@@ -10,16 +10,16 @@ import type { RunnableConfig } from '@langchain/core/runnables';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 
-import { TransactionAuthorizer } from '../../core/TransactionAuthorizer';
-import { SapiomClient } from '../../lib/SapiomClient';
-import { initializeSapiomClient } from '../shared';
+import { TransactionAuthorizer } from '@sapiom/core';
+import { SapiomClient } from '@sapiom/core';
+import { initializeSapiomClient } from '@sapiom/core';
 import {
   convertX402ToSapiomPayment,
   extractPaymentFromMCPError,
   getPaymentAuthFromTransaction,
   isMCPPaymentError,
 } from './internal/payment-detection';
-import { captureUserCallSite } from '../../lib/telemetry';
+import { captureUserCallSite } from '@sapiom/core';
 import type { SapiomToolConfig } from './internal/types';
 import { isAuthorizationDenied } from './internal/utils';
 import type { LangChainToolRequestFacts } from './schemas/langchain-tool-v1';

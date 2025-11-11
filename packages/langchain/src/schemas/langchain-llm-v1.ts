@@ -7,7 +7,7 @@
  * Schema: source="langchain-llm", version="v1"
  */
 
-import type { CallSiteInfo } from '../../../types/telemetry';
+import type { CallSiteInfo } from '@sapiom/core';
 
 /**
  * Tool usage metadata

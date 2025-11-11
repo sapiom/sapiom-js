@@ -3,7 +3,7 @@
  */
 import { ChatAnthropic, ChatAnthropicMessages } from '@langchain/anthropic';
 
-import { SapiomClient } from '../../../lib/SapiomClient';
+import { SapiomClient } from '@sapiom/core';
 import { SapiomChatAnthropic, wrapChatAnthropic } from './anthropic';
 
 /**

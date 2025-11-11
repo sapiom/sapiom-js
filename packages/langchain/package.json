@@ -76,5 +76,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "dependencies": {
+    "decimal.js": "^10.6.0"
+  }
 }

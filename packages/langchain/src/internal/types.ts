@@ -1,8 +1,8 @@
 /**
  * Shared types for LangChain integration
  */
-import type { SapiomClient } from '../../../lib/SapiomClient';
-import type { BaseSapiomIntegrationConfig } from '../../shared';
+import type { SapiomClient } from '@sapiom/core';
+import type { BaseSapiomIntegrationConfig } from '@sapiom/core';
 
 /**
  * Configuration for Sapiom model tracking

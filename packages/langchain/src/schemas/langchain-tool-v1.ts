@@ -6,7 +6,7 @@
  * Schema: source="langchain-tool", version="v1"
  */
 
-import type { CallSiteInfo } from '../../../types/telemetry';
+import type { CallSiteInfo } from '@sapiom/core';
 
 /**
  * Request facts (pre-execution)

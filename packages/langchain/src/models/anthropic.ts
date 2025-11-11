@@ -12,10 +12,10 @@ import type { BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import type { BaseMessageLike } from '@langchain/core/messages';
 import type { LLMResult } from '@langchain/core/outputs';
 
-import { TransactionAuthorizer } from '../../../core/TransactionAuthorizer';
-import { SapiomClient } from '../../../lib/SapiomClient';
-import { captureUserCallSite, getRuntimeInfo } from '../../../lib/telemetry';
-import { initializeSapiomClient } from '../../shared';
+import { TransactionAuthorizer } from '@sapiom/core';
+import { SapiomClient } from '@sapiom/core';
+import { captureUserCallSite, getRuntimeInfo } from '@sapiom/core';
+import { initializeSapiomClient } from '@sapiom/core';
 import { collectDependencyVersions, detectEntryMethod } from '../internal/langchain-telemetry';
 import { estimateInputTokens, extractActualTokens } from '../internal/token-estimation';
 import type { SapiomModelConfig } from '../internal/types';

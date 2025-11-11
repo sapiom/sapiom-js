@@ -12,7 +12,7 @@
 import { SapiomChatOpenAI } from './models/openai';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { ChatOpenAI } from '@langchain/openai';
-import type { SapiomClient } from '../../lib/SapiomClient';
+import type { SapiomClient } from '@sapiom/core';
 
 // Re-export provider models
 export { SapiomChatOpenAI } from './models/openai';

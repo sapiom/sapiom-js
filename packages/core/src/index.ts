@@ -52,6 +52,14 @@ export { withPaymentHandling, withAuthorizationHandling } from './core/wrappers'
 export { withSapiomHandling } from './core/SapiomHandler';
 export type { SapiomHandlerConfig } from './core/SapiomHandler';
 
+// Transaction Authorizer
+export { TransactionAuthorizer } from './core/TransactionAuthorizer';
+export type { TransactionAuthorizerConfig } from './core/TransactionAuthorizer';
+
+// Telemetry
+export { captureUserCallSite, getRuntimeInfo } from './lib/telemetry';
+export type { CallSiteInfo, RuntimeInfo } from './types/telemetry';
+
 // Types
 export { TransactionStatus } from './types/transaction';
 

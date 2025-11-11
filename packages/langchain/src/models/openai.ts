@@ -23,10 +23,10 @@ import { RunnableBinding } from '@langchain/core/runnables';
 import { ChatOpenAI } from '@langchain/openai';
 import type { ChatOpenAICallOptions } from '@langchain/openai';
 
-import { TransactionAuthorizer } from '../../../core/TransactionAuthorizer';
-import { SapiomClient } from '../../../lib/SapiomClient';
-import { captureUserCallSite, getRuntimeInfo } from '../../../lib/telemetry';
-import { initializeSapiomClient } from '../../shared';
+import { TransactionAuthorizer } from '@sapiom/core';
+import { SapiomClient } from '@sapiom/core';
+import { captureUserCallSite, getRuntimeInfo } from '@sapiom/core';
+import { initializeSapiomClient } from '@sapiom/core';
 import { collectDependencyVersions, detectEntryMethod } from '../internal/langchain-telemetry';
 import { estimateInputTokens, extractActualTokens } from '../internal/token-estimation';
 import type { SapiomModelConfig } from '../internal/types';

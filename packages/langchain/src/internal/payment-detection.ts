@@ -4,7 +4,7 @@
  * Based on: https://github.com/ethanniser/x402-mcp
  */
 
-import { SapiomClient } from '../../../lib/SapiomClient';
+import { SapiomClient } from '@sapiom/core';
 
 /**
  * x402 Payment Response Structure

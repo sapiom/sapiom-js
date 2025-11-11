@@ -46,7 +46,7 @@ export function withPaymentHandling(httpClient: HttpClientAdapter, config: Payme
     // Error handler - check for 402 and handle payment
     async (error: HttpError) => {
       // Create a function that can re-execute the request
-      const requestExecutor = async (request) => {
+      const requestExecutor = async (request: any) => {
         return await httpClient.request(request);
       };
 

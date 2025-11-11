@@ -5,7 +5,7 @@
 import { DynamicStructuredTool, DynamicTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { wrapSapiomTool, createSapiomTool, sapiomTool, SapiomDynamicTool } from './tool';
-import { SapiomClient } from '../../lib/SapiomClient';
+import { SapiomClient } from '@sapiom/core';
 
 describe('wrapSapiomTool', () => {
   let mockClient: SapiomClient;

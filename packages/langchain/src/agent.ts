@@ -6,11 +6,11 @@
  */
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 
-import { TransactionAuthorizer } from '../../core/TransactionAuthorizer';
-import type { SapiomClient } from '../../lib/SapiomClient';
-import { initializeSapiomClient } from '../shared';
-import type { BaseSapiomIntegrationConfig } from '../shared';
-import { captureUserCallSite } from '../../lib/telemetry';
+import { TransactionAuthorizer } from '@sapiom/core';
+import type { SapiomClient } from '@sapiom/core';
+import { initializeSapiomClient } from '@sapiom/core';
+import type { BaseSapiomIntegrationConfig } from '@sapiom/core';
+import { captureUserCallSite } from '@sapiom/core';
 import type { SapiomModelConfig } from './internal/types';
 import { generateSDKTraceId } from './internal/utils';
 import { wrapChatAnthropic } from './models/anthropic';

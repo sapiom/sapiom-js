@@ -5,7 +5,7 @@ import type { BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage } from '@langchain/core/messages';
 
-import { SapiomClient } from '../../../lib/SapiomClient';
+import { SapiomClient } from '@sapiom/core';
 
 /**
  * Generate SDK-prefixed trace ID

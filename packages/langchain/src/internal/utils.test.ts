@@ -9,7 +9,7 @@ import {
   AuthorizationDeniedError,
   convertInputToMessages,
 } from './utils';
-import { SapiomClient } from '../../../lib/SapiomClient';
+import { SapiomClient } from '@sapiom/core';
 
 describe('generateSDKTraceId', () => {
   it('generates unique trace IDs with sdk- prefix', () => {

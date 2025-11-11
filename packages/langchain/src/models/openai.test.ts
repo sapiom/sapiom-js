@@ -3,7 +3,7 @@
  */
 import { ChatOpenAI } from '@langchain/openai';
 
-import { SapiomClient } from '../../../lib/SapiomClient';
+import { SapiomClient } from '@sapiom/core';
 import { SapiomChatOpenAI, wrapChatOpenAI } from './openai';
 
 /**
