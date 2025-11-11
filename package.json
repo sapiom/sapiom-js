@@ -1,0 +1,41 @@
+{
+  "name": "@sapiom/sdk-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript SDK for Sapiom API - Monorepo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sdk.git"
+  },
+  "license": "MIT",
+  "author": "Sapiom",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r --filter='./packages/*' build",
+    "clean": "pnpm -r --filter='./packages/*' clean",
+    "test": "pnpm -r --filter='./packages/*' test",
+    "test:coverage": "pnpm -r --filter='./packages/*' test:coverage",
+    "lint": "pnpm -r --filter='./packages/*' lint",
+    "format": "pnpm -r --filter='./packages/*' format",
+    "typecheck": "pnpm -r --filter='./packages/*' typecheck",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.1",
+    "@types/node": "^20.11.30",
+    "@typescript-eslint/eslint-plugin": "^7.3.1",
+    "@typescript-eslint/parser": "^7.3.1",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.15.4"
+}
