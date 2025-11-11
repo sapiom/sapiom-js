@@ -1,8 +1,8 @@
-import { SapiomHandlerConfig, withSapiomHandling } from '../../core/SapiomHandler';
-import { createNodeHttpAdapter } from '../../http/adapters/node-http';
-import { HttpClientAdapter } from '../../http/types';
-import { SapiomClient } from '../../lib/SapiomClient';
-import { BaseSapiomIntegrationConfig, initializeSapiomClient } from '../shared';
+import { SapiomHandlerConfig, withSapiomHandling } from '@sapiom/core';
+import { createNodeHttpAdapter } from './adapter';
+import { HttpClientAdapter } from './types';
+import { SapiomClient } from '@sapiom/core';
+import { BaseSapiomIntegrationConfig, initializeSapiomClient } from './shared';
 
 /**
  * Configuration for Sapiom-enabled Node.js HTTP client

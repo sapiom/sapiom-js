@@ -68,6 +68,10 @@ export class PaymentHandler {
       const paymentData = extractPaymentData(error);
       const resource = extractResourceFromError(error);
 
+      if (!paymentData || !resource) {
+        return null; // Cannot extract payment info
+      }
+
       // Check for existing Sapiom transaction ID from request headers
       // (Don't trust transactionId from error - could be external service's ID)
       const existingTransactionId = getHeader(originalRequest.headers, 'X-Sapiom-Transaction-Id');

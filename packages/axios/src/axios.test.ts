@@ -1,29 +1,34 @@
-import nock from 'nock';
+import axios, { AxiosInstance } from 'axios';
+import MockAdapter from 'axios-mock-adapter';
 
-import { HttpRequest } from '../types';
-import { NodeHttpAdapter, createNodeHttpAdapter } from './node-http';
+import { HttpRequest } from './types';
+import { AxiosAdapter, createAxiosAdapter } from './axios';
 
-describe('NodeHttpAdapter', () => {
-  let adapter: NodeHttpAdapter;
-  const baseURL = 'https://api.example.com';
+describe('AxiosAdapter', () => {
+  let axiosInstance: AxiosInstance;
+  let mockAxios: MockAdapter;
+  let adapter: AxiosAdapter;
 
   beforeEach(() => {
-    adapter = new NodeHttpAdapter();
-    nock.cleanAll();
+    axiosInstance = axios.create({
+      baseURL: 'https://api.example.com',
+    });
+    mockAxios = new MockAdapter(axiosInstance);
+    adapter = new AxiosAdapter(axiosInstance);
   });
 
   afterEach(() => {
-    nock.cleanAll();
+    mockAxios.reset();
   });
 
   describe('request', () => {
     it('should execute a successful GET request', async () => {
       const mockData = { message: 'success', id: 123 };
-      nock(baseURL).get('/test').reply(200, mockData);
+      mockAxios.onGet('/test').reply(200, mockData);
 
       const request: HttpRequest = {
         method: 'GET',
-        url: `${baseURL}/test`,
+        url: '/test',
         headers: {},
       };
 
@@ -37,11 +42,11 @@ describe('NodeHttpAdapter', () => {
       const requestBody = { name: 'test', value: 42 };
       const responseData = { id: '123', created: true };
 
-      nock(baseURL).post('/users', requestBody).reply(201, responseData);
+      mockAxios.onPost('/users', requestBody).reply(201, responseData);
 
       const request: HttpRequest = {
         method: 'POST',
-        url: `${baseURL}/users`,
+        url: '/users',
         headers: { 'Content-Type': 'application/json' },
         body: requestBody,
       };
@@ -53,27 +58,27 @@ describe('NodeHttpAdapter', () => {
     });
 
     it('should include query params', async () => {
-      nock(baseURL).get('/search').query({ q: 'test', limit: 10 }).reply(200, { results: [] });
+      mockAxios.onGet('/search').reply((config) => {
+        expect(config.params).toEqual({ q: 'test', limit: 10 });
+        return [200, { results: [] }];
+      });
 
       const request: HttpRequest = {
         method: 'GET',
-        url: `${baseURL}/search`,
+        url: '/search',
         headers: {},
         params: { q: 'test', limit: 10 },
       };
 
-      const response = await adapter.request(request);
-
-      expect(response.status).toBe(200);
-      expect(response.data).toEqual({ results: [] });
+      await adapter.request(request);
     });
 
     it('should handle 404 errors', async () => {
-      nock(baseURL).get('/notfound').reply(404, { error: 'Not found' });
+      mockAxios.onGet('/notfound').reply(404, { error: 'Not found' });
 
       const request: HttpRequest = {
         method: 'GET',
-        url: `${baseURL}/notfound`,
+        url: '/notfound',
         headers: {},
       };
 
@@ -90,20 +95,17 @@ describe('NodeHttpAdapter', () => {
             scheme: 'exact',
             network: 'base-sepolia',
             maxAmountRequired: '1000000',
-            resourceName: 'https://api.example.com/premium',
             payTo: '0x1234567890123456789012345678901234567890',
             asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
           },
         ],
       };
 
-      nock(baseURL).get('/premium').reply(402, paymentData, {
-        'x-payment-required': 'true',
-      });
+      mockAxios.onGet('/premium').reply(402, paymentData);
 
       const request: HttpRequest = {
         method: 'GET',
-        url: `${baseURL}/premium`,
+        url: '/premium',
         headers: {},
       };
 
@@ -113,11 +115,11 @@ describe('NodeHttpAdapter', () => {
     });
 
     it('should handle network errors', async () => {
-      nock(baseURL).get('/network-error').replyWithError('Network Error');
+      mockAxios.onGet('/network-error').networkError();
 
       const request: HttpRequest = {
         method: 'GET',
-        url: `${baseURL}/network-error`,
+        url: '/network-error',
         headers: {},
       };
 
@@ -126,32 +128,20 @@ describe('NodeHttpAdapter', () => {
       });
     });
 
-    it('should handle text responses', async () => {
-      nock(baseURL).get('/text').reply(200, 'plain text response', { 'content-type': 'text/plain' });
+    it('should preserve metadata in request', async () => {
+      mockAxios.onGet('/test').reply((config) => {
+        expect((config as any).__sapiomInternal).toEqual({ __is402Retry: true });
+        return [200, { ok: true }];
+      });
 
       const request: HttpRequest = {
         method: 'GET',
-        url: `${baseURL}/text`,
+        url: '/test',
         headers: {},
+        metadata: { __is402Retry: true },
       };
 
-      const response = await adapter.request(request);
-
-      expect(response.data).toBe('plain text response');
-    });
-
-    it('should handle HTTPS requests', async () => {
-      nock('https://secure-api.com').get('/secure').reply(200, { secure: true });
-
-      const request: HttpRequest = {
-        method: 'GET',
-        url: 'https://secure-api.com/secure',
-        headers: {},
-      };
-
-      const response = await adapter.request(request);
-
-      expect(response.data).toEqual({ secure: true });
+      await adapter.request(request);
     });
   });
 
@@ -167,16 +157,16 @@ describe('NodeHttpAdapter', () => {
         };
       });
 
-      nock(baseURL).get('/test').matchHeader('X-Custom-Header', 'intercepted').reply(200, { ok: true });
+      mockAxios.onGet('/test').reply((config) => {
+        expect(config.headers?.['X-Custom-Header']).toBe('intercepted');
+        return [200, { ok: true }];
+      });
 
       await adapter.request({
         method: 'GET',
-        url: `${baseURL}/test`,
+        url: '/test',
         headers: {},
       });
-
-      // Verify nock matched the header
-      expect(nock.isDone()).toBe(true);
     });
 
     it('should support async interceptors', async () => {
@@ -188,15 +178,16 @@ describe('NodeHttpAdapter', () => {
         };
       });
 
-      nock(baseURL).get('/test').matchHeader('X-Async', 'true').reply(200, { ok: true });
+      mockAxios.onGet('/test').reply((config) => {
+        expect(config.headers?.['X-Async']).toBe('true');
+        return [200, { ok: true }];
+      });
 
       await adapter.request({
         method: 'GET',
-        url: `${baseURL}/test`,
+        url: '/test',
         headers: {},
       });
-
-      expect(nock.isDone()).toBe(true);
     });
 
     it('should allow cleanup of interceptors', async () => {
@@ -209,25 +200,26 @@ describe('NodeHttpAdapter', () => {
           },
         };
       });
-
       const cleanup = adapter.addRequestInterceptor(interceptor);
 
-      // First request - should have the header
-      nock(baseURL).get('/test1').matchHeader('X-Custom-Header', 'intercepted').reply(200, { ok: true });
+      mockAxios.onGet('/test1').reply((config) => {
+        expect(config.headers?.['X-Custom-Header']).toBe('intercepted');
+        return [200, { ok: true }];
+      });
+      mockAxios.onGet('/test2').reply((config) => {
+        expect(config.headers?.['X-Custom-Header']).not.toBeDefined();
+        return [200, { ok: true }];
+      });
 
-      await adapter.request({ method: 'GET', url: `${baseURL}/test1`, headers: {} });
+      // First request - interceptor should be called
+      await adapter.request({ method: 'GET', url: '/test1', headers: {} });
       expect(interceptor).toHaveBeenCalledTimes(1);
 
       // Clean up
       cleanup();
 
-      // Second request - should NOT have the header
-      nock(baseURL)
-        .get('/test2')
-        .matchHeader('X-Custom-Header', (val) => val === undefined)
-        .reply(200, { ok: true });
-
-      await adapter.request({ method: 'GET', url: `${baseURL}/test2`, headers: {} });
+      // Second request - interceptor should not be called
+      await adapter.request({ method: 'GET', url: '/test2', headers: {} });
       expect(interceptor).toHaveBeenCalledTimes(1); // Still 1
     });
 
@@ -244,11 +236,12 @@ describe('NodeHttpAdapter', () => {
         return request;
       });
 
-      nock(baseURL).get('/test').reply(200, {});
+      mockAxios.onGet('/test').reply(200, {});
 
-      await adapter.request({ method: 'GET', url: `${baseURL}/test`, headers: {} });
+      await adapter.request({ method: 'GET', url: '/test', headers: {} });
 
-      expect(calls).toEqual(['first', 'second']);
+      // Axios runs interceptors in reverse order (LIFO)
+      expect(calls).toEqual(['second', 'first']);
     });
   });
 
@@ -261,11 +254,11 @@ describe('NodeHttpAdapter', () => {
         };
       });
 
-      nock(baseURL).get('/test').reply(200, { original: true });
+      mockAxios.onGet('/test').reply(200, { original: true });
 
       const response = await adapter.request({
         method: 'GET',
-        url: `${baseURL}/test`,
+        url: '/test',
         headers: {},
       });
 
@@ -291,11 +284,11 @@ describe('NodeHttpAdapter', () => {
 
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      nock(baseURL).get('/notfound').reply(404, { error: 'Not found' });
+      mockAxios.onGet('/notfound').reply(404, { error: 'Not found' });
 
       const response = await adapter.request({
         method: 'GET',
-        url: `${baseURL}/notfound`,
+        url: '/notfound',
         headers: {},
       });
 
@@ -322,40 +315,45 @@ describe('NodeHttpAdapter', () => {
       const errorHandler = jest.fn();
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      nock(baseURL).get('/premium').reply(402, paymentData, {
+      mockAxios.onGet('/premium').reply(402, paymentData, {
         'x-payment-required': 'true',
       });
 
       await adapter
         .request({
           method: 'GET',
-          url: `${baseURL}/premium`,
+          url: '/premium',
           headers: {},
         })
         .catch(() => {});
 
       expect(errorHandler).toHaveBeenCalledWith(
         expect.objectContaining({
+          message: 'Request failed with status code 402',
           status: 402,
           data: paymentData,
           headers: expect.objectContaining({
             'x-payment-required': 'true',
           }),
           request: expect.objectContaining({
-            method: 'GET',
-            url: `${baseURL}/premium`,
+            method: 'get',
+            url: '/premium',
+          }),
+          response: expect.objectContaining({
+            status: 402,
+            data: paymentData,
           }),
         }),
       );
     });
 
     it('should handle 500 server errors', async () => {
-      nock(baseURL).get('/error').reply(500, { error: 'Internal server error' });
+      mockAxios.onGet('/error').reply(500, { error: 'Internal server error' });
 
       await expect(
         adapter.request({
           method: 'GET',
-          url: `${baseURL}/error`,
+          url: '/error',
           headers: {},
         }),
       ).rejects.toMatchObject({
@@ -370,27 +368,18 @@ describe('NodeHttpAdapter', () => {
           data: { ...response.data, modified: true },
         };
       });
-
       const cleanup = adapter.addResponseInterceptor(interceptor);
 
-      nock(baseURL).get('/test1').reply(200, { original: '1' });
-      nock(baseURL).get('/test2').reply(200, { original: '2' });
+      mockAxios.onGet('/test1').reply(200, { original: '1' });
+      mockAxios.onGet('/test2').reply(200, { original: '2' });
 
-      const response1 = await adapter.request({
-        method: 'GET',
-        url: `${baseURL}/test1`,
-        headers: {},
-      });
-      expect(response1.data).toEqual({ original: '1', modified: true });
+      const repsonse1 = await adapter.request({ method: 'GET', url: '/test1', headers: {} });
+      expect(repsonse1.data).toEqual({ original: '1', modified: true });
       expect(interceptor).toHaveBeenCalledTimes(1);
 
       cleanup();
 
-      const response2 = await adapter.request({
-        method: 'GET',
-        url: `${baseURL}/test2`,
-        headers: {},
-      });
+      const response2 = await adapter.request({ method: 'GET', url: '/test2', headers: {} });
       expect(response2.data).toEqual({ original: '2' });
       expect(interceptor).toHaveBeenCalledTimes(1); // Not called after cleanup
     });
@@ -408,28 +397,32 @@ describe('NodeHttpAdapter', () => {
         return response;
       });
 
-      nock(baseURL).get('/test').reply(200, {});
+      mockAxios.onGet('/test').reply(200, {});
 
-      await adapter.request({ method: 'GET', url: `${baseURL}/test`, headers: {} });
+      await adapter.request({ method: 'GET', url: '/test', headers: {} });
 
       expect(calls).toEqual(['first', 'second']);
     });
   });
 
-  describe('createNodeHttpAdapter', () => {
-    it('should create a NodeHttpAdapter instance', () => {
-      const adapter = createNodeHttpAdapter();
-      expect(adapter).toBeInstanceOf(NodeHttpAdapter);
+  describe('createAxiosAdapter', () => {
+    it('should create an AxiosAdapter instance', () => {
+      const axiosInstance = axios.create();
+      const adapter = createAxiosAdapter(axiosInstance);
+
+      expect(adapter).toBeInstanceOf(AxiosAdapter);
     });
 
     it('should work with created adapter', async () => {
-      const adapter = createNodeHttpAdapter();
+      const axiosInstance = axios.create({ baseURL: 'https://test.com' });
+      const mockAdapter = new MockAdapter(axiosInstance);
+      const adapter = createAxiosAdapter(axiosInstance);
 
-      nock('https://test.com').get('/data').reply(200, { test: true });
+      mockAdapter.onGet('/data').reply(200, { test: true });
 
       const response = await adapter.request({
         method: 'GET',
-        url: 'https://test.com/data',
+        url: '/data',
         headers: {},
       });
 
@@ -437,15 +430,85 @@ describe('NodeHttpAdapter', () => {
     });
   });
 
-  describe('integration with Node HTTP features', () => {
+  describe('metadata preservation', () => {
+    it('should preserve metadata through interceptors', async () => {
+      let capturedMetadata: any;
+
+      adapter.addRequestInterceptor((request) => {
+        capturedMetadata = request.metadata;
+        return request;
+      });
+
+      mockAxios.onGet('/test').reply(200, {});
+
+      await adapter.request({
+        method: 'GET',
+        url: '/test',
+        headers: {},
+        metadata: { customFlag: true, __is402Retry: false },
+      });
+
+      expect(capturedMetadata).toEqual({
+        customFlag: true,
+        __is402Retry: false,
+      });
+    });
+
+    it('should allow modifying metadata in interceptor', async () => {
+      adapter.addRequestInterceptor((request) => {
+        return {
+          ...request,
+          metadata: {
+            ...request.metadata,
+            interceptorAdded: true,
+          },
+        };
+      });
+
+      mockAxios.onGet('/test').reply((config) => {
+        expect((config as any).__sapiomInternal).toEqual({
+          original: true,
+          interceptorAdded: true,
+        });
+        return [200, {}];
+      });
+
+      await adapter.request({
+        method: 'GET',
+        url: '/test',
+        headers: {},
+        metadata: { original: true },
+      });
+    });
+
+    it('should preserve __sapiom separately from internal metadata', async () => {
+      adapter.addRequestInterceptor((request) => {
+        expect(request.__sapiom).toEqual({ serviceName: 'test-service' });
+        expect(request.metadata).toEqual({ __is402Retry: true });
+        return request;
+      });
+
+      mockAxios.onGet('/test').reply(200, {});
+
+      await adapter.request({
+        method: 'GET',
+        url: '/test',
+        headers: {},
+        __sapiom: { serviceName: 'test-service' },
+        metadata: { __is402Retry: true },
+      });
+    });
+  });
+
+  describe('integration with Axios features', () => {
     it('should work with different HTTP methods', async () => {
-      nock(baseURL).put('/resource/123').reply(200, { updated: true });
-      nock(baseURL).delete('/resource/456').reply(204);
-      nock(baseURL).patch('/resource/789').reply(200, { patched: true });
+      mockAxios.onPut('/resource/123').reply(200, { updated: true });
+      mockAxios.onDelete('/resource/456').reply(204);
+      mockAxios.onPatch('/resource/789').reply(200, { patched: true });
 
       const putResponse = await adapter.request({
         method: 'PUT',
-        url: `${baseURL}/resource/123`,
+        url: '/resource/123',
         headers: {},
         body: { name: 'updated' },
       });
@@ -453,14 +516,14 @@ describe('NodeHttpAdapter', () => {
 
       const deleteResponse = await adapter.request({
         method: 'DELETE',
-        url: `${baseURL}/resource/456`,
+        url: '/resource/456',
         headers: {},
       });
       expect(deleteResponse.status).toBe(204);
 
       const patchResponse = await adapter.request({
         method: 'PATCH',
-        url: `${baseURL}/resource/789`,
+        url: '/resource/789',
         headers: {},
         body: { name: 'patched' },
       });
@@ -468,53 +531,34 @@ describe('NodeHttpAdapter', () => {
     });
 
     it('should preserve custom headers', async () => {
-      nock(baseURL)
-        .get('/test')
-        .matchHeader('Authorization', 'Bearer token123')
-        .matchHeader('X-Custom', 'value')
-        .reply(200, {});
+      mockAxios.onGet('/test').reply((config) => {
+        expect(config.headers?.['Authorization']).toBe('Bearer token123');
+        expect(config.headers?.['X-Custom']).toBe('value');
+        return [200, {}];
+      });
 
       await adapter.request({
         method: 'GET',
-        url: `${baseURL}/test`,
+        url: '/test',
         headers: {
           Authorization: 'Bearer token123',
           'X-Custom': 'value',
         },
       });
-
-      expect(nock.isDone()).toBe(true);
     });
 
-    it('should handle non-JSON responses gracefully', async () => {
-      nock(baseURL).get('/html').reply(200, '<html>test</html>', { 'content-type': 'text/html' });
+    it('should handle timeout errors', async () => {
+      mockAxios.onGet('/timeout').timeout();
 
-      const response = await adapter.request({
-        method: 'GET',
-        url: `${baseURL}/html`,
-        headers: {},
+      await expect(
+        adapter.request({
+          method: 'GET',
+          url: '/timeout',
+          headers: {},
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('timeout'),
       });
-
-      expect(response.data).toBe('<html>test</html>');
-    });
-
-    it('should work with both HTTP and HTTPS', async () => {
-      nock('http://insecure-api.com').get('/data').reply(200, { http: true });
-      nock('https://secure-api.com').get('/data').reply(200, { https: true });
-
-      const httpResponse = await adapter.request({
-        method: 'GET',
-        url: 'http://insecure-api.com/data',
-        headers: {},
-      });
-      expect(httpResponse.data).toEqual({ http: true });
-
-      const httpsResponse = await adapter.request({
-        method: 'GET',
-        url: 'https://secure-api.com/data',
-        headers: {},
-      });
-      expect(httpsResponse.data).toEqual({ https: true });
     });
   });
 
@@ -522,22 +566,19 @@ describe('NodeHttpAdapter', () => {
     it('should allow interceptor to recover from 402 and retry', async () => {
       let firstCall = true;
 
-      nock(baseURL)
-        .get('/premium')
-        .times(2)
-        .reply(() => {
-          if (firstCall) {
-            firstCall = false;
-            return [402, { requiresPayment: true }];
-          }
-          return [200, { data: 'premium content' }];
-        });
+      mockAxios.onGet('/premium').reply(() => {
+        if (firstCall) {
+          firstCall = false;
+          return [402, { requiresPayment: true }];
+        }
+        return [200, { data: 'premium content' }];
+      });
 
       // Simulate payment interceptor
       adapter.addResponseInterceptor(
         (response) => response,
         async (error) => {
-          if (error.status === 402 && !error.request?.metadata?.__is402Retry) {
+          if (error.status === 402) {
             // Simulate payment handling
             const retryRequest: HttpRequest = {
               ...error.request!,
@@ -560,7 +601,7 @@ describe('NodeHttpAdapter', () => {
 
       const response = await adapter.request({
         method: 'GET',
-        url: `${baseURL}/premium`,
+        url: '/premium',
         headers: {},
       });
 
@@ -570,9 +611,9 @@ describe('NodeHttpAdapter', () => {
     });
 
     it('should prevent infinite retry loops', async () => {
-      let retryCount = 0;
+      mockAxios.onGet('/premium').reply(402, { requiresPayment: true });
 
-      nock(baseURL).get('/premium').times(2).reply(402, { requiresPayment: true });
+      let retryCount = 0;
 
       adapter.addResponseInterceptor(
         (response) => response,
@@ -595,7 +636,7 @@ describe('NodeHttpAdapter', () => {
       await expect(
         adapter.request({
           method: 'GET',
-          url: `${baseURL}/premium`,
+          url: '/premium',
           headers: {},
         }),
       ).rejects.toMatchObject({

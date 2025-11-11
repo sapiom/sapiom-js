@@ -1,4 +1,4 @@
-import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from '../types';
+import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from './types';
 
 /**
  * Fetch API adapter for HTTP client abstraction

@@ -1,30 +1,36 @@
-import axios, { AxiosInstance } from 'axios';
-import MockAdapter from 'axios-mock-adapter';
+import fetchMock from '@fetch-mock/jest';
 
-import { HttpRequest } from '../types';
-import { AxiosAdapter, createAxiosAdapter } from './axios';
+import { HttpRequest } from './types';
+import { FetchAdapter, createFetchAdapter } from './fetch';
 
-describe('AxiosAdapter', () => {
-  let axiosInstance: AxiosInstance;
-  let mockAxios: MockAdapter;
-  let adapter: AxiosAdapter;
+describe('FetchAdapter', () => {
+  let adapter: FetchAdapter;
+  const baseURL = 'https://api.example.com';
+
+  beforeAll(() => {
+    fetchMock.mockGlobal();
+  });
 
   beforeEach(() => {
-    axiosInstance = axios.create({
-      baseURL: 'https://api.example.com',
-    });
-    mockAxios = new MockAdapter(axiosInstance);
-    adapter = new AxiosAdapter(axiosInstance);
+    adapter = new FetchAdapter(baseURL);
+    fetchMock.clearHistory();
   });
 
   afterEach(() => {
-    mockAxios.reset();
+    fetchMock.removeRoutes();
+  });
+
+  afterAll(() => {
+    fetchMock.unmockGlobal();
   });
 
   describe('request', () => {
     it('should execute a successful GET request', async () => {
       const mockData = { message: 'success', id: 123 };
-      mockAxios.onGet('/test').reply(200, mockData);
+      fetchMock.route(`${baseURL}/test`, {
+        status: 200,
+        body: mockData,
+      });
 
       const request: HttpRequest = {
         method: 'GET',
@@ -42,7 +48,16 @@ describe('AxiosAdapter', () => {
       const requestBody = { name: 'test', value: 42 };
       const responseData = { id: '123', created: true };
 
-      mockAxios.onPost('/users', requestBody).reply(201, responseData);
+      fetchMock.route(
+        `${baseURL}/users`,
+        {
+          status: 201,
+          body: responseData,
+        },
+        {
+          method: 'POST',
+        },
+      );
 
       const request: HttpRequest = {
         method: 'POST',
@@ -57,24 +72,11 @@ describe('AxiosAdapter', () => {
       expect(response.data).toEqual(responseData);
     });
 
-    it('should include query params', async () => {
-      mockAxios.onGet('/search').reply((config) => {
-        expect(config.params).toEqual({ q: 'test', limit: 10 });
-        return [200, { results: [] }];
-      });
-
-      const request: HttpRequest = {
-        method: 'GET',
-        url: '/search',
-        headers: {},
-        params: { q: 'test', limit: 10 },
-      };
-
-      await adapter.request(request);
-    });
-
     it('should handle 404 errors', async () => {
-      mockAxios.onGet('/notfound').reply(404, { error: 'Not found' });
+      fetchMock.route(`${baseURL}/notfound`, {
+        status: 404,
+        body: { error: 'Not found' },
+      });
 
       const request: HttpRequest = {
         method: 'GET',
@@ -95,13 +97,20 @@ describe('AxiosAdapter', () => {
             scheme: 'exact',
             network: 'base-sepolia',
             maxAmountRequired: '1000000',
+            resourceName: 'https://api.example.com/premium',
             payTo: '0x1234567890123456789012345678901234567890',
             asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
           },
         ],
       };
 
-      mockAxios.onGet('/premium').reply(402, paymentData);
+      fetchMock.route(`${baseURL}/premium`, {
+        status: 402,
+        body: paymentData,
+        headers: {
+          'x-payment-required': 'true',
+        },
+      });
 
       const request: HttpRequest = {
         method: 'GET',
@@ -115,7 +124,9 @@ describe('AxiosAdapter', () => {
     });
 
     it('should handle network errors', async () => {
-      mockAxios.onGet('/network-error').networkError();
+      fetchMock.route(`${baseURL}/network-error`, {
+        throws: new Error('Network Error'),
+      });
 
       const request: HttpRequest = {
         method: 'GET',
@@ -128,20 +139,40 @@ describe('AxiosAdapter', () => {
       });
     });
 
-    it('should preserve metadata in request', async () => {
-      mockAxios.onGet('/test').reply((config) => {
-        expect((config as any).__sapiomInternal).toEqual({ __is402Retry: true });
-        return [200, { ok: true }];
+    it('should handle absolute URLs', async () => {
+      const absoluteURL = 'https://other-api.com/data';
+      fetchMock.route(absoluteURL, {
+        status: 200,
+        body: { absolute: true },
       });
 
       const request: HttpRequest = {
         method: 'GET',
-        url: '/test',
+        url: absoluteURL,
         headers: {},
-        metadata: { __is402Retry: true },
       };
 
-      await adapter.request(request);
+      const response = await adapter.request(request);
+
+      expect(response.data).toEqual({ absolute: true });
+    });
+
+    it('should handle text responses', async () => {
+      fetchMock.route(`${baseURL}/text`, {
+        status: 200,
+        body: 'plain text response',
+        headers: { 'content-type': 'text/plain' },
+      });
+
+      const request: HttpRequest = {
+        method: 'GET',
+        url: '/text',
+        headers: {},
+      };
+
+      const response = await adapter.request(request);
+
+      expect(response.data).toBe('plain text response');
     });
   });
 
@@ -157,9 +188,9 @@ describe('AxiosAdapter', () => {
         };
       });
 
-      mockAxios.onGet('/test').reply((config) => {
-        expect(config.headers?.['X-Custom-Header']).toBe('intercepted');
-        return [200, { ok: true }];
+      fetchMock.route(`${baseURL}/test`, {
+        status: 200,
+        body: { ok: true },
       });
 
       await adapter.request({
@@ -167,6 +198,10 @@ describe('AxiosAdapter', () => {
         url: '/test',
         headers: {},
       });
+
+      const calls = fetchMock.callHistory.calls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.options!.headers!['x-custom-header']).toBe('intercepted');
     });
 
     it('should support async interceptors', async () => {
@@ -178,9 +213,9 @@ describe('AxiosAdapter', () => {
         };
       });
 
-      mockAxios.onGet('/test').reply((config) => {
-        expect(config.headers?.['X-Async']).toBe('true');
-        return [200, { ok: true }];
+      fetchMock.route(`${baseURL}/test`, {
+        status: 200,
+        body: { ok: true },
       });
 
       await adapter.request({
@@ -188,6 +223,11 @@ describe('AxiosAdapter', () => {
         url: '/test',
         headers: {},
       });
+
+      // Verify async interceptor added the header (headers are lowercase in callHistory)
+      const calls = fetchMock.callHistory.calls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.options!.headers!['x-async']).toBe('true');
     });
 
     it('should allow cleanup of interceptors', async () => {
@@ -200,27 +240,29 @@ describe('AxiosAdapter', () => {
           },
         };
       });
+
       const cleanup = adapter.addRequestInterceptor(interceptor);
 
-      mockAxios.onGet('/test1').reply((config) => {
-        expect(config.headers?.['X-Custom-Header']).toBe('intercepted');
-        return [200, { ok: true }];
-      });
-      mockAxios.onGet('/test2').reply((config) => {
-        expect(config.headers?.['X-Custom-Header']).not.toBeDefined();
-        return [200, { ok: true }];
-      });
+      fetchMock.route(`begin:${baseURL}/test`, { status: 200, body: {} }, { repeat: 2 });
 
       // First request - interceptor should be called
       await adapter.request({ method: 'GET', url: '/test1', headers: {} });
       expect(interceptor).toHaveBeenCalledTimes(1);
+
+      // Verify header was added (headers are lowercase in callHistory)
+      let calls = fetchMock.callHistory.calls();
+      expect(calls[0]!.options!.headers!['x-custom-header']).toBe('intercepted');
 
       // Clean up
       cleanup();
 
       // Second request - interceptor should not be called
       await adapter.request({ method: 'GET', url: '/test2', headers: {} });
-      expect(interceptor).toHaveBeenCalledTimes(1); // Still 1
+      expect(interceptor).toHaveBeenCalledTimes(1); // Still 1 - not called again
+
+      // Verify header was NOT added after cleanup
+      calls = fetchMock.callHistory.calls();
+      expect(calls[1]!.options!.headers!['x-custom-header']).toBeUndefined();
     });
 
     it('should support multiple interceptors in order', async () => {
@@ -236,12 +278,11 @@ describe('AxiosAdapter', () => {
         return request;
       });
 
-      mockAxios.onGet('/test').reply(200, {});
+      fetchMock.route(`${baseURL}/test`, { status: 200, body: {} });
 
       await adapter.request({ method: 'GET', url: '/test', headers: {} });
 
-      // Axios runs interceptors in reverse order (LIFO)
-      expect(calls).toEqual(['second', 'first']);
+      expect(calls).toEqual(['first', 'second']);
     });
   });
 
@@ -254,7 +295,10 @@ describe('AxiosAdapter', () => {
         };
       });
 
-      mockAxios.onGet('/test').reply(200, { original: true });
+      fetchMock.route(`${baseURL}/test`, {
+        status: 200,
+        body: { original: true },
+      });
 
       const response = await adapter.request({
         method: 'GET',
@@ -284,7 +328,10 @@ describe('AxiosAdapter', () => {
 
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      mockAxios.onGet('/notfound').reply(404, { error: 'Not found' });
+      fetchMock.route(`${baseURL}/notfound`, {
+        status: 404,
+        body: { error: 'Not found' },
+      });
 
       const response = await adapter.request({
         method: 'GET',
@@ -315,8 +362,12 @@ describe('AxiosAdapter', () => {
       const errorHandler = jest.fn();
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      mockAxios.onGet('/premium').reply(402, paymentData, {
-        'x-payment-required': 'true',
+      fetchMock.route(`${baseURL}/premium`, {
+        status: 402,
+        body: paymentData,
+        headers: {
+          'x-payment-required': 'true',
+        },
       });
 
       await adapter
@@ -329,26 +380,21 @@ describe('AxiosAdapter', () => {
 
       expect(errorHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: 'Request failed with status code 402',
           status: 402,
           data: paymentData,
-          headers: expect.objectContaining({
-            'x-payment-required': 'true',
-          }),
           request: expect.objectContaining({
-            method: 'get',
+            method: 'GET',
             url: '/premium',
-          }),
-          response: expect.objectContaining({
-            status: 402,
-            data: paymentData,
           }),
         }),
       );
     });
 
     it('should handle 500 server errors', async () => {
-      mockAxios.onGet('/error').reply(500, { error: 'Internal server error' });
+      fetchMock.route(`${baseURL}/error`, {
+        status: 500,
+        body: { error: 'Internal server error' },
+      });
 
       await expect(
         adapter.request({
@@ -368,13 +414,14 @@ describe('AxiosAdapter', () => {
           data: { ...response.data, modified: true },
         };
       });
+
       const cleanup = adapter.addResponseInterceptor(interceptor);
 
-      mockAxios.onGet('/test1').reply(200, { original: '1' });
-      mockAxios.onGet('/test2').reply(200, { original: '2' });
+      fetchMock.route(`${baseURL}/test1`, { status: 200, body: { original: '1' } });
+      fetchMock.route(`${baseURL}/test2`, { status: 200, body: { original: '2' } });
 
-      const repsonse1 = await adapter.request({ method: 'GET', url: '/test1', headers: {} });
-      expect(repsonse1.data).toEqual({ original: '1', modified: true });
+      const response1 = await adapter.request({ method: 'GET', url: '/test1', headers: {} });
+      expect(response1.data).toEqual({ original: '1', modified: true });
       expect(interceptor).toHaveBeenCalledTimes(1);
 
       cleanup();
@@ -397,7 +444,7 @@ describe('AxiosAdapter', () => {
         return response;
       });
 
-      mockAxios.onGet('/test').reply(200, {});
+      fetchMock.route(`${baseURL}/test`, { status: 200, body: {} });
 
       await adapter.request({ method: 'GET', url: '/test', headers: {} });
 
@@ -405,20 +452,19 @@ describe('AxiosAdapter', () => {
     });
   });
 
-  describe('createAxiosAdapter', () => {
-    it('should create an AxiosAdapter instance', () => {
-      const axiosInstance = axios.create();
-      const adapter = createAxiosAdapter(axiosInstance);
-
-      expect(adapter).toBeInstanceOf(AxiosAdapter);
+  describe('createFetchAdapter', () => {
+    it('should create a FetchAdapter instance', () => {
+      const adapter = createFetchAdapter('https://test.com');
+      expect(adapter).toBeInstanceOf(FetchAdapter);
     });
 
     it('should work with created adapter', async () => {
-      const axiosInstance = axios.create({ baseURL: 'https://test.com' });
-      const mockAdapter = new MockAdapter(axiosInstance);
-      const adapter = createAxiosAdapter(axiosInstance);
+      const adapter = createFetchAdapter('https://test.com');
 
-      mockAdapter.onGet('/data').reply(200, { test: true });
+      fetchMock.route('https://test.com/data', {
+        status: 200,
+        body: { test: true },
+      });
 
       const response = await adapter.request({
         method: 'GET',
@@ -430,81 +476,11 @@ describe('AxiosAdapter', () => {
     });
   });
 
-  describe('metadata preservation', () => {
-    it('should preserve metadata through interceptors', async () => {
-      let capturedMetadata: any;
-
-      adapter.addRequestInterceptor((request) => {
-        capturedMetadata = request.metadata;
-        return request;
-      });
-
-      mockAxios.onGet('/test').reply(200, {});
-
-      await adapter.request({
-        method: 'GET',
-        url: '/test',
-        headers: {},
-        metadata: { customFlag: true, __is402Retry: false },
-      });
-
-      expect(capturedMetadata).toEqual({
-        customFlag: true,
-        __is402Retry: false,
-      });
-    });
-
-    it('should allow modifying metadata in interceptor', async () => {
-      adapter.addRequestInterceptor((request) => {
-        return {
-          ...request,
-          metadata: {
-            ...request.metadata,
-            interceptorAdded: true,
-          },
-        };
-      });
-
-      mockAxios.onGet('/test').reply((config) => {
-        expect((config as any).__sapiomInternal).toEqual({
-          original: true,
-          interceptorAdded: true,
-        });
-        return [200, {}];
-      });
-
-      await adapter.request({
-        method: 'GET',
-        url: '/test',
-        headers: {},
-        metadata: { original: true },
-      });
-    });
-
-    it('should preserve __sapiom separately from internal metadata', async () => {
-      adapter.addRequestInterceptor((request) => {
-        expect(request.__sapiom).toEqual({ serviceName: 'test-service' });
-        expect(request.metadata).toEqual({ __is402Retry: true });
-        return request;
-      });
-
-      mockAxios.onGet('/test').reply(200, {});
-
-      await adapter.request({
-        method: 'GET',
-        url: '/test',
-        headers: {},
-        __sapiom: { serviceName: 'test-service' },
-        metadata: { __is402Retry: true },
-      });
-    });
-  });
-
-  describe('integration with Axios features', () => {
+  describe('integration with Fetch features', () => {
     it('should work with different HTTP methods', async () => {
-      mockAxios.onPut('/resource/123').reply(200, { updated: true });
-      mockAxios.onDelete('/resource/456').reply(204);
-      mockAxios.onPatch('/resource/789').reply(200, { patched: true });
+      fetchMock.route(`${baseURL}/resource/123`, { status: 200, body: { updated: true } }, { method: 'PUT' });
+      fetchMock.route(`${baseURL}/resource/456`, { status: 200, body: '' }, { method: 'DELETE' }); // 204 not allowed with body
+      fetchMock.route(`${baseURL}/resource/789`, { status: 200, body: { patched: true } }, { method: 'PATCH' });
 
       const putResponse = await adapter.request({
         method: 'PUT',
@@ -519,7 +495,7 @@ describe('AxiosAdapter', () => {
         url: '/resource/456',
         headers: {},
       });
-      expect(deleteResponse.status).toBe(204);
+      expect(deleteResponse.status).toBe(200);
 
       const patchResponse = await adapter.request({
         method: 'PATCH',
@@ -530,55 +506,50 @@ describe('AxiosAdapter', () => {
       expect(patchResponse.data).toEqual({ patched: true });
     });
 
-    it('should preserve custom headers', async () => {
-      mockAxios.onGet('/test').reply((config) => {
-        expect(config.headers?.['Authorization']).toBe('Bearer token123');
-        expect(config.headers?.['X-Custom']).toBe('value');
-        return [200, {}];
+    it('should handle non-JSON responses gracefully', async () => {
+      fetchMock.route(`${baseURL}/html`, {
+        status: 200,
+        body: '<html>test</html>',
+        headers: { 'content-type': 'text/html' },
       });
 
-      await adapter.request({
+      const response = await adapter.request({
         method: 'GET',
-        url: '/test',
-        headers: {
-          Authorization: 'Bearer token123',
-          'X-Custom': 'value',
-        },
+        url: '/html',
+        headers: {},
       });
-    });
 
-    it('should handle timeout errors', async () => {
-      mockAxios.onGet('/timeout').timeout();
-
-      await expect(
-        adapter.request({
-          method: 'GET',
-          url: '/timeout',
-          headers: {},
-        }),
-      ).rejects.toMatchObject({
-        message: expect.stringContaining('timeout'),
-      });
+      expect(response.data).toBe('<html>test</html>');
     });
   });
 
   describe('error recovery with interceptors', () => {
     it('should allow interceptor to recover from 402 and retry', async () => {
-      let firstCall = true;
+      let callCount = 0;
 
-      mockAxios.onGet('/premium').reply(() => {
-        if (firstCall) {
-          firstCall = false;
-          return [402, { requiresPayment: true }];
-        }
-        return [200, { data: 'premium content' }];
-      });
+      fetchMock.route(
+        `${baseURL}/premium`,
+        () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              status: 402,
+              body: { requiresPayment: true },
+            };
+          }
+          return {
+            status: 200,
+            body: { data: 'premium content' },
+          };
+        },
+        { repeat: 2 },
+      );
 
       // Simulate payment interceptor
       adapter.addResponseInterceptor(
         (response) => response,
         async (error) => {
-          if (error.status === 402) {
+          if (error.status === 402 && !error.request?.metadata?.__is402Retry) {
             // Simulate payment handling
             const retryRequest: HttpRequest = {
               ...error.request!,
@@ -606,14 +577,21 @@ describe('AxiosAdapter', () => {
       });
 
       expect(response.status).toBe(200);
-      expect(firstCall).toBe(false);
+      expect(callCount).toBe(2);
       expect(response.data).toEqual({ data: 'premium content' });
     });
 
     it('should prevent infinite retry loops', async () => {
-      mockAxios.onGet('/premium').reply(402, { requiresPayment: true });
-
       let retryCount = 0;
+
+      fetchMock.route(
+        `${baseURL}/premium`,
+        {
+          status: 402,
+          body: { requiresPayment: true },
+        },
+        { repeat: 2 },
+      );
 
       adapter.addResponseInterceptor(
         (response) => response,

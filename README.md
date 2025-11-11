@@ -10,19 +10,65 @@ TypeScript SDK for building AI agents and applications with the Sapiom API. Prov
 
 ## 📦 Packages
 
-This is a monorepo containing multiple packages:
+This is a monorepo containing multiple focused packages. Install only what you need:
+
+### Core Package
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| [@sapiom/core](./packages/core) | v0.1.0 | Core SDK with HTTP adapters and transaction management |
+| [@sapiom/core](./packages/core) | v0.1.0 | Core transaction client, handlers, and utilities |
+
+### HTTP Client Integrations
+
+| Package | Version | Description |
+|---------|---------|-------------|
+| [@sapiom/axios](./packages/axios) | v0.1.0 | Axios HTTP client integration |
+| [@sapiom/fetch](./packages/fetch) | v0.1.0 | Native Fetch API integration |
+| [@sapiom/node-http](./packages/node-http) | v0.1.0 | Node.js HTTP/HTTPS integration |
+
+### Framework Integrations
+
+| Package | Version | Description |
+|---------|---------|-------------|
 | [@sapiom/langchain](./packages/langchain) | v0.1.0 | LangChain integration (v0.x compatible) |
 
 ### Coming Soon
+
 - `@sapiom/mastra` - Mastra framework integration
-- `@sapiom/langgraph` - LangGraph integration
+- `@sapiom/langgraph` - LangGraph integration  
 - `@sapiom/openai` - OpenAI SDK integration
 
 ## 🚀 Quick Start
+
+### For Axios Users
+
+```bash
+npm install @sapiom/core @sapiom/axios axios
+```
+
+```typescript
+import axios from 'axios';
+import { createSapiomClient } from '@sapiom/axios';
+
+const client = createSapiomClient(axios.create({
+  baseURL: 'https://api.example.com'
+}));
+
+const response = await client.get('/premium-endpoint');
+```
+
+### For Fetch Users
+
+```bash
+npm install @sapiom/core @sapiom/fetch
+```
+
+```typescript
+import { createSapiomFetch } from '@sapiom/fetch';
+
+const fetch = createSapiomFetch();
+const response = await fetch('https://api.example.com/data');
+```
 
 ### For LangChain Users
 
@@ -42,25 +88,11 @@ const model = new SapiomChatOpenAI({
 const response = await model.invoke('Hello!');
 ```
 
-### For HTTP Client Users
+### For Direct API Access
 
 ```bash
 npm install @sapiom/core
 ```
-
-```typescript
-import axios from 'axios';
-import { createSapiomClient } from '@sapiom/core/axios';
-
-const client = createSapiomClient(axios.create({
-  baseURL: 'https://api.example.com'
-}));
-
-// Automatically handles 402 payment flows
-const response = await client.get('/premium-endpoint');
-```
-
-### For Direct API Access
 
 ```typescript
 import { SapiomClient } from '@sapiom/core';
@@ -79,8 +111,24 @@ const transaction = await client.transactions.create({
 ## 📚 Documentation
 
 - **[@sapiom/core](./packages/core/README.md)** - Core SDK documentation
+- **[@sapiom/axios](./packages/axios/README.md)** - Axios integration guide
+- **[@sapiom/fetch](./packages/fetch/README.md)** - Fetch integration guide
+- **[@sapiom/node-http](./packages/node-http/README.md)** - Node.js HTTP integration guide
 - **[@sapiom/langchain](./packages/langchain/README.md)** - LangChain integration guide
 - **[Examples](./examples)** - Code examples for all packages
+
+## 🏗️ Package Architecture
+
+```
+@sapiom/core              Core transaction API & utilities
+    ↑
+    ├── @sapiom/axios     Axios integration
+    ├── @sapiom/fetch     Fetch integration
+    ├── @sapiom/node-http Node HTTP integration
+    └── @sapiom/langchain LangChain integration
+```
+
+All integration packages depend on `@sapiom/core` but are independent of each other.
 
 ## 🔧 Version Compatibility
 
@@ -119,6 +167,7 @@ pnpm format
 ```bash
 # Build specific package
 pnpm --filter @sapiom/core build
+pnpm --filter @sapiom/axios build
 
 # Test specific package
 pnpm --filter @sapiom/langchain test
@@ -162,23 +211,25 @@ MIT © [Sapiom](LICENSE)
 - [Documentation](https://docs.sapiom.com)
 - [NPM Organization](https://www.npmjs.com/org/sapiom)
 - [GitHub Issues](https://github.com/sapiom/sdk/issues)
-- [Discord Community](https://discord.gg/sapiom)
 
 ## 🌟 Features
 
+- ✅ **Modular architecture** - Install only what you need
 - ✅ **Zero dependencies** (core package)
-- ✅ **HTTP client agnostic** (Axios, Fetch, Node HTTP)
-- ✅ **Framework integrations** (LangChain, Mastra, more coming)
-- ✅ **Automatic payment handling** (402 Payment Required flows)
-- ✅ **Pre-emptive authorization** (protect endpoints before access)
-- ✅ **TypeScript native** (full type safety)
-- ✅ **Tree-shakeable** (only bundle what you use)
-- ✅ **Node.js 18+** (native fetch support)
+- ✅ **HTTP client agnostic** - Works with Axios, Fetch, Node HTTP
+- ✅ **Framework integrations** - LangChain, Mastra (coming soon)
+- ✅ **Automatic payment handling** - 402 Payment Required flows
+- ✅ **Pre-emptive authorization** - Protect endpoints before access
+- ✅ **TypeScript native** - Full type safety
+- ✅ **Tree-shakeable** - Optimal bundle sizes
+- ✅ **Node.js 18+** - Native fetch support
 
 ## 🗺️ Roadmap
 
 - [x] Core transaction API
-- [x] HTTP client adapters (Axios, Fetch, Node HTTP)
+- [x] Axios integration
+- [x] Fetch integration  
+- [x] Node.js HTTP integration
 - [x] LangChain v0.x integration
 - [ ] GitHub Actions CI/CD
 - [ ] Mastra integration

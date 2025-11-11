@@ -1,40 +1,29 @@
-import fetchMock from '@fetch-mock/jest';
+import nock from 'nock';
 
-import { HttpRequest } from '../types';
-import { FetchAdapter, createFetchAdapter } from './fetch';
+import { HttpRequest } from './types';
+import { NodeHttpAdapter, createNodeHttpAdapter } from './node-http';
 
-describe('FetchAdapter', () => {
-  let adapter: FetchAdapter;
+describe('NodeHttpAdapter', () => {
+  let adapter: NodeHttpAdapter;
   const baseURL = 'https://api.example.com';
 
-  beforeAll(() => {
-    fetchMock.mockGlobal();
-  });
-
   beforeEach(() => {
-    adapter = new FetchAdapter(baseURL);
-    fetchMock.clearHistory();
+    adapter = new NodeHttpAdapter();
+    nock.cleanAll();
   });
 
   afterEach(() => {
-    fetchMock.removeRoutes();
-  });
-
-  afterAll(() => {
-    fetchMock.unmockGlobal();
+    nock.cleanAll();
   });
 
   describe('request', () => {
     it('should execute a successful GET request', async () => {
       const mockData = { message: 'success', id: 123 };
-      fetchMock.route(`${baseURL}/test`, {
-        status: 200,
-        body: mockData,
-      });
+      nock(baseURL).get('/test').reply(200, mockData);
 
       const request: HttpRequest = {
         method: 'GET',
-        url: '/test',
+        url: `${baseURL}/test`,
         headers: {},
       };
 
@@ -48,20 +37,11 @@ describe('FetchAdapter', () => {
       const requestBody = { name: 'test', value: 42 };
       const responseData = { id: '123', created: true };
 
-      fetchMock.route(
-        `${baseURL}/users`,
-        {
-          status: 201,
-          body: responseData,
-        },
-        {
-          method: 'POST',
-        },
-      );
+      nock(baseURL).post('/users', requestBody).reply(201, responseData);
 
       const request: HttpRequest = {
         method: 'POST',
-        url: '/users',
+        url: `${baseURL}/users`,
         headers: { 'Content-Type': 'application/json' },
         body: requestBody,
       };
@@ -72,15 +52,28 @@ describe('FetchAdapter', () => {
       expect(response.data).toEqual(responseData);
     });
 
-    it('should handle 404 errors', async () => {
-      fetchMock.route(`${baseURL}/notfound`, {
-        status: 404,
-        body: { error: 'Not found' },
-      });
+    it('should include query params', async () => {
+      nock(baseURL).get('/search').query({ q: 'test', limit: 10 }).reply(200, { results: [] });
 
       const request: HttpRequest = {
         method: 'GET',
-        url: '/notfound',
+        url: `${baseURL}/search`,
+        headers: {},
+        params: { q: 'test', limit: 10 },
+      };
+
+      const response = await adapter.request(request);
+
+      expect(response.status).toBe(200);
+      expect(response.data).toEqual({ results: [] });
+    });
+
+    it('should handle 404 errors', async () => {
+      nock(baseURL).get('/notfound').reply(404, { error: 'Not found' });
+
+      const request: HttpRequest = {
+        method: 'GET',
+        url: `${baseURL}/notfound`,
         headers: {},
       };
 
@@ -104,17 +97,13 @@ describe('FetchAdapter', () => {
         ],
       };
 
-      fetchMock.route(`${baseURL}/premium`, {
-        status: 402,
-        body: paymentData,
-        headers: {
-          'x-payment-required': 'true',
-        },
+      nock(baseURL).get('/premium').reply(402, paymentData, {
+        'x-payment-required': 'true',
       });
 
       const request: HttpRequest = {
         method: 'GET',
-        url: '/premium',
+        url: `${baseURL}/premium`,
         headers: {},
       };
 
@@ -124,13 +113,11 @@ describe('FetchAdapter', () => {
     });
 
     it('should handle network errors', async () => {
-      fetchMock.route(`${baseURL}/network-error`, {
-        throws: new Error('Network Error'),
-      });
+      nock(baseURL).get('/network-error').replyWithError('Network Error');
 
       const request: HttpRequest = {
         method: 'GET',
-        url: '/network-error',
+        url: `${baseURL}/network-error`,
         headers: {},
       };
 
@@ -139,40 +126,32 @@ describe('FetchAdapter', () => {
       });
     });
 
-    it('should handle absolute URLs', async () => {
-      const absoluteURL = 'https://other-api.com/data';
-      fetchMock.route(absoluteURL, {
-        status: 200,
-        body: { absolute: true },
-      });
-
-      const request: HttpRequest = {
-        method: 'GET',
-        url: absoluteURL,
-        headers: {},
-      };
-
-      const response = await adapter.request(request);
-
-      expect(response.data).toEqual({ absolute: true });
-    });
-
     it('should handle text responses', async () => {
-      fetchMock.route(`${baseURL}/text`, {
-        status: 200,
-        body: 'plain text response',
-        headers: { 'content-type': 'text/plain' },
-      });
+      nock(baseURL).get('/text').reply(200, 'plain text response', { 'content-type': 'text/plain' });
 
       const request: HttpRequest = {
         method: 'GET',
-        url: '/text',
+        url: `${baseURL}/text`,
         headers: {},
       };
 
       const response = await adapter.request(request);
 
       expect(response.data).toBe('plain text response');
+    });
+
+    it('should handle HTTPS requests', async () => {
+      nock('https://secure-api.com').get('/secure').reply(200, { secure: true });
+
+      const request: HttpRequest = {
+        method: 'GET',
+        url: 'https://secure-api.com/secure',
+        headers: {},
+      };
+
+      const response = await adapter.request(request);
+
+      expect(response.data).toEqual({ secure: true });
     });
   });
 
@@ -188,20 +167,16 @@ describe('FetchAdapter', () => {
         };
       });
 
-      fetchMock.route(`${baseURL}/test`, {
-        status: 200,
-        body: { ok: true },
-      });
+      nock(baseURL).get('/test').matchHeader('X-Custom-Header', 'intercepted').reply(200, { ok: true });
 
       await adapter.request({
         method: 'GET',
-        url: '/test',
+        url: `${baseURL}/test`,
         headers: {},
       });
 
-      const calls = fetchMock.callHistory.calls();
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.options!.headers!['x-custom-header']).toBe('intercepted');
+      // Verify nock matched the header
+      expect(nock.isDone()).toBe(true);
     });
 
     it('should support async interceptors', async () => {
@@ -213,21 +188,15 @@ describe('FetchAdapter', () => {
         };
       });
 
-      fetchMock.route(`${baseURL}/test`, {
-        status: 200,
-        body: { ok: true },
-      });
+      nock(baseURL).get('/test').matchHeader('X-Async', 'true').reply(200, { ok: true });
 
       await adapter.request({
         method: 'GET',
-        url: '/test',
+        url: `${baseURL}/test`,
         headers: {},
       });
 
-      // Verify async interceptor added the header (headers are lowercase in callHistory)
-      const calls = fetchMock.callHistory.calls();
-      expect(calls).toHaveLength(1);
-      expect(calls[0]!.options!.headers!['x-async']).toBe('true');
+      expect(nock.isDone()).toBe(true);
     });
 
     it('should allow cleanup of interceptors', async () => {
@@ -243,26 +212,23 @@ describe('FetchAdapter', () => {
 
       const cleanup = adapter.addRequestInterceptor(interceptor);
 
-      fetchMock.route(`begin:${baseURL}/test`, { status: 200, body: {} }, { repeat: 2 });
+      // First request - should have the header
+      nock(baseURL).get('/test1').matchHeader('X-Custom-Header', 'intercepted').reply(200, { ok: true });
 
-      // First request - interceptor should be called
-      await adapter.request({ method: 'GET', url: '/test1', headers: {} });
+      await adapter.request({ method: 'GET', url: `${baseURL}/test1`, headers: {} });
       expect(interceptor).toHaveBeenCalledTimes(1);
-
-      // Verify header was added (headers are lowercase in callHistory)
-      let calls = fetchMock.callHistory.calls();
-      expect(calls[0]!.options!.headers!['x-custom-header']).toBe('intercepted');
 
       // Clean up
       cleanup();
 
-      // Second request - interceptor should not be called
-      await adapter.request({ method: 'GET', url: '/test2', headers: {} });
-      expect(interceptor).toHaveBeenCalledTimes(1); // Still 1 - not called again
+      // Second request - should NOT have the header
+      nock(baseURL)
+        .get('/test2')
+        .matchHeader('X-Custom-Header', (val) => val === undefined)
+        .reply(200, { ok: true });
 
-      // Verify header was NOT added after cleanup
-      calls = fetchMock.callHistory.calls();
-      expect(calls[1]!.options!.headers!['x-custom-header']).toBeUndefined();
+      await adapter.request({ method: 'GET', url: `${baseURL}/test2`, headers: {} });
+      expect(interceptor).toHaveBeenCalledTimes(1); // Still 1
     });
 
     it('should support multiple interceptors in order', async () => {
@@ -278,9 +244,9 @@ describe('FetchAdapter', () => {
         return request;
       });
 
-      fetchMock.route(`${baseURL}/test`, { status: 200, body: {} });
+      nock(baseURL).get('/test').reply(200, {});
 
-      await adapter.request({ method: 'GET', url: '/test', headers: {} });
+      await adapter.request({ method: 'GET', url: `${baseURL}/test`, headers: {} });
 
       expect(calls).toEqual(['first', 'second']);
     });
@@ -295,14 +261,11 @@ describe('FetchAdapter', () => {
         };
       });
 
-      fetchMock.route(`${baseURL}/test`, {
-        status: 200,
-        body: { original: true },
-      });
+      nock(baseURL).get('/test').reply(200, { original: true });
 
       const response = await adapter.request({
         method: 'GET',
-        url: '/test',
+        url: `${baseURL}/test`,
         headers: {},
       });
 
@@ -328,14 +291,11 @@ describe('FetchAdapter', () => {
 
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      fetchMock.route(`${baseURL}/notfound`, {
-        status: 404,
-        body: { error: 'Not found' },
-      });
+      nock(baseURL).get('/notfound').reply(404, { error: 'Not found' });
 
       const response = await adapter.request({
         method: 'GET',
-        url: '/notfound',
+        url: `${baseURL}/notfound`,
         headers: {},
       });
 
@@ -362,18 +322,14 @@ describe('FetchAdapter', () => {
       const errorHandler = jest.fn();
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      fetchMock.route(`${baseURL}/premium`, {
-        status: 402,
-        body: paymentData,
-        headers: {
-          'x-payment-required': 'true',
-        },
+      nock(baseURL).get('/premium').reply(402, paymentData, {
+        'x-payment-required': 'true',
       });
 
       await adapter
         .request({
           method: 'GET',
-          url: '/premium',
+          url: `${baseURL}/premium`,
           headers: {},
         })
         .catch(() => {});
@@ -382,24 +338,24 @@ describe('FetchAdapter', () => {
         expect.objectContaining({
           status: 402,
           data: paymentData,
+          headers: expect.objectContaining({
+            'x-payment-required': 'true',
+          }),
           request: expect.objectContaining({
             method: 'GET',
-            url: '/premium',
+            url: `${baseURL}/premium`,
           }),
         }),
       );
     });
 
     it('should handle 500 server errors', async () => {
-      fetchMock.route(`${baseURL}/error`, {
-        status: 500,
-        body: { error: 'Internal server error' },
-      });
+      nock(baseURL).get('/error').reply(500, { error: 'Internal server error' });
 
       await expect(
         adapter.request({
           method: 'GET',
-          url: '/error',
+          url: `${baseURL}/error`,
           headers: {},
         }),
       ).rejects.toMatchObject({
@@ -417,16 +373,24 @@ describe('FetchAdapter', () => {
 
       const cleanup = adapter.addResponseInterceptor(interceptor);
 
-      fetchMock.route(`${baseURL}/test1`, { status: 200, body: { original: '1' } });
-      fetchMock.route(`${baseURL}/test2`, { status: 200, body: { original: '2' } });
+      nock(baseURL).get('/test1').reply(200, { original: '1' });
+      nock(baseURL).get('/test2').reply(200, { original: '2' });
 
-      const response1 = await adapter.request({ method: 'GET', url: '/test1', headers: {} });
+      const response1 = await adapter.request({
+        method: 'GET',
+        url: `${baseURL}/test1`,
+        headers: {},
+      });
       expect(response1.data).toEqual({ original: '1', modified: true });
       expect(interceptor).toHaveBeenCalledTimes(1);
 
       cleanup();
 
-      const response2 = await adapter.request({ method: 'GET', url: '/test2', headers: {} });
+      const response2 = await adapter.request({
+        method: 'GET',
+        url: `${baseURL}/test2`,
+        headers: {},
+      });
       expect(response2.data).toEqual({ original: '2' });
       expect(interceptor).toHaveBeenCalledTimes(1); // Not called after cleanup
     });
@@ -444,31 +408,28 @@ describe('FetchAdapter', () => {
         return response;
       });
 
-      fetchMock.route(`${baseURL}/test`, { status: 200, body: {} });
+      nock(baseURL).get('/test').reply(200, {});
 
-      await adapter.request({ method: 'GET', url: '/test', headers: {} });
+      await adapter.request({ method: 'GET', url: `${baseURL}/test`, headers: {} });
 
       expect(calls).toEqual(['first', 'second']);
     });
   });
 
-  describe('createFetchAdapter', () => {
-    it('should create a FetchAdapter instance', () => {
-      const adapter = createFetchAdapter('https://test.com');
-      expect(adapter).toBeInstanceOf(FetchAdapter);
+  describe('createNodeHttpAdapter', () => {
+    it('should create a NodeHttpAdapter instance', () => {
+      const adapter = createNodeHttpAdapter();
+      expect(adapter).toBeInstanceOf(NodeHttpAdapter);
     });
 
     it('should work with created adapter', async () => {
-      const adapter = createFetchAdapter('https://test.com');
+      const adapter = createNodeHttpAdapter();
 
-      fetchMock.route('https://test.com/data', {
-        status: 200,
-        body: { test: true },
-      });
+      nock('https://test.com').get('/data').reply(200, { test: true });
 
       const response = await adapter.request({
         method: 'GET',
-        url: '/data',
+        url: 'https://test.com/data',
         headers: {},
       });
 
@@ -476,15 +437,15 @@ describe('FetchAdapter', () => {
     });
   });
 
-  describe('integration with Fetch features', () => {
+  describe('integration with Node HTTP features', () => {
     it('should work with different HTTP methods', async () => {
-      fetchMock.route(`${baseURL}/resource/123`, { status: 200, body: { updated: true } }, { method: 'PUT' });
-      fetchMock.route(`${baseURL}/resource/456`, { status: 200, body: '' }, { method: 'DELETE' }); // 204 not allowed with body
-      fetchMock.route(`${baseURL}/resource/789`, { status: 200, body: { patched: true } }, { method: 'PATCH' });
+      nock(baseURL).put('/resource/123').reply(200, { updated: true });
+      nock(baseURL).delete('/resource/456').reply(204);
+      nock(baseURL).patch('/resource/789').reply(200, { patched: true });
 
       const putResponse = await adapter.request({
         method: 'PUT',
-        url: '/resource/123',
+        url: `${baseURL}/resource/123`,
         headers: {},
         body: { name: 'updated' },
       });
@@ -492,58 +453,85 @@ describe('FetchAdapter', () => {
 
       const deleteResponse = await adapter.request({
         method: 'DELETE',
-        url: '/resource/456',
+        url: `${baseURL}/resource/456`,
         headers: {},
       });
-      expect(deleteResponse.status).toBe(200);
+      expect(deleteResponse.status).toBe(204);
 
       const patchResponse = await adapter.request({
         method: 'PATCH',
-        url: '/resource/789',
+        url: `${baseURL}/resource/789`,
         headers: {},
         body: { name: 'patched' },
       });
       expect(patchResponse.data).toEqual({ patched: true });
     });
 
-    it('should handle non-JSON responses gracefully', async () => {
-      fetchMock.route(`${baseURL}/html`, {
-        status: 200,
-        body: '<html>test</html>',
-        headers: { 'content-type': 'text/html' },
+    it('should preserve custom headers', async () => {
+      nock(baseURL)
+        .get('/test')
+        .matchHeader('Authorization', 'Bearer token123')
+        .matchHeader('X-Custom', 'value')
+        .reply(200, {});
+
+      await adapter.request({
+        method: 'GET',
+        url: `${baseURL}/test`,
+        headers: {
+          Authorization: 'Bearer token123',
+          'X-Custom': 'value',
+        },
       });
+
+      expect(nock.isDone()).toBe(true);
+    });
+
+    it('should handle non-JSON responses gracefully', async () => {
+      nock(baseURL).get('/html').reply(200, '<html>test</html>', { 'content-type': 'text/html' });
 
       const response = await adapter.request({
         method: 'GET',
-        url: '/html',
+        url: `${baseURL}/html`,
         headers: {},
       });
 
       expect(response.data).toBe('<html>test</html>');
     });
+
+    it('should work with both HTTP and HTTPS', async () => {
+      nock('http://insecure-api.com').get('/data').reply(200, { http: true });
+      nock('https://secure-api.com').get('/data').reply(200, { https: true });
+
+      const httpResponse = await adapter.request({
+        method: 'GET',
+        url: 'http://insecure-api.com/data',
+        headers: {},
+      });
+      expect(httpResponse.data).toEqual({ http: true });
+
+      const httpsResponse = await adapter.request({
+        method: 'GET',
+        url: 'https://secure-api.com/data',
+        headers: {},
+      });
+      expect(httpsResponse.data).toEqual({ https: true });
+    });
   });
 
   describe('error recovery with interceptors', () => {
     it('should allow interceptor to recover from 402 and retry', async () => {
-      let callCount = 0;
+      let firstCall = true;
 
-      fetchMock.route(
-        `${baseURL}/premium`,
-        () => {
-          callCount++;
-          if (callCount === 1) {
-            return {
-              status: 402,
-              body: { requiresPayment: true },
-            };
+      nock(baseURL)
+        .get('/premium')
+        .times(2)
+        .reply(() => {
+          if (firstCall) {
+            firstCall = false;
+            return [402, { requiresPayment: true }];
           }
-          return {
-            status: 200,
-            body: { data: 'premium content' },
-          };
-        },
-        { repeat: 2 },
-      );
+          return [200, { data: 'premium content' }];
+        });
 
       // Simulate payment interceptor
       adapter.addResponseInterceptor(
@@ -572,26 +560,19 @@ describe('FetchAdapter', () => {
 
       const response = await adapter.request({
         method: 'GET',
-        url: '/premium',
+        url: `${baseURL}/premium`,
         headers: {},
       });
 
       expect(response.status).toBe(200);
-      expect(callCount).toBe(2);
+      expect(firstCall).toBe(false);
       expect(response.data).toEqual({ data: 'premium content' });
     });
 
     it('should prevent infinite retry loops', async () => {
       let retryCount = 0;
 
-      fetchMock.route(
-        `${baseURL}/premium`,
-        {
-          status: 402,
-          body: { requiresPayment: true },
-        },
-        { repeat: 2 },
-      );
+      nock(baseURL).get('/premium').times(2).reply(402, { requiresPayment: true });
 
       adapter.addResponseInterceptor(
         (response) => response,
@@ -614,7 +595,7 @@ describe('FetchAdapter', () => {
       await expect(
         adapter.request({
           method: 'GET',
-          url: '/premium',
+          url: `${baseURL}/premium`,
           headers: {},
         }),
       ).rejects.toMatchObject({

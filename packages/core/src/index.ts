@@ -3,19 +3,6 @@ export { SapiomClient } from './lib/SapiomClient';
 export type { SapiomClientConfig } from './lib/SapiomClient';
 export { TransactionAPI } from './lib/TransactionAPI';
 
-// HTTP Client Abstraction
-export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError, SapiomTransactionMetadata } from './http/types';
-
-// HTTP Adapters
-export {
-  AxiosAdapter,
-  createAxiosAdapter,
-  FetchAdapter,
-  createFetchAdapter,
-  NodeHttpAdapter,
-  createNodeHttpAdapter,
-} from './http/adapters';
-
 // Payment Error Detection
 export {
   PaymentRequiredError,
@@ -72,17 +59,10 @@ export type {
   ReauthorizeWithPaymentRequest,
 } from './types/transaction';
 
-// Simple Integration Functions (Recommended for most users)
-export { createSapiomAxios } from './integrations/http/axios';
-export type { SapiomAxiosConfig } from './integrations/http/axios';
+// HTTP Types (needed by HTTP integration packages)
+export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError, SapiomTransactionMetadata } from './http/types';
 
-export { createSapiomFetch } from './integrations/http/fetch';
-export type { SapiomFetchConfig } from './integrations/http/fetch';
-
-export { createSapiomNodeHttp } from './integrations/http/node-http';
-export type { SapiomNodeHttpConfig } from './integrations/http/node-http';
-
-// Shared integration utilities
+// Shared integration utilities (needed by HTTP integration packages)
 export { initializeSapiomClient } from './integrations/shared';
 export type { BaseSapiomIntegrationConfig } from './integrations/shared';
 

@@ -1,8 +1,8 @@
-import { SapiomHandlerConfig, withSapiomHandling } from '../../core/SapiomHandler';
-import { createFetchAdapter } from '../../http/adapters/fetch';
-import { HttpClientAdapter } from '../../http/types';
-import { SapiomClient } from '../../lib/SapiomClient';
-import { BaseSapiomIntegrationConfig, initializeSapiomClient } from '../shared';
+import { SapiomHandlerConfig, withSapiomHandling } from '@sapiom/core';
+import { createFetchAdapter } from './adapter';
+import { HttpClientAdapter } from './types';
+import { SapiomClient } from '@sapiom/core';
+import { BaseSapiomIntegrationConfig, initializeSapiomClient } from './shared';
 
 /**
  * Configuration for Sapiom-enabled Fetch client

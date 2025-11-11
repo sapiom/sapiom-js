@@ -6,7 +6,7 @@
  */
 import { AxiosInstance } from 'axios';
 
-import { SapiomClient } from '../lib/SapiomClient';
+import { SapiomClient } from '@sapiom/core';
 
 declare module 'axios' {
   interface AxiosInstance {
