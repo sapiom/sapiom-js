@@ -36,7 +36,7 @@ const response = await client.request({
 - ✅ Automatic 402 payment handling
 - ✅ Pre-emptive authorization
 - ✅ Full TypeScript support
-- ✅ Zero dependencies (uses Node.js stdlib)
+- ✅ Uses Node.js standard library (no additional HTTP client needed)
 - ✅ Environment variable configuration
 
 ## Configuration
@@ -78,5 +78,5 @@ MIT © [Sapiom](../../LICENSE)
 ## Links
 
 - [Documentation](https://docs.sapiom.com)
-- [GitHub](https://github.com/sapiom/sdk)
+- [GitHub](https://github.com/sapiom/sapiom-javascript)
 - [NPM](https://www.npmjs.com/package/@sapiom/node-http)

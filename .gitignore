@@ -33,3 +33,5 @@ Thumbs.db
 
 # Changeset prerelease files
 .changeset/pre.json
+
+.temp/

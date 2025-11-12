@@ -10,24 +10,25 @@
     "payment",
     "402"
   ],
-  "homepage": "https://github.com/sapiom/sdk/tree/main/packages/core#readme",
+  "homepage": "https://github.com/sapiom/sapiom-javascript/tree/main/packages/core#readme",
   "bugs": {
-    "url": "https://github.com/sapiom/sdk/issues"
+    "url": "https://github.com/sapiom/sapiom-javascript/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sapiom/sdk.git",
+    "url": "https://github.com/sapiom/sapiom-javascript.git",
     "directory": "packages/core"
   },
   "license": "MIT",
   "author": "Sapiom",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
     }
   },
   "files": [
@@ -37,7 +38,9 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "build": "npm run build:cjs && npm run build:esm",
+    "build:cjs": "tsc --project tsconfig.cjs.json",
+    "build:esm": "tsc --project tsconfig.esm.json",
     "clean": "rm -rf dist *.tsbuildinfo",
     "dev": "tsc --watch --project tsconfig.build.json",
     "test": "jest",
@@ -48,11 +51,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "prepublishOnly": "pnpm build"
   },
-  "dependencies": {
-    "decimal.js": "^10.6.0"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@types/decimal.js": "^7.4.3",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.11.30",
     "@typescript-eslint/eslint-plugin": "^7.3.1",

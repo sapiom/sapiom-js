@@ -117,7 +117,6 @@ const transaction = await client.transactions.create({
 - **[@sapiom/fetch](./packages/fetch/README.md)** - Fetch integration guide
 - **[@sapiom/node-http](./packages/node-http/README.md)** - Node.js HTTP integration guide
 - **[@sapiom/langchain](./packages/langchain/README.md)** - LangChain integration guide
-- **[Examples](./examples)** - Code examples for all packages
 
 ## 🏗️ Package Architecture
 
@@ -212,12 +211,12 @@ MIT © [Sapiom](LICENSE)
 - [Website](https://sapiom.com)
 - [Documentation](https://docs.sapiom.com)
 - [NPM Organization](https://www.npmjs.com/org/sapiom)
-- [GitHub Issues](https://github.com/sapiom/sdk/issues)
+- [GitHub Issues](https://github.com/sapiom/sapiom-javascript/issues)
 
 ## 🌟 Features
 
 - ✅ **Modular architecture** - Install only what you need
-- ✅ **Zero dependencies** (core package)
+- ✅ **Lightweight core** - Minimal dependencies and small footprint
 - ✅ **HTTP client agnostic** - Works with Axios, Fetch, Node HTTP
 - ✅ **Framework integrations** - LangChain, Mastra (coming soon)
 - ✅ **Automatic payment handling** - 402 Payment Required flows

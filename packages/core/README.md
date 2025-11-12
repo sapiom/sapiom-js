@@ -9,7 +9,7 @@ Core SDK for Sapiom API providing HTTP client adapters, transaction management, 
 
 ## Features
 
-- ✅ **Zero dependencies** - Lightweight core with no external deps
+- ✅ **Lightweight core** - Minimal footprint with focused functionality
 - ✅ **HTTP client agnostic** - Works with Axios, Fetch, Node HTTP
 - ✅ **Automatic payment handling** - Handles 402 Payment Required flows
 - ✅ **Pre-emptive authorization** - Protect endpoints before access
@@ -56,9 +56,15 @@ console.log(client.transactions.isAuthorized(transaction)); // boolean
 
 ### Axios Integration
 
+For Axios integration, install the separate package:
+
+```bash
+npm install @sapiom/axios axios
+```
+
 ```typescript
 import axios from 'axios';
-import { createSapiomClient } from '@sapiom/core/axios';
+import { createSapiomClient } from '@sapiom/axios';
 
 const client = createSapiomClient(axios.create({
   baseURL: 'https://api.example.com'
@@ -72,10 +78,18 @@ const client = createSapiomClient(axios.create({
 const response = await client.get('/premium-endpoint');
 ```
 
+See [@sapiom/axios](../axios/README.md) for complete documentation.
+
 ### Fetch Integration
 
+For Fetch API integration, install the separate package:
+
+```bash
+npm install @sapiom/fetch
+```
+
 ```typescript
-import { createSapiomFetch } from '@sapiom/core/fetch';
+import { createSapiomFetch } from '@sapiom/fetch';
 
 const fetch = createSapiomFetch({
   sapiom: {
@@ -87,10 +101,18 @@ const fetch = createSapiomFetch({
 const response = await fetch('https://api.example.com/data');
 ```
 
+See [@sapiom/fetch](../fetch/README.md) for complete documentation.
+
 ### Node.js HTTP/HTTPS
 
+For Node.js HTTP/HTTPS integration, install the separate package:
+
+```bash
+npm install @sapiom/node-http
+```
+
 ```typescript
-import { createSapiomClient } from '@sapiom/core/node-http';
+import { createSapiomClient } from '@sapiom/node-http';
 
 const client = createSapiomClient({
   sapiom: {
@@ -103,6 +125,8 @@ const response = await client.request({
   url: 'https://api.example.com/data'
 });
 ```
+
+See [@sapiom/node-http](../node-http/README.md) for complete documentation.
 
 ## API Reference
 
@@ -254,10 +278,6 @@ import type {
 } from '@sapiom/core';
 ```
 
-## Examples
-
-See the [examples directory](../../examples) for complete working examples.
-
 ## License
 
 MIT © [Sapiom](../../LICENSE)
@@ -265,6 +285,6 @@ MIT © [Sapiom](../../LICENSE)
 ## Links
 
 - [Documentation](https://docs.sapiom.com)
-- [GitHub](https://github.com/sapiom/sdk)
+- [GitHub](https://github.com/sapiom/sapiom-javascript)
 - [NPM](https://www.npmjs.com/package/@sapiom/core)
-- [Issues](https://github.com/sapiom/sdk/issues)
+- [Issues](https://github.com/sapiom/sapiom-javascript/issues)

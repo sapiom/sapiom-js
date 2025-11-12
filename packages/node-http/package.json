@@ -11,24 +11,25 @@
     "payment",
     "402"
   ],
-  "homepage": "https://github.com/sapiom/sdk/tree/main/packages/node-http#readme",
+  "homepage": "https://github.com/sapiom/sapiom-javascript/tree/main/packages/node-http#readme",
   "bugs": {
-    "url": "https://github.com/sapiom/sdk/issues"
+    "url": "https://github.com/sapiom/sapiom-javascript/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sapiom/sdk.git",
+    "url": "https://github.com/sapiom/sapiom-javascript.git",
     "directory": "packages/node-http"
   },
   "license": "MIT",
   "author": "Sapiom",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
     }
   },
   "files": [
@@ -38,7 +39,9 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "build": "npm run build:cjs && npm run build:esm",
+    "build:cjs": "tsc --project tsconfig.cjs.json",
+    "build:esm": "tsc --project tsconfig.esm.json",
     "clean": "rm -rf dist *.tsbuildinfo",
     "dev": "tsc --watch --project tsconfig.build.json",
     "test": "jest",

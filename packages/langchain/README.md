@@ -36,7 +36,7 @@ const model = new SapiomChatOpenAI({
 const response = await model.invoke('Hello!');
 ```
 
-See [full README](https://github.com/sapiom/sdk/tree/main/packages/langchain) for complete documentation.
+See [full README](https://github.com/sapiom/sapiom-javascript/tree/main/packages/langchain) for complete documentation.
 
 ## License
 

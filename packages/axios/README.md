@@ -79,5 +79,5 @@ MIT © [Sapiom](../../LICENSE)
 ## Links
 
 - [Documentation](https://docs.sapiom.com)
-- [GitHub](https://github.com/sapiom/sdk)
+- [GitHub](https://github.com/sapiom/sapiom-javascript)
 - [NPM](https://www.npmjs.com/package/@sapiom/axios)

@@ -37,7 +37,7 @@ const data = await response.json();
 - ✅ Automatic 402 payment handling
 - ✅ Pre-emptive authorization
 - ✅ Full TypeScript support
-- ✅ Zero dependencies (uses native fetch)
+- ✅ Uses native Fetch API (no additional HTTP client needed)
 - ✅ Environment variable configuration
 
 ## Configuration
@@ -79,5 +79,5 @@ MIT © [Sapiom](../../LICENSE)
 ## Links
 
 - [Documentation](https://docs.sapiom.com)
-- [GitHub](https://github.com/sapiom/sdk)
+- [GitHub](https://github.com/sapiom/sapiom-javascript)
 - [NPM](https://www.npmjs.com/package/@sapiom/fetch)
