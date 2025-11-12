@@ -10,10 +10,8 @@ Axios integration for Sapiom SDK providing automatic payment handling (402 error
 ## Installation
 
 ```bash
-npm install @sapiom/core @sapiom/axios axios
+npm install @sapiom/axios axios
 ```
-
-**Note:** Both `@sapiom/core` and `axios` are required peer dependencies.
 
 ## Quick Start
 

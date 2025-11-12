@@ -61,9 +61,11 @@
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.2"
   },
-  "peerDependencies": {
-    "axios": ">=1.0.0",
+  "dependencies": {
     "@sapiom/core": "^0.1.0"
+  },
+  "peerDependencies": {
+    "axios": ">=1.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

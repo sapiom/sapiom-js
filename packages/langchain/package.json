@@ -65,10 +65,13 @@
     "typescript": "^5.4.2",
     "zod": "^4.1.12"
   },
+  "dependencies": {
+    "decimal.js": "^10.6.0",
+    "@sapiom/core": "^0.1.0"
+  },
   "peerDependencies": {
     "@langchain/core": ">=0.3.0 <1.0.0",
-    "@langchain/langgraph": ">=0.2.0 <1.0.0",
-    "@sapiom/core": "^0.1.0"
+    "@langchain/langgraph": ">=0.2.0 <1.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -76,8 +79,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "sideEffects": false,
-  "dependencies": {
-    "decimal.js": "^10.6.0"
-  }
+  "sideEffects": false
 }

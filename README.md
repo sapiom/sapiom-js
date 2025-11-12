@@ -43,7 +43,7 @@ This is a monorepo containing multiple focused packages. Install only what you n
 ### For Axios Users
 
 ```bash
-npm install @sapiom/core @sapiom/axios axios
+npm install @sapiom/axios axios
 ```
 
 ```typescript
@@ -60,7 +60,7 @@ const response = await client.get('/premium-endpoint');
 ### For Fetch Users
 
 ```bash
-npm install @sapiom/core @sapiom/fetch
+npm install @sapiom/fetch
 ```
 
 ```typescript
@@ -73,7 +73,7 @@ const response = await fetch('https://api.example.com/data');
 ### For LangChain Users
 
 ```bash
-npm install @sapiom/core @sapiom/langchain
+npm install @sapiom/langchain
 ```
 
 ```typescript
@@ -89,6 +89,8 @@ const response = await model.invoke('Hello!');
 ```
 
 ### For Direct API Access
+
+If you only need the transaction client without HTTP integrations:
 
 ```bash
 npm install @sapiom/core

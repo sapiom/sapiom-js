@@ -10,10 +10,8 @@ Node.js HTTP/HTTPS integration for Sapiom SDK providing automatic payment handli
 ## Installation
 
 ```bash
-npm install @sapiom/core @sapiom/node-http
+npm install @sapiom/node-http
 ```
-
-**Note:** `@sapiom/core` is a required peer dependency.
 
 ## Quick Start
 

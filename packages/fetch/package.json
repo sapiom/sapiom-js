@@ -61,7 +61,7 @@
     "typescript": "^5.4.2",
     "undici": "^7.16.0"
   },
-  "peerDependencies": {
+  "dependencies": {
     "@sapiom/core": "^0.1.0"
   },
   "engines": {

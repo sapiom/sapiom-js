@@ -19,10 +19,8 @@ This package currently supports LangChain v0.x. LangChain v1.x support coming in
 ## Installation
 
 ```bash
-npm install @sapiom/core @sapiom/langchain
+npm install @sapiom/langchain
 ```
-
-**Note:** Both packages are required.
 
 ## Quick Start
 

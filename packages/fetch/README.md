@@ -10,10 +10,10 @@ Fetch API integration for Sapiom SDK providing automatic payment handling (402 e
 ## Installation
 
 ```bash
-npm install @sapiom/core @sapiom/fetch
+npm install @sapiom/fetch
 ```
 
-**Note:** `@sapiom/core` is a required peer dependency. Requires Node.js 18+ (native fetch).
+**Note:** Requires Node.js 18+ (native fetch).
 
 ## Quick Start
 

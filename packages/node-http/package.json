@@ -62,7 +62,7 @@
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.2"
   },
-  "peerDependencies": {
+  "dependencies": {
     "@sapiom/core": "^0.1.0"
   },
   "engines": {
