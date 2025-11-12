@@ -1,8 +1,8 @@
 /**
  * Shared types for LangChain integration
  */
-import type { SapiomClient } from '@sapiom/core';
-import type { BaseSapiomIntegrationConfig } from '@sapiom/core';
+import type { SapiomClient } from "@sapiom/core";
+import type { BaseSapiomIntegrationConfig } from "@sapiom/core";
 
 /**
  * Configuration for Sapiom model tracking
@@ -103,7 +103,11 @@ export interface SapiomModelConfig extends BaseSapiomIntegrationConfig {
   /**
    * Callbacks for LLM operations
    */
-  onBeforeGenerate?: (txId: string, estimatedTokens: number, traceId: string | undefined) => void;
+  onBeforeGenerate?: (
+    txId: string,
+    estimatedTokens: number,
+    traceId: string | undefined,
+  ) => void;
   onAfterGenerate?: (txId: string, actualTokens: number, cost: number) => void;
   onAuthorizationDenied?: (txId: string, reason: string) => void;
 }
@@ -144,7 +148,12 @@ export interface SapiomToolConfig extends BaseSapiomIntegrationConfig {
   /**
    * Authorization callbacks
    */
-  onBeforeCall?: (txId: string, toolName: string, args: any, traceId: string | undefined) => void;
+  onBeforeCall?: (
+    txId: string,
+    toolName: string,
+    args: any,
+    traceId: string | undefined,
+  ) => void;
   onAfterCall?: (txId: string, result: any) => void;
   onAuthorizationDenied?: (txId: string, reason: string) => void;
 
@@ -206,7 +215,7 @@ export interface SapiomSessionMetadata {
    * Avoids creating new authorizer on every tool call
    * @internal
    */
-  __sapiomAuthorizer?: any;  // Avoid circular import with TransactionAuthorizer
+  __sapiomAuthorizer?: any; // Avoid circular import with TransactionAuthorizer
 
   /**
    * Agent invocation transaction ID (when using agents)

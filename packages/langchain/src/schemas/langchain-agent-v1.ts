@@ -6,17 +6,17 @@
  * Schema: source="langchain-agent", version="v1"
  */
 
-import type { CallSiteInfo } from '@sapiom/core';
+import type { CallSiteInfo } from "@sapiom/core";
 
 /**
  * Request facts (pre-execution)
  */
 export interface LangChainAgentRequestFacts {
   // Agent type
-  agentType: 'react' | 'openai-functions' | 'structured-chat' | 'unknown';
+  agentType: "react" | "openai-functions" | "structured-chat" | "unknown";
 
   // Invocation metadata
-  entryMethod: 'invoke' | 'stream';
+  entryMethod: "invoke" | "stream";
   messageCount: number;
 
   // Call site (where user invoked the agent, depth=3 for context)
@@ -54,11 +54,11 @@ export interface LangChainAgentErrorFacts {
  * Complete LangChain Agent facts package
  */
 export interface LangChainAgentFacts {
-  source: 'langchain-agent';
-  version: 'v1';
+  source: "langchain-agent";
+  version: "v1";
 
   sdk: {
-    name: '@sapiom/sdk';
+    name: "@sapiom/sdk";
     version: string;
   };
 

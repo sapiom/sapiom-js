@@ -1,15 +1,22 @@
-import * as http from 'http';
-import * as https from 'https';
-import { URL } from 'url';
+import * as http from "http";
+import * as https from "https";
+import { URL } from "url";
 
-import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from '@sapiom/core';
+import {
+  HttpClientAdapter,
+  HttpError,
+  HttpRequest,
+  HttpResponse,
+} from "@sapiom/core";
 
 /**
  * Node.js HTTP/HTTPS adapter for HTTP client abstraction
  * Uses native Node.js http/https modules
  */
 export class NodeHttpAdapter implements HttpClientAdapter {
-  private requestInterceptors: Array<(req: HttpRequest) => HttpRequest | Promise<HttpRequest>> = [];
+  private requestInterceptors: Array<
+    (req: HttpRequest) => HttpRequest | Promise<HttpRequest>
+  > = [];
   private responseInterceptors: Array<{
     onFulfilled: (res: HttpResponse) => HttpResponse | Promise<HttpResponse>;
     onRejected?: (err: HttpError) => any;
@@ -24,7 +31,7 @@ export class NodeHttpAdapter implements HttpClientAdapter {
 
     return new Promise((resolve, reject) => {
       const url = new URL(modifiedRequest.url);
-      const isHttps = url.protocol === 'https:';
+      const isHttps = url.protocol === "https:";
       const client = isHttps ? https : http;
 
       // Build query string from params
@@ -40,11 +47,14 @@ export class NodeHttpAdapter implements HttpClientAdapter {
       let bodyString: string | undefined;
       if (modifiedRequest.body) {
         bodyString =
-          typeof modifiedRequest.body === 'string' ? modifiedRequest.body : JSON.stringify(modifiedRequest.body);
+          typeof modifiedRequest.body === "string"
+            ? modifiedRequest.body
+            : JSON.stringify(modifiedRequest.body);
 
         // Set Content-Length header before creating request
-        if (!modifiedRequest.headers['Content-Length']) {
-          modifiedRequest.headers['Content-Length'] = Buffer.byteLength(bodyString).toString();
+        if (!modifiedRequest.headers["Content-Length"]) {
+          modifiedRequest.headers["Content-Length"] =
+            Buffer.byteLength(bodyString).toString();
         }
       }
 
@@ -57,25 +67,25 @@ export class NodeHttpAdapter implements HttpClientAdapter {
       };
 
       const req = client.request(options, async (res) => {
-        let data = '';
+        let data = "";
 
-        res.on('data', (chunk) => {
+        res.on("data", (chunk) => {
           data += chunk.toString();
         });
 
-        res.on('end', async () => {
+        res.on("end", async () => {
           const status = res.statusCode || 0;
-          const statusText = res.statusMessage || '';
+          const statusText = res.statusMessage || "";
           const headers = res.headers as Record<string, string>;
 
           // Parse response body
           let parsedData: T;
-          const contentType = headers['content-type'];
+          const contentType = headers["content-type"];
 
           try {
-            if (contentType?.includes('application/json')) {
+            if (contentType?.includes("application/json")) {
               parsedData = JSON.parse(data);
-            } else if (contentType?.includes('text/')) {
+            } else if (contentType?.includes("text/")) {
               parsedData = data as T;
             } else {
               // Try JSON, fall back to text
@@ -136,7 +146,9 @@ export class NodeHttpAdapter implements HttpClientAdapter {
             for (const interceptor of this.responseInterceptors) {
               if (interceptor.onRejected) {
                 try {
-                  const result = await interceptor.onRejected(error as HttpError);
+                  const result = await interceptor.onRejected(
+                    error as HttpError,
+                  );
                   if (result) {
                     return resolve(result);
                   }
@@ -150,9 +162,9 @@ export class NodeHttpAdapter implements HttpClientAdapter {
         });
       });
 
-      req.on('error', async (error) => {
+      req.on("error", async (error) => {
         const httpError: HttpError = {
-          message: error.message || 'Network request failed',
+          message: error.message || "Network request failed",
           request: modifiedRequest,
         };
 

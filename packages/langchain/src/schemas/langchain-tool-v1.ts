@@ -6,7 +6,7 @@
  * Schema: source="langchain-tool", version="v1"
  */
 
-import type { CallSiteInfo } from '@sapiom/core';
+import type { CallSiteInfo } from "@sapiom/core";
 
 /**
  * Request facts (pre-execution)
@@ -66,11 +66,11 @@ export interface LangChainToolErrorFacts {
  * Complete LangChain Tool facts package
  */
 export interface LangChainToolFacts {
-  source: 'langchain-tool';
-  version: 'v1';
+  source: "langchain-tool";
+  version: "v1";
 
   sdk: {
-    name: '@sapiom/sdk';
+    name: "@sapiom/sdk";
     version: string;
   };
 

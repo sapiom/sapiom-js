@@ -1,8 +1,11 @@
-import { AxiosInstance } from 'axios';
+import { AxiosInstance } from "axios";
 
-import { SapiomHandlerConfig, withSapiomHandling } from '@sapiom/core';
-import { createAxiosAdapter } from './adapter';
-import { BaseSapiomIntegrationConfig, initializeSapiomClient } from '@sapiom/core';
+import { SapiomHandlerConfig, withSapiomHandling } from "@sapiom/core";
+import { createAxiosAdapter } from "./adapter";
+import {
+  BaseSapiomIntegrationConfig,
+  initializeSapiomClient,
+} from "@sapiom/core";
 
 /**
  * Configuration for Sapiom-enabled Axios client
@@ -11,12 +14,12 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
   /**
    * Authorization handler configuration
    */
-  authorization?: Omit<SapiomHandlerConfig['authorization'], 'sapiomClient'>;
+  authorization?: Omit<SapiomHandlerConfig["authorization"], "sapiomClient">;
 
   /**
    * Payment handler configuration
    */
-  payment?: Omit<SapiomHandlerConfig['payment'], 'sapiomClient'>;
+  payment?: Omit<SapiomHandlerConfig["payment"], "sapiomClient">;
 }
 
 /**
@@ -92,7 +95,10 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
  * });
  * ```
  */
-export function createSapiomAxios(axiosInstance: AxiosInstance, config?: SapiomAxiosConfig): AxiosInstance {
+export function createSapiomAxios(
+  axiosInstance: AxiosInstance,
+  config?: SapiomAxiosConfig,
+): AxiosInstance {
   // Initialize SapiomClient (from config or environment)
   const sapiomClient = initializeSapiomClient(config);
 

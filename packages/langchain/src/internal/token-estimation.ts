@@ -1,10 +1,10 @@
 /**
  * Token estimation and cost calculation for LLM models
  */
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { BaseMessage } from '@langchain/core/messages';
-import type { AIMessage } from '@langchain/core/messages';
-import { Decimal } from 'decimal.js';
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { BaseMessage } from "@langchain/core/messages";
+import type { AIMessage } from "@langchain/core/messages";
+import { Decimal } from "decimal.js";
 
 // Configure Decimal.js for financial precision (36 digits, matching backend DECIMAL(36,18))
 Decimal.set({
@@ -27,27 +27,28 @@ export interface TokenUsage {
  *
  * Use this for exact decimal arithmetic with decimal.js
  */
-const MODEL_PRICING_STRINGS: Record<string, { input: string; output: string }> = {
-  // OpenAI (per token)
-  'gpt-4': { input: '0.00003', output: '0.00006' },
-  'gpt-4-turbo': { input: '0.00001', output: '0.00003' },
-  'gpt-4o': { input: '0.000005', output: '0.000015' },
-  'gpt-4o-mini': { input: '0.00000015', output: '0.0000006' },
-  'gpt-3.5-turbo': { input: '0.0000005', output: '0.0000015' },
+const MODEL_PRICING_STRINGS: Record<string, { input: string; output: string }> =
+  {
+    // OpenAI (per token)
+    "gpt-4": { input: "0.00003", output: "0.00006" },
+    "gpt-4-turbo": { input: "0.00001", output: "0.00003" },
+    "gpt-4o": { input: "0.000005", output: "0.000015" },
+    "gpt-4o-mini": { input: "0.00000015", output: "0.0000006" },
+    "gpt-3.5-turbo": { input: "0.0000005", output: "0.0000015" },
 
-  // Anthropic (per token)
-  'claude-3-5-sonnet-20241022': { input: '0.000003', output: '0.000015' },
-  'claude-3-5-sonnet': { input: '0.000003', output: '0.000015' }, // Alias for latest
-  'claude-3-5-haiku-20241022': { input: '0.0000008', output: '0.000004' },
-  'claude-3-5-haiku': { input: '0.0000008', output: '0.000004' }, // Alias for latest
-  'claude-3-opus': { input: '0.000015', output: '0.000075' },
-  'claude-3-sonnet': { input: '0.000003', output: '0.000015' },
-  'claude-3-haiku': { input: '0.00000025', output: '0.00000125' },
+    // Anthropic (per token)
+    "claude-3-5-sonnet-20241022": { input: "0.000003", output: "0.000015" },
+    "claude-3-5-sonnet": { input: "0.000003", output: "0.000015" }, // Alias for latest
+    "claude-3-5-haiku-20241022": { input: "0.0000008", output: "0.000004" },
+    "claude-3-5-haiku": { input: "0.0000008", output: "0.000004" }, // Alias for latest
+    "claude-3-opus": { input: "0.000015", output: "0.000075" },
+    "claude-3-sonnet": { input: "0.000003", output: "0.000015" },
+    "claude-3-haiku": { input: "0.00000025", output: "0.00000125" },
 
-  // Google (per token)
-  'gemini-1.5-pro': { input: '0.00000125', output: '0.000005' },
-  'gemini-1.5-flash': { input: '0.000000075', output: '0.0000003' },
-};
+    // Google (per token)
+    "gemini-1.5-pro": { input: "0.00000125", output: "0.000005" },
+    "gemini-1.5-flash": { input: "0.000000075", output: "0.0000003" },
+  };
 
 /**
  * Estimate INPUT tokens for messages (before execution)
@@ -68,7 +69,10 @@ const MODEL_PRICING_STRINGS: Record<string, { input: string; output: string }> =
  * const cost = calculateModelCost(model, { promptTokens: inputTokens });
  * ```
  */
-export async function estimateInputTokens(messages: BaseMessage[], model: BaseChatModel): Promise<number> {
+export async function estimateInputTokens(
+  messages: BaseMessage[],
+  model: BaseChatModel,
+): Promise<number> {
   let inputTokens = 0;
 
   try {
@@ -83,7 +87,10 @@ export async function estimateInputTokens(messages: BaseMessage[], model: BaseCh
 
     return inputTokens;
   } catch (error) {
-    console.warn('Failed to use model.getNumTokens(), falling back to generic estimation:', error);
+    console.warn(
+      "Failed to use model.getNumTokens(), falling back to generic estimation:",
+      error,
+    );
     return estimateInputTokensGeneric(messages);
   }
 }
@@ -94,7 +101,10 @@ export async function estimateInputTokens(messages: BaseMessage[], model: BaseCh
 function estimateInputTokensGeneric(messages: BaseMessage[]): number {
   let charCount = 0;
   for (const message of messages) {
-    const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+    const content =
+      typeof message.content === "string"
+        ? message.content
+        : JSON.stringify(message.content);
     charCount += content.length;
   }
   return Math.ceil(charCount / 4);
@@ -104,7 +114,10 @@ function estimateInputTokensGeneric(messages: BaseMessage[]): number {
  * @deprecated Use estimateInputTokens instead
  * @internal
  */
-export function estimateOpenAITokens(messages: BaseMessage[], modelName: string): number {
+export function estimateOpenAITokens(
+  messages: BaseMessage[],
+  modelName: string,
+): number {
   return estimateInputTokensGeneric(messages);
 }
 
@@ -124,7 +137,10 @@ export function estimateAnthropicTokens(messages: BaseMessage[]): number {
   let charCount = 0;
 
   for (const message of messages) {
-    const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+    const content =
+      typeof message.content === "string"
+        ? message.content
+        : JSON.stringify(message.content);
 
     charCount += content.length;
   }
@@ -225,7 +241,10 @@ export function extractActualTokens(result: AIMessage): TokenUsage | null {
  * const fiatAmount = actualCost.toFixed(18); // Exact decimal string
  * ```
  */
-export function calculateModelCost(model: BaseChatModel, usage: TokenUsage): Decimal {
+export function calculateModelCost(
+  model: BaseChatModel,
+  usage: TokenUsage,
+): Decimal {
   const modelName = getModelName(model);
   let pricing: { input: string; output: string } | undefined;
 
@@ -243,8 +262,8 @@ export function calculateModelCost(model: BaseChatModel, usage: TokenUsage): Dec
   }
 
   // Step 3: If still not found and model ends with -latest, try stripping it
-  if (!pricing && modelName.endsWith('-latest')) {
-    const baseModelName = modelName.replace(/-latest$/, '');
+  if (!pricing && modelName.endsWith("-latest")) {
+    const baseModelName = modelName.replace(/-latest$/, "");
 
     // Try exact match without -latest
     pricing = MODEL_PRICING_STRINGS[baseModelName];
@@ -267,7 +286,7 @@ export function calculateModelCost(model: BaseChatModel, usage: TokenUsage): Dec
         `Using conservative fallback estimate. ` +
         `Please update MODEL_PRICING_STRINGS in token-estimation.ts for accurate costs.`,
     );
-    pricing = { input: '0.000001', output: '0.000002' };
+    pricing = { input: "0.000001", output: "0.000002" };
   }
 
   // Convert to Decimal and calculate with exact arithmetic
@@ -290,18 +309,18 @@ export function calculateModelCost(model: BaseChatModel, usage: TokenUsage): Dec
  */
 export function getModelName(model: BaseChatModel): string {
   // Try standard properties
-  if ('modelName' in model && typeof (model as any).modelName === 'string') {
+  if ("modelName" in model && typeof (model as any).modelName === "string") {
     return (model as any).modelName;
   }
 
-  if ('model' in model && typeof (model as any).model === 'string') {
+  if ("model" in model && typeof (model as any).model === "string") {
     return (model as any).model;
   }
 
   // Fallback to _llmType
-  if (typeof model._llmType === 'function') {
+  if (typeof model._llmType === "function") {
     return model._llmType();
   }
 
-  return 'unknown-model';
+  return "unknown-model";
 }

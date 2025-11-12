@@ -5,7 +5,7 @@
  * call sites and runtime information.
  */
 
-import type { CallSiteInfo, RuntimeInfo } from '../types/telemetry';
+import type { CallSiteInfo, RuntimeInfo } from "../types/telemetry";
 
 /**
  * Capture user call site from stack trace
@@ -22,43 +22,63 @@ import type { CallSiteInfo, RuntimeInfo } from '../types/telemetry';
  * @param depth - Number of stack frames to capture (default: 3)
  * @returns Array of call site info or null if not available
  */
-export function captureUserCallSite(anonymize = true, depth = 3): CallSiteInfo[] | null {
+export function captureUserCallSite(
+  anonymize = true,
+  depth = 3,
+): CallSiteInfo[] | null {
   try {
     const stack = new Error().stack;
     if (!stack) return null;
 
-    const frames = stack.split('\n').slice(1); // Skip "Error"
+    const frames = stack.split("\n").slice(1); // Skip "Error"
 
     const userFrames: CallSiteInfo[] = [];
 
     for (const frame of frames) {
       // Skip SDK code (both as external package and in local development)
-      if (frame.includes('node_modules/@sapiom/sdk')) continue;
-      if (frame.includes('@sapiom/sdk')) continue;
-      if (frame.includes('/sdk/src/')) continue; // Local monorepo development
-      if (frame.includes('/sdk/dist/')) continue; // Built SDK in monorepo
+      if (frame.includes("node_modules/@sapiom/sdk")) continue;
+      if (frame.includes("@sapiom/sdk")) continue;
+      if (frame.includes("/sdk/src/")) continue; // Local monorepo development
+      if (frame.includes("/sdk/dist/")) continue; // Built SDK in monorepo
 
       // Skip other node_modules
-      if (frame.includes('node_modules/')) continue;
+      if (frame.includes("node_modules/")) continue;
 
       // Skip Node.js internals (prefixed with "node:")
-      if (frame.includes('node:internal/')) continue;
-      if (frame.includes('node:async_hooks')) continue;
-      if (frame.includes('node:timers')) continue;
+      if (frame.includes("node:internal/")) continue;
+      if (frame.includes("node:async_hooks")) continue;
+      if (frame.includes("node:timers")) continue;
 
       // Parse frame: "    at functionName (/path/to/file.ts:123:45)"
       // Also handles: "    at /path/to/file.ts:123:45" (anonymous)
-      const matchWithFunction = frame.match(/at\s+(.+?)\s+\((.+?):(\d+):(\d+)\)/);
+      const matchWithFunction = frame.match(
+        /at\s+(.+?)\s+\((.+?):(\d+):(\d+)\)/,
+      );
       const matchWithoutFunction = frame.match(/at\s+(.+?):(\d+):(\d+)/);
 
-      let parsed: { functionName: string; filePath: string; line: number; column: number } | null = null;
+      let parsed: {
+        functionName: string;
+        filePath: string;
+        line: number;
+        column: number;
+      } | null = null;
 
       if (matchWithFunction) {
         const [, functionName, filePath, line, column] = matchWithFunction;
-        parsed = { functionName, filePath, line: parseInt(line), column: parseInt(column) };
+        parsed = {
+          functionName,
+          filePath,
+          line: parseInt(line),
+          column: parseInt(column),
+        };
       } else if (matchWithoutFunction) {
         const [, filePath, line, column] = matchWithoutFunction;
-        parsed = { functionName: '<anonymous>', filePath, line: parseInt(line), column: parseInt(column) };
+        parsed = {
+          functionName: "<anonymous>",
+          filePath,
+          line: parseInt(line),
+          column: parseInt(column),
+        };
       }
 
       if (parsed) {
@@ -66,15 +86,17 @@ export function captureUserCallSite(anonymize = true, depth = 3): CallSiteInfo[]
         // Node built-ins: "async_hooks", "process/task_queues", "timers", etc.
         // They appear without leading "/" and without file extension
         const isNodeBuiltin =
-          !parsed.filePath.startsWith('/') && // Not absolute path
+          !parsed.filePath.startsWith("/") && // Not absolute path
           !parsed.filePath.match(/^[A-Z]:\\/) && // Not Windows path
-          !parsed.filePath.includes('.'); // No file extension
+          !parsed.filePath.includes("."); // No file extension
 
         if (isNodeBuiltin) {
           continue;
         }
 
-        const anonymizedPath = anonymize ? anonymizePath(parsed.filePath) : relativizePath(parsed.filePath);
+        const anonymizedPath = anonymize
+          ? anonymizePath(parsed.filePath)
+          : relativizePath(parsed.filePath);
 
         userFrames.push({
           file: anonymizedPath,
@@ -101,8 +123,8 @@ export function captureUserCallSite(anonymize = true, depth = 3): CallSiteInfo[]
  * Example: /Users/john/my-app/src/agents/weather.ts → agents/weather.ts
  */
 function anonymizePath(filePath: string, segments = 2): string {
-  const parts = filePath.split('/').filter(Boolean);
-  return parts.slice(-segments).join('/');
+  const parts = filePath.split("/").filter(Boolean);
+  return parts.slice(-segments).join("/");
 }
 
 /**
@@ -110,8 +132,8 @@ function anonymizePath(filePath: string, segments = 2): string {
  * Example: /Users/john/my-app/src/agents/weather.ts → src/agents/weather.ts
  */
 function relativizePath(filePath: string, segments = 3): string {
-  const parts = filePath.split('/').filter(Boolean);
-  return parts.slice(-segments).join('/');
+  const parts = filePath.split("/").filter(Boolean);
+  return parts.slice(-segments).join("/");
 }
 
 /**

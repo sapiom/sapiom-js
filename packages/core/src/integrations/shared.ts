@@ -1,4 +1,4 @@
-import { SapiomClient, SapiomClientConfig } from '../lib/SapiomClient';
+import { SapiomClient, SapiomClientConfig } from "../lib/SapiomClient";
 
 /**
  * Base configuration shared across all Sapiom integrations
@@ -43,7 +43,9 @@ export interface BaseSapiomIntegrationConfig {
  * });
  * ```
  */
-export function initializeSapiomClient(config?: BaseSapiomIntegrationConfig): SapiomClient {
+export function initializeSapiomClient(
+  config?: BaseSapiomIntegrationConfig,
+): SapiomClient {
   // Option 1: Use provided SapiomClient instance
   if (config?.sapiomClient) {
     return config.sapiomClient;
@@ -58,14 +60,16 @@ export function initializeSapiomClient(config?: BaseSapiomIntegrationConfig): Sa
   const apiKey = process.env.SAPIOM_API_KEY;
   if (!apiKey) {
     throw new Error(
-      'SAPIOM_API_KEY environment variable is required when no config is provided. ' +
-        'Set it in your environment or pass config.sapiom.apiKey explicitly.',
+      "SAPIOM_API_KEY environment variable is required when no config is provided. " +
+        "Set it in your environment or pass config.sapiom.apiKey explicitly.",
     );
   }
 
   return new SapiomClient({
     apiKey,
     baseURL: process.env.SAPIOM_BASE_URL || process.env.SAPIOM_API_URL,
-    timeout: process.env.SAPIOM_TIMEOUT ? parseInt(process.env.SAPIOM_TIMEOUT) : undefined,
+    timeout: process.env.SAPIOM_TIMEOUT
+      ? parseInt(process.env.SAPIOM_TIMEOUT)
+      : undefined,
   });
 }

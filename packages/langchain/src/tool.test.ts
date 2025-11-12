@@ -2,77 +2,85 @@
  * Tests for LangChain tool wrappers
  */
 
-import { DynamicStructuredTool, DynamicTool } from '@langchain/core/tools';
-import { z } from 'zod';
-import { wrapSapiomTool, createSapiomTool, sapiomTool, SapiomDynamicTool } from './tool';
-import { SapiomClient } from '@sapiom/core';
+import { DynamicStructuredTool, DynamicTool } from "@langchain/core/tools";
+import { z } from "zod";
+import {
+  wrapSapiomTool,
+  createSapiomTool,
+  sapiomTool,
+  SapiomDynamicTool,
+} from "./tool";
+import { SapiomClient } from "@sapiom/core";
 
-describe('wrapSapiomTool', () => {
+describe("wrapSapiomTool", () => {
   let mockClient: SapiomClient;
 
   beforeEach(() => {
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
-          id: 'tx-123',
-          status: 'authorized',
-          serviceName: 'tool',
-          actionName: 'call',
-          resourceName: 'test_tool',
+          id: "tx-123",
+          status: "authorized",
+          serviceName: "tool",
+          actionName: "call",
+          resourceName: "test_tool",
         }),
-        get: jest.fn().mockResolvedValue({ id: 'tx-123', status: 'authorized' }),
+        get: jest
+          .fn()
+          .mockResolvedValue({ id: "tx-123", status: "authorized" }),
         addFacts: jest.fn().mockResolvedValue({
           success: true,
-          factId: 'fact-123',
+          factId: "fact-123",
         }),
       },
     } as any;
   });
 
-  it('wraps DynamicStructuredTool and tracks calls', async () => {
+  it("wraps DynamicStructuredTool and tracks calls", async () => {
     const originalTool = new DynamicStructuredTool({
-      name: 'test_tool',
-      description: 'Test tool',
+      name: "test_tool",
+      description: "Test tool",
       schema: z.object({ input: z.string() }),
       func: async (input: any) => `Result: ${input.input}`,
     });
 
     const wrapped = wrapSapiomTool(originalTool, {
       sapiomClient: mockClient,
-      serviceName: 'test-service',
-      resourceName: 'test-resource',
+      serviceName: "test-service",
+      resourceName: "test-resource",
     });
 
     // Execute tool
-    const result = await (wrapped as any).func({ input: 'test' }, undefined, {
-      metadata: { __sapiomTraceId: 'trace-123' },
+    const result = await (wrapped as any).func({ input: "test" }, undefined, {
+      metadata: { __sapiomTraceId: "trace-123" },
     });
 
-    expect(result).toBe('Result: test');
+    expect(result).toBe("Result: test");
 
-    const createCall = (mockClient.transactions.create as jest.Mock).mock.calls[0][0];
+    const createCall = (mockClient.transactions.create as jest.Mock).mock
+      .calls[0][0];
 
     // Verify request facts sent
     expect(createCall.requestFacts).toBeDefined();
-    expect(createCall.requestFacts.source).toBe('langchain-tool');
-    expect(createCall.requestFacts.request.toolName).toBe('test_tool');
+    expect(createCall.requestFacts.source).toBe("langchain-tool");
+    expect(createCall.requestFacts.request.toolName).toBe("test_tool");
 
     // Verify config overrides applied
-    expect(createCall.serviceName).toBe('test-service');
-    expect(createCall.resourceName).toBe('test-resource');
+    expect(createCall.serviceName).toBe("test-service");
+    expect(createCall.resourceName).toBe("test-resource");
 
-    expect(mockClient.transactions.get).toHaveBeenCalledWith('tx-123');
+    expect(mockClient.transactions.get).toHaveBeenCalledWith("tx-123");
 
     // Verify response facts sent
     expect(mockClient.transactions.addFacts).toHaveBeenCalled();
   });
 
-  it('prevents double-wrapping', () => {
+  it("prevents double-wrapping", () => {
     const originalTool = new DynamicStructuredTool({
-      name: 'test_tool',
-      description: 'Test',
+      name: "test_tool",
+      description: "Test",
       schema: z.object({}),
-      func: async () => 'result',
+      func: async () => "result",
     });
 
     const wrapped1 = wrapSapiomTool(originalTool, { sapiomClient: mockClient });
@@ -82,16 +90,18 @@ describe('wrapSapiomTool', () => {
     expect((wrapped1 as any).__sapiomWrapped).toBe(true);
   });
 
-  it('skips wrapping tools without func property', () => {
+  it("skips wrapping tools without func property", () => {
     const toolWithoutFunc = {
-      name: 'custom_tool',
-      description: 'Custom',
-      invoke: async () => 'result',
+      name: "custom_tool",
+      description: "Custom",
+      invoke: async () => "result",
     } as any;
 
-    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
 
-    const wrapped = wrapSapiomTool(toolWithoutFunc, { sapiomClient: mockClient });
+    const wrapped = wrapSapiomTool(toolWithoutFunc, {
+      sapiomClient: mockClient,
+    });
 
     expect(wrapped).toBe(toolWithoutFunc);
     expect((wrapped as any).__sapiomWrapped).toBe(true);
@@ -102,36 +112,38 @@ describe('wrapSapiomTool', () => {
     consoleWarnSpy.mockRestore();
   });
 
-  it('uses session client when available', async () => {
+  it("uses session client when available", async () => {
     const sessionClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
-          id: 'tx-session-456',
-          status: 'authorized',
-          serviceName: 'tool',
-          actionName: 'call',
-          resourceName: 'test',
+          id: "tx-session-456",
+          status: "authorized",
+          serviceName: "tool",
+          actionName: "call",
+          resourceName: "test",
         }),
-        get: jest.fn().mockResolvedValue({ id: 'tx-session-456', status: 'authorized' }),
+        get: jest
+          .fn()
+          .mockResolvedValue({ id: "tx-session-456", status: "authorized" }),
         addFacts: jest.fn().mockResolvedValue({
           success: true,
-          factId: 'fact-456',
+          factId: "fact-456",
         }),
       },
     } as any;
 
     const tool = new DynamicStructuredTool({
-      name: 'test',
-      description: 'Test',
+      name: "test",
+      description: "Test",
       schema: z.object({}),
-      func: async () => 'result',
+      func: async () => "result",
     });
 
     const wrapped = wrapSapiomTool(tool, { sapiomClient: mockClient });
 
     await (wrapped as any).func({}, undefined, {
       metadata: {
-        __sapiomSessionId: 'session-123',
+        __sapiomSessionId: "session-123",
         __sapiomClient: sessionClient,
       },
     });
@@ -141,62 +153,62 @@ describe('wrapSapiomTool', () => {
     expect(mockClient.transactions.create).not.toHaveBeenCalled();
   });
 
-  it('handles MCP payment errors and retries', async () => {
+  it("handles MCP payment errors and retries", async () => {
     const paymentError = {
       message: JSON.stringify({
         x402Version: 1,
-        accepts: [{ scheme: 'exact', amount: '1000', unit: 'USD' }],
+        accepts: [{ scheme: "exact", amount: "1000", unit: "USD" }],
       }),
     };
 
     const authorizedPaymentTx = {
-      id: 'tx-payment-789',
-      status: 'authorized',
+      id: "tx-payment-789",
+      status: "authorized",
       payment: {
-        authorizationPayload: 'payment-auth-token',
+        authorizationPayload: "payment-auth-token",
       },
     };
 
     let callCount = 0;
     const tool = new DynamicStructuredTool({
-      name: 'paid_tool',
-      description: 'Requires payment',
+      name: "paid_tool",
+      description: "Requires payment",
       schema: z.object({ data: z.string() }),
       func: async (args: any) => {
         callCount++;
-        if (callCount === 1 && !args._meta?.['x402/payment']) {
+        if (callCount === 1 && !args._meta?.["x402/payment"]) {
           throw paymentError;
         }
-        return 'Paid result';
+        return "Paid result";
       },
     });
 
     (mockClient.transactions.create as jest.Mock)
-      .mockResolvedValueOnce({ id: 'tx-123' }) // Tool transaction
-      .mockResolvedValueOnce({ id: 'tx-payment-789' }); // Payment transaction
+      .mockResolvedValueOnce({ id: "tx-123" }) // Tool transaction
+      .mockResolvedValueOnce({ id: "tx-payment-789" }); // Payment transaction
 
     (mockClient.transactions.get as jest.Mock)
-      .mockResolvedValueOnce({ id: 'tx-123', status: 'authorized' }) // Tool auth
+      .mockResolvedValueOnce({ id: "tx-123", status: "authorized" }) // Tool auth
       .mockResolvedValueOnce(authorizedPaymentTx); // Payment auth
 
     const wrapped = wrapSapiomTool(tool, { sapiomClient: mockClient });
 
-    const result = await (wrapped as any).func({ data: 'test' }, undefined, {
-      metadata: { __sapiomTraceId: 'trace-123' },
+    const result = await (wrapped as any).func({ data: "test" }, undefined, {
+      metadata: { __sapiomTraceId: "trace-123" },
     });
 
-    expect(result).toBe('Paid result');
+    expect(result).toBe("Paid result");
     expect(callCount).toBe(2); // Called twice (first failed, retry succeeded)
     expect(mockClient.transactions.create).toHaveBeenCalledTimes(2);
   });
 
-  it('calls onBeforeCall and onAfterCall callbacks', async () => {
+  it("calls onBeforeCall and onAfterCall callbacks", async () => {
     const onBeforeCall = jest.fn();
     const onAfterCall = jest.fn();
 
     const tool = new DynamicStructuredTool({
-      name: 'test_tool',
-      description: 'Test',
+      name: "test_tool",
+      description: "Test",
       schema: z.object({ input: z.string() }),
       func: async (input: any) => `Result: ${input.input}`,
     });
@@ -207,48 +219,55 @@ describe('wrapSapiomTool', () => {
       onAfterCall,
     });
 
-    const result = await (wrapped as any).func({ input: 'test' }, undefined, {
-      metadata: { __sapiomTraceId: 'trace-123' },
+    const result = await (wrapped as any).func({ input: "test" }, undefined, {
+      metadata: { __sapiomTraceId: "trace-123" },
     });
 
-    expect(onBeforeCall).toHaveBeenCalledWith('tx-123', 'test_tool', { input: 'test' }, 'trace-123');
-    expect(onAfterCall).toHaveBeenCalledWith('tx-123', 'Result: test');
+    expect(onBeforeCall).toHaveBeenCalledWith(
+      "tx-123",
+      "test_tool",
+      { input: "test" },
+      "trace-123",
+    );
+    expect(onAfterCall).toHaveBeenCalledWith("tx-123", "Result: test");
   });
 });
 
-describe('SapiomDynamicTool', () => {
+describe("SapiomDynamicTool", () => {
   let mockClient: SapiomClient;
 
   beforeEach(() => {
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
-          id: 'tx-456',
-          status: 'authorized',
-          serviceName: 'tool',
-          actionName: 'call',
-          resourceName: 'weather',
+          id: "tx-456",
+          status: "authorized",
+          serviceName: "tool",
+          actionName: "call",
+          resourceName: "weather",
         }),
-        get: jest.fn().mockResolvedValue({ id: 'tx-456', status: 'authorized' }),
+        get: jest
+          .fn()
+          .mockResolvedValue({ id: "tx-456", status: "authorized" }),
         addFacts: jest.fn().mockResolvedValue({
           success: true,
-          factId: 'fact-456',
+          factId: "fact-456",
         }),
       },
     } as any;
   });
 
-  it('creates tool with Sapiom tracking built-in', async () => {
+  it("creates tool with Sapiom tracking built-in", async () => {
     const tool = new SapiomDynamicTool(
       {
-        name: 'weather',
-        description: 'Get weather',
+        name: "weather",
+        description: "Get weather",
         schema: z.object({ city: z.string() }),
         func: async ({ city }) => `Weather in ${city}: Sunny`,
       },
       {
         sapiomClient: mockClient,
-        serviceName: 'weather-api',
+        serviceName: "weather-api",
       },
     );
 
@@ -257,137 +276,137 @@ describe('SapiomDynamicTool', () => {
     expect(tool).toBeInstanceOf(DynamicStructuredTool);
   });
 
-  it('executes with authorization', async () => {
+  it("executes with authorization", async () => {
     const tool = new SapiomDynamicTool(
       {
-        name: 'search',
-        description: 'Search database',
+        name: "search",
+        description: "Search database",
         schema: z.object({ query: z.string() }),
         func: async ({ query }) => `Results for: ${query}`,
       },
       {
         sapiomClient: mockClient,
-        serviceName: 'database',
-        resourceName: 'search',
+        serviceName: "database",
+        resourceName: "search",
       },
     );
 
     // Access the wrapped func via _call (internal method)
-    const result = await (tool as any)._call(
-      { query: 'test' },
-      undefined,
-      { metadata: { __sapiomTraceId: 'trace-789' } },
-    );
+    const result = await (tool as any)._call({ query: "test" }, undefined, {
+      metadata: { __sapiomTraceId: "trace-789" },
+    });
 
-    expect(result).toBe('Results for: test');
+    expect(result).toBe("Results for: test");
     expect(mockClient.transactions.create).toHaveBeenCalledWith({
-      serviceName: 'database',
-      actionName: 'call',
-      resourceName: 'search',
-      traceExternalId: 'trace-789',
+      serviceName: "database",
+      actionName: "call",
+      resourceName: "search",
+      traceExternalId: "trace-789",
       qualifiers: {
-        tool: 'search',
+        tool: "search",
         // args NOT included for security
       },
     });
   });
 
-  it('handles payment errors', async () => {
+  it("handles payment errors", async () => {
     const paymentError = {
       message: JSON.stringify({
         x402Version: 1,
-        accepts: [{ scheme: 'exact', amount: '500' }],
+        accepts: [{ scheme: "exact", amount: "500" }],
       }),
     };
 
     const authorizedPaymentTx = {
-      id: 'tx-payment-999',
-      status: 'authorized',
+      id: "tx-payment-999",
+      status: "authorized",
       payment: {
-        authorizationPayload: { token: 'pay-token' },
+        authorizationPayload: { token: "pay-token" },
       },
     };
 
     let callCount = 0;
     const tool = new SapiomDynamicTool(
       {
-        name: 'premium',
-        description: 'Premium feature',
+        name: "premium",
+        description: "Premium feature",
         schema: z.object({ data: z.string() }),
         func: async (args: any) => {
           callCount++;
-          if (callCount === 1 && !args._meta?.['x402/payment']) {
+          if (callCount === 1 && !args._meta?.["x402/payment"]) {
             throw paymentError;
           }
-          return 'Premium result';
+          return "Premium result";
         },
       },
       { sapiomClient: mockClient },
     );
 
     (mockClient.transactions.create as jest.Mock)
-      .mockResolvedValueOnce({ id: 'tx-tool-111' })
-      .mockResolvedValueOnce({ id: 'tx-payment-999' });
+      .mockResolvedValueOnce({ id: "tx-tool-111" })
+      .mockResolvedValueOnce({ id: "tx-payment-999" });
 
     (mockClient.transactions.get as jest.Mock)
-      .mockResolvedValueOnce({ id: 'tx-tool-111', status: 'authorized' })
+      .mockResolvedValueOnce({ id: "tx-tool-111", status: "authorized" })
       .mockResolvedValueOnce(authorizedPaymentTx);
 
-    const result = await (tool as any)._call({ data: 'test' }, undefined, {});
+    const result = await (tool as any)._call({ data: "test" }, undefined, {});
 
-    expect(result).toBe('Premium result');
+    expect(result).toBe("Premium result");
     expect(callCount).toBe(2);
   });
 });
 
-describe('sapiomTool', () => {
+describe("sapiomTool", () => {
   let mockClient: SapiomClient;
 
   beforeEach(() => {
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
-          id: 'tx-factory',
-          status: 'authorized',
-          serviceName: 'tool',
-          actionName: 'call',
-          resourceName: 'test',
+          id: "tx-factory",
+          status: "authorized",
+          serviceName: "tool",
+          actionName: "call",
+          resourceName: "test",
         }),
-        get: jest.fn().mockResolvedValue({ id: 'tx-factory', status: 'authorized' }),
+        get: jest
+          .fn()
+          .mockResolvedValue({ id: "tx-factory", status: "authorized" }),
         addFacts: jest.fn().mockResolvedValue({
           success: true,
-          factId: 'fact-factory',
+          factId: "fact-factory",
         }),
       },
     } as any;
   });
 
-  it('creates SapiomDynamicTool instance', () => {
+  it("creates SapiomDynamicTool instance", () => {
     const tool = sapiomTool(
       async ({ city }) => `Weather: ${city}`,
       {
-        name: 'weather',
-        description: 'Get weather',
+        name: "weather",
+        description: "Get weather",
         schema: z.object({ city: z.string() }),
       },
       {
         sapiomClient: mockClient,
-        serviceName: 'weather-api',
+        serviceName: "weather-api",
       },
     );
 
     expect(tool).toBeInstanceOf(SapiomDynamicTool);
     expect(tool).toBeInstanceOf(DynamicStructuredTool);
-    expect(tool.name).toBe('weather');
+    expect(tool.name).toBe("weather");
     expect(tool.__sapiomClient).toBe(mockClient);
   });
 
-  it('works as drop-in replacement for tool()', async () => {
+  it("works as drop-in replacement for tool()", async () => {
     const tool = sapiomTool(
       async ({ count }) => `Sent ${count} messages`,
       {
-        name: 'send_sms',
-        description: 'Send SMS messages',
+        name: "send_sms",
+        description: "Send SMS messages",
         schema: z.object({ count: z.number() }),
       },
       { sapiomClient: mockClient },
@@ -395,31 +414,31 @@ describe('sapiomTool', () => {
 
     const result = await (tool as any)._call({ count: 5 }, undefined, {});
 
-    expect(result).toBe('Sent 5 messages');
+    expect(result).toBe("Sent 5 messages");
     expect(mockClient.transactions.create).toHaveBeenCalled();
   });
 
-  it('supports responseFormat option', () => {
+  it("supports responseFormat option", () => {
     const tool = sapiomTool(
-      async ({ input }) => ['content', { artifact: 'data' }] as any,
+      async ({ input }) => ["content", { artifact: "data" }] as any,
       {
-        name: 'test',
-        description: 'Test',
+        name: "test",
+        description: "Test",
         schema: z.object({ input: z.string() }),
-        responseFormat: 'content_and_artifact',
+        responseFormat: "content_and_artifact",
       },
       { sapiomClient: mockClient },
     );
 
-    expect(tool.responseFormat).toBe('content_and_artifact');
+    expect(tool.responseFormat).toBe("content_and_artifact");
   });
 
-  it('supports returnDirect option', () => {
+  it("supports returnDirect option", () => {
     const tool = sapiomTool(
-      async ({ query }) => 'result',
+      async ({ query }) => "result",
       {
-        name: 'final',
-        description: 'Final result',
+        name: "final",
+        description: "Final result",
         schema: z.object({ query: z.string() }),
         returnDirect: true,
       },
@@ -430,42 +449,45 @@ describe('sapiomTool', () => {
   });
 });
 
-describe('createSapiomTool (backwards compatibility)', () => {
-  it('is alias for wrapSapiomTool', () => {
+describe("createSapiomTool (backwards compatibility)", () => {
+  it("is alias for wrapSapiomTool", () => {
     expect(createSapiomTool).toBe(wrapSapiomTool);
   });
 });
 
-describe('integration scenarios', () => {
+describe("integration scenarios", () => {
   let mockClient: SapiomClient;
 
   beforeEach(() => {
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
-          id: 'tx-integration',
-          status: 'authorized',
-          serviceName: 'tool',
-          actionName: 'call',
-          resourceName: 'weather',
+          id: "tx-integration",
+          status: "authorized",
+          serviceName: "tool",
+          actionName: "call",
+          resourceName: "weather",
         }),
-        get: jest.fn().mockResolvedValue({ id: 'tx-integration', status: 'authorized' }),
+        get: jest
+          .fn()
+          .mockResolvedValue({ id: "tx-integration", status: "authorized" }),
         addFacts: jest.fn().mockResolvedValue({
           success: true,
-          factId: 'fact-integration',
+          factId: "fact-integration",
         }),
       },
     } as any;
   });
 
-  it('wrapSapiomTool preserves tool functionality', async () => {
+  it("wrapSapiomTool preserves tool functionality", async () => {
     let executionCount = 0;
 
     const tool = new DynamicStructuredTool({
-      name: 'counter',
-      description: 'Counts executions',
+      name: "counter",
+      description: "Counts executions",
       schema: z.object({ increment: z.number() }),
-      func: async (input: any) => { const { increment } = input;
+      func: async (input: any) => {
+        const { increment } = input;
         executionCount += increment;
         return `Count: ${executionCount}`;
       },
@@ -473,20 +495,28 @@ describe('integration scenarios', () => {
 
     const wrapped = wrapSapiomTool(tool, { sapiomClient: mockClient });
 
-    const result1 = await (wrapped as any).func({ increment: 5 }, undefined, {});
-    const result2 = await (wrapped as any).func({ increment: 3 }, undefined, {});
+    const result1 = await (wrapped as any).func(
+      { increment: 5 },
+      undefined,
+      {},
+    );
+    const result2 = await (wrapped as any).func(
+      { increment: 3 },
+      undefined,
+      {},
+    );
 
-    expect(result1).toBe('Count: 5');
-    expect(result2).toBe('Count: 8');
+    expect(result1).toBe("Count: 5");
+    expect(result2).toBe("Count: 8");
     expect(executionCount).toBe(8);
   });
 
-  it('sapiomTool creates clean non-mutated instances', () => {
+  it("sapiomTool creates clean non-mutated instances", () => {
     const tool1 = sapiomTool(
       async ({ input }) => `Result: ${input}`,
       {
-        name: 'test',
-        description: 'Test',
+        name: "test",
+        description: "Test",
         schema: z.object({ input: z.string() }),
       },
       { sapiomClient: mockClient },
@@ -495,8 +525,8 @@ describe('integration scenarios', () => {
     const tool2 = sapiomTool(
       async ({ input }) => `Different: ${input}`,
       {
-        name: 'test',
-        description: 'Test',
+        name: "test",
+        description: "Test",
         schema: z.object({ input: z.string() }),
       },
       { sapiomClient: mockClient },
@@ -508,22 +538,22 @@ describe('integration scenarios', () => {
     expect(tool2.__sapiomClient).toBe(mockClient);
   });
 
-  it('both APIs work with trace metadata', async () => {
+  it("both APIs work with trace metadata", async () => {
     const mutatedTool = wrapSapiomTool(
       new DynamicStructuredTool({
-        name: 'mutated',
-        description: 'Mutated',
+        name: "mutated",
+        description: "Mutated",
         schema: z.object({}),
-        func: async () => 'mutated-result',
+        func: async () => "mutated-result",
       }),
       { sapiomClient: mockClient },
     );
 
     const cleanTool = sapiomTool(
-      async () => 'clean-result',
+      async () => "clean-result",
       {
-        name: 'clean',
-        description: 'Clean',
+        name: "clean",
+        description: "Clean",
         schema: z.object({}),
       },
       { sapiomClient: mockClient },
@@ -531,8 +561,8 @@ describe('integration scenarios', () => {
 
     const traceMetadata = {
       metadata: {
-        __sapiomTraceId: 'trace-test',
-        __sapiomAgentTxId: 'tx-agent',
+        __sapiomTraceId: "trace-test",
+        __sapiomAgentTxId: "tx-agent",
       },
     };
 
@@ -541,7 +571,7 @@ describe('integration scenarios', () => {
 
     // Both should create transactions with same trace
     const calls = (mockClient.transactions.create as jest.Mock).mock.calls;
-    expect(calls[0][0].traceExternalId).toBe('trace-test');
-    expect(calls[1][0].traceExternalId).toBe('trace-test');
+    expect(calls[0][0].traceExternalId).toBe("trace-test");
+    expect(calls[1][0].traceExternalId).toBe("trace-test");
   });
 });

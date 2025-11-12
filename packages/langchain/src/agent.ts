@@ -4,22 +4,22 @@
  * Wraps a LangChain StateGraph to inject trace metadata
  * that propagates from model to tools.
  */
-import { createReactAgent } from '@langchain/langgraph/prebuilt';
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
 
-import { TransactionAuthorizer } from '@sapiom/core';
-import type { SapiomClient } from '@sapiom/core';
-import { initializeSapiomClient } from '@sapiom/core';
-import type { BaseSapiomIntegrationConfig } from '@sapiom/core';
-import { captureUserCallSite } from '@sapiom/core';
-import type { SapiomModelConfig } from './internal/types';
-import { generateSDKTraceId } from './internal/utils';
-import { wrapChatAnthropic } from './models/anthropic';
-import { wrapChatOpenAI } from './models/openai';
-import type { LangChainAgentRequestFacts } from './schemas/langchain-agent-v1';
-import { wrapSapiomTool } from './tool';
+import { TransactionAuthorizer } from "@sapiom/core";
+import type { SapiomClient } from "@sapiom/core";
+import { initializeSapiomClient } from "@sapiom/core";
+import type { BaseSapiomIntegrationConfig } from "@sapiom/core";
+import { captureUserCallSite } from "@sapiom/core";
+import type { SapiomModelConfig } from "./internal/types";
+import { generateSDKTraceId } from "./internal/utils";
+import { wrapChatAnthropic } from "./models/anthropic";
+import { wrapChatOpenAI } from "./models/openai";
+import type { LangChainAgentRequestFacts } from "./schemas/langchain-agent-v1";
+import { wrapSapiomTool } from "./tool";
 
 // SDK version for facts
-const SDK_VERSION = '1.0.0'; // TODO: Read from package.json
+const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
 
 /**
  * Configuration for wrapping an agent with Sapiom tracking
@@ -91,7 +91,10 @@ export interface WrapSapiomAgentConfig extends BaseSapiomIntegrationConfig {
  * await agent.invoke({ messages: [{ role: "user", content: "Hello" }] });
  * ```
  */
-export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any {
+export function wrapSapiomAgent(
+  graph: any,
+  config: WrapSapiomAgentConfig,
+): any {
   const sapiomClient = initializeSapiomClient(config);
   const traceId = config.traceId || generateSDKTraceId();
   const authorizer = new TransactionAuthorizer({ sapiomClient });
@@ -108,8 +111,8 @@ export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any 
     const callSite = captureUserCallSite();
 
     const requestFacts: LangChainAgentRequestFacts = {
-      agentType: 'react', // Could detect from graph type
-      entryMethod: 'invoke',
+      agentType: "react", // Could detect from graph type
+      entryMethod: "invoke",
       messageCount: state.messages?.length || 0,
       callSite,
       timestamp: new Date().toISOString(),
@@ -118,10 +121,10 @@ export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any 
     // Create and authorize agent transaction with facts
     const agentTx = await authorizer.createAndAuthorize({
       requestFacts: {
-        source: 'langchain-agent',
-        version: 'v1',
+        source: "langchain-agent",
+        version: "v1",
         sdk: {
-          name: '@sapiom/sdk',
+          name: "@sapiom/sdk",
           version: SDK_VERSION,
         },
         request: requestFacts,
@@ -159,9 +162,9 @@ export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any 
       // Submit response facts (fire-and-forget)
       sapiomClient.transactions
         .addFacts(agentTx.id, {
-          source: 'langchain-agent',
-          version: 'v1',
-          factPhase: 'response',
+          source: "langchain-agent",
+          version: "v1",
+          factPhase: "response",
           facts: {
             success: true,
             durationMs: duration,
@@ -171,7 +174,7 @@ export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any 
           },
         })
         .catch((err) => {
-          console.error('Failed to submit agent response facts:', err);
+          console.error("Failed to submit agent response facts:", err);
         });
 
       config.onAgentEnd?.(traceId, 0); // TODO: Query actual cost from backend
@@ -183,18 +186,18 @@ export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any 
       // Submit error facts (fire-and-forget)
       sapiomClient.transactions
         .addFacts(agentTx.id, {
-          source: 'langchain-agent',
-          version: 'v1',
-          factPhase: 'error',
+          source: "langchain-agent",
+          version: "v1",
+          factPhase: "error",
           facts: {
-            errorType: (error as any).constructor?.name || 'Error',
+            errorType: (error as any).constructor?.name || "Error",
             errorMessage: (error as Error).message,
             elapsedMs: duration,
             iterationsBeforeError: 0, // TODO: Track from graph state
           },
         })
         .catch((err) => {
-          console.error('Failed to submit agent error facts:', err);
+          console.error("Failed to submit agent error facts:", err);
         });
 
       throw error;
@@ -222,8 +225,8 @@ export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any 
       const callSite = captureUserCallSite();
 
       const requestFacts: LangChainAgentRequestFacts = {
-        agentType: 'react',
-        entryMethod: 'stream',
+        agentType: "react",
+        entryMethod: "stream",
         messageCount: state.messages?.length || 0,
         callSite,
         timestamp: new Date().toISOString(),
@@ -231,10 +234,10 @@ export function wrapSapiomAgent(graph: any, config: WrapSapiomAgentConfig): any 
 
       agentTx = await authorizer.createAndAuthorize({
         requestFacts: {
-          source: 'langchain-agent',
-          version: 'v1',
+          source: "langchain-agent",
+          version: "v1",
           sdk: {
-            name: '@sapiom/sdk',
+            name: "@sapiom/sdk",
             version: SDK_VERSION,
           },
           request: requestFacts,
@@ -334,9 +337,15 @@ export async function createSapiomReactAgent(
     // Detect provider and wrap accordingly
     const modelConstructorName = params.llm.constructor.name;
 
-    if (modelConstructorName === 'ChatOpenAI' || modelConstructorName.includes('OpenAI')) {
+    if (
+      modelConstructorName === "ChatOpenAI" ||
+      modelConstructorName.includes("OpenAI")
+    ) {
       wrappedModel = wrapChatOpenAI(params.llm, config);
-    } else if (modelConstructorName === 'ChatAnthropic' || modelConstructorName.includes('Anthropic')) {
+    } else if (
+      modelConstructorName === "ChatAnthropic" ||
+      modelConstructorName.includes("Anthropic")
+    ) {
       wrappedModel = wrapChatAnthropic(params.llm, config);
     } else {
       throw new Error(

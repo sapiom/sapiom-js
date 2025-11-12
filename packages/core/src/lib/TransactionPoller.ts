@@ -1,14 +1,14 @@
-import { TransactionStatus } from '../types/transaction';
-import { TransactionResponse } from '../types/transaction';
-import { SapiomClient } from './SapiomClient';
+import { TransactionStatus } from "../types/transaction";
+import { TransactionResponse } from "../types/transaction";
+import { SapiomClient } from "./SapiomClient";
 
 /**
  * Transaction polling result
  */
 export type TransactionPollResult =
-  | { status: 'authorized'; transaction: TransactionResponse }
-  | { status: 'denied'; transaction: TransactionResponse }
-  | { status: 'timeout' };
+  | { status: "authorized"; transaction: TransactionResponse }
+  | { status: "denied"; transaction: TransactionResponse }
+  | { status: "timeout" };
 
 /**
  * Configuration for transaction polling
@@ -40,8 +40,10 @@ export class TransactionPoller {
    * Polls transaction status until authorized/denied/timeout
    * Uses atomic Map.set() operations to prevent race conditions
    */
-  async waitForAuthorization(transactionId: string): Promise<TransactionPollResult> {
-    let entry = this.pollingPromises.get(transactionId);
+  async waitForAuthorization(
+    transactionId: string,
+  ): Promise<TransactionPollResult> {
+    const entry = this.pollingPromises.get(transactionId);
 
     if (entry) {
       // Atomic increment
@@ -82,7 +84,10 @@ export class TransactionPoller {
         if (newCount === 0) {
           this.pollingPromises.delete(transactionId);
         } else {
-          this.pollingPromises.set(transactionId, { ...current, refCount: newCount });
+          this.pollingPromises.set(transactionId, {
+            ...current,
+            refCount: newCount,
+          });
         }
       }
     }
@@ -92,25 +97,31 @@ export class TransactionPoller {
    * Internal polling implementation
    * Returns the final transaction to avoid redundant API calls
    */
-  private async pollTransactionStatus(transactionId: string): Promise<TransactionPollResult> {
+  private async pollTransactionStatus(
+    transactionId: string,
+  ): Promise<TransactionPollResult> {
     const timeout = this.config.timeout ?? 30000;
     const pollInterval = this.config.pollInterval ?? 1000;
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
-      const transaction = await this.sapiomClient.transactions.get(transactionId);
+      const transaction =
+        await this.sapiomClient.transactions.get(transactionId);
 
       if (transaction.status === TransactionStatus.AUTHORIZED) {
-        return { status: 'authorized', transaction };
+        return { status: "authorized", transaction };
       }
 
-      if (transaction.status === TransactionStatus.DENIED || transaction.status === TransactionStatus.CANCELLED) {
-        return { status: 'denied', transaction };
+      if (
+        transaction.status === TransactionStatus.DENIED ||
+        transaction.status === TransactionStatus.CANCELLED
+      ) {
+        return { status: "denied", transaction };
       }
 
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
 
-    return { status: 'timeout' };
+    return { status: "timeout" };
   }
 }

@@ -14,27 +14,33 @@
  *
  * See: .taskmaster/docs/ADDING-NEW-PROVIDER-GUIDE.md
  */
-import type { Callbacks } from '@langchain/core/callbacks/manager';
-import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
-import type { BaseMessageLike } from '@langchain/core/messages';
-import type { LLMResult } from '@langchain/core/outputs';
-import type { RunnableConfig } from '@langchain/core/runnables';
-import { RunnableBinding } from '@langchain/core/runnables';
-import { ChatOpenAI } from '@langchain/openai';
-import type { ChatOpenAICallOptions } from '@langchain/openai';
+import type { Callbacks } from "@langchain/core/callbacks/manager";
+import type { BaseLanguageModelInput } from "@langchain/core/language_models/base";
+import type { BaseMessageLike } from "@langchain/core/messages";
+import type { LLMResult } from "@langchain/core/outputs";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import { RunnableBinding } from "@langchain/core/runnables";
+import { ChatOpenAI } from "@langchain/openai";
+import type { ChatOpenAICallOptions } from "@langchain/openai";
 
-import { TransactionAuthorizer } from '@sapiom/core';
-import { SapiomClient } from '@sapiom/core';
-import { captureUserCallSite, getRuntimeInfo } from '@sapiom/core';
-import { initializeSapiomClient } from '@sapiom/core';
-import { collectDependencyVersions, detectEntryMethod } from '../internal/langchain-telemetry';
-import { estimateInputTokens, extractActualTokens } from '../internal/token-estimation';
-import type { SapiomModelConfig } from '../internal/types';
-import { generateSDKTraceId } from '../internal/utils';
-import type { LangChainLLMRequestFacts } from '../schemas/langchain-llm-v1';
+import { TransactionAuthorizer } from "@sapiom/core";
+import { SapiomClient } from "@sapiom/core";
+import { captureUserCallSite, getRuntimeInfo } from "@sapiom/core";
+import { initializeSapiomClient } from "@sapiom/core";
+import {
+  collectDependencyVersions,
+  detectEntryMethod,
+} from "../internal/langchain-telemetry";
+import {
+  estimateInputTokens,
+  extractActualTokens,
+} from "../internal/token-estimation";
+import type { SapiomModelConfig } from "../internal/types";
+import { generateSDKTraceId } from "../internal/utils";
+import type { LangChainLLMRequestFacts } from "../schemas/langchain-llm-v1";
 
 // SDK version for facts
-const SDK_VERSION = '1.0.0'; // TODO: Read from package.json
+const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
 
 /**
  * Extended ChatOpenAI with built-in Sapiom transaction tracking and authorization
@@ -127,7 +133,9 @@ export class SapiomChatOpenAI<
     options?: string[] | CallOptions,
     callbacks?: Callbacks,
   ): Promise<LLMResult> {
-    const parsedOptions = Array.isArray(options) ? ({ stop: options } as CallOptions) : options;
+    const parsedOptions = Array.isArray(options)
+      ? ({ stop: options } as CallOptions)
+      : options;
     const startTime = Date.now();
 
     // Resolve trace ID with priority order
@@ -150,7 +158,10 @@ export class SapiomChatOpenAI<
       new TransactionAuthorizer({
         sapiomClient: this.sapiomClient,
         onAuthorizationDenied: (txId, resource, reason) => {
-          this.sapiomConfig?.onAuthorizationDenied?.(txId, reason || 'Transaction denied');
+          this.sapiomConfig?.onAuthorizationDenied?.(
+            txId,
+            reason || "Transaction denied",
+          );
         },
       });
 
@@ -169,7 +180,10 @@ export class SapiomChatOpenAI<
       }),
     );
 
-    const totalEstimatedTokens = tokenEstimates.reduce((sum, est) => sum + est.tokens, 0);
+    const totalEstimatedTokens = tokenEstimates.reduce(
+      (sum, est) => sum + est.tokens,
+      0,
+    );
 
     // Capture telemetry
     const callSite = captureUserCallSite();
@@ -179,9 +193,9 @@ export class SapiomChatOpenAI<
 
     // Build request facts
     const requestFacts: LangChainLLMRequestFacts = {
-      framework: 'langchain',
+      framework: "langchain",
       modelClass: this.constructor.name,
-      modelId: (this as any).model || (this as any).modelName || 'unknown',
+      modelId: (this as any).model || (this as any).modelName || "unknown",
 
       entryMethod,
       isStreaming: false,
@@ -190,7 +204,7 @@ export class SapiomChatOpenAI<
       callSite,
 
       estimatedInputTokens: totalEstimatedTokens,
-      tokenEstimationMethod: 'tiktoken',
+      tokenEstimationMethod: "tiktoken",
 
       // Generation parameters
       temperature: (this as any).temperature,
@@ -205,7 +219,9 @@ export class SapiomChatOpenAI<
         ? {
             enabled: true,
             count: this.defaultOptions.tools.length,
-            names: this.defaultOptions.tools.map((t: any) => t.name || t.function?.name).filter(Boolean),
+            names: this.defaultOptions.tools
+              .map((t: any) => t.name || t.function?.name)
+              .filter(Boolean),
             toolChoice: parsedOptions?.tool_choice as string,
           }
         : undefined,
@@ -221,9 +237,14 @@ export class SapiomChatOpenAI<
       // Message context
       messages: {
         count: messages[0]?.length || 0,
-        hasSystemMessage: messages[0]?.some((m: any) => m.role === 'system') || false,
+        hasSystemMessage:
+          messages[0]?.some((m: any) => m.role === "system") || false,
         hasImages: false, // TODO: Detect image content
-        totalCharacters: messages[0]?.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0) || 0,
+        totalCharacters:
+          messages[0]?.reduce(
+            (sum: number, m: any) => sum + (m.content?.length || 0),
+            0,
+          ) || 0,
       },
 
       // LangChain context
@@ -245,10 +266,10 @@ export class SapiomChatOpenAI<
     const tx = await authorizer.createAndAuthorize({
       // NEW: Send request facts (backend infers service/action/resource and calculates cost)
       requestFacts: {
-        source: 'langchain-llm',
-        version: 'v1',
+        source: "langchain-llm",
+        version: "v1",
         sdk: {
-          name: '@sapiom/sdk',
+          name: "@sapiom/sdk",
           version: SDK_VERSION,
           nodeVersion: runtime.nodeVersion,
           platform: runtime.platform,
@@ -322,14 +343,15 @@ export class SapiomChatOpenAI<
         const responseMessage = (result.generations[0]?.[0] as any)?.message;
 
         await this.sapiomClient.transactions.addFacts(tx.id, {
-          source: 'langchain-llm',
-          version: 'v1',
-          factPhase: 'response',
+          source: "langchain-llm",
+          version: "v1",
+          factPhase: "response",
           facts: {
             actualInputTokens: totalActualInputTokens,
             actualOutputTokens: totalActualOutputTokens,
             actualTotalTokens: totalActualTokens,
-            finishReason: responseMessage?.response_metadata?.finish_reason || 'unknown',
+            finishReason:
+              responseMessage?.response_metadata?.finish_reason || "unknown",
             responseId: responseMessage?.id,
             hadToolCalls,
             toolCallCount: hadToolCalls ? toolCallNames.length : 0,
@@ -342,7 +364,7 @@ export class SapiomChatOpenAI<
       }
     } catch (error) {
       // Log error but don't fail the generate
-      console.error('Failed to submit response facts:', error);
+      console.error("Failed to submit response facts:", error);
     }
 
     return result;
@@ -455,7 +477,9 @@ export class SapiomChatOpenAI<
  * await tracked.invoke("Hello!");
  * ```
  */
-export function wrapChatOpenAI<CallOptions extends ChatOpenAICallOptions = ChatOpenAICallOptions>(
+export function wrapChatOpenAI<
+  CallOptions extends ChatOpenAICallOptions = ChatOpenAICallOptions,
+>(
   model: ChatOpenAI<CallOptions>,
   config?: SapiomModelConfig,
 ): SapiomChatOpenAI<CallOptions> {

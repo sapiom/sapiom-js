@@ -1,6 +1,16 @@
-import { AxiosError, AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
+import {
+  AxiosError,
+  AxiosInstance,
+  AxiosResponse,
+  InternalAxiosRequestConfig,
+} from "axios";
 
-import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from '@sapiom/core';
+import {
+  HttpClientAdapter,
+  HttpError,
+  HttpRequest,
+  HttpResponse,
+} from "@sapiom/core";
 
 /**
  * Axios adapter for HTTP client abstraction
@@ -34,47 +44,52 @@ export class AxiosAdapter implements HttpClientAdapter {
     onFulfilled: (request: HttpRequest) => HttpRequest | Promise<HttpRequest>,
     onRejected?: (error: any) => any,
   ): () => void {
-    const id = this.axiosInstance.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-      // Convert Axios config to generic HttpRequest
-      const genericRequest: HttpRequest = {
-        method: config.method || 'GET',
-        url: config.url || '',
-        headers: config.headers as Record<string, string>,
-        body: config.data,
-        params: config.params,
-        __sapiom: (config as any).__sapiom,
-        metadata: (config as any).__sapiomInternal,
-      };
+    const id = this.axiosInstance.interceptors.request.use(
+      async (config: InternalAxiosRequestConfig) => {
+        // Convert Axios config to generic HttpRequest
+        const genericRequest: HttpRequest = {
+          method: config.method || "GET",
+          url: config.url || "",
+          headers: config.headers as Record<string, string>,
+          body: config.data,
+          params: config.params,
+          __sapiom: (config as any).__sapiom,
+          metadata: (config as any).__sapiomInternal,
+        };
 
-      // Call the interceptor
-      const result = await onFulfilled(genericRequest);
+        // Call the interceptor
+        const result = await onFulfilled(genericRequest);
 
-      // Convert back to Axios config
-      const updatedConfig: InternalAxiosRequestConfig = {
-        ...config,
-        method: result.method,
-        url: result.url,
-        headers: result.headers as any,
-        data: result.body,
-        params: result.params,
-      };
+        // Convert back to Axios config
+        const updatedConfig: InternalAxiosRequestConfig = {
+          ...config,
+          method: result.method,
+          url: result.url,
+          headers: result.headers as any,
+          data: result.body,
+          params: result.params,
+        };
 
-      // Store both user metadata and internal metadata
-      if (result.__sapiom) {
-        (updatedConfig as any).__sapiom = result.__sapiom;
-      }
-      if (result.metadata) {
-        (updatedConfig as any).__sapiomInternal = result.metadata;
-      }
+        // Store both user metadata and internal metadata
+        if (result.__sapiom) {
+          (updatedConfig as any).__sapiom = result.__sapiom;
+        }
+        if (result.metadata) {
+          (updatedConfig as any).__sapiomInternal = result.metadata;
+        }
 
-      return updatedConfig;
-    }, onRejected);
+        return updatedConfig;
+      },
+      onRejected,
+    );
 
     return () => this.axiosInstance.interceptors.request.eject(id);
   }
 
   addResponseInterceptor(
-    onFulfilled: (response: HttpResponse) => HttpResponse | Promise<HttpResponse>,
+    onFulfilled: (
+      response: HttpResponse,
+    ) => HttpResponse | Promise<HttpResponse>,
     onRejected?: (error: HttpError) => any,
   ): () => void {
     const id = this.axiosInstance.interceptors.response.use(
@@ -103,7 +118,7 @@ export class AxiosAdapter implements HttpClientAdapter {
         // Convert Axios error to generic HttpError
         // Note: Axios may have already JSON.stringified the body, so parse it back if needed
         let requestBody = error.config?.data;
-        if (typeof requestBody === 'string' && requestBody.startsWith('{')) {
+        if (typeof requestBody === "string" && requestBody.startsWith("{")) {
           try {
             requestBody = JSON.parse(requestBody);
           } catch {
@@ -119,8 +134,8 @@ export class AxiosAdapter implements HttpClientAdapter {
           data: error.response?.data,
           request: error.config
             ? {
-                method: error.config.method || 'GET',
-                url: error.config.url || '',
+                method: error.config.method || "GET",
+                url: error.config.url || "",
                 headers: error.config.headers as Record<string, string>,
                 body: requestBody,
                 params: error.config.params,
@@ -166,6 +181,8 @@ export class AxiosAdapter implements HttpClientAdapter {
  * const adapter = createAxiosAdapter(axiosInstance);
  * ```
  */
-export function createAxiosAdapter(axiosInstance: AxiosInstance): HttpClientAdapter {
+export function createAxiosAdapter(
+  axiosInstance: AxiosInstance,
+): HttpClientAdapter {
   return new AxiosAdapter(axiosInstance);
 }

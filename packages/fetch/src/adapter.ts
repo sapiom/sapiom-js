@@ -1,11 +1,18 @@
-import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from '@sapiom/core';
+import {
+  HttpClientAdapter,
+  HttpError,
+  HttpRequest,
+  HttpResponse,
+} from "@sapiom/core";
 
 /**
  * Fetch API adapter for HTTP client abstraction
  * Provides HttpClientAdapter interface using native fetch
  */
 export class FetchAdapter implements HttpClientAdapter {
-  private requestInterceptors: Array<(req: HttpRequest) => HttpRequest | Promise<HttpRequest>> = [];
+  private requestInterceptors: Array<
+    (req: HttpRequest) => HttpRequest | Promise<HttpRequest>
+  > = [];
   private responseInterceptors: Array<{
     onFulfilled: (res: HttpResponse) => HttpResponse | Promise<HttpResponse>;
     onRejected?: (err: HttpError) => any;
@@ -32,12 +39,12 @@ export class FetchAdapter implements HttpClientAdapter {
       });
 
       // Parse response body
-      const contentType = response.headers.get('content-type');
+      const contentType = response.headers.get("content-type");
       let data: T;
 
-      if (contentType?.includes('application/json')) {
+      if (contentType?.includes("application/json")) {
         data = (await response.json()) as T;
-      } else if (contentType?.includes('text/')) {
+      } else if (contentType?.includes("text/")) {
         data = (await response.text()) as T;
       } else {
         // Try JSON, fall back to text
@@ -99,14 +106,14 @@ export class FetchAdapter implements HttpClientAdapter {
       return genericResponse;
     } catch (error: any) {
       // Handle network errors or errors thrown by interceptors
-      if ('status' in error && 'headers' in error) {
+      if ("status" in error && "headers" in error) {
         // Already an HttpError from above
         throw error;
       }
 
       // Network error or other fetch error
       const httpError: HttpError = {
-        message: error.message || 'Network request failed',
+        message: error.message || "Network request failed",
         request: modifiedRequest,
       };
 
@@ -163,7 +170,7 @@ export class FetchAdapter implements HttpClientAdapter {
     }
 
     // If already a string, use as-is (might be pre-stringified JSON)
-    if (typeof body === 'string') {
+    if (typeof body === "string") {
       return body;
     }
 
@@ -173,7 +180,7 @@ export class FetchAdapter implements HttpClientAdapter {
       body instanceof Blob ||
       body instanceof ArrayBuffer ||
       body instanceof URLSearchParams ||
-      (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream)
+      (typeof ReadableStream !== "undefined" && body instanceof ReadableStream)
     ) {
       return body;
     }
@@ -191,13 +198,15 @@ export class FetchAdapter implements HttpClientAdapter {
     }
 
     // If request URL is absolute, use it as-is
-    if (requestUrl.startsWith('http://') || requestUrl.startsWith('https://')) {
+    if (requestUrl.startsWith("http://") || requestUrl.startsWith("https://")) {
       return requestUrl;
     }
 
     // Join base URL with request URL
-    const base = this.baseURL.endsWith('/') ? this.baseURL.slice(0, -1) : this.baseURL;
-    const path = requestUrl.startsWith('/') ? requestUrl : `/${requestUrl}`;
+    const base = this.baseURL.endsWith("/")
+      ? this.baseURL.slice(0, -1)
+      : this.baseURL;
+    const path = requestUrl.startsWith("/") ? requestUrl : `/${requestUrl}`;
     return `${base}${path}`;
   }
 }

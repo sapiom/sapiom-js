@@ -1,134 +1,136 @@
-import { SapiomClient } from './SapiomClient';
+import { SapiomClient } from "./SapiomClient";
 
 // Mock global fetch
 const mockFetch = jest.fn();
 global.fetch = mockFetch as any;
 
-describe('SapiomClient', () => {
+describe("SapiomClient", () => {
   beforeEach(() => {
     mockFetch.mockReset();
   });
 
-  describe('initialization', () => {
-    it('should initialize with required config', () => {
+  describe("initialization", () => {
+    it("should initialize with required config", () => {
       const client = new SapiomClient({
-        apiKey: 'test-api-key',
-        baseURL: 'https://api.test.com',
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
       });
 
       expect(client).toBeDefined();
       expect(client.transactions).toBeDefined();
     });
 
-    it('should throw error when API key is missing', () => {
+    it("should throw error when API key is missing", () => {
       expect(() => {
         new SapiomClient({
-          apiKey: '',
+          apiKey: "",
         });
-      }).toThrow('API key is required');
+      }).toThrow("API key is required");
     });
 
-    it('should use default baseURL when not provided', () => {
+    it("should use default baseURL when not provided", () => {
       const client = new SapiomClient({
-        apiKey: 'test-api-key',
+        apiKey: "test-api-key",
       });
 
       const httpClient = client.getHttpClient();
-      expect(httpClient.defaults.baseURL).toBe('http://localhost:3000');
+      expect(httpClient.defaults.baseURL).toBe("http://localhost:3000");
     });
 
-    it('should update API key', () => {
+    it("should update API key", () => {
       const client = new SapiomClient({
-        apiKey: 'test-api-key',
+        apiKey: "test-api-key",
       });
 
-      client.setApiKey('new-api-key');
+      client.setApiKey("new-api-key");
       const httpClient = client.getHttpClient();
-      expect(httpClient.defaults.headers['x-api-key']).toBe('new-api-key');
+      expect(httpClient.defaults.headers["x-api-key"]).toBe("new-api-key");
     });
   });
 
-  describe('request method - response parsing', () => {
+  describe("request method - response parsing", () => {
     let client: SapiomClient;
 
     beforeEach(() => {
       client = new SapiomClient({
-        apiKey: 'test-api-key',
-        baseURL: 'https://api.test.com',
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
       });
     });
 
-    it('should parse JSON responses with application/json content-type', async () => {
-      const mockData = { message: 'success', count: 42 };
+    it("should parse JSON responses with application/json content-type", async () => {
+      const mockData = { message: "success", count: 42 };
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue(mockData),
         text: jest.fn().mockResolvedValue(JSON.stringify(mockData)),
       });
 
-      const result = await client.request({ url: '/test' });
+      const result = await client.request({ url: "/test" });
 
       expect(result).toEqual(mockData);
-      expect(typeof result).toBe('object');
+      expect(typeof result).toBe("object");
     });
 
-    it('should parse text responses with text/plain content-type', async () => {
-      const mockText = 'Hello, World!';
+    it("should parse text responses with text/plain content-type", async () => {
+      const mockText = "Hello, World!";
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'text/plain' : null),
+          get: (name: string) =>
+            name === "content-type" ? "text/plain" : null,
         },
-        json: jest.fn().mockRejectedValue(new Error('Not JSON')),
+        json: jest.fn().mockRejectedValue(new Error("Not JSON")),
         text: jest.fn().mockResolvedValue(mockText),
       });
 
-      const result = await client.request({ url: '/test' });
+      const result = await client.request({ url: "/test" });
 
       expect(result).toBe(mockText);
-      expect(typeof result).toBe('string');
+      expect(typeof result).toBe("string");
     });
 
-    it('should parse text responses with text/html content-type', async () => {
-      const mockHtml = '<html><body>Test</body></html>';
+    it("should parse text responses with text/html content-type", async () => {
+      const mockHtml = "<html><body>Test</body></html>";
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'text/html' : null),
+          get: (name: string) => (name === "content-type" ? "text/html" : null),
         },
-        json: jest.fn().mockRejectedValue(new Error('Not JSON')),
+        json: jest.fn().mockRejectedValue(new Error("Not JSON")),
         text: jest.fn().mockResolvedValue(mockHtml),
       });
 
-      const result = await client.request({ url: '/test' });
+      const result = await client.request({ url: "/test" });
 
       expect(result).toBe(mockHtml);
-      expect(typeof result).toBe('string');
+      expect(typeof result).toBe("string");
     });
 
-    it('should handle empty responses', async () => {
+    it("should handle empty responses", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 204,
         headers: {
           get: () => null,
         },
-        json: jest.fn().mockRejectedValue(new Error('No content')),
-        text: jest.fn().mockResolvedValue(''),
+        json: jest.fn().mockRejectedValue(new Error("No content")),
+        text: jest.fn().mockResolvedValue(""),
       });
 
-      const result = await client.request({ url: '/test' });
+      const result = await client.request({ url: "/test" });
 
       expect(result).toBeNull();
     });
 
-    it('should parse JSON-like responses without content-type', async () => {
+    it("should parse JSON-like responses without content-type", async () => {
       const mockData = { success: true };
       const mockText = JSON.stringify(mockData);
       mockFetch.mockResolvedValueOnce({
@@ -141,82 +143,89 @@ describe('SapiomClient', () => {
         text: jest.fn().mockResolvedValue(mockText),
       });
 
-      const result = await client.request({ url: '/test' });
+      const result = await client.request({ url: "/test" });
 
       expect(result).toEqual(mockData);
     });
 
-    it('should handle invalid JSON in application/json response', async () => {
+    it("should handle invalid JSON in application/json response", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
-        json: jest.fn().mockRejectedValue(new Error('Invalid JSON')),
-        text: jest.fn().mockResolvedValue('not valid json'),
+        json: jest.fn().mockRejectedValue(new Error("Invalid JSON")),
+        text: jest.fn().mockResolvedValue("not valid json"),
       });
 
-      const result = await client.request({ url: '/test' });
+      const result = await client.request({ url: "/test" });
 
       // Should return empty object for invalid JSON with JSON content-type
       expect(result).toEqual({});
     });
 
-    it('should handle plain text without content-type', async () => {
-      const mockText = 'plain text response';
+    it("should handle plain text without content-type", async () => {
+      const mockText = "plain text response";
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
           get: () => null,
         },
-        json: jest.fn().mockRejectedValue(new Error('Not JSON')),
+        json: jest.fn().mockRejectedValue(new Error("Not JSON")),
         text: jest.fn().mockResolvedValue(mockText),
       });
 
-      const result = await client.request({ url: '/test' });
+      const result = await client.request({ url: "/test" });
 
       expect(result).toBe(mockText);
-      expect(typeof result).toBe('string');
+      expect(typeof result).toBe("string");
     });
 
-    it('should handle error responses with JSON content', async () => {
-      const errorData = { error: 'Bad Request', message: 'Invalid input' };
+    it("should handle error responses with JSON content", async () => {
+      const errorData = { error: "Bad Request", message: "Invalid input" };
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 400,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue(errorData),
         text: jest.fn().mockResolvedValue(JSON.stringify(errorData)),
       });
 
-      await expect(client.request({ url: '/test' })).rejects.toThrow(/Request failed with status 400/);
+      await expect(client.request({ url: "/test" })).rejects.toThrow(
+        /Request failed with status 400/,
+      );
     });
 
-    it('should handle error responses with text content', async () => {
-      const errorText = 'Internal Server Error';
+    it("should handle error responses with text content", async () => {
+      const errorText = "Internal Server Error";
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'text/plain' : null),
+          get: (name: string) =>
+            name === "content-type" ? "text/plain" : null,
         },
-        json: jest.fn().mockRejectedValue(new Error('Not JSON')),
+        json: jest.fn().mockRejectedValue(new Error("Not JSON")),
         text: jest.fn().mockResolvedValue(errorText),
       });
 
-      await expect(client.request({ url: '/test' })).rejects.toThrow(/Request failed with status 500/);
+      await expect(client.request({ url: "/test" })).rejects.toThrow(
+        /Request failed with status 500/,
+      );
     });
 
-    it('should handle timeout', async () => {
+    it("should handle timeout", async () => {
       jest.useFakeTimers();
 
       const client = new SapiomClient({
-        apiKey: 'test-api-key',
-        baseURL: 'https://api.test.com',
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
         timeout: 100,
       });
 
@@ -229,7 +238,8 @@ describe('SapiomClient', () => {
                 ok: true,
                 status: 200,
                 headers: {
-                  get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+                  get: (name: string) =>
+                    name === "content-type" ? "application/json" : null,
                 },
                 json: jest.fn().mockResolvedValue({}),
               });
@@ -237,17 +247,17 @@ describe('SapiomClient', () => {
 
             // Listen for abort signal
             if (options?.signal) {
-              options.signal.addEventListener('abort', () => {
+              options.signal.addEventListener("abort", () => {
                 clearTimeout(timer);
-                const error: any = new Error('The operation was aborted');
-                error.name = 'AbortError';
+                const error: any = new Error("The operation was aborted");
+                error.name = "AbortError";
                 reject(error);
               });
             }
           }),
       );
 
-      const requestPromise = client.request({ url: '/test' });
+      const requestPromise = client.request({ url: "/test" });
 
       // Fast-forward time past timeout
       jest.advanceTimersByTime(101);
@@ -257,112 +267,121 @@ describe('SapiomClient', () => {
       jest.useRealTimers();
     });
 
-    it('should handle network errors', async () => {
-      mockFetch.mockRejectedValueOnce(new Error('Network error'));
+    it("should handle network errors", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
-      await expect(client.request({ url: '/test' })).rejects.toThrow('Network error');
+      await expect(client.request({ url: "/test" })).rejects.toThrow(
+        "Network error",
+      );
     });
 
-    it('should build URLs with query parameters', async () => {
+    it("should build URLs with query parameters", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({ success: true }),
         text: jest.fn().mockResolvedValue('{"success":true}'),
       });
 
       await client.request({
-        url: '/test',
-        params: { foo: 'bar', num: 123 },
+        url: "/test",
+        params: { foo: "bar", num: 123 },
       });
 
-      expect(mockFetch).toHaveBeenCalledWith('https://api.test.com/test?foo=bar&num=123', expect.any(Object));
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.test.com/test?foo=bar&num=123",
+        expect.any(Object),
+      );
     });
 
-    it('should handle POST requests with body', async () => {
-      const mockBody = { name: 'test', value: 42 };
+    it("should handle POST requests with body", async () => {
+      const mockBody = { name: "test", value: 42 };
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 201,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
-        json: jest.fn().mockResolvedValue({ id: '123' }),
+        json: jest.fn().mockResolvedValue({ id: "123" }),
         text: jest.fn().mockResolvedValue('{"id":"123"}'),
       });
 
       await client.request({
-        url: '/test',
-        method: 'POST',
+        url: "/test",
+        method: "POST",
         body: mockBody,
       });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        'https://api.test.com/test',
+        "https://api.test.com/test",
         expect.objectContaining({
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify(mockBody),
         }),
       );
     });
 
-    it('should merge custom headers with defaults', async () => {
+    it("should merge custom headers with defaults", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({}),
-        text: jest.fn().mockResolvedValue('{}'),
+        text: jest.fn().mockResolvedValue("{}"),
       });
 
       await client.request({
-        url: '/test',
-        headers: { 'X-Custom-Header': 'custom-value' },
+        url: "/test",
+        headers: { "X-Custom-Header": "custom-value" },
       });
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
           headers: expect.objectContaining({
-            'x-api-key': 'test-api-key',
-            'Content-Type': 'application/json',
-            'X-Custom-Header': 'custom-value',
+            "x-api-key": "test-api-key",
+            "Content-Type": "application/json",
+            "X-Custom-Header": "custom-value",
           }),
         }),
       );
     });
   });
 
-  describe('request body handling', () => {
+  describe("request body handling", () => {
     let client: SapiomClient;
 
     beforeEach(() => {
       client = new SapiomClient({
-        apiKey: 'test-api-key',
-        baseURL: 'https://api.test.com',
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
       });
     });
 
-    it('should stringify object bodies', async () => {
-      const mockBody = { name: 'test', value: 42 };
+    it("should stringify object bodies", async () => {
+      const mockBody = { name: "test", value: 42 };
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 201,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
-        json: jest.fn().mockResolvedValue({ id: '123' }),
+        json: jest.fn().mockResolvedValue({ id: "123" }),
         text: jest.fn().mockResolvedValue('{"id":"123"}'),
       });
 
       await client.request({
-        url: '/test',
-        method: 'POST',
+        url: "/test",
+        method: "POST",
         body: mockBody,
       });
 
@@ -374,23 +393,24 @@ describe('SapiomClient', () => {
       );
     });
 
-    it('should not double-encode pre-stringified JSON', async () => {
-      const mockData = { name: 'test', value: 42 };
+    it("should not double-encode pre-stringified JSON", async () => {
+      const mockData = { name: "test", value: 42 };
       const prestringified = JSON.stringify(mockData);
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 201,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
-        json: jest.fn().mockResolvedValue({ id: '123' }),
+        json: jest.fn().mockResolvedValue({ id: "123" }),
         text: jest.fn().mockResolvedValue('{"id":"123"}'),
       });
 
       await client.request({
-        url: '/test',
-        method: 'POST',
+        url: "/test",
+        method: "POST",
         body: prestringified,
       });
 
@@ -403,24 +423,25 @@ describe('SapiomClient', () => {
       );
     });
 
-    it('should handle FormData bodies without stringifying', async () => {
+    it("should handle FormData bodies without stringifying", async () => {
       const formData = new FormData();
-      formData.append('file', 'test-content');
-      formData.append('name', 'test-file');
+      formData.append("file", "test-content");
+      formData.append("name", "test-file");
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 201,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({ success: true }),
         text: jest.fn().mockResolvedValue('{"success":true}'),
       });
 
       await client.request({
-        url: '/upload',
-        method: 'POST',
+        url: "/upload",
+        method: "POST",
         body: formData,
       });
 
@@ -433,24 +454,25 @@ describe('SapiomClient', () => {
       );
     });
 
-    it('should handle URLSearchParams bodies without stringifying', async () => {
+    it("should handle URLSearchParams bodies without stringifying", async () => {
       const params = new URLSearchParams();
-      params.append('key1', 'value1');
-      params.append('key2', 'value2');
+      params.append("key1", "value1");
+      params.append("key2", "value2");
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({ success: true }),
         text: jest.fn().mockResolvedValue('{"success":true}'),
       });
 
       await client.request({
-        url: '/form',
-        method: 'POST',
+        url: "/form",
+        method: "POST",
         body: params,
       });
 
@@ -463,22 +485,23 @@ describe('SapiomClient', () => {
       );
     });
 
-    it('should handle Blob bodies without stringifying', async () => {
-      const blob = new Blob(['test content'], { type: 'text/plain' });
+    it("should handle Blob bodies without stringifying", async () => {
+      const blob = new Blob(["test content"], { type: "text/plain" });
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 201,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({ success: true }),
         text: jest.fn().mockResolvedValue('{"success":true}'),
       });
 
       await client.request({
-        url: '/upload',
-        method: 'POST',
+        url: "/upload",
+        method: "POST",
         body: blob,
       });
 
@@ -491,22 +514,23 @@ describe('SapiomClient', () => {
       );
     });
 
-    it('should handle ArrayBuffer bodies without stringifying', async () => {
+    it("should handle ArrayBuffer bodies without stringifying", async () => {
       const buffer = new ArrayBuffer(8);
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 201,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({ success: true }),
         text: jest.fn().mockResolvedValue('{"success":true}'),
       });
 
       await client.request({
-        url: '/binary',
-        method: 'POST',
+        url: "/binary",
+        method: "POST",
         body: buffer,
       });
 
@@ -519,20 +543,21 @@ describe('SapiomClient', () => {
       );
     });
 
-    it('should handle null body', async () => {
+    it("should handle null body", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({}),
-        text: jest.fn().mockResolvedValue('{}'),
+        text: jest.fn().mockResolvedValue("{}"),
       });
 
       await client.request({
-        url: '/test',
-        method: 'POST',
+        url: "/test",
+        method: "POST",
         body: null,
       });
 
@@ -544,20 +569,21 @@ describe('SapiomClient', () => {
       );
     });
 
-    it('should handle undefined body', async () => {
+    it("should handle undefined body", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) => (name === 'content-type' ? 'application/json' : null),
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
         },
         json: jest.fn().mockResolvedValue({}),
-        text: jest.fn().mockResolvedValue('{}'),
+        text: jest.fn().mockResolvedValue("{}"),
       });
 
       await client.request({
-        url: '/test',
-        method: 'GET',
+        url: "/test",
+        method: "GET",
       });
 
       expect(mockFetch).toHaveBeenCalledWith(

@@ -1,7 +1,10 @@
-import { HttpClientAdapter } from '../http/types';
-import { AuthorizationHandler, AuthorizationHandlerConfig } from './AuthorizationHandler';
-import { PaymentHandler, PaymentHandlerConfig } from './PaymentHandler';
-import { withAuthorizationHandling, withPaymentHandling } from './wrappers';
+import { HttpClientAdapter } from "../http/types";
+import {
+  AuthorizationHandler,
+  AuthorizationHandlerConfig,
+} from "./AuthorizationHandler";
+import { PaymentHandler, PaymentHandlerConfig } from "./PaymentHandler";
+import { withAuthorizationHandling, withPaymentHandling } from "./wrappers";
 
 /**
  * Configuration for unified Sapiom handler
@@ -9,9 +12,9 @@ import { withAuthorizationHandling, withPaymentHandling } from './wrappers';
  * Both handlers are always attached (use empty config {} to use defaults)
  */
 export interface SapiomHandlerConfig {
-  sapiomClient: AuthorizationHandlerConfig['sapiomClient'];
-  authorization?: Omit<AuthorizationHandlerConfig, 'sapiomClient'>;
-  payment?: Omit<PaymentHandlerConfig, 'sapiomClient'>;
+  sapiomClient: AuthorizationHandlerConfig["sapiomClient"];
+  authorization?: Omit<AuthorizationHandlerConfig, "sapiomClient">;
+  payment?: Omit<PaymentHandlerConfig, "sapiomClient">;
 }
 
 /**
@@ -71,7 +74,10 @@ export interface SapiomHandlerConfig {
  * const response = await axiosInstance.get('/api/admin/premium-data');
  * ```
  */
-export function withSapiomHandling(httpClient: HttpClientAdapter, config: SapiomHandlerConfig): HttpClientAdapter {
+export function withSapiomHandling(
+  httpClient: HttpClientAdapter,
+  config: SapiomHandlerConfig,
+): HttpClientAdapter {
   // Apply authorization handler (request phase) unless explicitly disabled
   if (config.authorization?.enabled !== false) {
     withAuthorizationHandling(httpClient, {

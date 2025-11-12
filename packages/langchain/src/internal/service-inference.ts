@@ -2,7 +2,7 @@
  * Service and resource inference for transaction metadata
  */
 
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
 /**
  * Infer service name from model class
@@ -23,37 +23,37 @@ export function inferServiceFromModel(model: BaseChatModel): string {
   const className = model.constructor.name;
 
   // OpenAI
-  if (className.includes('OpenAI')) {
-    return 'openai';
+  if (className.includes("OpenAI")) {
+    return "openai";
   }
 
   // Anthropic
-  if (className.includes('Anthropic') || className.includes('Claude')) {
-    return 'anthropic';
+  if (className.includes("Anthropic") || className.includes("Claude")) {
+    return "anthropic";
   }
 
   // Google
-  if (className.includes('Google') || className.includes('Gemini')) {
-    return 'google';
+  if (className.includes("Google") || className.includes("Gemini")) {
+    return "google";
   }
 
   // Cohere
-  if (className.includes('Cohere')) {
-    return 'cohere';
+  if (className.includes("Cohere")) {
+    return "cohere";
   }
 
   // Mistral
-  if (className.includes('Mistral')) {
-    return 'mistral';
+  if (className.includes("Mistral")) {
+    return "mistral";
   }
 
   // Groq
-  if (className.includes('Groq')) {
-    return 'groq';
+  if (className.includes("Groq")) {
+    return "groq";
   }
 
   // Generic fallback
-  return 'llm-unknown';
+  return "llm-unknown";
 }
 
 /**
@@ -73,20 +73,20 @@ export function inferServiceFromModel(model: BaseChatModel): string {
  */
 export function getModelName(model: BaseChatModel): string {
   // Try standard property names
-  if ('modelName' in model && typeof (model as any).modelName === 'string') {
+  if ("modelName" in model && typeof (model as any).modelName === "string") {
     return (model as any).modelName;
   }
 
-  if ('model' in model && typeof (model as any).model === 'string') {
+  if ("model" in model && typeof (model as any).model === "string") {
     return (model as any).model;
   }
 
   // Try _llmType as fallback
-  if (typeof model._llmType === 'function') {
+  if (typeof model._llmType === "function") {
     return model._llmType();
   }
 
-  return 'unknown-model';
+  return "unknown-model";
 }
 
 /**

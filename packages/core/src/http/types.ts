@@ -98,7 +98,9 @@ export interface HttpClientAdapter {
    * @returns Cleanup function to remove the interceptor
    */
   addResponseInterceptor(
-    onFulfilled: (response: HttpResponse) => HttpResponse | Promise<HttpResponse>,
+    onFulfilled: (
+      response: HttpResponse,
+    ) => HttpResponse | Promise<HttpResponse>,
     onRejected?: (error: HttpError) => any,
   ): () => void;
 }

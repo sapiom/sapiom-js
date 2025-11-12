@@ -4,11 +4,11 @@
  * These augmentations add the __sapiomClient property to wrapped instances
  * for better TypeScript support when accessing the underlying SapiomClient.
  */
-import { AxiosInstance } from 'axios';
+import { AxiosInstance } from "axios";
 
-import { SapiomClient } from '@sapiom/core';
+import { SapiomClient } from "@sapiom/core";
 
-declare module 'axios' {
+declare module "axios" {
   interface AxiosInstance {
     /**
      * Reference to the SapiomClient used for payment and authorization handling

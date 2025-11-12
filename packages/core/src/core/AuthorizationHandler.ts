@@ -1,13 +1,13 @@
-import { HttpRequest, SapiomTransactionMetadata } from '../http/types';
-import type { HttpClientRequestFacts } from '../integrations/http/schemas/http-client-v1';
-import { captureUserCallSite } from '../lib/telemetry';
-import { SapiomClient } from '../lib/SapiomClient';
-import { TransactionPoller } from '../lib/TransactionPoller';
-import { getHeader, setHeader } from '../lib/utils';
-import { TransactionStatus } from '../types/transaction';
+import { HttpRequest, SapiomTransactionMetadata } from "../http/types";
+import type { HttpClientRequestFacts } from "../integrations/http/schemas/http-client-v1";
+import { captureUserCallSite } from "../lib/telemetry";
+import { SapiomClient } from "../lib/SapiomClient";
+import { TransactionPoller } from "../lib/TransactionPoller";
+import { getHeader, setHeader } from "../lib/utils";
+import { TransactionStatus } from "../types/transaction";
 
 // SDK version for facts
-const SDK_VERSION = '1.0.0'; // TODO: Read from package.json
+const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
 
 /**
  * Authorization error thrown when transaction is denied
@@ -18,8 +18,10 @@ export class AuthorizationDeniedError extends Error {
     public readonly endpoint: string,
     public readonly reason?: string,
   ) {
-    super(`Authorization denied for ${endpoint}: ${reason || 'No reason provided'}`);
-    this.name = 'AuthorizationDeniedError';
+    super(
+      `Authorization denied for ${endpoint}: ${reason || "No reason provided"}`,
+    );
+    this.name = "AuthorizationDeniedError";
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, AuthorizationDeniedError);
@@ -37,7 +39,7 @@ export class AuthorizationTimeoutError extends Error {
     public readonly timeout: number,
   ) {
     super(`Authorization timeout after ${timeout}ms for ${endpoint}`);
-    this.name = 'AuthorizationTimeoutError';
+    this.name = "AuthorizationTimeoutError";
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, AuthorizationTimeoutError);
@@ -53,7 +55,9 @@ export interface EndpointAuthorizationRule {
   pathPattern: RegExp;
   serviceName: string;
   actionName?: string;
-  qualifiers?: Record<string, any> | ((request: HttpRequest) => Record<string, any>);
+  qualifiers?:
+    | Record<string, any>
+    | ((request: HttpRequest) => Record<string, any>);
   resourceExtractor?: (request: HttpRequest) => string;
   metadata?: Record<string, any>;
 }
@@ -78,7 +82,11 @@ export interface AuthorizationHandlerConfig {
 
   onAuthorizationPending?: (transactionId: string, endpoint: string) => void;
   onAuthorizationSuccess?: (transactionId: string, endpoint: string) => void;
-  onAuthorizationDenied?: (transactionId: string, endpoint: string, reason?: string) => void;
+  onAuthorizationDenied?: (
+    transactionId: string,
+    endpoint: string,
+    reason?: string,
+  ) => void;
 
   throwOnDenied?: boolean; // Default: true
 }
@@ -109,9 +117,14 @@ export class AuthorizationHandler {
 
     // If request already has transaction ID, validate and handle appropriately
     // Use case-insensitive header check (HTTP headers are case-insensitive per RFC 7230)
-    const existingTransactionId = getHeader(request.headers, 'X-Sapiom-Transaction-Id');
+    const existingTransactionId = getHeader(
+      request.headers,
+      "X-Sapiom-Transaction-Id",
+    );
     if (existingTransactionId) {
-      const transaction = await this.config.sapiomClient.transactions.get(existingTransactionId);
+      const transaction = await this.config.sapiomClient.transactions.get(
+        existingTransactionId,
+      );
       const endpoint = request.url;
 
       switch (transaction.status) {
@@ -120,18 +133,29 @@ export class AuthorizationHandler {
           return request;
 
         case TransactionStatus.PENDING:
-        case TransactionStatus.PREPARING:
+        case TransactionStatus.PREPARING: {
           // Wait for authorization to complete (don't call onAuthorizationPending - already created)
-          const authResult = await this.poller.waitForAuthorization(existingTransactionId);
+          const authResult = await this.poller.waitForAuthorization(
+            existingTransactionId,
+          );
 
-          if (authResult.status === 'authorized') {
-            this.config.onAuthorizationSuccess?.(existingTransactionId, endpoint);
+          if (authResult.status === "authorized") {
+            this.config.onAuthorizationSuccess?.(
+              existingTransactionId,
+              endpoint,
+            );
             return request;
-          } else if (authResult.status === 'denied') {
-            this.config.onAuthorizationDenied?.(existingTransactionId, endpoint);
+          } else if (authResult.status === "denied") {
+            this.config.onAuthorizationDenied?.(
+              existingTransactionId,
+              endpoint,
+            );
 
             if (this.config.throwOnDenied ?? true) {
-              throw new AuthorizationDeniedError(existingTransactionId, endpoint);
+              throw new AuthorizationDeniedError(
+                existingTransactionId,
+                endpoint,
+              );
             }
             return request;
           } else {
@@ -142,6 +166,7 @@ export class AuthorizationHandler {
               this.config.authorizationTimeout ?? 30000,
             );
           }
+        }
 
         case TransactionStatus.DENIED:
         case TransactionStatus.CANCELLED:
@@ -155,7 +180,9 @@ export class AuthorizationHandler {
 
         default:
           // Unknown status - throw error
-          throw new Error(`Transaction ${existingTransactionId} has unexpected status: ${transaction.status}`);
+          throw new Error(
+            `Transaction ${existingTransactionId} has unexpected status: ${transaction.status}`,
+          );
       }
     }
 
@@ -182,7 +209,7 @@ export class AuthorizationHandler {
     const callSite = captureUserCallSite();
 
     // Parse URL
-    let urlParsed: HttpClientRequestFacts['urlParsed'];
+    let urlParsed: HttpClientRequestFacts["urlParsed"];
     try {
       const parsed = new URL(request.url);
       urlParsed = {
@@ -195,10 +222,10 @@ export class AuthorizationHandler {
     } catch {
       // Relative URL
       urlParsed = {
-        protocol: '',
-        hostname: '',
+        protocol: "",
+        hostname: "",
         pathname: request.url,
-        search: '',
+        search: "",
         port: null,
       };
     }
@@ -208,7 +235,11 @@ export class AuthorizationHandler {
     if (request.headers) {
       Object.entries(request.headers).forEach(([key, value]) => {
         const lowerKey = key.toLowerCase();
-        if (!lowerKey.includes('auth') && !lowerKey.includes('key') && !lowerKey.includes('token')) {
+        if (
+          !lowerKey.includes("auth") &&
+          !lowerKey.includes("key") &&
+          !lowerKey.includes("token")
+        ) {
           sanitizedHeaders[key] = String(value);
         }
       });
@@ -220,9 +251,11 @@ export class AuthorizationHandler {
       urlParsed,
       headers: sanitizedHeaders,
       hasBody: !!request.body,
-      bodySizeBytes: request.body ? JSON.stringify(request.body).length : undefined,
-      contentType: request.headers?.['content-type'],
-      clientType: 'fetch', // TODO: Detect actual client type
+      bodySizeBytes: request.body
+        ? JSON.stringify(request.body).length
+        : undefined,
+      contentType: request.headers?.["content-type"],
+      clientType: "fetch", // TODO: Detect actual client type
       callSite,
       timestamp: new Date().toISOString(),
     };
@@ -233,10 +266,10 @@ export class AuthorizationHandler {
     const transaction = await this.config.sapiomClient.transactions.create({
       // NEW: Send request facts
       requestFacts: {
-        source: 'http-client',
-        version: 'v1',
+        source: "http-client",
+        version: "v1",
         sdk: {
-          name: '@sapiom/sdk',
+          name: "@sapiom/sdk",
           version: SDK_VERSION,
         },
         request: requestFacts,
@@ -258,7 +291,9 @@ export class AuthorizationHandler {
       // Qualifiers and metadata
       qualifiers:
         userMetadata?.qualifiers ||
-        (typeof rule?.qualifiers === 'function' ? rule.qualifiers(request) : rule?.qualifiers),
+        (typeof rule?.qualifiers === "function"
+          ? rule.qualifiers(request)
+          : rule?.qualifiers),
       metadata: {
         ...userMetadata?.metadata,
         ...rule?.metadata,
@@ -267,7 +302,10 @@ export class AuthorizationHandler {
     });
 
     // Check for denied or cancelled
-    if (transaction.status === TransactionStatus.DENIED || transaction.status === TransactionStatus.CANCELLED) {
+    if (
+      transaction.status === TransactionStatus.DENIED ||
+      transaction.status === TransactionStatus.CANCELLED
+    ) {
       this.config.onAuthorizationDenied?.(transaction.id, endpoint);
 
       if (this.config.throwOnDenied ?? true) {
@@ -283,7 +321,11 @@ export class AuthorizationHandler {
 
       return {
         ...request,
-        headers: setHeader(request.headers, 'X-Sapiom-Transaction-Id', transaction.id),
+        headers: setHeader(
+          request.headers,
+          "X-Sapiom-Transaction-Id",
+          transaction.id,
+        ),
       };
     }
 
@@ -292,14 +334,18 @@ export class AuthorizationHandler {
 
     const authResult = await this.poller.waitForAuthorization(transaction.id);
 
-    if (authResult.status === 'authorized') {
+    if (authResult.status === "authorized") {
       this.config.onAuthorizationSuccess?.(transaction.id, endpoint);
 
       return {
         ...request,
-        headers: setHeader(request.headers, 'X-Sapiom-Transaction-Id', transaction.id),
+        headers: setHeader(
+          request.headers,
+          "X-Sapiom-Transaction-Id",
+          transaction.id,
+        ),
       };
-    } else if (authResult.status === 'denied') {
+    } else if (authResult.status === "denied") {
       this.config.onAuthorizationDenied?.(transaction.id, endpoint);
 
       if (this.config.throwOnDenied ?? true) {
@@ -309,7 +355,11 @@ export class AuthorizationHandler {
       return request;
     } else {
       // Timeout
-      throw new AuthorizationTimeoutError(transaction.id, endpoint, this.config.authorizationTimeout ?? 30000);
+      throw new AuthorizationTimeoutError(
+        transaction.id,
+        endpoint,
+        this.config.authorizationTimeout ?? 30000,
+      );
     }
   }
 
@@ -324,7 +374,10 @@ export class AuthorizationHandler {
     }
 
     // If no endpoint patterns configured, authorize everything
-    if (!this.config.authorizedEndpoints || this.config.authorizedEndpoints.length === 0) {
+    if (
+      !this.config.authorizedEndpoints ||
+      this.config.authorizedEndpoints.length === 0
+    ) {
       return true;
     }
 
@@ -335,7 +388,9 @@ export class AuthorizationHandler {
   /**
    * Finds matching authorization rule for request
    */
-  private findMatchingRule(request: HttpRequest): EndpointAuthorizationRule | undefined {
+  private findMatchingRule(
+    request: HttpRequest,
+  ): EndpointAuthorizationRule | undefined {
     if (!this.config.authorizedEndpoints) {
       return undefined;
     }
@@ -346,10 +401,11 @@ export class AuthorizationHandler {
     return this.config.authorizedEndpoints.find((rule) => {
       // Check method match
       if (rule.method) {
-        if (typeof rule.method === 'string') {
+        if (typeof rule.method === "string") {
           if (rule.method.toUpperCase() !== method) return false;
         } else if (Array.isArray(rule.method)) {
-          if (!rule.method.map((m) => m.toUpperCase()).includes(method)) return false;
+          if (!rule.method.map((m) => m.toUpperCase()).includes(method))
+            return false;
         } else if (rule.method instanceof RegExp) {
           if (!rule.method.test(method)) return false;
         }
@@ -365,13 +421,13 @@ export class AuthorizationHandler {
    */
   private mapMethodToAction(method: string): string {
     const actionMap: Record<string, string> = {
-      GET: 'read',
-      POST: 'create',
-      PUT: 'update',
-      PATCH: 'update',
-      DELETE: 'delete',
+      GET: "read",
+      POST: "create",
+      PUT: "update",
+      PATCH: "update",
+      DELETE: "delete",
     };
-    return actionMap[method.toUpperCase()] || 'execute';
+    return actionMap[method.toUpperCase()] || "execute";
   }
 
   /**
@@ -380,12 +436,12 @@ export class AuthorizationHandler {
   private extractServiceFromUrl(url: string): string {
     try {
       const parsed = new URL(url);
-      const pathParts = parsed.pathname.split('/').filter(Boolean);
-      return pathParts[0] || 'api';
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      return pathParts[0] || "api";
     } catch {
       // Relative URL - extract from path
-      const pathParts = url.split('/').filter(Boolean);
-      return pathParts[0] || 'api';
+      const pathParts = url.split("/").filter(Boolean);
+      return pathParts[0] || "api";
     }
   }
 }

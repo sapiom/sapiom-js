@@ -1,6 +1,6 @@
 // This file contains the core payment error detection logic without HTTP library dependencies
-import { HttpError } from '../http/types';
-import { PaymentData } from '../types/transaction';
+import { HttpError } from "../http/types";
+import { PaymentData } from "../types/transaction";
 
 /**
  * Standard x402 protocol response format
@@ -59,10 +59,10 @@ export class PaymentRequiredError extends Error {
     message: string,
     public paymentData: PaymentData,
     public resource: string,
-    public transactionId?: string
+    public transactionId?: string,
   ) {
     super(message);
-    this.name = 'PaymentRequiredError';
+    this.name = "PaymentRequiredError";
   }
 }
 
@@ -70,9 +70,9 @@ export class PaymentRequiredError extends Error {
 function isX402Response(data: unknown): data is X402PaymentResponse {
   return (
     data !== null &&
-    typeof data === 'object' &&
-    'x402Version' in data &&
-    'accepts' in data &&
+    typeof data === "object" &&
+    "x402Version" in data &&
+    "accepts" in data &&
     Array.isArray((data as any).accepts)
   );
 }
@@ -80,10 +80,10 @@ function isX402Response(data: unknown): data is X402PaymentResponse {
 function isSapiomPaymentResponse(data: unknown): data is SapiomPaymentResponse {
   return (
     data !== null &&
-    typeof data === 'object' &&
-    'requiresPayment' in data &&
+    typeof data === "object" &&
+    "requiresPayment" in data &&
     (data as any).requiresPayment === true &&
-    'paymentData' in data
+    "paymentData" in data
   );
 }
 
@@ -92,7 +92,12 @@ function isSapiomPaymentResponse(data: unknown): data is SapiomPaymentResponse {
  */
 export class HttpErrorDetector implements ErrorDetectorAdapter {
   canHandle(error: unknown): boolean {
-    return error !== null && typeof error === 'object' && 'status' in error && 'message' in error;
+    return (
+      error !== null &&
+      typeof error === "object" &&
+      "status" in error &&
+      "message" in error
+    );
   }
 
   is402Error(error: unknown): boolean {
@@ -103,15 +108,21 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
 
   extractPaymentInfo(error: unknown): ExtractedPaymentInfo {
     if (!this.canHandle(error)) {
-      throw new Error('HttpErrorDetector cannot handle this error');
+      throw new Error("HttpErrorDetector cannot handle this error");
     }
 
     const httpError = error as HttpError;
 
     // Try x402 protocol format first
     if (isX402Response(httpError.data)) {
-      const paymentData = convertX402ToPaymentData(httpError.data, httpError.request?.url || '');
-      const resource = httpError.data.accepts[0]?.resource || httpError.request?.url || 'unknown';
+      const paymentData = convertX402ToPaymentData(
+        httpError.data,
+        httpError.request?.url || "",
+      );
+      const resource =
+        httpError.data.accepts[0]?.resource ||
+        httpError.request?.url ||
+        "unknown";
       const transactionId = this.extractTransactionId(httpError);
       return { paymentData, resource, transactionId };
     }
@@ -120,7 +131,7 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
     if (isSapiomPaymentResponse(httpError.data)) {
       return {
         paymentData: httpError.data.paymentData,
-        resource: httpError.request?.url || 'unknown',
+        resource: httpError.request?.url || "unknown",
         transactionId: httpError.data.transactionId,
       };
     }
@@ -128,7 +139,7 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
     // Generic extraction
     return {
       paymentData: normalizeToPaymentData(httpError.data),
-      resource: httpError.request?.url || 'unknown',
+      resource: httpError.request?.url || "unknown",
       transactionId: this.extractTransactionId(httpError),
     };
   }
@@ -140,11 +151,11 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
       return data.transactionId;
     }
 
-    if (error.headers?.['x-sapiom-transaction-id']) {
-      return error.headers['x-sapiom-transaction-id'];
+    if (error.headers?.["x-sapiom-transaction-id"]) {
+      return error.headers["x-sapiom-transaction-id"];
     }
 
-    if (data && typeof data === 'object') {
+    if (data && typeof data === "object") {
       return (data as any).transactionId || (data as any).transaction_id;
     }
 
@@ -227,20 +238,23 @@ export function extractTransactionId(error: unknown): string | undefined {
 /**
  * Convert x402 format to Sapiom PaymentData
  */
-export function convertX402ToPaymentData(x402: X402PaymentResponse, resource: string): PaymentData {
+export function convertX402ToPaymentData(
+  x402: X402PaymentResponse,
+  resource: string,
+): PaymentData {
   const requirement = x402.accepts[0];
   if (!requirement) {
-    throw new Error('No payment requirements in x402 response');
+    throw new Error("No payment requirements in x402 response");
   }
 
   return {
-    protocol: 'x402',
+    protocol: "x402",
     network: requirement.network,
     token: requirement.asset,
-    scheme: requirement.scheme as 'exact' | 'max',
+    scheme: requirement.scheme as "exact" | "max",
     amount: requirement.maxAmountRequired,
     payTo: requirement.payTo,
-    payToType: 'address',
+    payToType: "address",
     protocolMetadata: {
       x402Version: x402.x402Version,
       resource: requirement.resource || resource,
@@ -259,10 +273,10 @@ export function wrapWith402Detection<T>(fn: () => Promise<T>): Promise<T> {
     const paymentInfo = globalRegistry.detectPaymentError(error);
     if (paymentInfo) {
       throw new PaymentRequiredError(
-        'Payment required',
+        "Payment required",
         paymentInfo.paymentData,
         paymentInfo.resource,
-        paymentInfo.transactionId
+        paymentInfo.transactionId,
       );
     }
     throw error;
@@ -271,19 +285,19 @@ export function wrapWith402Detection<T>(fn: () => Promise<T>): Promise<T> {
 
 // Helper functions
 function normalizeToPaymentData(data: unknown): PaymentData {
-  if (!data || typeof data !== 'object') {
-    throw new Error('Invalid payment data');
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid payment data");
   }
 
   const obj = data as any;
   return {
-    protocol: obj.protocol || 'x402',
-    network: obj.network || 'unknown',
-    token: obj.token || obj.asset || 'USDC',
-    scheme: obj.scheme || 'exact',
-    amount: obj.amount || obj.maxAmountRequired || '0',
-    payTo: obj.payTo || obj.recipient || 'unknown',
-    payToType: obj.payToType || 'address',
+    protocol: obj.protocol || "x402",
+    network: obj.network || "unknown",
+    token: obj.token || obj.asset || "USDC",
+    scheme: obj.scheme || "exact",
+    amount: obj.amount || obj.maxAmountRequired || "0",
+    payTo: obj.payTo || obj.recipient || "unknown",
+    payToType: obj.payToType || "address",
     protocolMetadata: obj.protocolMetadata || obj.metadata || {},
   };
 }
@@ -303,6 +317,6 @@ export class AxiosErrorDetector implements ErrorDetectorAdapter {
     return false;
   }
   extractPaymentInfo(): never {
-    throw new Error('AxiosErrorDetector moved to @sapiom/axios package');
+    throw new Error("AxiosErrorDetector moved to @sapiom/axios package");
   }
 }

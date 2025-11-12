@@ -6,7 +6,7 @@
  * Schema: source="http-client", version="v1"
  */
 
-import type { CallSiteInfo } from '../../../types/telemetry';
+import type { CallSiteInfo } from "../../../types/telemetry";
 
 /**
  * Request facts (pre-execution)
@@ -34,7 +34,7 @@ export interface HttpClientRequestFacts {
   contentType?: string;
 
   // Client type
-  clientType: 'fetch' | 'axios' | 'node-http';
+  clientType: "fetch" | "axios" | "node-http";
 
   // Call site (depth=3 for call chain)
   callSite: CallSiteInfo[] | null;
@@ -85,11 +85,11 @@ export interface HttpClientErrorFacts {
  * Complete HTTP Client facts package
  */
 export interface HttpClientFacts {
-  source: 'http-client';
-  version: 'v1';
+  source: "http-client";
+  version: "v1";
 
   sdk: {
-    name: '@sapiom/sdk';
+    name: "@sapiom/sdk";
     version: string;
   };
 

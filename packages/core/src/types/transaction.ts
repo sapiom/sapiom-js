@@ -1,9 +1,9 @@
 export enum TransactionStatus {
-  PENDING = 'pending',
-  PREPARING = 'preparing',
-  AUTHORIZED = 'authorized',
-  DENIED = 'denied',
-  CANCELLED = 'cancelled',
+  PENDING = "pending",
+  PREPARING = "preparing",
+  AUTHORIZED = "authorized",
+  DENIED = "denied",
+  CANCELLED = "cancelled",
 }
 
 export interface PaymentData {
@@ -100,8 +100,8 @@ export interface TransactionResponse {
   completedAt?: string;
   currentPaymentTransactionId?: string | null;
   payment?: PaymentTransactionResponse;
-  trace?: TraceResponse;  // Optional for backward compatibility
-  costs?: TransactionCostResponse[];  // Optional for backward compatibility
+  trace?: TraceResponse; // Optional for backward compatibility
+  costs?: TransactionCostResponse[]; // Optional for backward compatibility
 }
 
 export interface ListTransactionsParams {

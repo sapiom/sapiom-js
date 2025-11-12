@@ -1,22 +1,22 @@
 /**
  * Tests for wrapSapiomAgent and createSapiomReactAgent
  */
-import { ChatOpenAI } from '@langchain/openai';
-import { ChatAnthropic } from '@langchain/anthropic';
-import { SapiomClient } from '@sapiom/core';
-import { wrapSapiomAgent, createSapiomReactAgent } from './agent';
-import { SapiomChatOpenAI } from './models/openai';
-import { SapiomChatAnthropic } from './models/anthropic';
+import { ChatOpenAI } from "@langchain/openai";
+import { ChatAnthropic } from "@langchain/anthropic";
+import { SapiomClient } from "@sapiom/core";
+import { wrapSapiomAgent, createSapiomReactAgent } from "./agent";
+import { SapiomChatOpenAI } from "./models/openai";
+import { SapiomChatAnthropic } from "./models/anthropic";
 
 // Mock @langchain/langgraph/prebuilt
-jest.mock('@langchain/langgraph/prebuilt', () => ({
+jest.mock("@langchain/langgraph/prebuilt", () => ({
   createReactAgent: jest.fn().mockResolvedValue({
     invoke: jest.fn().mockResolvedValue({ messages: [] }),
     stream: jest.fn(),
   }),
 }));
 
-describe('wrapSapiomAgent', () => {
+describe("wrapSapiomAgent", () => {
   let mockClient: SapiomClient;
   let mockGraph: any;
   let originalInvoke: jest.Mock;
@@ -31,34 +31,34 @@ describe('wrapSapiomAgent', () => {
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
-          id: 'tx-agent-123',
-          status: 'authorized',
-          trace: { id: 'trace-uuid', externalId: 'test-trace' },
-          serviceName: 'langchain-agent',
-          actionName: 'invoke',
-          resourceName: 'react',
+          id: "tx-agent-123",
+          status: "authorized",
+          trace: { id: "trace-uuid", externalId: "test-trace" },
+          serviceName: "langchain-agent",
+          actionName: "invoke",
+          resourceName: "react",
         }),
         get: jest.fn().mockResolvedValue({
-          id: 'tx-agent-123',
-          status: 'authorized',
-          trace: { id: 'trace-uuid', externalId: 'test-trace' },
-          serviceName: 'langchain-agent',
-          actionName: 'invoke',
-          resourceName: 'react',
+          id: "tx-agent-123",
+          status: "authorized",
+          trace: { id: "trace-uuid", externalId: "test-trace" },
+          serviceName: "langchain-agent",
+          actionName: "invoke",
+          resourceName: "react",
         }),
         addFacts: jest.fn().mockResolvedValue({
           success: true,
-          factId: 'fact-123',
+          factId: "fact-123",
         }),
       },
     } as any;
 
     originalInvoke = jest.fn().mockResolvedValue({
-      messages: [{ role: 'assistant', content: 'Response' }],
+      messages: [{ role: "assistant", content: "Response" }],
     });
 
     originalStream = jest.fn().mockImplementation(async function* () {
-      yield { messages: [{ role: 'assistant', content: 'Chunk' }] };
+      yield { messages: [{ role: "assistant", content: "Chunk" }] };
     });
 
     mockGraph = {
@@ -67,44 +67,46 @@ describe('wrapSapiomAgent', () => {
     };
   });
 
-  describe('invoke wrapper', () => {
-    it('creates agent transaction with trace', async () => {
+  describe("invoke wrapper", () => {
+    it("creates agent transaction with trace", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'agent-workflow',
+        traceId: "agent-workflow",
         onAgentStart,
         onAgentEnd,
       });
 
-      await agent.invoke({ messages: [{ role: 'user', content: 'Hello' }] });
+      await agent.invoke({ messages: [{ role: "user", content: "Hello" }] });
 
-      const createCall = (mockClient.transactions.create as jest.Mock).mock.calls[0][0];
+      const createCall = (mockClient.transactions.create as jest.Mock).mock
+        .calls[0][0];
 
       // Verify request facts sent
       expect(createCall.requestFacts).toBeDefined();
-      expect(createCall.requestFacts.source).toBe('langchain-agent');
-      expect(createCall.requestFacts.version).toBe('v1');
-      expect(createCall.requestFacts.request.entryMethod).toBe('invoke');
-      expect(createCall.traceExternalId).toBe('agent-workflow');
+      expect(createCall.requestFacts.source).toBe("langchain-agent");
+      expect(createCall.requestFacts.version).toBe("v1");
+      expect(createCall.requestFacts.request.entryMethod).toBe("invoke");
+      expect(createCall.traceExternalId).toBe("agent-workflow");
     });
 
-    it('auto-generates traceId when not provided', async () => {
+    it("auto-generates traceId when not provided", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
       });
 
       await agent.invoke({ messages: [] });
 
-      const createCall = (mockClient.transactions.create as jest.Mock).mock.calls[0][0];
+      const createCall = (mockClient.transactions.create as jest.Mock).mock
+        .calls[0][0];
 
       expect(createCall.requestFacts).toBeDefined();
       expect(createCall.traceExternalId).toMatch(/^sdk-[0-9a-f-]{36}$/);
     });
 
-    it('injects trace metadata into config', async () => {
+    it("injects trace metadata into config", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'test-trace',
+        traceId: "test-trace",
       });
 
       let capturedConfig: any;
@@ -115,40 +117,42 @@ describe('wrapSapiomAgent', () => {
 
       await agent.invoke({ messages: [] });
 
-      expect(capturedConfig.metadata.__sapiomTraceId).toBe('test-trace');
-      expect(capturedConfig.metadata.__sapiomAgentTxId).toBe('tx-agent-123');
-      expect(capturedConfig.metadata.__sapiomAgentInvokeTransaction).toBeDefined();
+      expect(capturedConfig.metadata.__sapiomTraceId).toBe("test-trace");
+      expect(capturedConfig.metadata.__sapiomAgentTxId).toBe("tx-agent-123");
+      expect(
+        capturedConfig.metadata.__sapiomAgentInvokeTransaction,
+      ).toBeDefined();
       expect(capturedConfig.metadata.__sapiomClient).toBe(mockClient);
     });
 
-    it('calls onAgentStart callback', async () => {
+    it("calls onAgentStart callback", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'test-trace',
+        traceId: "test-trace",
         onAgentStart,
       });
 
       await agent.invoke({ messages: [] });
 
-      expect(onAgentStart).toHaveBeenCalledWith('test-trace', 'tx-agent-123');
+      expect(onAgentStart).toHaveBeenCalledWith("test-trace", "tx-agent-123");
     });
 
-    it('calls onAgentEnd callback', async () => {
+    it("calls onAgentEnd callback", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'test-trace',
+        traceId: "test-trace",
         onAgentEnd,
       });
 
       await agent.invoke({ messages: [] });
 
-      expect(onAgentEnd).toHaveBeenCalledWith('test-trace', 0);
+      expect(onAgentEnd).toHaveBeenCalledWith("test-trace", 0);
     });
 
-    it('preserves user-provided metadata', async () => {
+    it("preserves user-provided metadata", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'test-trace',
+        traceId: "test-trace",
       });
 
       let capturedConfig: any;
@@ -160,20 +164,20 @@ describe('wrapSapiomAgent', () => {
       await agent.invoke(
         { messages: [] },
         {
-          metadata: { userKey: 'userValue' },
+          metadata: { userKey: "userValue" },
         },
       );
 
-      expect(capturedConfig.metadata.userKey).toBe('userValue');
-      expect(capturedConfig.metadata.__sapiomTraceId).toBe('test-trace');
+      expect(capturedConfig.metadata.userKey).toBe("userValue");
+      expect(capturedConfig.metadata.__sapiomTraceId).toBe("test-trace");
     });
   });
 
-  describe('stream wrapper', () => {
-    it('creates transaction when called directly', async () => {
+  describe("stream wrapper", () => {
+    it("creates transaction when called directly", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'stream-trace',
+        traceId: "stream-trace",
         onAgentStart,
       });
 
@@ -184,21 +188,22 @@ describe('wrapSapiomAgent', () => {
         // Process chunk
       }
 
-      const createCall = (mockClient.transactions.create as jest.Mock).mock.calls[0][0];
+      const createCall = (mockClient.transactions.create as jest.Mock).mock
+        .calls[0][0];
 
       // Verify request facts sent
       expect(createCall.requestFacts).toBeDefined();
-      expect(createCall.requestFacts.source).toBe('langchain-agent');
-      expect(createCall.requestFacts.request.entryMethod).toBe('stream');
-      expect(createCall.traceExternalId).toBe('stream-trace');
+      expect(createCall.requestFacts.source).toBe("langchain-agent");
+      expect(createCall.requestFacts.request.entryMethod).toBe("stream");
+      expect(createCall.traceExternalId).toBe("stream-trace");
 
-      expect(onAgentStart).toHaveBeenCalledWith('stream-trace', 'tx-agent-123');
+      expect(onAgentStart).toHaveBeenCalledWith("stream-trace", "tx-agent-123");
     });
 
-    it('injects trace metadata into config', async () => {
+    it("injects trace metadata into config", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'stream-trace',
+        traceId: "stream-trace",
       });
 
       let capturedConfig: any;
@@ -212,14 +217,14 @@ describe('wrapSapiomAgent', () => {
         // Consume
       }
 
-      expect(capturedConfig.metadata.__sapiomTraceId).toBe('stream-trace');
+      expect(capturedConfig.metadata.__sapiomTraceId).toBe("stream-trace");
       expect(capturedConfig.metadata.__sapiomClient).toBe(mockClient);
     });
 
-    it('reuses transaction when called from invoke', async () => {
+    it("reuses transaction when called from invoke", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'test-trace',
+        traceId: "test-trace",
       });
 
       // Mock invoke to call stream
@@ -238,14 +243,15 @@ describe('wrapSapiomAgent', () => {
       // Should only create ONE transaction (for invoke)
       expect(mockClient.transactions.create).toHaveBeenCalledTimes(1);
 
-      const createCall = (mockClient.transactions.create as jest.Mock).mock.calls[0][0];
-      expect(createCall.requestFacts.request.entryMethod).toBe('invoke');
+      const createCall = (mockClient.transactions.create as jest.Mock).mock
+        .calls[0][0];
+      expect(createCall.requestFacts.request.entryMethod).toBe("invoke");
     });
 
-    it('detects invoke transaction via metadata', async () => {
+    it("detects invoke transaction via metadata", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'test-trace',
+        traceId: "test-trace",
       });
 
       let streamConfig: any;
@@ -257,8 +263,8 @@ describe('wrapSapiomAgent', () => {
       // Simulate invoke calling stream with enriched config
       const invokeConfig = {
         metadata: {
-          __sapiomAgentInvokeTransaction: { id: 'tx-from-invoke' },
-          __sapiomTraceId: 'test-trace',
+          __sapiomAgentInvokeTransaction: { id: "tx-from-invoke" },
+          __sapiomTraceId: "test-trace",
         },
       };
 
@@ -271,12 +277,14 @@ describe('wrapSapiomAgent', () => {
       expect(mockClient.transactions.create).not.toHaveBeenCalled();
 
       // Should pass through config
-      expect(streamConfig.metadata.__sapiomAgentInvokeTransaction).toBeDefined();
+      expect(
+        streamConfig.metadata.__sapiomAgentInvokeTransaction,
+      ).toBeDefined();
     });
   });
 
-  describe('helper properties', () => {
-    it('exposes __sapiomClient property', () => {
+  describe("helper properties", () => {
+    it("exposes __sapiomClient property", () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
       });
@@ -284,16 +292,16 @@ describe('wrapSapiomAgent', () => {
       expect(agent.__sapiomClient).toBe(mockClient);
     });
 
-    it('exposes __sapiomTraceId property', () => {
+    it("exposes __sapiomTraceId property", () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'exposed-trace',
+        traceId: "exposed-trace",
       });
 
-      expect(agent.__sapiomTraceId).toBe('exposed-trace');
+      expect(agent.__sapiomTraceId).toBe("exposed-trace");
     });
 
-    it('exposes auto-generated traceId', () => {
+    it("exposes auto-generated traceId", () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
       });
@@ -302,16 +310,16 @@ describe('wrapSapiomAgent', () => {
     });
   });
 
-  describe('error handling', () => {
-    it('propagates authorization denied errors', async () => {
+  describe("error handling", () => {
+    it("propagates authorization denied errors", async () => {
       (mockClient.transactions.get as jest.Mock).mockResolvedValue({
-        id: 'tx-123',
-        status: 'denied',
+        id: "tx-123",
+        status: "denied",
       });
 
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
-        traceId: 'test-trace',
+        traceId: "test-trace",
       });
 
       await expect(agent.invoke({ messages: [] })).rejects.toThrow();
@@ -319,7 +327,7 @@ describe('wrapSapiomAgent', () => {
   });
 });
 
-describe('createSapiomReactAgent', () => {
+describe("createSapiomReactAgent", () => {
   let mockClient: SapiomClient;
   let mockTools: any[];
   let mockPrompt: any;
@@ -328,33 +336,33 @@ describe('createSapiomReactAgent', () => {
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({
-          id: 'tx-123',
-          status: 'authorized',
-          trace: { id: 'trace-uuid', externalId: 'test-trace' },
+          id: "tx-123",
+          status: "authorized",
+          trace: { id: "trace-uuid", externalId: "test-trace" },
         }),
         get: jest.fn().mockResolvedValue({
-          id: 'tx-123',
-          status: 'authorized',
-          trace: { id: 'trace-uuid', externalId: 'test-trace' },
+          id: "tx-123",
+          status: "authorized",
+          trace: { id: "trace-uuid", externalId: "test-trace" },
         }),
       },
     } as any;
 
     mockTools = [
       {
-        name: 'test-tool',
-        description: 'A test tool',
+        name: "test-tool",
+        description: "A test tool",
         func: jest.fn(),
       },
     ];
 
     mockPrompt = {
-      inputVariables: ['tools', 'tool_names', 'agent_scratchpad'],
+      inputVariables: ["tools", "tool_names", "agent_scratchpad"],
       partial: jest.fn().mockResolvedValue({}),
     };
 
     // Reset mock from previous tests
-    const { createReactAgent } = require('@langchain/langgraph/prebuilt');
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     (createReactAgent as jest.Mock).mockClear();
     (createReactAgent as jest.Mock).mockResolvedValue({
       invoke: jest.fn().mockResolvedValue({ messages: [] }),
@@ -362,15 +370,15 @@ describe('createSapiomReactAgent', () => {
     });
   });
 
-  it('wraps ChatOpenAI model with Sapiom tracking', async () => {
-    const llm = new ChatOpenAI({ model: 'gpt-4', openAIApiKey: 'test-key' });
+  it("wraps ChatOpenAI model with Sapiom tracking", async () => {
+    const llm = new ChatOpenAI({ model: "gpt-4", openAIApiKey: "test-key" });
 
     const agent = await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
-    const { createReactAgent } = require('@langchain/langgraph/prebuilt');
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     expect(createReactAgent).toHaveBeenCalled();
 
     const callArgs = (createReactAgent as jest.Mock).mock.calls[0][0];
@@ -378,18 +386,18 @@ describe('createSapiomReactAgent', () => {
     expect(callArgs.llm.__sapiomWrapped).toBe(true);
   });
 
-  it('wraps ChatAnthropic model with Sapiom tracking', async () => {
+  it("wraps ChatAnthropic model with Sapiom tracking", async () => {
     const llm = new ChatAnthropic({
-      model: 'claude-3-5-sonnet-20241022',
-      anthropicApiKey: 'test-key',
+      model: "claude-3-5-sonnet-20241022",
+      anthropicApiKey: "test-key",
     });
 
     const agent = await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
-    const { createReactAgent } = require('@langchain/langgraph/prebuilt');
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     expect(createReactAgent).toHaveBeenCalled();
 
     const callArgs = (createReactAgent as jest.Mock).mock.calls[0][0];
@@ -397,33 +405,33 @@ describe('createSapiomReactAgent', () => {
     expect(callArgs.llm.__sapiomWrapped).toBe(true);
   });
 
-  it('does not double-wrap already wrapped models', async () => {
+  it("does not double-wrap already wrapped models", async () => {
     const llm = new SapiomChatOpenAI(
-      { model: 'gpt-4', openAIApiKey: 'test-key' },
-      { sapiomClient: mockClient }
+      { model: "gpt-4", openAIApiKey: "test-key" },
+      { sapiomClient: mockClient },
     );
 
     const agent = await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
-    const { createReactAgent } = require('@langchain/langgraph/prebuilt');
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     const callArgs = (createReactAgent as jest.Mock).mock.calls[0][0];
 
     // Should be the same instance, not re-wrapped
     expect(callArgs.llm).toBe(llm);
   });
 
-  it('wraps all tools with Sapiom tracking', async () => {
-    const llm = new ChatOpenAI({ model: 'gpt-4', openAIApiKey: 'test-key' });
+  it("wraps all tools with Sapiom tracking", async () => {
+    const llm = new ChatOpenAI({ model: "gpt-4", openAIApiKey: "test-key" });
 
     await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
-    const { createReactAgent } = require('@langchain/langgraph/prebuilt');
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     const callArgs = (createReactAgent as jest.Mock).mock.calls[0][0];
 
     // Tools should be wrapped
@@ -431,40 +439,40 @@ describe('createSapiomReactAgent', () => {
     expect(callArgs.tools[0].__sapiomWrapped).toBe(true);
   });
 
-  it('does not double-wrap already wrapped tools', async () => {
-    const llm = new ChatOpenAI({ model: 'gpt-4', openAIApiKey: 'test-key' });
+  it("does not double-wrap already wrapped tools", async () => {
+    const llm = new ChatOpenAI({ model: "gpt-4", openAIApiKey: "test-key" });
     const wrappedTool = { ...mockTools[0], __sapiomWrapped: true };
 
     await createSapiomReactAgent(
       { llm, tools: [wrappedTool], prompt: mockPrompt },
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
-    const { createReactAgent } = require('@langchain/langgraph/prebuilt');
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     const callArgs = (createReactAgent as jest.Mock).mock.calls[0][0];
 
     // Should be the same instance
     expect(callArgs.tools[0]).toBe(wrappedTool);
   });
 
-  it('wraps the agent graph with trace support', async () => {
-    const llm = new ChatOpenAI({ model: 'gpt-4', openAIApiKey: 'test-key' });
+  it("wraps the agent graph with trace support", async () => {
+    const llm = new ChatOpenAI({ model: "gpt-4", openAIApiKey: "test-key" });
 
     const agent = await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
       {
         sapiomClient: mockClient,
-        traceId: 'custom-trace',
-      }
+        traceId: "custom-trace",
+      },
     );
 
     // Agent should have Sapiom properties
     expect(agent.__sapiomClient).toBe(mockClient);
-    expect(agent.__sapiomTraceId).toBe('custom-trace');
+    expect(agent.__sapiomTraceId).toBe("custom-trace");
   });
 
-  it('passes through additional createReactAgent params', async () => {
-    const llm = new ChatOpenAI({ model: 'gpt-4', openAIApiKey: 'test-key' });
+  it("passes through additional createReactAgent params", async () => {
+    const llm = new ChatOpenAI({ model: "gpt-4", openAIApiKey: "test-key" });
 
     await createSapiomReactAgent(
       {
@@ -472,70 +480,70 @@ describe('createSapiomReactAgent', () => {
         tools: mockTools,
         prompt: mockPrompt,
         streamRunnable: false,
-        customParam: 'test',
+        customParam: "test",
       } as any,
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
-    const { createReactAgent } = require('@langchain/langgraph/prebuilt');
+    const { createReactAgent } = require("@langchain/langgraph/prebuilt");
     const callArgs = (createReactAgent as jest.Mock).mock.calls[0][0];
 
     expect(callArgs.streamRunnable).toBe(false);
-    expect(callArgs.customParam).toBe('test');
+    expect(callArgs.customParam).toBe("test");
   });
 
-  it('throws error for unsupported model types', async () => {
+  it("throws error for unsupported model types", async () => {
     const unsupportedModel = {
-      constructor: { name: 'UnsupportedModel' },
+      constructor: { name: "UnsupportedModel" },
     } as any;
 
     await expect(
       createSapiomReactAgent(
         { llm: unsupportedModel, tools: mockTools, prompt: mockPrompt },
-        { sapiomClient: mockClient }
-      )
-    ).rejects.toThrow('Unsupported model type: UnsupportedModel');
+        { sapiomClient: mockClient },
+      ),
+    ).rejects.toThrow("Unsupported model type: UnsupportedModel");
   });
 
-  it('uses auto-generated trace if not provided', async () => {
-    const llm = new ChatOpenAI({ model: 'gpt-4', openAIApiKey: 'test-key' });
+  it("uses auto-generated trace if not provided", async () => {
+    const llm = new ChatOpenAI({ model: "gpt-4", openAIApiKey: "test-key" });
 
     const agent = await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
     // Should have auto-generated trace ID with sdk- prefix
     expect(agent.__sapiomTraceId).toMatch(/^sdk-/);
   });
 
-  it('preserves trace from wrapped model if not explicitly provided', async () => {
+  it("preserves trace from wrapped model if not explicitly provided", async () => {
     const llm = new SapiomChatOpenAI(
-      { model: 'gpt-4', openAIApiKey: 'test-key' },
-      { sapiomClient: mockClient, traceId: 'model-trace' }
+      { model: "gpt-4", openAIApiKey: "test-key" },
+      { sapiomClient: mockClient, traceId: "model-trace" },
     );
 
     const agent = await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
-      { sapiomClient: mockClient }
+      { sapiomClient: mockClient },
     );
 
     // Should use trace from model
-    expect(agent.__sapiomTraceId).toBe('model-trace');
+    expect(agent.__sapiomTraceId).toBe("model-trace");
   });
 
-  it('explicit traceId overrides model trace', async () => {
+  it("explicit traceId overrides model trace", async () => {
     const llm = new SapiomChatOpenAI(
-      { model: 'gpt-4', openAIApiKey: 'test-key' },
-      { sapiomClient: mockClient, traceId: 'model-trace' }
+      { model: "gpt-4", openAIApiKey: "test-key" },
+      { sapiomClient: mockClient, traceId: "model-trace" },
     );
 
     const agent = await createSapiomReactAgent(
       { llm, tools: mockTools, prompt: mockPrompt },
-      { sapiomClient: mockClient, traceId: 'explicit-trace' }
+      { sapiomClient: mockClient, traceId: "explicit-trace" },
     );
 
     // Explicit trace should take precedence
-    expect(agent.__sapiomTraceId).toBe('explicit-trace');
+    expect(agent.__sapiomTraceId).toBe("explicit-trace");
   });
 });

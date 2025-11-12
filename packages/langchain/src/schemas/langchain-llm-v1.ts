@@ -7,7 +7,7 @@
  * Schema: source="langchain-llm", version="v1"
  */
 
-import type { CallSiteInfo } from '@sapiom/core';
+import type { CallSiteInfo } from "@sapiom/core";
 
 /**
  * Tool usage metadata
@@ -53,12 +53,12 @@ export interface LangChainContextInfo {
  */
 export interface LangChainLLMRequestFacts {
   // Model identity
-  framework: 'langchain';
+  framework: "langchain";
   modelClass: string;
   modelId: string;
 
   // Call metadata
-  entryMethod: 'invoke' | 'generate' | 'stream' | 'batch';
+  entryMethod: "invoke" | "generate" | "stream" | "batch";
   isStreaming: boolean;
   batchSize: number;
 
@@ -68,7 +68,7 @@ export interface LangChainLLMRequestFacts {
 
   // Token estimation
   estimatedInputTokens: number;
-  tokenEstimationMethod: 'tiktoken' | 'approximate';
+  tokenEstimationMethod: "tiktoken" | "approximate";
 
   // Generation parameters
   temperature?: number;
@@ -156,11 +156,11 @@ export interface LangChainLLMErrorFacts {
  * Complete LangChain LLM facts package
  */
 export interface LangChainLLMFacts {
-  source: 'langchain-llm';
-  version: 'v1';
+  source: "langchain-llm";
+  version: "v1";
 
   sdk: {
-    name: '@sapiom/sdk';
+    name: "@sapiom/sdk";
     version: string;
     nodeVersion?: string;
     platform?: string;

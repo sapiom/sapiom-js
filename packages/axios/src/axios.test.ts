@@ -1,17 +1,17 @@
-import axios, { AxiosInstance } from 'axios';
-import MockAdapter from 'axios-mock-adapter';
+import axios, { AxiosInstance } from "axios";
+import MockAdapter from "axios-mock-adapter";
 
-import { HttpRequest } from '@sapiom/core';
-import { AxiosAdapter, createAxiosAdapter } from './adapter';
+import { HttpRequest } from "@sapiom/core";
+import { AxiosAdapter, createAxiosAdapter } from "./adapter";
 
-describe('AxiosAdapter', () => {
+describe("AxiosAdapter", () => {
   let axiosInstance: AxiosInstance;
   let mockAxios: MockAdapter;
   let adapter: AxiosAdapter;
 
   beforeEach(() => {
     axiosInstance = axios.create({
-      baseURL: 'https://api.example.com',
+      baseURL: "https://api.example.com",
     });
     mockAxios = new MockAdapter(axiosInstance);
     adapter = new AxiosAdapter(axiosInstance);
@@ -21,14 +21,14 @@ describe('AxiosAdapter', () => {
     mockAxios.reset();
   });
 
-  describe('request', () => {
-    it('should execute a successful GET request', async () => {
-      const mockData = { message: 'success', id: 123 };
-      mockAxios.onGet('/test').reply(200, mockData);
+  describe("request", () => {
+    it("should execute a successful GET request", async () => {
+      const mockData = { message: "success", id: 123 };
+      mockAxios.onGet("/test").reply(200, mockData);
 
       const request: HttpRequest = {
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
       };
 
@@ -38,16 +38,16 @@ describe('AxiosAdapter', () => {
       expect(response.data).toEqual(mockData);
     });
 
-    it('should execute a POST request with body', async () => {
-      const requestBody = { name: 'test', value: 42 };
-      const responseData = { id: '123', created: true };
+    it("should execute a POST request with body", async () => {
+      const requestBody = { name: "test", value: 42 };
+      const responseData = { id: "123", created: true };
 
-      mockAxios.onPost('/users', requestBody).reply(201, responseData);
+      mockAxios.onPost("/users", requestBody).reply(201, responseData);
 
       const request: HttpRequest = {
-        method: 'POST',
-        url: '/users',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        url: "/users",
+        headers: { "Content-Type": "application/json" },
         body: requestBody,
       };
 
@@ -57,28 +57,28 @@ describe('AxiosAdapter', () => {
       expect(response.data).toEqual(responseData);
     });
 
-    it('should include query params', async () => {
-      mockAxios.onGet('/search').reply((config) => {
-        expect(config.params).toEqual({ q: 'test', limit: 10 });
+    it("should include query params", async () => {
+      mockAxios.onGet("/search").reply((config) => {
+        expect(config.params).toEqual({ q: "test", limit: 10 });
         return [200, { results: [] }];
       });
 
       const request: HttpRequest = {
-        method: 'GET',
-        url: '/search',
+        method: "GET",
+        url: "/search",
         headers: {},
-        params: { q: 'test', limit: 10 },
+        params: { q: "test", limit: 10 },
       };
 
       await adapter.request(request);
     });
 
-    it('should handle 404 errors', async () => {
-      mockAxios.onGet('/notfound').reply(404, { error: 'Not found' });
+    it("should handle 404 errors", async () => {
+      mockAxios.onGet("/notfound").reply(404, { error: "Not found" });
 
       const request: HttpRequest = {
-        method: 'GET',
-        url: '/notfound',
+        method: "GET",
+        url: "/notfound",
         headers: {},
       };
 
@@ -87,25 +87,25 @@ describe('AxiosAdapter', () => {
       });
     });
 
-    it('should handle 402 payment errors', async () => {
+    it("should handle 402 payment errors", async () => {
       const paymentData = {
         x402Version: 1,
         accepts: [
           {
-            scheme: 'exact',
-            network: 'base-sepolia',
-            maxAmountRequired: '1000000',
-            payTo: '0x1234567890123456789012345678901234567890',
-            asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            scheme: "exact",
+            network: "base-sepolia",
+            maxAmountRequired: "1000000",
+            payTo: "0x1234567890123456789012345678901234567890",
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
           },
         ],
       };
 
-      mockAxios.onGet('/premium').reply(402, paymentData);
+      mockAxios.onGet("/premium").reply(402, paymentData);
 
       const request: HttpRequest = {
-        method: 'GET',
-        url: '/premium',
+        method: "GET",
+        url: "/premium",
         headers: {},
       };
 
@@ -114,29 +114,31 @@ describe('AxiosAdapter', () => {
       });
     });
 
-    it('should handle network errors', async () => {
-      mockAxios.onGet('/network-error').networkError();
+    it("should handle network errors", async () => {
+      mockAxios.onGet("/network-error").networkError();
 
       const request: HttpRequest = {
-        method: 'GET',
-        url: '/network-error',
+        method: "GET",
+        url: "/network-error",
         headers: {},
       };
 
       await expect(adapter.request(request)).rejects.toMatchObject({
-        message: expect.stringContaining('Network Error'),
+        message: expect.stringContaining("Network Error"),
       });
     });
 
-    it('should preserve metadata in request', async () => {
-      mockAxios.onGet('/test').reply((config) => {
-        expect((config as any).__sapiomInternal).toEqual({ __is402Retry: true });
+    it("should preserve metadata in request", async () => {
+      mockAxios.onGet("/test").reply((config) => {
+        expect((config as any).__sapiomInternal).toEqual({
+          __is402Retry: true,
+        });
         return [200, { ok: true }];
       });
 
       const request: HttpRequest = {
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
         metadata: { __is402Retry: true },
       };
@@ -145,108 +147,108 @@ describe('AxiosAdapter', () => {
     });
   });
 
-  describe('addRequestInterceptor', () => {
-    it('should modify outgoing requests', async () => {
+  describe("addRequestInterceptor", () => {
+    it("should modify outgoing requests", async () => {
       adapter.addRequestInterceptor((request) => {
         return {
           ...request,
           headers: {
             ...request.headers,
-            'X-Custom-Header': 'intercepted',
+            "X-Custom-Header": "intercepted",
           },
         };
       });
 
-      mockAxios.onGet('/test').reply((config) => {
-        expect(config.headers?.['X-Custom-Header']).toBe('intercepted');
+      mockAxios.onGet("/test").reply((config) => {
+        expect(config.headers?.["X-Custom-Header"]).toBe("intercepted");
         return [200, { ok: true }];
       });
 
       await adapter.request({
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
       });
     });
 
-    it('should support async interceptors', async () => {
+    it("should support async interceptors", async () => {
       adapter.addRequestInterceptor(async (request) => {
         await new Promise((resolve) => setTimeout(resolve, 10));
         return {
           ...request,
-          headers: { ...request.headers, 'X-Async': 'true' },
+          headers: { ...request.headers, "X-Async": "true" },
         };
       });
 
-      mockAxios.onGet('/test').reply((config) => {
-        expect(config.headers?.['X-Async']).toBe('true');
+      mockAxios.onGet("/test").reply((config) => {
+        expect(config.headers?.["X-Async"]).toBe("true");
         return [200, { ok: true }];
       });
 
       await adapter.request({
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
       });
     });
 
-    it('should allow cleanup of interceptors', async () => {
+    it("should allow cleanup of interceptors", async () => {
       const interceptor = jest.fn((request) => {
         return {
           ...request,
           headers: {
             ...request.headers,
-            'X-Custom-Header': 'intercepted',
+            "X-Custom-Header": "intercepted",
           },
         };
       });
       const cleanup = adapter.addRequestInterceptor(interceptor);
 
-      mockAxios.onGet('/test1').reply((config) => {
-        expect(config.headers?.['X-Custom-Header']).toBe('intercepted');
+      mockAxios.onGet("/test1").reply((config) => {
+        expect(config.headers?.["X-Custom-Header"]).toBe("intercepted");
         return [200, { ok: true }];
       });
-      mockAxios.onGet('/test2').reply((config) => {
-        expect(config.headers?.['X-Custom-Header']).not.toBeDefined();
+      mockAxios.onGet("/test2").reply((config) => {
+        expect(config.headers?.["X-Custom-Header"]).not.toBeDefined();
         return [200, { ok: true }];
       });
 
       // First request - interceptor should be called
-      await adapter.request({ method: 'GET', url: '/test1', headers: {} });
+      await adapter.request({ method: "GET", url: "/test1", headers: {} });
       expect(interceptor).toHaveBeenCalledTimes(1);
 
       // Clean up
       cleanup();
 
       // Second request - interceptor should not be called
-      await adapter.request({ method: 'GET', url: '/test2', headers: {} });
+      await adapter.request({ method: "GET", url: "/test2", headers: {} });
       expect(interceptor).toHaveBeenCalledTimes(1); // Still 1
     });
 
-    it('should support multiple interceptors in order', async () => {
+    it("should support multiple interceptors in order", async () => {
       const calls: string[] = [];
 
       adapter.addRequestInterceptor((request) => {
-        calls.push('first');
+        calls.push("first");
         return request;
       });
 
       adapter.addRequestInterceptor((request) => {
-        calls.push('second');
+        calls.push("second");
         return request;
       });
 
-      mockAxios.onGet('/test').reply(200, {});
+      mockAxios.onGet("/test").reply(200, {});
 
-      await adapter.request({ method: 'GET', url: '/test', headers: {} });
+      await adapter.request({ method: "GET", url: "/test", headers: {} });
 
       // Axios runs interceptors in reverse order (LIFO)
-      expect(calls).toEqual(['second', 'first']);
+      expect(calls).toEqual(["second", "first"]);
     });
   });
 
-  describe('addResponseInterceptor', () => {
-    it('should modify successful responses', async () => {
+  describe("addResponseInterceptor", () => {
+    it("should modify successful responses", async () => {
       adapter.addResponseInterceptor((response) => {
         return {
           ...response,
@@ -254,11 +256,11 @@ describe('AxiosAdapter', () => {
         };
       });
 
-      mockAxios.onGet('/test').reply(200, { original: true });
+      mockAxios.onGet("/test").reply(200, { original: true });
 
       const response = await adapter.request({
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
       });
 
@@ -268,13 +270,13 @@ describe('AxiosAdapter', () => {
       });
     });
 
-    it('should handle errors with error interceptor', async () => {
+    it("should handle errors with error interceptor", async () => {
       const errorHandler = jest.fn((error) => {
         // Recover from 404 by returning a default response
         if (error.status === 404) {
           return {
             status: 200,
-            statusText: 'OK',
+            statusText: "OK",
             headers: {},
             data: { recovered: true, original404: true },
           };
@@ -284,11 +286,11 @@ describe('AxiosAdapter', () => {
 
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      mockAxios.onGet('/notfound').reply(404, { error: 'Not found' });
+      mockAxios.onGet("/notfound").reply(404, { error: "Not found" });
 
       const response = await adapter.request({
-        method: 'GET',
-        url: '/notfound',
+        method: "GET",
+        url: "/notfound",
         headers: {},
       });
 
@@ -297,17 +299,17 @@ describe('AxiosAdapter', () => {
       expect(response.data).toEqual({ recovered: true, original404: true });
     });
 
-    it('should properly format 402 payment errors', async () => {
+    it("should properly format 402 payment errors", async () => {
       const paymentData = {
         x402Version: 1,
         accepts: [
           {
-            scheme: 'exact',
-            network: 'base-sepolia',
-            maxAmountRequired: '1000000',
-            resourceName: 'https://api.example.com/premium',
-            payTo: '0x1234567890123456789012345678901234567890',
-            asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            scheme: "exact",
+            network: "base-sepolia",
+            maxAmountRequired: "1000000",
+            resourceName: "https://api.example.com/premium",
+            payTo: "0x1234567890123456789012345678901234567890",
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
           },
         ],
       };
@@ -315,29 +317,29 @@ describe('AxiosAdapter', () => {
       const errorHandler = jest.fn();
       adapter.addResponseInterceptor((response) => response, errorHandler);
 
-      mockAxios.onGet('/premium').reply(402, paymentData, {
-        'x-payment-required': 'true',
+      mockAxios.onGet("/premium").reply(402, paymentData, {
+        "x-payment-required": "true",
       });
 
       await adapter
         .request({
-          method: 'GET',
-          url: '/premium',
+          method: "GET",
+          url: "/premium",
           headers: {},
         })
         .catch(() => {});
 
       expect(errorHandler).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: 'Request failed with status code 402',
+          message: "Request failed with status code 402",
           status: 402,
           data: paymentData,
           headers: expect.objectContaining({
-            'x-payment-required': 'true',
+            "x-payment-required": "true",
           }),
           request: expect.objectContaining({
-            method: 'get',
-            url: '/premium',
+            method: "get",
+            url: "/premium",
           }),
           response: expect.objectContaining({
             status: 402,
@@ -347,13 +349,13 @@ describe('AxiosAdapter', () => {
       );
     });
 
-    it('should handle 500 server errors', async () => {
-      mockAxios.onGet('/error').reply(500, { error: 'Internal server error' });
+    it("should handle 500 server errors", async () => {
+      mockAxios.onGet("/error").reply(500, { error: "Internal server error" });
 
       await expect(
         adapter.request({
-          method: 'GET',
-          url: '/error',
+          method: "GET",
+          url: "/error",
           headers: {},
         }),
       ).rejects.toMatchObject({
@@ -361,7 +363,7 @@ describe('AxiosAdapter', () => {
       });
     });
 
-    it('should allow cleanup of response interceptors', async () => {
+    it("should allow cleanup of response interceptors", async () => {
       const interceptor = jest.fn((response) => {
         return {
           ...response,
@@ -370,59 +372,67 @@ describe('AxiosAdapter', () => {
       });
       const cleanup = adapter.addResponseInterceptor(interceptor);
 
-      mockAxios.onGet('/test1').reply(200, { original: '1' });
-      mockAxios.onGet('/test2').reply(200, { original: '2' });
+      mockAxios.onGet("/test1").reply(200, { original: "1" });
+      mockAxios.onGet("/test2").reply(200, { original: "2" });
 
-      const repsonse1 = await adapter.request({ method: 'GET', url: '/test1', headers: {} });
-      expect(repsonse1.data).toEqual({ original: '1', modified: true });
+      const repsonse1 = await adapter.request({
+        method: "GET",
+        url: "/test1",
+        headers: {},
+      });
+      expect(repsonse1.data).toEqual({ original: "1", modified: true });
       expect(interceptor).toHaveBeenCalledTimes(1);
 
       cleanup();
 
-      const response2 = await adapter.request({ method: 'GET', url: '/test2', headers: {} });
-      expect(response2.data).toEqual({ original: '2' });
+      const response2 = await adapter.request({
+        method: "GET",
+        url: "/test2",
+        headers: {},
+      });
+      expect(response2.data).toEqual({ original: "2" });
       expect(interceptor).toHaveBeenCalledTimes(1); // Not called after cleanup
     });
 
-    it('should support multiple response interceptors in order', async () => {
+    it("should support multiple response interceptors in order", async () => {
       const calls: string[] = [];
 
       adapter.addResponseInterceptor((response) => {
-        calls.push('first');
+        calls.push("first");
         return response;
       });
 
       adapter.addResponseInterceptor((response) => {
-        calls.push('second');
+        calls.push("second");
         return response;
       });
 
-      mockAxios.onGet('/test').reply(200, {});
+      mockAxios.onGet("/test").reply(200, {});
 
-      await adapter.request({ method: 'GET', url: '/test', headers: {} });
+      await adapter.request({ method: "GET", url: "/test", headers: {} });
 
-      expect(calls).toEqual(['first', 'second']);
+      expect(calls).toEqual(["first", "second"]);
     });
   });
 
-  describe('createAxiosAdapter', () => {
-    it('should create an AxiosAdapter instance', () => {
+  describe("createAxiosAdapter", () => {
+    it("should create an AxiosAdapter instance", () => {
       const axiosInstance = axios.create();
       const adapter = createAxiosAdapter(axiosInstance);
 
       expect(adapter).toBeInstanceOf(AxiosAdapter);
     });
 
-    it('should work with created adapter', async () => {
-      const axiosInstance = axios.create({ baseURL: 'https://test.com' });
+    it("should work with created adapter", async () => {
+      const axiosInstance = axios.create({ baseURL: "https://test.com" });
       const mockAdapter = new MockAdapter(axiosInstance);
       const adapter = createAxiosAdapter(axiosInstance);
 
-      mockAdapter.onGet('/data').reply(200, { test: true });
+      mockAdapter.onGet("/data").reply(200, { test: true });
 
       const response = await adapter.request({
-        method: 'GET',
-        url: '/data',
+        method: "GET",
+        url: "/data",
         headers: {},
       });
 
@@ -430,8 +440,8 @@ describe('AxiosAdapter', () => {
     });
   });
 
-  describe('metadata preservation', () => {
-    it('should preserve metadata through interceptors', async () => {
+  describe("metadata preservation", () => {
+    it("should preserve metadata through interceptors", async () => {
       let capturedMetadata: any;
 
       adapter.addRequestInterceptor((request) => {
@@ -439,11 +449,11 @@ describe('AxiosAdapter', () => {
         return request;
       });
 
-      mockAxios.onGet('/test').reply(200, {});
+      mockAxios.onGet("/test").reply(200, {});
 
       await adapter.request({
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
         metadata: { customFlag: true, __is402Retry: false },
       });
@@ -454,7 +464,7 @@ describe('AxiosAdapter', () => {
       });
     });
 
-    it('should allow modifying metadata in interceptor', async () => {
+    it("should allow modifying metadata in interceptor", async () => {
       adapter.addRequestInterceptor((request) => {
         return {
           ...request,
@@ -465,7 +475,7 @@ describe('AxiosAdapter', () => {
         };
       });
 
-      mockAxios.onGet('/test').reply((config) => {
+      mockAxios.onGet("/test").reply((config) => {
         expect((config as any).__sapiomInternal).toEqual({
           original: true,
           interceptorAdded: true,
@@ -474,104 +484,104 @@ describe('AxiosAdapter', () => {
       });
 
       await adapter.request({
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
         metadata: { original: true },
       });
     });
 
-    it('should preserve __sapiom separately from internal metadata', async () => {
+    it("should preserve __sapiom separately from internal metadata", async () => {
       adapter.addRequestInterceptor((request) => {
-        expect(request.__sapiom).toEqual({ serviceName: 'test-service' });
+        expect(request.__sapiom).toEqual({ serviceName: "test-service" });
         expect(request.metadata).toEqual({ __is402Retry: true });
         return request;
       });
 
-      mockAxios.onGet('/test').reply(200, {});
+      mockAxios.onGet("/test").reply(200, {});
 
       await adapter.request({
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {},
-        __sapiom: { serviceName: 'test-service' },
+        __sapiom: { serviceName: "test-service" },
         metadata: { __is402Retry: true },
       });
     });
   });
 
-  describe('integration with Axios features', () => {
-    it('should work with different HTTP methods', async () => {
-      mockAxios.onPut('/resource/123').reply(200, { updated: true });
-      mockAxios.onDelete('/resource/456').reply(204);
-      mockAxios.onPatch('/resource/789').reply(200, { patched: true });
+  describe("integration with Axios features", () => {
+    it("should work with different HTTP methods", async () => {
+      mockAxios.onPut("/resource/123").reply(200, { updated: true });
+      mockAxios.onDelete("/resource/456").reply(204);
+      mockAxios.onPatch("/resource/789").reply(200, { patched: true });
 
       const putResponse = await adapter.request({
-        method: 'PUT',
-        url: '/resource/123',
+        method: "PUT",
+        url: "/resource/123",
         headers: {},
-        body: { name: 'updated' },
+        body: { name: "updated" },
       });
       expect(putResponse.data).toEqual({ updated: true });
 
       const deleteResponse = await adapter.request({
-        method: 'DELETE',
-        url: '/resource/456',
+        method: "DELETE",
+        url: "/resource/456",
         headers: {},
       });
       expect(deleteResponse.status).toBe(204);
 
       const patchResponse = await adapter.request({
-        method: 'PATCH',
-        url: '/resource/789',
+        method: "PATCH",
+        url: "/resource/789",
         headers: {},
-        body: { name: 'patched' },
+        body: { name: "patched" },
       });
       expect(patchResponse.data).toEqual({ patched: true });
     });
 
-    it('should preserve custom headers', async () => {
-      mockAxios.onGet('/test').reply((config) => {
-        expect(config.headers?.['Authorization']).toBe('Bearer token123');
-        expect(config.headers?.['X-Custom']).toBe('value');
+    it("should preserve custom headers", async () => {
+      mockAxios.onGet("/test").reply((config) => {
+        expect(config.headers?.["Authorization"]).toBe("Bearer token123");
+        expect(config.headers?.["X-Custom"]).toBe("value");
         return [200, {}];
       });
 
       await adapter.request({
-        method: 'GET',
-        url: '/test',
+        method: "GET",
+        url: "/test",
         headers: {
-          Authorization: 'Bearer token123',
-          'X-Custom': 'value',
+          Authorization: "Bearer token123",
+          "X-Custom": "value",
         },
       });
     });
 
-    it('should handle timeout errors', async () => {
-      mockAxios.onGet('/timeout').timeout();
+    it("should handle timeout errors", async () => {
+      mockAxios.onGet("/timeout").timeout();
 
       await expect(
         adapter.request({
-          method: 'GET',
-          url: '/timeout',
+          method: "GET",
+          url: "/timeout",
           headers: {},
         }),
       ).rejects.toMatchObject({
-        message: expect.stringContaining('timeout'),
+        message: expect.stringContaining("timeout"),
       });
     });
   });
 
-  describe('error recovery with interceptors', () => {
-    it('should allow interceptor to recover from 402 and retry', async () => {
+  describe("error recovery with interceptors", () => {
+    it("should allow interceptor to recover from 402 and retry", async () => {
       let firstCall = true;
 
-      mockAxios.onGet('/premium').reply(() => {
+      mockAxios.onGet("/premium").reply(() => {
         if (firstCall) {
           firstCall = false;
           return [402, { requiresPayment: true }];
         }
-        return [200, { data: 'premium content' }];
+        return [200, { data: "premium content" }];
       });
 
       // Simulate payment interceptor
@@ -584,7 +594,7 @@ describe('AxiosAdapter', () => {
               ...error.request!,
               headers: {
                 ...error.request!.headers,
-                'X-PAYMENT': 'payment-authorization-payload',
+                "X-PAYMENT": "payment-authorization-payload",
               },
               metadata: {
                 ...error.request!.metadata,
@@ -600,18 +610,18 @@ describe('AxiosAdapter', () => {
       );
 
       const response = await adapter.request({
-        method: 'GET',
-        url: '/premium',
+        method: "GET",
+        url: "/premium",
         headers: {},
       });
 
       expect(response.status).toBe(200);
       expect(firstCall).toBe(false);
-      expect(response.data).toEqual({ data: 'premium content' });
+      expect(response.data).toEqual({ data: "premium content" });
     });
 
-    it('should prevent infinite retry loops', async () => {
-      mockAxios.onGet('/premium').reply(402, { requiresPayment: true });
+    it("should prevent infinite retry loops", async () => {
+      mockAxios.onGet("/premium").reply(402, { requiresPayment: true });
 
       let retryCount = 0;
 
@@ -635,8 +645,8 @@ describe('AxiosAdapter', () => {
 
       await expect(
         adapter.request({
-          method: 'GET',
-          url: '/premium',
+          method: "GET",
+          url: "/premium",
           headers: {},
         }),
       ).rejects.toMatchObject({

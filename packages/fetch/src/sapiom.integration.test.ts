@@ -2,13 +2,13 @@
  * Integration tests for unified SapiomHandler with Fetch adapter
  * Tests combined authorization + payment flow (Fetch-specific tests only)
  */
-import { createFetchAdapter } from './adapter';
-import { SapiomClient } from '@sapiom/core';
-import { TransactionAPI } from '@sapiom/core';
-import { TransactionStatus } from '@sapiom/core';
-import { withSapiomHandling } from '@sapiom/core';
+import { createFetchAdapter } from "./adapter";
+import { SapiomClient } from "@sapiom/core";
+import { TransactionAPI } from "@sapiom/core";
+import { TransactionStatus } from "@sapiom/core";
+import { withSapiomHandling } from "@sapiom/core";
 
-describe('Unified Sapiom Handler Integration Tests', () => {
+describe("Unified Sapiom Handler Integration Tests", () => {
   let mockTransactionAPI: jest.Mocked<TransactionAPI>;
   let mockSapiomClient: SapiomClient;
 
@@ -36,8 +36,8 @@ describe('Unified Sapiom Handler Integration Tests', () => {
   // For now, this file serves as a placeholder for future Fetch-specific
   // unified handler tests.
 
-  it('should be able to create fetch adapter with Sapiom handling', () => {
-    const adapter = createFetchAdapter('https://api.example.com');
+  it("should be able to create fetch adapter with Sapiom handling", () => {
+    const adapter = createFetchAdapter("https://api.example.com");
 
     withSapiomHandling(adapter, {
       sapiomClient: mockSapiomClient,

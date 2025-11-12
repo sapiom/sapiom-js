@@ -1,8 +1,11 @@
-import { SapiomHandlerConfig, withSapiomHandling } from '@sapiom/core';
-import { createNodeHttpAdapter } from './adapter';
-import { HttpClientAdapter } from '@sapiom/core';
-import { SapiomClient } from '@sapiom/core';
-import { BaseSapiomIntegrationConfig, initializeSapiomClient } from '@sapiom/core';
+import { SapiomHandlerConfig, withSapiomHandling } from "@sapiom/core";
+import { createNodeHttpAdapter } from "./adapter";
+import { HttpClientAdapter } from "@sapiom/core";
+import { SapiomClient } from "@sapiom/core";
+import {
+  BaseSapiomIntegrationConfig,
+  initializeSapiomClient,
+} from "@sapiom/core";
 
 /**
  * Configuration for Sapiom-enabled Node.js HTTP client
@@ -11,12 +14,12 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
   /**
    * Authorization handler configuration
    */
-  authorization?: Omit<SapiomHandlerConfig['authorization'], 'sapiomClient'>;
+  authorization?: Omit<SapiomHandlerConfig["authorization"], "sapiomClient">;
 
   /**
    * Payment handler configuration
    */
-  payment?: Omit<SapiomHandlerConfig['payment'], 'sapiomClient'>;
+  payment?: Omit<SapiomHandlerConfig["payment"], "sapiomClient">;
 }
 
 /**

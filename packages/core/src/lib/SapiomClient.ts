@@ -1,4 +1,4 @@
-import { TransactionAPI } from './TransactionAPI';
+import { TransactionAPI } from "./TransactionAPI";
 
 export interface SapiomClientConfig {
   apiKey: string;
@@ -27,14 +27,14 @@ export class SapiomClient {
 
   constructor(config: SapiomClientConfig) {
     if (!config.apiKey) {
-      throw new Error('API key is required');
+      throw new Error("API key is required");
     }
 
-    this.baseURL = config.baseURL || 'http://localhost:3000';
+    this.baseURL = config.baseURL || "http://localhost:3000";
     this.timeout = config.timeout || 30000;
     this.defaultHeaders = {
-      'Content-Type': 'application/json',
-      'x-api-key': config.apiKey,
+      "Content-Type": "application/json",
+      "x-api-key": config.apiKey,
       ...config.headers,
     };
 
@@ -46,14 +46,20 @@ export class SapiomClient {
    * Update the API key
    */
   setApiKey(apiKey: string): void {
-    this.defaultHeaders['x-api-key'] = apiKey;
+    this.defaultHeaders["x-api-key"] = apiKey;
   }
 
   /**
    * Get the default headers (for testing and compatibility)
    * @deprecated Use for testing only. This method exists for backward compatibility.
    */
-  getHttpClient(): { defaults: { baseURL: string; timeout: number; headers: Record<string, string> } } {
+  getHttpClient(): {
+    defaults: {
+      baseURL: string;
+      timeout: number;
+      headers: Record<string, string>;
+    };
+  } {
     return {
       defaults: {
         baseURL: this.baseURL,
@@ -75,7 +81,7 @@ export class SapiomClient {
 
     try {
       const response = await fetch(url, {
-        method: config.method || 'GET',
+        method: config.method || "GET",
         headers,
         body: this.prepareRequestBody(config.body),
         signal: controller.signal,
@@ -85,13 +91,15 @@ export class SapiomClient {
 
       if (!response.ok) {
         const errorData = await this.parseResponse(response);
-        throw new Error(`Request failed with status ${response.status}: ${JSON.stringify(errorData)}`);
+        throw new Error(
+          `Request failed with status ${response.status}: ${JSON.stringify(errorData)}`,
+        );
       }
 
       return (await this.parseResponse(response)) as T;
     } catch (error: any) {
       clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
+      if (error.name === "AbortError") {
         throw new Error(`Request timeout after ${this.timeout}ms`);
       }
       throw error;
@@ -108,7 +116,7 @@ export class SapiomClient {
     }
 
     // If already a string, use as-is (might be pre-stringified JSON)
-    if (typeof body === 'string') {
+    if (typeof body === "string") {
       return body;
     }
 
@@ -118,7 +126,7 @@ export class SapiomClient {
       body instanceof Blob ||
       body instanceof ArrayBuffer ||
       body instanceof URLSearchParams ||
-      (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream)
+      (typeof ReadableStream !== "undefined" && body instanceof ReadableStream)
     ) {
       return body;
     }
@@ -131,10 +139,10 @@ export class SapiomClient {
    * Parse response based on content type
    */
   private async parseResponse(response: Response): Promise<any> {
-    const contentType = response.headers.get('content-type');
+    const contentType = response.headers.get("content-type");
 
     // Handle JSON responses
-    if (contentType?.includes('application/json')) {
+    if (contentType?.includes("application/json")) {
       try {
         return await response.json();
       } catch {
@@ -144,7 +152,7 @@ export class SapiomClient {
     }
 
     // Handle text responses
-    if (contentType?.includes('text/')) {
+    if (contentType?.includes("text/")) {
       return await response.text();
     }
 
@@ -157,7 +165,10 @@ export class SapiomClient {
     }
 
     // Try to parse as JSON if it looks like JSON
-    if ((text.startsWith('{') || text.startsWith('[')) && (text.endsWith('}') || text.endsWith(']'))) {
+    if (
+      (text.startsWith("{") || text.startsWith("[")) &&
+      (text.endsWith("}") || text.endsWith("]"))
+    ) {
       try {
         return JSON.parse(text);
       } catch {
@@ -174,8 +185,10 @@ export class SapiomClient {
    * Build full URL with query parameters
    */
   private buildUrl(path: string, params?: Record<string, any>): string {
-    const base = this.baseURL.endsWith('/') ? this.baseURL.slice(0, -1) : this.baseURL;
-    const pathname = path.startsWith('/') ? path : `/${path}`;
+    const base = this.baseURL.endsWith("/")
+      ? this.baseURL.slice(0, -1)
+      : this.baseURL;
+    const pathname = path.startsWith("/") ? path : `/${path}`;
     const url = `${base}${pathname}`;
 
     if (!params || Object.keys(params).length === 0) {

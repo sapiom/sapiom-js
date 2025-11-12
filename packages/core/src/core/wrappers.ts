@@ -1,6 +1,9 @@
-import { HttpClientAdapter, HttpError } from '../http/types';
-import { AuthorizationHandler, AuthorizationHandlerConfig } from './AuthorizationHandler';
-import { PaymentHandler, PaymentHandlerConfig } from './PaymentHandler';
+import { HttpClientAdapter, HttpError } from "../http/types";
+import {
+  AuthorizationHandler,
+  AuthorizationHandlerConfig,
+} from "./AuthorizationHandler";
+import { PaymentHandler, PaymentHandlerConfig } from "./PaymentHandler";
 
 /**
  * Adds payment handling to any HTTP client adapter
@@ -35,7 +38,10 @@ import { PaymentHandler, PaymentHandlerConfig } from './PaymentHandler';
  * const response = await axiosInstance.get('/premium-data');
  * ```
  */
-export function withPaymentHandling(httpClient: HttpClientAdapter, config: PaymentHandlerConfig): HttpClientAdapter {
+export function withPaymentHandling(
+  httpClient: HttpClientAdapter,
+  config: PaymentHandlerConfig,
+): HttpClientAdapter {
   const handler = new PaymentHandler(config);
 
   // Add response interceptor to catch 402 errors
@@ -54,8 +60,8 @@ export function withPaymentHandling(httpClient: HttpClientAdapter, config: Payme
       const result = await handler.handlePaymentError(
         error,
         error.request || {
-          method: 'GET',
-          url: '',
+          method: "GET",
+          url: "",
           headers: {},
         },
         requestExecutor,

@@ -1,8 +1,11 @@
-import { SapiomHandlerConfig, withSapiomHandling } from '@sapiom/core';
-import { createFetchAdapter } from './adapter';
-import { HttpClientAdapter } from '@sapiom/core';
-import { SapiomClient } from '@sapiom/core';
-import { BaseSapiomIntegrationConfig, initializeSapiomClient } from '@sapiom/core';
+import { SapiomHandlerConfig, withSapiomHandling } from "@sapiom/core";
+import { createFetchAdapter } from "./adapter";
+import { HttpClientAdapter } from "@sapiom/core";
+import { SapiomClient } from "@sapiom/core";
+import {
+  BaseSapiomIntegrationConfig,
+  initializeSapiomClient,
+} from "@sapiom/core";
 
 /**
  * Configuration for Sapiom-enabled Fetch client
@@ -11,12 +14,12 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
   /**
    * Authorization handler configuration
    */
-  authorization?: Omit<SapiomHandlerConfig['authorization'], 'sapiomClient'>;
+  authorization?: Omit<SapiomHandlerConfig["authorization"], "sapiomClient">;
 
   /**
    * Payment handler configuration
    */
-  payment?: Omit<SapiomHandlerConfig['payment'], 'sapiomClient'>;
+  payment?: Omit<SapiomHandlerConfig["payment"], "sapiomClient">;
 }
 
 /**
@@ -79,11 +82,19 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
   });
 
   // Return a native fetch-compatible function
-  const sapiomFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const sapiomFetch = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
     // Convert fetch arguments to HttpRequest format
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
 
-    const method = init?.method || 'GET';
+    const method = init?.method || "GET";
     const headers: Record<string, string> = {};
 
     if (init?.headers) {
@@ -115,7 +126,7 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
     let body: string | null = null;
     if (response.data !== undefined && response.data !== null) {
       // If data is already a string (text response), use it directly
-      if (typeof response.data === 'string') {
+      if (typeof response.data === "string") {
         body = response.data;
       } else {
         // For objects, stringify them (they were parsed from JSON)

@@ -32,7 +32,10 @@ export function getHeader(
  * @param headerName Header name to check (case-insensitive)
  * @returns true if header exists
  */
-export function hasHeader(headers: Record<string, string | string[] | undefined>, headerName: string): boolean {
+export function hasHeader(
+  headers: Record<string, string | string[] | undefined>,
+  headerName: string,
+): boolean {
   return getHeader(headers, headerName) !== undefined;
 }
 
@@ -55,7 +58,7 @@ export function setHeader(
   // Copy all headers except case variants of the one we're setting
   for (const [key, val] of Object.entries(headers)) {
     if (key.toLowerCase() !== lowerHeaderName) {
-      newHeaders[key] = Array.isArray(val) ? val[0] || '' : val || '';
+      newHeaders[key] = Array.isArray(val) ? val[0] || "" : val || "";
     }
   }
 
@@ -81,7 +84,7 @@ export function removeHeader(
 
   for (const [key, val] of Object.entries(headers)) {
     if (key.toLowerCase() !== lowerHeaderName) {
-      newHeaders[key] = Array.isArray(val) ? val[0] || '' : val || '';
+      newHeaders[key] = Array.isArray(val) ? val[0] || "" : val || "";
     }
   }
 

@@ -5,9 +5,12 @@
  * Used by both HTTP adapters and LangChain integration.
  */
 
-import { SapiomClient } from '../lib/SapiomClient';
-import { TransactionPoller } from '../lib/TransactionPoller';
-import type { TransactionResponse, CreateTransactionRequest } from '../types/transaction';
+import { SapiomClient } from "../lib/SapiomClient";
+import { TransactionPoller } from "../lib/TransactionPoller";
+import type {
+  TransactionResponse,
+  CreateTransactionRequest,
+} from "../types/transaction";
 
 /**
  * Parameters for creating and authorizing a transaction
@@ -119,7 +122,11 @@ export interface TransactionAuthorizerConfig {
    */
   onAuthorizationPending?: (transactionId: string, resource: string) => void;
   onAuthorizationSuccess?: (transactionId: string, resource: string) => void;
-  onAuthorizationDenied?: (transactionId: string, resource: string, reason?: string) => void;
+  onAuthorizationDenied?: (
+    transactionId: string,
+    resource: string,
+    reason?: string,
+  ) => void;
 
   /**
    * Whether to throw on authorization denial
@@ -137,8 +144,10 @@ export class TransactionDeniedError extends Error {
     public readonly resource: string,
     public readonly reason?: string,
   ) {
-    super(`Transaction denied for ${resource}: ${reason || 'No reason provided'}`);
-    this.name = 'TransactionDeniedError';
+    super(
+      `Transaction denied for ${resource}: ${reason || "No reason provided"}`,
+    );
+    this.name = "TransactionDeniedError";
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, TransactionDeniedError);
@@ -156,7 +165,7 @@ export class TransactionTimeoutError extends Error {
     public readonly timeout: number,
   ) {
     super(`Authorization timeout after ${timeout}ms for ${resource}`);
-    this.name = 'TransactionTimeoutError';
+    this.name = "TransactionTimeoutError";
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, TransactionTimeoutError);
@@ -213,17 +222,19 @@ export class TransactionAuthorizer {
    * });
    * ```
    */
-  async createAndAuthorize(params: AuthorizeTransactionParams): Promise<TransactionResponse> {
+  async createAndAuthorize(
+    params: AuthorizeTransactionParams,
+  ): Promise<TransactionResponse> {
     // Handle case where both agentId and agentName are provided
     // Prefer agentId (explicit reference) over agentName (find-or-create)
-    let agentId = params.agentId;
+    const agentId = params.agentId;
     let agentName = params.agentName;
 
     if (params.agentId && params.agentName) {
       console.warn(
-        '[Sapiom SDK] Both agentId and agentName provided. ' +
+        "[Sapiom SDK] Both agentId and agentName provided. " +
           `Preferring agentId="${params.agentId}" over agentName="${params.agentName}". ` +
-          'To avoid this warning, provide only one.'
+          "To avoid this warning, provide only one.",
       );
       // Prefer agentId (explicit reference to existing agent)
       agentName = undefined;
@@ -245,23 +256,38 @@ export class TransactionAuthorizer {
       metadata: params.metadata,
     });
 
-    this.config.onAuthorizationPending?.(tx.id, params.resourceName || 'unknown');
+    this.config.onAuthorizationPending?.(
+      tx.id,
+      params.resourceName || "unknown",
+    );
 
     // Wait for authorization using centralized poller
     const result = await this.poller.waitForAuthorization(tx.id);
 
     // Handle result
-    if (result.status === 'authorized') {
-      this.config.onAuthorizationSuccess?.(tx.id, params.resourceName || 'unknown');
+    if (result.status === "authorized") {
+      this.config.onAuthorizationSuccess?.(
+        tx.id,
+        params.resourceName || "unknown",
+      );
       return result.transaction;
     }
 
-    if (result.status === 'denied') {
-      const reason = (result.transaction as any).declineReason || 'Transaction denied';
-      this.config.onAuthorizationDenied?.(tx.id, params.resourceName || 'unknown', reason);
+    if (result.status === "denied") {
+      const reason =
+        (result.transaction as any).declineReason || "Transaction denied";
+      this.config.onAuthorizationDenied?.(
+        tx.id,
+        params.resourceName || "unknown",
+        reason,
+      );
 
       if (this.config.throwOnDenied !== false) {
-        throw new TransactionDeniedError(tx.id, params.resourceName || 'unknown', reason);
+        throw new TransactionDeniedError(
+          tx.id,
+          params.resourceName || "unknown",
+          reason,
+        );
       }
 
       return result.transaction;
@@ -270,8 +296,8 @@ export class TransactionAuthorizer {
     // Timeout
     throw new TransactionTimeoutError(
       tx.id,
-      params.resourceName || 'unknown',
-      this.config.authorizationTimeout || 30000
+      params.resourceName || "unknown",
+      this.config.authorizationTimeout || 30000,
     );
   }
 
@@ -289,15 +315,16 @@ export class TransactionAuthorizer {
   async waitForExisting(transactionId: string): Promise<TransactionResponse> {
     const result = await this.poller.waitForAuthorization(transactionId);
 
-    if (result.status === 'authorized') {
+    if (result.status === "authorized") {
       return result.transaction;
     }
 
-    if (result.status === 'denied') {
-      const reason = (result.transaction as any).declineReason || 'Transaction denied';
+    if (result.status === "denied") {
+      const reason =
+        (result.transaction as any).declineReason || "Transaction denied";
 
       if (this.config.throwOnDenied !== false) {
-        throw new TransactionDeniedError(transactionId, 'unknown', reason);
+        throw new TransactionDeniedError(transactionId, "unknown", reason);
       }
 
       return result.transaction;
@@ -306,8 +333,8 @@ export class TransactionAuthorizer {
     // Timeout
     throw new TransactionTimeoutError(
       transactionId,
-      'unknown',
-      this.config.authorizationTimeout || 30000
+      "unknown",
+      this.config.authorizationTimeout || 30000,
     );
   }
 

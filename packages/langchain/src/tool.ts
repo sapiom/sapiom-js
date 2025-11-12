@@ -5,27 +5,27 @@
  * 1. wrapSapiomTool() - Wraps existing tools by mutating func property
  * 2. sapiomTool() - Factory for creating new Sapiom-tracked tools
  */
-import type { CallbackManagerForToolRun } from '@langchain/core/callbacks/manager';
-import type { RunnableConfig } from '@langchain/core/runnables';
-import type { StructuredToolInterface } from '@langchain/core/tools';
-import { DynamicStructuredTool } from '@langchain/core/tools';
+import type { CallbackManagerForToolRun } from "@langchain/core/callbacks/manager";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 
-import { TransactionAuthorizer } from '@sapiom/core';
-import { SapiomClient } from '@sapiom/core';
-import { initializeSapiomClient } from '@sapiom/core';
+import { TransactionAuthorizer } from "@sapiom/core";
+import { SapiomClient } from "@sapiom/core";
+import { initializeSapiomClient } from "@sapiom/core";
 import {
   convertX402ToSapiomPayment,
   extractPaymentFromMCPError,
   getPaymentAuthFromTransaction,
   isMCPPaymentError,
-} from './internal/payment-detection';
-import { captureUserCallSite } from '@sapiom/core';
-import type { SapiomToolConfig } from './internal/types';
-import { isAuthorizationDenied } from './internal/utils';
-import type { LangChainToolRequestFacts } from './schemas/langchain-tool-v1';
+} from "./internal/payment-detection";
+import { captureUserCallSite } from "@sapiom/core";
+import type { SapiomToolConfig } from "./internal/types";
+import { isAuthorizationDenied } from "./internal/utils";
+import type { LangChainToolRequestFacts } from "./schemas/langchain-tool-v1";
 
 // SDK version for facts
-const SDK_VERSION = '1.0.0'; // TODO: Read from package.json
+const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
 
 /**
  * Wraps an existing tool by mutating its func property.
@@ -77,7 +77,7 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
   // ============================================
   // VALIDATE TOOL HAS func PROPERTY
   // ============================================
-  if (!('func' in tool) || typeof (tool as any).func !== 'function') {
+  if (!("func" in tool) || typeof (tool as any).func !== "function") {
     console.warn(
       `Tool ${tool.name} doesn't have 'func' property - Sapiom wrapper skipped. ` +
         `Only DynamicTool and DynamicStructuredTool supported.`,
@@ -103,14 +103,22 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
     const startTime = Date.now();
 
     // Extract trace and agent config from parent config (set by model/agent)
-    const traceId = parentConfig?.metadata?.__sapiomTraceId as string | undefined;
-    const agentId = parentConfig?.metadata?.__sapiomAgentId as string | undefined;
-    const agentName = parentConfig?.metadata?.__sapiomAgentName as string | undefined;
-    const sessionClient = (parentConfig?.metadata?.__sapiomClient as SapiomClient) || sapiomClient;
+    const traceId = parentConfig?.metadata?.__sapiomTraceId as
+      | string
+      | undefined;
+    const agentId = parentConfig?.metadata?.__sapiomAgentId as
+      | string
+      | undefined;
+    const agentName = parentConfig?.metadata?.__sapiomAgentName as
+      | string
+      | undefined;
+    const sessionClient =
+      (parentConfig?.metadata?.__sapiomClient as SapiomClient) || sapiomClient;
 
     // Use shared authorizer from agent if available, otherwise create inline
     const authorizer =
-      (parentConfig?.metadata?.__sapiomAuthorizer as any) || new TransactionAuthorizer({ sapiomClient: sessionClient });
+      (parentConfig?.metadata?.__sapiomAuthorizer as any) ||
+      new TransactionAuthorizer({ sapiomClient: sessionClient });
 
     // ============================================
     // Collect Request Facts
@@ -133,10 +141,10 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
     const toolTx = await authorizer.createAndAuthorize({
       // NEW: Send request facts (backend infers service/action/resource)
       requestFacts: {
-        source: 'langchain-tool',
-        version: 'v1',
+        source: "langchain-tool",
+        version: "v1",
         sdk: {
-          name: '@sapiom/sdk',
+          name: "@sapiom/sdk",
           version: SDK_VERSION,
         },
         request: requestFacts,
@@ -163,9 +171,9 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       // Submit response facts (fire-and-forget)
       sessionClient.transactions
         .addFacts(toolTx.id, {
-          source: 'langchain-tool',
-          version: 'v1',
-          factPhase: 'response',
+          source: "langchain-tool",
+          version: "v1",
+          factPhase: "response",
           facts: {
             success: true,
             durationMs: duration,
@@ -174,7 +182,7 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
           },
         })
         .catch((err) => {
-          console.error('Failed to submit tool response facts:', err);
+          console.error("Failed to submit tool response facts:", err);
         });
 
       config?.onAfterCall?.(toolTx.id, result);
@@ -191,8 +199,8 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
 
         // Create and authorize payment transaction
         const authorizedPaymentTx = await authorizer.createAndAuthorize({
-          serviceName: config?.serviceName || 'tool',
-          actionName: 'payment',
+          serviceName: config?.serviceName || "tool",
+          actionName: "payment",
           resourceName: config?.resourceName || tool.name,
           paymentData: convertX402ToSapiomPayment(paymentData),
           traceExternalId: traceId,
@@ -214,7 +222,7 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
           ...args,
           _meta: {
             ...(args._meta || {}),
-            'x402/payment': paymentAuth,
+            "x402/payment": paymentAuth,
           },
         };
 
@@ -226,18 +234,18 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       const duration = Date.now() - startTime;
       sessionClient.transactions
         .addFacts(toolTx.id, {
-          source: 'langchain-tool',
-          version: 'v1',
-          factPhase: 'error',
+          source: "langchain-tool",
+          version: "v1",
+          factPhase: "error",
           facts: {
-            errorType: (error as any).constructor?.name || 'Error',
+            errorType: (error as any).constructor?.name || "Error",
             errorMessage: (error as Error).message,
             isMCPPaymentError: false, // Already handled above
             elapsedMs: duration,
           },
         })
         .catch((err) => {
-          console.error('Failed to submit tool error facts:', err);
+          console.error("Failed to submit tool error facts:", err);
         });
 
       // Handle authorization denied
@@ -268,7 +276,12 @@ export class SapiomDynamicTool<
   SchemaOutputT = any,
   SchemaInputT = any,
   ToolOutputT = any,
-> extends DynamicStructuredTool<SchemaT, SchemaOutputT, SchemaInputT, ToolOutputT> {
+> extends DynamicStructuredTool<
+  SchemaT,
+  SchemaOutputT,
+  SchemaInputT,
+  ToolOutputT
+> {
   #sapiomClient: SapiomClient;
   #sapiomConfig: SapiomToolConfig;
 
@@ -277,8 +290,11 @@ export class SapiomDynamicTool<
       name: string;
       description: string;
       schema: SchemaT;
-      func: (input: SchemaOutputT, config?: RunnableConfig) => Promise<ToolOutputT> | ToolOutputT;
-      responseFormat?: 'content' | 'content_and_artifact';
+      func: (
+        input: SchemaOutputT,
+        config?: RunnableConfig,
+      ) => Promise<ToolOutputT> | ToolOutputT;
+      responseFormat?: "content" | "content_and_artifact";
       returnDirect?: boolean;
     },
     sapiomConfig?: SapiomToolConfig,
@@ -295,10 +311,18 @@ export class SapiomDynamicTool<
       parentConfig?: RunnableConfig,
     ): Promise<ToolOutputT> => {
       // Extract trace and agent config from parent config (set by model/agent)
-      const traceId = parentConfig?.metadata?.__sapiomTraceId as string | undefined;
-      const agentId = parentConfig?.metadata?.__sapiomAgentId as string | undefined;
-      const agentName = parentConfig?.metadata?.__sapiomAgentName as string | undefined;
-      const sessionClient = (parentConfig?.metadata?.__sapiomClient as SapiomClient) || sapiomClient;
+      const traceId = parentConfig?.metadata?.__sapiomTraceId as
+        | string
+        | undefined;
+      const agentId = parentConfig?.metadata?.__sapiomAgentId as
+        | string
+        | undefined;
+      const agentName = parentConfig?.metadata?.__sapiomAgentName as
+        | string
+        | undefined;
+      const sessionClient =
+        (parentConfig?.metadata?.__sapiomClient as SapiomClient) ||
+        sapiomClient;
 
       // Use shared authorizer from agent if available, otherwise create inline
       const authorizer =
@@ -307,8 +331,8 @@ export class SapiomDynamicTool<
 
       // Create and authorize tool transaction
       const toolTx = await authorizer.createAndAuthorize({
-        serviceName: sapiomConfig?.serviceName || 'tool',
-        actionName: sapiomConfig?.actionName || 'call',
+        serviceName: sapiomConfig?.serviceName || "tool",
+        actionName: sapiomConfig?.actionName || "call",
         resourceName: sapiomConfig?.resourceName || fields.name,
         traceExternalId: traceId, // undefined is fine - backend auto-creates trace
         agentId,
@@ -337,12 +361,16 @@ export class SapiomDynamicTool<
         if (isMCPPaymentError(error)) {
           const paymentData = extractPaymentFromMCPError(error);
 
-          sapiomConfig?.onPaymentRequired?.(toolTx.id, paymentData, fields.name);
+          sapiomConfig?.onPaymentRequired?.(
+            toolTx.id,
+            paymentData,
+            fields.name,
+          );
 
           // Create and authorize payment transaction
           const authorizedPaymentTx = await authorizer.createAndAuthorize({
-            serviceName: sapiomConfig?.serviceName || 'tool',
-            actionName: 'payment',
+            serviceName: sapiomConfig?.serviceName || "tool",
+            actionName: "payment",
             resourceName: sapiomConfig?.resourceName || fields.name,
             paymentData: convertX402ToSapiomPayment(paymentData),
             traceExternalId: traceId,
@@ -357,14 +385,15 @@ export class SapiomDynamicTool<
           sapiomConfig?.onPaymentAuthorized?.(authorizedPaymentTx.id);
 
           // Extract payment authorization
-          const paymentAuth = getPaymentAuthFromTransaction(authorizedPaymentTx);
+          const paymentAuth =
+            getPaymentAuthFromTransaction(authorizedPaymentTx);
 
           // Retry with payment
           const argsWithPayment = {
             ...args,
             _meta: {
               ...(args as any)._meta,
-              'x402/payment': paymentAuth,
+              "x402/payment": paymentAuth,
             },
           } as SchemaOutputT;
 
@@ -432,13 +461,20 @@ export class SapiomDynamicTool<
  * );
  * ```
  */
-export function sapiomTool<SchemaT = any, SchemaOutputT = any, ToolOutputT = any>(
-  func: (input: SchemaOutputT, config?: RunnableConfig) => Promise<ToolOutputT> | ToolOutputT,
+export function sapiomTool<
+  SchemaT = any,
+  SchemaOutputT = any,
+  ToolOutputT = any,
+>(
+  func: (
+    input: SchemaOutputT,
+    config?: RunnableConfig,
+  ) => Promise<ToolOutputT> | ToolOutputT,
   fields: {
     name: string;
     description: string;
     schema: SchemaT;
-    responseFormat?: 'content' | 'content_and_artifact';
+    responseFormat?: "content" | "content_and_artifact";
     returnDirect?: boolean;
   },
   sapiomConfig?: SapiomToolConfig,

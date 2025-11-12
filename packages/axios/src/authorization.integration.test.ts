@@ -2,13 +2,19 @@
  * Integration tests for AuthorizationHandler with Axios adapter
  * Tests the complete authorization flow
  */
-import axios from 'axios';
-import MockAdapter from 'axios-mock-adapter';
+import axios from "axios";
+import MockAdapter from "axios-mock-adapter";
 
-import { createAxiosAdapter } from './adapter';
-import { SapiomClient, TransactionAPI, TransactionStatus, AuthorizationDeniedError, withAuthorizationHandling } from '@sapiom/core';
+import { createAxiosAdapter } from "./adapter";
+import {
+  SapiomClient,
+  TransactionAPI,
+  TransactionStatus,
+  AuthorizationDeniedError,
+  withAuthorizationHandling,
+} from "@sapiom/core";
 
-describe('Axios Authorization Integration', () => {
+describe("Axios Authorization Integration", () => {
   let mockTransactionAPI: jest.Mocked<TransactionAPI>;
   let mockSapiomClient: SapiomClient;
 
@@ -29,8 +35,8 @@ describe('Axios Authorization Integration', () => {
     } as any;
   });
 
-  it('should authorize request and add transaction ID header', async () => {
-    const axiosInstance = axios.create({ baseURL: 'https://api.example.com' });
+  it("should authorize request and add transaction ID header", async () => {
+    const axiosInstance = axios.create({ baseURL: "https://api.example.com" });
     const mockAxios = new MockAdapter(axiosInstance);
     const adapter = createAxiosAdapter(axiosInstance);
 
@@ -44,34 +50,37 @@ describe('Axios Authorization Integration', () => {
       authorizedEndpoints: [
         {
           pathPattern: /^\/api\/admin\//,
-          serviceName: 'admin-api',
+          serviceName: "admin-api",
         },
       ],
       ...authCallbacks,
     });
 
-    mockAxios.onGet('/api/admin/users').reply((config) => {
-      if (config.headers?.['X-Sapiom-Transaction-Id'] === 'tx_axios_auth') {
-        return [200, { users: ['alice', 'bob'] }];
+    mockAxios.onGet("/api/admin/users").reply((config) => {
+      if (config.headers?.["X-Sapiom-Transaction-Id"] === "tx_axios_auth") {
+        return [200, { users: ["alice", "bob"] }];
       }
-      return [403, { error: 'Unauthorized' }];
+      return [403, { error: "Unauthorized" }];
     });
 
     mockTransactionAPI.create.mockResolvedValue({
-      id: 'tx_axios_auth',
+      id: "tx_axios_auth",
       status: TransactionStatus.AUTHORIZED,
     } as any);
 
-    const response = await axiosInstance.get('/api/admin/users');
+    const response = await axiosInstance.get("/api/admin/users");
 
-    expect(response.data).toEqual({ users: ['alice', 'bob'] });
-    expect(authCallbacks.onAuthorizationSuccess).toHaveBeenCalledWith('tx_axios_auth', '/api/admin/users');
+    expect(response.data).toEqual({ users: ["alice", "bob"] });
+    expect(authCallbacks.onAuthorizationSuccess).toHaveBeenCalledWith(
+      "tx_axios_auth",
+      "/api/admin/users",
+    );
 
     mockAxios.restore();
   });
 
-  it('should throw AuthorizationDeniedError for denied transactions', async () => {
-    const axiosInstance = axios.create({ baseURL: 'https://api.example.com' });
+  it("should throw AuthorizationDeniedError for denied transactions", async () => {
+    const axiosInstance = axios.create({ baseURL: "https://api.example.com" });
     const mockAxios = new MockAdapter(axiosInstance);
     const adapter = createAxiosAdapter(axiosInstance);
 
@@ -80,17 +89,19 @@ describe('Axios Authorization Integration', () => {
       authorizedEndpoints: [
         {
           pathPattern: /^\/api\/admin\//,
-          serviceName: 'admin-api',
+          serviceName: "admin-api",
         },
       ],
     });
 
     mockTransactionAPI.create.mockResolvedValue({
-      id: 'tx_denied',
+      id: "tx_denied",
       status: TransactionStatus.DENIED,
     } as any);
 
-    await expect(axiosInstance.get('/api/admin/users')).rejects.toThrow(AuthorizationDeniedError);
+    await expect(axiosInstance.get("/api/admin/users")).rejects.toThrow(
+      AuthorizationDeniedError,
+    );
 
     mockAxios.restore();
   });

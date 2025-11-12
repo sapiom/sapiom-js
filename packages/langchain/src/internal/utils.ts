@@ -1,11 +1,11 @@
 /**
  * Shared utilities for LangChain integration
  */
-import type { BaseLanguageModelInput } from '@langchain/core/language_models/base';
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { BaseMessage } from '@langchain/core/messages';
+import type { BaseLanguageModelInput } from "@langchain/core/language_models/base";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { BaseMessage } from "@langchain/core/messages";
 
-import { SapiomClient } from '@sapiom/core';
+import { SapiomClient } from "@sapiom/core";
 
 /**
  * Generate SDK-prefixed trace ID
@@ -61,18 +61,23 @@ export async function waitForTransactionAuthorization(
   while (true) {
     // Check timeout
     if (Date.now() - startTime > timeout) {
-      throw new Error(`Transaction authorization timeout after ${timeout}ms (txId: ${txId})`);
+      throw new Error(
+        `Transaction authorization timeout after ${timeout}ms (txId: ${txId})`,
+      );
     }
 
     // Poll transaction status
     const tx = await client.transactions.get(txId);
 
-    if (tx.status === 'authorized') {
+    if (tx.status === "authorized") {
       return tx; // Return authorized transaction
     }
 
-    if (tx.status === 'denied' || tx.status === 'cancelled') {
-      throw new AuthorizationDeniedError((tx as any).declineReason || `Transaction ${txId} was ${tx.status}`, txId);
+    if (tx.status === "denied" || tx.status === "cancelled") {
+      throw new AuthorizationDeniedError(
+        (tx as any).declineReason || `Transaction ${txId} was ${tx.status}`,
+        txId,
+      );
     }
 
     // Still pending, wait and retry
@@ -89,7 +94,7 @@ export class AuthorizationDeniedError extends Error {
     public readonly txId: string,
   ) {
     super(message);
-    this.name = 'AuthorizationDeniedError';
+    this.name = "AuthorizationDeniedError";
   }
 }
 
@@ -99,7 +104,9 @@ export class AuthorizationDeniedError extends Error {
  * @param error - Error to check
  * @returns True if error is AuthorizationDeniedError
  */
-export function isAuthorizationDenied(error: unknown): error is AuthorizationDeniedError {
+export function isAuthorizationDenied(
+  error: unknown,
+): error is AuthorizationDeniedError {
   return error instanceof AuthorizationDeniedError;
 }
 
@@ -111,10 +118,12 @@ export function isAuthorizationDenied(error: unknown): error is AuthorizationDen
  * @param input - LangChain model input
  * @returns Array of BaseMessage
  */
-export function convertInputToMessages(input: BaseLanguageModelInput): BaseMessage[] {
+export function convertInputToMessages(
+  input: BaseLanguageModelInput,
+): BaseMessage[] {
   // String input
-  if (typeof input === 'string') {
-    return [{ role: 'user', content: input } as unknown as BaseMessage];
+  if (typeof input === "string") {
+    return [{ role: "user", content: input } as unknown as BaseMessage];
   }
 
   // Already messages
@@ -127,7 +136,7 @@ export function convertInputToMessages(input: BaseLanguageModelInput): BaseMessa
   }
 
   // PromptValue
-  if ('toChatMessages' in input && typeof input.toChatMessages === 'function') {
+  if ("toChatMessages" in input && typeof input.toChatMessages === "function") {
     return input.toChatMessages();
   }
 

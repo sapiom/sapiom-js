@@ -4,7 +4,7 @@
  * Based on: https://github.com/ethanniser/x402-mcp
  */
 
-import { SapiomClient } from '@sapiom/core';
+import { SapiomClient } from "@sapiom/core";
 
 /**
  * x402 Payment Response Structure
@@ -78,7 +78,7 @@ export interface X402PaymentResponse {
  * ```
  */
 export function isMCPPaymentError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
+  if (!error || typeof error !== "object") {
     return false;
   }
 
@@ -102,11 +102,11 @@ export function isMCPPaymentError(error: unknown): boolean {
   // Check for x402 indicators in message
   const message = err.message as string;
   return (
-    message.includes('x402Version') ||
-    message.includes('Payment required') ||
-    message.includes('payment_required') ||
-    (err.code === 402) ||
-    (err.statusCode === 402)
+    message.includes("x402Version") ||
+    message.includes("Payment required") ||
+    message.includes("payment_required") ||
+    err.code === 402 ||
+    err.statusCode === 402
   );
 }
 
@@ -149,7 +149,8 @@ export function extractPaymentFromMCPError(error: any): X402PaymentResponse {
   // Try parsing from error data property
   if (error.data) {
     try {
-      const data = typeof error.data === 'string' ? JSON.parse(error.data) : error.data;
+      const data =
+        typeof error.data === "string" ? JSON.parse(error.data) : error.data;
       if (data.x402Version && Array.isArray(data.accepts)) {
         return {
           x402Version: data.x402Version,
@@ -176,18 +177,20 @@ export function extractPaymentFromMCPError(error: any): X402PaymentResponse {
  *
  * @internal
  */
-export function convertX402ToSapiomPayment(x402Payment: X402PaymentResponse): any {
+export function convertX402ToSapiomPayment(
+  x402Payment: X402PaymentResponse,
+): any {
   // Take first accepted payment method
   const firstAccept = x402Payment.accepts[0];
 
   return {
-    protocol: 'x402',
+    protocol: "x402",
     version: x402Payment.x402Version,
     scheme: firstAccept.scheme,
     amount: firstAccept.amount,
     minAmount: firstAccept.minAmount,
     maxAmount: firstAccept.maxAmount,
-    unit: firstAccept.unit || 'USD',
+    unit: firstAccept.unit || "USD",
     destination: firstAccept.to,
     metadata: {
       ...firstAccept,
@@ -222,11 +225,10 @@ export function getPaymentAuthFromTransaction(transaction: any): string {
   // authorizationPayload format depends on backend
   // May be string (pre-encoded) or object (need to encode)
   // Following HTTP adapter pattern (PaymentHandler.ts:159-162)
-  if (typeof authorizationPayload === 'string') {
+  if (typeof authorizationPayload === "string") {
     return authorizationPayload;
   }
 
   // Encode object as base64 JSON (x402 protocol expects this)
-  return Buffer.from(JSON.stringify(authorizationPayload)).toString('base64');
+  return Buffer.from(JSON.stringify(authorizationPayload)).toString("base64");
 }
-

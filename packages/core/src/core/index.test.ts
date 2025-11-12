@@ -10,49 +10,49 @@ import {
   withAuthorizationHandling,
   withPaymentHandling,
   withSapiomHandling,
-} from './index';
-import type { HttpClientAdapter } from '../http/types';
+} from "./index";
+import type { HttpClientAdapter } from "../http/types";
 
-describe('@sapiom/sdk/core module', () => {
-  describe('module exports', () => {
-    it('should export PaymentHandler class', () => {
+describe("@sapiom/sdk/core module", () => {
+  describe("module exports", () => {
+    it("should export PaymentHandler class", () => {
       expect(PaymentHandler).toBeDefined();
-      expect(typeof PaymentHandler).toBe('function');
+      expect(typeof PaymentHandler).toBe("function");
     });
 
-    it('should export AuthorizationHandler class', () => {
+    it("should export AuthorizationHandler class", () => {
       expect(AuthorizationHandler).toBeDefined();
-      expect(typeof AuthorizationHandler).toBe('function');
+      expect(typeof AuthorizationHandler).toBe("function");
     });
 
-    it('should export AuthorizationDeniedError class', () => {
+    it("should export AuthorizationDeniedError class", () => {
       expect(AuthorizationDeniedError).toBeDefined();
-      expect(typeof AuthorizationDeniedError).toBe('function');
+      expect(typeof AuthorizationDeniedError).toBe("function");
     });
 
-    it('should export AuthorizationTimeoutError class', () => {
+    it("should export AuthorizationTimeoutError class", () => {
       expect(AuthorizationTimeoutError).toBeDefined();
-      expect(typeof AuthorizationTimeoutError).toBe('function');
+      expect(typeof AuthorizationTimeoutError).toBe("function");
     });
 
-    it('should export withPaymentHandling function', () => {
+    it("should export withPaymentHandling function", () => {
       expect(withPaymentHandling).toBeDefined();
-      expect(typeof withPaymentHandling).toBe('function');
+      expect(typeof withPaymentHandling).toBe("function");
     });
 
-    it('should export withAuthorizationHandling function', () => {
+    it("should export withAuthorizationHandling function", () => {
       expect(withAuthorizationHandling).toBeDefined();
-      expect(typeof withAuthorizationHandling).toBe('function');
+      expect(typeof withAuthorizationHandling).toBe("function");
     });
 
-    it('should export withSapiomHandling function', () => {
+    it("should export withSapiomHandling function", () => {
       expect(withSapiomHandling).toBeDefined();
-      expect(typeof withSapiomHandling).toBe('function');
+      expect(typeof withSapiomHandling).toBe("function");
     });
   });
 
-  describe('type exports', () => {
-    it('should export PaymentHandlerConfig type', () => {
+  describe("type exports", () => {
+    it("should export PaymentHandlerConfig type", () => {
       // Type test - this will fail at compile time if type is not exported
       const config: PaymentHandlerConfig = {
         sapiomClient: {} as any,
@@ -60,7 +60,7 @@ describe('@sapiom/sdk/core module', () => {
       expect(config).toBeDefined();
     });
 
-    it('should export AuthorizationHandlerConfig type', () => {
+    it("should export AuthorizationHandlerConfig type", () => {
       // Type test - this will fail at compile time if type is not exported
       const config: AuthorizationHandlerConfig = {
         sapiomClient: {} as any,
@@ -68,16 +68,16 @@ describe('@sapiom/sdk/core module', () => {
       expect(config).toBeDefined();
     });
 
-    it('should export EndpointAuthorizationRule type', () => {
+    it("should export EndpointAuthorizationRule type", () => {
       // Type test - this will fail at compile time if type is not exported
       const rule: EndpointAuthorizationRule = {
         pathPattern: /^\/admin/,
-        serviceName: 'admin-api',
+        serviceName: "admin-api",
       };
       expect(rule).toBeDefined();
     });
 
-    it('should export SapiomHandlerConfig type', () => {
+    it("should export SapiomHandlerConfig type", () => {
       // Type test - this will fail at compile time if type is not exported
       const config: SapiomHandlerConfig = {
         sapiomClient: {} as any,
@@ -86,34 +86,42 @@ describe('@sapiom/sdk/core module', () => {
     });
   });
 
-  describe('error classes', () => {
-    it('should create AuthorizationDeniedError instances', () => {
-      const error = new AuthorizationDeniedError('tx-123', '/api/admin/users', 'Insufficient permissions');
+  describe("error classes", () => {
+    it("should create AuthorizationDeniedError instances", () => {
+      const error = new AuthorizationDeniedError(
+        "tx-123",
+        "/api/admin/users",
+        "Insufficient permissions",
+      );
 
       expect(error).toBeInstanceOf(Error);
       expect(error).toBeInstanceOf(AuthorizationDeniedError);
-      expect(error.message).toContain('/api/admin/users');
-      expect(error.message).toContain('Insufficient permissions');
-      expect(error.transactionId).toBe('tx-123');
-      expect(error.endpoint).toBe('/api/admin/users');
-      expect(error.reason).toBe('Insufficient permissions');
+      expect(error.message).toContain("/api/admin/users");
+      expect(error.message).toContain("Insufficient permissions");
+      expect(error.transactionId).toBe("tx-123");
+      expect(error.endpoint).toBe("/api/admin/users");
+      expect(error.reason).toBe("Insufficient permissions");
     });
 
-    it('should create AuthorizationTimeoutError instances', () => {
-      const error = new AuthorizationTimeoutError('tx-456', '/api/premium/data', 5000);
+    it("should create AuthorizationTimeoutError instances", () => {
+      const error = new AuthorizationTimeoutError(
+        "tx-456",
+        "/api/premium/data",
+        5000,
+      );
 
       expect(error).toBeInstanceOf(Error);
       expect(error).toBeInstanceOf(AuthorizationTimeoutError);
-      expect(error.message).toContain('/api/premium/data');
-      expect(error.message).toContain('5000');
-      expect(error.transactionId).toBe('tx-456');
-      expect(error.endpoint).toBe('/api/premium/data');
+      expect(error.message).toContain("/api/premium/data");
+      expect(error.message).toContain("5000");
+      expect(error.transactionId).toBe("tx-456");
+      expect(error.endpoint).toBe("/api/premium/data");
       expect(error.timeout).toBe(5000);
     });
   });
 
-  describe('integration for advanced users', () => {
-    it('should provide all primitives needed for custom integration', () => {
+  describe("integration for advanced users", () => {
+    it("should provide all primitives needed for custom integration", () => {
       // Verify all necessary exports are available
       expect(PaymentHandler).toBeDefined();
       expect(AuthorizationHandler).toBeDefined();
@@ -122,12 +130,14 @@ describe('@sapiom/sdk/core module', () => {
       expect(withSapiomHandling).toBeDefined();
     });
 
-    it('should support type-safe configuration', () => {
+    it("should support type-safe configuration", () => {
       // Type test - verify config types work together
       const sapiomConfig: SapiomHandlerConfig = {
         sapiomClient: {} as any,
         authorization: {
-          authorizedEndpoints: [{ pathPattern: /^\/admin/, serviceName: 'admin' }],
+          authorizedEndpoints: [
+            { pathPattern: /^\/admin/, serviceName: "admin" },
+          ],
         },
         payment: {
           onPaymentRequired: jest.fn(),
@@ -137,7 +147,7 @@ describe('@sapiom/sdk/core module', () => {
       expect(sapiomConfig).toBeDefined();
     });
 
-    it('should allow payment-only configuration', () => {
+    it("should allow payment-only configuration", () => {
       const paymentConfig: PaymentHandlerConfig = {
         sapiomClient: {} as any,
         onPaymentRequired: jest.fn(),
@@ -146,18 +156,20 @@ describe('@sapiom/sdk/core module', () => {
       expect(paymentConfig).toBeDefined();
     });
 
-    it('should allow authorization-only configuration', () => {
+    it("should allow authorization-only configuration", () => {
       const authConfig: AuthorizationHandlerConfig = {
         sapiomClient: {} as any,
-        authorizedEndpoints: [{ pathPattern: /^\/admin/, serviceName: 'admin' }],
+        authorizedEndpoints: [
+          { pathPattern: /^\/admin/, serviceName: "admin" },
+        ],
       };
 
       expect(authConfig).toBeDefined();
     });
   });
 
-  describe('documentation examples', () => {
-    it('should support the advanced usage pattern from README', () => {
+  describe("documentation examples", () => {
+    it("should support the advanced usage pattern from README", () => {
       // This pattern should work as documented
       const mockAdapter: HttpClientAdapter = {
         request: jest.fn(),
@@ -177,7 +189,7 @@ describe('@sapiom/sdk/core module', () => {
       }).not.toThrow();
     });
 
-    it('should support payment-only handler pattern from README', () => {
+    it("should support payment-only handler pattern from README", () => {
       const mockAdapter: HttpClientAdapter = {
         request: jest.fn(),
         addRequestInterceptor: jest.fn(),
@@ -194,7 +206,7 @@ describe('@sapiom/sdk/core module', () => {
       }).not.toThrow();
     });
 
-    it('should support authorization-only handler pattern from README', () => {
+    it("should support authorization-only handler pattern from README", () => {
       const mockAdapter: HttpClientAdapter = {
         request: jest.fn(),
         addRequestInterceptor: jest.fn(),
@@ -207,7 +219,9 @@ describe('@sapiom/sdk/core module', () => {
       expect(() => {
         withAuthorizationHandling(mockAdapter, {
           sapiomClient: mockSapiomClient,
-          authorizedEndpoints: [{ pathPattern: /^\/admin/, serviceName: 'admin' }],
+          authorizedEndpoints: [
+            { pathPattern: /^\/admin/, serviceName: "admin" },
+          ],
         });
       }).not.toThrow();
     });
