@@ -1,4 +1,4 @@
-import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from './types';
+import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from '@sapiom/core';
 
 /**
  * Fetch API adapter for HTTP client abstraction

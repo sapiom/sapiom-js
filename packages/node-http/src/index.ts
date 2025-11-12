@@ -9,4 +9,4 @@ export type { SapiomNodeHttpConfig } from './node-http';
 
 // Re-export adapter and types for advanced use cases
 export { createNodeHttpAdapter, NodeHttpAdapter } from './adapter';
-export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError } from './types';
+export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError } from '@sapiom/core';

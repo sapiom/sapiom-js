@@ -2,7 +2,7 @@ import * as http from 'http';
 import * as https from 'https';
 import { URL } from 'url';
 
-import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from './types';
+import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from '@sapiom/core';
 
 /**
  * Node.js HTTP/HTTPS adapter for HTTP client abstraction

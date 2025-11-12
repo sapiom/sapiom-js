@@ -34,7 +34,7 @@ describe('wrapSapiomTool', () => {
       name: 'test_tool',
       description: 'Test tool',
       schema: z.object({ input: z.string() }),
-      func: async ({ input }) => `Result: ${input}`,
+      func: async (input: any) => `Result: ${input.input}`,
     });
 
     const wrapped = wrapSapiomTool(originalTool, {
@@ -198,7 +198,7 @@ describe('wrapSapiomTool', () => {
       name: 'test_tool',
       description: 'Test',
       schema: z.object({ input: z.string() }),
-      func: async ({ input }) => `Result: ${input}`,
+      func: async (input: any) => `Result: ${input.input}`,
     });
 
     const wrapped = wrapSapiomTool(tool, {
@@ -465,7 +465,7 @@ describe('integration scenarios', () => {
       name: 'counter',
       description: 'Counts executions',
       schema: z.object({ increment: z.number() }),
-      func: async ({ increment }) => {
+      func: async (input: any) => { const { increment } = input;
         executionCount += increment;
         return `Count: ${executionCount}`;
       },

@@ -433,7 +433,7 @@ describe('SapiomChatOpenAI', () => {
       await model.invoke('First');
 
       // Call withConfig (simulates bindTools behavior)
-      const newModel = model.withConfig({ temperature: 0.5 });
+      const newModel = model.withConfig({ configurable: { temperature: 0.5 } });
 
       await newModel.invoke('Second');
 

@@ -9,4 +9,4 @@ export type { SapiomFetchConfig } from './fetch';
 
 // Re-export adapter and types for advanced use cases
 export { createFetchAdapter, FetchAdapter } from './adapter';
-export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError } from './types';
+export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError } from '@sapiom/core';

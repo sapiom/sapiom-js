@@ -1,8 +1,8 @@
 import axios, { AxiosInstance } from 'axios';
 import MockAdapter from 'axios-mock-adapter';
 
-import { HttpRequest } from './types';
-import { AxiosAdapter, createAxiosAdapter } from './axios';
+import { HttpRequest } from '@sapiom/core';
+import { AxiosAdapter, createAxiosAdapter } from './adapter';
 
 describe('AxiosAdapter', () => {
   let axiosInstance: AxiosInstance;

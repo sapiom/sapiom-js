@@ -11,6 +11,7 @@ import {
   withPaymentHandling,
   withSapiomHandling,
 } from './index';
+import type { HttpClientAdapter } from '../http/types';
 
 describe('@sapiom/sdk/core module', () => {
   describe('module exports', () => {
@@ -140,7 +141,6 @@ describe('@sapiom/sdk/core module', () => {
       const paymentConfig: PaymentHandlerConfig = {
         sapiomClient: {} as any,
         onPaymentRequired: jest.fn(),
-        onPaymentAuthorized: jest.fn(),
       };
 
       expect(paymentConfig).toBeDefined();

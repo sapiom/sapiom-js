@@ -1,7 +1,7 @@
 import nock from 'nock';
 
-import { HttpRequest } from './types';
-import { NodeHttpAdapter, createNodeHttpAdapter } from './node-http';
+import { HttpRequest } from '@sapiom/core';
+import { NodeHttpAdapter, createNodeHttpAdapter } from './adapter';
 
 describe('NodeHttpAdapter', () => {
   let adapter: NodeHttpAdapter;

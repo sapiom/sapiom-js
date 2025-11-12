@@ -1,6 +1,6 @@
 import { AxiosError, AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 
-import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from './types';
+import { HttpClientAdapter, HttpError, HttpRequest, HttpResponse } from '@sapiom/core';
 
 /**
  * Axios adapter for HTTP client abstraction

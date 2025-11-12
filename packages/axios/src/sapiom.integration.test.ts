@@ -1,15 +1,15 @@
 /**
- * Integration tests for unified SapiomHandler
+ * Integration tests for unified SapiomHandler with Axios adapter
  * Tests combined authorization + payment flow
  */
 import axios from 'axios';
 import MockAdapter from 'axios-mock-adapter';
 
-import { createAxiosAdapter } from '../http/adapters/axios';
-import { SapiomClient } from '../lib/SapiomClient';
-import { TransactionAPI } from '../lib/TransactionAPI';
-import { TransactionStatus } from '../types/transaction';
-import { withSapiomHandling } from './SapiomHandler';
+import { createAxiosAdapter } from './adapter';
+import { SapiomClient } from '@sapiom/core';
+import { TransactionAPI } from '@sapiom/core';
+import { TransactionStatus } from '@sapiom/core';
+import { withSapiomHandling } from '@sapiom/core';
 
 describe('Unified Sapiom Handler Integration Tests', () => {
   let mockTransactionAPI: jest.Mocked<TransactionAPI>;

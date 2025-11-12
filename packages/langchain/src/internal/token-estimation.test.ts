@@ -150,7 +150,7 @@ describe('extractActualTokens', () => {
 
 describe('calculateModelCost', () => {
   it('returns Decimal instance', () => {
-    const mockModel = { modelName: 'gpt-4' } as BaseChatModel;
+    const mockModel = { modelName: 'gpt-4' } as unknown as BaseChatModel;
 
     const cost = calculateModelCost(mockModel, { promptTokens: 100 });
 
@@ -217,7 +217,7 @@ describe('calculateModelCost', () => {
   });
 
   it('calculates exact cost for cheapest model (gemini-1.5-flash)', () => {
-    const mockModel = { modelName: 'gemini-1.5-flash' } as BaseChatModel;
+    const mockModel = { modelName: 'gemini-1.5-flash' } as unknown as BaseChatModel;
 
     // Single input token
     const cost = calculateModelCost(mockModel, { promptTokens: 1 });
@@ -228,7 +228,7 @@ describe('calculateModelCost', () => {
   });
 
   it('maintains precision through arithmetic (claude-3-haiku)', () => {
-    const mockModel = { modelName: 'claude-3-haiku' } as BaseChatModel;
+    const mockModel = { modelName: 'claude-3-haiku' } as unknown as BaseChatModel;
 
     // 1000 tokens
     const cost = calculateModelCost(mockModel, { promptTokens: 1000 });
@@ -241,7 +241,7 @@ describe('calculateModelCost', () => {
     const models = ['gemini-1.5-flash', 'claude-3-haiku', 'gpt-4o-mini'];
 
     models.forEach((modelName) => {
-      const mockModel = { modelName } as BaseChatModel;
+      const mockModel = { modelName } as unknown as BaseChatModel;
       const cost = calculateModelCost(mockModel, { promptTokens: 1 });
 
       // Even single token should produce non-zero cost
@@ -251,7 +251,7 @@ describe('calculateModelCost', () => {
   });
 
   it('handles zero completion tokens (estimate scenario)', () => {
-    const mockModel = { modelName: 'gpt-4' } as BaseChatModel;
+    const mockModel = { modelName: 'gpt-4' } as unknown as BaseChatModel;
 
     const cost = calculateModelCost(mockModel, { promptTokens: 100 });
 
@@ -295,7 +295,7 @@ describe('calculateModelCost', () => {
   });
 
   it('handles large token counts without precision loss', () => {
-    const mockModel = { modelName: 'gpt-4' } as BaseChatModel;
+    const mockModel = { modelName: 'gpt-4' } as unknown as BaseChatModel;
 
     const cost = calculateModelCost(mockModel, {
       promptTokens: 100000,
@@ -309,7 +309,7 @@ describe('calculateModelCost', () => {
   });
 
   it('handles -latest suffix by stripping it (claude-3-5-haiku-latest)', () => {
-    const mockModel = { modelName: 'claude-3-5-haiku-latest' } as BaseChatModel;
+    const mockModel = { modelName: 'claude-3-5-haiku-latest' } as unknown as BaseChatModel;
 
     const cost = calculateModelCost(mockModel, { promptTokens: 1000 });
 
@@ -320,7 +320,7 @@ describe('calculateModelCost', () => {
   it('prioritizes exact -latest match over stripped version', () => {
     // This test verifies that if we ever add explicit -latest entries,
     // they take priority over the stripped version
-    const mockModel = { modelName: 'claude-3-5-sonnet-latest' } as BaseChatModel;
+    const mockModel = { modelName: 'claude-3-5-sonnet-latest' } as unknown as BaseChatModel;
 
     const cost = calculateModelCost(mockModel, { promptTokens: 1000 });
 
@@ -331,7 +331,7 @@ describe('calculateModelCost', () => {
   });
 
   it('handles -latest suffix for other providers (claude-3-5-sonnet-latest)', () => {
-    const mockModel = { modelName: 'claude-3-5-sonnet-latest' } as BaseChatModel;
+    const mockModel = { modelName: 'claude-3-5-sonnet-latest' } as unknown as BaseChatModel;
 
     const cost = calculateModelCost(mockModel, {
       promptTokens: 1000,
@@ -344,7 +344,7 @@ describe('calculateModelCost', () => {
 
   it('warns when falling back to conservative estimate', () => {
     const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
-    const mockModel = { modelName: 'unknown-future-model-2026' } as BaseChatModel;
+    const mockModel = { modelName: 'unknown-future-model-2026' } as unknown as BaseChatModel;
 
     const cost = calculateModelCost(mockModel, { promptTokens: 1000 });
 

@@ -1,7 +1,7 @@
 import fetchMock from '@fetch-mock/jest';
 
-import { HttpRequest } from './types';
-import { FetchAdapter, createFetchAdapter } from './fetch';
+import { HttpRequest } from '@sapiom/core';
+import { FetchAdapter, createFetchAdapter } from './adapter';
 
 describe('FetchAdapter', () => {
   let adapter: FetchAdapter;
@@ -201,7 +201,7 @@ describe('FetchAdapter', () => {
 
       const calls = fetchMock.callHistory.calls();
       expect(calls).toHaveLength(1);
-      expect(calls[0]!.options!.headers!['x-custom-header']).toBe('intercepted');
+      expect((calls[0]!.options!.headers as any)['x-custom-header']).toBe('intercepted');
     });
 
     it('should support async interceptors', async () => {
@@ -227,7 +227,7 @@ describe('FetchAdapter', () => {
       // Verify async interceptor added the header (headers are lowercase in callHistory)
       const calls = fetchMock.callHistory.calls();
       expect(calls).toHaveLength(1);
-      expect(calls[0]!.options!.headers!['x-async']).toBe('true');
+      expect((calls[0]!.options!.headers as any)['x-async']).toBe('true');
     });
 
     it('should allow cleanup of interceptors', async () => {
@@ -251,7 +251,7 @@ describe('FetchAdapter', () => {
 
       // Verify header was added (headers are lowercase in callHistory)
       let calls = fetchMock.callHistory.calls();
-      expect(calls[0]!.options!.headers!['x-custom-header']).toBe('intercepted');
+      expect((calls[0]!.options!.headers as any)['x-custom-header']).toBe('intercepted');
 
       // Clean up
       cleanup();
@@ -262,7 +262,7 @@ describe('FetchAdapter', () => {
 
       // Verify header was NOT added after cleanup
       calls = fetchMock.callHistory.calls();
-      expect(calls[1]!.options!.headers!['x-custom-header']).toBeUndefined();
+      expect((calls[1]!.options!.headers as any)['x-custom-header']).toBeUndefined();
     });
 
     it('should support multiple interceptors in order', async () => {

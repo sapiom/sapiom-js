@@ -9,4 +9,4 @@ export type { SapiomAxiosConfig } from './axios';
 
 // Re-export adapter and types for advanced use cases
 export { createAxiosAdapter, AxiosAdapter } from './adapter';
-export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError } from './types';
+export type { HttpClientAdapter, HttpRequest, HttpResponse, HttpError } from '@sapiom/core';

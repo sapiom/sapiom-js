@@ -2,7 +2,7 @@ import { AxiosInstance } from 'axios';
 
 import { SapiomHandlerConfig, withSapiomHandling } from '@sapiom/core';
 import { createAxiosAdapter } from './adapter';
-import { BaseSapiomIntegrationConfig, initializeSapiomClient } from './shared';
+import { BaseSapiomIntegrationConfig, initializeSapiomClient } from '@sapiom/core';
 
 /**
  * Configuration for Sapiom-enabled Axios client
