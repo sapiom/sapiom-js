@@ -1,6 +1,7 @@
 /**
  * Shared utilities for LangChain integration
  */
+import { randomUUID } from "crypto";
 import type { BaseLanguageModelInput } from "@langchain/core/language_models/base";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseMessage } from "@langchain/core/messages";
@@ -24,7 +25,7 @@ import { SapiomClient } from "@sapiom/core";
 export function generateSDKTraceId(): string {
   // Use crypto.randomUUID() for proper UUID v4
   // Prefix with "sdk-" to indicate SDK-generated
-  return `sdk-${crypto.randomUUID()}`;
+  return `sdk-${randomUUID()}`;
 }
 
 /**
