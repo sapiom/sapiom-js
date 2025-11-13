@@ -61,13 +61,15 @@ export class AxiosAdapter implements HttpClientAdapter {
         const result = await onFulfilled(genericRequest);
 
         // Convert back to Axios config
+        // Only overwrite fields if they're explicitly set (not undefined)
         const updatedConfig: InternalAxiosRequestConfig = {
           ...config,
           method: result.method,
           url: result.url,
           headers: result.headers as any,
-          data: result.body,
-          params: result.params,
+          // Preserve original data/params if interceptor didn't explicitly set them
+          data: result.body !== undefined ? result.body : config.data,
+          params: result.params !== undefined ? result.params : config.params,
         };
 
         // Store both user metadata and internal metadata
