@@ -53,6 +53,10 @@ export type { SapiomHandlerConfig } from "./core/SapiomHandler";
 export { TransactionAuthorizer } from "./core/TransactionAuthorizer";
 export type { TransactionAuthorizerConfig } from "./core/TransactionAuthorizer";
 
+// Transaction Polling
+export { TransactionPoller } from "./lib/TransactionPoller";
+export type { TransactionPollingConfig, TransactionPollResult } from "./lib/TransactionPoller";
+
 // Telemetry
 export { captureUserCallSite, getRuntimeInfo } from "./lib/telemetry";
 export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry";

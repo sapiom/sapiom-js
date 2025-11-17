@@ -1,32 +1,86 @@
 import { AxiosInstance } from "axios";
 
-import { SapiomHandlerConfig, withSapiomHandling } from "@sapiom/core";
-import { createAxiosAdapter } from "./adapter";
+import { SapiomClient, SapiomClientConfig } from "@sapiom/core";
 import {
-  BaseSapiomIntegrationConfig,
-  initializeSapiomClient,
-} from "@sapiom/core";
+  addAuthorizationInterceptor,
+  addPaymentInterceptor,
+  AuthorizationInterceptorConfig,
+  PaymentInterceptorConfig,
+} from "./interceptors";
+
+/**
+ * Base configuration for Sapiom integration
+ */
+export interface BaseSapiomIntegrationConfig {
+  /**
+   * Existing SapiomClient instance (takes precedence over sapiom config)
+   */
+  sapiomClient?: SapiomClient;
+
+  /**
+   * SapiomClient configuration (if not providing an existing instance)
+   */
+  sapiom?: SapiomClientConfig;
+}
 
 /**
  * Configuration for Sapiom-enabled Axios client
  */
 export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
   /**
-   * Authorization handler configuration
+   * Authorization interceptor configuration
    */
-  authorization?: Omit<SapiomHandlerConfig["authorization"], "sapiomClient">;
+  authorization?: Omit<AuthorizationInterceptorConfig, "sapiomClient">;
 
   /**
-   * Payment handler configuration
+   * Payment interceptor configuration
    */
-  payment?: Omit<SapiomHandlerConfig["payment"], "sapiomClient">;
+  payment?: Omit<PaymentInterceptorConfig, "sapiomClient">;
+
+  /**
+   * Default metadata applied to all transactions created by this client
+   */
+  agentName?: string;
+  agentId?: string;
+  serviceName?: string;
+  traceId?: string;
+  traceExternalId?: string;
+}
+
+/**
+ * Initialize SapiomClient from config or environment
+ */
+function initializeSapiomClient(
+  config?: BaseSapiomIntegrationConfig,
+): SapiomClient {
+  // Use provided instance
+  if (config?.sapiomClient) {
+    return config.sapiomClient;
+  }
+
+  // Use provided config
+  if (config?.sapiom) {
+    return new SapiomClient(config.sapiom);
+  }
+
+  // Fall back to environment variables
+  const apiKey = process.env.SAPIOM_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "SAPIOM_API_KEY environment variable is required when not providing explicit config",
+    );
+  }
+
+  return new SapiomClient({
+    apiKey,
+    baseURL: process.env.SAPIOM_BASE_URL,
+  });
 }
 
 /**
  * Creates a Sapiom-enabled Axios client with automatic authorization and payment handling
  *
- * This is the simplest way to add Sapiom capabilities to your Axios instance.
- * It automatically wraps the instance with:
+ * This function adds native Axios interceptors to handle:
  * - Pre-emptive authorization (request interceptor)
  * - Reactive payment handling (response interceptor for 402 errors)
  *
@@ -41,7 +95,7 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
  * ```typescript
  * // Simplest usage (reads SAPIOM_API_KEY from environment)
  * import axios from 'axios';
- * import { createSapiomAxios } from '@sapiom/sdk';
+ * import { createSapiomAxios } from '@sapiom/axios';
  *
  * const client = createSapiomAxios(axios.create({
  *   baseURL: 'https://api.example.com'
@@ -55,7 +109,7 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
  * ```typescript
  * // With custom configuration
  * import axios from 'axios';
- * import { createSapiomAxios } from '@sapiom/sdk';
+ * import { createSapiomAxios } from '@sapiom/axios';
  *
  * const client = createSapiomAxios(axios.create({
  *   baseURL: 'https://api.example.com'
@@ -84,7 +138,8 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
  * ```typescript
  * // Using an existing SapiomClient instance
  * import axios from 'axios';
- * import { SapiomClient, createSapiomAxios } from '@sapiom/sdk';
+ * import { SapiomClient } from '@sapiom/core';
+ * import { createSapiomAxios } from '@sapiom/axios';
  *
  * const sapiomClient = new SapiomClient({ apiKey: 'your-api-key' });
  *
@@ -102,14 +157,35 @@ export function createSapiomAxios(
   // Initialize SapiomClient (from config or environment)
   const sapiomClient = initializeSapiomClient(config);
 
-  // Create adapter and apply Sapiom handling
-  const adapter = createAxiosAdapter(axiosInstance);
+  // Store default metadata on the axios instance
+  const defaultMetadata: any = {};
+  if (config?.agentName) defaultMetadata.agentName = config.agentName;
+  if (config?.agentId) defaultMetadata.agentId = config.agentId;
+  if (config?.serviceName) defaultMetadata.serviceName = config.serviceName;
+  if (config?.traceId) defaultMetadata.traceId = config.traceId;
+  if (config?.traceExternalId)
+    defaultMetadata.traceExternalId = config.traceExternalId;
 
-  withSapiomHandling(adapter, {
-    sapiomClient,
-    authorization: config?.authorization,
-    payment: config?.payment,
-  });
+  // Store metadata on axios instance for interceptors to access
+  if (Object.keys(defaultMetadata).length > 0) {
+    (axiosInstance as any).__sapiomDefaultMetadata = defaultMetadata;
+  }
+
+  // Add authorization interceptor (if enabled)
+  if (config?.authorization?.enabled !== false) {
+    addAuthorizationInterceptor(axiosInstance, {
+      ...(config?.authorization || {}),
+      sapiomClient,
+    });
+  }
+
+  // Add payment interceptor (if enabled)
+  if (config?.payment?.enabled !== false) {
+    addPaymentInterceptor(axiosInstance, {
+      ...(config?.payment || {}),
+      sapiomClient,
+    });
+  }
 
   // Store reference to SapiomClient for testing and advanced usage
   (axiosInstance as any).__sapiomClient = sapiomClient;
