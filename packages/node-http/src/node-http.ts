@@ -75,30 +75,27 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
  * const client = createSapiomNodeHttp({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
- *   serviceName: 'my-service',
- *   traceId: 'trace-123'
+ *   serviceName: 'my-service'
  * });
  *
  * // Per-request override via __sapiom property
- * const response = await client.request({
+ * await client.request({
  *   method: 'POST',
  *   url: 'https://api.example.com/resource',
  *   headers: { 'Content-Type': 'application/json' },
  *   body: { data: 'test' },
  *   __sapiom: {
- *     serviceName: 'different-service',  // Overrides default
- *     actionName: 'custom-action',
- *     traceExternalId: 'ext-456'
+ *     serviceName: 'different-service',
+ *     actionName: 'custom-action'
  *   }
  * });
  *
- * // Supports streams natively
- * import * as fs from 'fs';
+ * // Disable Sapiom for specific request
  * await client.request({
- *   method: 'POST',
- *   url: 'https://api.example.com/upload',
- *   headers: { 'Content-Type': 'application/octet-stream' },
- *   body: fs.createReadStream('/path/to/file')
+ *   method: 'GET',
+ *   url: 'https://api.example.com/public',
+ *   headers: {},
+ *   __sapiom: { enabled: false }
  * });
  * ```
  */
@@ -106,6 +103,7 @@ export function createSapiomNodeHttp(
   config?: SapiomNodeHttpConfig
 ): HttpClientAdapter & { __sapiomClient: SapiomClient } {
   const sapiomClient = initializeSapiomClient(config);
+  const isEnabled = config?.enabled !== false;
 
   const defaultMetadata: Record<string, any> = {};
   if (config?.agentName) defaultMetadata.agentName = config.agentName;
@@ -114,6 +112,7 @@ export function createSapiomNodeHttp(
   if (config?.traceId) defaultMetadata.traceId = config.traceId;
   if (config?.traceExternalId)
     defaultMetadata.traceExternalId = config.traceExternalId;
+  if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
   const authConfig: AuthorizationConfig = { sapiomClient };
   const paymentConfig: PaymentConfig = { sapiomClient };
@@ -205,6 +204,13 @@ export function createSapiomNodeHttp(
 
   const adapter: HttpClientAdapter = {
     async request<T = any>(request: HttpRequest): Promise<HttpResponse<T>> {
+      const requestMetadata = request.__sapiom || {};
+      const userMetadata = { ...defaultMetadata, ...requestMetadata };
+
+      if (!isEnabled || userMetadata?.enabled === false) {
+        return makeRequest<T>(request);
+      }
+
       let modifiedRequest = await handleAuthorization(
         request,
         authConfig,

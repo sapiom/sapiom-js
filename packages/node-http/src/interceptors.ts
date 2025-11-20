@@ -147,10 +147,6 @@ export async function handleAuthorization(
   const requestMetadata = request.__sapiom || {};
   const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
-  if (requestMetadata?.skipAuthorization) {
-    return request;
-  }
-
   const method = request.method.toUpperCase();
   const url = request.url;
   const endpoint = new URL(url).pathname;

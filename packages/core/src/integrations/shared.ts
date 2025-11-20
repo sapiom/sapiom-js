@@ -16,6 +16,13 @@ export interface BaseSapiomIntegrationConfig {
   apiKey?: string;
 
   /**
+   * Enable Sapiom authorization and payment handling
+   * When false, all requests bypass Sapiom completely
+   * Default: true
+   */
+  enabled?: boolean;
+
+  /**
    * Sapiom API base URL (for testing or private environments)
    * @internal
    */

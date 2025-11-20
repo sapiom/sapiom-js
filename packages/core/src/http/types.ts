@@ -8,7 +8,7 @@ export interface SapiomTransactionMetadata {
   resourceName?: string; // Override resource identifier
   qualifiers?: Record<string, any>; // Additional context
   metadata?: Record<string, any>; // Custom metadata for transaction
-  skipAuthorization?: boolean; // Skip authorization for this request
+  enabled?: boolean; // Override Sapiom handling for this request (bypasses authorization and payment)
 
   // Trace configuration
   traceId?: string; // Use existing trace by internal UUID

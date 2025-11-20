@@ -160,7 +160,7 @@ export function addAuthorizationInterceptor(
       const requestMetadata = (axiosConfig as any).__sapiom || {};
       const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
-      if (requestMetadata?.skipAuthorization) {
+      if (userMetadata?.enabled === false) {
         return axiosConfig;
       }
 
@@ -363,6 +363,14 @@ export function addPaymentInterceptor(
         return Promise.reject(error);
       }
 
+      const defaultMetadata = (axiosInstance as any).__sapiomDefaultMetadata || {};
+      const requestMetadata = (originalConfig as any).__sapiom || {};
+      const userMetadata = { ...defaultMetadata, ...requestMetadata };
+
+      if (userMetadata?.enabled === false) {
+        return Promise.reject(error);
+      }
+
       try {
         const httpError = axiosErrorToHttpError(error);
 
@@ -376,10 +384,6 @@ export function addPaymentInterceptor(
         const existingTransactionId =
           getHeader(originalConfig.headers, "X-Sapiom-Transaction-Id") ||
           (originalConfig as any).__sapiomTransactionId;
-
-        const defaultMetadata = (axiosInstance as any).__sapiomDefaultMetadata || {};
-        const requestMetadata = (originalConfig as any).__sapiom || {};
-        const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
         let transaction;
         if (existingTransactionId) {

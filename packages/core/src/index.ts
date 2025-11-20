@@ -27,28 +27,6 @@ export type {
   ErrorDetectorAdapter,
 } from "./lib/PaymentErrorDetection";
 
-// Core Handlers
-export { PaymentHandler } from "./core/PaymentHandler";
-export type { PaymentHandlerConfig } from "./core/PaymentHandler";
-
-export {
-  AuthorizationHandler,
-  AuthorizationDeniedError,
-  AuthorizationTimeoutError,
-} from "./core/AuthorizationHandler";
-export type {
-  AuthorizationHandlerConfig,
-  EndpointAuthorizationRule,
-} from "./core/AuthorizationHandler";
-
-// Wrapper Functions
-export {
-  withPaymentHandling,
-  withAuthorizationHandling,
-} from "./core/wrappers";
-export { withSapiomHandling } from "./core/SapiomHandler";
-export type { SapiomHandlerConfig } from "./core/SapiomHandler";
-
 // Transaction Authorizer
 export { TransactionAuthorizer } from "./core/TransactionAuthorizer";
 export type { TransactionAuthorizerConfig } from "./core/TransactionAuthorizer";

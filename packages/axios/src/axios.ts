@@ -55,12 +55,21 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {}
  *     actionName: 'custom-action'
  *   }
  * });
+ *
+ * // Disable Sapiom for specific request
+ * await client.get('/api/public', {
+ *   __sapiom: { enabled: false }
+ * });
  * ```
  */
 export function createSapiomAxios(
   axiosInstance: AxiosInstance,
   config?: SapiomAxiosConfig,
 ): AxiosInstance {
+  if (config?.enabled === false) {
+    return axiosInstance;
+  }
+
   const sapiomClient = initializeSapiomClient(config);
 
   const defaultMetadata: any = {};
@@ -70,6 +79,7 @@ export function createSapiomAxios(
   if (config?.traceId) defaultMetadata.traceId = config.traceId;
   if (config?.traceExternalId)
     defaultMetadata.traceExternalId = config.traceExternalId;
+  if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
   if (Object.keys(defaultMetadata).length > 0) {
     (axiosInstance as any).__sapiomDefaultMetadata = defaultMetadata;

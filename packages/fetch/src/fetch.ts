@@ -57,26 +57,28 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
  * const fetch = createSapiomFetch({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
- *   serviceName: 'my-service',
- *   traceId: 'trace-123'
+ *   serviceName: 'my-service'
  * });
  *
  * // Per-request override via __sapiom property
  * const request = new Request('/api/resource', { method: 'POST' });
  * (request as any).__sapiom = {
- *   serviceName: 'different-service',  // Overrides default
- *   actionName: 'custom-action',
- *   traceExternalId: 'ext-456'
+ *   serviceName: 'different-service',
+ *   actionName: 'custom-action'
  * };
  * await fetch(request);
  *
- * // Native fetch features fully supported
- * const formData = new FormData();
- * formData.append('file', fileBlob);
- * await fetch('/upload', { method: 'POST', body: formData });
+ * // Disable Sapiom for specific request
+ * const publicRequest = new Request('/api/public');
+ * (publicRequest as any).__sapiom = { enabled: false };
+ * await fetch(publicRequest);
  * ```
  */
 export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
+  if (config?.enabled === false) {
+    return globalThis.fetch;
+  }
+
   const sapiomClient = initializeSapiomClient(config);
 
   const defaultMetadata: Record<string, any> = {};
@@ -86,6 +88,7 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
   if (config?.traceId) defaultMetadata.traceId = config.traceId;
   if (config?.traceExternalId)
     defaultMetadata.traceExternalId = config.traceExternalId;
+  if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
   const authConfig: AuthorizationConfig = { sapiomClient };
   const paymentConfig: PaymentConfig = { sapiomClient };
@@ -95,6 +98,13 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
     init?: RequestInit
   ): Promise<Response> => {
     let request = new Request(input, init);
+
+    const requestMetadata = (request as any).__sapiom || {};
+    const userMetadata = { ...defaultMetadata, ...requestMetadata };
+
+    if (userMetadata?.enabled === false) {
+      return globalThis.fetch(request);
+    }
 
     request = await handleAuthorization(request, authConfig, defaultMetadata);
 
