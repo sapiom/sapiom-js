@@ -5,6 +5,7 @@ import {
   captureUserCallSite,
   extractPaymentData,
   extractResourceFromError,
+  HttpClientRequestFacts,
 } from "@sapiom/core";
 
 /**
@@ -148,12 +149,10 @@ export async function handleAuthorization(
   const parsedUrl = new URL(url);
   const urlParsed = {
     protocol: parsedUrl.protocol.replace(":", ""),
-    host: parsedUrl.host,
     hostname: parsedUrl.hostname,
-    port: parsedUrl.port,
     pathname: parsedUrl.pathname,
     search: parsedUrl.search,
-    hash: parsedUrl.hash,
+    port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
   };
 
   const sanitizedHeaders: Record<string, string> = {};
@@ -170,7 +169,7 @@ export async function handleAuthorization(
     }
   }
 
-  const requestFacts = {
+  const requestFacts: HttpClientRequestFacts = {
     method,
     url,
     urlParsed,

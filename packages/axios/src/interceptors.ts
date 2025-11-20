@@ -13,6 +13,7 @@ import {
   extractPaymentData,
   extractResourceFromError,
   HttpError,
+  HttpClientRequestFacts,
 } from "@sapiom/core";
 
 /**
@@ -225,7 +226,7 @@ export function addAuthorizationInterceptor(
         );
       }
 
-      const requestFacts = {
+      const requestFacts: HttpClientRequestFacts = {
         method,
         url: fullUrl,
         urlParsed,
@@ -237,7 +238,7 @@ export function addAuthorizationInterceptor(
         contentType: axiosConfig.headers?.["content-type"] as
           | string
           | undefined,
-        clientType: "axios" as const,
+        clientType: "axios",
         callSite,
         timestamp: new Date().toISOString(),
       };

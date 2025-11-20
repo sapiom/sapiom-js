@@ -1,4 +1,4 @@
-import { SapiomClient, SapiomClientConfig } from "../lib/SapiomClient";
+import { SapiomClient, SapiomClientConfig } from "../client/SapiomClient";
 
 /**
  * Base configuration shared across all Sapiom integrations

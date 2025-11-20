@@ -5,8 +5,8 @@
  * Used by both HTTP adapters and LangChain integration.
  */
 
-import { SapiomClient } from "../lib/SapiomClient";
-import { TransactionPoller } from "../lib/TransactionPoller";
+import { SapiomClient } from "../client/SapiomClient";
+import { TransactionPoller } from "../client/TransactionPoller";
 import type {
   TransactionResponse,
   CreateTransactionRequest,

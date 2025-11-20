@@ -1,7 +1,7 @@
 // Main client
-export { SapiomClient } from "./lib/SapiomClient";
-export type { SapiomClientConfig } from "./lib/SapiomClient";
-export { TransactionAPI } from "./lib/TransactionAPI";
+export { SapiomClient } from "./client/SapiomClient";
+export type { SapiomClientConfig } from "./client/SapiomClient";
+export { TransactionAPI } from "./client/TransactionAPI";
 
 // Payment Error Detection
 export {
@@ -17,7 +17,7 @@ export {
   registerErrorDetector,
   AxiosErrorDetector,
   HttpErrorDetector,
-} from "./lib/PaymentErrorDetection";
+} from "./errors/PaymentErrorDetection";
 
 export type {
   X402PaymentResponse,
@@ -25,18 +25,18 @@ export type {
   SapiomPaymentResponse,
   ExtractedPaymentInfo,
   ErrorDetectorAdapter,
-} from "./lib/PaymentErrorDetection";
+} from "./errors/PaymentErrorDetection";
 
 // Transaction Authorizer
-export { TransactionAuthorizer } from "./core/TransactionAuthorizer";
-export type { TransactionAuthorizerConfig } from "./core/TransactionAuthorizer";
+export { TransactionAuthorizer } from "./utils/TransactionAuthorizer";
+export type { TransactionAuthorizerConfig } from "./utils/TransactionAuthorizer";
 
 // Transaction Polling
-export { TransactionPoller } from "./lib/TransactionPoller";
-export type { TransactionPollingConfig, TransactionPollResult } from "./lib/TransactionPoller";
+export { TransactionPoller } from "./client/TransactionPoller";
+export type { TransactionPollingConfig, TransactionPollResult } from "./client/TransactionPoller";
 
 // Telemetry
-export { captureUserCallSite, getRuntimeInfo } from "./lib/telemetry";
+export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry";
 export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry";
 
 // Types
@@ -58,11 +58,19 @@ export type {
   HttpResponse,
   HttpError,
   SapiomTransactionMetadata,
-} from "./http/types";
+} from "./types/http";
+
+// HTTP Schemas (versioned fact schemas)
+export type {
+  HttpClientFacts,
+  HttpClientRequestFacts,
+  HttpClientResponseFacts,
+  HttpClientErrorFacts,
+} from "./schemas/http-client-v1";
 
 // Shared integration utilities (needed by HTTP integration packages)
-export { initializeSapiomClient } from "./integrations/shared";
-export type { BaseSapiomIntegrationConfig } from "./integrations/shared";
+export { initializeSapiomClient } from "./types/config";
+export type { BaseSapiomIntegrationConfig } from "./types/config";
 
 // Default export for convenience
-export { SapiomClient as default } from "./lib/SapiomClient";
+export { SapiomClient as default } from "./client/SapiomClient";

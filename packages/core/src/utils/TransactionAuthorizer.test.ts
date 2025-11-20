@@ -7,7 +7,7 @@ import {
   TransactionDeniedError,
   TransactionTimeoutError,
 } from "./TransactionAuthorizer";
-import { SapiomClient } from "../lib/SapiomClient";
+import { SapiomClient } from "../client/SapiomClient";
 
 describe("TransactionAuthorizer", () => {
   let mockClient: SapiomClient;

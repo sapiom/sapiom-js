@@ -6,7 +6,7 @@
  * Schema: source="http-client", version="v1"
  */
 
-import type { CallSiteInfo } from "../../../types/telemetry";
+import type { CallSiteInfo } from "../types/telemetry";
 
 /**
  * Request facts (pre-execution)
