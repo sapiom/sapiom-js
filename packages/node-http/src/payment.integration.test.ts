@@ -25,24 +25,9 @@ describe("Payment Integration - Node-HTTP", () => {
     } as any;
   });
 
-  it("should create client with payment enabled", () => {
+  it("should create client with Sapiom client", () => {
     const client = createSapiomNodeHttp({
       sapiomClient: mockSapiomClient,
-      payment: {
-        enabled: true,
-        onPaymentRequired: jest.fn(),
-      },
-    });
-
-    expect(client).toBeDefined();
-  });
-
-  it("should create client with payment disabled", () => {
-    const client = createSapiomNodeHttp({
-      sapiomClient: mockSapiomClient,
-      payment: {
-        enabled: false,
-      },
     });
 
     expect(client).toBeDefined();

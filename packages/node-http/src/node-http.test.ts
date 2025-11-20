@@ -49,35 +49,6 @@ describe("createSapiomNodeHttp", () => {
     expect(client).toBeDefined();
   });
 
-  it("should create client with authorization config", () => {
-    const client = createSapiomNodeHttp({
-      sapiomClient: mockSapiomClient,
-      authorization: {
-        authorizedEndpoints: [
-          {
-            pathPattern: /^\/api/,
-            serviceName: "test-api",
-          },
-        ],
-        onAuthorizationSuccess: jest.fn(),
-      },
-    });
-
-    expect(client).toBeDefined();
-  });
-
-  it("should create client with payment config", () => {
-    const client = createSapiomNodeHttp({
-      sapiomClient: mockSapiomClient,
-      payment: {
-        onPaymentRequired: jest.fn(),
-        onPaymentSuccess: jest.fn(),
-      },
-    });
-
-    expect(client).toBeDefined();
-  });
-
   it("should throw error when calling addRequestInterceptor", () => {
     const client = createSapiomNodeHttp({
       sapiomClient: mockSapiomClient,

@@ -25,29 +25,9 @@ describe("Authorization Integration - Node-HTTP", () => {
     } as any;
   });
 
-  it("should create client with authorization enabled", () => {
+  it("should create client with Sapiom client", () => {
     const client = createSapiomNodeHttp({
       sapiomClient: mockSapiomClient,
-      authorization: {
-        enabled: true,
-        authorizedEndpoints: [
-          {
-            pathPattern: /^\/api/,
-            serviceName: "test-service",
-          },
-        ],
-      },
-    });
-
-    expect(client).toBeDefined();
-  });
-
-  it("should create client with authorization disabled", () => {
-    const client = createSapiomNodeHttp({
-      sapiomClient: mockSapiomClient,
-      authorization: {
-        enabled: false,
-      },
     });
 
     expect(client).toBeDefined();

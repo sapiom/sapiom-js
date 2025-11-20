@@ -12,18 +12,9 @@ export {
 } from "./axios";
 export type { SapiomAxiosConfig } from "./axios";
 
-// Interceptor functions for manual setup
 export {
-  addAuthorizationInterceptor,
-  addPaymentInterceptor,
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
-} from "./interceptors";
-
-export type {
-  AuthorizationInterceptorConfig,
-  PaymentInterceptorConfig,
-  EndpointAuthorizationRule,
 } from "./interceptors";
 
 // Type augmentations for axios

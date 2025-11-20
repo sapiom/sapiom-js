@@ -4,9 +4,4 @@ export {
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
 } from "./fetch";
-export type {
-  SapiomFetchConfig,
-  EndpointAuthorizationRule,
-  AuthorizationConfig,
-  PaymentConfig,
-} from "./fetch";
+export type { SapiomFetchConfig } from "./fetch";

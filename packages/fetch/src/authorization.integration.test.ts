@@ -25,29 +25,9 @@ describe("Authorization Integration - Fetch", () => {
     } as any;
   });
 
-  it("should create fetch with authorization enabled", () => {
+  it("should create fetch with Sapiom client", () => {
     const fetch = createSapiomFetch({
       sapiomClient: mockSapiomClient,
-      authorization: {
-        enabled: true,
-        authorizedEndpoints: [
-          {
-            pathPattern: /^\/api/,
-            serviceName: "test-service",
-          },
-        ],
-      },
-    });
-
-    expect(fetch).toBeDefined();
-  });
-
-  it("should create fetch with authorization disabled", () => {
-    const fetch = createSapiomFetch({
-      sapiomClient: mockSapiomClient,
-      authorization: {
-        enabled: false,
-      },
     });
 
     expect(fetch).toBeDefined();

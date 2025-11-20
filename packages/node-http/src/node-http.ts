@@ -16,23 +16,12 @@ import {
   handlePayment,
   AuthorizationConfig,
   PaymentConfig,
-  EndpointAuthorizationRule,
 } from "./interceptors";
 
 /**
  * Configuration for Sapiom-enabled Node.js HTTP client
  */
-export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
-  /**
-   * Authorization configuration
-   */
-  authorization?: Omit<AuthorizationConfig, "sapiomClient">;
-
-  /**
-   * Payment configuration
-   */
-  payment?: Omit<PaymentConfig, "sapiomClient">;
-}
+export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
 
 /**
  * Creates a Sapiom-enabled Node.js HTTP client with automatic authorization and payment handling
@@ -63,25 +52,13 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  *
  * @example
  * ```typescript
- * // With custom configuration
+ * // With API key and default metadata
  * import { createSapiomNodeHttp } from '@sapiom/node-http';
  *
  * const client = createSapiomNodeHttp({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
- *   authorization: {
- *     authorizedEndpoints: [
- *       { pathPattern: /^https:\/\/api\.example\.com\/admin/, serviceName: 'admin-api' }
- *     ],
- *     onAuthorizationPending: (txId, endpoint) => {
- *       console.log(`Awaiting authorization for ${endpoint}`);
- *     }
- *   },
- *   payment: {
- *     onPaymentRequired: (txId, payment) => {
- *       console.log(`Payment needed: ${payment.amount} ${payment.token}`);
- *     }
- *   }
+ *   serviceName: 'my-service'
  * });
  *
  * const response = await client.request({
@@ -138,36 +115,8 @@ export function createSapiomNodeHttp(
   if (config?.traceExternalId)
     defaultMetadata.traceExternalId = config.traceExternalId;
 
-  const authConfig: AuthorizationConfig | undefined =
-    config?.authorization?.enabled !== false
-      ? {
-          sapiomClient,
-          enabled: true,
-          authorizedEndpoints: config?.authorization?.authorizedEndpoints,
-          authorizationTimeout: config?.authorization?.authorizationTimeout,
-          pollingInterval: config?.authorization?.pollingInterval,
-          onAuthorizationPending:
-            config?.authorization?.onAuthorizationPending,
-          onAuthorizationSuccess:
-            config?.authorization?.onAuthorizationSuccess,
-          onAuthorizationDenied: config?.authorization?.onAuthorizationDenied,
-          throwOnDenied: config?.authorization?.throwOnDenied,
-        }
-      : undefined;
-
-  const paymentConfig: PaymentConfig | undefined =
-    config?.payment?.enabled !== false
-      ? {
-          sapiomClient,
-          enabled: true,
-          onPaymentRequired: config?.payment?.onPaymentRequired,
-          onPaymentSuccess: config?.payment?.onPaymentSuccess,
-          onPaymentFailed: config?.payment?.onPaymentFailed,
-          maxRetries: config?.payment?.maxRetries,
-          pollingInterval: config?.payment?.pollingInterval,
-          authorizationTimeout: config?.payment?.authorizationTimeout,
-        }
-      : undefined;
+  const authConfig: AuthorizationConfig = { sapiomClient };
+  const paymentConfig: PaymentConfig = { sapiomClient };
 
   async function makeRequest<T = any>(
     request: HttpRequest
@@ -256,23 +205,17 @@ export function createSapiomNodeHttp(
 
   const adapter: HttpClientAdapter = {
     async request<T = any>(request: HttpRequest): Promise<HttpResponse<T>> {
-      let modifiedRequest = request;
-      if (authConfig) {
-        modifiedRequest = await handleAuthorization(
-          request,
-          authConfig,
-          defaultMetadata
-        );
-      }
+      let modifiedRequest = await handleAuthorization(
+        request,
+        authConfig,
+        defaultMetadata
+      );
 
       try {
         const response = await makeRequest<T>(modifiedRequest);
         return response;
       } catch (error) {
-        if (
-          paymentConfig &&
-          (error as HttpError).response?.status === 402
-        ) {
+        if ((error as HttpError).response?.status === 402) {
           return await handlePayment(
             modifiedRequest,
             error as HttpError,
@@ -286,15 +229,11 @@ export function createSapiomNodeHttp(
     },
 
     addRequestInterceptor(onFulfilled, onRejected) {
-      throw new Error(
-        "addRequestInterceptor is not supported. Use config.authorization instead."
-      );
+      throw new Error("addRequestInterceptor is not supported");
     },
 
     addResponseInterceptor(onFulfilled, onRejected) {
-      throw new Error(
-        "addResponseInterceptor is not supported. Use config.payment instead."
-      );
+      throw new Error("addResponseInterceptor is not supported");
     },
   };
 
@@ -302,12 +241,6 @@ export function createSapiomNodeHttp(
 
   return adapter as HttpClientAdapter & { __sapiomClient: SapiomClient };
 }
-
-export type {
-  EndpointAuthorizationRule,
-  AuthorizationConfig,
-  PaymentConfig,
-} from "./interceptors";
 
 export {
   AuthorizationDeniedError,

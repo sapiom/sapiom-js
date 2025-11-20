@@ -25,24 +25,9 @@ describe("Payment Integration - Fetch", () => {
     } as any;
   });
 
-  it("should create fetch with payment enabled", () => {
+  it("should create fetch with Sapiom client", () => {
     const fetch = createSapiomFetch({
       sapiomClient: mockSapiomClient,
-      payment: {
-        enabled: true,
-        onPaymentRequired: jest.fn(),
-      },
-    });
-
-    expect(fetch).toBeDefined();
-  });
-
-  it("should create fetch with payment disabled", () => {
-    const fetch = createSapiomFetch({
-      sapiomClient: mockSapiomClient,
-      payment: {
-        enabled: false,
-      },
     });
 
     expect(fetch).toBeDefined();

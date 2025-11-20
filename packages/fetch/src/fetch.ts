@@ -8,23 +8,12 @@ import {
   handlePayment,
   AuthorizationConfig,
   PaymentConfig,
-  EndpointAuthorizationRule,
 } from "./interceptors";
 
 /**
  * Configuration for Sapiom-enabled Fetch client
  */
-export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
-  /**
-   * Authorization configuration
-   */
-  authorization?: Omit<AuthorizationConfig, "sapiomClient">;
-
-  /**
-   * Payment configuration
-   */
-  payment?: Omit<PaymentConfig, "sapiomClient">;
-}
+export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
 
 /**
  * Creates a Sapiom-enabled fetch function with automatic authorization and payment handling
@@ -50,22 +39,13 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
  *
  * @example
  * ```typescript
- * // With custom configuration
+ * // With API key and default metadata
  * import { createSapiomFetch } from '@sapiom/fetch';
  *
  * const fetch = createSapiomFetch({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
- *   authorization: {
- *     authorizedEndpoints: [
- *       { pathPattern: /^\/admin/, serviceName: 'admin-api' }
- *     ]
- *   },
- *   payment: {
- *     onPaymentRequired: (txId, payment) => {
- *       console.log(`Payment needed: ${payment.amount} ${payment.token}`);
- *     }
- *   }
+ *   serviceName: 'my-service'
  * });
  *
  * const response = await fetch('https://api.example.com/data');
@@ -107,36 +87,8 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
   if (config?.traceExternalId)
     defaultMetadata.traceExternalId = config.traceExternalId;
 
-  const authConfig: AuthorizationConfig | undefined =
-    config?.authorization?.enabled !== false
-      ? {
-          sapiomClient,
-          enabled: true,
-          authorizedEndpoints: config?.authorization?.authorizedEndpoints,
-          authorizationTimeout: config?.authorization?.authorizationTimeout,
-          pollingInterval: config?.authorization?.pollingInterval,
-          onAuthorizationPending:
-            config?.authorization?.onAuthorizationPending,
-          onAuthorizationSuccess:
-            config?.authorization?.onAuthorizationSuccess,
-          onAuthorizationDenied: config?.authorization?.onAuthorizationDenied,
-          throwOnDenied: config?.authorization?.throwOnDenied,
-        }
-      : undefined;
-
-  const paymentConfig: PaymentConfig | undefined =
-    config?.payment?.enabled !== false
-      ? {
-          sapiomClient,
-          enabled: true,
-          onPaymentRequired: config?.payment?.onPaymentRequired,
-          onPaymentSuccess: config?.payment?.onPaymentSuccess,
-          onPaymentFailed: config?.payment?.onPaymentFailed,
-          maxRetries: config?.payment?.maxRetries,
-          pollingInterval: config?.payment?.pollingInterval,
-          authorizationTimeout: config?.payment?.authorizationTimeout,
-        }
-      : undefined;
+  const authConfig: AuthorizationConfig = { sapiomClient };
+  const paymentConfig: PaymentConfig = { sapiomClient };
 
   const sapiomFetch = async (
     input: string | URL | Request,
@@ -144,13 +96,11 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
   ): Promise<Response> => {
     let request = new Request(input, init);
 
-    if (authConfig) {
-      request = await handleAuthorization(request, authConfig, defaultMetadata);
-    }
+    request = await handleAuthorization(request, authConfig, defaultMetadata);
 
     let response = await globalThis.fetch(request);
 
-    if (paymentConfig && response.status === 402) {
+    if (response.status === 402) {
       response = await handlePayment(
         request,
         response,
@@ -166,12 +116,6 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
 
   return sapiomFetch as typeof fetch;
 }
-
-export type {
-  EndpointAuthorizationRule,
-  AuthorizationConfig,
-  PaymentConfig,
-} from "./interceptors";
 
 export {
   AuthorizationDeniedError,

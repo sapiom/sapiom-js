@@ -47,47 +47,4 @@ describe("createSapiomFetch", () => {
 
     expect(fetch).toBeDefined();
   });
-
-  it("should create fetch with authorization config", () => {
-    const fetch = createSapiomFetch({
-      sapiomClient: mockSapiomClient,
-      authorization: {
-        authorizedEndpoints: [
-          {
-            pathPattern: /^\/api/,
-            serviceName: "test-api",
-          },
-        ],
-        onAuthorizationSuccess: jest.fn(),
-      },
-    });
-
-    expect(fetch).toBeDefined();
-  });
-
-  it("should create fetch with payment config", () => {
-    const fetch = createSapiomFetch({
-      sapiomClient: mockSapiomClient,
-      payment: {
-        onPaymentRequired: jest.fn(),
-        onPaymentSuccess: jest.fn(),
-      },
-    });
-
-    expect(fetch).toBeDefined();
-  });
-
-  it("should create fetch with both authorization and payment", () => {
-    const fetch = createSapiomFetch({
-      sapiomClient: mockSapiomClient,
-      authorization: {
-        authorizedEndpoints: [],
-      },
-      payment: {
-        onPaymentRequired: jest.fn(),
-      },
-    });
-
-    expect(fetch).toBeDefined();
-  });
 });

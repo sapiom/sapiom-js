@@ -37,33 +37,11 @@ describe("Sapiom Fetch Integration Tests", () => {
     expect((fetch as any).__sapiomClient).toBe(mockSapiomClient);
   });
 
-  it("should create fetch with authorization config", () => {
-    const onAuthorizationSuccess = jest.fn();
-
+  it("should create fetch with default metadata", () => {
     const fetch = createSapiomFetch({
       sapiomClient: mockSapiomClient,
-      authorization: {
-        authorizedEndpoints: [
-          {
-            pathPattern: /^\/api\/premium\//,
-            serviceName: "premium-api",
-          },
-        ],
-        onAuthorizationSuccess,
-      },
-    });
-
-    expect(fetch).toBeDefined();
-  });
-
-  it("should create fetch with payment config", () => {
-    const onPaymentRequired = jest.fn();
-
-    const fetch = createSapiomFetch({
-      sapiomClient: mockSapiomClient,
-      payment: {
-        onPaymentRequired,
-      },
+      agentName: "test-agent",
+      serviceName: "test-service",
     });
 
     expect(fetch).toBeDefined();

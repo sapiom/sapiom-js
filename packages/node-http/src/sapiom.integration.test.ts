@@ -37,33 +37,11 @@ describe("Sapiom Node-HTTP Integration Tests", () => {
     expect(client.__sapiomClient).toBe(mockSapiomClient);
   });
 
-  it("should create client with authorization config", () => {
-    const onAuthorizationSuccess = jest.fn();
-
+  it("should create client with default metadata", () => {
     const client = createSapiomNodeHttp({
       sapiomClient: mockSapiomClient,
-      authorization: {
-        authorizedEndpoints: [
-          {
-            pathPattern: /^\/api\/premium\//,
-            serviceName: "premium-api",
-          },
-        ],
-        onAuthorizationSuccess,
-      },
-    });
-
-    expect(client).toBeDefined();
-  });
-
-  it("should create client with payment config", () => {
-    const onPaymentRequired = jest.fn();
-
-    const client = createSapiomNodeHttp({
-      sapiomClient: mockSapiomClient,
-      payment: {
-        onPaymentRequired,
-      },
+      agentName: "test-agent",
+      serviceName: "test-service",
     });
 
     expect(client).toBeDefined();
