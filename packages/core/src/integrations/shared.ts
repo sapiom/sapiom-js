@@ -5,17 +5,58 @@ import { SapiomClient, SapiomClientConfig } from "../lib/SapiomClient";
  */
 export interface BaseSapiomIntegrationConfig {
   /**
-   * Existing SapiomClient instance (takes precedence over 'sapiom' config)
+   * Existing SapiomClient instance (takes precedence over other config)
    */
   sapiomClient?: SapiomClient;
 
   /**
-   * Config to create new SapiomClient
-   * If not provided, reads from environment:
-   * - SAPIOM_API_KEY (required)
-   * - SAPIOM_BASE_URL or SAPIOM_API_URL (optional)
+   * Sapiom API key
+   * If not provided, reads from SAPIOM_API_KEY environment variable
    */
-  sapiom?: SapiomClientConfig;
+  apiKey?: string;
+
+  /**
+   * Sapiom API base URL (for testing or private environments)
+   * @internal
+   */
+  baseURL?: string;
+
+  /**
+   * Request timeout in milliseconds
+   * @internal
+   */
+  timeout?: number;
+
+  /**
+   * Custom headers to include with all requests
+   * @internal
+   */
+  headers?: Record<string, string>;
+
+  /**
+   * Default agent name for transactions
+   */
+  agentName?: string;
+
+  /**
+   * Default agent ID for transactions
+   */
+  agentId?: string;
+
+  /**
+   * Default service name for transactions
+   */
+  serviceName?: string;
+
+  /**
+   * Default trace ID for transactions
+   */
+  traceId?: string;
+
+  /**
+   * Default external trace ID for transactions
+   */
+  traceExternalId?: string;
 }
 
 /**
@@ -33,7 +74,7 @@ export interface BaseSapiomIntegrationConfig {
  *
  * // Initialize with explicit config
  * const client = initializeSapiomClient({
- *   sapiom: { apiKey: 'sk_...' }
+ *   apiKey: 'sk_...'
  * });
  *
  * // Use existing client instance
@@ -46,30 +87,24 @@ export interface BaseSapiomIntegrationConfig {
 export function initializeSapiomClient(
   config?: BaseSapiomIntegrationConfig,
 ): SapiomClient {
-  // Option 1: Use provided SapiomClient instance
   if (config?.sapiomClient) {
     return config.sapiomClient;
   }
 
-  // Option 2: Create from provided config
-  if (config?.sapiom) {
-    return new SapiomClient(config.sapiom);
-  }
-
-  // Option 3: Create from environment variables
-  const apiKey = process.env.SAPIOM_API_KEY;
+  const apiKey = config?.apiKey ?? process.env.SAPIOM_API_KEY;
   if (!apiKey) {
     throw new Error(
       "SAPIOM_API_KEY environment variable is required when no config is provided. " +
-        "Set it in your environment or pass config.sapiom.apiKey explicitly.",
+        "Set it in your environment or pass config.apiKey explicitly.",
     );
   }
 
   return new SapiomClient({
     apiKey,
-    baseURL: process.env.SAPIOM_BASE_URL || process.env.SAPIOM_API_URL,
-    timeout: process.env.SAPIOM_TIMEOUT
+    baseURL: config?.baseURL ?? process.env.SAPIOM_BASE_URL ?? process.env.SAPIOM_API_URL,
+    timeout: config?.timeout ?? (process.env.SAPIOM_TIMEOUT
       ? parseInt(process.env.SAPIOM_TIMEOUT)
-      : undefined,
+      : undefined),
+    headers: config?.headers,
   });
 }

@@ -1,27 +1,15 @@
 import { AxiosInstance } from "axios";
 
-import { SapiomClient, SapiomClientConfig } from "@sapiom/core";
+import {
+  BaseSapiomIntegrationConfig,
+  initializeSapiomClient,
+} from "@sapiom/core";
 import {
   addAuthorizationInterceptor,
   addPaymentInterceptor,
   AuthorizationInterceptorConfig,
   PaymentInterceptorConfig,
 } from "./interceptors";
-
-/**
- * Base configuration for Sapiom integration
- */
-export interface BaseSapiomIntegrationConfig {
-  /**
-   * Existing SapiomClient instance (takes precedence over sapiom config)
-   */
-  sapiomClient?: SapiomClient;
-
-  /**
-   * SapiomClient configuration (if not providing an existing instance)
-   */
-  sapiom?: SapiomClientConfig;
-}
 
 /**
  * Configuration for Sapiom-enabled Axios client
@@ -36,45 +24,6 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
    * Payment interceptor configuration
    */
   payment?: Omit<PaymentInterceptorConfig, "sapiomClient">;
-
-  /**
-   * Default metadata applied to all transactions created by this client
-   */
-  agentName?: string;
-  agentId?: string;
-  serviceName?: string;
-  traceId?: string;
-  traceExternalId?: string;
-}
-
-/**
- * Initialize SapiomClient from config or environment
- */
-function initializeSapiomClient(
-  config?: BaseSapiomIntegrationConfig,
-): SapiomClient {
-  // Use provided instance
-  if (config?.sapiomClient) {
-    return config.sapiomClient;
-  }
-
-  // Use provided config
-  if (config?.sapiom) {
-    return new SapiomClient(config.sapiom);
-  }
-
-  // Fall back to environment variables
-  const apiKey = process.env.SAPIOM_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "SAPIOM_API_KEY environment variable is required when not providing explicit config",
-    );
-  }
-
-  return new SapiomClient({
-    apiKey,
-    baseURL: process.env.SAPIOM_BASE_URL,
-  });
 }
 
 /**
@@ -114,10 +63,8 @@ function initializeSapiomClient(
  * const client = createSapiomAxios(axios.create({
  *   baseURL: 'https://api.example.com'
  * }), {
- *   sapiom: {
- *     apiKey: 'your-api-key',
- *     baseURL: 'https://sapiom.example.com'
- *   },
+ *   apiKey: 'sk_...',
+ *   agentName: 'my-agent',
  *   authorization: {
  *     authorizedEndpoints: [
  *       { pathPattern: /^\/admin/, serviceName: 'admin-api' }
@@ -136,17 +83,25 @@ function initializeSapiomClient(
  *
  * @example
  * ```typescript
- * // Using an existing SapiomClient instance
+ * // With default metadata (applied to all requests)
  * import axios from 'axios';
- * import { SapiomClient } from '@sapiom/core';
  * import { createSapiomAxios } from '@sapiom/axios';
- *
- * const sapiomClient = new SapiomClient({ apiKey: 'your-api-key' });
  *
  * const client = createSapiomAxios(axios.create({
  *   baseURL: 'https://api.example.com'
  * }), {
- *   sapiomClient // Reuse existing client
+ *   apiKey: 'sk_...',
+ *   agentName: 'my-agent',
+ *   serviceName: 'my-service',
+ *   traceId: 'trace-123'
+ * });
+ *
+ * // Per-request override via __sapiom
+ * await client.post('/api/resource', data, {
+ *   __sapiom: {
+ *     serviceName: 'different-service',  // Overrides default
+ *     actionName: 'custom-action'
+ *   }
  * });
  * ```
  */

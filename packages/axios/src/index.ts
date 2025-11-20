@@ -8,9 +8,9 @@
 // Main entry point
 export {
   createSapiomAxios,
-  createSapiomAxios as createSapiomClient, // Backward compatibility alias
+  createSapiomAxios as createSapiomClient,
 } from "./axios";
-export type { SapiomAxiosConfig, BaseSapiomIntegrationConfig } from "./axios";
+export type { SapiomAxiosConfig } from "./axios";
 
 // Interceptor functions for manual setup
 export {
@@ -33,6 +33,7 @@ export {} from "./augmentations";
 export type {
   SapiomClient,
   SapiomClientConfig,
+  BaseSapiomIntegrationConfig,
   TransactionResponse,
   PaymentTransactionResponse,
   TransactionStatus,
