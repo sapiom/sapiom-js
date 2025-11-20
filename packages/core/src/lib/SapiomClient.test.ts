@@ -293,7 +293,7 @@ describe("SapiomClient", () => {
       });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://api.test.com/test?foo=bar&num=123",
+        "https://api.test.com/v1/test?foo=bar&num=123",
         expect.any(Object),
       );
     });
@@ -318,7 +318,7 @@ describe("SapiomClient", () => {
       });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://api.test.com/test",
+        "https://api.test.com/v1/test",
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify(mockBody),
@@ -352,6 +352,97 @@ describe("SapiomClient", () => {
             "X-Custom-Header": "custom-value",
           }),
         }),
+      );
+    });
+  });
+
+  describe("URL versioning", () => {
+    let client: SapiomClient;
+
+    beforeEach(() => {
+      client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+      });
+    });
+
+    it("should automatically prefix paths with /v1/", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ success: true }),
+        text: jest.fn().mockResolvedValue('{"success":true}'),
+      });
+
+      await client.request({ url: "/transactions" });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.test.com/v1/transactions",
+        expect.any(Object),
+      );
+    });
+
+    it("should not double-prefix paths that already have /v1/", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ success: true }),
+        text: jest.fn().mockResolvedValue('{"success":true}'),
+      });
+
+      await client.request({ url: "/v1/transactions" });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.test.com/v1/transactions",
+        expect.any(Object),
+      );
+    });
+
+    it("should handle paths without leading slash", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ success: true }),
+        text: jest.fn().mockResolvedValue('{"success":true}'),
+      });
+
+      await client.request({ url: "transactions" });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.test.com/v1/transactions",
+        expect.any(Object),
+      );
+    });
+
+    it("should prefix nested paths correctly", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ success: true }),
+        text: jest.fn().mockResolvedValue('{"success":true}'),
+      });
+
+      await client.request({ url: "/transactions/123/costs" });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.test.com/v1/transactions/123/costs",
+        expect.any(Object),
       );
     });
   });
