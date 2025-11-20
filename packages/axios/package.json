@@ -65,7 +65,7 @@
     "typescript": "^5.4.2"
   },
   "dependencies": {
-    "@sapiom/core": "^0.1.0"
+    "@sapiom/core": "*"
   },
   "peerDependencies": {
     "axios": ">=1.0.0"
