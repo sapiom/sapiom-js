@@ -34,7 +34,7 @@ export interface TokenUsage {
  */
 export async function estimateInputTokens(
   messages: BaseMessage[],
-  model: BaseChatModel
+  model: BaseChatModel,
 ): Promise<number> {
   let inputTokens = 0;
 
@@ -52,7 +52,7 @@ export async function estimateInputTokens(
   } catch (error) {
     console.warn(
       "Failed to use model.getNumTokens(), falling back to generic estimation:",
-      error
+      error,
     );
     return estimateInputTokensGeneric(messages);
   }
@@ -79,7 +79,7 @@ function estimateInputTokensGeneric(messages: BaseMessage[]): number {
  */
 export function estimateOpenAITokens(
   messages: BaseMessage[],
-  modelName: string
+  modelName: string,
 ): number {
   return estimateInputTokensGeneric(messages);
 }

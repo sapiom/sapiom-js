@@ -33,7 +33,10 @@ export type { TransactionAuthorizerConfig } from "./utils/TransactionAuthorizer"
 
 // Transaction Polling
 export { TransactionPoller } from "./client/TransactionPoller";
-export type { TransactionPollingConfig, TransactionPollResult } from "./client/TransactionPoller";
+export type {
+  TransactionPollingConfig,
+  TransactionPollResult,
+} from "./client/TransactionPoller";
 
 // Telemetry
 export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry";

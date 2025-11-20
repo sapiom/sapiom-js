@@ -123,10 +123,15 @@ export function initializeSapiomClient(
 
   return new SapiomClient({
     apiKey,
-    baseURL: config?.baseURL ?? process.env.SAPIOM_BASE_URL ?? process.env.SAPIOM_API_URL,
-    timeout: config?.timeout ?? (process.env.SAPIOM_TIMEOUT
-      ? parseInt(process.env.SAPIOM_TIMEOUT)
-      : undefined),
+    baseURL:
+      config?.baseURL ??
+      process.env.SAPIOM_BASE_URL ??
+      process.env.SAPIOM_API_URL,
+    timeout:
+      config?.timeout ??
+      (process.env.SAPIOM_TIMEOUT
+        ? parseInt(process.env.SAPIOM_TIMEOUT)
+        : undefined),
     headers: config?.headers,
   });
 }

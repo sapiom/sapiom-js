@@ -97,7 +97,7 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
 
   const sapiomFetch = async (
     input: string | URL | Request,
-    init?: RequestInit
+    init?: RequestInit,
   ): Promise<Response> => {
     let request = new Request(input, init);
 
@@ -117,7 +117,7 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
         request,
         response,
         paymentConfig,
-        defaultMetadata
+        defaultMetadata,
       );
     }
 

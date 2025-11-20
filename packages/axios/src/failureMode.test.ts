@@ -43,7 +43,7 @@ describe("Axios failureMode", () => {
 
       // Sapiom API fails with 500
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API returned 500")
+        new Error("Sapiom API returned 500"),
       );
 
       const client = createSapiomAxios(axiosInstance, {
@@ -61,7 +61,7 @@ describe("Axios failureMode", () => {
       mockAxios.onGet("/test").reply(200, { data: "success" });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("ETIMEDOUT: Sapiom API timeout")
+        new Error("ETIMEDOUT: Sapiom API timeout"),
       );
 
       const client = createSapiomAxios(axiosInstance, {
@@ -93,7 +93,7 @@ describe("Axios failureMode", () => {
       mockAxios.onGet("/test").reply(200, { data: "success" });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("ECONNREFUSED: Connection refused")
+        new Error("ECONNREFUSED: Connection refused"),
       );
 
       const client = createSapiomAxios(axiosInstance, {
@@ -108,19 +108,21 @@ describe("Axios failureMode", () => {
     it("should return original 402 when payment handling fails", async () => {
       mockAxios.onGet("/test").reply(402, {
         x402Version: 1,
-        accepts: [{
-          scheme: "exact",
-          network: "base",
-          maxAmountRequired: "1000000",
-          resourceName: "https://api.example.com/test",
-          payTo: "0x123",
-          asset: "0xUSDC",
-        }],
+        accepts: [
+          {
+            scheme: "exact",
+            network: "base",
+            maxAmountRequired: "1000000",
+            resourceName: "https://api.example.com/test",
+            payTo: "0x123",
+            asset: "0xUSDC",
+          },
+        ],
       });
 
       // Payment transaction creation fails
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API error")
+        new Error("Sapiom API error"),
       );
 
       const client = createSapiomAxios(axiosInstance, {
@@ -143,7 +145,7 @@ describe("Axios failureMode", () => {
       mockAxios.onGet("/test").reply(200, { data: "success" });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API returned 500")
+        new Error("Sapiom API returned 500"),
       );
 
       const client = createSapiomAxios(axiosInstance, {
@@ -151,15 +153,15 @@ describe("Axios failureMode", () => {
         failureMode: "closed",
       });
 
-      await expect(client.get("/test")).rejects.toThrow("Sapiom API returned 500");
+      await expect(client.get("/test")).rejects.toThrow(
+        "Sapiom API returned 500",
+      );
     });
 
     it("should throw when Sapiom API times out", async () => {
       mockAxios.onGet("/test").reply(200, { data: "success" });
 
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("ETIMEDOUT")
-      );
+      mockTransactionAPI.create.mockRejectedValue(new Error("ETIMEDOUT"));
 
       const client = createSapiomAxios(axiosInstance, {
         sapiomClient: mockSapiomClient,
@@ -187,18 +189,20 @@ describe("Axios failureMode", () => {
     it("should throw when payment handling fails", async () => {
       mockAxios.onGet("/test").reply(402, {
         x402Version: 1,
-        accepts: [{
-          scheme: "exact",
-          network: "base",
-          maxAmountRequired: "1000000",
-          resourceName: "https://api.example.com/test",
-          payTo: "0x123",
-          asset: "0xUSDC",
-        }],
+        accepts: [
+          {
+            scheme: "exact",
+            network: "base",
+            maxAmountRequired: "1000000",
+            resourceName: "https://api.example.com/test",
+            payTo: "0x123",
+            asset: "0xUSDC",
+          },
+        ],
       });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom payment API error")
+        new Error("Sapiom payment API error"),
       );
 
       const client = createSapiomAxios(axiosInstance, {
@@ -206,7 +210,9 @@ describe("Axios failureMode", () => {
         failureMode: "closed",
       });
 
-      await expect(client.get("/test")).rejects.toThrow("Sapiom payment API error");
+      await expect(client.get("/test")).rejects.toThrow(
+        "Sapiom payment API error",
+      );
     });
   });
 
@@ -214,9 +220,7 @@ describe("Axios failureMode", () => {
     it('should default to "open" when not specified', async () => {
       mockAxios.onGet("/test").reply(200, { data: "success" });
 
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom error")
-      );
+      mockTransactionAPI.create.mockRejectedValue(new Error("Sapiom error"));
 
       const client = createSapiomAxios(axiosInstance, {
         sapiomClient: mockSapiomClient,

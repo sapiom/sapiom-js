@@ -55,7 +55,7 @@ describe("createSapiomNodeHttp", () => {
     });
 
     expect(() => {
-      client.addRequestInterceptor(() => ({} as any));
+      client.addRequestInterceptor(() => ({}) as any);
     }).toThrow("addRequestInterceptor is not supported");
   });
 
@@ -65,7 +65,7 @@ describe("createSapiomNodeHttp", () => {
     });
 
     expect(() => {
-      client.addResponseInterceptor(() => ({} as any));
+      client.addResponseInterceptor(() => ({}) as any);
     }).toThrow("addResponseInterceptor is not supported");
   });
 });

@@ -44,10 +44,10 @@ export class AuthorizationDeniedError extends Error {
   constructor(
     public readonly transactionId: string,
     public readonly endpoint: string,
-    public readonly reason?: string
+    public readonly reason?: string,
   ) {
     super(
-      `Authorization denied for ${endpoint}: ${reason || "No reason provided"}`
+      `Authorization denied for ${endpoint}: ${reason || "No reason provided"}`,
     );
     this.name = "AuthorizationDeniedError";
   }
@@ -57,7 +57,7 @@ export class AuthorizationTimeoutError extends Error {
   constructor(
     public readonly transactionId: string,
     public readonly endpoint: string,
-    public readonly timeout: number
+    public readonly timeout: number,
   ) {
     super(`Authorization timeout after ${timeout}ms for ${endpoint}`);
     this.name = "AuthorizationTimeoutError";
@@ -66,7 +66,7 @@ export class AuthorizationTimeoutError extends Error {
 
 function getHeader(
   headers: Record<string, any> | undefined,
-  name: string
+  name: string,
 ): string | undefined {
   if (!headers) return undefined;
   const lowerName = name.toLowerCase();
@@ -81,7 +81,7 @@ function getHeader(
 function setHeader(
   headers: Record<string, any>,
   name: string,
-  value: string
+  value: string,
 ): void {
   const lowerName = name.toLowerCase();
   for (const key of Object.keys(headers)) {
@@ -97,7 +97,7 @@ function setHeader(
  */
 export function addAuthorizationInterceptor(
   axiosInstance: AxiosInstance,
-  config: AuthorizationInterceptorConfig
+  config: AuthorizationInterceptorConfig,
 ): () => void {
   const poller = new TransactionPoller(config.sapiomClient, {
     timeout: AUTHORIZATION_TIMEOUT,
@@ -112,18 +112,21 @@ export function addAuthorizationInterceptor(
 
       const existingTransactionId = getHeader(
         axiosConfig.headers,
-        "X-Sapiom-Transaction-Id"
+        "X-Sapiom-Transaction-Id",
       );
 
       if (existingTransactionId) {
         let transaction;
         try {
           transaction = await config.sapiomClient.transactions.get(
-            existingTransactionId
+            existingTransactionId,
           );
         } catch (error) {
           if (config.failureMode === "closed") throw error;
-          console.error("[Sapiom] Failed to get transaction, allowing request:", error);
+          console.error(
+            "[Sapiom] Failed to get transaction, allowing request:",
+            error,
+          );
           return axiosConfig;
         }
 
@@ -136,11 +139,14 @@ export function addAuthorizationInterceptor(
             let authResult;
             try {
               authResult = await poller.waitForAuthorization(
-                existingTransactionId
+                existingTransactionId,
               );
             } catch (error) {
               if (config.failureMode === "closed") throw error;
-              console.error("[Sapiom] Failed to poll transaction, allowing request:", error);
+              console.error(
+                "[Sapiom] Failed to poll transaction, allowing request:",
+                error,
+              );
               return axiosConfig;
             }
 
@@ -149,13 +155,13 @@ export function addAuthorizationInterceptor(
             } else if (authResult.status === "denied") {
               throw new AuthorizationDeniedError(
                 existingTransactionId,
-                axiosConfig.url || ""
+                axiosConfig.url || "",
               );
             } else {
               throw new AuthorizationTimeoutError(
                 existingTransactionId,
                 axiosConfig.url || "",
-                AUTHORIZATION_TIMEOUT
+                AUTHORIZATION_TIMEOUT,
               );
             }
           }
@@ -164,85 +170,85 @@ export function addAuthorizationInterceptor(
           case TransactionStatus.CANCELLED:
             throw new AuthorizationDeniedError(
               existingTransactionId,
-              axiosConfig.url || ""
+              axiosConfig.url || "",
             );
 
           default:
             throw new Error(
-              `Transaction ${existingTransactionId} has unexpected status: ${transaction.status}`
+              `Transaction ${existingTransactionId} has unexpected status: ${transaction.status}`,
             );
         }
       }
 
-        const defaultMetadata =
-          (axiosInstance as any).__sapiomDefaultMetadata || {};
-        const requestMetadata = (axiosConfig as any).__sapiom || {};
-        const userMetadata = { ...defaultMetadata, ...requestMetadata };
+      const defaultMetadata =
+        (axiosInstance as any).__sapiomDefaultMetadata || {};
+      const requestMetadata = (axiosConfig as any).__sapiom || {};
+      const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
-        if (userMetadata?.enabled === false) {
-          return axiosConfig;
+      if (userMetadata?.enabled === false) {
+        return axiosConfig;
+      }
+
+      const method = axiosConfig.method?.toUpperCase() || "GET";
+
+      const buildFullUrl = (config: InternalAxiosRequestConfig): string => {
+        const requestUrl = config.url || "";
+
+        if (requestUrl.match(/^https?:\/\//)) {
+          return requestUrl;
         }
 
-        const method = axiosConfig.method?.toUpperCase() || "GET";
+        const baseURL = config.baseURL || "";
+        if (!baseURL) {
+          return requestUrl;
+        }
 
-        const buildFullUrl = (config: InternalAxiosRequestConfig): string => {
-          const requestUrl = config.url || "";
+        const base = baseURL.replace(/\/$/, "");
+        const path = requestUrl.replace(/^\//, "");
 
-          if (requestUrl.match(/^https?:\/\//)) {
-            return requestUrl;
-          }
+        return path ? `${base}/${path}` : base;
+      };
 
-          const baseURL = config.baseURL || "";
-          if (!baseURL) {
-            return requestUrl;
-          }
+      const fullUrl = buildFullUrl(axiosConfig);
+      const endpoint = axiosConfig.url || "";
 
-          const base = baseURL.replace(/\/$/, "");
-          const path = requestUrl.replace(/^\//, "");
+      const callSite = captureUserCallSite();
 
-          return path ? `${base}/${path}` : base;
+      let urlParsed;
+      try {
+        const parsed = new URL(fullUrl);
+        urlParsed = {
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          pathname: parsed.pathname,
+          search: parsed.search,
+          port: parsed.port ? parseInt(parsed.port) : null,
         };
+      } catch {
+        urlParsed = {
+          protocol: "",
+          hostname: "",
+          pathname: endpoint,
+          search: "",
+          port: null,
+        };
+      }
 
-        const fullUrl = buildFullUrl(axiosConfig);
-        const endpoint = axiosConfig.url || "";
-
-        const callSite = captureUserCallSite();
-
-        let urlParsed;
-        try {
-          const parsed = new URL(fullUrl);
-          urlParsed = {
-            protocol: parsed.protocol,
-            hostname: parsed.hostname,
-            pathname: parsed.pathname,
-            search: parsed.search,
-            port: parsed.port ? parseInt(parsed.port) : null,
-          };
-        } catch {
-          urlParsed = {
-            protocol: "",
-            hostname: "",
-            pathname: endpoint,
-            search: "",
-            port: null,
-          };
-        }
-
-        const sanitizedHeaders: Record<string, string> = {};
-        if (axiosConfig.headers) {
-          Object.entries(axiosConfig.headers as Record<string, any>).forEach(
-            ([key, value]) => {
-              const lowerKey = key.toLowerCase();
-              if (
-                !lowerKey.includes("auth") &&
-                !lowerKey.includes("key") &&
-                !lowerKey.includes("token")
-              ) {
-                sanitizedHeaders[key] = String(value);
-              }
+      const sanitizedHeaders: Record<string, string> = {};
+      if (axiosConfig.headers) {
+        Object.entries(axiosConfig.headers as Record<string, any>).forEach(
+          ([key, value]) => {
+            const lowerKey = key.toLowerCase();
+            if (
+              !lowerKey.includes("auth") &&
+              !lowerKey.includes("key") &&
+              !lowerKey.includes("token")
+            ) {
+              sanitizedHeaders[key] = String(value);
             }
-          );
-        }
+          },
+        );
+      }
 
       const requestFacts: HttpClientRequestFacts = {
         method,
@@ -288,7 +294,10 @@ export function addAuthorizationInterceptor(
         });
       } catch (error) {
         if (config.failureMode === "closed") throw error;
-        console.error("[Sapiom] Failed to create transaction, allowing request:", error);
+        console.error(
+          "[Sapiom] Failed to create transaction, allowing request:",
+          error,
+        );
         return axiosConfig;
       }
 
@@ -303,7 +312,7 @@ export function addAuthorizationInterceptor(
         setHeader(
           axiosConfig.headers,
           "X-Sapiom-Transaction-Id",
-          transaction.id
+          transaction.id,
         );
 
         (axiosConfig as any).__sapiomTransactionId = transaction.id;
@@ -316,7 +325,10 @@ export function addAuthorizationInterceptor(
         result = await poller.waitForAuthorization(transaction.id);
       } catch (error) {
         if (config.failureMode === "closed") throw error;
-        console.error("[Sapiom] Failed to poll transaction, allowing request:", error);
+        console.error(
+          "[Sapiom] Failed to poll transaction, allowing request:",
+          error,
+        );
         return axiosConfig;
       }
 
@@ -324,7 +336,7 @@ export function addAuthorizationInterceptor(
         setHeader(
           axiosConfig.headers,
           "X-Sapiom-Transaction-Id",
-          transaction.id
+          transaction.id,
         );
 
         (axiosConfig as any).__sapiomTransactionId = transaction.id;
@@ -336,10 +348,10 @@ export function addAuthorizationInterceptor(
         throw new AuthorizationTimeoutError(
           transaction.id,
           endpoint,
-          AUTHORIZATION_TIMEOUT
+          AUTHORIZATION_TIMEOUT,
         );
       }
-    }
+    },
   );
 
   return () => axiosInstance.interceptors.request.eject(interceptorId);
@@ -377,7 +389,7 @@ function axiosErrorToHttpError(error: AxiosError): HttpError {
  */
 export function addPaymentInterceptor(
   axiosInstance: AxiosInstance,
-  config: PaymentInterceptorConfig
+  config: PaymentInterceptorConfig,
 ): () => void {
   const poller = new TransactionPoller(config.sapiomClient, {
     timeout: AUTHORIZATION_TIMEOUT,
@@ -422,7 +434,7 @@ export function addPaymentInterceptor(
       if (existingTransactionId) {
         try {
           transaction = await config.sapiomClient.transactions.get(
-            existingTransactionId
+            existingTransactionId,
           );
 
           if (
@@ -432,12 +444,15 @@ export function addPaymentInterceptor(
             transaction =
               await config.sapiomClient.transactions.reauthorizeWithPayment(
                 existingTransactionId,
-                paymentData
+                paymentData,
               );
           }
         } catch (apiError) {
           if (config.failureMode === "closed") return Promise.reject(apiError);
-          console.error("[Sapiom] Failed to get/reauthorize transaction, returning 402:", apiError);
+          console.error(
+            "[Sapiom] Failed to get/reauthorize transaction, returning 402:",
+            apiError,
+          );
           return Promise.reject(error);
         }
       } else {
@@ -473,27 +488,30 @@ export function addPaymentInterceptor(
           });
         } catch (apiError) {
           if (config.failureMode === "closed") return Promise.reject(apiError);
-          console.error("[Sapiom] Failed to create payment transaction, returning 402:", apiError);
+          console.error(
+            "[Sapiom] Failed to create payment transaction, returning 402:",
+            apiError,
+          );
           return Promise.reject(error);
         }
       }
 
       if (
-          transaction.status === TransactionStatus.DENIED ||
-          transaction.status === TransactionStatus.CANCELLED
-        ) {
-          return Promise.reject({
-            response: {
-              status: 403,
-              statusText: "Forbidden",
-              data: {
-                error: "Payment transaction was denied or cancelled",
-                transactionId: transaction.id,
-                status: transaction.status,
-              },
+        transaction.status === TransactionStatus.DENIED ||
+        transaction.status === TransactionStatus.CANCELLED
+      ) {
+        return Promise.reject({
+          response: {
+            status: 403,
+            statusText: "Forbidden",
+            data: {
+              error: "Payment transaction was denied or cancelled",
+              transactionId: transaction.id,
+              status: transaction.status,
             },
-          });
-        }
+          },
+        });
+      }
 
       if (transaction.status !== TransactionStatus.AUTHORIZED) {
         let result;
@@ -501,7 +519,10 @@ export function addPaymentInterceptor(
           result = await poller.waitForAuthorization(transaction.id);
         } catch (pollError) {
           if (config.failureMode === "closed") return Promise.reject(pollError);
-          console.error("[Sapiom] Failed to poll payment transaction, returning 402:", pollError);
+          console.error(
+            "[Sapiom] Failed to poll payment transaction, returning 402:",
+            pollError,
+          );
           return Promise.reject(error);
         }
 
@@ -525,7 +546,7 @@ export function addPaymentInterceptor(
 
       if (!authorizationPayload) {
         throw new Error(
-          `Transaction ${transaction.id} is authorized but missing payment authorization payload`
+          `Transaction ${transaction.id} is authorized but missing payment authorization payload`,
         );
       }
 
@@ -533,7 +554,7 @@ export function addPaymentInterceptor(
         typeof authorizationPayload === "string"
           ? authorizationPayload
           : Buffer.from(JSON.stringify(authorizationPayload)).toString(
-              "base64"
+              "base64",
             );
 
       const retryConfig = {
@@ -546,7 +567,7 @@ export function addPaymentInterceptor(
       const response = await axiosInstance.request(retryConfig);
 
       return response;
-    }
+    },
   );
 
   return () => axiosInstance.interceptors.response.eject(interceptorId);

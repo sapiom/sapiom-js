@@ -216,7 +216,7 @@ export function createSapiomNodeHttp(
         return makeRequest<T>(request);
       }
 
-      let modifiedRequest = await handleAuthorization(
+      const modifiedRequest = await handleAuthorization(
         request,
         authConfig,
         defaultMetadata

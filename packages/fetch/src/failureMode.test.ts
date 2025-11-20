@@ -45,7 +45,7 @@ describe("Fetch failureMode", () => {
       });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API returned 500")
+        new Error("Sapiom API returned 500"),
       );
 
       const fetch = createSapiomFetch({
@@ -66,7 +66,7 @@ describe("Fetch failureMode", () => {
       });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("ETIMEDOUT: Sapiom API timeout")
+        new Error("ETIMEDOUT: Sapiom API timeout"),
       );
 
       const fetch = createSapiomFetch({
@@ -101,19 +101,21 @@ describe("Fetch failureMode", () => {
         status: 402,
         body: {
           x402Version: 1,
-          accepts: [{
-            scheme: "exact",
-            network: "base",
-            maxAmountRequired: "1000000",
-            resourceName: "https://api.example.com/test",
-            payTo: "0x123",
-            asset: "0xUSDC",
-          }],
+          accepts: [
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "1000000",
+              resourceName: "https://api.example.com/test",
+              payTo: "0x123",
+              asset: "0xUSDC",
+            },
+          ],
         },
       });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API error")
+        new Error("Sapiom API error"),
       );
 
       const fetch = createSapiomFetch({
@@ -135,7 +137,7 @@ describe("Fetch failureMode", () => {
       });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API returned 500")
+        new Error("Sapiom API returned 500"),
       );
 
       const fetch = createSapiomFetch({
@@ -144,7 +146,7 @@ describe("Fetch failureMode", () => {
       });
 
       await expect(fetch("https://api.example.com/test")).rejects.toThrow(
-        "Sapiom API returned 500"
+        "Sapiom API returned 500",
       );
     });
 
@@ -154,16 +156,16 @@ describe("Fetch failureMode", () => {
         body: { data: "success" },
       });
 
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("ETIMEDOUT")
-      );
+      mockTransactionAPI.create.mockRejectedValue(new Error("ETIMEDOUT"));
 
       const fetch = createSapiomFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
 
-      await expect(fetch("https://api.example.com/test")).rejects.toThrow("ETIMEDOUT");
+      await expect(fetch("https://api.example.com/test")).rejects.toThrow(
+        "ETIMEDOUT",
+      );
     });
 
     it("should throw when SDK has bugs", async () => {
@@ -181,7 +183,9 @@ describe("Fetch failureMode", () => {
         failureMode: "closed",
       });
 
-      await expect(fetch("https://api.example.com/test")).rejects.toThrow("SDK bug");
+      await expect(fetch("https://api.example.com/test")).rejects.toThrow(
+        "SDK bug",
+      );
     });
 
     it("should throw when payment handling fails", async () => {
@@ -189,19 +193,21 @@ describe("Fetch failureMode", () => {
         status: 402,
         body: {
           x402Version: 1,
-          accepts: [{
-            scheme: "exact",
-            network: "base",
-            maxAmountRequired: "1000000",
-            resourceName: "https://api.example.com/test",
-            payTo: "0x123",
-            asset: "0xUSDC",
-          }],
+          accepts: [
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "1000000",
+              resourceName: "https://api.example.com/test",
+              payTo: "0x123",
+              asset: "0xUSDC",
+            },
+          ],
         },
       });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom payment API error")
+        new Error("Sapiom payment API error"),
       );
 
       const fetch = createSapiomFetch({
@@ -210,7 +216,7 @@ describe("Fetch failureMode", () => {
       });
 
       await expect(fetch("https://api.example.com/test")).rejects.toThrow(
-        "Sapiom payment API error"
+        "Sapiom payment API error",
       );
     });
   });
@@ -222,9 +228,7 @@ describe("Fetch failureMode", () => {
         body: { data: "success" },
       });
 
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom error")
-      );
+      mockTransactionAPI.create.mockRejectedValue(new Error("Sapiom error"));
 
       const fetch = createSapiomFetch({
         sapiomClient: mockSapiomClient,
@@ -255,7 +259,7 @@ describe("Fetch failureMode", () => {
       });
 
       await expect(fetch("https://api.example.com/test")).rejects.toThrow(
-        "Authorization denied"
+        "Authorization denied",
       );
     });
   });

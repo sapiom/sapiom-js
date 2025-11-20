@@ -38,7 +38,7 @@ describe("Node-HTTP failureMode", () => {
         .reply(200, { data: "success" });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API returned 500")
+        new Error("Sapiom API returned 500"),
       );
 
       const client = createSapiomNodeHttp({
@@ -62,7 +62,7 @@ describe("Node-HTTP failureMode", () => {
         .reply(200, { data: "success" });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("ETIMEDOUT: Sapiom API timeout")
+        new Error("ETIMEDOUT: Sapiom API timeout"),
       );
 
       const client = createSapiomNodeHttp({
@@ -106,18 +106,20 @@ describe("Node-HTTP failureMode", () => {
         .get("/test")
         .reply(402, {
           x402Version: 1,
-          accepts: [{
-            scheme: "exact",
-            network: "base",
-            maxAmountRequired: "1000000",
-            resourceName: "https://api.example.com/test",
-            payTo: "0x123",
-            asset: "0xUSDC",
-          }],
+          accepts: [
+            {
+              scheme: "exact",
+              network: "base",
+              maxAmountRequired: "1000000",
+              resourceName: "https://api.example.com/test",
+              payTo: "0x123",
+              asset: "0xUSDC",
+            },
+          ],
         });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API error")
+        new Error("Sapiom API error"),
       );
 
       const client = createSapiomNodeHttp({
@@ -146,7 +148,7 @@ describe("Node-HTTP failureMode", () => {
         .reply(200, { data: "success" });
 
       mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom API returned 500")
+        new Error("Sapiom API returned 500"),
       );
 
       const client = createSapiomNodeHttp({
@@ -159,7 +161,7 @@ describe("Node-HTTP failureMode", () => {
           method: "GET",
           url: "https://api.example.com/test",
           headers: {},
-        })
+        }),
       ).rejects.toThrow("Sapiom API returned 500");
     });
 
@@ -168,9 +170,7 @@ describe("Node-HTTP failureMode", () => {
         .get("/test")
         .reply(200, { data: "success" });
 
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("ETIMEDOUT")
-      );
+      mockTransactionAPI.create.mockRejectedValue(new Error("ETIMEDOUT"));
 
       const client = createSapiomNodeHttp({
         sapiomClient: mockSapiomClient,
@@ -182,7 +182,7 @@ describe("Node-HTTP failureMode", () => {
           method: "GET",
           url: "https://api.example.com/test",
           headers: {},
-        })
+        }),
       ).rejects.toThrow("ETIMEDOUT");
     });
 
@@ -205,7 +205,7 @@ describe("Node-HTTP failureMode", () => {
           method: "GET",
           url: "https://api.example.com/test",
           headers: {},
-        })
+        }),
       ).rejects.toThrow("SDK bug");
     });
   });
@@ -216,9 +216,7 @@ describe("Node-HTTP failureMode", () => {
         .get("/test")
         .reply(200, { data: "success" });
 
-      mockTransactionAPI.create.mockRejectedValue(
-        new Error("Sapiom error")
-      );
+      mockTransactionAPI.create.mockRejectedValue(new Error("Sapiom error"));
 
       const client = createSapiomNodeHttp({
         sapiomClient: mockSapiomClient,
@@ -257,7 +255,7 @@ describe("Node-HTTP failureMode", () => {
           method: "GET",
           url: "https://api.example.com/test",
           headers: {},
-        })
+        }),
       ).rejects.toThrow("Authorization denied");
     });
   });
