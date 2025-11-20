@@ -9,6 +9,7 @@ import {
   HttpResponse,
   HttpError,
   HttpClientRequestFacts,
+  FailureMode,
 } from "@sapiom/core";
 
 /**
@@ -16,6 +17,7 @@ import {
  */
 export interface AuthorizationConfig {
   sapiomClient: SapiomClient;
+  failureMode: FailureMode;
 }
 
 /**
@@ -23,6 +25,7 @@ export interface AuthorizationConfig {
  */
 export interface PaymentConfig {
   sapiomClient: SapiomClient;
+  failureMode: FailureMode;
 }
 
 const SDK_VERSION = "1.0.0";
@@ -102,9 +105,16 @@ export async function handleAuthorization(
       pollInterval: POLL_INTERVAL,
     });
 
-    const transaction = await config.sapiomClient.transactions.get(
-      existingTransactionId
-    );
+    let transaction;
+    try {
+      transaction = await config.sapiomClient.transactions.get(
+        existingTransactionId
+      );
+    } catch (error) {
+      if (config.failureMode === "closed") throw error;
+      console.error("[Sapiom] Failed to get transaction, allowing request:", error);
+      return request;
+    }
 
     const endpoint = request.url;
 
@@ -114,17 +124,21 @@ export async function handleAuthorization(
 
       case TransactionStatus.PENDING:
       case TransactionStatus.PREPARING: {
-        const authResult = await poller.waitForAuthorization(
-          existingTransactionId
-        );
+        let authResult;
+        try {
+          authResult = await poller.waitForAuthorization(
+            existingTransactionId
+          );
+        } catch (error) {
+          if (config.failureMode === "closed") throw error;
+          console.error("[Sapiom] Failed to poll transaction, allowing request:", error);
+          return request;
+        }
 
         if (authResult.status === "authorized") {
           return request;
         } else if (authResult.status === "denied") {
-          throw new AuthorizationDeniedError(
-            existingTransactionId,
-            endpoint
-          );
+          throw new AuthorizationDeniedError(existingTransactionId, endpoint);
         } else {
           throw new AuthorizationTimeoutError(
             existingTransactionId,
@@ -145,114 +159,131 @@ export async function handleAuthorization(
     }
   }
 
-  const requestMetadata = request.__sapiom || {};
-  const userMetadata = { ...defaultMetadata, ...requestMetadata };
+    const requestMetadata = request.__sapiom || {};
+    const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
-  const method = request.method.toUpperCase();
-  const url = request.url;
-  const endpoint = new URL(url).pathname;
+    const method = request.method.toUpperCase();
+    const url = request.url;
+    const endpoint = new URL(url).pathname;
 
-  const callSite = captureUserCallSite();
+    const callSite = captureUserCallSite();
 
-  const parsedUrl = new URL(url);
-  const urlParsed = {
-    protocol: parsedUrl.protocol.replace(":", ""),
-    hostname: parsedUrl.hostname,
-    pathname: parsedUrl.pathname,
-    search: parsedUrl.search,
-    port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
-  };
+    const parsedUrl = new URL(url);
+    const urlParsed = {
+      protocol: parsedUrl.protocol.replace(":", ""),
+      hostname: parsedUrl.hostname,
+      pathname: parsedUrl.pathname,
+      search: parsedUrl.search,
+      port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
+    };
 
-  const sanitizedHeaders: Record<string, string> = {};
-  const sensitiveHeaders = new Set([
-    "authorization",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-  ]);
+    const sanitizedHeaders: Record<string, string> = {};
+    const sensitiveHeaders = new Set([
+      "authorization",
+      "cookie",
+      "x-api-key",
+      "x-auth-token",
+    ]);
 
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (!sensitiveHeaders.has(key.toLowerCase())) {
-      sanitizedHeaders[key] = value;
+    for (const [key, value] of Object.entries(request.headers)) {
+      if (!sensitiveHeaders.has(key.toLowerCase())) {
+        sanitizedHeaders[key] = value;
+      }
     }
-  }
 
-  const requestFacts: HttpClientRequestFacts = {
-    method,
-    url,
-    urlParsed,
-    headers: sanitizedHeaders,
-    hasBody: !!request.body,
-    bodySizeBytes: undefined,
-    contentType: request.headers["content-type"] || undefined,
-    clientType: "node-http",
-    callSite,
-    timestamp: new Date().toISOString(),
-  };
+    const requestFacts: HttpClientRequestFacts = {
+      method,
+      url,
+      urlParsed,
+      headers: sanitizedHeaders,
+      hasBody: !!request.body,
+      bodySizeBytes: undefined,
+      contentType: request.headers["content-type"] || undefined,
+      clientType: "node-http",
+      callSite,
+      timestamp: new Date().toISOString(),
+    };
 
-  const transaction = await config.sapiomClient.transactions.create({
-    requestFacts: {
-      source: "http-client",
-      version: "v1",
-      sdk: {
-        name: "@sapiom/node-http",
-        version: SDK_VERSION,
-      },
-      request: requestFacts,
-    },
-    serviceName: userMetadata?.serviceName,
-    actionName: userMetadata?.actionName,
-    resourceName: userMetadata?.resourceName,
-    traceId: userMetadata?.traceId,
-    traceExternalId: userMetadata?.traceExternalId,
-    agentId: userMetadata?.agentId,
-    agentName: userMetadata?.agentName,
-    qualifiers: userMetadata?.qualifiers,
-    metadata: {
-      ...userMetadata?.metadata,
-      preemptiveAuthorization: true,
-    },
-  });
+    let transaction;
+    try {
+      transaction = await config.sapiomClient.transactions.create({
+        requestFacts: {
+          source: "http-client",
+          version: "v1",
+          sdk: {
+            name: "@sapiom/node-http",
+            version: SDK_VERSION,
+          },
+          request: requestFacts,
+        },
+        serviceName: userMetadata?.serviceName,
+        actionName: userMetadata?.actionName,
+        resourceName: userMetadata?.resourceName,
+        traceId: userMetadata?.traceId,
+        traceExternalId: userMetadata?.traceExternalId,
+        agentId: userMetadata?.agentId,
+        agentName: userMetadata?.agentName,
+        qualifiers: userMetadata?.qualifiers,
+        metadata: {
+          ...userMetadata?.metadata,
+          preemptiveAuthorization: true,
+        },
+      });
+    } catch (error) {
+      if (config.failureMode === "closed") throw error;
+      console.error("[Sapiom] Failed to create transaction, allowing request:", error);
+      return request;
+    }
 
-  switch (transaction.status) {
-    case TransactionStatus.AUTHORIZED:
-      break;
+    if (
+      transaction.status === TransactionStatus.DENIED ||
+      transaction.status === TransactionStatus.CANCELLED
+    ) {
+      throw new AuthorizationDeniedError(transaction.id, endpoint);
+    }
 
-    case TransactionStatus.PENDING:
-    case TransactionStatus.PREPARING: {
+    if (transaction.status === TransactionStatus.AUTHORIZED) {
+      const modifiedRequest = { ...request };
+      modifiedRequest.headers = { ...request.headers };
+      setHeader(
+        modifiedRequest.headers,
+        "X-Sapiom-Transaction-Id",
+        transaction.id
+      );
+      return modifiedRequest;
+    }
+
+    let result;
+    try {
       const poller = new TransactionPoller(config.sapiomClient, {
         timeout: AUTHORIZATION_TIMEOUT,
         pollInterval: POLL_INTERVAL,
       });
-      const authResult = await poller.waitForAuthorization(transaction.id);
-
-      if (authResult.status === "denied") {
-        throw new AuthorizationDeniedError(transaction.id, endpoint);
-      } else if (authResult.status === "timeout") {
-        throw new AuthorizationTimeoutError(
-          transaction.id,
-          endpoint,
-          AUTHORIZATION_TIMEOUT
-        );
-      }
-      break;
+      result = await poller.waitForAuthorization(transaction.id);
+    } catch (error) {
+      if (config.failureMode === "closed") throw error;
+      console.error("[Sapiom] Failed to poll transaction, allowing request:", error);
+      return request;
     }
 
-    case TransactionStatus.DENIED:
-    case TransactionStatus.CANCELLED:
-      throw new AuthorizationDeniedError(transaction.id, endpoint);
-
-    default:
-      throw new Error(
-        `Transaction ${transaction.id} has unexpected status: ${transaction.status}`
+    if (result.status === "authorized") {
+      const modifiedRequest = { ...request };
+      modifiedRequest.headers = { ...request.headers };
+      setHeader(
+        modifiedRequest.headers,
+        "X-Sapiom-Transaction-Id",
+        transaction.id
       );
-  }
-
-  const modifiedRequest = { ...request };
-  modifiedRequest.headers = { ...request.headers };
-  setHeader(modifiedRequest.headers, "X-Sapiom-Transaction-Id", transaction.id);
-
-  return modifiedRequest;
+      return modifiedRequest;
+    } else if (result.status === "denied") {
+      throw new AuthorizationDeniedError(transaction.id, endpoint);
+    } else {
+      throw new AuthorizationTimeoutError(
+        transaction.id,
+        endpoint,
+        AUTHORIZATION_TIMEOUT
+      );
+    }
 }
 
 /**
@@ -269,18 +300,19 @@ export async function handlePayment(
     throw error;
   }
 
+  const paymentData = extractPaymentData(error);
+  const resource = extractResourceFromError(error);
+
+  if (!paymentData || !resource) {
+    throw error;
+  }
+
+  const requestMetadata = originalRequest.__sapiom || {};
+  const userMetadata = { ...defaultMetadata, ...requestMetadata };
+
+  let transaction;
   try {
-    const paymentData = extractPaymentData(error);
-    const resource = extractResourceFromError(error);
-
-    if (!paymentData || !resource) {
-      throw error;
-    }
-
-    const requestMetadata = originalRequest.__sapiom || {};
-    const userMetadata = { ...defaultMetadata, ...requestMetadata };
-
-    const transaction = await config.sapiomClient.transactions.create({
+    transaction = await config.sapiomClient.transactions.create({
       serviceName: resource.split(":")[0] || "unknown",
       actionName: userMetadata?.actionName || "access",
       resourceName: userMetadata?.resourceName || resource,
@@ -296,40 +328,58 @@ export async function handlePayment(
         originalUrl: originalRequest.url,
       },
     });
+  } catch (apiError) {
+    if (config.failureMode === "closed") throw apiError;
+    console.error("[Sapiom] Failed to create payment transaction, returning 402:", apiError);
+    throw error;
+  }
 
-    const poller = new TransactionPoller(config.sapiomClient, {
-      timeout: AUTHORIZATION_TIMEOUT,
-      pollInterval: POLL_INTERVAL,
-    });
+  if (
+    transaction.status === TransactionStatus.DENIED ||
+    transaction.status === TransactionStatus.CANCELLED
+  ) {
+    throw error;
+  }
 
-    const authResult = await poller.waitForAuthorization(transaction.id);
+  if (transaction.status !== TransactionStatus.AUTHORIZED) {
+    let authResult;
+    try {
+      const poller = new TransactionPoller(config.sapiomClient, {
+        timeout: AUTHORIZATION_TIMEOUT,
+        pollInterval: POLL_INTERVAL,
+      });
+      authResult = await poller.waitForAuthorization(transaction.id);
+    } catch (pollError) {
+      if (config.failureMode === "closed") throw pollError;
+      console.error("[Sapiom] Failed to poll payment transaction, returning 402:", pollError);
+      throw error;
+    }
 
     if (authResult.status !== "authorized") {
       throw error;
     }
 
-    const authorizedTransaction = authResult.transaction!;
-    const authorizationPayload = authorizedTransaction.payment?.authorizationPayload;
-
-    if (!authorizationPayload) {
-      throw new Error(
-        `Transaction ${transaction.id} is authorized but missing payment authorization payload`
-      );
-    }
-
-    const paymentHeaderValue =
-      typeof authorizationPayload === "string"
-        ? authorizationPayload
-        : Buffer.from(JSON.stringify(authorizationPayload)).toString("base64");
-
-    const retryRequest = { ...originalRequest };
-    retryRequest.headers = { ...originalRequest.headers };
-    setHeader(retryRequest.headers, "X-PAYMENT", paymentHeaderValue);
-
-    const retryResponse = await requestFn(retryRequest);
-
-    return retryResponse;
-  } catch (err) {
-    throw error;
+    transaction = authResult.transaction!;
   }
+
+  const authorizationPayload = transaction.payment?.authorizationPayload;
+
+  if (!authorizationPayload) {
+    throw new Error(
+      `Transaction ${transaction.id} is authorized but missing payment authorization payload`
+    );
+  }
+
+  const paymentHeaderValue =
+    typeof authorizationPayload === "string"
+      ? authorizationPayload
+      : Buffer.from(JSON.stringify(authorizationPayload)).toString("base64");
+
+  const retryRequest = { ...originalRequest };
+  retryRequest.headers = { ...originalRequest.headers };
+  setHeader(retryRequest.headers, "X-PAYMENT", paymentHeaderValue);
+
+  const retryResponse = await requestFn(retryRequest);
+
+  return retryResponse;
 }

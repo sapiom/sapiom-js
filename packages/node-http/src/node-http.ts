@@ -114,8 +114,10 @@ export function createSapiomNodeHttp(
     defaultMetadata.traceExternalId = config.traceExternalId;
   if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
-  const authConfig: AuthorizationConfig = { sapiomClient };
-  const paymentConfig: PaymentConfig = { sapiomClient };
+  const failureMode = config?.failureMode ?? "open";
+
+  const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
+  const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
 
   async function makeRequest<T = any>(
     request: HttpRequest
@@ -145,7 +147,10 @@ export function createSapiomNodeHttp(
       };
 
       if (bodyData && options.headers) {
-        const headers = options.headers as Record<string, string | string[] | undefined>;
+        const headers = options.headers as Record<
+          string,
+          string | string[] | undefined
+        >;
         if (!headers["Content-Length"]) {
           headers["Content-Length"] = Buffer.byteLength(bodyData).toString();
         }

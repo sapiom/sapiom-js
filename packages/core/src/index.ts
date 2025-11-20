@@ -70,7 +70,7 @@ export type {
 
 // Shared integration utilities (needed by HTTP integration packages)
 export { initializeSapiomClient } from "./types/config";
-export type { BaseSapiomIntegrationConfig } from "./types/config";
+export type { BaseSapiomIntegrationConfig, FailureMode } from "./types/config";
 
 // Default export for convenience
 export { SapiomClient as default } from "./client/SapiomClient";

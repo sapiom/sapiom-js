@@ -90,8 +90,10 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
     defaultMetadata.traceExternalId = config.traceExternalId;
   if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
-  const authConfig: AuthorizationConfig = { sapiomClient };
-  const paymentConfig: PaymentConfig = { sapiomClient };
+  const failureMode = config?.failureMode ?? "open";
+
+  const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
+  const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
 
   const sapiomFetch = async (
     input: string | URL | Request,

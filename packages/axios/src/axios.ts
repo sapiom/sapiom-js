@@ -71,6 +71,7 @@ export function createSapiomAxios(
   }
 
   const sapiomClient = initializeSapiomClient(config);
+  const failureMode = config?.failureMode ?? "open";
 
   const defaultMetadata: any = {};
   if (config?.agentName) defaultMetadata.agentName = config.agentName;
@@ -85,8 +86,10 @@ export function createSapiomAxios(
     (axiosInstance as any).__sapiomDefaultMetadata = defaultMetadata;
   }
 
-  addAuthorizationInterceptor(axiosInstance, { sapiomClient });
-  addPaymentInterceptor(axiosInstance, { sapiomClient });
+  (axiosInstance as any).__sapiomFailureMode = failureMode;
+
+  addAuthorizationInterceptor(axiosInstance, { sapiomClient, failureMode });
+  addPaymentInterceptor(axiosInstance, { sapiomClient, failureMode });
 
   (axiosInstance as any).__sapiomClient = sapiomClient;
 

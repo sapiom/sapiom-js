@@ -1,6 +1,13 @@
 import { SapiomClient, SapiomClientConfig } from "../client/SapiomClient";
 
 /**
+ * Failure mode for Sapiom integration
+ * - 'open': Allow requests to proceed if Sapiom API fails (default)
+ * - 'closed': Block requests if Sapiom API fails
+ */
+export type FailureMode = "open" | "closed";
+
+/**
  * Base configuration shared across all Sapiom integrations
  */
 export interface BaseSapiomIntegrationConfig {
@@ -21,6 +28,14 @@ export interface BaseSapiomIntegrationConfig {
    * Default: true
    */
   enabled?: boolean;
+
+  /**
+   * Behavior when Sapiom API fails (network errors, 5xx, timeouts, SDK bugs)
+   * - 'open': Allow requests to proceed (default, prioritizes availability)
+   * - 'closed': Block requests (prioritizes security)
+   * Default: 'open'
+   */
+  failureMode?: FailureMode;
 
   /**
    * Sapiom API base URL (for testing or private environments)

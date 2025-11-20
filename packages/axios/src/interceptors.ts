@@ -14,6 +14,7 @@ import {
   extractResourceFromError,
   HttpError,
   HttpClientRequestFacts,
+  FailureMode,
 } from "@sapiom/core";
 
 /**
@@ -21,6 +22,7 @@ import {
  */
 export interface AuthorizationInterceptorConfig {
   sapiomClient: SapiomClient;
+  failureMode: FailureMode;
 }
 
 /**
@@ -28,6 +30,7 @@ export interface AuthorizationInterceptorConfig {
  */
 export interface PaymentInterceptorConfig {
   sapiomClient: SapiomClient;
+  failureMode: FailureMode;
 }
 
 const SDK_VERSION = "1.0.0";
@@ -113,9 +116,16 @@ export function addAuthorizationInterceptor(
       );
 
       if (existingTransactionId) {
-        const transaction = await config.sapiomClient.transactions.get(
-          existingTransactionId
-        );
+        let transaction;
+        try {
+          transaction = await config.sapiomClient.transactions.get(
+            existingTransactionId
+          );
+        } catch (error) {
+          if (config.failureMode === "closed") throw error;
+          console.error("[Sapiom] Failed to get transaction, allowing request:", error);
+          return axiosConfig;
+        }
 
         switch (transaction.status) {
           case TransactionStatus.AUTHORIZED:
@@ -123,9 +133,16 @@ export function addAuthorizationInterceptor(
 
           case TransactionStatus.PENDING:
           case TransactionStatus.PREPARING: {
-            const authResult = await poller.waitForAuthorization(
-              existingTransactionId
-            );
+            let authResult;
+            try {
+              authResult = await poller.waitForAuthorization(
+                existingTransactionId
+              );
+            } catch (error) {
+              if (config.failureMode === "closed") throw error;
+              console.error("[Sapiom] Failed to poll transaction, allowing request:", error);
+              return axiosConfig;
+            }
 
             if (authResult.status === "authorized") {
               return axiosConfig;
@@ -157,74 +174,75 @@ export function addAuthorizationInterceptor(
         }
       }
 
-      const defaultMetadata = (axiosInstance as any).__sapiomDefaultMetadata || {};
-      const requestMetadata = (axiosConfig as any).__sapiom || {};
-      const userMetadata = { ...defaultMetadata, ...requestMetadata };
+        const defaultMetadata =
+          (axiosInstance as any).__sapiomDefaultMetadata || {};
+        const requestMetadata = (axiosConfig as any).__sapiom || {};
+        const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
-      if (userMetadata?.enabled === false) {
-        return axiosConfig;
-      }
-
-      const method = axiosConfig.method?.toUpperCase() || "GET";
-
-      const buildFullUrl = (config: InternalAxiosRequestConfig): string => {
-        const requestUrl = config.url || "";
-
-        if (requestUrl.match(/^https?:\/\//)) {
-          return requestUrl;
+        if (userMetadata?.enabled === false) {
+          return axiosConfig;
         }
 
-        const baseURL = config.baseURL || "";
-        if (!baseURL) {
-          return requestUrl;
-        }
+        const method = axiosConfig.method?.toUpperCase() || "GET";
 
-        const base = baseURL.replace(/\/$/, "");
-        const path = requestUrl.replace(/^\//, "");
+        const buildFullUrl = (config: InternalAxiosRequestConfig): string => {
+          const requestUrl = config.url || "";
 
-        return path ? `${base}/${path}` : base;
-      };
-
-      const fullUrl = buildFullUrl(axiosConfig);
-      const endpoint = axiosConfig.url || "";
-
-      const callSite = captureUserCallSite();
-
-      let urlParsed;
-      try {
-        const parsed = new URL(fullUrl);
-        urlParsed = {
-          protocol: parsed.protocol,
-          hostname: parsed.hostname,
-          pathname: parsed.pathname,
-          search: parsed.search,
-          port: parsed.port ? parseInt(parsed.port) : null,
-        };
-      } catch {
-        urlParsed = {
-          protocol: "",
-          hostname: "",
-          pathname: endpoint,
-          search: "",
-          port: null,
-        };
-      }
-
-      const sanitizedHeaders: Record<string, string> = {};
-      if (axiosConfig.headers) {
-        Object.entries(axiosConfig.headers as Record<string, any>).forEach(
-          ([key, value]) => {
-            const lowerKey = key.toLowerCase();
-            if (
-              !lowerKey.includes("auth") &&
-              !lowerKey.includes("key") &&
-              !lowerKey.includes("token")
-            ) {
-              sanitizedHeaders[key] = String(value);
-            }
+          if (requestUrl.match(/^https?:\/\//)) {
+            return requestUrl;
           }
-        );
-      }
+
+          const baseURL = config.baseURL || "";
+          if (!baseURL) {
+            return requestUrl;
+          }
+
+          const base = baseURL.replace(/\/$/, "");
+          const path = requestUrl.replace(/^\//, "");
+
+          return path ? `${base}/${path}` : base;
+        };
+
+        const fullUrl = buildFullUrl(axiosConfig);
+        const endpoint = axiosConfig.url || "";
+
+        const callSite = captureUserCallSite();
+
+        let urlParsed;
+        try {
+          const parsed = new URL(fullUrl);
+          urlParsed = {
+            protocol: parsed.protocol,
+            hostname: parsed.hostname,
+            pathname: parsed.pathname,
+            search: parsed.search,
+            port: parsed.port ? parseInt(parsed.port) : null,
+          };
+        } catch {
+          urlParsed = {
+            protocol: "",
+            hostname: "",
+            pathname: endpoint,
+            search: "",
+            port: null,
+          };
+        }
+
+        const sanitizedHeaders: Record<string, string> = {};
+        if (axiosConfig.headers) {
+          Object.entries(axiosConfig.headers as Record<string, any>).forEach(
+            ([key, value]) => {
+              const lowerKey = key.toLowerCase();
+              if (
+                !lowerKey.includes("auth") &&
+                !lowerKey.includes("key") &&
+                !lowerKey.includes("token")
+              ) {
+                sanitizedHeaders[key] = String(value);
+              }
+            }
+          );
+        }
 
       const requestFacts: HttpClientRequestFacts = {
         method,
@@ -243,29 +261,36 @@ export function addAuthorizationInterceptor(
         timestamp: new Date().toISOString(),
       };
 
-      const transaction = await config.sapiomClient.transactions.create({
-        requestFacts: {
-          source: "http-client",
-          version: "v1",
-          sdk: {
-            name: "@sapiom/axios",
-            version: SDK_VERSION,
+      let transaction;
+      try {
+        transaction = await config.sapiomClient.transactions.create({
+          requestFacts: {
+            source: "http-client",
+            version: "v1",
+            sdk: {
+              name: "@sapiom/axios",
+              version: SDK_VERSION,
+            },
+            request: requestFacts,
           },
-          request: requestFacts,
-        },
-        serviceName: userMetadata?.serviceName,
-        actionName: userMetadata?.actionName,
-        resourceName: userMetadata?.resourceName,
-        traceId: userMetadata?.traceId,
-        traceExternalId: userMetadata?.traceExternalId,
-        agentId: userMetadata?.agentId,
-        agentName: userMetadata?.agentName,
-        qualifiers: userMetadata?.qualifiers,
-        metadata: {
-          ...userMetadata?.metadata,
-          preemptiveAuthorization: true,
-        },
-      });
+          serviceName: userMetadata?.serviceName,
+          actionName: userMetadata?.actionName,
+          resourceName: userMetadata?.resourceName,
+          traceId: userMetadata?.traceId,
+          traceExternalId: userMetadata?.traceExternalId,
+          agentId: userMetadata?.agentId,
+          agentName: userMetadata?.agentName,
+          qualifiers: userMetadata?.qualifiers,
+          metadata: {
+            ...userMetadata?.metadata,
+            preemptiveAuthorization: true,
+          },
+        });
+      } catch (error) {
+        if (config.failureMode === "closed") throw error;
+        console.error("[Sapiom] Failed to create transaction, allowing request:", error);
+        return axiosConfig;
+      }
 
       if (
         transaction.status === TransactionStatus.DENIED ||
@@ -286,7 +311,14 @@ export function addAuthorizationInterceptor(
         return axiosConfig;
       }
 
-      const result = await poller.waitForAuthorization(transaction.id);
+      let result;
+      try {
+        result = await poller.waitForAuthorization(transaction.id);
+      } catch (error) {
+        if (config.failureMode === "closed") throw error;
+        console.error("[Sapiom] Failed to poll transaction, allowing request:", error);
+        return axiosConfig;
+      }
 
       if (result.status === "authorized") {
         setHeader(
@@ -364,7 +396,8 @@ export function addPaymentInterceptor(
         return Promise.reject(error);
       }
 
-      const defaultMetadata = (axiosInstance as any).__sapiomDefaultMetadata || {};
+      const defaultMetadata =
+        (axiosInstance as any).__sapiomDefaultMetadata || {};
       const requestMetadata = (originalConfig as any).__sapiom || {};
       const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
@@ -372,22 +405,22 @@ export function addPaymentInterceptor(
         return Promise.reject(error);
       }
 
-      try {
-        const httpError = axiosErrorToHttpError(error);
+      const httpError = axiosErrorToHttpError(error);
 
-        const paymentData = extractPaymentData(httpError);
-        const resource = extractResourceFromError(httpError);
+      const paymentData = extractPaymentData(httpError);
+      const resource = extractResourceFromError(httpError);
 
-        if (!paymentData || !resource) {
-          return Promise.reject(error);
-        }
+      if (!paymentData || !resource) {
+        return Promise.reject(error);
+      }
 
-        const existingTransactionId =
-          getHeader(originalConfig.headers, "X-Sapiom-Transaction-Id") ||
-          (originalConfig as any).__sapiomTransactionId;
+      const existingTransactionId =
+        getHeader(originalConfig.headers, "X-Sapiom-Transaction-Id") ||
+        (originalConfig as any).__sapiomTransactionId;
 
-        let transaction;
-        if (existingTransactionId) {
+      let transaction;
+      if (existingTransactionId) {
+        try {
           transaction = await config.sapiomClient.transactions.get(
             existingTransactionId
           );
@@ -402,20 +435,26 @@ export function addPaymentInterceptor(
                 paymentData
               );
           }
-        } else {
-          const extractServiceName = (resource: string): string => {
-            try {
-              const url = new URL(resource);
-              const pathParts = url.pathname.split("/").filter(Boolean);
-              return pathParts[0] || "api";
-            } catch {
-              return "api";
-            }
-          };
+        } catch (apiError) {
+          if (config.failureMode === "closed") return Promise.reject(apiError);
+          console.error("[Sapiom] Failed to get/reauthorize transaction, returning 402:", apiError);
+          return Promise.reject(error);
+        }
+      } else {
+        const extractServiceName = (resource: string): string => {
+          try {
+            const url = new URL(resource);
+            const pathParts = url.pathname.split("/").filter(Boolean);
+            return pathParts[0] || "api";
+          } catch {
+            return "api";
+          }
+        };
 
-          const serviceName =
-            userMetadata?.serviceName || extractServiceName(resource);
+        const serviceName =
+          userMetadata?.serviceName || extractServiceName(resource);
 
+        try {
           transaction = await config.sapiomClient.transactions.create({
             serviceName,
             actionName: userMetadata?.actionName || "access",
@@ -432,9 +471,14 @@ export function addPaymentInterceptor(
               originalUrl: originalConfig.url || "",
             },
           });
+        } catch (apiError) {
+          if (config.failureMode === "closed") return Promise.reject(apiError);
+          console.error("[Sapiom] Failed to create payment transaction, returning 402:", apiError);
+          return Promise.reject(error);
         }
+      }
 
-        if (
+      if (
           transaction.status === TransactionStatus.DENIED ||
           transaction.status === TransactionStatus.CANCELLED
         ) {
@@ -451,53 +495,57 @@ export function addPaymentInterceptor(
           });
         }
 
-        if (transaction.status !== TransactionStatus.AUTHORIZED) {
-          const result = await poller.waitForAuthorization(transaction.id);
+      if (transaction.status !== TransactionStatus.AUTHORIZED) {
+        let result;
+        try {
+          result = await poller.waitForAuthorization(transaction.id);
+        } catch (pollError) {
+          if (config.failureMode === "closed") return Promise.reject(pollError);
+          console.error("[Sapiom] Failed to poll payment transaction, returning 402:", pollError);
+          return Promise.reject(error);
+        }
 
-          if (result.status !== "authorized") {
-            return Promise.reject({
-              response: {
-                status: 403,
-                statusText: "Forbidden",
-                data: {
-                  error: `Payment transaction ${result.status}`,
-                  transactionId: transaction.id,
-                },
+        if (result.status !== "authorized") {
+          return Promise.reject({
+            response: {
+              status: 403,
+              statusText: "Forbidden",
+              data: {
+                error: `Payment transaction ${result.status}`,
+                transactionId: transaction.id,
               },
-            });
-          }
-
-          transaction = result.transaction!;
+            },
+          });
         }
 
-        const authorizationPayload = transaction.payment?.authorizationPayload;
-
-        if (!authorizationPayload) {
-          throw new Error(
-            `Transaction ${transaction.id} is authorized but missing payment authorization payload`
-          );
-        }
-
-        const paymentHeaderValue =
-          typeof authorizationPayload === "string"
-            ? authorizationPayload
-            : Buffer.from(JSON.stringify(authorizationPayload)).toString(
-                "base64"
-              );
-
-        const retryConfig = {
-          ...originalConfig,
-          __is402Retry: true,
-        } as any;
-
-        setHeader(retryConfig.headers, "X-PAYMENT", paymentHeaderValue);
-
-        const response = await axiosInstance.request(retryConfig);
-
-        return response;
-      } catch (handlerError) {
-        return Promise.reject(error);
+        transaction = result.transaction!;
       }
+
+      const authorizationPayload = transaction.payment?.authorizationPayload;
+
+      if (!authorizationPayload) {
+        throw new Error(
+          `Transaction ${transaction.id} is authorized but missing payment authorization payload`
+        );
+      }
+
+      const paymentHeaderValue =
+        typeof authorizationPayload === "string"
+          ? authorizationPayload
+          : Buffer.from(JSON.stringify(authorizationPayload)).toString(
+              "base64"
+            );
+
+      const retryConfig = {
+        ...originalConfig,
+        __is402Retry: true,
+      } as any;
+
+      setHeader(retryConfig.headers, "X-PAYMENT", paymentHeaderValue);
+
+      const response = await axiosInstance.request(retryConfig);
+
+      return response;
     }
   );
 
