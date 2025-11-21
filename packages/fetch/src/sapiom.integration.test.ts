@@ -1,14 +1,12 @@
 /**
- * Integration tests for unified SapiomHandler with Fetch adapter
- * Tests combined authorization + payment flow (Fetch-specific tests only)
+ * Integration tests for Sapiom Fetch implementation
+ * Tests combined authorization + payment flow
  */
-import { createFetchAdapter } from "./adapter";
+import { createFetch } from "./fetch";
 import { SapiomClient } from "@sapiom/core";
 import { TransactionAPI } from "@sapiom/core";
-import { TransactionStatus } from "@sapiom/core";
-import { withSapiomHandling } from "@sapiom/core";
 
-describe("Unified Sapiom Handler Integration Tests", () => {
+describe("Sapiom Fetch Integration Tests", () => {
   let mockTransactionAPI: jest.Mocked<TransactionAPI>;
   let mockSapiomClient: SapiomClient;
 
@@ -29,20 +27,22 @@ describe("Unified Sapiom Handler Integration Tests", () => {
     } as any;
   });
 
-  // Note: The SapiomHandler integration test file in the monorepo source
-  // only contained Axios-based tests in its main test cases.
-  // Fetch and Node HTTP specific integration tests would be added here
-  // if they existed in the original source file.
-  // For now, this file serves as a placeholder for future Fetch-specific
-  // unified handler tests.
-
-  it("should be able to create fetch adapter with Sapiom handling", () => {
-    const adapter = createFetchAdapter("https://api.example.com");
-
-    withSapiomHandling(adapter, {
+  it("should create Sapiom-enabled fetch function", () => {
+    const fetch = createFetch({
       sapiomClient: mockSapiomClient,
     });
 
-    expect(adapter).toBeDefined();
+    expect(typeof fetch).toBe("function");
+    expect((fetch as any).__sapiomClient).toBe(mockSapiomClient);
+  });
+
+  it("should create fetch with default metadata", () => {
+    const fetch = createFetch({
+      sapiomClient: mockSapiomClient,
+      agentName: "test-agent",
+      serviceName: "test-service",
+    });
+
+    expect(typeof fetch).toBe("function");
   });
 });

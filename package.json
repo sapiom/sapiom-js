@@ -22,7 +22,8 @@
     "typecheck": "pnpm -r --filter='./packages/*' typecheck",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm build && changeset publish"
+    "release": "pnpm build && changeset publish",
+    "dev:watch": "pnpm -r --filter='./packages/*' --parallel run dev"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.1",

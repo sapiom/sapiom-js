@@ -1,5 +1,5 @@
 // This file contains the core payment error detection logic without HTTP library dependencies
-import { HttpError } from "../http/types";
+import { HttpError } from "../types/http";
 import { PaymentData } from "../types/transaction";
 
 /**

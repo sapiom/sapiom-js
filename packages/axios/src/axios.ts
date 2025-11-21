@@ -1,37 +1,21 @@
 import { AxiosInstance } from "axios";
 
-import { SapiomHandlerConfig, withSapiomHandling } from "@sapiom/core";
-import { createAxiosAdapter } from "./adapter";
 import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
 } from "@sapiom/core";
+import {
+  addAuthorizationInterceptor,
+  addPaymentInterceptor,
+} from "./interceptors";
 
 /**
  * Configuration for Sapiom-enabled Axios client
  */
-export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
-  /**
-   * Authorization handler configuration
-   */
-  authorization?: Omit<SapiomHandlerConfig["authorization"], "sapiomClient">;
-
-  /**
-   * Payment handler configuration
-   */
-  payment?: Omit<SapiomHandlerConfig["payment"], "sapiomClient">;
-}
+export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {}
 
 /**
  * Creates a Sapiom-enabled Axios client with automatic authorization and payment handling
- *
- * This is the simplest way to add Sapiom capabilities to your Axios instance.
- * It automatically wraps the instance with:
- * - Pre-emptive authorization (request interceptor)
- * - Reactive payment handling (response interceptor for 402 errors)
- *
- * The function mutates the original Axios instance by adding interceptors,
- * then returns the same instance for convenient chaining.
  *
  * @param axiosInstance - The Axios instance to wrap with Sapiom handling
  * @param config - Optional configuration (reads from env vars by default)
@@ -41,79 +25,73 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
  * ```typescript
  * // Simplest usage (reads SAPIOM_API_KEY from environment)
  * import axios from 'axios';
- * import { createSapiomAxios } from '@sapiom/sdk';
+ * import { createSapiomAxios } from '@sapiom/axios';
  *
  * const client = createSapiomAxios(axios.create({
  *   baseURL: 'https://api.example.com'
  * }));
  *
- * // Auto-handles 402 payment errors and authorization
  * const data = await client.get('/premium-endpoint');
  * ```
  *
  * @example
  * ```typescript
- * // With custom configuration
+ * // With API key and default metadata
  * import axios from 'axios';
- * import { createSapiomAxios } from '@sapiom/sdk';
+ * import { createSapiomAxios } from '@sapiom/axios';
  *
  * const client = createSapiomAxios(axios.create({
  *   baseURL: 'https://api.example.com'
  * }), {
- *   sapiom: {
- *     apiKey: 'your-api-key',
- *     baseURL: 'https://sapiom.example.com'
- *   },
- *   authorization: {
- *     authorizedEndpoints: [
- *       { pathPattern: /^\/admin/, serviceName: 'admin-api' }
- *     ],
- *     onAuthorizationPending: (txId, endpoint) => {
- *       console.log(`Awaiting authorization for ${endpoint}`);
- *     }
- *   },
- *   payment: {
- *     onPaymentRequired: (txId, payment) => {
- *       console.log(`Payment needed: ${payment.amount} ${payment.token}`);
- *     }
+ *   apiKey: 'sk_...',
+ *   agentName: 'my-agent',
+ *   serviceName: 'my-service'
+ * });
+ *
+ * // Per-request override via __sapiom
+ * await client.post('/api/resource', data, {
+ *   __sapiom: {
+ *     serviceName: 'different-service',
+ *     actionName: 'custom-action'
  *   }
  * });
- * ```
  *
- * @example
- * ```typescript
- * // Using an existing SapiomClient instance
- * import axios from 'axios';
- * import { SapiomClient, createSapiomAxios } from '@sapiom/sdk';
- *
- * const sapiomClient = new SapiomClient({ apiKey: 'your-api-key' });
- *
- * const client = createSapiomAxios(axios.create({
- *   baseURL: 'https://api.example.com'
- * }), {
- *   sapiomClient // Reuse existing client
+ * // Disable Sapiom for specific request
+ * await client.get('/api/public', {
+ *   __sapiom: { enabled: false }
  * });
  * ```
  */
-export function createSapiomAxios(
+export function withSapiom(
   axiosInstance: AxiosInstance,
   config?: SapiomAxiosConfig,
 ): AxiosInstance {
-  // Initialize SapiomClient (from config or environment)
+  if (config?.enabled === false) {
+    return axiosInstance;
+  }
+
   const sapiomClient = initializeSapiomClient(config);
+  const failureMode = config?.failureMode ?? "open";
 
-  // Create adapter and apply Sapiom handling
-  const adapter = createAxiosAdapter(axiosInstance);
+  const defaultMetadata: any = {};
+  if (config?.agentName) defaultMetadata.agentName = config.agentName;
+  if (config?.agentId) defaultMetadata.agentId = config.agentId;
+  if (config?.serviceName) defaultMetadata.serviceName = config.serviceName;
+  if (config?.traceId) defaultMetadata.traceId = config.traceId;
+  if (config?.traceExternalId)
+    defaultMetadata.traceExternalId = config.traceExternalId;
+  if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
-  withSapiomHandling(adapter, {
-    sapiomClient,
-    authorization: config?.authorization,
-    payment: config?.payment,
-  });
+  if (Object.keys(defaultMetadata).length > 0) {
+    (axiosInstance as any).__sapiomDefaultMetadata = defaultMetadata;
+  }
 
-  // Store reference to SapiomClient for testing and advanced usage
+  (axiosInstance as any).__sapiomFailureMode = failureMode;
+
+  addAuthorizationInterceptor(axiosInstance, { sapiomClient, failureMode });
+  addPaymentInterceptor(axiosInstance, { sapiomClient, failureMode });
+
   (axiosInstance as any).__sapiomClient = sapiomClient;
 
-  // Return original instance (now wrapped with Sapiom interceptors)
   return axiosInstance;
 }

@@ -33,7 +33,7 @@ importers:
   packages/axios:
     dependencies:
       '@sapiom/core':
-        specifier: ^0.1.0
+        specifier: workspace:*
         version: link:../core
     devDependencies:
       '@types/jest':
@@ -103,7 +103,7 @@ importers:
   packages/fetch:
     dependencies:
       '@sapiom/core':
-        specifier: ^0.1.0
+        specifier: workspace:*
         version: link:../core
     devDependencies:
       '@fetch-mock/jest':
@@ -143,7 +143,7 @@ importers:
   packages/langchain:
     dependencies:
       '@sapiom/core':
-        specifier: ^0.1.0
+        specifier: workspace:*
         version: link:../core
     devDependencies:
       '@langchain/anthropic':
@@ -192,7 +192,7 @@ importers:
   packages/node-http:
     dependencies:
       '@sapiom/core':
-        specifier: ^0.1.0
+        specifier: workspace:*
         version: link:../core
     devDependencies:
       '@types/jest':

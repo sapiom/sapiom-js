@@ -1,32 +1,26 @@
-import { SapiomHandlerConfig, withSapiomHandling } from "@sapiom/core";
-import { createFetchAdapter } from "./adapter";
-import { HttpClientAdapter } from "@sapiom/core";
 import { SapiomClient } from "@sapiom/core";
 import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
 } from "@sapiom/core";
+import {
+  handleAuthorization,
+  handlePayment,
+  AuthorizationConfig,
+  PaymentConfig,
+} from "./interceptors";
 
 /**
  * Configuration for Sapiom-enabled Fetch client
  */
-export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
-  /**
-   * Authorization handler configuration
-   */
-  authorization?: Omit<SapiomHandlerConfig["authorization"], "sapiomClient">;
-
-  /**
-   * Payment handler configuration
-   */
-  payment?: Omit<SapiomHandlerConfig["payment"], "sapiomClient">;
-}
+export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
 
 /**
  * Creates a Sapiom-enabled fetch function with automatic authorization and payment handling
  *
  * Drop-in replacement for native fetch() with Sapiom capabilities.
- * Works exactly like native fetch - no API changes required!
+ * Works directly with native Request/Response objects, preserving all native fetch features
+ * (FormData, Blob, streams, etc.).
  *
  * @param config - Optional configuration (reads from env vars by default)
  * @returns A fetch function with Sapiom payment and authorization handling
@@ -34,7 +28,7 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
  * @example
  * ```typescript
  * // Simplest usage (reads SAPIOM_API_KEY from environment)
- * import { createSapiomFetch } from '@sapiom/sdk/http';
+ * import { createSapiomFetch } from '@sapiom/fetch';
  *
  * const fetch = createSapiomFetch();
  *
@@ -45,105 +39,98 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
  *
  * @example
  * ```typescript
- * // With custom configuration
- * import { createSapiomFetch } from '@sapiom/sdk/http';
+ * // With API key and default metadata
+ * import { createSapiomFetch } from '@sapiom/fetch';
  *
  * const fetch = createSapiomFetch({
- *   sapiom: {
- *     apiKey: 'your-api-key',
- *     baseURL: 'https://sapiom.example.com'
- *   },
- *   authorization: {
- *     authorizedEndpoints: [
- *       { pathPattern: /^\/admin/, serviceName: 'admin-api' }
- *     ]
- *   },
- *   payment: {
- *     onPaymentRequired: (txId, payment) => {
- *       console.log(`Payment needed: ${payment.amount} ${payment.token}`);
- *     }
- *   }
+ *   apiKey: 'sk_...',
+ *   agentName: 'my-agent',
+ *   serviceName: 'my-service'
  * });
  *
  * const response = await fetch('https://api.example.com/data');
  * ```
+ *
+ * @example
+ * ```typescript
+ * // With default metadata (applied to all requests)
+ * const fetch = createSapiomFetch({
+ *   apiKey: 'sk_...',
+ *   agentName: 'my-agent',
+ *   serviceName: 'my-service'
+ * });
+ *
+ * // Per-request override via __sapiom property
+ * const request = new Request('/api/resource', { method: 'POST' });
+ * (request as any).__sapiom = {
+ *   serviceName: 'different-service',
+ *   actionName: 'custom-action'
+ * };
+ * await fetch(request);
+ *
+ * // Disable Sapiom for specific request
+ * const publicRequest = new Request('/api/public');
+ * (publicRequest as any).__sapiom = { enabled: false };
+ * await fetch(publicRequest);
+ * ```
  */
-export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
-  // Initialize SapiomClient (from config or environment)
+export function createFetch(config?: SapiomFetchConfig): typeof fetch {
+  if (config?.enabled === false) {
+    return globalThis.fetch;
+  }
+
   const sapiomClient = initializeSapiomClient(config);
 
-  // Create adapter WITHOUT baseURL - let users provide full URLs like native fetch
-  const adapter = createFetchAdapter();
+  const defaultMetadata: Record<string, any> = {};
+  if (config?.agentName) defaultMetadata.agentName = config.agentName;
+  if (config?.agentId) defaultMetadata.agentId = config.agentId;
+  if (config?.serviceName) defaultMetadata.serviceName = config.serviceName;
+  if (config?.traceId) defaultMetadata.traceId = config.traceId;
+  if (config?.traceExternalId)
+    defaultMetadata.traceExternalId = config.traceExternalId;
+  if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
-  withSapiomHandling(adapter, {
-    sapiomClient,
-    authorization: config?.authorization,
-    payment: config?.payment,
-  });
+  const failureMode = config?.failureMode ?? "open";
 
-  // Return a native fetch-compatible function
+  const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
+  const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
+
   const sapiomFetch = async (
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    // Convert fetch arguments to HttpRequest format
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url;
+    let request = new Request(input, init);
 
-    const method = init?.method || "GET";
-    const headers: Record<string, string> = {};
+    const requestMetadata = (request as any).__sapiom || {};
+    const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
-    if (init?.headers) {
-      if (init.headers instanceof Headers) {
-        init.headers.forEach((value, key) => {
-          headers[key] = value;
-        });
-      } else if (Array.isArray(init.headers)) {
-        init.headers.forEach(([key, value]) => {
-          headers[key] = value;
-        });
-      } else {
-        Object.assign(headers, init.headers);
-      }
+    if (userMetadata?.enabled === false) {
+      return globalThis.fetch(request);
     }
 
-    // Use the adapter's request method (which has interceptors applied)
-    const response = await adapter.request({
-      method,
-      url,
-      headers,
-      body: init?.body as any,
-    });
+    request = await handleAuthorization(request, authConfig, defaultMetadata);
 
-    // Convert HttpResponse back to fetch Response
-    // response.data is already parsed by FetchAdapter - avoid double encoding
-    const responseHeaders = new Headers(response.headers);
+    let response = await globalThis.fetch(request);
 
-    let body: string | null = null;
-    if (response.data !== undefined && response.data !== null) {
-      // If data is already a string (text response), use it directly
-      if (typeof response.data === "string") {
-        body = response.data;
-      } else {
-        // For objects, stringify them (they were parsed from JSON)
-        body = JSON.stringify(response.data);
-      }
+    if (response.status === 402) {
+      response = await handlePayment(
+        input,
+        init,
+        response,
+        paymentConfig,
+        defaultMetadata,
+      );
     }
 
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-    });
+    return response;
   };
 
-  // Attach helper properties for advanced usage
   (sapiomFetch as any).__sapiomClient = sapiomClient;
-  (sapiomFetch as any).__adapter = adapter;
 
   return sapiomFetch as typeof fetch;
 }
+
+export {
+  AuthorizationDeniedError,
+  AuthorizationTimeoutError,
+} from "./interceptors";

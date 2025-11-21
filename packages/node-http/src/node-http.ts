@@ -1,36 +1,36 @@
-import { SapiomHandlerConfig, withSapiomHandling } from "@sapiom/core";
-import { createNodeHttpAdapter } from "./adapter";
-import { HttpClientAdapter } from "@sapiom/core";
-import { SapiomClient } from "@sapiom/core";
+import * as http from "http";
+import * as https from "https";
+import {
+  SapiomClient,
+  HttpClientAdapter,
+  HttpRequest,
+  HttpResponse,
+  HttpError,
+} from "@sapiom/core";
 import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
 } from "@sapiom/core";
+import {
+  handleAuthorization,
+  handlePayment,
+  AuthorizationConfig,
+  PaymentConfig,
+} from "./interceptors";
 
 /**
  * Configuration for Sapiom-enabled Node.js HTTP client
  */
-export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
-  /**
-   * Authorization handler configuration
-   */
-  authorization?: Omit<SapiomHandlerConfig["authorization"], "sapiomClient">;
-
-  /**
-   * Payment handler configuration
-   */
-  payment?: Omit<SapiomHandlerConfig["payment"], "sapiomClient">;
-}
+export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
 
 /**
- * Creates a Sapiom-enabled Node.js HTTP client adapter with automatic authorization and payment handling
+ * Creates a Sapiom-enabled Node.js HTTP client with automatic authorization and payment handling
  *
- * This creates a new HttpClientAdapter using Node.js's native http/https modules, wrapped with:
- * - Pre-emptive authorization (request interceptor)
- * - Reactive payment handling (response interceptor for 402 errors)
+ * This creates a native HTTP client using Node.js's http/https modules with:
+ * - Pre-emptive authorization (request pre-processing)
+ * - Reactive payment handling (response error handling for 402)
  *
- * Unlike Axios or Fetch integrations, this returns an HttpClientAdapter interface
- * that can be used for making raw HTTP requests.
+ * Works directly with Node.js native types, supporting streams, buffers, and all body types.
  *
  * @param config - Optional configuration (reads from env vars by default)
  * @returns A Sapiom-enabled HttpClientAdapter
@@ -38,7 +38,7 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  * @example
  * ```typescript
  * // Simplest usage (reads SAPIOM_API_KEY from environment)
- * import { createSapiomNodeHttp } from '@sapiom/sdk';
+ * import { createSapiomNodeHttp } from '@sapiom/node-http';
  *
  * const client = createSapiomNodeHttp();
  *
@@ -52,27 +52,13 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  *
  * @example
  * ```typescript
- * // With custom configuration
- * import { createSapiomNodeHttp } from '@sapiom/sdk';
+ * // With API key and default metadata
+ * import { createSapiomNodeHttp } from '@sapiom/node-http';
  *
  * const client = createSapiomNodeHttp({
- *   sapiom: {
- *     apiKey: 'your-api-key',
- *     baseURL: 'https://sapiom.example.com'
- *   },
- *   authorization: {
- *     authorizedEndpoints: [
- *       { pathPattern: /^https:\/\/api\.example\.com\/admin/, serviceName: 'admin-api' }
- *     ],
- *     onAuthorizationPending: (txId, endpoint) => {
- *       console.log(`Awaiting authorization for ${endpoint}`);
- *     }
- *   },
- *   payment: {
- *     onPaymentRequired: (txId, payment) => {
- *       console.log(`Payment needed: ${payment.amount} ${payment.token}`);
- *     }
- *   }
+ *   apiKey: 'sk_...',
+ *   agentName: 'my-agent',
+ *   serviceName: 'my-service'
  * });
  *
  * const response = await client.request({
@@ -85,49 +71,189 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  *
  * @example
  * ```typescript
- * // Useful for server-side applications that need fine-grained control
- * import { createSapiomNodeHttp } from '@sapiom/sdk';
- *
+ * // With default metadata (applied to all requests)
  * const client = createSapiomNodeHttp({
- *   payment: {
- *     onPaymentRequired: async (txId, payment) => {
- *       await logger.info(`Payment required: ${txId}`, { payment });
- *     },
- *     onPaymentAuthorized: async (txId) => {
- *       await logger.info(`Payment authorized: ${txId}`);
- *     }
+ *   apiKey: 'sk_...',
+ *   agentName: 'my-agent',
+ *   serviceName: 'my-service'
+ * });
+ *
+ * // Per-request override via __sapiom property
+ * await client.request({
+ *   method: 'POST',
+ *   url: 'https://api.example.com/resource',
+ *   headers: { 'Content-Type': 'application/json' },
+ *   body: { data: 'test' },
+ *   __sapiom: {
+ *     serviceName: 'different-service',
+ *     actionName: 'custom-action'
  *   }
  * });
  *
- * // Use in your Node.js application
- * async function fetchPremiumData(endpoint: string) {
- *   const response = await client.request({
- *     method: 'GET',
- *     url: `https://api.example.com${endpoint}`,
- *     headers: { 'Authorization': `Bearer ${token}` }
- *   });
- *   return response.data;
- * }
+ * // Disable Sapiom for specific request
+ * await client.request({
+ *   method: 'GET',
+ *   url: 'https://api.example.com/public',
+ *   headers: {},
+ *   __sapiom: { enabled: false }
+ * });
  * ```
  */
-export function createSapiomNodeHttp(
-  config?: SapiomNodeHttpConfig,
+export function createClient(
+  config?: SapiomNodeHttpConfig
 ): HttpClientAdapter & { __sapiomClient: SapiomClient } {
-  // Initialize SapiomClient (from config or environment)
   const sapiomClient = initializeSapiomClient(config);
+  const isEnabled = config?.enabled !== false;
 
-  // Create Node.js HTTP adapter
-  const adapter = createNodeHttpAdapter();
+  const defaultMetadata: Record<string, any> = {};
+  if (config?.agentName) defaultMetadata.agentName = config.agentName;
+  if (config?.agentId) defaultMetadata.agentId = config.agentId;
+  if (config?.serviceName) defaultMetadata.serviceName = config.serviceName;
+  if (config?.traceId) defaultMetadata.traceId = config.traceId;
+  if (config?.traceExternalId)
+    defaultMetadata.traceExternalId = config.traceExternalId;
+  if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
-  // Apply Sapiom handling
-  withSapiomHandling(adapter, {
-    sapiomClient,
-    authorization: config?.authorization,
-    payment: config?.payment,
-  });
+  const failureMode = config?.failureMode ?? "open";
 
-  // Store reference to SapiomClient for testing and advanced usage
+  const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
+  const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
+
+  async function makeRequest<T = any>(
+    request: HttpRequest
+  ): Promise<HttpResponse<T>> {
+    return new Promise<HttpResponse<T>>((resolve, reject) => {
+      const parsedUrl = new URL(request.url);
+      const isHttps = parsedUrl.protocol === "https:";
+      const client = isHttps ? https : http;
+
+      let bodyData: string | Buffer | undefined;
+      if (request.body !== undefined && request.body !== null) {
+        if (typeof request.body === "string") {
+          bodyData = request.body;
+        } else if (Buffer.isBuffer(request.body)) {
+          bodyData = request.body;
+        } else if (typeof request.body === "object") {
+          bodyData = JSON.stringify(request.body);
+        }
+      }
+
+      const options: http.RequestOptions = {
+        method: request.method,
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port,
+        path: parsedUrl.pathname + parsedUrl.search,
+        headers: { ...request.headers },
+      };
+
+      if (bodyData && options.headers) {
+        const headers = options.headers as Record<
+          string,
+          string | string[] | undefined
+        >;
+        if (!headers["Content-Length"]) {
+          headers["Content-Length"] = Buffer.byteLength(bodyData).toString();
+        }
+      }
+
+      const req = client.request(options, (res) => {
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk.toString();
+        });
+
+        res.on("end", () => {
+          let parsedData: T;
+          const contentType = res.headers["content-type"] || "";
+
+          if (contentType.includes("application/json") && data) {
+            try {
+              parsedData = JSON.parse(data);
+            } catch {
+              parsedData = data as any;
+            }
+          } else {
+            parsedData = data as any;
+          }
+
+          const response: HttpResponse<T> = {
+            status: res.statusCode || 200,
+            statusText: res.statusMessage || "OK",
+            headers: res.headers as Record<string, string>,
+            data: parsedData,
+          };
+
+          if (res.statusCode === 402) {
+            const error: HttpError = {
+              message: "Payment required",
+              response,
+            };
+            reject(error);
+          } else {
+            resolve(response);
+          }
+        });
+      });
+
+      req.on("error", (err) => {
+        reject(err);
+      });
+
+      if (bodyData) {
+        req.write(bodyData);
+      }
+
+      req.end();
+    });
+  }
+
+  const adapter: HttpClientAdapter = {
+    async request<T = any>(request: HttpRequest): Promise<HttpResponse<T>> {
+      const requestMetadata = request.__sapiom || {};
+      const userMetadata = { ...defaultMetadata, ...requestMetadata };
+
+      if (!isEnabled || userMetadata?.enabled === false) {
+        return makeRequest<T>(request);
+      }
+
+      const modifiedRequest = await handleAuthorization(
+        request,
+        authConfig,
+        defaultMetadata
+      );
+
+      try {
+        const response = await makeRequest<T>(modifiedRequest);
+        return response;
+      } catch (error) {
+        if ((error as HttpError).response?.status === 402) {
+          return await handlePayment(
+            modifiedRequest,
+            error as HttpError,
+            paymentConfig,
+            makeRequest,
+            defaultMetadata
+          );
+        }
+        throw error;
+      }
+    },
+
+    addRequestInterceptor(onFulfilled, onRejected) {
+      throw new Error("addRequestInterceptor is not supported");
+    },
+
+    addResponseInterceptor(onFulfilled, onRejected) {
+      throw new Error("addResponseInterceptor is not supported");
+    },
+  };
+
   (adapter as any).__sapiomClient = sapiomClient;
 
   return adapter as HttpClientAdapter & { __sapiomClient: SapiomClient };
 }
+
+export {
+  AuthorizationDeniedError,
+  AuthorizationTimeoutError,
+} from "./interceptors";

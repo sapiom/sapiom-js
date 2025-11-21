@@ -183,13 +183,22 @@ export class SapiomClient {
 
   /**
    * Build full URL with query parameters
+   * Automatically prefixes paths with /v1/ for API versioning
    */
   private buildUrl(path: string, params?: Record<string, any>): string {
     const base = this.baseURL.endsWith("/")
       ? this.baseURL.slice(0, -1)
       : this.baseURL;
+
+    // Ensure path starts with /
     const pathname = path.startsWith("/") ? path : `/${path}`;
-    const url = `${base}${pathname}`;
+
+    // Add /v1 prefix if not already present
+    const versionedPath = pathname.startsWith("/v1/")
+      ? pathname
+      : `/v1${pathname}`;
+
+    const url = `${base}${versionedPath}`;
 
     if (!params || Object.keys(params).length === 0) {
       return url;

@@ -18,12 +18,10 @@ npm install @sapiom/fetch
 ## Quick Start
 
 ```typescript
-import { createSapiomFetch } from '@sapiom/fetch';
+import { createFetch } from '@sapiom/fetch';
 
-const fetch = createSapiomFetch({
-  sapiom: {
-    apiKey: process.env.SAPIOM_API_KEY
-  }
+const fetch = createFetch({
+  apiKey: process.env.SAPIOM_API_KEY
 });
 
 // Drop-in replacement for native fetch
@@ -43,26 +41,45 @@ const data = await response.json();
 ## Configuration
 
 ```typescript
-import { createSapiomFetch } from '@sapiom/fetch';
+import { createFetch } from '@sapiom/fetch';
 
-const fetch = createSapiomFetch({
-  sapiom: {
-    apiKey: string;
-    baseURL?: string;
-    timeout?: number;
-  },
-  authorization?: {
-    enabled?: boolean;
-    authorizedEndpoints?: Array<{
-      pathPattern: RegExp;
-      service: string;
-    }>;
-  },
-  payment?: {
-    enabled?: boolean;
-    onPaymentRequired?: (txId: string, payment: PaymentDetails) => void;
-  }
+const fetch = createFetch({
+  // Required (or use SAPIOM_API_KEY environment variable)
+  apiKey: 'sk_...',
+
+  // Optional - Control
+  enabled: true,              // Enable Sapiom handling (default: true)
+  failureMode: 'open',        // 'open' | 'closed' (default: 'open')
+                              // 'open': Allow requests if Sapiom fails (prioritizes availability)
+                              // 'closed': Block requests if Sapiom fails (prioritizes security)
+
+  // Optional - Default metadata (applied to all requests)
+  agentName: 'my-agent',      // Agent identifier
+  agentId: 'agent-123',       // Agent UUID or numeric ID
+  serviceName: 'my-service',  // Service name for transactions
+  traceId: 'trace-xyz',       // Internal trace UUID
+  traceExternalId: 'ext-456', // External trace identifier
 });
+```
+
+### Per-Request Overrides
+
+Override configuration for individual requests using the `__sapiom` property:
+
+```typescript
+// Disable Sapiom for a specific request
+const publicRequest = new Request('/api/public');
+(publicRequest as any).__sapiom = { enabled: false };
+await fetch(publicRequest);
+
+// Override metadata for a specific request
+const request = new Request('/api/resource', { method: 'POST' });
+(request as any).__sapiom = {
+  serviceName: 'different-service',
+  actionName: 'custom-action',
+  traceExternalId: 'ext-789'
+};
+await fetch(request);
 ```
 
 ## Environment Variables

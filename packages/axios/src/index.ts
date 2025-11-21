@@ -1,20 +1,27 @@
 /**
  * @sapiom/axios - Axios integration for Sapiom SDK
  *
- * Provides automatic payment handling and authorization for Axios HTTP clients.
+ * Provides automatic payment handling and authorization for Axios HTTP clients
+ * using native Axios interceptors.
  */
 
-export {
-  createSapiomAxios,
-  createSapiomAxios as createSapiomClient,
-} from "./axios";
+export { withSapiom } from "./axios";
 export type { SapiomAxiosConfig } from "./axios";
 
-// Re-export adapter and types for advanced use cases
-export { createAxiosAdapter, AxiosAdapter } from "./adapter";
+export {
+  AuthorizationDeniedError,
+  AuthorizationTimeoutError,
+} from "./interceptors";
+
+// Type augmentations for axios
+export {} from "./augmentations";
+
+// Re-export commonly used types from core
 export type {
-  HttpClientAdapter,
-  HttpRequest,
-  HttpResponse,
-  HttpError,
+  SapiomClient,
+  SapiomClientConfig,
+  BaseSapiomIntegrationConfig,
+  TransactionResponse,
+  PaymentTransactionResponse,
+  TransactionStatus,
 } from "@sapiom/core";
