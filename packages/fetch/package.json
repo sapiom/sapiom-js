@@ -65,7 +65,7 @@
     "undici": "^7.16.0"
   },
   "dependencies": {
-    "@sapiom/core": "*"
+    "@sapiom/core": "workspace:*"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -69,7 +69,7 @@
     "zod": "^4.1.12"
   },
   "dependencies": {
-    "@sapiom/core": "*"
+    "@sapiom/core": "workspace:*"
   },
   "peerDependencies": {
     "@langchain/core": ">=0.3.0 <1.0.0",

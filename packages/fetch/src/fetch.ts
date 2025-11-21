@@ -114,7 +114,8 @@ export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
 
     if (response.status === 402) {
       response = await handlePayment(
-        request,
+        input,
+        init,
         response,
         paymentConfig,
         defaultMetadata,

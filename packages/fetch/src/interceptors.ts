@@ -290,7 +290,8 @@ export async function handleAuthorization(
  * Handle payment errors (402 responses)
  */
 export async function handlePayment(
-  originalRequest: Request,
+  originalInput: string | URL | Request,
+  originalInit: RequestInit | undefined,
   response: Response,
   config: PaymentConfig,
   defaultMetadata?: Record<string, any>,
@@ -309,8 +310,13 @@ export async function handlePayment(
   }
 
   const httpError = {
+    message: "Payment required",
+    status: 402,
+    data: errorData,
     response: {
       status: 402,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
       data: errorData,
     },
   };
@@ -322,8 +328,14 @@ export async function handlePayment(
     return response;
   }
 
-  const requestMetadata = (originalRequest as any).__sapiom || {};
+  const requestMetadata = (originalInit as any)?.__sapiom || {};
   const userMetadata = { ...defaultMetadata, ...requestMetadata };
+
+  const originalUrl = typeof originalInput === "string"
+    ? originalInput
+    : originalInput instanceof URL
+      ? originalInput.toString()
+      : originalInput.url;
 
   let transaction;
   try {
@@ -339,8 +351,8 @@ export async function handlePayment(
       qualifiers: userMetadata?.qualifiers,
       metadata: {
         ...userMetadata?.metadata,
-        originalMethod: originalRequest.method,
-        originalUrl: originalRequest.url,
+        originalMethod: originalInit?.method || "GET",
+        originalUrl: originalUrl,
       },
     });
   } catch (error) {
@@ -388,11 +400,13 @@ export async function handlePayment(
       ? authorizationPayload
       : btoa(JSON.stringify(authorizationPayload));
 
-  const headers = new Headers(originalRequest.headers);
-  setHeader(headers, "X-PAYMENT", paymentHeaderValue);
+  const newInit = {
+    ...originalInit,
+    headers: {
+      ...(originalInit?.headers || {}),
+      "X-PAYMENT": paymentHeaderValue,
+    },
+  };
 
-  const retryRequest = new Request(originalRequest, { headers });
-  const retryResponse = await fetch(retryRequest);
-
-  return retryResponse;
+  return await globalThis.fetch(originalInput, newInit);
 }
