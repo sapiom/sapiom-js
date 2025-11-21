@@ -2,7 +2,7 @@
  * Critical tests for failureMode behavior
  * These tests ensure Sapiom failures don't break customer apps
  */
-import { createSapiomNodeHttp } from "./node-http";
+import { createClient } from "./node-http";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 import nock from "nock";
 
@@ -41,7 +41,7 @@ describe("Node-HTTP failureMode", () => {
         new Error("Sapiom API returned 500"),
       );
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -65,7 +65,7 @@ describe("Node-HTTP failureMode", () => {
         new Error("ETIMEDOUT: Sapiom API timeout"),
       );
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
       }); // Default is "open"
 
@@ -87,7 +87,7 @@ describe("Node-HTTP failureMode", () => {
         throw new TypeError("Cannot read property 'foo' of undefined");
       });
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -122,7 +122,7 @@ describe("Node-HTTP failureMode", () => {
         new Error("Sapiom API error"),
       );
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -151,7 +151,7 @@ describe("Node-HTTP failureMode", () => {
         new Error("Sapiom API returned 500"),
       );
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -172,7 +172,7 @@ describe("Node-HTTP failureMode", () => {
 
       mockTransactionAPI.create.mockRejectedValue(new Error("ETIMEDOUT"));
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -195,7 +195,7 @@ describe("Node-HTTP failureMode", () => {
         throw new TypeError("SDK bug");
       });
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -218,7 +218,7 @@ describe("Node-HTTP failureMode", () => {
 
       mockTransactionAPI.create.mockRejectedValue(new Error("Sapiom error"));
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         // No failureMode specified
       });
@@ -245,7 +245,7 @@ describe("Node-HTTP failureMode", () => {
         status: "denied",
       } as any);
 
-      const client = createSapiomNodeHttp({
+      const client = createClient({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });

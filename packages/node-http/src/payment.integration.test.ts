@@ -2,7 +2,7 @@
  * Integration tests for Payment with Node-HTTP
  * Detailed payment handler tests are in @sapiom/core
  */
-import { createSapiomNodeHttp } from "./node-http";
+import { createClient } from "./node-http";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 
 describe("Payment Integration - Node-HTTP", () => {
@@ -26,7 +26,7 @@ describe("Payment Integration - Node-HTTP", () => {
   });
 
   it("should create client with Sapiom client", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
     });
 

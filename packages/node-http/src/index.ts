@@ -1,6 +1,5 @@
 export {
-  createSapiomNodeHttp,
-  createSapiomNodeHttp as createSapiomClient,
+  createClient,
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
 } from "./node-http";

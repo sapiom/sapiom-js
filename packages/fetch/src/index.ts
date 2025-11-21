@@ -1,6 +1,5 @@
 export {
-  createSapiomFetch,
-  createSapiomFetch as createSapiomClient,
+  createFetch,
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
 } from "./fetch";

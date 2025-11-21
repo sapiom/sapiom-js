@@ -2,7 +2,7 @@
  * Integration tests for Sapiom Node-HTTP implementation
  * Tests combined authorization + payment flow
  */
-import { createSapiomNodeHttp } from "./node-http";
+import { createClient } from "./node-http";
 import { SapiomClient } from "@sapiom/core";
 import { TransactionAPI } from "@sapiom/core";
 
@@ -28,7 +28,7 @@ describe("Sapiom Node-HTTP Integration Tests", () => {
   });
 
   it("should create Sapiom-enabled HTTP client", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
     });
 
@@ -38,7 +38,7 @@ describe("Sapiom Node-HTTP Integration Tests", () => {
   });
 
   it("should create client with default metadata", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
       agentName: "test-agent",
       serviceName: "test-service",

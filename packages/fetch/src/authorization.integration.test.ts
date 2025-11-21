@@ -2,7 +2,7 @@
  * Integration tests for Authorization with Fetch
  * Detailed authorization handler tests are in @sapiom/core
  */
-import { createSapiomFetch } from "./fetch";
+import { createFetch } from "./fetch";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 
 describe("Authorization Integration - Fetch", () => {
@@ -26,10 +26,10 @@ describe("Authorization Integration - Fetch", () => {
   });
 
   it("should create fetch with Sapiom client", () => {
-    const fetch = createSapiomFetch({
+    const fetch = createFetch({
       sapiomClient: mockSapiomClient,
     });
 
-    expect(fetch).toBeDefined();
+    expect(typeof fetch).toBe("function");
   });
 });

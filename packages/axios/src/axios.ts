@@ -62,7 +62,7 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {}
  * });
  * ```
  */
-export function createSapiomAxios(
+export function withSapiom(
   axiosInstance: AxiosInstance,
   config?: SapiomAxiosConfig,
 ): AxiosInstance {

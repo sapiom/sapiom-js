@@ -1,7 +1,7 @@
-import { createSapiomNodeHttp } from "./node-http";
+import { createClient } from "./node-http";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 
-describe("createSapiomNodeHttp", () => {
+describe("createClient", () => {
   let mockSapiomClient: SapiomClient;
 
   beforeEach(() => {
@@ -22,7 +22,7 @@ describe("createSapiomNodeHttp", () => {
   });
 
   it("should create an HTTP client adapter", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
     });
 
@@ -31,7 +31,7 @@ describe("createSapiomNodeHttp", () => {
   });
 
   it("should attach sapiomClient to adapter", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
     });
 
@@ -39,7 +39,7 @@ describe("createSapiomNodeHttp", () => {
   });
 
   it("should create client with default metadata", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
       agentName: "test-agent",
       agentId: "agent-123",
@@ -50,7 +50,7 @@ describe("createSapiomNodeHttp", () => {
   });
 
   it("should throw error when calling addRequestInterceptor", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
     });
 
@@ -60,7 +60,7 @@ describe("createSapiomNodeHttp", () => {
   });
 
   it("should throw error when calling addResponseInterceptor", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
     });
 

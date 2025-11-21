@@ -1,7 +1,7 @@
-import { createSapiomFetch } from "./fetch";
+import { createFetch } from "./fetch";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 
-describe("createSapiomFetch", () => {
+describe("createFetch", () => {
   let mockSapiomClient: SapiomClient;
 
   beforeEach(() => {
@@ -22,7 +22,7 @@ describe("createSapiomFetch", () => {
   });
 
   it("should create a fetch function", () => {
-    const fetch = createSapiomFetch({
+    const fetch = createFetch({
       sapiomClient: mockSapiomClient,
     });
 
@@ -30,7 +30,7 @@ describe("createSapiomFetch", () => {
   });
 
   it("should attach sapiomClient to fetch function", () => {
-    const fetch = createSapiomFetch({
+    const fetch = createFetch({
       sapiomClient: mockSapiomClient,
     });
 
@@ -38,13 +38,13 @@ describe("createSapiomFetch", () => {
   });
 
   it("should create fetch with default metadata", () => {
-    const fetch = createSapiomFetch({
+    const fetch = createFetch({
       sapiomClient: mockSapiomClient,
       agentName: "test-agent",
       agentId: "agent-123",
       serviceName: "test-service",
     });
 
-    expect(fetch).toBeDefined();
+    expect(typeof fetch).toBe("function");
   });
 });

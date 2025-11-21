@@ -2,7 +2,7 @@
  * Critical tests for failureMode behavior
  * These tests ensure Sapiom failures don't break customer apps
  */
-import { createSapiomFetch } from "./fetch";
+import { createFetch } from "./fetch";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 import fetchMock from "@fetch-mock/jest";
 
@@ -48,7 +48,7 @@ describe("Fetch failureMode", () => {
         new Error("Sapiom API returned 500"),
       );
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -69,7 +69,7 @@ describe("Fetch failureMode", () => {
         new Error("ETIMEDOUT: Sapiom API timeout"),
       );
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
       }); // Default is "open"
 
@@ -87,7 +87,7 @@ describe("Fetch failureMode", () => {
         throw new TypeError("Cannot read property 'foo' of undefined");
       });
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -118,7 +118,7 @@ describe("Fetch failureMode", () => {
         new Error("Sapiom API error"),
       );
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -140,7 +140,7 @@ describe("Fetch failureMode", () => {
         new Error("Sapiom API returned 500"),
       );
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -158,7 +158,7 @@ describe("Fetch failureMode", () => {
 
       mockTransactionAPI.create.mockRejectedValue(new Error("ETIMEDOUT"));
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -178,7 +178,7 @@ describe("Fetch failureMode", () => {
         throw new TypeError("SDK bug");
       });
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -210,7 +210,7 @@ describe("Fetch failureMode", () => {
         new Error("Sapiom payment API error"),
       );
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -230,7 +230,7 @@ describe("Fetch failureMode", () => {
 
       mockTransactionAPI.create.mockRejectedValue(new Error("Sapiom error"));
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         // No failureMode specified
       });
@@ -253,7 +253,7 @@ describe("Fetch failureMode", () => {
         status: "denied",
       } as any);
 
-      const fetch = createSapiomFetch({
+      const fetch = createFetch({
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });

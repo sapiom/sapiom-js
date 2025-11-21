@@ -2,7 +2,7 @@
  * Integration tests for Sapiom Fetch implementation
  * Tests combined authorization + payment flow
  */
-import { createSapiomFetch } from "./fetch";
+import { createFetch } from "./fetch";
 import { SapiomClient } from "@sapiom/core";
 import { TransactionAPI } from "@sapiom/core";
 
@@ -28,22 +28,21 @@ describe("Sapiom Fetch Integration Tests", () => {
   });
 
   it("should create Sapiom-enabled fetch function", () => {
-    const fetch = createSapiomFetch({
+    const fetch = createFetch({
       sapiomClient: mockSapiomClient,
     });
 
-    expect(fetch).toBeDefined();
     expect(typeof fetch).toBe("function");
     expect((fetch as any).__sapiomClient).toBe(mockSapiomClient);
   });
 
   it("should create fetch with default metadata", () => {
-    const fetch = createSapiomFetch({
+    const fetch = createFetch({
       sapiomClient: mockSapiomClient,
       agentName: "test-agent",
       serviceName: "test-service",
     });
 
-    expect(fetch).toBeDefined();
+    expect(typeof fetch).toBe("function");
   });
 });

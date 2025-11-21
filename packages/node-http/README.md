@@ -16,17 +16,16 @@ npm install @sapiom/node-http
 ## Quick Start
 
 ```typescript
-import { createSapiomClient } from '@sapiom/node-http';
+import { createClient } from '@sapiom/node-http';
 
-const client = createSapiomClient({
-  sapiom: {
-    apiKey: process.env.SAPIOM_API_KEY
-  }
+const client = createClient({
+  apiKey: process.env.SAPIOM_API_KEY
 });
 
 const response = await client.request({
   method: 'GET',
-  url: 'https://api.example.com/data'
+  url: 'https://api.example.com/data',
+  headers: {}
 });
 ```
 
@@ -42,24 +41,50 @@ const response = await client.request({
 ## Configuration
 
 ```typescript
-import { createSapiomClient } from '@sapiom/node-http';
+import { createClient } from '@sapiom/node-http';
 
-const client = createSapiomClient({
-  sapiom: {
-    apiKey: string;
-    baseURL?: string;
-    timeout?: number;
-  },
-  authorization?: {
-    enabled?: boolean;
-    authorizedEndpoints?: Array<{
-      pathPattern: RegExp;
-      service: string;
-    }>;
-  },
-  payment?: {
-    enabled?: boolean;
-    onPaymentRequired?: (txId: string, payment: PaymentDetails) => void;
+const client = createClient({
+  // Required (or use SAPIOM_API_KEY environment variable)
+  apiKey: 'sk_...',
+
+  // Optional - Control
+  enabled: true,              // Enable Sapiom handling (default: true)
+  failureMode: 'open',        // 'open' | 'closed' (default: 'open')
+                              // 'open': Allow requests if Sapiom fails (prioritizes availability)
+                              // 'closed': Block requests if Sapiom fails (prioritizes security)
+
+  // Optional - Default metadata (applied to all requests)
+  agentName: 'my-agent',      // Agent identifier
+  agentId: 'agent-123',       // Agent UUID or numeric ID
+  serviceName: 'my-service',  // Service name for transactions
+  traceId: 'trace-xyz',       // Internal trace UUID
+  traceExternalId: 'ext-456', // External trace identifier
+});
+```
+
+### Per-Request Overrides
+
+Override configuration for individual requests using the `__sapiom` property:
+
+```typescript
+// Disable Sapiom for a specific request
+await client.request({
+  method: 'GET',
+  url: 'https://api.example.com/public',
+  headers: {},
+  __sapiom: { enabled: false }
+});
+
+// Override metadata for a specific request
+await client.request({
+  method: 'POST',
+  url: 'https://api.example.com/resource',
+  headers: { 'Content-Type': 'application/json' },
+  body: { data: 'test' },
+  __sapiom: {
+    serviceName: 'different-service',
+    actionName: 'custom-action',
+    traceExternalId: 'ext-789'
   }
 });
 ```

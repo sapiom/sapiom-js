@@ -5,11 +5,7 @@
  * using native Axios interceptors.
  */
 
-// Main entry point
-export {
-  createSapiomAxios,
-  createSapiomAxios as createSapiomClient,
-} from "./axios";
+export { withSapiom } from "./axios";
 export type { SapiomAxiosConfig } from "./axios";
 
 export {

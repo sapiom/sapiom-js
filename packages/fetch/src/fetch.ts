@@ -74,7 +74,7 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
  * await fetch(publicRequest);
  * ```
  */
-export function createSapiomFetch(config?: SapiomFetchConfig): typeof fetch {
+export function createFetch(config?: SapiomFetchConfig): typeof fetch {
   if (config?.enabled === false) {
     return globalThis.fetch;
   }

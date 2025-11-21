@@ -99,7 +99,7 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
  * });
  * ```
  */
-export function createSapiomNodeHttp(
+export function createClient(
   config?: SapiomNodeHttpConfig
 ): HttpClientAdapter & { __sapiomClient: SapiomClient } {
   const sapiomClient = initializeSapiomClient(config);

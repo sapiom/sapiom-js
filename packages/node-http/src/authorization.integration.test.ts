@@ -2,7 +2,7 @@
  * Integration tests for Authorization with Node-HTTP
  * Detailed authorization handler tests are in @sapiom/core
  */
-import { createSapiomNodeHttp } from "./node-http";
+import { createClient } from "./node-http";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 
 describe("Authorization Integration - Node-HTTP", () => {
@@ -26,7 +26,7 @@ describe("Authorization Integration - Node-HTTP", () => {
   });
 
   it("should create client with Sapiom client", () => {
-    const client = createSapiomNodeHttp({
+    const client = createClient({
       sapiomClient: mockSapiomClient,
     });
 

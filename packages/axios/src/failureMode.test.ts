@@ -4,7 +4,7 @@
  */
 import axios, { AxiosInstance } from "axios";
 import MockAdapter from "axios-mock-adapter";
-import { createSapiomAxios } from "./axios";
+import { withSapiom } from "./axios";
 import { SapiomClient, TransactionAPI } from "@sapiom/core";
 
 describe("Axios failureMode", () => {
@@ -46,7 +46,7 @@ describe("Axios failureMode", () => {
         new Error("Sapiom API returned 500"),
       );
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -64,7 +64,7 @@ describe("Axios failureMode", () => {
         new Error("ETIMEDOUT: Sapiom API timeout"),
       );
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
       }); // Default is "open"
 
@@ -80,7 +80,7 @@ describe("Axios failureMode", () => {
         throw new TypeError("Cannot read property 'foo' of undefined");
       });
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -96,7 +96,7 @@ describe("Axios failureMode", () => {
         new Error("ECONNREFUSED: Connection refused"),
       );
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -125,7 +125,7 @@ describe("Axios failureMode", () => {
         new Error("Sapiom API error"),
       );
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
@@ -148,7 +148,7 @@ describe("Axios failureMode", () => {
         new Error("Sapiom API returned 500"),
       );
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -163,7 +163,7 @@ describe("Axios failureMode", () => {
 
       mockTransactionAPI.create.mockRejectedValue(new Error("ETIMEDOUT"));
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -178,7 +178,7 @@ describe("Axios failureMode", () => {
         throw new TypeError("SDK bug");
       });
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -205,7 +205,7 @@ describe("Axios failureMode", () => {
         new Error("Sapiom payment API error"),
       );
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "closed",
       });
@@ -222,7 +222,7 @@ describe("Axios failureMode", () => {
 
       mockTransactionAPI.create.mockRejectedValue(new Error("Sapiom error"));
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         // No failureMode specified
       });
@@ -242,7 +242,7 @@ describe("Axios failureMode", () => {
         status: "denied",
       } as any);
 
-      const client = createSapiomAxios(axiosInstance, {
+      const client = withSapiom(axiosInstance, {
         sapiomClient: mockSapiomClient,
         failureMode: "open",
       });
