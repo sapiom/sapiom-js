@@ -6,17 +6,6 @@ export enum TransactionStatus {
   CANCELLED = "cancelled",
 }
 
-export interface PaymentData {
-  protocol: string;
-  network: string;
-  token: string;
-  scheme: string;
-  amount: string;
-  payTo: string;
-  payToType: string;
-  protocolMetadata?: Record<string, any>;
-}
-
 export interface TransactionCostInput {
   fiatAmount: string;
   fiatAssetSymbol: string;
@@ -35,7 +24,7 @@ export interface CreateTransactionRequest {
   actionName?: string;
   resourceName?: string;
   qualifiers?: Record<string, any>;
-  paymentData?: PaymentData;
+  paymentData?: PaymentProtocolData;
   metadata?: Record<string, any>;
   traceId?: string;
   traceExternalId?: string;
@@ -111,13 +100,38 @@ export interface ListTransactionsParams {
   offset?: number;
 }
 
-export interface ReauthorizeWithPaymentRequest {
-  protocol: string;
-  network: string;
-  token: string;
+/**
+ * x402 Payment Requirement
+ * Based on: https://github.com/http-402/x402
+ */
+export interface X402PaymentRequirement {
   scheme: string;
-  amount: string;
+  network: string;
+  maxAmountRequired: string;
+  resource: string;
+  description: string;
+  mimeType: string;
+  outputSchema?: object | null;
   payTo: string;
-  payToType: string;
-  protocolMetadata?: Record<string, any>;
+  maxTimeoutSeconds: number;
+  asset: string;
+  extra?: object | null;
+}
+
+/**
+ * x402 Protocol Response
+ */
+export interface X402Response {
+  x402Version: number;
+  accepts: X402PaymentRequirement[];
+}
+
+/**
+ * Payment Protocol Data
+ * Used for both transaction creation with payment and reauthorization
+ */
+export interface PaymentProtocolData {
+  x402: X402Response;
+  additionalProtocols?: Record<string, any>;
+  metadata?: Record<string, any>;
 }

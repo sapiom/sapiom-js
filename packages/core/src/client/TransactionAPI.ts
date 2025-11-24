@@ -1,7 +1,7 @@
 import {
   CreateTransactionRequest,
   ListTransactionsParams,
-  ReauthorizeWithPaymentRequest,
+  PaymentProtocolData,
   TransactionResponse,
   TransactionStatus,
   TransactionCostInput,
@@ -82,14 +82,14 @@ export class TransactionAPI {
   }
 
   /**
-   * Reauthorize an existing authorized transaction with payment details
+   * Reauthorize an existing authorized transaction with payment protocol data
    * @param transactionId The transaction ID to reauthorize
-   * @param data The payment data for reauthorization
+   * @param data The payment protocol data (x402, etc.)
    * @returns The updated transaction response with payment details
    */
   async reauthorizeWithPayment(
     transactionId: string,
-    data: ReauthorizeWithPaymentRequest,
+    data: PaymentProtocolData,
   ): Promise<TransactionResponse> {
     return await this.client.request<TransactionResponse>({
       method: "POST",
