@@ -3,7 +3,7 @@ import {
   TransactionPoller,
   TransactionStatus,
   captureUserCallSite,
-  extractPaymentData,
+  extractX402Response,
   extractResourceFromError,
   HttpClientRequestFacts,
 } from "@sapiom/core";
@@ -321,10 +321,11 @@ export async function handlePayment(
     },
   };
 
-  const paymentData = extractPaymentData(httpError);
+  // Extract raw x402 response (no pre-processing)
+  const x402Response = extractX402Response(httpError);
   const resource = extractResourceFromError(httpError);
 
-  if (!paymentData || !resource) {
+  if (!x402Response || !resource) {
     return response;
   }
 
@@ -343,7 +344,17 @@ export async function handlePayment(
       serviceName: resource.split(":")[0] || "unknown",
       actionName: userMetadata?.actionName || "access",
       resourceName: userMetadata?.resourceName || resource,
-      paymentData,
+      paymentData: {
+        x402: x402Response,
+        metadata: {
+          originalRequest: {
+            url: originalUrl,
+            method: originalInit?.method || "GET",
+          },
+          responseHeaders: Object.fromEntries(response.headers.entries()),
+          httpStatusCode: 402,
+        },
+      },
       traceId: userMetadata?.traceId,
       traceExternalId: userMetadata?.traceExternalId,
       agentId: userMetadata?.agentId,

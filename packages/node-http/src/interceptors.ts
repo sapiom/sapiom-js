@@ -3,7 +3,7 @@ import {
   TransactionPoller,
   TransactionStatus,
   captureUserCallSite,
-  extractPaymentData,
+  extractX402Response,
   extractResourceFromError,
   HttpRequest,
   HttpResponse,
@@ -310,10 +310,11 @@ export async function handlePayment(
     throw error;
   }
 
-  const paymentData = extractPaymentData(error);
+  // Extract raw x402 response (no pre-processing)
+  const x402Response = extractX402Response(error);
   const resource = extractResourceFromError(error);
 
-  if (!paymentData || !resource) {
+  if (!x402Response || !resource) {
     throw error;
   }
 
@@ -326,7 +327,17 @@ export async function handlePayment(
       serviceName: resource.split(":")[0] || "unknown",
       actionName: userMetadata?.actionName || "access",
       resourceName: userMetadata?.resourceName || resource,
-      paymentData,
+      paymentData: {
+        x402: x402Response,
+        metadata: {
+          originalRequest: {
+            url: originalRequest.url,
+            method: originalRequest.method,
+          },
+          responseHeaders: error.response?.headers,
+          httpStatusCode: 402,
+        },
+      },
       traceId: userMetadata?.traceId,
       traceExternalId: userMetadata?.traceExternalId,
       agentId: userMetadata?.agentId,
