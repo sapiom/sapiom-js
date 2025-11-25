@@ -10,7 +10,7 @@ import {
   TransactionPoller,
   TransactionStatus,
   captureUserCallSite,
-  extractPaymentData,
+  extractX402Response,
   extractResourceFromError,
   HttpError,
   HttpClientRequestFacts,
@@ -419,10 +419,11 @@ export function addPaymentInterceptor(
 
       const httpError = axiosErrorToHttpError(error);
 
-      const paymentData = extractPaymentData(httpError);
+      // Extract raw x402 response (no pre-processing)
+      const x402Response = extractX402Response(httpError);
       const resource = extractResourceFromError(httpError);
 
-      if (!paymentData || !resource) {
+      if (!x402Response || !resource) {
         return Promise.reject(error);
       }
 
@@ -444,7 +445,17 @@ export function addPaymentInterceptor(
             transaction =
               await config.sapiomClient.transactions.reauthorizeWithPayment(
                 existingTransactionId,
-                paymentData,
+                {
+                  x402: x402Response,
+                  metadata: {
+                    originalRequest: {
+                      url: originalConfig.url,
+                      method: originalConfig.method,
+                    },
+                    responseHeaders: error.response?.headers,
+                    httpStatusCode: 402,
+                  },
+                },
               );
           }
         } catch (apiError) {
@@ -474,7 +485,17 @@ export function addPaymentInterceptor(
             serviceName,
             actionName: userMetadata?.actionName || "access",
             resourceName: userMetadata?.resourceName || resource,
-            paymentData,
+            paymentData: {
+              x402: x402Response,
+              metadata: {
+                originalRequest: {
+                  url: originalConfig.url,
+                  method: originalConfig.method,
+                },
+                responseHeaders: error.response?.headers,
+                httpStatusCode: 402,
+              },
+            },
             traceId: userMetadata?.traceId,
             traceExternalId: userMetadata?.traceExternalId,
             agentId: userMetadata?.agentId,

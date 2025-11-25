@@ -9,10 +9,9 @@ export {
   isPaymentRequiredError,
   isAxios402Error,
   isHttp402Error,
-  extractPaymentData,
   extractResourceFromError,
   extractTransactionId,
-  convertX402ToPaymentData,
+  extractX402Response,
   wrapWith402Detection,
   registerErrorDetector,
   AxiosErrorDetector,
@@ -21,9 +20,8 @@ export {
 
 export type {
   X402PaymentResponse,
-  X402PaymentRequirement,
+  X402PaymentRequirement as X402PaymentRequirementFromError,
   SapiomPaymentResponse,
-  ExtractedPaymentInfo,
   ErrorDetectorAdapter,
 } from "./errors/PaymentErrorDetection";
 
@@ -46,12 +44,13 @@ export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry";
 export { TransactionStatus } from "./types/transaction";
 
 export type {
-  PaymentData,
   CreateTransactionRequest,
   TransactionResponse,
   PaymentTransactionResponse,
   ListTransactionsParams,
-  ReauthorizeWithPaymentRequest,
+  PaymentProtocolData,
+  X402Response,
+  X402PaymentRequirement,
 } from "./types/transaction";
 
 // HTTP Types (needed by HTTP integration packages)
