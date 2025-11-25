@@ -138,6 +138,14 @@ export class SapiomChatOpenAI<
       : options;
     const startTime = Date.now();
 
+    // Check if Sapiom is disabled (either from config or parent metadata)
+    const parentEnabled = parsedOptions?.metadata?.__sapiomEnabled;
+    const isEnabled = this.sapiomConfig?.enabled !== false;
+    if (parentEnabled === false || !isEnabled) {
+      // Call parent generate without Sapiom tracking
+      return await super.generate(messages, options, callbacks);
+    }
+
     // Resolve trace ID with priority order
     const traceId: string =
       (parsedOptions?.metadata?.__sapiomTraceId as string | undefined) || // Per-invoke override
@@ -151,6 +159,12 @@ export class SapiomChatOpenAI<
     const agentName: string | undefined =
       (parsedOptions?.metadata?.__sapiomAgentName as string | undefined) || // Per-invoke override
       this.#defaultAgentName; // From config
+
+    // Resolve failure mode
+    const failureMode =
+      (parsedOptions?.metadata?.__sapiomFailureMode as string) ||
+      this.sapiomConfig?.failureMode ||
+      "open";
 
     // Use shared authorizer from agent if available, otherwise create inline
     const authorizer =
@@ -263,35 +277,58 @@ export class SapiomChatOpenAI<
     // ============================================
     // STEP 2: Create Transaction with Request Facts
     // ============================================
-    const tx = await authorizer.createAndAuthorize({
-      // NEW: Send request facts (backend infers service/action/resource and calculates cost)
-      requestFacts: {
-        source: "langchain-llm",
-        version: "v1",
-        sdk: {
-          name: "@sapiom/sdk",
-          version: SDK_VERSION,
-          nodeVersion: runtime.nodeVersion,
-          platform: runtime.platform,
-          dependencies,
+    let tx;
+    try {
+      tx = await authorizer.createAndAuthorize({
+        // NEW: Send request facts (backend infers service/action/resource and calculates cost)
+        requestFacts: {
+          source: "langchain-llm",
+          version: "v1",
+          sdk: {
+            name: "@sapiom/sdk",
+            version: SDK_VERSION,
+            nodeVersion: runtime.nodeVersion,
+            platform: runtime.platform,
+            dependencies,
+          },
+          request: requestFacts,
         },
-        request: requestFacts,
-      },
 
-      // Allow config overrides (for advanced users)
-      serviceName: this.sapiomConfig?.serviceName,
+        // Allow config overrides (for advanced users)
+        serviceName: this.sapiomConfig?.serviceName,
 
-      // Trace still works the same
-      traceExternalId: traceId,
+        // Trace still works the same
+        traceExternalId: traceId,
 
-      // Agent tagging
-      agentId,
-      agentName,
+        // Agent tagging
+        agentId,
+        agentName,
 
-      // User-facing metadata and qualifiers (optional)
-      qualifiers: parsedOptions?.metadata?.qualifiers,
-      metadata: parsedOptions?.metadata?.userMetadata,
-    } as any); // TODO: Update TransactionAuthorizer types
+        // User-facing metadata and qualifiers (optional)
+        qualifiers: parsedOptions?.metadata?.qualifiers,
+        metadata: parsedOptions?.metadata?.userMetadata,
+      } as any); // TODO: Update TransactionAuthorizer types
+    } catch (error) {
+      // Always throw authorization denials and timeouts (these are business logic, not failures)
+      if (
+        error instanceof Error &&
+        (error.name === "TransactionDeniedError" ||
+          error.name === "TransactionTimeoutError")
+      ) {
+        throw error;
+      }
+
+      // Handle Sapiom API failures according to failureMode
+      if (failureMode === "closed") {
+        throw error;
+      }
+      console.error(
+        "[Sapiom] Failed to create/authorize LLM transaction, continuing without tracking:",
+        error,
+      );
+      // Continue without Sapiom tracking
+      return await super.generate(messages, options, callbacks);
+    }
 
     // Update current trace ID from transaction response
     if (tx.trace) {

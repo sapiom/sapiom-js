@@ -95,12 +95,6 @@ export interface SapiomModelConfig extends BaseSapiomIntegrationConfig {
   serviceName?: string;
 
   /**
-   * Whether to track and authorize LLM calls
-   * @default true
-   */
-  enabled?: boolean;
-
-  /**
    * Callbacks for LLM operations
    */
   onBeforeGenerate?: (
@@ -229,6 +223,19 @@ export interface SapiomSessionMetadata {
    * @internal
    */
   __sapiomAgentInvokeTransaction?: any;
+
+  /**
+   * Whether Sapiom tracking is enabled for this context
+   * Can be false to disable tracking
+   */
+  __sapiomEnabled?: boolean;
+
+  /**
+   * Failure mode for this context
+   * - 'open': Allow requests if Sapiom fails (prioritizes availability)
+   * - 'closed': Block requests if Sapiom fails (prioritizes security)
+   */
+  __sapiomFailureMode?: string;
 }
 
 /**
