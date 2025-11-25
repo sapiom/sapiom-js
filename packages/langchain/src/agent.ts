@@ -45,12 +45,6 @@ export interface WrapSapiomAgentConfig extends BaseSapiomIntegrationConfig {
    * - Cannot be used with agentId
    */
   agentName?: string;
-
-  /**
-   * Callbacks
-   */
-  onAgentStart?: (traceId: string, txId: string) => void;
-  onAgentEnd?: (traceId: string, totalCost: number) => void;
 }
 
 /**
@@ -83,8 +77,7 @@ export interface WrapSapiomAgentConfig extends BaseSapiomIntegrationConfig {
  * // Wrap with Sapiom trace tracking
  * const agent = wrapSapiomAgent(graph, {
  *   sapiomClient,
- *   traceId: "agent-workflow",
- *   onAgentEnd: (traceId, cost) => console.log(`Done: $${cost}`)
+ *   traceId: "agent-workflow"
  * });
  *
  * // All operations (model + tools) grouped under one trace
@@ -95,8 +88,14 @@ export function wrapSapiomAgent(
   graph: any,
   config: WrapSapiomAgentConfig,
 ): any {
+  // If Sapiom is disabled, return the original graph unchanged
+  if (config.enabled === false) {
+    return graph;
+  }
+
   const sapiomClient = initializeSapiomClient(config);
   const traceId = config.traceId || generateSDKTraceId();
+  const failureMode = config.failureMode ?? "open";
   const authorizer = new TransactionAuthorizer({ sapiomClient });
 
   // ============================================
@@ -119,22 +118,43 @@ export function wrapSapiomAgent(
     };
 
     // Create and authorize agent transaction with facts
-    const agentTx = await authorizer.createAndAuthorize({
-      requestFacts: {
-        source: "langchain-agent",
-        version: "v1",
-        sdk: {
-          name: "@sapiom/sdk",
-          version: SDK_VERSION,
+    let agentTx;
+    try {
+      agentTx = await authorizer.createAndAuthorize({
+        requestFacts: {
+          source: "langchain-agent",
+          version: "v1",
+          sdk: {
+            name: "@sapiom/sdk",
+            version: SDK_VERSION,
+          },
+          request: requestFacts,
         },
-        request: requestFacts,
-      },
-      traceExternalId: traceId,
-      agentId: config.agentId,
-      agentName: config.agentName,
-    } as any);
+        traceExternalId: traceId,
+        agentId: config.agentId,
+        agentName: config.agentName,
+      } as any);
+    } catch (error) {
+      // Always throw authorization denials and timeouts (these are business logic, not failures)
+      if (
+        error instanceof Error &&
+        (error.name === "TransactionDeniedError" ||
+          error.name === "TransactionTimeoutError")
+      ) {
+        throw error;
+      }
 
-    config.onAgentStart?.(traceId, agentTx.id);
+      // Handle Sapiom API failures according to failureMode
+      if (failureMode === "closed") {
+        throw error;
+      }
+      console.error(
+        "[Sapiom] Failed to create/authorize agent transaction, continuing without tracking:",
+        error,
+      );
+      // Continue without Sapiom tracking
+      return await originalInvoke(state, options);
+    }
 
     // Inject trace, authorizer, and transaction into config
     // Authorizer is shared to avoid creating new instances on every tool call
@@ -150,6 +170,8 @@ export function wrapSapiomAgent(
         __sapiomAgentTxId: agentTx.id,
         __sapiomAgentInvokeTransaction: agentTx, // Signal to stream()
         __sapiomClient: sapiomClient,
+        __sapiomEnabled: config.enabled,
+        __sapiomFailureMode: failureMode,
       },
     };
 
@@ -176,8 +198,6 @@ export function wrapSapiomAgent(
         .catch((err) => {
           console.error("Failed to submit agent response facts:", err);
         });
-
-      config.onAgentEnd?.(traceId, 0); // TODO: Query actual cost from backend
 
       return result;
     } catch (error) {
@@ -232,22 +252,42 @@ export function wrapSapiomAgent(
         timestamp: new Date().toISOString(),
       };
 
-      agentTx = await authorizer.createAndAuthorize({
-        requestFacts: {
-          source: "langchain-agent",
-          version: "v1",
-          sdk: {
-            name: "@sapiom/sdk",
-            version: SDK_VERSION,
+      try {
+        agentTx = await authorizer.createAndAuthorize({
+          requestFacts: {
+            source: "langchain-agent",
+            version: "v1",
+            sdk: {
+              name: "@sapiom/sdk",
+              version: SDK_VERSION,
+            },
+            request: requestFacts,
           },
-          request: requestFacts,
-        },
-        traceExternalId: traceId,
-        agentId: config.agentId,
-        agentName: config.agentName,
-      } as any);
+          traceExternalId: traceId,
+          agentId: config.agentId,
+          agentName: config.agentName,
+        } as any);
+      } catch (error) {
+        // Always throw authorization denials and timeouts (these are business logic, not failures)
+        if (
+          error instanceof Error &&
+          (error.name === "TransactionDeniedError" ||
+            error.name === "TransactionTimeoutError")
+        ) {
+          throw error;
+        }
 
-      config.onAgentStart?.(traceId, agentTx.id);
+        // Handle Sapiom API failures according to failureMode
+        if (failureMode === "closed") {
+          throw error;
+        }
+        console.error(
+          "[Sapiom] Failed to create/authorize agent transaction, continuing without tracking:",
+          error,
+        );
+        // Continue without Sapiom tracking
+        return await originalStream(state, options);
+      }
 
       // Inject trace and authorizer into config
       enrichedConfig = {
@@ -260,6 +300,8 @@ export function wrapSapiomAgent(
           __sapiomAuthorizer: authorizer, // Share authorizer
           __sapiomAgentTxId: agentTx.id,
           __sapiomClient: sapiomClient,
+          __sapiomEnabled: config.enabled,
+          __sapiomFailureMode: failureMode,
         },
       };
     }

@@ -65,7 +65,17 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
   tool: T,
   config?: SapiomToolConfig,
 ): T & { __sapiomClient: SapiomClient } {
+  // If Sapiom is disabled, return the original tool with markers but no tracking
+  if (config?.enabled === false) {
+    const sapiomClient = initializeSapiomClient(config);
+    (tool as any).__sapiomClient = sapiomClient;
+    (tool as any).__sapiomWrapped = true;
+    (tool as any).__sapiomDisabled = true;
+    return tool as T & { __sapiomClient: SapiomClient };
+  }
+
   const sapiomClient = initializeSapiomClient(config);
+  const failureMode = config?.failureMode ?? "open";
 
   // ============================================
   // PREVENT DOUBLE-WRAPPING
@@ -102,6 +112,12 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
   ): Promise<any> {
     const startTime = Date.now();
 
+    // Check if Sapiom is disabled (either from config or parent metadata)
+    const parentEnabled = parentConfig?.metadata?.__sapiomEnabled;
+    if (parentEnabled === false || (tool as any).__sapiomDisabled) {
+      return await originalFunc(args, runManager, parentConfig);
+    }
+
     // Extract trace and agent config from parent config (set by model/agent)
     const traceId = parentConfig?.metadata?.__sapiomTraceId as
       | string
@@ -114,6 +130,8 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       | undefined;
     const sessionClient =
       (parentConfig?.metadata?.__sapiomClient as SapiomClient) || sapiomClient;
+    const sessionFailureMode =
+      (parentConfig?.metadata?.__sapiomFailureMode as string) || failureMode;
 
     // Use shared authorizer from agent if available, otherwise create inline
     const authorizer =
@@ -138,30 +156,51 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
     // ============================================
     // Create and authorize tool transaction with facts
     // ============================================
-    const toolTx = await authorizer.createAndAuthorize({
-      // NEW: Send request facts (backend infers service/action/resource)
-      requestFacts: {
-        source: "langchain-tool",
-        version: "v1",
-        sdk: {
-          name: "@sapiom/sdk",
-          version: SDK_VERSION,
+    let toolTx;
+    try {
+      toolTx = await authorizer.createAndAuthorize({
+        // NEW: Send request facts (backend infers service/action/resource)
+        requestFacts: {
+          source: "langchain-tool",
+          version: "v1",
+          sdk: {
+            name: "@sapiom/sdk",
+            version: SDK_VERSION,
+          },
+          request: requestFacts,
         },
-        request: requestFacts,
-      },
 
-      // Allow config overrides (for advanced users)
-      serviceName: config?.serviceName,
-      actionName: config?.actionName,
-      resourceName: config?.resourceName,
+        // Allow config overrides (for advanced users)
+        serviceName: config?.serviceName,
+        actionName: config?.actionName,
+        resourceName: config?.resourceName,
 
-      traceExternalId: traceId,
-      agentId,
-      agentName,
-      qualifiers: config?.qualifiers,
-    } as any);
+        traceExternalId: traceId,
+        agentId,
+        agentName,
+        qualifiers: config?.qualifiers,
+      } as any);
+    } catch (error) {
+      // Always throw authorization denials and timeouts (these are business logic, not failures)
+      if (
+        error instanceof Error &&
+        (error.name === "TransactionDeniedError" ||
+          error.name === "TransactionTimeoutError")
+      ) {
+        throw error;
+      }
 
-    config?.onBeforeCall?.(toolTx.id, tool.name, args, traceId);
+      // Handle Sapiom API failures according to failureMode
+      if (sessionFailureMode === "closed") {
+        throw error;
+      }
+      console.error(
+        "[Sapiom] Failed to create/authorize tool transaction, continuing without tracking:",
+        error,
+      );
+      // Continue without Sapiom tracking
+      return await originalFunc(args, runManager, parentConfig);
+    }
 
     try {
       // Call original tool func
@@ -185,8 +224,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
           console.error("Failed to submit tool response facts:", err);
         });
 
-      config?.onAfterCall?.(toolTx.id, result);
-
       return result;
     } catch (error) {
       // ============================================
@@ -194,8 +231,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       // ============================================
       if (isMCPPaymentError(error)) {
         const paymentData = extractPaymentFromMCPError(error);
-
-        config?.onPaymentRequired?.(toolTx.id, paymentData, tool.name);
 
         // Create and authorize payment transaction
         const authorizedPaymentTx = await authorizer.createAndAuthorize({
@@ -211,8 +246,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
             originalToolCall: tool.name,
           },
         });
-
-        config?.onPaymentAuthorized?.(authorizedPaymentTx.id);
 
         // Extract payment authorization
         const paymentAuth = getPaymentAuthFromTransaction(authorizedPaymentTx);
@@ -247,11 +280,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
         .catch((err) => {
           console.error("Failed to submit tool error facts:", err);
         });
-
-      // Handle authorization denied
-      if (isAuthorizationDenied(error)) {
-        config?.onAuthorizationDenied?.(toolTx.id, (error as Error).message);
-      }
 
       throw error;
     }
@@ -300,6 +328,8 @@ export class SapiomDynamicTool<
     sapiomConfig?: SapiomToolConfig,
   ) {
     const sapiomClient = initializeSapiomClient(sapiomConfig);
+    const failureMode = sapiomConfig?.failureMode ?? "open";
+    const isEnabled = sapiomConfig?.enabled !== false;
 
     // Store original func
     const originalFunc = fields.func;
@@ -310,6 +340,12 @@ export class SapiomDynamicTool<
       runManager?: CallbackManagerForToolRun,
       parentConfig?: RunnableConfig,
     ): Promise<ToolOutputT> => {
+      // Check if Sapiom is disabled (either from config or parent metadata)
+      const parentEnabled = parentConfig?.metadata?.__sapiomEnabled;
+      if (parentEnabled === false || !isEnabled) {
+        return await originalFunc(args, parentConfig);
+      }
+
       // Extract trace and agent config from parent config (set by model/agent)
       const traceId = parentConfig?.metadata?.__sapiomTraceId as
         | string
@@ -323,6 +359,8 @@ export class SapiomDynamicTool<
       const sessionClient =
         (parentConfig?.metadata?.__sapiomClient as SapiomClient) ||
         sapiomClient;
+      const sessionFailureMode =
+        (parentConfig?.metadata?.__sapiomFailureMode as string) || failureMode;
 
       // Use shared authorizer from agent if available, otherwise create inline
       const authorizer =
@@ -330,28 +368,47 @@ export class SapiomDynamicTool<
         new TransactionAuthorizer({ sapiomClient: sessionClient });
 
       // Create and authorize tool transaction
-      const toolTx = await authorizer.createAndAuthorize({
-        serviceName: sapiomConfig?.serviceName || "tool",
-        actionName: sapiomConfig?.actionName || "call",
-        resourceName: sapiomConfig?.resourceName || fields.name,
-        traceExternalId: traceId, // undefined is fine - backend auto-creates trace
-        agentId,
-        agentName,
-        qualifiers: {
-          tool: fields.name,
-          // DO NOT include args - may contain sensitive data
-          // Users can explicitly add safe metadata via sapiomConfig.qualifiers
-          ...sapiomConfig?.qualifiers,
-        },
-      });
+      let toolTx;
+      try {
+        toolTx = await authorizer.createAndAuthorize({
+          serviceName: sapiomConfig?.serviceName || "tool",
+          actionName: sapiomConfig?.actionName || "call",
+          resourceName: sapiomConfig?.resourceName || fields.name,
+          traceExternalId: traceId, // undefined is fine - backend auto-creates trace
+          agentId,
+          agentName,
+          qualifiers: {
+            tool: fields.name,
+            // DO NOT include args - may contain sensitive data
+            // Users can explicitly add safe metadata via sapiomConfig.qualifiers
+            ...sapiomConfig?.qualifiers,
+          },
+        });
+      } catch (error) {
+        // Always throw authorization denials and timeouts (these are business logic, not failures)
+        if (
+          error instanceof Error &&
+          (error.name === "TransactionDeniedError" ||
+            error.name === "TransactionTimeoutError")
+        ) {
+          throw error;
+        }
 
-      sapiomConfig?.onBeforeCall?.(toolTx.id, fields.name, args, traceId);
+        // Handle Sapiom API failures according to failureMode
+        if (sessionFailureMode === "closed") {
+          throw error;
+        }
+        console.error(
+          "[Sapiom] Failed to create/authorize tool transaction, continuing without tracking:",
+          error,
+        );
+        // Continue without Sapiom tracking
+        return await originalFunc(args, parentConfig);
+      }
 
       try {
         // Call original func
         const result = await originalFunc(args, parentConfig);
-
-        sapiomConfig?.onAfterCall?.(toolTx.id, result);
 
         return result;
       } catch (error) {
@@ -360,12 +417,6 @@ export class SapiomDynamicTool<
         // ============================================
         if (isMCPPaymentError(error)) {
           const paymentData = extractPaymentFromMCPError(error);
-
-          sapiomConfig?.onPaymentRequired?.(
-            toolTx.id,
-            paymentData,
-            fields.name,
-          );
 
           // Create and authorize payment transaction
           const authorizedPaymentTx = await authorizer.createAndAuthorize({
@@ -381,8 +432,6 @@ export class SapiomDynamicTool<
               originalToolCall: fields.name,
             },
           });
-
-          sapiomConfig?.onPaymentAuthorized?.(authorizedPaymentTx.id);
 
           // Extract payment authorization
           const paymentAuth =
