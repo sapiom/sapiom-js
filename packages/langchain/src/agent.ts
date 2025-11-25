@@ -45,12 +45,6 @@ export interface WrapSapiomAgentConfig extends BaseSapiomIntegrationConfig {
    * - Cannot be used with agentId
    */
   agentName?: string;
-
-  /**
-   * Callbacks
-   */
-  onAgentStart?: (traceId: string, txId: string) => void;
-  onAgentEnd?: (traceId: string, totalCost: number) => void;
 }
 
 /**
@@ -83,8 +77,7 @@ export interface WrapSapiomAgentConfig extends BaseSapiomIntegrationConfig {
  * // Wrap with Sapiom trace tracking
  * const agent = wrapSapiomAgent(graph, {
  *   sapiomClient,
- *   traceId: "agent-workflow",
- *   onAgentEnd: (traceId, cost) => console.log(`Done: $${cost}`)
+ *   traceId: "agent-workflow"
  * });
  *
  * // All operations (model + tools) grouped under one trace
@@ -163,8 +156,6 @@ export function wrapSapiomAgent(
       return await originalInvoke(state, options);
     }
 
-    config.onAgentStart?.(traceId, agentTx.id);
-
     // Inject trace, authorizer, and transaction into config
     // Authorizer is shared to avoid creating new instances on every tool call
     // Transaction signals to stream() that we already authorized
@@ -207,8 +198,6 @@ export function wrapSapiomAgent(
         .catch((err) => {
           console.error("Failed to submit agent response facts:", err);
         });
-
-      config.onAgentEnd?.(traceId, 0); // TODO: Query actual cost from backend
 
       return result;
     } catch (error) {
@@ -299,8 +288,6 @@ export function wrapSapiomAgent(
         // Continue without Sapiom tracking
         return await originalStream(state, options);
       }
-
-      config.onAgentStart?.(traceId, agentTx.id);
 
       // Inject trace and authorizer into config
       enrichedConfig = {

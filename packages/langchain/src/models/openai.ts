@@ -171,12 +171,6 @@ export class SapiomChatOpenAI<
       (parsedOptions?.metadata?.__sapiomAuthorizer as any) ||
       new TransactionAuthorizer({
         sapiomClient: this.sapiomClient,
-        onAuthorizationDenied: (txId, resource, reason) => {
-          this.sapiomConfig?.onAuthorizationDenied?.(
-            txId,
-            reason || "Transaction denied",
-          );
-        },
       });
 
     // ============================================

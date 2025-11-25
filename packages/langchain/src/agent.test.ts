@@ -21,12 +21,8 @@ describe("wrapSapiomAgent", () => {
   let mockGraph: any;
   let originalInvoke: jest.Mock;
   let originalStream: jest.Mock;
-  let onAgentStart: jest.Mock;
-  let onAgentEnd: jest.Mock;
 
   beforeEach(() => {
-    onAgentStart = jest.fn();
-    onAgentEnd = jest.fn();
 
     mockClient = {
       transactions: {
@@ -72,8 +68,6 @@ describe("wrapSapiomAgent", () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
         traceId: "agent-workflow",
-        onAgentStart,
-        onAgentEnd,
       });
 
       await agent.invoke({ messages: [{ role: "user", content: "Hello" }] });
@@ -125,30 +119,6 @@ describe("wrapSapiomAgent", () => {
       expect(capturedConfig.metadata.__sapiomClient).toBe(mockClient);
     });
 
-    it("calls onAgentStart callback", async () => {
-      const agent = wrapSapiomAgent(mockGraph, {
-        sapiomClient: mockClient,
-        traceId: "test-trace",
-        onAgentStart,
-      });
-
-      await agent.invoke({ messages: [] });
-
-      expect(onAgentStart).toHaveBeenCalledWith("test-trace", "tx-agent-123");
-    });
-
-    it("calls onAgentEnd callback", async () => {
-      const agent = wrapSapiomAgent(mockGraph, {
-        sapiomClient: mockClient,
-        traceId: "test-trace",
-        onAgentEnd,
-      });
-
-      await agent.invoke({ messages: [] });
-
-      expect(onAgentEnd).toHaveBeenCalledWith("test-trace", 0);
-    });
-
     it("preserves user-provided metadata", async () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
@@ -178,7 +148,6 @@ describe("wrapSapiomAgent", () => {
       const agent = wrapSapiomAgent(mockGraph, {
         sapiomClient: mockClient,
         traceId: "stream-trace",
-        onAgentStart,
       });
 
       const stream = await agent.stream({ messages: [] });
@@ -196,8 +165,6 @@ describe("wrapSapiomAgent", () => {
       expect(createCall.requestFacts.source).toBe("langchain-agent");
       expect(createCall.requestFacts.request.entryMethod).toBe("stream");
       expect(createCall.traceExternalId).toBe("stream-trace");
-
-      expect(onAgentStart).toHaveBeenCalledWith("stream-trace", "tx-agent-123");
     });
 
     it("injects trace metadata into config", async () => {

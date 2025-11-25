@@ -201,36 +201,6 @@ describe("wrapSapiomTool", () => {
     expect(callCount).toBe(2); // Called twice (first failed, retry succeeded)
     expect(mockClient.transactions.create).toHaveBeenCalledTimes(2);
   });
-
-  it("calls onBeforeCall and onAfterCall callbacks", async () => {
-    const onBeforeCall = jest.fn();
-    const onAfterCall = jest.fn();
-
-    const tool = new DynamicStructuredTool({
-      name: "test_tool",
-      description: "Test",
-      schema: z.object({ input: z.string() }),
-      func: async (input: any) => `Result: ${input.input}`,
-    });
-
-    const wrapped = wrapSapiomTool(tool, {
-      sapiomClient: mockClient,
-      onBeforeCall,
-      onAfterCall,
-    });
-
-    const result = await (wrapped as any).func({ input: "test" }, undefined, {
-      metadata: { __sapiomTraceId: "trace-123" },
-    });
-
-    expect(onBeforeCall).toHaveBeenCalledWith(
-      "tx-123",
-      "test_tool",
-      { input: "test" },
-      "trace-123",
-    );
-    expect(onAfterCall).toHaveBeenCalledWith("tx-123", "Result: test");
-  });
 });
 
 describe("SapiomDynamicTool", () => {

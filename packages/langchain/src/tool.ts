@@ -202,8 +202,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       return await originalFunc(args, runManager, parentConfig);
     }
 
-    config?.onBeforeCall?.(toolTx.id, tool.name, args, traceId);
-
     try {
       // Call original tool func
       const result = await originalFunc(args, runManager, parentConfig);
@@ -226,8 +224,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
           console.error("Failed to submit tool response facts:", err);
         });
 
-      config?.onAfterCall?.(toolTx.id, result);
-
       return result;
     } catch (error) {
       // ============================================
@@ -235,8 +231,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       // ============================================
       if (isMCPPaymentError(error)) {
         const paymentData = extractPaymentFromMCPError(error);
-
-        config?.onPaymentRequired?.(toolTx.id, paymentData, tool.name);
 
         // Create and authorize payment transaction
         const authorizedPaymentTx = await authorizer.createAndAuthorize({
@@ -252,8 +246,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
             originalToolCall: tool.name,
           },
         });
-
-        config?.onPaymentAuthorized?.(authorizedPaymentTx.id);
 
         // Extract payment authorization
         const paymentAuth = getPaymentAuthFromTransaction(authorizedPaymentTx);
@@ -288,11 +280,6 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
         .catch((err) => {
           console.error("Failed to submit tool error facts:", err);
         });
-
-      // Handle authorization denied
-      if (isAuthorizationDenied(error)) {
-        config?.onAuthorizationDenied?.(toolTx.id, (error as Error).message);
-      }
 
       throw error;
     }
@@ -419,13 +406,9 @@ export class SapiomDynamicTool<
         return await originalFunc(args, parentConfig);
       }
 
-      sapiomConfig?.onBeforeCall?.(toolTx.id, fields.name, args, traceId);
-
       try {
         // Call original func
         const result = await originalFunc(args, parentConfig);
-
-        sapiomConfig?.onAfterCall?.(toolTx.id, result);
 
         return result;
       } catch (error) {
@@ -434,12 +417,6 @@ export class SapiomDynamicTool<
         // ============================================
         if (isMCPPaymentError(error)) {
           const paymentData = extractPaymentFromMCPError(error);
-
-          sapiomConfig?.onPaymentRequired?.(
-            toolTx.id,
-            paymentData,
-            fields.name,
-          );
 
           // Create and authorize payment transaction
           const authorizedPaymentTx = await authorizer.createAndAuthorize({
@@ -455,8 +432,6 @@ export class SapiomDynamicTool<
               originalToolCall: fields.name,
             },
           });
-
-          sapiomConfig?.onPaymentAuthorized?.(authorizedPaymentTx.id);
 
           // Extract payment authorization
           const paymentAuth =

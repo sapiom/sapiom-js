@@ -283,13 +283,10 @@ describe("SapiomChatOpenAI", () => {
       status: "denied",
     });
 
-    const onAuthorizationDenied = jest.fn();
-
     const model = new SapiomChatOpenAI(
       { model: "gpt-4", openAIApiKey: "test-key" },
       {
         sapiomClient: mockClient,
-        onAuthorizationDenied,
       },
     );
 

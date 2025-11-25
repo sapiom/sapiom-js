@@ -250,13 +250,10 @@ describe("SapiomChatAnthropic", () => {
       status: "denied",
     });
 
-    const onAuthorizationDenied = jest.fn();
-
     const model = new SapiomChatAnthropic(
       { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       {
         sapiomClient: mockClient,
-        onAuthorizationDenied,
       },
     );
 
@@ -283,13 +280,10 @@ describe("SapiomChatAnthropic", () => {
   });
 
   it("handles missing usage_metadata gracefully", async () => {
-    const onAfterGenerate = jest.fn();
-
     const model = new SapiomChatAnthropic(
       { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       {
         sapiomClient: mockClient,
-        onAfterGenerate,
       },
     );
 
@@ -297,8 +291,8 @@ describe("SapiomChatAnthropic", () => {
 
     await model.invoke("Test");
 
-    // onAfterGenerate should not be called if no usage data
-    expect(onAfterGenerate).not.toHaveBeenCalled();
+    // Should not throw even without usage metadata
+    expect(mockClient.transactions.create).toHaveBeenCalled();
   });
 
   it("supports custom service name in config", async () => {
