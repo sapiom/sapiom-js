@@ -1,290 +1,92 @@
 # @sapiom/langchain
 
-[![npm version](https://badge.fury.io/js/%40sapiom%2Flangchain.svg)](https://www.npmjs.com/package/@sapiom/langchain)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-> ⚠️ **Beta Status:** Currently in v0.x. API may change before v1.0.0. Production-ready and actively maintained.
-
-LangChain integration for Sapiom SDK providing automatic cost tracking, authorization, and session management for LangChain agents, tools, and models.
-
-## Version Compatibility
-
-| Package Version | LangChain Version | Status |
-|----------------|-------------------|---------|
-| v0.x           | v0.3+            | ✅ Active |
-| v1.0           | v1.0+            | 🚧 Planned |
-
-This package currently supports LangChain v0.x. LangChain v1.x support coming in SDK v1.0.
+LangChain v1.x integration for Sapiom SDK.
 
 ## Installation
 
 ```bash
-npm install @sapiom/langchain
+npm install @sapiom/langchain langchain
 ```
-
-## Features
-
-- ✅ **One-line integration**: Replace `createReactAgent` with `createSapiomReactAgent`
-- ✅ Automatic transaction authorization and cost tracking
-- ✅ Trace-based workflow grouping for agents, tools, and models
-- ✅ Pre-emptive authorization before LLM calls
-- ✅ Automatic payment handling for MCP tools (402 errors)
-- ✅ Works with any LangChain model (OpenAI, Anthropic, etc.)
-- ✅ Full TypeScript support
-- ✅ Environment variable configuration
 
 ## Quick Start
 
-The easiest way to add Sapiom tracking to your LangChain agent:
-
 ```typescript
-import { createSapiomReactAgent } from '@sapiom/langchain';
-import { ChatOpenAI } from '@langchain/openai';
+import { createAgent } from "langchain";
+import { createSapiomMiddleware } from "@sapiom/langchain";
 
-// Just replace createReactAgent with createSapiomReactAgent
-const agent = await createSapiomReactAgent(
-  {
-    llm: new ChatOpenAI({ model: 'gpt-4' }),
-    tools: [...yourTools]
-  },
-  {
-    apiKey: process.env.SAPIOM_API_KEY,
-    traceId: 'my-agent-session'
-  }
-);
+const agent = createAgent({
+  model: "gpt-4",
+  tools: [getWeather, sendEmail],
+  middleware: [
+    createSapiomMiddleware({
+      apiKey: process.env.SAPIOM_API_KEY,
+    }),
+  ],
+});
 
-// All operations (model + tools) are automatically tracked
+// All model and tool calls are automatically tracked!
 const result = await agent.invoke({
-  messages: [{ role: "user", content: "What's the weather?" }]
+  messages: [{ role: "user", content: "What's the weather in Tokyo?" }],
 });
 ```
-
-That's it! `createSapiomReactAgent` automatically wraps your model and tools with Sapiom tracking.
 
 ## Configuration
 
-All Sapiom wrappers (models, tools, agents) support the following configuration options:
-
 ```typescript
-import { SapiomChatOpenAI, wrapSapiomTool, wrapSapiomAgent } from '@sapiom/langchain';
+createSapiomMiddleware({
+  // Required (or use SAPIOM_API_KEY env var)
+  apiKey: "sk-...",
 
-const config = {
-  // Required (or use SAPIOM_API_KEY environment variable)
-  apiKey: 'sk_...',
+  // Control behavior
+  enabled: true,           // Enable/disable tracking
+  failureMode: "open",     // 'open' (graceful) | 'closed' (strict)
 
-  // Optional - Control
-  enabled: true,              // Enable Sapiom handling (default: true)
-  failureMode: 'open',        // 'open' | 'closed' (default: 'open')
-                              // 'open': Allow operations if Sapiom fails (prioritizes availability)
-                              // 'closed': Block operations if Sapiom fails (prioritizes security)
-
-  // Optional - Default metadata (applied to all operations)
-  agentName: 'my-agent',      // Agent identifier
-  agentId: 'agent-123',       // Agent UUID or numeric ID
-  serviceName: 'my-service',  // Service name for transactions
-  traceId: 'trace-xyz',       // Workflow trace identifier
-  traceExternalId: 'ext-456', // External trace identifier
-};
-
-// Apply to models
-const model = new SapiomChatOpenAI({ model: 'gpt-4' }, config);
-
-// Apply to tools
-const tool = wrapSapiomTool(myTool, config);
-
-// Apply to agents
-const agent = wrapSapiomAgent(graph, config);
-```
-
-### Control Options
-
-#### `enabled`
-When `false`, disables Sapiom tracking entirely. The wrapped component behaves exactly like the original LangChain component.
-
-```typescript
-const model = new SapiomChatOpenAI(
-  { model: 'gpt-4' },
-  { apiKey: 'sk_...', enabled: false }
-);
-// Behaves like regular ChatOpenAI - no tracking
-```
-
-#### `failureMode`
-Controls behavior when Sapiom API fails (network errors, 5xx, timeouts, SDK bugs):
-- `'open'` (default): Logs error, continues without tracking (prioritizes availability)
-- `'closed'`: Throws error, blocks operation (prioritizes security)
-
-**Important:** Authorization denials and timeouts always throw errors regardless of `failureMode` (these are business logic decisions, not system failures).
-
-```typescript
-// Development/testing: Fail fast if Sapiom has issues
-const model = new SapiomChatOpenAI(
-  { model: 'gpt-4' },
-  { apiKey: 'sk_...', failureMode: 'closed' }
-);
-
-// Production: Degrade gracefully if Sapiom has issues
-const model = new SapiomChatOpenAI(
-  { model: 'gpt-4' },
-  { apiKey: 'sk_...', failureMode: 'open' } // default
-);
-```
-
-### Per-Request Overrides
-
-Override configuration for individual requests using metadata:
-
-```typescript
-// Disable Sapiom for a specific call
-await model.invoke("Public data", {
-  metadata: { __sapiomEnabled: false }
-});
-
-// Override trace ID for a specific call
-await model.invoke("User query", {
-  metadata: { __sapiomTraceId: "conversation-456" }
+  // Default trace/agent info
+  traceId: "my-workflow",  // Groups related transactions
+  agentId: "AG-001",       // Tag with existing agent
+  agentName: "my-agent",   // Find-or-create agent by name
 });
 ```
 
-## Usage
-
-### Agents (Recommended)
-
-Use `createSapiomReactAgent` as a drop-in replacement for LangChain's `createReactAgent`. It automatically wraps your model and tools:
+## Per-Invocation Overrides
 
 ```typescript
-import { createSapiomReactAgent } from '@sapiom/langchain';
-import { ChatOpenAI } from '@langchain/openai';
-import { ChatAnthropic } from '@langchain/anthropic';
-
-// Works with any LangChain model
-const agent = await createSapiomReactAgent(
+await agent.invoke(
+  { messages: [...] },
   {
-    llm: new ChatOpenAI({ model: 'gpt-4' }),
-    // or: llm: new ChatAnthropic({ model: 'claude-3-5-sonnet-20241022' }),
-    tools: [...yourTools]
-  },
-  {
-    apiKey: process.env.SAPIOM_API_KEY,
-    traceId: 'my-agent-session',
-    agentName: 'customer-support-bot',
-    failureMode: 'open'  // 'open' | 'closed'
-  }
-);
-
-// All operations (model + tools) grouped under one trace
-await agent.invoke({
-  messages: [{ role: "user", content: "Hello" }]
-});
-```
-
-### Advanced Usage
-
-For more control, you can manually wrap individual components:
-
-#### Models
-
-Drop-in replacements for LangChain chat models:
-
-```typescript
-import { SapiomChatOpenAI, SapiomChatAnthropic } from '@sapiom/langchain';
-
-// OpenAI
-const openai = new SapiomChatOpenAI(
-  { model: 'gpt-4', openAIApiKey: process.env.OPENAI_API_KEY },
-  { apiKey: process.env.SAPIOM_API_KEY }
-);
-
-// Anthropic
-const anthropic = new SapiomChatAnthropic(
-  { model: 'claude-3-5-sonnet-20241022', anthropicApiKey: process.env.ANTHROPIC_API_KEY },
-  { apiKey: process.env.SAPIOM_API_KEY }
-);
-```
-
-#### Tools
-
-Wrap existing tools or create new ones with Sapiom tracking:
-
-```typescript
-import { wrapSapiomTool, sapiomTool } from '@sapiom/langchain';
-import { DynamicStructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
-
-// Wrap existing tool
-const existingTool = new DynamicStructuredTool({
-  name: "weather",
-  description: "Get weather for a city",
-  schema: z.object({ city: z.string() }),
-  func: async ({ city }) => `Weather in ${city}: Sunny`
-});
-
-const wrappedTool = wrapSapiomTool(existingTool, {
-  apiKey: process.env.SAPIOM_API_KEY,
-  serviceName: 'weather-api'
-});
-
-// Or create new tool with built-in tracking
-const newTool = sapiomTool(
-  async ({ city }) => `Weather in ${city}: Sunny`,
-  {
-    name: "weather",
-    description: "Get weather for a city",
-    schema: z.object({ city: z.string() })
-  },
-  {
-    apiKey: process.env.SAPIOM_API_KEY,
-    serviceName: 'weather-api'
+    context: {
+      sapiomTraceId: "conversation-456",
+      sapiomAgentId: "AG-002",
+    },
   }
 );
 ```
 
-#### Manual Agent Wrapping
+## Failure Modes
 
-If you need to wrap an existing agent graph:
+| Mode | Behavior |
+|------|----------|
+| `open` (default) | Log errors, continue without tracking |
+| `closed` | Throw errors, block operations |
 
-```typescript
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { wrapSapiomAgent, SapiomChatOpenAI } from '@sapiom/langchain';
+Authorization denials always throw regardless of failure mode.
 
-// Create model and tools with Sapiom tracking
-const model = new SapiomChatOpenAI(
-  { model: 'gpt-4' },
-  { apiKey: process.env.SAPIOM_API_KEY }
-);
+## What Gets Tracked
 
-const tools = [
-  // ... your wrapped tools
-];
+- **Agent lifecycle**: Start/end transactions
+- **Model calls**: Token estimation, actual usage, tool calls
+- **Tool calls**: Pre-authorization, payment retry (x402-mcp)
 
-// Create LangChain agent
-const graph = await createReactAgent({ llm: model, tools });
+## LangChain v0.x
 
-// Wrap with Sapiom for unified trace tracking
-const agent = wrapSapiomAgent(graph, {
-  apiKey: process.env.SAPIOM_API_KEY,
-  traceId: 'agent-workflow',
-  agentName: 'customer-support-bot',
-  failureMode: 'open'
-});
+For LangChain v0.x (< 1.0.0), use `@sapiom/langchain-classic`:
 
-// All operations (model + tools) grouped under one trace
-await agent.invoke({ messages: [{ role: "user", content: "Hello" }] });
+```bash
+npm install @sapiom/langchain-classic
 ```
 
-## Environment Variables
-
-Automatically reads from environment:
-- `SAPIOM_API_KEY` (required)
-- `SAPIOM_BASE_URL` or `SAPIOM_API_URL` (optional)
-- `SAPIOM_TIMEOUT` (optional, in milliseconds)
+See [@sapiom/langchain-classic](../langchain-classic) for documentation.
 
 ## License
 
-MIT © [Sapiom](../../LICENSE)
-
-## Links
-
-- [Documentation](https://docs.sapiom.com)
-- [GitHub](https://github.com/sapiom/sapiom-javascript)
-- [NPM](https://www.npmjs.com/package/@sapiom/langchain)
+MIT
