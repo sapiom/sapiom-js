@@ -189,6 +189,10 @@ export function createClient(
           if (res.statusCode === 402) {
             const error: HttpError = {
               message: "Payment required",
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+              data: response.data,
               response,
             };
             reject(error);
