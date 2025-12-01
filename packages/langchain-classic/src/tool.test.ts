@@ -32,6 +32,9 @@ describe("wrapSapiomTool", () => {
           success: true,
           factId: "fact-123",
         }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-123", status: "completed" },
+        }),
       },
     } as any;
   });
@@ -71,8 +74,8 @@ describe("wrapSapiomTool", () => {
 
     expect(mockClient.transactions.get).toHaveBeenCalledWith("tx-123");
 
-    // Verify response facts sent
-    expect(mockClient.transactions.addFacts).toHaveBeenCalled();
+    // Verify transaction completed
+    expect(mockClient.transactions.complete).toHaveBeenCalled();
   });
 
   it("prevents double-wrapping", () => {
@@ -128,6 +131,9 @@ describe("wrapSapiomTool", () => {
         addFacts: jest.fn().mockResolvedValue({
           success: true,
           factId: "fact-456",
+        }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-session-456", status: "completed" },
         }),
       },
     } as any;
@@ -222,6 +228,9 @@ describe("SapiomDynamicTool", () => {
         addFacts: jest.fn().mockResolvedValue({
           success: true,
           factId: "fact-456",
+        }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-456", status: "completed" },
         }),
       },
     } as any;
@@ -347,6 +356,9 @@ describe("sapiomTool", () => {
           success: true,
           factId: "fact-factory",
         }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-factory", status: "completed" },
+        }),
       },
     } as any;
   });
@@ -444,6 +456,9 @@ describe("integration scenarios", () => {
         addFacts: jest.fn().mockResolvedValue({
           success: true,
           factId: "fact-integration",
+        }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-integration", status: "completed" },
         }),
       },
     } as any;

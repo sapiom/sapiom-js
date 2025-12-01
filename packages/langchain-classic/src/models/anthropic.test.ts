@@ -65,6 +65,11 @@ describe("SapiomChatAnthropic", () => {
           factId: "fact-resp-123",
           costId: "cost-actual-123",
         }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-model-123", status: "completed" },
+          factId: "fact-resp-123",
+          costId: "cost-actual-123",
+        }),
         addCost: jest.fn().mockResolvedValue({
           id: "cost-actual-123",
           isEstimate: false,

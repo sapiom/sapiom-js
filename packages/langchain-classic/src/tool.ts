@@ -207,21 +207,23 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       const result = await originalFunc(args, runManager, parentConfig);
       const duration = Date.now() - startTime;
 
-      // Submit response facts (fire-and-forget)
+      // Complete transaction with response facts (fire-and-forget)
       sessionClient.transactions
-        .addFacts(toolTx.id, {
-          source: "langchain-tool",
-          version: "v1",
-          factPhase: "response",
-          facts: {
-            success: true,
-            durationMs: duration,
-            hasResult: result !== null && result !== undefined,
-            resultType: typeof result,
+        .complete(toolTx.id, {
+          outcome: "success",
+          responseFacts: {
+            source: "langchain-tool",
+            version: "v1",
+            facts: {
+              success: true,
+              durationMs: duration,
+              hasResult: result !== null && result !== undefined,
+              resultType: typeof result,
+            },
           },
         })
         .catch((err) => {
-          console.error("Failed to submit tool response facts:", err);
+          console.error("Failed to complete tool transaction:", err);
         });
 
       return result;
@@ -263,22 +265,24 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
         return await originalFunc(argsWithPayment, runManager, parentConfig);
       }
 
-      // Submit error facts (fire-and-forget)
+      // Complete transaction with error facts (fire-and-forget)
       const duration = Date.now() - startTime;
       sessionClient.transactions
-        .addFacts(toolTx.id, {
-          source: "langchain-tool",
-          version: "v1",
-          factPhase: "error",
-          facts: {
-            errorType: (error as any).constructor?.name || "Error",
-            errorMessage: (error as Error).message,
-            isMCPPaymentError: false, // Already handled above
-            elapsedMs: duration,
+        .complete(toolTx.id, {
+          outcome: "error",
+          responseFacts: {
+            source: "langchain-tool",
+            version: "v1",
+            facts: {
+              errorType: (error as any).constructor?.name || "Error",
+              errorMessage: (error as Error).message,
+              isMCPPaymentError: false, // Already handled above
+              elapsedMs: duration,
+            },
           },
         })
         .catch((err) => {
-          console.error("Failed to submit tool error facts:", err);
+          console.error("Failed to complete tool transaction:", err);
         });
 
       throw error;

@@ -18,6 +18,7 @@ jest.mock("@sapiom/core", () => ({
 const mockSapiomClient = {
   transactions: {
     addFacts: jest.fn().mockResolvedValue({}),
+    complete: jest.fn().mockResolvedValue({}),
   },
 };
 
@@ -158,14 +159,16 @@ describe("createSapiomMiddleware", () => {
 
       await middleware.afterAgent!(state as any, runtime);
 
-      expect(mockSapiomClient.transactions.addFacts).toHaveBeenCalledWith(
+      expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
         expect.objectContaining({
-          source: "langchain-agent",
-          factPhase: "response",
-          facts: expect.objectContaining({
-            success: true,
-            outputMessageCount: 1,
+          outcome: "success",
+          responseFacts: expect.objectContaining({
+            source: "langchain-agent",
+            facts: expect.objectContaining({
+              success: true,
+              outputMessageCount: 1,
+            }),
           }),
         })
       );
@@ -178,7 +181,7 @@ describe("createSapiomMiddleware", () => {
 
       await middleware.afterAgent!(state as any, runtime);
 
-      expect(mockSapiomClient.transactions.addFacts).not.toHaveBeenCalled();
+      expect(mockSapiomClient.transactions.complete).not.toHaveBeenCalled();
     });
   });
 
@@ -236,16 +239,18 @@ describe("createSapiomMiddleware", () => {
 
       await middleware.wrapModelCall!(request, handler);
 
-      expect(mockSapiomClient.transactions.addFacts).toHaveBeenCalledWith(
+      expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
         expect.objectContaining({
-          source: "langchain-llm",
-          factPhase: "response",
-          facts: expect.objectContaining({
-            actualInputTokens: 10,
-            actualOutputTokens: 20,
-            hadToolCalls: true,
-            toolCallCount: 1,
+          outcome: "success",
+          responseFacts: expect.objectContaining({
+            source: "langchain-llm",
+            facts: expect.objectContaining({
+              actualInputTokens: 10,
+              actualOutputTokens: 20,
+              hadToolCalls: true,
+              toolCallCount: 1,
+            }),
           }),
         })
       );
@@ -310,13 +315,15 @@ describe("createSapiomMiddleware", () => {
 
       await middleware.wrapToolCall!(request, handler);
 
-      expect(mockSapiomClient.transactions.addFacts).toHaveBeenCalledWith(
+      expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
         expect.objectContaining({
-          source: "langchain-tool",
-          factPhase: "response",
-          facts: expect.objectContaining({
-            success: true,
+          outcome: "success",
+          responseFacts: expect.objectContaining({
+            source: "langchain-tool",
+            facts: expect.objectContaining({
+              success: true,
+            }),
           }),
         })
       );
@@ -331,13 +338,15 @@ describe("createSapiomMiddleware", () => {
         middleware.wrapToolCall!(request, handler)
       ).rejects.toThrow("Tool failed");
 
-      expect(mockSapiomClient.transactions.addFacts).toHaveBeenCalledWith(
+      expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
         expect.objectContaining({
-          factPhase: "error",
-          facts: expect.objectContaining({
-            errorType: "Error",
-            errorMessage: "Tool failed",
+          outcome: "error",
+          responseFacts: expect.objectContaining({
+            facts: expect.objectContaining({
+              errorType: "Error",
+              errorMessage: "Tool failed",
+            }),
           }),
         })
       );

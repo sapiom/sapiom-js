@@ -46,6 +46,9 @@ describe("wrapSapiomAgent", () => {
           success: true,
           factId: "fact-123",
         }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-123", status: "completed" },
+        }),
       },
     } as any;
 

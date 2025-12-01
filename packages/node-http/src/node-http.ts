@@ -14,8 +14,10 @@ import {
 import {
   handleAuthorization,
   handlePayment,
+  handleCompletion,
   AuthorizationConfig,
   PaymentConfig,
+  CompletionConfig,
 } from "./interceptors";
 
 /**
@@ -118,6 +120,7 @@ export function createClient(
 
   const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
   const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
+  const completionConfig: CompletionConfig = { sapiomClient };
 
   async function makeRequest<T = any>(
     request: HttpRequest
@@ -222,20 +225,36 @@ export function createClient(
         defaultMetadata
       );
 
+      const startTime = Date.now();
+      let response: HttpResponse<T> | null = null;
+      let error: Error | HttpError | null = null;
+
       try {
-        const response = await makeRequest<T>(modifiedRequest);
+        response = await makeRequest<T>(modifiedRequest);
         return response;
-      } catch (error) {
+      } catch (err) {
+        error = err as Error | HttpError;
         if ((error as HttpError).response?.status === 402) {
-          return await handlePayment(
+          response = await handlePayment(
             modifiedRequest,
             error as HttpError,
             paymentConfig,
             makeRequest,
             defaultMetadata
           );
+          error = null; // Clear error since payment succeeded
+          return response;
         }
-        throw error;
+        throw err;
+      } finally {
+        // Fire-and-forget: complete the transaction
+        handleCompletion(
+          modifiedRequest,
+          response,
+          error,
+          completionConfig,
+          startTime
+        );
       }
     },
 

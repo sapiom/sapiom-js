@@ -6,8 +6,10 @@ import {
 import {
   handleAuthorization,
   handlePayment,
+  handleCompletion,
   AuthorizationConfig,
   PaymentConfig,
+  CompletionConfig,
 } from "./interceptors";
 
 /**
@@ -94,6 +96,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
 
   const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
   const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
+  const completionConfig: CompletionConfig = { sapiomClient };
 
   const sapiomFetch = async (
     input: string | URL | Request,
@@ -110,19 +113,31 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
 
     request = await handleAuthorization(request, authConfig, defaultMetadata);
 
-    let response = await globalThis.fetch(request);
+    const startTime = Date.now();
+    let response: Response | null = null;
+    let error: Error | null = null;
 
-    if (response.status === 402) {
-      response = await handlePayment(
-        input,
-        init,
-        response,
-        paymentConfig,
-        defaultMetadata,
-      );
+    try {
+      response = await globalThis.fetch(request);
+
+      if (response.status === 402) {
+        response = await handlePayment(
+          input,
+          init,
+          response,
+          paymentConfig,
+          defaultMetadata,
+        );
+      }
+
+      return response;
+    } catch (err) {
+      error = err as Error;
+      throw err;
+    } finally {
+      // Fire-and-forget: complete the transaction
+      handleCompletion(request, response, error, completionConfig, startTime);
     }
-
-    return response;
   };
 
   (sapiomFetch as any).__sapiomClient = sapiomClient;

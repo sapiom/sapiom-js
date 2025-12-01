@@ -7,6 +7,7 @@ import {
 import {
   addAuthorizationInterceptor,
   addPaymentInterceptor,
+  addCompletionInterceptor,
 } from "./interceptors";
 
 /**
@@ -89,6 +90,10 @@ export function withSapiom(
   (axiosInstance as any).__sapiomFailureMode = failureMode;
 
   addAuthorizationInterceptor(axiosInstance, { sapiomClient, failureMode });
+  // IMPORTANT: Completion interceptor must be added BEFORE payment interceptor
+  // because Axios response interceptors run in LIFO order (last added runs first).
+  // We want: request -> payment handling (retry on 402) -> completion
+  addCompletionInterceptor(axiosInstance, { sapiomClient });
   addPaymentInterceptor(axiosInstance, { sapiomClient, failureMode });
 
   (axiosInstance as any).__sapiomClient = sapiomClient;

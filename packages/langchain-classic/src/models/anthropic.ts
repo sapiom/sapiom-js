@@ -354,33 +354,35 @@ export class SapiomChatAnthropic<
         }
       });
 
-      // Only submit response facts if we have usage data
+      // Complete transaction with response facts if we have usage data
       if (totalActualInputTokens > 0) {
         const responseMessage = (result.generations[0]?.[0] as any)?.message;
 
-        await this.sapiomClient.transactions.addFacts(tx.id, {
-          source: "langchain-llm",
-          version: "v1",
-          factPhase: "response",
-          facts: {
-            actualInputTokens: totalActualInputTokens,
-            actualOutputTokens: totalActualOutputTokens,
-            actualTotalTokens: totalActualTokens,
-            finishReason:
-              responseMessage?.response_metadata?.stop_reason || "unknown",
-            responseId: responseMessage?.id,
-            hadToolCalls,
-            toolCallCount: hadToolCalls ? toolCallNames.length : 0,
-            toolCallNames: hadToolCalls ? toolCallNames : undefined,
-            outputCharacters: result.generations[0]?.[0]?.text?.length || 0,
-            hadImages: false, // TODO: Detect image output
-            durationMs: duration,
+        await this.sapiomClient.transactions.complete(tx.id, {
+          outcome: "success",
+          responseFacts: {
+            source: "langchain-llm",
+            version: "v1",
+            facts: {
+              actualInputTokens: totalActualInputTokens,
+              actualOutputTokens: totalActualOutputTokens,
+              actualTotalTokens: totalActualTokens,
+              finishReason:
+                responseMessage?.response_metadata?.stop_reason || "unknown",
+              responseId: responseMessage?.id,
+              hadToolCalls,
+              toolCallCount: hadToolCalls ? toolCallNames.length : 0,
+              toolCallNames: hadToolCalls ? toolCallNames : undefined,
+              outputCharacters: result.generations[0]?.[0]?.text?.length || 0,
+              hadImages: false, // TODO: Detect image output
+              durationMs: duration,
+            },
           },
         });
       }
     } catch (error) {
       // Log error but don't fail the generate
-      console.error("Failed to submit response facts:", error);
+      console.error("Failed to complete LLM transaction:", error);
     }
 
     return result;

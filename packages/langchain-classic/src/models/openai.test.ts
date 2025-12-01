@@ -64,6 +64,11 @@ describe("SapiomChatOpenAI", () => {
           factId: "fact-resp-123",
           costId: "cost-actual-123",
         }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-123", status: "completed" },
+          factId: "fact-resp-123",
+          costId: "cost-actual-123",
+        }),
         addCost: jest.fn().mockResolvedValue({
           id: "cost-actual-123",
           isEstimate: false,
@@ -156,18 +161,18 @@ describe("SapiomChatOpenAI", () => {
       createCall.requestFacts.request.estimatedInputTokens,
     ).toBeGreaterThan(0);
 
-    // Verify response facts sent
-    expect(mockClient.transactions.addFacts).toHaveBeenCalled();
-    const addFactsCalls = (mockClient.transactions.addFacts as jest.Mock).mock
+    // Verify transaction completed
+    expect(mockClient.transactions.complete).toHaveBeenCalled();
+    const completeCalls = (mockClient.transactions.complete as jest.Mock).mock
       .calls;
-    expect(addFactsCalls.length).toBeGreaterThan(0);
+    expect(completeCalls.length).toBeGreaterThan(0);
 
-    const [txId, addFactsData] = addFactsCalls[0];
+    const [txId, completeData] = completeCalls[0];
     expect(txId).toBe("tx-model-123");
-    expect(addFactsData.source).toBe("langchain-llm");
-    expect(addFactsData.factPhase).toBe("response");
-    expect(addFactsData.facts.actualInputTokens).toBe(10);
-    expect(addFactsData.facts.actualOutputTokens).toBe(5);
+    expect(completeData.outcome).toBe("success");
+    expect(completeData.responseFacts.source).toBe("langchain-llm");
+    expect(completeData.responseFacts.facts.actualInputTokens).toBe(10);
+    expect(completeData.responseFacts.facts.actualOutputTokens).toBe(5);
   });
 
   it("auto-generates trace ID when not provided", async () => {
@@ -620,17 +625,19 @@ describe("SapiomChatOpenAI", () => {
 
       await model.invoke("Hello");
 
-      expect(mockClient.transactions.addFacts).toHaveBeenCalledWith(
+      expect(mockClient.transactions.complete).toHaveBeenCalledWith(
         "tx-model-123",
         expect.objectContaining({
-          source: "langchain-llm",
-          version: "v1",
-          factPhase: "response",
-          facts: expect.objectContaining({
-            actualInputTokens: 100,
-            actualOutputTokens: 50,
-            actualTotalTokens: 150,
-            finishReason: expect.any(String),
+          outcome: "success",
+          responseFacts: expect.objectContaining({
+            source: "langchain-llm",
+            version: "v1",
+            facts: expect.objectContaining({
+              actualInputTokens: 100,
+              actualOutputTokens: 50,
+              actualTotalTokens: 150,
+              finishReason: expect.any(String),
+            }),
           }),
         }),
       );
@@ -745,14 +752,16 @@ describe("SapiomChatOpenAI", () => {
         .calls[0][0];
       expect(createCall.requestFacts.request.batchSize).toBe(2);
 
-      // Should submit ONE aggregate response facts
-      expect(mockClient.transactions.addFacts).toHaveBeenCalledTimes(1);
-      const addFactsCall = (mockClient.transactions.addFacts as jest.Mock).mock
-        .calls[0][1];
+      // Should submit ONE aggregate complete call with response facts
+      expect(mockClient.transactions.complete).toHaveBeenCalledTimes(1);
+      const completeCall = (mockClient.transactions.complete as jest.Mock).mock
+        .calls[0];
 
-      expect(addFactsCall.facts.actualInputTokens).toBe(30); // 10 + 20
-      expect(addFactsCall.facts.actualOutputTokens).toBe(15); // 5 + 10
-      expect(addFactsCall.facts.actualTotalTokens).toBe(45); // 15 + 30
+      expect(completeCall[0]).toBe("tx-model-123"); // transaction ID
+      expect(completeCall[1].outcome).toBe("success");
+      expect(completeCall[1].responseFacts.facts.actualInputTokens).toBe(30); // 10 + 20
+      expect(completeCall[1].responseFacts.facts.actualOutputTokens).toBe(15); // 5 + 10
+      expect(completeCall[1].responseFacts.facts.actualTotalTokens).toBe(45); // 15 + 30
     });
   });
 

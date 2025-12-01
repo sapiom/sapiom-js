@@ -6,6 +6,8 @@ import {
   extractX402Response,
   extractResourceFromError,
   HttpClientRequestFacts,
+  HttpClientResponseFacts,
+  HttpClientErrorFacts,
 } from "@sapiom/core";
 
 import type { FailureMode } from "@sapiom/core";
@@ -420,4 +422,95 @@ export async function handlePayment(
   };
 
   return await globalThis.fetch(originalInput, newInit);
+}
+
+/**
+ * Completion configuration for fetch
+ */
+export interface CompletionConfig {
+  sapiomClient: SapiomClient;
+}
+
+/**
+ * Handle transaction completion after request finishes (fire-and-forget)
+ *
+ * This should be called after the HTTP request completes to mark the transaction
+ * as COMPLETED with the appropriate outcome (success/error).
+ */
+export function handleCompletion(
+  request: Request,
+  response: Response | null,
+  error: Error | null,
+  config: CompletionConfig,
+  startTime: number,
+): void {
+  const transactionId = getHeader(request.headers, "X-Sapiom-Transaction-Id");
+
+  if (!transactionId) {
+    return;
+  }
+
+  const durationMs = Date.now() - startTime;
+  const isSuccess = response !== null && response.ok;
+
+  const sanitizedHeaders: Record<string, string> = {};
+  if (response) {
+    const sensitiveHeaders = new Set([
+      "set-cookie",
+      "authorization",
+      "x-api-key",
+    ]);
+    for (const [key, value] of response.headers.entries()) {
+      if (!sensitiveHeaders.has(key.toLowerCase())) {
+        sanitizedHeaders[key] = value;
+      }
+    }
+  }
+
+  let responseFacts:
+    | { source: string; version: string; facts: Record<string, any> }
+    | undefined;
+
+  if (isSuccess && response) {
+    const facts: HttpClientResponseFacts = {
+      status: response.status,
+      statusText: response.statusText,
+      headers: sanitizedHeaders,
+      contentType: response.headers.get("content-type") || undefined,
+      durationMs,
+    };
+    responseFacts = {
+      source: "http-client",
+      version: "v1",
+      facts,
+    };
+  } else if (error || (response && !response.ok)) {
+    const facts: HttpClientErrorFacts = {
+      errorType: error?.name || "HttpError",
+      errorMessage: error?.message || `HTTP ${response?.status}`,
+      httpStatus: response?.status,
+      httpStatusText: response?.statusText,
+      isNetworkError: error !== null && response === null,
+      isTimeout:
+        error?.name === "AbortError" ||
+        error?.message?.includes("timeout") ||
+        false,
+      elapsedMs: durationMs,
+    };
+    responseFacts = {
+      source: "http-client",
+      version: "v1",
+      facts,
+    };
+  }
+
+  // Fire-and-forget: complete the transaction without blocking
+  config.sapiomClient.transactions
+    .complete(transactionId, {
+      outcome: isSuccess ? "success" : "error",
+      responseFacts,
+    })
+    .catch((err) => {
+      console.error("[Sapiom] Failed to complete transaction:", err);
+    });
 }

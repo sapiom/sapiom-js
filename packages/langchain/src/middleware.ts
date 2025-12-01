@@ -257,22 +257,26 @@ export function createSapiomMiddleware(
         ? Date.now() - (state.__sapiomStartTime as number)
         : 0;
 
-      // Submit response facts (fire-and-forget)
+      const txId = state.__sapiomAgentTxId as string;
+
+      // Complete transaction with response facts (fire-and-forget)
       sapiomClient.transactions
-        .addFacts(state.__sapiomAgentTxId as string, {
-          source: "langchain-agent",
-          version: "v1",
-          factPhase: "response",
-          facts: {
-            success: true,
-            durationMs: duration,
-            outputMessageCount: Array.isArray(state.messages)
-              ? state.messages.length
-              : 0,
+        .complete(txId, {
+          outcome: "success",
+          responseFacts: {
+            source: "langchain-agent",
+            version: "v1",
+            facts: {
+              success: true,
+              durationMs: duration,
+              outputMessageCount: Array.isArray(state.messages)
+                ? state.messages.length
+                : 0,
+            },
           },
         })
         .catch((err) => {
-          console.error("[Sapiom] Failed to submit agent response facts:", err);
+          console.error("[Sapiom] Failed to complete agent transaction:", err);
         });
     },
 
@@ -328,29 +332,31 @@ export function createSapiomMiddleware(
       const result = await handler(request);
       const duration = Date.now() - startTime;
 
-      // Submit response facts (fire-and-forget)
+      // Complete transaction with response facts (fire-and-forget)
       if (llmTx) {
         const actualUsage = extractActualTokens(result);
         const toolCalls = result.tool_calls ?? [];
 
         sapiomClient.transactions
-          .addFacts(llmTx.id, {
-            source: "langchain-llm",
-            version: "v1",
-            factPhase: "response",
-            facts: {
-              actualInputTokens: actualUsage?.promptTokens ?? 0,
-              actualOutputTokens: actualUsage?.completionTokens ?? 0,
-              actualTotalTokens: actualUsage?.totalTokens ?? 0,
-              durationMs: duration,
-              hadToolCalls: toolCalls.length > 0,
-              toolCallCount: toolCalls.length,
-              toolCallNames: toolCalls.map((tc) => tc.name),
-              finishReason: result.response_metadata?.finish_reason,
+          .complete(llmTx.id, {
+            outcome: "success",
+            responseFacts: {
+              source: "langchain-llm",
+              version: "v1",
+              facts: {
+                actualInputTokens: actualUsage?.promptTokens ?? 0,
+                actualOutputTokens: actualUsage?.completionTokens ?? 0,
+                actualTotalTokens: actualUsage?.totalTokens ?? 0,
+                durationMs: duration,
+                hadToolCalls: toolCalls.length > 0,
+                toolCallCount: toolCalls.length,
+                toolCallNames: toolCalls.map((tc) => tc.name),
+                finishReason: result.response_metadata?.finish_reason,
+              },
             },
           })
           .catch((err) => {
-            console.error("[Sapiom] Failed to submit LLM response facts:", err);
+            console.error("[Sapiom] Failed to complete LLM transaction:", err);
           });
       }
 
@@ -406,21 +412,23 @@ export function createSapiomMiddleware(
         const result = await handler(request);
         const duration = Date.now() - startTime;
 
-        // Submit success facts
+        // Complete transaction with response facts (fire-and-forget)
         if (toolTx) {
           sapiomClient.transactions
-            .addFacts(toolTx.id, {
-              source: "langchain-tool",
-              version: "v1",
-              factPhase: "response",
-              facts: {
-                success: true,
-                durationMs: duration,
+            .complete(toolTx.id, {
+              outcome: "success",
+              responseFacts: {
+                source: "langchain-tool",
+                version: "v1",
+                facts: {
+                  success: true,
+                  durationMs: duration,
+                },
               },
             })
             .catch((err) => {
               console.error(
-                "[Sapiom] Failed to submit tool response facts:",
+                "[Sapiom] Failed to complete tool transaction:",
                 err
               );
             });
@@ -466,25 +474,27 @@ export function createSapiomMiddleware(
           return handler(retryRequest);
         }
 
-        // Submit error facts
+        // Complete transaction with error facts (fire-and-forget)
         const duration = Date.now() - startTime;
         if (toolTx) {
           sapiomClient.transactions
-            .addFacts(toolTx.id, {
-              source: "langchain-tool",
-              version: "v1",
-              factPhase: "error",
-              facts: {
-                errorType:
-                  (error as Error)?.constructor?.name ?? "UnknownError",
-                errorMessage: (error as Error)?.message ?? String(error),
-                durationMs: duration,
-                isMCPPaymentError: false,
+            .complete(toolTx.id, {
+              outcome: "error",
+              responseFacts: {
+                source: "langchain-tool",
+                version: "v1",
+                facts: {
+                  errorType:
+                    (error as Error)?.constructor?.name ?? "UnknownError",
+                  errorMessage: (error as Error)?.message ?? String(error),
+                  durationMs: duration,
+                  isMCPPaymentError: false,
+                },
               },
             })
             .catch((err) => {
               console.error(
-                "[Sapiom] Failed to submit tool error facts:",
+                "[Sapiom] Failed to complete tool transaction:",
                 err
               );
             });
