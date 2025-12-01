@@ -444,9 +444,6 @@ export function createSapiomMiddleware(
 
           // Create and authorize payment transaction
           const paymentTx = await authorizer.createAndAuthorize({
-            serviceName: "tool",
-            actionName: "payment",
-            resourceName: request.tool.name,
             paymentData: convertX402ToSapiomPayment(paymentData),
             traceExternalId: traceId,
             qualifiers: { parentTxId: toolTx?.id },

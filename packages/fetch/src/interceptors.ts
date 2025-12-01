@@ -343,9 +343,9 @@ export async function handlePayment(
   let transaction;
   try {
     transaction = await config.sapiomClient.transactions.create({
-      serviceName: resource.split(":")[0] || "unknown",
-      actionName: userMetadata?.actionName || "access",
-      resourceName: userMetadata?.resourceName || resource,
+      serviceName: userMetadata?.serviceName,
+      actionName: userMetadata?.actionName,
+      resourceName: userMetadata?.resourceName,
       paymentData: {
         x402: x402Response,
         metadata: {

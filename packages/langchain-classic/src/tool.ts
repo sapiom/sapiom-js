@@ -236,9 +236,9 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
 
         // Create and authorize payment transaction
         const authorizedPaymentTx = await authorizer.createAndAuthorize({
-          serviceName: config?.serviceName || "tool",
-          actionName: "payment",
-          resourceName: config?.resourceName || tool.name,
+          serviceName: config?.serviceName,
+          actionName: config?.actionName,
+          resourceName: config?.resourceName,
           paymentData: convertX402ToSapiomPayment(paymentData),
           traceExternalId: traceId,
           agentId,
@@ -375,9 +375,9 @@ export class SapiomDynamicTool<
       let toolTx;
       try {
         toolTx = await authorizer.createAndAuthorize({
-          serviceName: sapiomConfig?.serviceName || "tool",
-          actionName: sapiomConfig?.actionName || "call",
-          resourceName: sapiomConfig?.resourceName || fields.name,
+          serviceName: sapiomConfig?.serviceName,
+          actionName: sapiomConfig?.actionName,
+          resourceName: sapiomConfig?.resourceName,
           traceExternalId: traceId, // undefined is fine - backend auto-creates trace
           agentId,
           agentName,
@@ -424,9 +424,9 @@ export class SapiomDynamicTool<
 
           // Create and authorize payment transaction
           const authorizedPaymentTx = await authorizer.createAndAuthorize({
-            serviceName: sapiomConfig?.serviceName || "tool",
-            actionName: "payment",
-            resourceName: sapiomConfig?.resourceName || fields.name,
+            serviceName: sapiomConfig?.serviceName,
+            actionName: sapiomConfig?.actionName,
+            resourceName: sapiomConfig?.resourceName,
             paymentData: convertX402ToSapiomPayment(paymentData),
             traceExternalId: traceId,
             agentId,

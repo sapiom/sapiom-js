@@ -276,16 +276,21 @@ describe("SapiomDynamicTool", () => {
     });
 
     expect(result).toBe("Results for: test");
-    expect(mockClient.transactions.create).toHaveBeenCalledWith({
-      serviceName: "database",
-      actionName: "call",
-      resourceName: "search",
-      traceExternalId: "trace-789",
-      qualifiers: {
-        tool: "search",
-        // args NOT included for security
-      },
-    });
+    expect(mockClient.transactions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceName: "database",
+        resourceName: "search",
+        traceExternalId: "trace-789",
+        qualifiers: {
+          tool: "search",
+          // args NOT included for security
+        },
+      }),
+    );
+    // actionName should be undefined (inferred by backend)
+    const createCall = (mockClient.transactions.create as jest.Mock).mock
+      .calls[0][0];
+    expect(createCall.actionName).toBeUndefined();
   });
 
   it("handles payment errors", async () => {

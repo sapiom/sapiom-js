@@ -478,24 +478,11 @@ export function addPaymentInterceptor(
           return Promise.reject(error);
         }
       } else {
-        const extractServiceName = (resource: string): string => {
-          try {
-            const url = new URL(resource);
-            const pathParts = url.pathname.split("/").filter(Boolean);
-            return pathParts[0] || "api";
-          } catch {
-            return "api";
-          }
-        };
-
-        const serviceName =
-          userMetadata?.serviceName || extractServiceName(resource);
-
         try {
           transaction = await config.sapiomClient.transactions.create({
-            serviceName,
-            actionName: userMetadata?.actionName || "access",
-            resourceName: userMetadata?.resourceName || resource,
+            serviceName: userMetadata?.serviceName,
+            actionName: userMetadata?.actionName,
+            resourceName: userMetadata?.resourceName,
             paymentData: {
               x402: x402Response,
               metadata: {
