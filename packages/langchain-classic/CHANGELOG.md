@@ -1,4 +1,4 @@
-# @sapiom/langchain
+# @sapiom/langchain-classic
 
 ## 0.1.0
 
