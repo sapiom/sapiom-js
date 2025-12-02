@@ -28,15 +28,11 @@
  */
 
 // Main middleware
-export {
-  createSapiomMiddleware,
-  type SapiomMiddleware,
-  type SapiomMiddlewareConfig,
-  type SapiomMiddlewareContext,
-  type ModelRequest,
-  type ModelResponse,
-  type ToolCallRequest,
-} from "./middleware";
+export { createSapiomMiddleware } from "./middleware";
+export type { SapiomMiddlewareConfig, SapiomMiddlewareContext } from "./internal/types";
+
+// Re-export LangChain types for convenience
+export type { AgentMiddleware, ToolCallRequest } from "langchain";
 
 // Types (re-exported from middleware, but also available directly)
 export type {

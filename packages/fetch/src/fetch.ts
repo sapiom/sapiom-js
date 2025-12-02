@@ -126,6 +126,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
           init,
           response,
           paymentConfig,
+          request,
           defaultMetadata,
         );
       }

@@ -2,18 +2,57 @@
  * Tests for Sapiom LangChain v1.x Middleware
  */
 
-import {
-  createSapiomMiddleware,
-  type ModelRequest,
-  type ModelResponse,
-  type ToolCallRequest,
-} from "./middleware";
+import { createSapiomMiddleware } from "./middleware";
+
+// Mock types for testing (these come from langchain, but we define our own for tests)
+interface ModelRequest {
+  model: { modelName?: string; model?: string };
+  messages: Array<{ content: string; role?: string }>;
+  tools: Array<{ name?: string }>;
+  state: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  systemPrompt?: string;
+  systemMessage?: unknown;
+}
+
+interface ModelResponse {
+  usage_metadata?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  };
+  tool_calls?: Array<{ name: string }>;
+}
+
+interface ToolCallRequest {
+  toolCall: {
+    name: string;
+    args: Record<string, unknown>;
+    id: string;
+  };
+  tool: {
+    name: string;
+    description?: string;
+  };
+  state: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+}
 
 // Mock Sapiom core
 jest.mock("@sapiom/core", () => ({
   initializeSapiomClient: jest.fn(() => mockSapiomClient),
   TransactionAuthorizer: jest.fn().mockImplementation(() => mockAuthorizer),
 }));
+
+// Helper to extract hook function from BeforeAgentHook/AfterAgentHook union type
+function getHookFn<T extends ((...args: any[]) => any) | { hook: (...args: any[]) => any }>(
+  hook: T | undefined
+): ((...args: any[]) => any) | undefined {
+  if (!hook) return undefined;
+  if (typeof hook === "function") return hook;
+  if (typeof hook === "object" && "hook" in hook) return hook.hook;
+  return undefined;
+}
 
 const mockSapiomClient = {
   transactions: {
@@ -57,10 +96,11 @@ describe("createSapiomMiddleware", () => {
   describe("beforeAgent", () => {
     it("creates agent transaction with auto-generated trace ID", async () => {
       const middleware = createSapiomMiddleware();
+      const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [{ content: "Hello" }] };
       const runtime = {};
 
-      const result = await middleware.beforeAgent!(state, runtime);
+      const result = await beforeAgent(state, runtime);
 
       expect(mockAuthorizer.createAndAuthorize).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -76,30 +116,33 @@ describe("createSapiomMiddleware", () => {
 
     it("uses config trace ID when provided", async () => {
       const middleware = createSapiomMiddleware({ traceId: "custom-trace" });
+      const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [] };
       const runtime = {};
 
-      const result = await middleware.beforeAgent!(state, runtime);
+      const result = await beforeAgent(state, runtime);
 
       expect(result.__sapiomTraceId).toBe("custom-trace");
     });
 
     it("uses context trace ID as override", async () => {
       const middleware = createSapiomMiddleware({ traceId: "config-trace" });
+      const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [] };
       const runtime = { context: { sapiomTraceId: "context-trace" } };
 
-      const result = await middleware.beforeAgent!(state, runtime);
+      const result = await beforeAgent(state, runtime);
 
       expect(result.__sapiomTraceId).toBe("context-trace");
     });
 
     it("skips tracking when disabled", async () => {
       const middleware = createSapiomMiddleware({ enabled: false });
+      const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [] };
       const runtime = {};
 
-      const result = await middleware.beforeAgent!(state, runtime);
+      const result = await beforeAgent(state, runtime);
 
       expect(mockAuthorizer.createAndAuthorize).not.toHaveBeenCalled();
       expect(result).toEqual({});
@@ -110,10 +153,11 @@ describe("createSapiomMiddleware", () => {
         new Error("API error")
       );
       const middleware = createSapiomMiddleware({ failureMode: "open" });
+      const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [] };
       const runtime = {};
 
-      const result = await middleware.beforeAgent!(state, runtime);
+      const result = await beforeAgent(state, runtime);
 
       expect(result.__sapiomTraceId).toMatch(/^sdk-/);
       expect(result.__sapiomAgentTxId).toBeUndefined();
@@ -124,10 +168,11 @@ describe("createSapiomMiddleware", () => {
         new Error("API error")
       );
       const middleware = createSapiomMiddleware({ failureMode: "closed" });
+      const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [] };
       const runtime = {};
 
-      await expect(middleware.beforeAgent!(state, runtime)).rejects.toThrow(
+      await expect(beforeAgent(state, runtime)).rejects.toThrow(
         "API error"
       );
     });
@@ -138,10 +183,11 @@ describe("createSapiomMiddleware", () => {
       mockAuthorizer.createAndAuthorize.mockRejectedValueOnce(deniedError);
 
       const middleware = createSapiomMiddleware({ failureMode: "open" });
+      const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [] };
       const runtime = {};
 
-      await expect(middleware.beforeAgent!(state, runtime)).rejects.toThrow(
+      await expect(beforeAgent(state, runtime)).rejects.toThrow(
         "Transaction denied"
       );
     });
@@ -150,6 +196,7 @@ describe("createSapiomMiddleware", () => {
   describe("afterAgent", () => {
     it("submits response facts when tracking is active", async () => {
       const middleware = createSapiomMiddleware();
+      const afterAgent = getHookFn(middleware.afterAgent)!;
       const state = {
         messages: [{ content: "Response" }],
         __sapiomAgentTxId: "tx-123",
@@ -157,7 +204,7 @@ describe("createSapiomMiddleware", () => {
       };
       const runtime = {};
 
-      await middleware.afterAgent!(state as any, runtime);
+      await afterAgent(state as any, runtime);
 
       expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
@@ -176,10 +223,11 @@ describe("createSapiomMiddleware", () => {
 
     it("skips when no agent transaction", async () => {
       const middleware = createSapiomMiddleware();
+      const afterAgent = getHookFn(middleware.afterAgent)!;
       const state = { messages: [] };
       const runtime = {};
 
-      await middleware.afterAgent!(state as any, runtime);
+      await afterAgent(state as any, runtime);
 
       expect(mockSapiomClient.transactions.complete).not.toHaveBeenCalled();
     });
@@ -213,7 +261,7 @@ describe("createSapiomMiddleware", () => {
       const request = createMockRequest();
       const handler = jest.fn().mockResolvedValue(createMockResponse());
 
-      await middleware.wrapModelCall!(request, handler);
+      await middleware.wrapModelCall!(request as any, handler);
 
       expect(mockAuthorizer.createAndAuthorize).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -221,7 +269,6 @@ describe("createSapiomMiddleware", () => {
             source: "langchain-llm",
             request: expect.objectContaining({
               modelId: "gpt-4",
-              messageCount: 1,
             }),
           }),
         })
@@ -237,7 +284,7 @@ describe("createSapiomMiddleware", () => {
       });
       const handler = jest.fn().mockResolvedValue(response);
 
-      await middleware.wrapModelCall!(request, handler);
+      await middleware.wrapModelCall!(request as any, handler);
 
       expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
@@ -262,7 +309,7 @@ describe("createSapiomMiddleware", () => {
       const response = createMockResponse();
       const handler = jest.fn().mockResolvedValue(response);
 
-      const result = await middleware.wrapModelCall!(request, handler);
+      const result = await middleware.wrapModelCall!(request as any, handler);
 
       expect(mockAuthorizer.createAndAuthorize).not.toHaveBeenCalled();
       expect(result).toBe(response);

@@ -300,6 +300,9 @@ export async function handleAuthorization(
 
 /**
  * Handle payment errors (402 responses)
+ *
+ * Reauthorizes the existing transaction with payment data from the 402 response,
+ * then retries the request with the X-PAYMENT header.
  */
 export async function handlePayment(
   originalRequest: HttpRequest,
@@ -320,16 +323,24 @@ export async function handlePayment(
     throw error;
   }
 
-  const requestMetadata = originalRequest.__sapiom || {};
-  const userMetadata = { ...defaultMetadata, ...requestMetadata };
+  // Get existing transaction ID from the request (set by authorization interceptor)
+  const existingTransactionId = getHeader(
+    originalRequest.headers,
+    "X-Sapiom-Transaction-Id",
+  );
+
+  if (!existingTransactionId) {
+    // No existing transaction - throw the original error
+    // This can happen if authorization was skipped or failed
+    throw error;
+  }
 
   let transaction;
   try {
-    transaction = await config.sapiomClient.transactions.create({
-      serviceName: userMetadata?.serviceName,
-      actionName: userMetadata?.actionName,
-      resourceName: userMetadata?.resourceName,
-      paymentData: {
+    // Reauthorize the existing transaction with payment data
+    transaction = await config.sapiomClient.transactions.reauthorizeWithPayment(
+      existingTransactionId,
+      {
         x402: x402Response,
         metadata: {
           originalRequest: {
@@ -340,21 +351,11 @@ export async function handlePayment(
           httpStatusCode: 402,
         },
       },
-      traceId: userMetadata?.traceId,
-      traceExternalId: userMetadata?.traceExternalId,
-      agentId: userMetadata?.agentId,
-      agentName: userMetadata?.agentName,
-      qualifiers: userMetadata?.qualifiers,
-      metadata: {
-        ...userMetadata?.metadata,
-        originalMethod: originalRequest.method,
-        originalUrl: originalRequest.url,
-      },
-    });
+    );
   } catch (apiError) {
     if (config.failureMode === "closed") throw apiError;
     console.error(
-      "[Sapiom] Failed to create payment transaction, returning 402:",
+      "[Sapiom] Failed to reauthorize transaction with payment, returning 402:",
       apiError,
     );
     throw error;

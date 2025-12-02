@@ -290,12 +290,16 @@ export async function handleAuthorization(
 
 /**
  * Handle payment errors (402 responses)
+ *
+ * Reauthorizes the existing transaction with payment data from the 402 response,
+ * then retries the request with the X-PAYMENT header.
  */
 export async function handlePayment(
   originalInput: string | URL | Request,
   originalInit: RequestInit | undefined,
   response: Response,
   config: PaymentConfig,
+  request: Request,
   defaultMetadata?: Record<string, any>,
 ): Promise<Response> {
   if (response.status !== 402) {
@@ -331,22 +335,31 @@ export async function handlePayment(
     return response;
   }
 
-  const requestMetadata = (originalInit as any)?.__sapiom || {};
-  const userMetadata = { ...defaultMetadata, ...requestMetadata };
+  // Get existing transaction ID from the request (set by authorization interceptor)
+  const existingTransactionId = getHeader(
+    request.headers,
+    "X-Sapiom-Transaction-Id",
+  );
 
-  const originalUrl = typeof originalInput === "string"
-    ? originalInput
-    : originalInput instanceof URL
-      ? originalInput.toString()
-      : originalInput.url;
+  if (!existingTransactionId) {
+    // No existing transaction - return the 402 response
+    // This can happen if authorization was skipped or failed
+    return response;
+  }
+
+  const originalUrl =
+    typeof originalInput === "string"
+      ? originalInput
+      : originalInput instanceof URL
+        ? originalInput.toString()
+        : originalInput.url;
 
   let transaction;
   try {
-    transaction = await config.sapiomClient.transactions.create({
-      serviceName: userMetadata?.serviceName,
-      actionName: userMetadata?.actionName,
-      resourceName: userMetadata?.resourceName,
-      paymentData: {
+    // Reauthorize the existing transaction with payment data
+    transaction = await config.sapiomClient.transactions.reauthorizeWithPayment(
+      existingTransactionId,
+      {
         x402: x402Response,
         metadata: {
           originalRequest: {
@@ -357,50 +370,43 @@ export async function handlePayment(
           httpStatusCode: 402,
         },
       },
-      traceId: userMetadata?.traceId,
-      traceExternalId: userMetadata?.traceExternalId,
-      agentId: userMetadata?.agentId,
-      agentName: userMetadata?.agentName,
-      qualifiers: userMetadata?.qualifiers,
-      metadata: {
-        ...userMetadata?.metadata,
-        originalMethod: originalInit?.method || "GET",
-        originalUrl: originalUrl,
-      },
+    );
+  } catch (error) {
+    if (config.failureMode === "closed") throw error;
+    console.error(
+      "[Sapiom] Failed to reauthorize transaction with payment, returning 402:",
+      error,
+    );
+    return response;
+  }
+
+  // Poll for authorization if not already authorized
+  if (transaction.status !== TransactionStatus.AUTHORIZED) {
+    const poller = new TransactionPoller(config.sapiomClient, {
+      timeout: AUTHORIZATION_TIMEOUT,
+      pollInterval: POLL_INTERVAL,
     });
-  } catch (error) {
-    if (config.failureMode === "closed") throw error;
-    console.error(
-      "[Sapiom] Failed to create payment transaction, returning 402:",
-      error,
-    );
-    return response;
+
+    let authResult;
+    try {
+      authResult = await poller.waitForAuthorization(transaction.id);
+    } catch (error) {
+      if (config.failureMode === "closed") throw error;
+      console.error(
+        "[Sapiom] Failed to poll payment transaction, returning 402:",
+        error,
+      );
+      return response;
+    }
+
+    if (authResult.status !== "authorized") {
+      return response;
+    }
+
+    transaction = authResult.transaction!;
   }
 
-  const poller = new TransactionPoller(config.sapiomClient, {
-    timeout: AUTHORIZATION_TIMEOUT,
-    pollInterval: POLL_INTERVAL,
-  });
-
-  let authResult;
-  try {
-    authResult = await poller.waitForAuthorization(transaction.id);
-  } catch (error) {
-    if (config.failureMode === "closed") throw error;
-    console.error(
-      "[Sapiom] Failed to poll payment transaction, returning 402:",
-      error,
-    );
-    return response;
-  }
-
-  if (authResult.status !== "authorized") {
-    return response;
-  }
-
-  const authorizedTransaction = authResult.transaction!;
-  const authorizationPayload =
-    authorizedTransaction.payment?.authorizationPayload;
+  const authorizationPayload = transaction.payment?.authorizationPayload;
 
   if (!authorizationPayload) {
     throw new Error(

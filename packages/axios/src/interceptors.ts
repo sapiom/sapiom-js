@@ -568,6 +568,7 @@ export function addPaymentInterceptor(
       const retryConfig = {
         ...originalConfig,
         __is402Retry: true,
+        __sapiomPaymentHandling: false, // Allow completion on retry
       } as any;
 
       setHeader(retryConfig.headers, "X-PAYMENT", paymentHeaderValue);
@@ -658,6 +659,12 @@ export function addCompletionInterceptor(
     },
     async (error: AxiosError) => {
       const originalConfig = error.config as InternalAxiosRequestConfig;
+
+      // Skip 402 errors - they will be handled by the payment interceptor
+      // which may retry the request. Completion will happen on the retry result.
+      if (error.response?.status === 402) {
+        return Promise.reject(error);
+      }
 
       // Skip if this is the original request that triggered payment flow
       // The retry request will handle completion instead

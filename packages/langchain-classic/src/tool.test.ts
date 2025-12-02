@@ -276,20 +276,27 @@ describe("SapiomDynamicTool", () => {
     });
 
     expect(result).toBe("Results for: test");
-    expect(mockClient.transactions.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        serviceName: "database",
-        resourceName: "search",
-        traceExternalId: "trace-789",
-        qualifiers: {
-          tool: "search",
-          // args NOT included for security
-        },
-      }),
-    );
-    // actionName should be undefined (inferred by backend)
+
     const createCall = (mockClient.transactions.create as jest.Mock).mock
       .calls[0][0];
+
+    // Verify requestFacts structure (new facts-based API)
+    expect(createCall.requestFacts).toBeDefined();
+    expect(createCall.requestFacts.source).toBe("langchain-tool");
+    expect(createCall.requestFacts.version).toBe("v1");
+    expect(createCall.requestFacts.request.toolName).toBe("search");
+    expect(createCall.requestFacts.request.toolDescription).toBe(
+      "Search database",
+    );
+    expect(createCall.requestFacts.request.hasArguments).toBe(true);
+    expect(createCall.requestFacts.request.argumentKeys).toEqual(["query"]);
+
+    // Verify config overrides are passed
+    expect(createCall.serviceName).toBe("database");
+    expect(createCall.resourceName).toBe("search");
+    expect(createCall.traceExternalId).toBe("trace-789");
+
+    // actionName should be undefined (inferred by backend)
     expect(createCall.actionName).toBeUndefined();
   });
 

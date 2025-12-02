@@ -29,10 +29,11 @@ import {
   type SapiomClient,
 } from "@sapiom/core";
 
+import type { AgentMiddleware, ToolCallRequest } from "langchain";
+
 import type {
   SapiomMiddlewareConfig,
   SapiomMiddlewareContext,
-  SapiomMiddlewareState,
 } from "./internal/types";
 import {
   generateSDKTraceId,
@@ -49,81 +50,15 @@ import {
 import {
   estimateInputTokens,
   getModelId,
+  getModelClass,
   extractActualTokens,
+  collectMessageContext,
+  collectToolUsage,
+  captureUserCallSite,
+  collectDependencyVersions,
+  getRuntimeInfo,
+  extractModelParameters,
 } from "./internal/telemetry";
-
-/**
- * LangChain v1.x middleware hook types
- *
- * These types represent the middleware interface from LangChain v1.x.
- * We define them here to avoid requiring langchain as a compile-time dependency.
- */
-
-/** Model request passed to wrapModelCall */
-export interface ModelRequest {
-  model: unknown;
-  messages: Array<{ content?: unknown; role?: string }>;
-  tools: unknown[];
-  state: Record<string, unknown>;
-  runtime: { context?: SapiomMiddlewareContext };
-}
-
-/** Model response from handler */
-export interface ModelResponse {
-  tool_calls?: Array<{ name: string }>;
-  usage_metadata?: {
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens?: number;
-  };
-  response_metadata?: {
-    finish_reason?: string;
-  };
-}
-
-/** Tool call request passed to wrapToolCall */
-export interface ToolCallRequest {
-  toolCall: {
-    name: string;
-    args?: Record<string, unknown>;
-    id?: string;
-  };
-  tool: {
-    name: string;
-    description?: string;
-  };
-  state: Record<string, unknown>;
-  runtime: { context?: SapiomMiddlewareContext };
-}
-
-/** Middleware definition returned by createSapiomMiddleware */
-export interface SapiomMiddleware {
-  name: string;
-
-  /** Called once at agent start */
-  beforeAgent?: (
-    state: Record<string, unknown>,
-    runtime: { context?: SapiomMiddlewareContext }
-  ) => Promise<SapiomMiddlewareState>;
-
-  /** Called once at agent end */
-  afterAgent?: (
-    state: Record<string, unknown> & SapiomMiddlewareState,
-    runtime: { context?: SapiomMiddlewareContext }
-  ) => Promise<void>;
-
-  /** Wraps each model call */
-  wrapModelCall?: (
-    request: ModelRequest,
-    handler: (request: ModelRequest) => Promise<ModelResponse>
-  ) => Promise<ModelResponse>;
-
-  /** Wraps each tool call */
-  wrapToolCall?: <T>(
-    request: ToolCallRequest,
-    handler: (request: ToolCallRequest) => Promise<T>
-  ) => Promise<T>;
-}
 
 /**
  * Create Sapiom middleware for LangChain v1.x agents
@@ -169,13 +104,17 @@ export interface SapiomMiddleware {
  */
 export function createSapiomMiddleware(
   config: SapiomMiddlewareConfig = {}
-): SapiomMiddleware {
+): AgentMiddleware {
   // Initialize Sapiom client
   const sapiomClient: SapiomClient =
     config.sapiomClient ?? initializeSapiomClient(config);
   const authorizer = new TransactionAuthorizer({ sapiomClient });
   const failureMode = config.failureMode ?? "open";
   const isEnabled = config.enabled !== false;
+
+  // Fallback trace ID for when hooks are called without beforeAgent
+  // (e.g., direct model/tool usage without agent wrapper)
+  const fallbackTraceId = config.traceId ?? generateSDKTraceId();
 
   return {
     name: "SapiomMiddleware",
@@ -222,6 +161,8 @@ export function createSapiomMiddleware(
           __sapiomTraceId: traceId,
           __sapiomAgentTxId: agentTx.id,
           __sapiomStartTime: startTime,
+          __sapiomAgentId: agentId,
+          __sapiomAgentName: agentName,
         };
       } catch (error) {
         // Always throw authorization denials
@@ -241,6 +182,8 @@ export function createSapiomMiddleware(
         return {
           __sapiomTraceId: traceId,
           __sapiomStartTime: startTime,
+          __sapiomAgentId: agentId,
+          __sapiomAgentName: agentName,
         };
       }
     },
@@ -253,11 +196,15 @@ export function createSapiomMiddleware(
         return;
       }
 
+      const txId = state.__sapiomAgentTxId as string;
+
+      // Clear the transaction ID immediately to prevent double-completion
+      // (ReAct agents may loop and call afterAgent multiple times)
+      delete (state as Record<string, unknown>).__sapiomAgentTxId;
+
       const duration = state.__sapiomStartTime
         ? Date.now() - (state.__sapiomStartTime as number)
         : 0;
-
-      const txId = state.__sapiomAgentTxId as string;
 
       // Complete transaction with response facts (fire-and-forget)
       sapiomClient.transactions
@@ -289,30 +236,84 @@ export function createSapiomMiddleware(
       }
 
       const startTime = Date.now();
-      const traceId = request.state.__sapiomTraceId as string | undefined;
+      // Use state trace ID if available, otherwise fall back to middleware-level ID
+      const traceId = (request.state.__sapiomTraceId as string | undefined) ?? fallbackTraceId;
+      const agentId = (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
+      const agentName = (request.state.__sapiomAgentName as string | undefined) ?? config.agentName;
 
-      // Estimate input tokens
+      // Collect telemetry
       const estimatedTokens = estimateInputTokens(request.messages);
       const modelId = getModelId(request.model);
+      const modelClass = getModelClass(request.model);
+      const callSite = captureUserCallSite();
+      const messageContext = collectMessageContext(request.messages);
+      const toolUsage = collectToolUsage(request.tools);
+      const modelParams = extractModelParameters(request.model);
+
+      // Build request facts following langchain-llm-v1 schema
+      const requestFacts = {
+        // Model identity
+        framework: "langchain" as const,
+        modelClass,
+        modelId,
+
+        // Call metadata
+        entryMethod: "invoke" as const,
+        isStreaming: false,
+        batchSize: 1,
+
+        // Call site
+        callSite,
+
+        // Token estimation
+        estimatedInputTokens: estimatedTokens,
+        tokenEstimationMethod: "approximate" as const,
+
+        // Model parameters
+        temperature: modelParams.temperature,
+        maxTokens: modelParams.maxTokens,
+        topP: modelParams.topP,
+        stopSequences: modelParams.stopSequences,
+
+        // Tool usage
+        tools: toolUsage.enabled ? toolUsage : undefined,
+
+        // Message context
+        messages: messageContext,
+
+        // LangChain context
+        langchain: {
+          hasCallbacks: false, // Middleware doesn't have direct callback access
+          callbackCount: 0,
+        },
+
+        // Timestamp
+        timestamp: new Date().toISOString(),
+      };
 
       // Create and authorize LLM transaction
       let llmTx: { id: string } | undefined;
       try {
+        // Collect SDK info (done here to avoid overhead if tracking is disabled)
+        const runtime = getRuntimeInfo();
+        const dependencies = collectDependencyVersions();
+
         llmTx = await authorizer.createAndAuthorize({
           requestFacts: {
             source: "langchain-llm",
             version: "v1",
-            sdk: { name: SDK_NAME, version: SDK_VERSION },
-            request: {
-              modelId,
-              estimatedInputTokens: estimatedTokens,
-              messageCount: request.messages.length,
-              hasTools: request.tools.length > 0,
-              toolCount: request.tools.length,
-              timestamp: new Date().toISOString(),
+            sdk: {
+              name: SDK_NAME,
+              version: SDK_VERSION,
+              nodeVersion: runtime.nodeVersion,
+              platform: runtime.platform,
+              dependencies,
             },
+            request: requestFacts,
           },
           traceExternalId: traceId,
+          agentId,
+          agentName,
         } as unknown as Parameters<typeof authorizer.createAndAuthorize>[0]);
       } catch (error) {
         if (isAuthorizationDeniedOrTimeout(error)) {
@@ -372,8 +373,17 @@ export function createSapiomMiddleware(
       }
 
       const startTime = Date.now();
-      const traceId = request.state.__sapiomTraceId as string | undefined;
+      // Use state trace ID if available, otherwise fall back to middleware-level ID
+      const traceId = (request.state.__sapiomTraceId as string | undefined) ?? fallbackTraceId;
+      const agentId = (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
+      const agentName = (request.state.__sapiomAgentName as string | undefined) ?? config.agentName;
       const args = request.toolCall.args ?? {};
+
+      // Get tool name and description safely (works for both ClientTool and ServerTool)
+      const toolName =
+        (request.tool as { name?: string }).name ?? request.toolCall.name;
+      const toolDescription = (request.tool as { description?: string })
+        .description;
 
       // Create and authorize tool transaction
       let toolTx: { id: string } | undefined;
@@ -384,14 +394,16 @@ export function createSapiomMiddleware(
             version: "v1",
             sdk: { name: SDK_NAME, version: SDK_VERSION },
             request: {
-              toolName: request.tool.name,
-              toolDescription: request.tool.description,
+              toolName,
+              toolDescription,
               hasArguments: Object.keys(args).length > 0,
               argumentKeys: Object.keys(args),
               timestamp: new Date().toISOString(),
             },
           },
           traceExternalId: traceId,
+          agentId,
+          agentName,
         } as unknown as Parameters<typeof authorizer.createAndAuthorize>[0]);
       } catch (error) {
         if (isAuthorizationDeniedOrTimeout(error)) {
@@ -454,7 +466,7 @@ export function createSapiomMiddleware(
           );
 
           // Retry with payment in args
-          const retryRequest: ToolCallRequest = {
+          const retryRequest = {
             ...request,
             toolCall: {
               ...request.toolCall,
@@ -468,7 +480,7 @@ export function createSapiomMiddleware(
             },
           };
 
-          return handler(retryRequest);
+          return handler(retryRequest as typeof request);
         }
 
         // Complete transaction with error facts (fire-and-forget)

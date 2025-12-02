@@ -397,8 +397,8 @@ describe("HTTP Client Integration Tests", () => {
         } as any);
 
       // Payment transaction polling returns authorized with payload
-      mocks.get.mockResolvedValue({
-        id: "tx-payment",
+      mocks.reauthorizeWithPayment.mockResolvedValue({
+        id: "tx-auth",
         status: TransactionStatus.AUTHORIZED,
         payment: {
           authorizationPayload: "payment-token-xyz",
@@ -442,29 +442,25 @@ describe("HTTP Client Integration Tests", () => {
       const data = await response.json();
       expect(data).toEqual({ paid: true });
 
-      // Verify two transactions created (auth + payment)
-      expect(mocks.create).toHaveBeenCalledTimes(2);
+      // Verify one transaction created (auth) and reauthorized with payment
+      expect(mocks.create).toHaveBeenCalledTimes(1);
+      expect(mocks.reauthorizeWithPayment).toHaveBeenCalledTimes(1);
 
-      // Verify payment transaction includes x402 data
-      const paymentCreateCall = mocks.create.mock.calls[1][0];
-      expect(paymentCreateCall.paymentData).toBeDefined();
-      expect(paymentCreateCall.paymentData!.x402).toBeDefined();
+      // Verify reauthorize was called with x402 data
+      const reauthorizeCall = mocks.reauthorizeWithPayment.mock.calls[0];
+      expect(reauthorizeCall[0]).toBe("tx-auth"); // transaction ID
+      expect(reauthorizeCall[1].x402).toBeDefined();
     });
 
     it("should return original 402 if payment transaction is denied", async () => {
-      mocks.create
-        .mockResolvedValueOnce({
-          id: "tx-auth",
-          status: TransactionStatus.AUTHORIZED,
-        } as any)
-        .mockResolvedValueOnce({
-          id: "tx-payment-denied",
-          status: TransactionStatus.PENDING,
-        } as any);
+      mocks.create.mockResolvedValueOnce({
+        id: "tx-auth",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
 
-      // Payment transaction polling returns denied
-      mocks.get.mockResolvedValue({
-        id: "tx-payment-denied",
+      // Reauthorize returns denied status
+      mocks.reauthorizeWithPayment.mockResolvedValue({
+        id: "tx-auth",
         status: TransactionStatus.DENIED,
       } as any);
 
