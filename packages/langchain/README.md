@@ -89,4 +89,10 @@ See [@sapiom/langchain-classic](../langchain-classic) for documentation.
 
 ## License
 
-MIT
+MIT © [Sapiom](../../LICENSE)
+
+## Links
+
+- [Documentation](https://docs.sapiom.com)
+- [GitHub](https://github.com/sapiom/sapiom-js)
+- [NPM](https://www.npmjs.com/package/@sapiom/langchain)
