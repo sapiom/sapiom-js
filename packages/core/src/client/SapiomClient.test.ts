@@ -34,7 +34,7 @@ describe("SapiomClient", () => {
       });
 
       const httpClient = client.getHttpClient();
-      expect(httpClient.defaults.baseURL).toBe("http://localhost:3000");
+      expect(httpClient.defaults.baseURL).toBe("https://api.sapiom.ai");
     });
 
     it("should update API key", () => {
