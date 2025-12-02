@@ -22,7 +22,7 @@ export class TransactionAPI {
   async create(data: CreateTransactionRequest): Promise<TransactionResponse> {
     return await this.client.request<TransactionResponse>({
       method: "POST",
-      url: "/v1/transactions",
+      url: "/transactions",
       body: data,
     });
   }
@@ -35,7 +35,7 @@ export class TransactionAPI {
   async list(params?: ListTransactionsParams): Promise<TransactionResponse[]> {
     return await this.client.request<TransactionResponse[]>({
       method: "GET",
-      url: "/v1/transactions",
+      url: "/transactions",
       params: params || {},
     });
   }
@@ -48,7 +48,7 @@ export class TransactionAPI {
   async get(transactionId: string): Promise<TransactionResponse> {
     return await this.client.request<TransactionResponse>({
       method: "GET",
-      url: `/v1/transactions/${transactionId}`,
+      url: `/transactions/${transactionId}`,
     });
   }
 
@@ -95,7 +95,7 @@ export class TransactionAPI {
   ): Promise<TransactionResponse> {
     return await this.client.request<TransactionResponse>({
       method: "POST",
-      url: `/v1/transactions/${transactionId}/reauthorize`,
+      url: `/transactions/${transactionId}/reauthorize`,
       body: data,
     });
   }
@@ -127,7 +127,7 @@ export class TransactionAPI {
   ): Promise<TransactionCostResponse> {
     return await this.client.request<TransactionCostResponse>({
       method: "POST",
-      url: `/v1/transactions/${transactionId}/costs`,
+      url: `/transactions/${transactionId}/costs`,
       body: cost,
     });
   }
@@ -153,7 +153,7 @@ export class TransactionAPI {
   }> {
     return await this.client.request({
       method: "GET",
-      url: `/v1/transactions/${transactionId}/costs`,
+      url: `/transactions/${transactionId}/costs`,
     });
   }
 
@@ -199,7 +199,7 @@ export class TransactionAPI {
   ): Promise<{ success: boolean; factId: string; costId?: string }> {
     return await this.client.request({
       method: "POST",
-      url: `/v1/transactions/${transactionId}/facts`,
+      url: `/transactions/${transactionId}/facts`,
       body: data,
     });
   }
