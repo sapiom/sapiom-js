@@ -1,5 +1,9 @@
 # @sapiom/langchain
 
+## 0.1.1
+
+- First public release
+
 ## 0.1.0
 
 ### Initial Release
