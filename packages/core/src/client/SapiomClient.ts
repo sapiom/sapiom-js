@@ -30,7 +30,7 @@ export class SapiomClient {
       throw new Error("API key is required");
     }
 
-    this.baseURL = config.baseURL || "http://localhost:3000";
+    this.baseURL = config.baseURL || "https://api.sapiom.ai";
     this.timeout = config.timeout || 30000;
     this.defaultHeaders = {
       "Content-Type": "application/json",

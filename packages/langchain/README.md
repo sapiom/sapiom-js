@@ -286,5 +286,5 @@ MIT © [Sapiom](../../LICENSE)
 ## Links
 
 - [Documentation](https://docs.sapiom.com)
-- [GitHub](https://github.com/sapiom/sapiom-javascript)
+- [GitHub](https://github.com/sapiom/sapiom-js)
 - [NPM](https://www.npmjs.com/package/@sapiom/langchain)

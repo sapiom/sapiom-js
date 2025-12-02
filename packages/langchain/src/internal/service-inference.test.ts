@@ -189,7 +189,7 @@ describe("inferServiceFromMCPUrl", () => {
   });
 
   it("handles localhost URLs", () => {
-    const service = inferServiceFromMCPUrl("http://localhost:3000", "local");
+    const service = inferServiceFromMCPUrl("https://localhost:3000", "local");
 
     expect(service).toBe("mcp-localhost");
   });

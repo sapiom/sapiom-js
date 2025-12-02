@@ -140,7 +140,7 @@ new SapiomClient(config: SapiomClientConfig)
 
 **Config options:**
 - `apiKey: string` - Required: Your Sapiom API key
-- `baseURL?: string` - Optional: API base URL (default: http://localhost:3000)
+- `baseURL?: string` - Optional: API base URL (default: https://api.sapiom.ai)
 - `timeout?: number` - Optional: Request timeout in ms (default: 30000)
 - `headers?: Record<string, string>` - Optional: Additional headers
 
@@ -285,6 +285,6 @@ MIT © [Sapiom](../../LICENSE)
 ## Links
 
 - [Documentation](https://docs.sapiom.com)
-- [GitHub](https://github.com/sapiom/sapiom-javascript)
+- [GitHub](https://github.com/sapiom/sapiom-js)
 - [NPM](https://www.npmjs.com/package/@sapiom/core)
-- [Issues](https://github.com/sapiom/sapiom-javascript/issues)
+- [Issues](https://github.com/sapiom/sapiom-js/issues)

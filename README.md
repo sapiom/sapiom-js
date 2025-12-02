@@ -211,7 +211,7 @@ MIT © [Sapiom](LICENSE)
 - [Website](https://sapiom.com)
 - [Documentation](https://docs.sapiom.com)
 - [NPM Organization](https://www.npmjs.com/org/sapiom)
-- [GitHub Issues](https://github.com/sapiom/sapiom-javascript/issues)
+- [GitHub Issues](https://github.com/sapiom/sapiom-js/issues)
 
 ## 🌟 Features
 

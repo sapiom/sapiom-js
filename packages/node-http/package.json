@@ -11,13 +11,13 @@
     "payment",
     "402"
   ],
-  "homepage": "https://github.com/sapiom/sapiom-javascript/tree/main/packages/node-http#readme",
+  "homepage": "https://github.com/sapiom/sapiom-js/tree/main/packages/node-http#readme",
   "bugs": {
-    "url": "https://github.com/sapiom/sapiom-javascript/issues"
+    "url": "https://github.com/sapiom/sapiom-js/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sapiom/sapiom-javascript.git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
     "directory": "packages/node-http"
   },
   "license": "MIT",
