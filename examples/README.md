@@ -100,9 +100,27 @@ On the second request, you should see an `AuthorizationDeniedError` - this means
 
 Start with `axios/` or `fetch/` - they're the simplest to understand.
 
-## Test Server Endpoints
+## About the Demo Server
 
-The test server (`DUMMY_SERVER_URL`) provides these endpoints:
+The examples connect to a demo server that simulates real-world APIs with payment requirements. This server implements the [x402 payment protocol](https://www.x402.org/) - an HTTP standard where APIs can require micropayments.
+
+**How it works:**
+
+1. Your code makes a normal HTTP request (e.g., `POST /api/sms`)
+2. The server returns `402 Payment Required` with pricing info
+3. The Sapiom SDK automatically handles the payment
+4. The server validates payment and returns the response
+
+You don't need to understand the x402 protocol - the Sapiom SDK handles it transparently. Your code just makes normal HTTP requests.
+
+The demo server simulates a marketing platform with:
+- **CRM endpoints** - Customer data (free, but requires authorization)
+- **SMS endpoints** - Send messages (paid per message)
+- **Analytics endpoints** - Campaign metrics (paid + authorization)
+
+## Demo Server Endpoints
+
+The demo server (`DUMMY_SERVER_URL`) provides these endpoints:
 
 ### Free endpoints (no balance required)
 
