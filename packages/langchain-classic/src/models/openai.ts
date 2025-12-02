@@ -1,20 +1,27 @@
 /**
- * SapiomChatAnthropic - Drop-in replacement for ChatAnthropic with Sapiom tracking
+ * SapiomChatOpenAI - Drop-in replacement for ChatOpenAI with Sapiom tracking
  *
- * This follows the same pattern as SapiomChatOpenAI with:
- * - Trace-based workflow grouping
- * - TransactionAuthorizer for pre-execution authorization
- * - Facts-based tracking (backend infers service/action/resource and calculates costs)
+ * IMPORTANT FOR FUTURE PROVIDERS:
+ * When implementing SapiomChatAnthropic, SapiomChatGoogle, etc., you MUST:
+ *
+ * 1. Use `protected` (not private) for sapiomClient and sapiomConfig
+ * 2. Store `fields` as `protected override` in constructor
+ * 3. Override `invoke()` and `generate()` with Sapiom tracking
+ * 4. ⚠️ CRITICAL: Override `withConfig()` to return new SapiomChatYourProvider
+ *    - Without this, bindTools() creates parent class (ChatOpenAI), losing tracking
+ *    - Must reuse `this.sapiomClient` (don't create new instance)
+ *    - Must merge `defaultOptions`
+ *
+ * See: .taskmaster/docs/ADDING-NEW-PROVIDER-GUIDE.md
  */
-import {
-  type AnthropicInput,
-  type ChatAnthropicCallOptions,
-  ChatAnthropicMessages,
-} from "@langchain/anthropic";
 import type { Callbacks } from "@langchain/core/callbacks/manager";
 import type { BaseLanguageModelInput } from "@langchain/core/language_models/base";
 import type { BaseMessageLike } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import { RunnableBinding } from "@langchain/core/runnables";
+import { ChatOpenAI } from "@langchain/openai";
+import type { ChatOpenAICallOptions } from "@langchain/openai";
 
 import { TransactionAuthorizer } from "@sapiom/core";
 import { SapiomClient } from "@sapiom/core";
@@ -36,22 +43,27 @@ import type { LangChainLLMRequestFacts } from "../schemas/langchain-llm-v1";
 const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
 
 /**
- * Extended ChatAnthropic with built-in Sapiom transaction tracking and authorization
+ * Extended ChatOpenAI with built-in Sapiom transaction tracking and authorization
  *
- * Drop-in replacement for ChatAnthropic that adds:
+ * Drop-in replacement for ChatOpenAI that adds:
  * - Token estimation and tracking
  * - Pre-execution authorization
  * - Trace-based workflow grouping
  * - Real-time usage reporting
  *
+ * **Trace Support:**
+ * - Direct calls: Full trace support ✓
+ * - Vanilla agents (createReactAgent): Model traces only, tools get separate traces
+ * - SapiomReactAgent: Full trace support across model + tools ✓ (Phase 4)
+ *
  * @example
  * ```typescript
- * import { SapiomChatAnthropic } from "@sapiom/sdk/langchain";
+ * import { SapiomChatOpenAI } from "@sapiom/sdk/langchain";
  *
- * const model = new SapiomChatAnthropic(
+ * const model = new SapiomChatOpenAI(
  *   {
- *     model: "claude-3-5-sonnet-20241022",
- *     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+ *     model: "gpt-4",
+ *     openAIApiKey: process.env.OPENAI_API_KEY,
  *   },
  *   {
  *     traceId: "conversation-123",
@@ -61,13 +73,13 @@ const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
  *   }
  * );
  *
- * // All ChatAnthropic methods work, but with Sapiom tracking
+ * // All ChatOpenAI methods work, but with Sapiom tracking
  * const response = await model.invoke("Hello!");
  * ```
  */
-export class SapiomChatAnthropic<
-  CallOptions extends ChatAnthropicCallOptions = ChatAnthropicCallOptions,
-> extends ChatAnthropicMessages<CallOptions> {
+export class SapiomChatOpenAI<
+  CallOptions extends ChatOpenAICallOptions = ChatOpenAICallOptions,
+> extends ChatOpenAI<CallOptions> {
   protected sapiomClient: SapiomClient;
   protected sapiomConfig: SapiomModelConfig;
   #defaultTraceId: string; // Auto-generated or from config
@@ -76,16 +88,16 @@ export class SapiomChatAnthropic<
   #defaultAgentName?: string; // From config
 
   /**
-   * Create a new SapiomChatAnthropic instance
+   * Create a new SapiomChatOpenAI instance
    *
-   * @param fields - ChatAnthropic configuration (same as ChatAnthropic constructor)
+   * @param fields - ChatOpenAI configuration (same as ChatOpenAI constructor)
    * @param sapiomConfig - Sapiom-specific configuration
    */
   constructor(
-    protected fields?: Partial<AnthropicInput>,
+    protected override fields?: any,
     sapiomConfig?: SapiomModelConfig,
   ) {
-    // Call ChatAnthropicMessages constructor with original config
+    // Call ChatOpenAI constructor with original config
     super(fields);
 
     // Initialize Sapiom tracking
@@ -206,26 +218,29 @@ export class SapiomChatAnthropic<
       temperature: (this as any).temperature,
       maxTokens: (this as any).maxTokens,
       topP: (this as any).topP,
+      frequencyPenalty: (this as any).frequencyPenalty,
+      presencePenalty: (this as any).presencePenalty,
       stopSequences: (this as any).stopSequences,
 
       // Tool usage
-      tools: parsedOptions?.tools
+      tools: this.defaultOptions?.tools
         ? {
             enabled: true,
-            count: Array.isArray(parsedOptions.tools)
-              ? parsedOptions.tools.length
-              : 0,
-            names: Array.isArray(parsedOptions.tools)
-              ? parsedOptions.tools
-                  .map((t: any) => t.name || t.function?.name)
-                  .filter(Boolean)
-              : [],
+            count: this.defaultOptions.tools.length,
+            names: this.defaultOptions.tools
+              .map((t: any) => t.name || t.function?.name)
+              .filter(Boolean),
             toolChoice: parsedOptions?.tool_choice as string,
           }
         : undefined,
 
-      // Structured output (Anthropic uses different pattern than OpenAI)
-      structuredOutput: undefined, // TODO: Detect Anthropic structured output
+      // Structured output
+      structuredOutput: this.defaultOptions?.response_format
+        ? {
+            enabled: true,
+            method: (this.defaultOptions.response_format as any)?.type,
+          }
+        : undefined,
 
       // Message context
       messages: {
@@ -354,60 +369,73 @@ export class SapiomChatAnthropic<
         }
       });
 
-      // Only submit response facts if we have usage data
+      // Complete transaction with response facts if we have usage data
       if (totalActualInputTokens > 0) {
         const responseMessage = (result.generations[0]?.[0] as any)?.message;
 
-        await this.sapiomClient.transactions.addFacts(tx.id, {
-          source: "langchain-llm",
-          version: "v1",
-          factPhase: "response",
-          facts: {
-            actualInputTokens: totalActualInputTokens,
-            actualOutputTokens: totalActualOutputTokens,
-            actualTotalTokens: totalActualTokens,
-            finishReason:
-              responseMessage?.response_metadata?.stop_reason || "unknown",
-            responseId: responseMessage?.id,
-            hadToolCalls,
-            toolCallCount: hadToolCalls ? toolCallNames.length : 0,
-            toolCallNames: hadToolCalls ? toolCallNames : undefined,
-            outputCharacters: result.generations[0]?.[0]?.text?.length || 0,
-            hadImages: false, // TODO: Detect image output
-            durationMs: duration,
+        await this.sapiomClient.transactions.complete(tx.id, {
+          outcome: "success",
+          responseFacts: {
+            source: "langchain-llm",
+            version: "v1",
+            facts: {
+              actualInputTokens: totalActualInputTokens,
+              actualOutputTokens: totalActualOutputTokens,
+              actualTotalTokens: totalActualTokens,
+              finishReason:
+                responseMessage?.response_metadata?.finish_reason || "unknown",
+              responseId: responseMessage?.id,
+              hadToolCalls,
+              toolCallCount: hadToolCalls ? toolCallNames.length : 0,
+              toolCallNames: hadToolCalls ? toolCallNames : undefined,
+              outputCharacters: result.generations[0]?.[0]?.text?.length || 0,
+              hadImages: false, // TODO: Detect image output
+              durationMs: duration,
+            },
           },
         });
       }
     } catch (error) {
       // Log error but don't fail the generate
-      console.error("Failed to submit response facts:", error);
+      console.error("Failed to complete LLM transaction:", error);
     }
 
     return result;
   }
-
   // ============================================
-  // OPTIONAL: Override withConfig for clarity (NOT strictly required for Anthropic)
+  // ⚠️ CRITICAL: Override withConfig
   // ============================================
-  // Unlike ChatOpenAI which overrides to create new instances with defaultOptions,
-  // ChatAnthropicMessages inherits Runnable.withConfig() which wraps in RunnableBinding.
+  // WHY THIS IS REQUIRED:
+  // - LangGraph calls llm.bindTools(tools) which internally calls llm.withConfig({ tools })
+  // - Parent's withConfig() would create ChatOpenAI (not SapiomChatOpenAI)
+  // - New instance would lose Sapiom tracking
+  // - Result: LLM calls not tracked or authorized ❌
   //
-  // We could omit this override entirely since:
-  // - super.withConfig(config) wraps THIS instance in RunnableBinding
-  // - THIS instance already has all Sapiom tracking (sapiomClient, traceId, etc.)
-  // - When RunnableBinding invokes, it delegates to our overridden invoke() ✅
+  // PATTERN:
+  // - Create new instance of THIS class (SapiomChatOpenAI, not parent)
+  // - Pass this.fields (stored in constructor)
+  // - MUST reuse this.sapiomClient (same instance, not new one)
+  // - Merge defaultOptions (standard pattern from parent)
   //
-  // We keep this override for consistency with OpenAI pattern and future flexibility.
+  // Verify the implementation of each provider's withConfig method to determine if it must be overridden!
+  // Providers that do not implement withConfig and default to RunnableBinding.withConfig() may not need this override.
   override withConfig(config: Partial<CallOptions>): any {
-    // Simply delegate to parent's withConfig which creates RunnableBinding({ bound: this, config })
-    return super.withConfig(config);
+    const newModel = new SapiomChatOpenAI<CallOptions>(this.fields, {
+      ...this.sapiomConfig,
+      sapiomClient: this.sapiomClient, // ← MUST reuse same client instance
+      traceId: this.#currentTraceId, // ← Preserve current trace ID
+      agentId: this.#defaultAgentId, // ← Preserve agent ID
+      agentName: this.#defaultAgentName, // ← Preserve agent name
+    });
+    newModel.defaultOptions = { ...this.defaultOptions, ...config };
+    return newModel;
   }
 
   // ============================================
-  // ALL OTHER METHODS INHERITED FROM ChatAnthropicMessages
+  // ALL OTHER METHODS INHERITED FROM ChatOpenAI
   // ============================================
   // withStructuredOutput, stream, batch, etc.
-  // All work automatically because we extend ChatAnthropicMessages!
+  // All work automatically because we extend ChatOpenAI!
 
   /**
    * Current trace ID being used by this model
@@ -419,6 +447,21 @@ export class SapiomChatAnthropic<
    * - Updated after each invoke to reflect backend response
    *
    * Use this to capture the trace ID and reuse across model instances.
+   *
+   * @example
+   * ```typescript
+   * const model1 = new SapiomChatOpenAI({ model: "gpt-4" });
+   * await model1.invoke("Hello");
+   *
+   * // Capture auto-generated trace
+   * const traceId = model1.currentTraceId;
+   *
+   * // Reuse in another model
+   * const model2 = new SapiomChatOpenAI(
+   *   { model: "gpt-3.5-turbo" },
+   *   { traceId }
+   * );
+   * ```
    */
   get currentTraceId(): string {
     return this.#currentTraceId;
@@ -440,25 +483,25 @@ export class SapiomChatAnthropic<
 }
 
 /**
- * Wrap an existing ChatAnthropic instance with Sapiom tracking
+ * Wrap an existing ChatOpenAI instance with Sapiom tracking
  *
  * Convenience function for migrating existing code without changing instantiation.
  * Extracts all configuration from the original model and creates a new Sapiom-tracked instance.
  *
- * @param model - Existing ChatAnthropic instance to wrap
+ * @param model - Existing ChatOpenAI instance to wrap
  * @param config - Optional Sapiom-specific configuration
- * @returns New SapiomChatAnthropic instance with same configuration but Sapiom tracking
+ * @returns New SapiomChatOpenAI instance with same configuration but Sapiom tracking
  *
  * @example
  * ```typescript
- * import { ChatAnthropic } from "@langchain/anthropic";
- * import { wrapChatAnthropic } from "@sapiom/sdk/langchain";
+ * import { ChatOpenAI } from "@langchain/openai";
+ * import { wrapChatOpenAI } from "@sapiom/sdk/langchain";
  *
  * // Existing model
- * const model = new ChatAnthropic({ model: "claude-3-5-sonnet-20241022" });
+ * const model = new ChatOpenAI({ model: "gpt-4" });
  *
  * // Wrap with Sapiom tracking - one line change
- * const tracked = wrapChatAnthropic(model, {
+ * const tracked = wrapChatOpenAI(model, {
  *   sapiomApiKey: process.env.SAPIOM_API_KEY,
  *   traceId: "conversation-123"
  * });
@@ -467,59 +510,21 @@ export class SapiomChatAnthropic<
  * await tracked.invoke("Hello!");
  * ```
  */
-export function wrapChatAnthropic<
-  CallOptions extends ChatAnthropicCallOptions = ChatAnthropicCallOptions,
+export function wrapChatOpenAI<
+  CallOptions extends ChatOpenAICallOptions = ChatOpenAICallOptions,
 >(
-  model: any, // ChatAnthropic type
+  model: ChatOpenAI<CallOptions>,
   config?: SapiomModelConfig,
-): SapiomChatAnthropic<CallOptions> {
+): SapiomChatOpenAI<CallOptions> {
   // Prevent double-wrapping
-  if (model.__sapiomWrapped) {
-    return model as SapiomChatAnthropic<CallOptions>;
+  if ((model as any).__sapiomWrapped) {
+    return model as SapiomChatOpenAI<CallOptions>;
   }
 
-  // ChatAnthropic doesn't store constructor fields - reconstruct from public properties
-  // Ordered to match libs/providers/langchain-anthropic/src/chat_models.ts constructor
-  const fields: any = {
-    // API configuration (lines 733-746)
-    anthropicApiKey: model.anthropicApiKey || model.apiKey,
-    apiKey: model.apiKey,
-    anthropicApiUrl: model.apiUrl,
+  // ChatOpenAI stores constructor fields as protected property
+  // Access it directly at runtime (protected is only compile-time check)
+  const fields = (model as any).fields || {};
 
-    // Model settings (lines 748-750)
-    modelName: model.modelName,
-    model: model.model,
-
-    // Advanced options (line 752)
-    invocationKwargs: model.invocationKwargs,
-
-    // Generation parameters (lines 754-760)
-    topP: model.topP,
-    temperature: model.temperature,
-    topK: model.topK,
-    maxTokens: model.maxTokens,
-    stopSequences: model.stopSequences,
-
-    // Streaming (lines 762-763)
-    streaming: model.streaming,
-    streamUsage: model.streamUsage,
-
-    // Extended features (lines 765-767)
-    thinking: model.thinking,
-    contextManagement: model.contextManagement,
-
-    // Client options (line 741)
-    clientOptions: model.clientOptions,
-
-    // Client factory (lines 769-771)
-    createClient: model.createClient,
-  };
-
-  // Filter out undefined values
-  const cleanFields = Object.fromEntries(
-    Object.entries(fields).filter(([_, value]) => value !== undefined),
-  );
-
-  // Create new Sapiom-tracked instance with extracted fields
-  return new SapiomChatAnthropic<CallOptions>(cleanFields, config);
+  // Create new Sapiom-tracked instance with exact same fields
+  return new SapiomChatOpenAI<CallOptions>(fields, config);
 }

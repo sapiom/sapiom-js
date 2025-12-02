@@ -6,6 +6,8 @@ import {
   extractX402Response,
   extractResourceFromError,
   HttpClientRequestFacts,
+  HttpClientResponseFacts,
+  HttpClientErrorFacts,
 } from "@sapiom/core";
 
 import type { FailureMode } from "@sapiom/core";
@@ -288,12 +290,16 @@ export async function handleAuthorization(
 
 /**
  * Handle payment errors (402 responses)
+ *
+ * Reauthorizes the existing transaction with payment data from the 402 response,
+ * then retries the request with the X-PAYMENT header.
  */
 export async function handlePayment(
   originalInput: string | URL | Request,
   originalInit: RequestInit | undefined,
   response: Response,
   config: PaymentConfig,
+  request: Request,
   defaultMetadata?: Record<string, any>,
 ): Promise<Response> {
   if (response.status !== 402) {
@@ -329,22 +335,31 @@ export async function handlePayment(
     return response;
   }
 
-  const requestMetadata = (originalInit as any)?.__sapiom || {};
-  const userMetadata = { ...defaultMetadata, ...requestMetadata };
+  // Get existing transaction ID from the request (set by authorization interceptor)
+  const existingTransactionId = getHeader(
+    request.headers,
+    "X-Sapiom-Transaction-Id",
+  );
 
-  const originalUrl = typeof originalInput === "string"
-    ? originalInput
-    : originalInput instanceof URL
-      ? originalInput.toString()
-      : originalInput.url;
+  if (!existingTransactionId) {
+    // No existing transaction - return the 402 response
+    // This can happen if authorization was skipped or failed
+    return response;
+  }
+
+  const originalUrl =
+    typeof originalInput === "string"
+      ? originalInput
+      : originalInput instanceof URL
+        ? originalInput.toString()
+        : originalInput.url;
 
   let transaction;
   try {
-    transaction = await config.sapiomClient.transactions.create({
-      serviceName: resource.split(":")[0] || "unknown",
-      actionName: userMetadata?.actionName || "access",
-      resourceName: userMetadata?.resourceName || resource,
-      paymentData: {
+    // Reauthorize the existing transaction with payment data
+    transaction = await config.sapiomClient.transactions.reauthorizeWithPayment(
+      existingTransactionId,
+      {
         x402: x402Response,
         metadata: {
           originalRequest: {
@@ -355,50 +370,43 @@ export async function handlePayment(
           httpStatusCode: 402,
         },
       },
-      traceId: userMetadata?.traceId,
-      traceExternalId: userMetadata?.traceExternalId,
-      agentId: userMetadata?.agentId,
-      agentName: userMetadata?.agentName,
-      qualifiers: userMetadata?.qualifiers,
-      metadata: {
-        ...userMetadata?.metadata,
-        originalMethod: originalInit?.method || "GET",
-        originalUrl: originalUrl,
-      },
+    );
+  } catch (error) {
+    if (config.failureMode === "closed") throw error;
+    console.error(
+      "[Sapiom] Failed to reauthorize transaction with payment, returning 402:",
+      error,
+    );
+    return response;
+  }
+
+  // Poll for authorization if not already authorized
+  if (transaction.status !== TransactionStatus.AUTHORIZED) {
+    const poller = new TransactionPoller(config.sapiomClient, {
+      timeout: AUTHORIZATION_TIMEOUT,
+      pollInterval: POLL_INTERVAL,
     });
-  } catch (error) {
-    if (config.failureMode === "closed") throw error;
-    console.error(
-      "[Sapiom] Failed to create payment transaction, returning 402:",
-      error,
-    );
-    return response;
+
+    let authResult;
+    try {
+      authResult = await poller.waitForAuthorization(transaction.id);
+    } catch (error) {
+      if (config.failureMode === "closed") throw error;
+      console.error(
+        "[Sapiom] Failed to poll payment transaction, returning 402:",
+        error,
+      );
+      return response;
+    }
+
+    if (authResult.status !== "authorized") {
+      return response;
+    }
+
+    transaction = authResult.transaction!;
   }
 
-  const poller = new TransactionPoller(config.sapiomClient, {
-    timeout: AUTHORIZATION_TIMEOUT,
-    pollInterval: POLL_INTERVAL,
-  });
-
-  let authResult;
-  try {
-    authResult = await poller.waitForAuthorization(transaction.id);
-  } catch (error) {
-    if (config.failureMode === "closed") throw error;
-    console.error(
-      "[Sapiom] Failed to poll payment transaction, returning 402:",
-      error,
-    );
-    return response;
-  }
-
-  if (authResult.status !== "authorized") {
-    return response;
-  }
-
-  const authorizedTransaction = authResult.transaction!;
-  const authorizationPayload =
-    authorizedTransaction.payment?.authorizationPayload;
+  const authorizationPayload = transaction.payment?.authorizationPayload;
 
   if (!authorizationPayload) {
     throw new Error(
@@ -420,4 +428,95 @@ export async function handlePayment(
   };
 
   return await globalThis.fetch(originalInput, newInit);
+}
+
+/**
+ * Completion configuration for fetch
+ */
+export interface CompletionConfig {
+  sapiomClient: SapiomClient;
+}
+
+/**
+ * Handle transaction completion after request finishes (fire-and-forget)
+ *
+ * This should be called after the HTTP request completes to mark the transaction
+ * as COMPLETED with the appropriate outcome (success/error).
+ */
+export function handleCompletion(
+  request: Request,
+  response: Response | null,
+  error: Error | null,
+  config: CompletionConfig,
+  startTime: number,
+): void {
+  const transactionId = getHeader(request.headers, "X-Sapiom-Transaction-Id");
+
+  if (!transactionId) {
+    return;
+  }
+
+  const durationMs = Date.now() - startTime;
+  const isSuccess = response !== null && response.ok;
+
+  const sanitizedHeaders: Record<string, string> = {};
+  if (response) {
+    const sensitiveHeaders = new Set([
+      "set-cookie",
+      "authorization",
+      "x-api-key",
+    ]);
+    for (const [key, value] of response.headers.entries()) {
+      if (!sensitiveHeaders.has(key.toLowerCase())) {
+        sanitizedHeaders[key] = value;
+      }
+    }
+  }
+
+  let responseFacts:
+    | { source: string; version: string; facts: Record<string, any> }
+    | undefined;
+
+  if (isSuccess && response) {
+    const facts: HttpClientResponseFacts = {
+      status: response.status,
+      statusText: response.statusText,
+      headers: sanitizedHeaders,
+      contentType: response.headers.get("content-type") || undefined,
+      durationMs,
+    };
+    responseFacts = {
+      source: "http-client",
+      version: "v1",
+      facts,
+    };
+  } else if (error || (response && !response.ok)) {
+    const facts: HttpClientErrorFacts = {
+      errorType: error?.name || "HttpError",
+      errorMessage: error?.message || `HTTP ${response?.status}`,
+      httpStatus: response?.status,
+      httpStatusText: response?.statusText,
+      isNetworkError: error !== null && response === null,
+      isTimeout:
+        error?.name === "AbortError" ||
+        error?.message?.includes("timeout") ||
+        false,
+      elapsedMs: durationMs,
+    };
+    responseFacts = {
+      source: "http-client",
+      version: "v1",
+      facts,
+    };
+  }
+
+  // Fire-and-forget: complete the transaction without blocking
+  config.sapiomClient.transactions
+    .complete(transactionId, {
+      outcome: isSuccess ? "success" : "error",
+      responseFacts,
+    })
+    .catch((err) => {
+      console.error("[Sapiom] Failed to complete transaction:", err);
+    });
 }

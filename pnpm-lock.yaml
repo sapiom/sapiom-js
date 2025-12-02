@@ -146,6 +146,46 @@ importers:
         specifier: workspace:*
         version: link:../core
     devDependencies:
+      '@types/jest':
+        specifier: ^29.5.14
+        version: 29.5.14
+      '@types/node':
+        specifier: ^20.11.30
+        version: 20.19.24
+      '@typescript-eslint/eslint-plugin':
+        specifier: ^7.3.1
+        version: 7.18.0(@typescript-eslint/parser@7.18.0)(eslint@8.57.1)(typescript@5.9.3)
+      '@typescript-eslint/parser':
+        specifier: ^7.3.1
+        version: 7.18.0(eslint@8.57.1)(typescript@5.9.3)
+      eslint:
+        specifier: ^8.57.0
+        version: 8.57.1
+      jest:
+        specifier: ^29.7.0
+        version: 29.7.0(@types/node@20.19.24)
+      langchain:
+        specifier: ^1.0.0
+        version: 1.1.1(@langchain/core@1.1.0)
+      prettier:
+        specifier: ^3.2.5
+        version: 3.6.2
+      ts-jest:
+        specifier: ^29.1.2
+        version: 29.4.5(@babel/core@7.28.5)(jest@29.7.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.4.2
+        version: 5.9.3
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+
+  packages/langchain-classic:
+    dependencies:
+      '@sapiom/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
       '@langchain/anthropic':
         specifier: ^0.3.30
         version: 0.3.33(@langchain/core@0.3.79)(zod@4.1.12)
@@ -1256,6 +1296,28 @@ packages:
       - openai
     dev: true
 
+  /@langchain/core@1.1.0:
+    resolution: {integrity: sha512-yJ6JHcU9psjnQbzRFkXjIdNTA+3074dA+2pHdH8ewvQCSleSk6JcjkCMIb5+NASjeMoi1ZuntlLKVsNqF38YxA==}
+    engines: {node: '>=20'}
+    dependencies:
+      '@cfworker/json-schema': 4.1.1
+      ansi-styles: 5.2.0
+      camelcase: 6.3.0
+      decamelize: 1.2.0
+      js-tiktoken: 1.0.21
+      langsmith: 0.3.79
+      mustache: 4.2.0
+      p-queue: 6.6.2
+      p-retry: 7.1.0
+      uuid: 10.0.0
+      zod: 4.1.12
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@opentelemetry/exporter-trace-otlp-proto'
+      - '@opentelemetry/sdk-trace-base'
+      - openai
+    dev: true
+
   /@langchain/langgraph-checkpoint@0.0.18(@langchain/core@0.3.79):
     resolution: {integrity: sha512-IS7zJj36VgY+4pf8ZjsVuUWef7oTwt1y9ylvwu0aLuOn1d0fg05Om9DLm3v2GZ2Df6bhLV1kfWAM0IAl9O5rQQ==}
     engines: {node: '>=18'}
@@ -1263,6 +1325,16 @@ packages:
       '@langchain/core': '>=0.2.31 <0.4.0'
     dependencies:
       '@langchain/core': 0.3.79
+      uuid: 10.0.0
+    dev: true
+
+  /@langchain/langgraph-checkpoint@1.0.0(@langchain/core@1.1.0):
+    resolution: {integrity: sha512-xrclBGvNCXDmi0Nz28t3vjpxSH6UYx6w5XAXSiiB1WEdc2xD2iY/a913I3x3a31XpInUW/GGfXXfePfaghV54A==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@langchain/core': ^1.0.1
+    dependencies:
+      '@langchain/core': 1.1.0
       uuid: 10.0.0
     dev: true
 
@@ -1287,6 +1359,26 @@ packages:
       uuid: 9.0.1
     dev: true
 
+  /@langchain/langgraph-sdk@1.0.2(@langchain/core@1.1.0):
+    resolution: {integrity: sha512-r3noE2KouUdfRCmHxZcS06Io8I3jplEXA+ORpYECa89VAdHWaknWRJMIBBwVJkQQJ9fvNBmOmyfTcbRkeTTakw==}
+    peerDependencies:
+      '@langchain/core': ^1.0.1
+      react: ^18 || ^19
+      react-dom: ^18 || ^19
+    peerDependenciesMeta:
+      '@langchain/core':
+        optional: true
+      react:
+        optional: true
+      react-dom:
+        optional: true
+    dependencies:
+      '@langchain/core': 1.1.0
+      p-queue: 6.6.2
+      p-retry: 4.6.2
+      uuid: 9.0.1
+    dev: true
+
   /@langchain/langgraph@0.2.74(@langchain/core@0.3.79):
     resolution: {integrity: sha512-oHpEi5sTZTPaeZX1UnzfM2OAJ21QGQrwReTV6+QnX7h8nDCBzhtipAw1cK616S+X8zpcVOjgOtJuaJhXa4mN8w==}
     engines: {node: '>=18'}
@@ -1302,6 +1394,27 @@ packages:
       '@langchain/langgraph-sdk': 0.0.112(@langchain/core@0.3.79)
       uuid: 10.0.0
       zod: 3.25.76
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: true
+
+  /@langchain/langgraph@1.0.2(@langchain/core@1.1.0)(zod@4.1.12):
+    resolution: {integrity: sha512-syxzzWTnmpCL+RhUEvalUeOXFoZy/KkzHa2Da2gKf18zsf9Dkbh3rfnRDrTyUGS1XSTejq07s4rg1qntdEDs2A==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@langchain/core': ^1.0.1
+      zod: ^3.25.32 || ^4.1.0
+      zod-to-json-schema: ^3.x
+    peerDependenciesMeta:
+      zod-to-json-schema:
+        optional: true
+    dependencies:
+      '@langchain/core': 1.1.0
+      '@langchain/langgraph-checkpoint': 1.0.0(@langchain/core@1.1.0)
+      '@langchain/langgraph-sdk': 1.0.2(@langchain/core@1.1.0)
+      uuid: 10.0.0
+      zod: 4.1.12
     transitivePeerDependencies:
       - react
       - react-dom
@@ -2742,6 +2855,11 @@ packages:
       is-extglob: 2.1.1
     dev: true
 
+  /is-network-error@1.3.0:
+    resolution: {integrity: sha512-6oIwpsgRfnDiyEDLMay/GqCl3HoAtH5+RUKW29gYkL0QA+ipzpDLA16yQs7/RHCSu+BwgbJaOUqa4A99qNVQVw==}
+    engines: {node: '>=16'}
+    dev: true
+
   /is-node-process@1.2.0:
     resolution: {integrity: sha512-Vg4o6/fqPxIjtxgUH5QLJhwZ7gW5diGCVlXpuUfELC62CuxM1iHcRe51f2W1FDy04Ai4KJkagKjx3XaqyfRKXw==}
     dev: true
@@ -3447,6 +3565,28 @@ packages:
     engines: {node: '>=6'}
     dev: true
 
+  /langchain@1.1.1(@langchain/core@1.1.0):
+    resolution: {integrity: sha512-z7cOFhLOzbu/lRlIE8GZ5rlfi7obvvHThhMdts1KsUBusJmWLmh1Yik28MHYzJRXclUbqs4u/9D2yNmr36wf0A==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@langchain/core': 1.1.0
+    dependencies:
+      '@langchain/core': 1.1.0
+      '@langchain/langgraph': 1.0.2(@langchain/core@1.1.0)(zod@4.1.12)
+      '@langchain/langgraph-checkpoint': 1.0.0(@langchain/core@1.1.0)
+      langsmith: 0.3.79
+      uuid: 10.0.0
+      zod: 4.1.12
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@opentelemetry/exporter-trace-otlp-proto'
+      - '@opentelemetry/sdk-trace-base'
+      - openai
+      - react
+      - react-dom
+      - zod-to-json-schema
+    dev: true
+
   /langsmith@0.3.79:
     resolution: {integrity: sha512-j5uiAsyy90zxlxaMuGjb7EdcL51Yx61SpKfDOI1nMPBbemGju+lf47he4e59Hp5K63CY8XWgFP42WeZ+zuIU4Q==}
     peerDependencies:
@@ -3753,6 +3893,13 @@ packages:
     dependencies:
       '@types/retry': 0.12.0
       retry: 0.13.1
+    dev: true
+
+  /p-retry@7.1.0:
+    resolution: {integrity: sha512-xL4PiFRQa/f9L9ZvR4/gUCRNus4N8YX80ku8kv9Jqz+ZokkiZLM0bcvX0gm1F3PDi9SPRsww1BDsTWgE6Y1GLQ==}
+    engines: {node: '>=20'}
+    dependencies:
+      is-network-error: 1.3.0
     dev: true
 
   /p-timeout@3.2.0:

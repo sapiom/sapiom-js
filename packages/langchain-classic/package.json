@@ -1,7 +1,7 @@
 {
-  "name": "@sapiom/langchain",
+  "name": "@sapiom/langchain-classic",
   "version": "0.1.0",
-  "description": "LangChain v1.x integration for Sapiom SDK",
+  "description": "LangChain v0.x integration for Sapiom SDK (legacy)",
   "keywords": [
     "sapiom",
     "sdk",
@@ -9,17 +9,17 @@
     "ai",
     "agent",
     "llm",
-    "middleware",
-    "typescript"
+    "typescript",
+    "legacy"
   ],
-  "homepage": "https://github.com/sapiom/sapiom-javascript/tree/main/packages/langchain#readme",
+  "homepage": "https://github.com/sapiom/sapiom-javascript/tree/main/packages/langchain-classic#readme",
   "bugs": {
     "url": "https://github.com/sapiom/sapiom-javascript/issues"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/sapiom/sapiom-javascript.git",
-    "directory": "packages/langchain"
+    "directory": "packages/langchain-classic"
   },
   "license": "MIT",
   "author": "Sapiom",
@@ -54,28 +54,27 @@
     "prepublishOnly": "pnpm build && pnpm test"
   },
   "devDependencies": {
+    "@langchain/anthropic": "^0.3.30",
+    "@langchain/core": "^0.3.78",
+    "@langchain/langgraph": "^0.2.74",
+    "@langchain/openai": "^1.0.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.11.30",
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
     "jest": "^29.7.0",
-    "langchain": "^1.0.0",
     "prettier": "^3.2.5",
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.2",
-    "zod": "^3.23.0"
+    "zod": "^4.1.12"
   },
   "dependencies": {
     "@sapiom/core": "workspace:*"
   },
   "peerDependencies": {
-    "langchain": ">=1.0.0"
-  },
-  "peerDependenciesMeta": {
-    "langchain": {
-      "optional": false
-    }
+    "@langchain/core": ">=0.3.0 <1.0.0",
+    "@langchain/langgraph": ">=0.2.0 <1.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
