@@ -1,0 +1,23 @@
+{
+  "name": "@sapiom/example-langchain",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sapiom SDK example using LangChain middleware",
+  "scripts": {
+    "start": "npx tsx index.ts",
+    "dev": "npx tsx index.ts"
+  },
+  "dependencies": {
+    "@sapiom/langchain": "latest",
+    "@langchain/anthropic": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "dotenv": "^16.4.5",
+    "langchain": "^0.3.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2"
+  }
+}
