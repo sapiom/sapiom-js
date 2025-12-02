@@ -207,21 +207,23 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       const result = await originalFunc(args, runManager, parentConfig);
       const duration = Date.now() - startTime;
 
-      // Submit response facts (fire-and-forget)
+      // Complete transaction with response facts (fire-and-forget)
       sessionClient.transactions
-        .addFacts(toolTx.id, {
-          source: "langchain-tool",
-          version: "v1",
-          factPhase: "response",
-          facts: {
-            success: true,
-            durationMs: duration,
-            hasResult: result !== null && result !== undefined,
-            resultType: typeof result,
+        .complete(toolTx.id, {
+          outcome: "success",
+          responseFacts: {
+            source: "langchain-tool",
+            version: "v1",
+            facts: {
+              success: true,
+              durationMs: duration,
+              hasResult: result !== null && result !== undefined,
+              resultType: typeof result,
+            },
           },
         })
         .catch((err) => {
-          console.error("Failed to submit tool response facts:", err);
+          console.error("Failed to complete tool transaction:", err);
         });
 
       return result;
@@ -234,9 +236,9 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
 
         // Create and authorize payment transaction
         const authorizedPaymentTx = await authorizer.createAndAuthorize({
-          serviceName: config?.serviceName || "tool",
-          actionName: "payment",
-          resourceName: config?.resourceName || tool.name,
+          serviceName: config?.serviceName,
+          actionName: config?.actionName,
+          resourceName: config?.resourceName,
           paymentData: convertX402ToSapiomPayment(paymentData),
           traceExternalId: traceId,
           agentId,
@@ -263,22 +265,24 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
         return await originalFunc(argsWithPayment, runManager, parentConfig);
       }
 
-      // Submit error facts (fire-and-forget)
+      // Complete transaction with error facts (fire-and-forget)
       const duration = Date.now() - startTime;
       sessionClient.transactions
-        .addFacts(toolTx.id, {
-          source: "langchain-tool",
-          version: "v1",
-          factPhase: "error",
-          facts: {
-            errorType: (error as any).constructor?.name || "Error",
-            errorMessage: (error as Error).message,
-            isMCPPaymentError: false, // Already handled above
-            elapsedMs: duration,
+        .complete(toolTx.id, {
+          outcome: "error",
+          responseFacts: {
+            source: "langchain-tool",
+            version: "v1",
+            facts: {
+              errorType: (error as any).constructor?.name || "Error",
+              errorMessage: (error as Error).message,
+              isMCPPaymentError: false, // Already handled above
+              elapsedMs: duration,
+            },
           },
         })
         .catch((err) => {
-          console.error("Failed to submit tool error facts:", err);
+          console.error("Failed to complete tool transaction:", err);
         });
 
       throw error;
@@ -340,6 +344,8 @@ export class SapiomDynamicTool<
       runManager?: CallbackManagerForToolRun,
       parentConfig?: RunnableConfig,
     ): Promise<ToolOutputT> => {
+      const startTime = Date.now();
+
       // Check if Sapiom is disabled (either from config or parent metadata)
       const parentEnabled = parentConfig?.metadata?.__sapiomEnabled;
       if (parentEnabled === false || !isEnabled) {
@@ -367,23 +373,48 @@ export class SapiomDynamicTool<
         (parentConfig?.metadata?.__sapiomAuthorizer as any) ||
         new TransactionAuthorizer({ sapiomClient: sessionClient });
 
-      // Create and authorize tool transaction
+      // ============================================
+      // Collect Request Facts
+      // ============================================
+      const callSite = captureUserCallSite();
+
+      const requestFacts: LangChainToolRequestFacts = {
+        toolName: fields.name,
+        toolDescription: fields.description,
+        inputSchema: (fields as any).schema || {},
+        callSite,
+        hasArguments: args && Object.keys(args as object).length > 0,
+        argumentKeys: args ? Object.keys(args as object) : [], // Keys only, not values (privacy!)
+        timestamp: new Date().toISOString(),
+      };
+
+      // ============================================
+      // Create and authorize tool transaction with facts
+      // ============================================
       let toolTx;
       try {
         toolTx = await authorizer.createAndAuthorize({
-          serviceName: sapiomConfig?.serviceName || "tool",
-          actionName: sapiomConfig?.actionName || "call",
-          resourceName: sapiomConfig?.resourceName || fields.name,
+          // Send request facts (backend infers service/action/resource)
+          requestFacts: {
+            source: "langchain-tool",
+            version: "v1",
+            sdk: {
+              name: "@sapiom/sdk",
+              version: SDK_VERSION,
+            },
+            request: requestFacts,
+          },
+
+          // Allow config overrides (for advanced users)
+          serviceName: sapiomConfig?.serviceName,
+          actionName: sapiomConfig?.actionName,
+          resourceName: sapiomConfig?.resourceName,
+
           traceExternalId: traceId, // undefined is fine - backend auto-creates trace
           agentId,
           agentName,
-          qualifiers: {
-            tool: fields.name,
-            // DO NOT include args - may contain sensitive data
-            // Users can explicitly add safe metadata via sapiomConfig.qualifiers
-            ...sapiomConfig?.qualifiers,
-          },
-        });
+          qualifiers: sapiomConfig?.qualifiers,
+        } as any);
       } catch (error) {
         // Always throw authorization denials and timeouts (these are business logic, not failures)
         if (
@@ -409,6 +440,26 @@ export class SapiomDynamicTool<
       try {
         // Call original func
         const result = await originalFunc(args, parentConfig);
+        const duration = Date.now() - startTime;
+
+        // Complete transaction with response facts (fire-and-forget)
+        sessionClient.transactions
+          .complete(toolTx.id, {
+            outcome: "success",
+            responseFacts: {
+              source: "langchain-tool",
+              version: "v1",
+              facts: {
+                success: true,
+                durationMs: duration,
+                hasResult: result !== null && result !== undefined,
+                resultType: typeof result,
+              },
+            },
+          })
+          .catch((err) => {
+            console.error("Failed to complete tool transaction:", err);
+          });
 
         return result;
       } catch (error) {
@@ -420,9 +471,9 @@ export class SapiomDynamicTool<
 
           // Create and authorize payment transaction
           const authorizedPaymentTx = await authorizer.createAndAuthorize({
-            serviceName: sapiomConfig?.serviceName || "tool",
-            actionName: "payment",
-            resourceName: sapiomConfig?.resourceName || fields.name,
+            serviceName: sapiomConfig?.serviceName,
+            actionName: sapiomConfig?.actionName,
+            resourceName: sapiomConfig?.resourceName,
             paymentData: convertX402ToSapiomPayment(paymentData),
             traceExternalId: traceId,
             agentId,
@@ -448,6 +499,26 @@ export class SapiomDynamicTool<
 
           return await originalFunc(argsWithPayment, parentConfig);
         }
+
+        // Complete transaction with error facts (fire-and-forget)
+        const duration = Date.now() - startTime;
+        sessionClient.transactions
+          .complete(toolTx.id, {
+            outcome: "error",
+            responseFacts: {
+              source: "langchain-tool",
+              version: "v1",
+              facts: {
+                errorType: (error as any).constructor?.name || "Error",
+                errorMessage: (error as Error).message,
+                isMCPPaymentError: false, // Already handled above
+                elapsedMs: duration,
+              },
+            },
+          })
+          .catch((err) => {
+            console.error("Failed to complete tool transaction:", err);
+          });
 
         throw error;
       }

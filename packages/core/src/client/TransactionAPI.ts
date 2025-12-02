@@ -1,4 +1,6 @@
 import {
+  CompleteTransactionRequest,
+  CompleteTransactionResult,
   CreateTransactionRequest,
   ListTransactionsParams,
   PaymentProtocolData,
@@ -61,7 +63,7 @@ export class TransactionAPI {
    * Helper method to check if a transaction is completed
    */
   isCompleted(transaction: TransactionResponse): boolean {
-    return transaction.status === TransactionStatus.AUTHORIZED;
+    return transaction.status === TransactionStatus.COMPLETED;
   }
 
   /**
@@ -198,6 +200,56 @@ export class TransactionAPI {
     return await this.client.request({
       method: "POST",
       url: `/v1/transactions/${transactionId}/facts`,
+      body: data,
+    });
+  }
+
+  /**
+   * Complete an authorized transaction
+   *
+   * Marks an AUTHORIZED transaction as COMPLETED with an outcome (success/error).
+   * Optionally stores response or error facts for cost calculation and analytics.
+   *
+   * This should be called fire-and-forget style - there's no need to block on it.
+   *
+   * @param transactionId - The transaction ID to complete
+   * @param data - The completion data with outcome and optional response facts
+   * @returns CompleteTransactionResult with transaction and optional fact/cost IDs
+   *
+   * @example
+   * ```typescript
+   * // Fire-and-forget after operation completes successfully
+   * client.transactions
+   *   .complete(transactionId, {
+   *     outcome: 'success',
+   *     responseFacts: {
+   *       source: 'my-service',
+   *       version: 'v1',
+   *       facts: { duration: 234, itemsProcessed: 50 }
+   *     }
+   *   })
+   *   .catch(err => console.error('Failed to complete transaction:', err));
+   *
+   * // On error
+   * client.transactions
+   *   .complete(transactionId, {
+   *     outcome: 'error',
+   *     responseFacts: {
+   *       source: 'my-service',
+   *       version: 'v1',
+   *       facts: { errorType: 'TimeoutError', errorMessage: 'Request timed out' }
+   *     }
+   *   })
+   *   .catch(err => console.error('Failed to complete transaction:', err));
+   * ```
+   */
+  async complete(
+    transactionId: string,
+    data: CompleteTransactionRequest,
+  ): Promise<CompleteTransactionResult> {
+    return await this.client.request<CompleteTransactionResult>({
+      method: "POST",
+      url: `/transactions/${transactionId}/complete`,
       body: data,
     });
   }

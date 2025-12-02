@@ -41,9 +41,11 @@ export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry";
 export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry";
 
 // Types
-export { TransactionStatus } from "./types/transaction";
+export { TransactionStatus, TransactionOutcome } from "./types/transaction";
 
 export type {
+  CompleteTransactionRequest,
+  CompleteTransactionResult,
   CreateTransactionRequest,
   TransactionResponse,
   PaymentTransactionResponse,

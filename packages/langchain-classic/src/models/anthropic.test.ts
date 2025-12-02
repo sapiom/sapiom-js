@@ -1,10 +1,10 @@
 /**
- * Tests for SapiomChatOpenAI and wrapChatOpenAI
+ * Tests for SapiomChatAnthropic and wrapChatAnthropic
  */
-import { ChatOpenAI } from "@langchain/openai";
+import { ChatAnthropic, ChatAnthropicMessages } from "@langchain/anthropic";
 
 import { SapiomClient } from "@sapiom/core";
-import { SapiomChatOpenAI, wrapChatOpenAI } from "./openai";
+import { SapiomChatAnthropic, wrapChatAnthropic } from "./anthropic";
 
 /**
  * Helper to mock generate() response with usage metadata
@@ -14,23 +14,25 @@ function mockGenerate(
   content: string,
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number },
 ) {
-  return jest.spyOn(ChatOpenAI.prototype, "generate").mockResolvedValue({
-    generations: [
-      [
-        {
-          message: {
-            content,
-            usage_metadata: usage,
+  return jest
+    .spyOn(ChatAnthropicMessages.prototype, "generate")
+    .mockResolvedValue({
+      generations: [
+        [
+          {
+            message: {
+              content,
+              usage_metadata: usage,
+            },
+            text: content,
           },
-          text: content,
-        },
+        ],
       ],
-    ],
-    llmOutput: {},
-  } as any);
+      llmOutput: {},
+    } as any);
 }
 
-describe("SapiomChatOpenAI", () => {
+describe("SapiomChatAnthropic", () => {
   let mockClient: SapiomClient;
 
   beforeEach(() => {
@@ -40,10 +42,9 @@ describe("SapiomChatOpenAI", () => {
           id: "tx-model-123",
           status: "authorized",
           trace: { id: "trace-uuid-123", externalId: null },
-          // Backend-inferred values (SDK ignores these)
-          serviceName: "openai",
+          serviceName: "anthropic",
           actionName: "generate",
-          resourceName: "gpt-4",
+          resourceName: "claude-3-5-sonnet-20241022",
           costs: [
             { id: "cost-estimate-123", fiatAmount: "0.030", isEstimate: true },
           ],
@@ -52,15 +53,20 @@ describe("SapiomChatOpenAI", () => {
           id: "tx-model-123",
           status: "authorized",
           trace: { id: "trace-uuid-123", externalId: null },
-          serviceName: "openai",
+          serviceName: "anthropic",
           actionName: "generate",
-          resourceName: "gpt-4",
+          resourceName: "claude-3-5-sonnet-20241022",
           costs: [
             { id: "cost-estimate-123", fiatAmount: "0.030", isEstimate: true },
           ],
         }),
         addFacts: jest.fn().mockResolvedValue({
           success: true,
+          factId: "fact-resp-123",
+          costId: "cost-actual-123",
+        }),
+        complete: jest.fn().mockResolvedValue({
+          transaction: { id: "tx-model-123", status: "completed" },
           factId: "fact-resp-123",
           costId: "cost-actual-123",
         }),
@@ -77,110 +83,76 @@ describe("SapiomChatOpenAI", () => {
     } as any;
   });
 
-  it("creates SapiomChatOpenAI with Sapiom tracking", () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+  it("creates SapiomChatAnthropic with Sapiom tracking", () => {
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       { sapiomClient: mockClient },
     );
 
-    expect(model).toBeInstanceOf(ChatOpenAI);
-    expect(model).toBeInstanceOf(SapiomChatOpenAI);
+    expect(model).toBeInstanceOf(ChatAnthropicMessages);
+    expect(model).toBeInstanceOf(SapiomChatAnthropic);
     expect(model.__sapiomClient).toBe(mockClient);
     expect(model.__sapiomWrapped).toBe(true);
   });
 
-  it("works as drop-in replacement for ChatOpenAI", () => {
-    const model = new SapiomChatOpenAI(
+  it("works as drop-in replacement for ChatAnthropic", () => {
+    const model = new SapiomChatAnthropic(
       {
-        model: "gpt-4-turbo",
+        model: "claude-3-5-sonnet-20241022",
         temperature: 0.7,
         maxTokens: 1000,
-        openAIApiKey: "test-key",
+        anthropicApiKey: "test-key",
       },
       { sapiomClient: mockClient },
     );
 
-    // ChatOpenAI stores model name in 'model' property (or modelName getter)
-    expect((model as any).model || (model as any).modelName).toBe(
-      "gpt-4-turbo",
-    );
+    // ChatAnthropicMessages stores model name in 'model' property
+    expect((model as any).model).toBe("claude-3-5-sonnet-20241022");
     expect((model as any).temperature).toBe(0.7);
     expect((model as any).maxTokens).toBe(1000);
   });
 
   it("tracks invoke calls", async () => {
-    // Skip actual OpenAI API call in test
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+    // Skip actual Anthropic API call in test
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       { sapiomClient: mockClient },
     );
 
-    // Mock parent's generate (invoke calls generate internally)
-    jest.spyOn(ChatOpenAI.prototype, "generate").mockResolvedValue({
-      generations: [
-        [
-          {
-            message: {
-              content: "Hello!",
-              usage_metadata: {
-                input_tokens: 10,
-                output_tokens: 5,
-                total_tokens: 15,
-              },
-            },
-            text: "Hello!",
-          },
-        ],
-      ],
-      llmOutput: {},
-    } as any);
+    // Mock parent's invoke to avoid real API call
+    mockGenerate("Hello!", {
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 15,
+    });
 
     await model.invoke("Hello");
 
     // Should create transaction with requestFacts
     expect(mockClient.transactions.create).toHaveBeenCalled();
+    const createCall = (mockClient.transactions.create as jest.Mock).mock
+      .calls[0][0];
 
-    const calls = (mockClient.transactions.create as jest.Mock).mock.calls;
-    expect(calls.length).toBeGreaterThan(0);
-
-    const createCall = calls[0][0];
-    expect(createCall).toBeDefined();
-
-    // Verify requestFacts sent
     expect(createCall.requestFacts).toBeDefined();
     expect(createCall.requestFacts.source).toBe("langchain-llm");
-    expect(createCall.requestFacts.version).toBe("v1");
-    expect(createCall.requestFacts.request.modelClass).toBe("SapiomChatOpenAI");
-    expect(createCall.requestFacts.request.modelId).toBe("gpt-4");
+    expect(createCall.requestFacts.request.modelClass).toBe(
+      "SapiomChatAnthropic",
+    );
+    expect(createCall.requestFacts.request.modelId).toBe(
+      "claude-3-5-sonnet-20241022",
+    );
     expect(
       createCall.requestFacts.request.estimatedInputTokens,
     ).toBeGreaterThan(0);
-
-    // Verify response facts sent
-    expect(mockClient.transactions.addFacts).toHaveBeenCalled();
-    const addFactsCalls = (mockClient.transactions.addFacts as jest.Mock).mock
-      .calls;
-    expect(addFactsCalls.length).toBeGreaterThan(0);
-
-    const [txId, addFactsData] = addFactsCalls[0];
-    expect(txId).toBe("tx-model-123");
-    expect(addFactsData.source).toBe("langchain-llm");
-    expect(addFactsData.factPhase).toBe("response");
-    expect(addFactsData.facts.actualInputTokens).toBe(10);
-    expect(addFactsData.facts.actualOutputTokens).toBe(5);
   });
 
   it("auto-generates trace ID when not provided", async () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       { sapiomClient: mockClient },
     );
 
-    mockGenerate("Hi", {
-      input_tokens: 10,
-      output_tokens: 5,
-      total_tokens: 15,
-    });
+    mockGenerate("Hi");
 
     await model.invoke("Test");
 
@@ -193,8 +165,8 @@ describe("SapiomChatOpenAI", () => {
   });
 
   it("uses user-provided trace ID", async () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       {
         sapiomClient: mockClient,
         traceId: "my-workflow-123",
@@ -218,8 +190,8 @@ describe("SapiomChatOpenAI", () => {
   });
 
   it("supports per-invoke trace override", async () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       {
         sapiomClient: mockClient,
         traceId: "default-trace",
@@ -283,8 +255,8 @@ describe("SapiomChatOpenAI", () => {
       status: "denied",
     });
 
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       {
         sapiomClient: mockClient,
       },
@@ -293,14 +265,11 @@ describe("SapiomChatOpenAI", () => {
     await expect(model.invoke("Test")).rejects.toThrow(/denied/);
   });
 
-  it("estimates tokens and includes in request facts", async () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+  it("estimates tokens before authorization", async () => {
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       { sapiomClient: mockClient },
     );
-
-    // Mock getNumTokens for token estimation
-    jest.spyOn(model as any, "getNumTokens").mockResolvedValue(10);
 
     mockGenerate("Response");
 
@@ -309,19 +278,31 @@ describe("SapiomChatOpenAI", () => {
     const createCall = (mockClient.transactions.create as jest.Mock).mock
       .calls[0][0];
 
-    // Verify token estimation in request facts
     expect(
       createCall.requestFacts.request.estimatedInputTokens,
     ).toBeGreaterThan(0);
     expect(createCall.requestFacts.request.batchSize).toBe(1);
-    expect(createCall.requestFacts.request.tokenEstimationMethod).toBe(
-      "tiktoken",
-    );
   });
 
-  it("supports custom service name override in config", async () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+  it("handles missing usage_metadata gracefully", async () => {
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
+      {
+        sapiomClient: mockClient,
+      },
+    );
+
+    mockGenerate("Response"); // No usage metadata
+
+    await model.invoke("Test");
+
+    // Should not throw even without usage metadata
+    expect(mockClient.transactions.create).toHaveBeenCalled();
+  });
+
+  it("supports custom service name in config", async () => {
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       {
         sapiomClient: mockClient,
         serviceName: "custom-llm-service",
@@ -343,12 +324,12 @@ describe("SapiomChatOpenAI", () => {
   });
 
   it("generates aggregate transaction for batch generate", async () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       { sapiomClient: mockClient },
     );
 
-    jest.spyOn(ChatOpenAI.prototype, "generate").mockResolvedValue({
+    jest.spyOn(ChatAnthropicMessages.prototype, "generate").mockResolvedValue({
       generations: [[], []],
     } as any);
 
@@ -366,13 +347,13 @@ describe("SapiomChatOpenAI", () => {
     expect(call.requestFacts.request.batchSize).toBe(2);
   });
 
-  it("inherits all ChatOpenAI methods", () => {
-    const model = new SapiomChatOpenAI(
-      { model: "gpt-4", openAIApiKey: "test-key" },
+  it("inherits all ChatAnthropicMessages methods", () => {
+    const model = new SapiomChatAnthropic(
+      { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
       { sapiomClient: mockClient },
     );
 
-    // These methods should exist (inherited from ChatOpenAI)
+    // These methods should exist (inherited from ChatAnthropicMessages)
     expect(typeof model.invoke).toBe("function");
     expect(typeof model.generate).toBe("function");
     expect(typeof model.stream).toBe("function");
@@ -386,8 +367,8 @@ describe("SapiomChatOpenAI", () => {
 
   describe("Trace Integration", () => {
     it("reuses auto-generated trace across multiple invokes", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         { sapiomClient: mockClient },
       );
 
@@ -415,8 +396,8 @@ describe("SapiomChatOpenAI", () => {
     });
 
     it("updates currentTraceId from backend response", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         {
           sapiomClient: mockClient,
           traceId: "my-trace",
@@ -437,20 +418,20 @@ describe("SapiomChatOpenAI", () => {
       expect(model.currentTraceId).toBe("my-trace");
     });
 
-    it.skip("trace propagation requires agent wrapper (SapiomReactAgent)", async () => {
+    it.skip("trace propagation requires agent wrapper (wrapSapiomAgent)", async () => {
       // NOTE: Vanilla LangChain agents (createReactAgent) do not propagate
       // metadata from model to tools automatically.
       //
       // For full trace support across model + tools, use:
-      // - SapiomReactAgent (Phase 4) - wraps entire agent
+      // - wrapSapiomAgent - wraps entire agent
       // - Or manually pass traceId in agent config
       //
-      // This test is skipped until Phase 4 (Agent Wrapper) is implemented.
+      // This test is skipped - trace propagation is handled at agent level.
     });
 
     it("maps SDK traceId to backend traceExternalId parameter", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         {
           sapiomClient: mockClient,
           traceId: "user-trace-xyz",
@@ -472,8 +453,8 @@ describe("SapiomChatOpenAI", () => {
     });
 
     it("preserves trace across withConfig() calls", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         {
           sapiomClient: mockClient,
           traceId: "original-trace",
@@ -502,8 +483,8 @@ describe("SapiomChatOpenAI", () => {
     });
 
     it("handles batch generate with trace", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         {
           sapiomClient: mockClient,
           traceId: "batch-trace",
@@ -514,15 +495,14 @@ describe("SapiomChatOpenAI", () => {
         id: "tx-batch",
         status: "authorized",
         trace: { id: "trace-uuid", externalId: "batch-trace" },
-        serviceName: "openai",
-        actionName: "generate-batch",
-        resourceName: "gpt-4",
-        costs: [{ id: "cost-est", fiatAmount: "0.030", isEstimate: true }],
+        costs: [{ id: "cost-est", isEstimate: true }],
       });
 
-      jest.spyOn(ChatOpenAI.prototype, "generate").mockResolvedValue({
-        generations: [[], []],
-      } as any);
+      jest
+        .spyOn(ChatAnthropicMessages.prototype, "generate")
+        .mockResolvedValue({
+          generations: [[], []],
+        } as any);
 
       await model.generate([
         [{ role: "user", content: "Batch 1" }] as any,
@@ -539,8 +519,8 @@ describe("SapiomChatOpenAI", () => {
     });
 
     it("fallbacks gracefully when backend returns null externalId", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         {
           sapiomClient: mockClient,
           traceId: "my-trace",
@@ -563,8 +543,8 @@ describe("SapiomChatOpenAI", () => {
     });
 
     it("exposes currentTraceId immediately after construction", () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         {
           sapiomClient: mockClient,
           traceId: "early-access-trace",
@@ -577,94 +557,14 @@ describe("SapiomChatOpenAI", () => {
   });
 
   // ============================================================================
-  // COST TRACKING TESTS
+  // INVOKE → GENERATE WORKAROUND TESTS
   // ============================================================================
 
-  describe("Facts Tracking", () => {
-    it("submits request facts with token estimate", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4" },
+  describe("Double Authorization Prevention", () => {
+    it("prevents double authorization when invoke calls generate", async () => {
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         { sapiomClient: mockClient },
-      );
-
-      mockGenerate("Response", {
-        input_tokens: 100,
-        output_tokens: 50,
-        total_tokens: 150,
-      });
-
-      await model.invoke("Hello");
-
-      const createCall = (mockClient.transactions.create as jest.Mock).mock
-        .calls[0][0];
-
-      // Verify request facts sent
-      expect(createCall.requestFacts).toBeDefined();
-      expect(
-        createCall.requestFacts.request.estimatedInputTokens,
-      ).toBeGreaterThan(0);
-      expect(createCall.requestFacts.request.modelId).toBe("gpt-4");
-    });
-
-    it("submits response facts with actual token usage", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4" },
-        { sapiomClient: mockClient },
-      );
-
-      mockGenerate("Response", {
-        input_tokens: 100,
-        output_tokens: 50,
-        total_tokens: 150,
-      });
-
-      await model.invoke("Hello");
-
-      expect(mockClient.transactions.addFacts).toHaveBeenCalledWith(
-        "tx-model-123",
-        expect.objectContaining({
-          source: "langchain-llm",
-          version: "v1",
-          factPhase: "response",
-          facts: expect.objectContaining({
-            actualInputTokens: 100,
-            actualOutputTokens: 50,
-            actualTotalTokens: 150,
-            finishReason: expect.any(String),
-          }),
-        }),
-      );
-    });
-
-    it("includes call site in request facts", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4o" },
-        { sapiomClient: mockClient },
-      );
-
-      mockGenerate("Response", {
-        input_tokens: 1000,
-        output_tokens: 500,
-        total_tokens: 1500,
-      });
-
-      await model.invoke("Test");
-
-      const createCall = (mockClient.transactions.create as jest.Mock).mock
-        .calls[0][0];
-
-      // Verify call site captured (may be null in test environment)
-      expect(createCall.requestFacts.request.callSite).toBeDefined();
-    });
-
-    it("does not fail invoke if response facts submission fails", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4" },
-        { sapiomClient: mockClient },
-      );
-
-      (mockClient.transactions.addFacts as jest.Mock).mockRejectedValueOnce(
-        new Error("Network error"),
       );
 
       mockGenerate("Response", {
@@ -673,147 +573,93 @@ describe("SapiomChatOpenAI", () => {
         total_tokens: 15,
       });
 
-      // Should not throw even if facts submission fails
-      const result = await model.invoke("Hello");
-      expect(result).toBeDefined();
-      expect(result.content).toBe("Response");
+      await model.invoke("Test");
+
+      // Should only create ONE transaction (not two)
+      expect(mockClient.transactions.create).toHaveBeenCalledTimes(1);
     });
 
-    it("skips response facts if usage metadata not available", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4" },
+    it("authorizes when generate is called directly", async () => {
+      const model = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         { sapiomClient: mockClient },
       );
 
-      mockGenerate("Response"); // No usage metadata
-
-      await model.invoke("Hello");
-
-      // Should create transaction with request facts
-      expect(mockClient.transactions.create).toHaveBeenCalled();
-
-      // Should NOT call addFacts (no actual usage to report)
-      expect(mockClient.transactions.addFacts).not.toHaveBeenCalled();
-    });
-
-    it("submits aggregate response facts for batch generate", async () => {
-      const model = new SapiomChatOpenAI(
-        { model: "gpt-4" },
-        { sapiomClient: mockClient },
-      );
-
-      jest.spyOn(ChatOpenAI.prototype, "generate").mockResolvedValue({
-        generations: [
-          [
-            {
-              message: {
-                content: "Response 1",
-                usage_metadata: {
-                  input_tokens: 10,
-                  output_tokens: 5,
-                  total_tokens: 15,
-                },
-              },
-              text: "Response 1",
-            },
-          ],
-          [
-            {
-              message: {
-                content: "Response 2",
-                usage_metadata: {
-                  input_tokens: 20,
-                  output_tokens: 10,
-                  total_tokens: 30,
-                },
-              },
-              text: "Response 2",
-            },
-          ],
-        ],
-      } as any);
+      jest
+        .spyOn(ChatAnthropicMessages.prototype, "generate")
+        .mockResolvedValue({
+          generations: [[]],
+        } as any);
 
       await model.generate([
-        [{ role: "user", content: "Batch 1" }] as any,
-        [{ role: "user", content: "Batch 2" }] as any,
+        [{ role: "user", content: "Direct generate call" }] as any,
       ]);
 
-      // Should submit ONE transaction with batch request facts
+      // Should create transaction for direct generate() call
       expect(mockClient.transactions.create).toHaveBeenCalledTimes(1);
-
       const createCall = (mockClient.transactions.create as jest.Mock).mock
         .calls[0][0];
-      expect(createCall.requestFacts.request.batchSize).toBe(2);
 
-      // Should submit ONE aggregate response facts
-      expect(mockClient.transactions.addFacts).toHaveBeenCalledTimes(1);
-      const addFactsCall = (mockClient.transactions.addFacts as jest.Mock).mock
-        .calls[0][1];
-
-      expect(addFactsCall.facts.actualInputTokens).toBe(30); // 10 + 20
-      expect(addFactsCall.facts.actualOutputTokens).toBe(15); // 5 + 10
-      expect(addFactsCall.facts.actualTotalTokens).toBe(45); // 15 + 30
+      // Verify single batch in request facts
+      expect(createCall.requestFacts.request.batchSize).toBe(1);
     });
   });
 
   // ============================================================================
-  // WRAP CHAT OPENAI TESTS
+  // WRAP CHAT ANTHROPIC TESTS
   // ============================================================================
 
-  describe("wrapChatOpenAI", () => {
-    it("wraps existing ChatOpenAI instance with Sapiom tracking", () => {
-      const originalModel = new ChatOpenAI({
-        model: "gpt-4",
+  describe("wrapChatAnthropic", () => {
+    it("wraps existing ChatAnthropic instance with Sapiom tracking", () => {
+      const originalModel = new ChatAnthropic({
+        model: "claude-3-5-sonnet-20241022",
         temperature: 0.7,
         maxTokens: 1000,
-        openAIApiKey: "test-key",
+        anthropicApiKey: "test-key",
       });
 
-      const wrappedModel = wrapChatOpenAI(originalModel, {
+      const wrappedModel = wrapChatAnthropic(originalModel, {
         sapiomClient: mockClient,
       });
 
-      expect(wrappedModel).toBeInstanceOf(SapiomChatOpenAI);
+      expect(wrappedModel).toBeInstanceOf(SapiomChatAnthropic);
       expect(wrappedModel.__sapiomWrapped).toBe(true);
       expect(wrappedModel.__sapiomClient).toBe(mockClient);
     });
 
-    it("preserves all configuration fields from original model", () => {
-      const originalModel = new ChatOpenAI({
-        model: "gpt-4-turbo",
+    it("preserves all configuration from original model", () => {
+      const originalModel = new ChatAnthropic({
+        model: "claude-3-5-sonnet-20241022",
         temperature: 0.8,
         maxTokens: 2000,
+        topK: 40,
         topP: 0.9,
-        frequencyPenalty: 0.5,
-        presencePenalty: 0.6,
-        openAIApiKey: "test-key",
-        timeout: 60000,
-        maxRetries: 3,
+        anthropicApiKey: "test-key",
+        streaming: true,
+        streamUsage: false,
       });
 
-      const wrappedModel = wrapChatOpenAI(originalModel, {
+      const wrappedModel = wrapChatAnthropic(originalModel, {
         sapiomClient: mockClient,
       });
 
-      // Verify all fields were copied (access via protected fields property)
-      const fields = (wrappedModel as any).fields;
-      expect(fields.model).toBe("gpt-4-turbo");
-      expect(fields.temperature).toBe(0.8);
-      expect(fields.maxTokens).toBe(2000);
-      expect(fields.topP).toBe(0.9);
-      expect(fields.frequencyPenalty).toBe(0.5);
-      expect(fields.presencePenalty).toBe(0.6);
-      expect(fields.timeout).toBe(60000);
-      expect(fields.maxRetries).toBe(3);
+      // Verify configuration was copied
+      expect((wrappedModel as any).model).toBe("claude-3-5-sonnet-20241022");
+      expect((wrappedModel as any).temperature).toBe(0.8);
+      expect((wrappedModel as any).maxTokens).toBe(2000);
+      expect((wrappedModel as any).topK).toBe(40);
+      expect((wrappedModel as any).topP).toBe(0.9);
+      expect((wrappedModel as any).streaming).toBe(true);
+      expect((wrappedModel as any).streamUsage).toBe(false);
     });
 
-    it("prevents double-wrapping of SapiomChatOpenAI", () => {
-      const originalModel = new SapiomChatOpenAI(
-        { model: "gpt-4", openAIApiKey: "test-key" },
+    it("prevents double-wrapping of SapiomChatAnthropic", () => {
+      const originalModel = new SapiomChatAnthropic(
+        { model: "claude-3-5-sonnet-20241022", anthropicApiKey: "test-key" },
         { sapiomClient: mockClient },
       );
 
-      const wrappedModel = wrapChatOpenAI(originalModel, {
+      const wrappedModel = wrapChatAnthropic(originalModel, {
         sapiomClient: mockClient,
       });
 
@@ -821,13 +667,13 @@ describe("SapiomChatOpenAI", () => {
       expect(wrappedModel).toBe(originalModel);
     });
 
-    it("wrapped model can invoke and tracks transactions with facts", async () => {
-      const originalModel = new ChatOpenAI({
-        model: "gpt-4",
-        openAIApiKey: "test-key",
+    it("wrapped model can invoke and tracks transactions", async () => {
+      const originalModel = new ChatAnthropic({
+        model: "claude-3-5-sonnet-20241022",
+        anthropicApiKey: "test-key",
       });
 
-      const wrappedModel = wrapChatOpenAI(originalModel, {
+      const wrappedModel = wrapChatAnthropic(originalModel, {
         sapiomClient: mockClient,
       });
 
@@ -845,18 +691,20 @@ describe("SapiomChatOpenAI", () => {
         .calls[0][0];
 
       expect(createCall.requestFacts).toBeDefined();
-      expect(createCall.requestFacts.request.modelId).toBe("gpt-4");
+      expect(createCall.requestFacts.request.modelId).toBe(
+        "claude-3-5-sonnet-20241022",
+      );
     });
 
     it("allows custom trace ID in wrapper config", async () => {
-      const originalModel = new ChatOpenAI({
-        model: "gpt-4",
-        openAIApiKey: "test-key",
+      const originalModel = new ChatAnthropic({
+        model: "claude-3-5-sonnet-20241022",
+        anthropicApiKey: "test-key",
       });
 
-      const wrappedModel = wrapChatOpenAI(originalModel, {
+      const wrappedModel = wrapChatAnthropic(originalModel, {
         sapiomClient: mockClient,
-        traceId: "custom-trace-123",
+        traceId: "custom-trace-456",
       });
 
       mockGenerate("Response");
@@ -865,16 +713,16 @@ describe("SapiomChatOpenAI", () => {
 
       const createCall = (mockClient.transactions.create as jest.Mock).mock
         .calls[0][0];
-      expect(createCall.traceExternalId).toBe("custom-trace-123");
-      expect(wrappedModel.currentTraceId).toBe("custom-trace-123");
+      expect(createCall.traceExternalId).toBe("custom-trace-456");
+      expect(wrappedModel.currentTraceId).toBe("custom-trace-456");
     });
 
     it("wraps model with all LangChain methods available", () => {
-      const originalModel = new ChatOpenAI({
-        model: "gpt-4",
-        openAIApiKey: "test-key",
+      const originalModel = new ChatAnthropic({
+        model: "claude-3-5-sonnet-20241022",
+        anthropicApiKey: "test-key",
       });
-      const wrappedModel = wrapChatOpenAI(originalModel, {
+      const wrappedModel = wrapChatAnthropic(originalModel, {
         sapiomClient: mockClient,
       });
 
@@ -886,6 +734,23 @@ describe("SapiomChatOpenAI", () => {
       expect(typeof (wrappedModel as any).withStructuredOutput).toBe(
         "function",
       );
+    });
+
+    it("preserves extended thinking config when wrapping", () => {
+      const originalModel = new ChatAnthropic({
+        model: "claude-3-5-sonnet-20241022",
+        anthropicApiKey: "test-key",
+        thinking: { type: "enabled", budget_tokens: 1000 },
+      });
+
+      const wrappedModel = wrapChatAnthropic(originalModel, {
+        sapiomClient: mockClient,
+      });
+
+      expect((wrappedModel as any).thinking).toEqual({
+        type: "enabled",
+        budget_tokens: 1000,
+      });
     });
   });
 });

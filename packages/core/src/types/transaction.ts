@@ -2,8 +2,14 @@ export enum TransactionStatus {
   PENDING = "pending",
   PREPARING = "preparing",
   AUTHORIZED = "authorized",
+  COMPLETED = "completed",
   DENIED = "denied",
   CANCELLED = "cancelled",
+}
+
+export enum TransactionOutcome {
+  SUCCESS = "success",
+  ERROR = "error",
 }
 
 export interface TransactionCostInput {
@@ -80,6 +86,7 @@ export interface TransactionResponse {
   resourceName: string;
   serviceId?: string | null;
   status: TransactionStatus;
+  outcome?: TransactionOutcome | null;
   requiresPayment: boolean;
   qualifiers?: Record<string, any>;
   metadata?: Record<string, any>;
@@ -134,4 +141,25 @@ export interface PaymentProtocolData {
   x402: X402Response;
   additionalProtocols?: Record<string, any>;
   metadata?: Record<string, any>;
+}
+
+/**
+ * Request data for completing a transaction
+ */
+export interface CompleteTransactionRequest {
+  outcome: "success" | "error";
+  responseFacts?: {
+    source: string;
+    version: string;
+    facts: Record<string, any>;
+  };
+}
+
+/**
+ * Result of completing a transaction
+ */
+export interface CompleteTransactionResult {
+  transaction: TransactionResponse;
+  factId?: string;
+  costId?: string;
 }

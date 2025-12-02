@@ -14,6 +14,8 @@ import {
   extractResourceFromError,
   HttpError,
   HttpClientRequestFacts,
+  HttpClientResponseFacts,
+  HttpClientErrorFacts,
   FailureMode,
 } from "@sapiom/core";
 
@@ -316,6 +318,7 @@ export function addAuthorizationInterceptor(
         );
 
         (axiosConfig as any).__sapiomTransactionId = transaction.id;
+        (axiosConfig as any).__sapiomStartTime = Date.now();
 
         return axiosConfig;
       }
@@ -340,6 +343,7 @@ export function addAuthorizationInterceptor(
         );
 
         (axiosConfig as any).__sapiomTransactionId = transaction.id;
+        (axiosConfig as any).__sapiomStartTime = Date.now();
 
         return axiosConfig;
       } else if (result.status === "denied") {
@@ -427,6 +431,11 @@ export function addPaymentInterceptor(
         return Promise.reject(error);
       }
 
+      // Mark the original request as being handled by payment flow
+      // This prevents the completion interceptor from firing on the original request
+      // when the retry succeeds. If payment fails, we'll clear this flag.
+      (originalConfig as any).__sapiomPaymentHandling = true;
+
       const existingTransactionId =
         getHeader(originalConfig.headers, "X-Sapiom-Transaction-Id") ||
         (originalConfig as any).__sapiomTransactionId;
@@ -459,6 +468,8 @@ export function addPaymentInterceptor(
               );
           }
         } catch (apiError) {
+          // Clear payment handling flag so completion interceptor fires
+          (originalConfig as any).__sapiomPaymentHandling = false;
           if (config.failureMode === "closed") return Promise.reject(apiError);
           console.error(
             "[Sapiom] Failed to get/reauthorize transaction, returning 402:",
@@ -467,24 +478,11 @@ export function addPaymentInterceptor(
           return Promise.reject(error);
         }
       } else {
-        const extractServiceName = (resource: string): string => {
-          try {
-            const url = new URL(resource);
-            const pathParts = url.pathname.split("/").filter(Boolean);
-            return pathParts[0] || "api";
-          } catch {
-            return "api";
-          }
-        };
-
-        const serviceName =
-          userMetadata?.serviceName || extractServiceName(resource);
-
         try {
           transaction = await config.sapiomClient.transactions.create({
-            serviceName,
-            actionName: userMetadata?.actionName || "access",
-            resourceName: userMetadata?.resourceName || resource,
+            serviceName: userMetadata?.serviceName,
+            actionName: userMetadata?.actionName,
+            resourceName: userMetadata?.resourceName,
             paymentData: {
               x402: x402Response,
               metadata: {
@@ -508,6 +506,8 @@ export function addPaymentInterceptor(
             },
           });
         } catch (apiError) {
+          // Clear payment handling flag so completion interceptor fires
+          (originalConfig as any).__sapiomPaymentHandling = false;
           if (config.failureMode === "closed") return Promise.reject(apiError);
           console.error(
             "[Sapiom] Failed to create payment transaction, returning 402:",
@@ -521,17 +521,9 @@ export function addPaymentInterceptor(
         transaction.status === TransactionStatus.DENIED ||
         transaction.status === TransactionStatus.CANCELLED
       ) {
-        return Promise.reject({
-          response: {
-            status: 403,
-            statusText: "Forbidden",
-            data: {
-              error: "Payment transaction was denied or cancelled",
-              transactionId: transaction.id,
-              status: transaction.status,
-            },
-          },
-        });
+        // Clear payment handling flag so completion interceptor fires
+        (originalConfig as any).__sapiomPaymentHandling = false;
+        return Promise.reject(error); // Return original 402 error for completion
       }
 
       if (transaction.status !== TransactionStatus.AUTHORIZED) {
@@ -539,6 +531,8 @@ export function addPaymentInterceptor(
         try {
           result = await poller.waitForAuthorization(transaction.id);
         } catch (pollError) {
+          // Clear payment handling flag so completion interceptor fires
+          (originalConfig as any).__sapiomPaymentHandling = false;
           if (config.failureMode === "closed") return Promise.reject(pollError);
           console.error(
             "[Sapiom] Failed to poll payment transaction, returning 402:",
@@ -548,16 +542,9 @@ export function addPaymentInterceptor(
         }
 
         if (result.status !== "authorized") {
-          return Promise.reject({
-            response: {
-              status: 403,
-              statusText: "Forbidden",
-              data: {
-                error: `Payment transaction ${result.status}`,
-                transactionId: transaction.id,
-              },
-            },
-          });
+          // Clear payment handling flag so completion interceptor fires
+          (originalConfig as any).__sapiomPaymentHandling = false;
+          return Promise.reject(error); // Return original 402 error for completion
         }
 
         transaction = result.transaction!;
@@ -581,6 +568,7 @@ export function addPaymentInterceptor(
       const retryConfig = {
         ...originalConfig,
         __is402Retry: true,
+        __sapiomPaymentHandling: false, // Allow completion on retry
       } as any;
 
       setHeader(retryConfig.headers, "X-PAYMENT", paymentHeaderValue);
@@ -588,6 +576,137 @@ export function addPaymentInterceptor(
       const response = await axiosInstance.request(retryConfig);
 
       return response;
+    },
+  );
+
+  return () => axiosInstance.interceptors.response.eject(interceptorId);
+}
+
+/**
+ * Completion interceptor configuration
+ */
+export interface CompletionInterceptorConfig {
+  sapiomClient: SapiomClient;
+}
+
+/**
+ * Add completion response interceptor to axios instance
+ *
+ * This interceptor fires-and-forgets a transaction completion after each request.
+ */
+export function addCompletionInterceptor(
+  axiosInstance: AxiosInstance,
+  config: CompletionInterceptorConfig,
+): () => void {
+  const interceptorId = axiosInstance.interceptors.response.use(
+    (response: AxiosResponse) => {
+      const axiosConfig = response.config as InternalAxiosRequestConfig;
+
+      // Skip if this is the original request that triggered payment flow
+      // The retry request will handle completion instead
+      if ((axiosConfig as any).__sapiomPaymentHandling) {
+        return response;
+      }
+
+      const transactionId =
+        getHeader(axiosConfig.headers, "X-Sapiom-Transaction-Id") ||
+        (axiosConfig as any).__sapiomTransactionId;
+
+      if (transactionId) {
+        const startTime = (axiosConfig as any).__sapiomStartTime || Date.now();
+        const durationMs = Date.now() - startTime;
+
+        const sanitizedHeaders: Record<string, string> = {};
+        const sensitiveHeaders = new Set([
+          "set-cookie",
+          "authorization",
+          "x-api-key",
+        ]);
+        if (response.headers) {
+          Object.entries(response.headers as Record<string, any>).forEach(
+            ([key, value]) => {
+              if (!sensitiveHeaders.has(key.toLowerCase())) {
+                sanitizedHeaders[key] = String(value);
+              }
+            },
+          );
+        }
+
+        const facts: HttpClientResponseFacts = {
+          status: response.status,
+          statusText: response.statusText,
+          headers: sanitizedHeaders,
+          contentType: response.headers?.["content-type"] as string | undefined,
+          durationMs,
+        };
+
+        // Fire-and-forget
+        config.sapiomClient.transactions
+          .complete(transactionId, {
+            outcome: "success",
+            responseFacts: {
+              source: "http-client",
+              version: "v1",
+              facts,
+            },
+          })
+          .catch((err) => {
+            console.error("[Sapiom] Failed to complete transaction:", err);
+          });
+      }
+
+      return response;
+    },
+    async (error: AxiosError) => {
+      const originalConfig = error.config as InternalAxiosRequestConfig;
+
+      // Skip 402 errors - they will be handled by the payment interceptor
+      // which may retry the request. Completion will happen on the retry result.
+      if (error.response?.status === 402) {
+        return Promise.reject(error);
+      }
+
+      // Skip if this is the original request that triggered payment flow
+      // The retry request will handle completion instead
+      if ((originalConfig as any)?.__sapiomPaymentHandling) {
+        return Promise.reject(error);
+      }
+
+      const transactionId = originalConfig
+        ? getHeader(originalConfig.headers, "X-Sapiom-Transaction-Id") ||
+          (originalConfig as any).__sapiomTransactionId
+        : undefined;
+
+      if (transactionId) {
+        const startTime = (originalConfig as any).__sapiomStartTime || Date.now();
+        const durationMs = Date.now() - startTime;
+
+        const facts: HttpClientErrorFacts = {
+          errorType: error.name || "AxiosError",
+          errorMessage: error.message,
+          httpStatus: error.response?.status,
+          httpStatusText: error.response?.statusText,
+          isNetworkError: !error.response,
+          isTimeout: error.code === "ECONNABORTED" || error.code === "ETIMEDOUT",
+          elapsedMs: durationMs,
+        };
+
+        // Fire-and-forget
+        config.sapiomClient.transactions
+          .complete(transactionId, {
+            outcome: "error",
+            responseFacts: {
+              source: "http-client",
+              version: "v1",
+              facts,
+            },
+          })
+          .catch((err) => {
+            console.error("[Sapiom] Failed to complete transaction:", err);
+          });
+      }
+
+      return Promise.reject(error);
     },
   );
 

@@ -28,9 +28,10 @@ This is a monorepo containing multiple focused packages. Install only what you n
 
 ### Framework Integrations
 
-| Package | Version | Description |
-|---------|---------|-------------|
-| [@sapiom/langchain](./packages/langchain) | v0.1.0 | LangChain integration (v0.x compatible) |
+| Package | Version | LangChain | Description |
+|---------|---------|-----------|-------------|
+| [@sapiom/langchain](./packages/langchain) | v0.1.0 | v1.x | LangChain v1.x integration (recommended) |
+| [@sapiom/langchain-classic](./packages/langchain-classic) | v0.1.0 | v0.3+ | LangChain v0.x integration (legacy) |
 
 ### Coming Soon
 
@@ -70,22 +71,46 @@ const fetch = createSapiomFetch();
 const response = await fetch('https://api.example.com/data');
 ```
 
-### For LangChain Users
+### For LangChain v1.x Users
 
 ```bash
-npm install @sapiom/langchain
+npm install @sapiom/langchain langchain
 ```
 
 ```typescript
-import { SapiomChatOpenAI } from '@sapiom/langchain';
+import { createAgent } from "langchain";
+import { createSapiomMiddleware } from "@sapiom/langchain";
 
-const model = new SapiomChatOpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  sapiomApiKey: process.env.SAPIOM_API_KEY,
-  model: 'gpt-4'
+const agent = createAgent({
+  model: "gpt-4",
+  tools: [getWeather, sendEmail],
+  middleware: [
+    createSapiomMiddleware({
+      apiKey: process.env.SAPIOM_API_KEY,
+    }),
+  ],
 });
 
-const response = await model.invoke('Hello!');
+const result = await agent.invoke({
+  messages: [{ role: "user", content: "What's the weather?" }],
+});
+```
+
+### For LangChain v0.x Users (Legacy)
+
+```bash
+npm install @sapiom/langchain-classic
+```
+
+```typescript
+import { createSapiomReactAgent } from '@sapiom/langchain-classic';
+
+const agent = await createSapiomReactAgent(
+  { llm: new ChatOpenAI({ model: "gpt-4" }), tools: [...] },
+  { apiKey: process.env.SAPIOM_API_KEY }
+);
+
+const response = await agent.invoke({ messages: [...] });
 ```
 
 ### For Direct API Access
@@ -135,12 +160,13 @@ All integration packages depend on `@sapiom/core` but are independent of each ot
 
 ### LangChain Support
 
-| SDK Version | LangChain Version | Status |
-|------------|-------------------|---------|
-| v0.x       | v0.3+            | ✅ Active |
-| v1.0       | v1.0+            | 🚧 Planned |
+| Package | LangChain Version | Status |
+|---------|-------------------|---------|
+| `@sapiom/langchain` | v1.x | ✅ Recommended |
+| `@sapiom/langchain-classic` | v0.3+ | ✅ Legacy Support |
 
-The `@sapiom/langchain` package currently supports LangChain v0.x. When LangChain v1.0 stabilizes, we'll release SDK v1.0 with updated support.
+- **New projects**: Use `@sapiom/langchain` with LangChain v1.x
+- **Existing v0.x projects**: Use `@sapiom/langchain-classic` (no changes needed)
 
 ## 🛠️ Development
 
@@ -232,10 +258,10 @@ MIT © [Sapiom](LICENSE)
 - [x] Fetch integration  
 - [x] Node.js HTTP integration
 - [x] LangChain v0.x integration
+- [x] LangChain v1.x integration (middleware-based)
 - [ ] GitHub Actions CI/CD
 - [ ] Mastra integration
 - [ ] LangGraph integration
 - [ ] OpenAI SDK integration
-- [ ] LangChain v1.x support (SDK v1.0)
 - [ ] Browser support (via bundlers)
 - [ ] WebSocket support for streaming

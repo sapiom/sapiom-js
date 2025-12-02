@@ -1,38 +1,89 @@
 /**
- * Sapiom SDK - LangChain Integration
+ * @sapiom/langchain - LangChain v1.x Integration
  *
- * Provides unified session tracking and cost management for LangChain agents.
+ * Provides Sapiom tracking for LangChain v1.x agents via middleware.
+ *
+ * @example
+ * ```typescript
+ * import { createAgent } from "langchain";
+ * import { createSapiomMiddleware } from "@sapiom/langchain";
+ *
+ * const agent = createAgent({
+ *   model: "gpt-4",
+ *   tools: [getWeather, sendEmail],
+ *   middleware: [
+ *     createSapiomMiddleware({
+ *       apiKey: process.env.SAPIOM_API_KEY,
+ *     }),
+ *   ],
+ * });
+ *
+ * // All model and tool calls are automatically tracked!
+ * const result = await agent.invoke({
+ *   messages: [{ role: "user", content: "What's the weather?" }],
+ * });
+ * ```
  *
  * @packageDocumentation
  */
 
-// Re-export types (users may need these for TypeScript)
+// Main middleware
+export { createSapiomMiddleware } from "./middleware";
+export type { SapiomMiddlewareConfig, SapiomMiddlewareContext } from "./internal/types";
+
+// Re-export LangChain types for convenience
+export type { AgentMiddleware, ToolCallRequest } from "langchain";
+
+// Types (re-exported from middleware, but also available directly)
 export type {
-  SapiomModelConfig,
-  SapiomToolConfig,
-  SapiomSessionMetadata,
-  SapiomWrapped,
+  SapiomMiddlewareState,
 } from "./internal/types";
 
-// Tool Wrapper
+// Utilities (for advanced use cases)
 export {
-  wrapSapiomTool,
-  createSapiomTool,
-  sapiomTool,
-  SapiomDynamicTool,
-} from "./tool";
+  generateSDKTraceId,
+  isAuthorizationDenied,
+  isAuthorizationDeniedOrTimeout,
+  AuthorizationDeniedError,
+  SDK_VERSION,
+  SDK_NAME,
+} from "./internal/utils";
 
-// Model Wrapper
-export { SapiomChatOpenAI, SapiomChatAnthropic } from "./model";
+// Payment detection (for custom payment handling)
+export {
+  isMCPPaymentError,
+  extractPaymentFromMCPError,
+  convertX402ToSapiomPayment,
+  getPaymentAuthFromTransaction,
+  type X402PaymentResponse,
+} from "./internal/payment";
 
-// Model Wrapper Functions
-export { wrapChatOpenAI } from "./models/openai";
-export { wrapChatAnthropic } from "./models/anthropic";
+// Telemetry (for custom tracking)
+export {
+  estimateInputTokens,
+  getModelId,
+  extractActualTokens,
+  type TokenUsage,
+} from "./internal/telemetry";
 
-// Agent Wrapper
-export { wrapSapiomAgent, createSapiomReactAgent } from "./agent";
-export type { WrapSapiomAgentConfig } from "./agent";
+// Schemas (for type checking)
+export type {
+  AgentRequestFacts,
+  AgentResponseFacts,
+  AgentErrorFacts,
+  AgentFacts,
+} from "./schemas/agent-v1";
 
-// Re-export SapiomClient from core for convenience
-export { SapiomClient } from "@sapiom/core";
-export type { SapiomClientConfig } from "@sapiom/core";
+export type {
+  ModelRequestFacts,
+  ModelResponseFacts,
+  ModelErrorFacts,
+  ModelFacts,
+} from "./schemas/model-v1";
+
+export type {
+  ToolRequestFacts,
+  ToolResponseFacts,
+  ToolErrorFacts,
+  ToolFacts,
+} from "./schemas/tool-v1";

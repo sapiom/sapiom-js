@@ -96,7 +96,9 @@ export class SapiomClient {
         );
       }
 
-      return (await this.parseResponse(response)) as T;
+      const responseData = await this.parseResponse(response);
+
+      return responseData as T;
     } catch (error: any) {
       clearTimeout(timeoutId);
       if (error.name === "AbortError") {

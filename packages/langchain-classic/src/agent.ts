@@ -181,43 +181,47 @@ export function wrapSapiomAgent(
       const result = await originalInvoke(state, enrichedConfig);
       const duration = Date.now() - startTime;
 
-      // Submit response facts (fire-and-forget)
+      // Complete transaction with response facts (fire-and-forget)
       sapiomClient.transactions
-        .addFacts(agentTx.id, {
-          source: "langchain-agent",
-          version: "v1",
-          factPhase: "response",
-          facts: {
-            success: true,
-            durationMs: duration,
-            iterations: 0, // TODO: Track from graph state
-            hasOutput: !!result,
-            outputMessageCount: result?.messages?.length || 0,
+        .complete(agentTx.id, {
+          outcome: "success",
+          responseFacts: {
+            source: "langchain-agent",
+            version: "v1",
+            facts: {
+              success: true,
+              durationMs: duration,
+              iterations: 0, // TODO: Track from graph state
+              hasOutput: !!result,
+              outputMessageCount: result?.messages?.length || 0,
+            },
           },
         })
         .catch((err) => {
-          console.error("Failed to submit agent response facts:", err);
+          console.error("Failed to complete agent transaction:", err);
         });
 
       return result;
     } catch (error) {
       const duration = Date.now() - startTime;
 
-      // Submit error facts (fire-and-forget)
+      // Complete transaction with error facts (fire-and-forget)
       sapiomClient.transactions
-        .addFacts(agentTx.id, {
-          source: "langchain-agent",
-          version: "v1",
-          factPhase: "error",
-          facts: {
-            errorType: (error as any).constructor?.name || "Error",
-            errorMessage: (error as Error).message,
-            elapsedMs: duration,
-            iterationsBeforeError: 0, // TODO: Track from graph state
+        .complete(agentTx.id, {
+          outcome: "error",
+          responseFacts: {
+            source: "langchain-agent",
+            version: "v1",
+            facts: {
+              errorType: (error as any).constructor?.name || "Error",
+              errorMessage: (error as Error).message,
+              elapsedMs: duration,
+              iterationsBeforeError: 0, // TODO: Track from graph state
+            },
           },
         })
         .catch((err) => {
-          console.error("Failed to submit agent error facts:", err);
+          console.error("Failed to complete agent transaction:", err);
         });
 
       throw error;
