@@ -17,7 +17,9 @@ cp ../.env.example .env
 ## Run
 
 ```bash
-npm start
+npm start       # Free endpoints only (no balance required)
+npm run free    # Same as above
+npm run full    # All endpoints including paid (requires balance)
 ```
 
 ## What This Shows
