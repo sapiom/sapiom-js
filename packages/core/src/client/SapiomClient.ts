@@ -19,6 +19,9 @@ interface FetchConfig {
   headers?: Record<string, string>;
 }
 
+/** Default production API URL */
+const DEFAULT_API_URL = "https://api.sapiom.ai";
+
 export class SapiomClient {
   private readonly baseURL: string;
   private readonly timeout: number;
@@ -30,7 +33,11 @@ export class SapiomClient {
       throw new Error("API key is required");
     }
 
-    this.baseURL = config.baseURL || "http://localhost:3000";
+    // Priority: config.baseURL > SAPIOM_API_URL env var > default production URL
+    this.baseURL =
+      config.baseURL ||
+      (typeof process !== "undefined" ? process.env?.SAPIOM_API_URL : undefined) ||
+      DEFAULT_API_URL;
     this.timeout = config.timeout || 30000;
     this.defaultHeaders = {
       "Content-Type": "application/json",

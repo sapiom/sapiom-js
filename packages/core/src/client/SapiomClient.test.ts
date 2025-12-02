@@ -34,7 +34,7 @@ describe("SapiomClient", () => {
       });
 
       const httpClient = client.getHttpClient();
-      expect(httpClient.defaults.baseURL).toBe("http://localhost:3000");
+      expect(httpClient.defaults.baseURL).toBe("https://api.sapiom.ai");
     });
 
     it("should update API key", () => {
@@ -198,7 +198,7 @@ describe("SapiomClient", () => {
       });
 
       await expect(client.request({ url: "/test" })).rejects.toThrow(
-        /Request failed with status 400/,
+        /Request failed with status 400/
       );
     });
 
@@ -216,7 +216,7 @@ describe("SapiomClient", () => {
       });
 
       await expect(client.request({ url: "/test" })).rejects.toThrow(
-        /Request failed with status 500/,
+        /Request failed with status 500/
       );
     });
 
@@ -254,7 +254,7 @@ describe("SapiomClient", () => {
                 reject(error);
               });
             }
-          }),
+          })
       );
 
       const requestPromise = client.request({ url: "/test" });
@@ -271,7 +271,7 @@ describe("SapiomClient", () => {
       mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
       await expect(client.request({ url: "/test" })).rejects.toThrow(
-        "Network error",
+        "Network error"
       );
     });
 
@@ -294,7 +294,7 @@ describe("SapiomClient", () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.test.com/v1/test?foo=bar&num=123",
-        expect.any(Object),
+        expect.any(Object)
       );
     });
 
@@ -322,7 +322,7 @@ describe("SapiomClient", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify(mockBody),
-        }),
+        })
       );
     });
 
@@ -351,7 +351,7 @@ describe("SapiomClient", () => {
             "Content-Type": "application/json",
             "X-Custom-Header": "custom-value",
           }),
-        }),
+        })
       );
     });
   });
@@ -382,7 +382,7 @@ describe("SapiomClient", () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.test.com/v1/transactions",
-        expect.any(Object),
+        expect.any(Object)
       );
     });
 
@@ -402,7 +402,7 @@ describe("SapiomClient", () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.test.com/v1/transactions",
-        expect.any(Object),
+        expect.any(Object)
       );
     });
 
@@ -422,7 +422,7 @@ describe("SapiomClient", () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.test.com/v1/transactions",
-        expect.any(Object),
+        expect.any(Object)
       );
     });
 
@@ -442,7 +442,7 @@ describe("SapiomClient", () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.test.com/v1/transactions/123/costs",
-        expect.any(Object),
+        expect.any(Object)
       );
     });
   });
@@ -480,7 +480,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: JSON.stringify(mockBody),
-        }),
+        })
       );
     });
 
@@ -510,7 +510,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: prestringified,
-        }),
+        })
       );
     });
 
@@ -541,7 +541,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: formData,
-        }),
+        })
       );
     });
 
@@ -572,7 +572,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: params,
-        }),
+        })
       );
     });
 
@@ -601,7 +601,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: blob,
-        }),
+        })
       );
     });
 
@@ -630,7 +630,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: buffer,
-        }),
+        })
       );
     });
 
@@ -656,7 +656,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: undefined,
-        }),
+        })
       );
     });
 
@@ -681,7 +681,7 @@ describe("SapiomClient", () => {
         expect.any(String),
         expect.objectContaining({
           body: undefined,
-        }),
+        })
       );
     });
   });
