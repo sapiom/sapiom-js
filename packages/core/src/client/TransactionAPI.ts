@@ -9,10 +9,10 @@ import {
   TransactionCostInput,
   TransactionCostResponse,
 } from "../types/transaction";
-import type { SapiomClient } from "./SapiomClient";
+import type { HttpClient } from "./HttpClient";
 
 export class TransactionAPI {
-  constructor(private readonly client: SapiomClient) {}
+  constructor(private readonly httpClient: HttpClient) {}
 
   /**
    * Create a new transaction
@@ -20,7 +20,7 @@ export class TransactionAPI {
    * @returns The created transaction response
    */
   async create(data: CreateTransactionRequest): Promise<TransactionResponse> {
-    return await this.client.request<TransactionResponse>({
+    return await this.httpClient.request<TransactionResponse>({
       method: "POST",
       url: "/transactions",
       body: data,
@@ -33,7 +33,7 @@ export class TransactionAPI {
    * @returns The transaction details
    */
   async get(transactionId: string): Promise<TransactionResponse> {
-    return await this.client.request<TransactionResponse>({
+    return await this.httpClient.request<TransactionResponse>({
       method: "GET",
       url: `/transactions/${transactionId}`,
     });
@@ -80,7 +80,7 @@ export class TransactionAPI {
     transactionId: string,
     data: PaymentProtocolData,
   ): Promise<TransactionResponse> {
-    return await this.client.request<TransactionResponse>({
+    return await this.httpClient.request<TransactionResponse>({
       method: "POST",
       url: `/transactions/${transactionId}/reauthorize`,
       body: data,
@@ -112,7 +112,7 @@ export class TransactionAPI {
     transactionId: string,
     cost: TransactionCostInput & { supersedesCostId?: string },
   ): Promise<TransactionCostResponse> {
-    return await this.client.request<TransactionCostResponse>({
+    return await this.httpClient.request<TransactionCostResponse>({
       method: "POST",
       url: `/transactions/${transactionId}/costs`,
       body: cost,
@@ -159,7 +159,7 @@ export class TransactionAPI {
       facts: Record<string, any>;
     },
   ): Promise<{ success: boolean; factId: string; costId?: string }> {
-    return await this.client.request({
+    return await this.httpClient.request({
       method: "POST",
       url: `/transactions/${transactionId}/facts`,
       body: data,
@@ -209,7 +209,7 @@ export class TransactionAPI {
     transactionId: string,
     data: CompleteTransactionRequest,
   ): Promise<CompleteTransactionResult> {
-    return await this.client.request<CompleteTransactionResult>({
+    return await this.httpClient.request<CompleteTransactionResult>({
       method: "POST",
       url: `/transactions/${transactionId}/complete`,
       body: data,
