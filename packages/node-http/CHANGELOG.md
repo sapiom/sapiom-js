@@ -1,5 +1,9 @@
 # @sapiom/node-http
 
+## 0.1.2
+
+- Handle undefined headers in request
+
 ## 0.1.1
 
 - First public release
