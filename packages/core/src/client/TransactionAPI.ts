@@ -28,19 +28,6 @@ export class TransactionAPI {
   }
 
   /**
-   * List transactions for the organization
-   * @param params Query parameters for filtering and pagination
-   * @returns Array of transactions
-   */
-  async list(params?: ListTransactionsParams): Promise<TransactionResponse[]> {
-    return await this.client.request<TransactionResponse[]>({
-      method: "GET",
-      url: "/transactions",
-      params: params || {},
-    });
-  }
-
-  /**
    * Get a specific transaction by ID
    * @param transactionId The transaction ID
    * @returns The transaction details
@@ -129,31 +116,6 @@ export class TransactionAPI {
       method: "POST",
       url: `/transactions/${transactionId}/costs`,
       body: cost,
-    });
-  }
-
-  /**
-   * List all costs for a transaction
-   *
-   * Returns both active and superseded costs for audit trail.
-   *
-   * @param transactionId - Transaction ID
-   * @returns Costs with total active cost
-   *
-   * @example
-   * ```typescript
-   * const { costs, totalActiveCostUsd } = await client.transactions.listCosts(txId);
-   * console.log(`Total cost: $${totalActiveCostUsd}`);
-   * costs.forEach(c => console.log(`  ${c.isEstimate ? 'Estimate' : 'Actual'}: $${c.fiatAmount}`));
-   * ```
-   */
-  async listCosts(transactionId: string): Promise<{
-    costs: TransactionCostResponse[];
-    totalActiveCostUsd: string;
-  }> {
-    return await this.client.request({
-      method: "GET",
-      url: `/transactions/${transactionId}/costs`,
     });
   }
 
