@@ -223,8 +223,11 @@ export function createClient(
         return makeRequest<T>(request);
       }
 
+      // Normalize request to ensure headers is always defined
+      const normalizedRequest = { ...request, headers: request.headers || {} };
+
       const modifiedRequest = await handleAuthorization(
-        request,
+        normalizedRequest,
         authConfig,
         defaultMetadata
       );
