@@ -102,6 +102,7 @@ async function main() {
     logInfo(`Timezone: ${response.data.timezone}`);
   } catch (error: any) {
     logError(`Failed: ${error.message}`);
+    console.error("Full stack trace:", error.stack);
   }
 
   // ============================================
@@ -127,6 +128,7 @@ async function main() {
     logInfo(`Uptime: ${Math.floor(response.data.uptime)}s`);
   } catch (error: any) {
     logError(`Failed: ${error.message}`);
+    console.error("Full stack trace:", error.stack);
   }
 
   // ============================================

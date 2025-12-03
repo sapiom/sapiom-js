@@ -8,7 +8,7 @@
  *
  * Usage: Use createClient() and call client.request() for HTTP requests
  */
-import { createSapiomClient as createNodeHttpClient } from "@sapiom/node-http";
+import { createClient as createNodeHttpClient } from "@sapiom/node-http";
 import dotenv from "dotenv";
 
 dotenv.config();

@@ -9,7 +9,7 @@
     "full": "npx tsx index.ts"
   },
   "dependencies": {
-    "@sapiom/node-http": "latest",
+    "@sapiom/node-http": "^0.1.1",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
