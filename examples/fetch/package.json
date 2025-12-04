@@ -1,0 +1,20 @@
+{
+  "name": "@sapiom/example-fetch",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sapiom SDK example using native Fetch API",
+  "scripts": {
+    "start": "npx tsx index-free.ts",
+    "free": "npx tsx index-free.ts",
+    "full": "npx tsx index.ts"
+  },
+  "dependencies": {
+    "@sapiom/fetch": "latest",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2"
+  }
+}
