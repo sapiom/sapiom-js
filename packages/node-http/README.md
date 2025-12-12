@@ -102,6 +102,6 @@ MIT © [Sapiom](../../LICENSE)
 
 ## Links
 
-- [Documentation](https://docs.sapiom.com)
+- [Documentation](https://docs.sapiom.ai)
 - [GitHub](https://github.com/sapiom/sapiom-js)
 - [NPM](https://www.npmjs.com/package/@sapiom/node-http)

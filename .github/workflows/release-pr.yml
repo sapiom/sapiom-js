@@ -1,10 +1,10 @@
-name: Publish
+name: Release PR
 
 on:
   push:
     branches:
       - main
-    paths:
+    paths-ignore:
       - '**/CHANGELOG.md'
 
 concurrency:
@@ -12,11 +12,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  publish:
+  release-pr:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -29,16 +29,14 @@ jobs:
         with:
           node-version: 18
           cache: pnpm
-          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build packages
-        run: pnpm build
-
-      - name: Publish to npm
-        run: pnpm changeset publish
+      - name: Create Release Pull Request
+        uses: changesets/action@v1
+        with:
+          title: "chore: version packages"
+          commit: "chore: version packages"
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

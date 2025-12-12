@@ -36,7 +36,7 @@ import { SapiomClient } from '@sapiom/core';
 
 const client = new SapiomClient({
   apiKey: process.env.SAPIOM_API_KEY,
-  baseURL: 'https://api.sapiom.com' // optional
+  baseURL: 'https://api.sapiom.ai' // optional
 });
 
 // Create a transaction
@@ -284,7 +284,7 @@ MIT © [Sapiom](../../LICENSE)
 
 ## Links
 
-- [Documentation](https://docs.sapiom.com)
+- [Documentation](https://docs.sapiom.ai)
 - [GitHub](https://github.com/sapiom/sapiom-js)
 - [NPM](https://www.npmjs.com/package/@sapiom/core)
 - [Issues](https://github.com/sapiom/sapiom-js/issues)
