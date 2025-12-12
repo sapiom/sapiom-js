@@ -1,5 +1,11 @@
 # @sapiom/core
 
+## 0.1.2
+
+### Patch Changes
+
+- 5593157: Update documentation links, sapiom.com to sapiom.ai
+
 ## 0.1.1
 
 - First public release
