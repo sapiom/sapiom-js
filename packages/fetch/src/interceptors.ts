@@ -82,6 +82,27 @@ function setHeader(headers: Headers, name: string, value: string): void {
 }
 
 /**
+ * Get the correct payment header name based on x402 version
+ * V1: X-PAYMENT, V2: PAYMENT-SIGNATURE
+ */
+function getPaymentHeaderName(payload: any): string {
+  if (payload?.x402Version === 2) {
+    return "PAYMENT-SIGNATURE";
+  }
+  return "X-PAYMENT";
+}
+
+/**
+ * Extract settlement header from response (checks both V1 and V2 header names)
+ */
+function extractSettlementHeader(headers: Headers): string | undefined {
+  return (
+    getHeader(headers, "payment-response") || // V2
+    getHeader(headers, "x-payment-response") // V1
+  );
+}
+
+/**
  * Create authorization wrapper for fetch
  */
 export async function handleAuthorization(
@@ -419,11 +440,14 @@ export async function handlePayment(
       ? authorizationPayload
       : btoa(JSON.stringify(authorizationPayload));
 
+  // Select header name based on x402 version (V1: X-PAYMENT, V2: PAYMENT-SIGNATURE)
+  const headerName = getPaymentHeaderName(authorizationPayload);
+
   const newInit = {
     ...originalInit,
     headers: {
       ...(originalInit?.headers || {}),
-      "X-PAYMENT": paymentHeaderValue,
+      [headerName]: paymentHeaderValue,
     },
   };
 

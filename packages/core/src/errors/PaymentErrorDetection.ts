@@ -1,27 +1,27 @@
 // This file contains the core payment error detection logic without HTTP library dependencies
 import { HttpError } from "../types/http";
+import {
+  X402PaymentRequirementV1,
+  X402PaymentRequirementV2,
+  X402ResponseV1,
+  X402ResponseV2,
+} from "../types/transaction";
+
+// ============================================================================
+// x402 Payment Response Types (for error detection)
+// ============================================================================
 
 /**
- * Standard x402 protocol response format
+ * V1 Payment Requirement (re-exported for error detection)
  */
-export interface X402PaymentResponse {
-  x402Version: number;
-  accepts: X402PaymentRequirement[];
-}
+export type X402PaymentRequirement =
+  | X402PaymentRequirementV1
+  | X402PaymentRequirementV2;
 
-export interface X402PaymentRequirement {
-  scheme: string;
-  network: string;
-  maxAmountRequired: string;
-  resource: string;
-  description: string;
-  mimeType: string;
-  outputSchema?: object | null;
-  payTo: string;
-  maxTimeoutSeconds: number;
-  asset: string;
-  extra?: object | null;
-}
+/**
+ * Standard x402 protocol response format (union of V1 and V2)
+ */
+export type X402PaymentResponse = X402ResponseV1 | X402ResponseV2;
 
 /**
  * Sapiom-specific payment response format
@@ -49,6 +49,9 @@ export interface ErrorDetectorAdapter {
  * Custom error for payment required
  */
 export class PaymentRequiredError extends Error {
+  /** The x402 protocol version (1 or 2) */
+  public readonly x402Version: number;
+
   constructor(
     message: string,
     public x402Response: X402PaymentResponse,
@@ -57,18 +60,40 @@ export class PaymentRequiredError extends Error {
   ) {
     super(message);
     this.name = "PaymentRequiredError";
+    this.x402Version = x402Response.x402Version;
+  }
+
+  /** Check if this error came from a V2 resource server */
+  isV2(): boolean {
+    return this.x402Version === 2;
+  }
+
+  /** Check if this error came from a V1 resource server */
+  isV1(): boolean {
+    return this.x402Version === 1;
   }
 }
 
 // Type guards
 function isX402Response(data: unknown): data is X402PaymentResponse {
-  return (
-    data !== null &&
-    typeof data === "object" &&
-    "x402Version" in data &&
-    "accepts" in data &&
-    Array.isArray((data as any).accepts)
-  );
+  if (data === null || typeof data !== "object") return false;
+
+  const obj = data as Record<string, unknown>;
+
+  // Must have x402Version and accepts array
+  if (!("x402Version" in obj) || !("accepts" in obj)) return false;
+  if (!Array.isArray(obj.accepts)) return false;
+
+  // V2 requires resource object with url
+  if (obj.x402Version === 2) {
+    if (!("resource" in obj) || typeof obj.resource !== "object") {
+      return false;
+    }
+    const resource = obj.resource as Record<string, unknown>;
+    if (typeof resource.url !== "string") return false;
+  }
+
+  return true;
 }
 
 function isSapiomPaymentResponse(data: unknown): data is SapiomPaymentResponse {
@@ -129,7 +154,20 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
 
     // Try to get resource from x402 response
     if (isX402Response(httpError.data)) {
-      return httpError.data.accepts[0]?.resource || httpError.request?.url;
+      // V2: resource URL is at response level
+      if (
+        httpError.data.x402Version === 2 &&
+        "resource" in httpError.data &&
+        httpError.data.resource?.url
+      ) {
+        return httpError.data.resource.url;
+      }
+      // V1: resource URL is in first requirement
+      const firstAccept = httpError.data.accepts[0];
+      if (firstAccept && "resource" in firstAccept) {
+        return firstAccept.resource || httpError.request?.url;
+      }
+      return httpError.request?.url;
     }
 
     // Fall back to request URL
