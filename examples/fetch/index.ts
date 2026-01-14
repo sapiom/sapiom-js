@@ -157,6 +157,7 @@ async function main() {
         logInfo("Payment transaction was denied by Sapiom policy");
       }
     }
+    // break;
   }
 
   logInfo(`\nTotal SMS sent: ${smsCount}/${customers.length}`);

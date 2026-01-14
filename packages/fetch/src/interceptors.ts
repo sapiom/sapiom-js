@@ -329,6 +329,7 @@ export async function handlePayment(
 
   const errorResponse = response.clone();
   const errorBody = await errorResponse.text();
+
   let errorData: any;
   try {
     errorData = JSON.parse(errorBody);
