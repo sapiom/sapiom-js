@@ -93,16 +93,6 @@ function getPaymentHeaderName(payload: any): string {
 }
 
 /**
- * Extract settlement header from response (checks both V1 and V2 header names)
- */
-function extractSettlementHeader(headers: Headers): string | undefined {
-  return (
-    getHeader(headers, "payment-response") || // V2
-    getHeader(headers, "x-payment-response") // V1
-  );
-}
-
-/**
  * Create authorization wrapper for fetch
  */
 export async function handleAuthorization(

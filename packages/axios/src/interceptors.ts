@@ -106,18 +106,6 @@ function getPaymentHeaderName(payload: any): string {
 }
 
 /**
- * Extract settlement header from response (checks both V1 and V2 header names)
- */
-function extractSettlementHeader(
-  headers: Record<string, any>,
-): string | undefined {
-  return (
-    getHeader(headers, "payment-response") || // V2
-    getHeader(headers, "x-payment-response") // V1
-  );
-}
-
-/**
  * Add authorization request interceptor to axios instance
  */
 export function addAuthorizationInterceptor(

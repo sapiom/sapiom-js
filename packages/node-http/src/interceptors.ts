@@ -89,6 +89,17 @@ function setHeader(
 }
 
 /**
+ * Get the correct payment header name based on x402 version
+ * V1: X-PAYMENT, V2: PAYMENT-SIGNATURE
+ */
+function getPaymentHeaderName(payload: any): string {
+  if (payload?.x402Version === 2) {
+    return "PAYMENT-SIGNATURE";
+  }
+  return "X-PAYMENT";
+}
+
+/**
  * Handle authorization for a request
  */
 export async function handleAuthorization(
@@ -405,9 +416,12 @@ export async function handlePayment(
       ? authorizationPayload
       : Buffer.from(JSON.stringify(authorizationPayload)).toString("base64");
 
+  // Select header name based on x402 version (V1: X-PAYMENT, V2: PAYMENT-SIGNATURE)
+  const headerName = getPaymentHeaderName(authorizationPayload);
+
   const retryRequest = { ...originalRequest };
   retryRequest.headers = { ...originalRequest.headers };
-  setHeader(retryRequest.headers, "X-PAYMENT", paymentHeaderValue);
+  setHeader(retryRequest.headers, headerName, paymentHeaderValue);
 
   const retryResponse = await requestFn(retryRequest);
 
