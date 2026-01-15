@@ -117,9 +117,9 @@ export interface ListTransactionsParams {
  */
 export interface X402PaymentRequirementV1 {
   scheme: string;
-  network: string; // "sapiom" (V1 format)
-  maxAmountRequired: string; // V1 field name
-  resource: string; // URL embedded in requirement
+  network: string;
+  maxAmountRequired: string;  // V1 field name
+  resource: string;           // URL embedded in requirement in V1
   description: string;
   mimeType: string;
   outputSchema?: object | null;
@@ -145,9 +145,9 @@ export interface X402ResponseV1 {
  * V2 Payment Requirement (new x402 format)
  */
 export interface X402PaymentRequirementV2 {
-  scheme: string; // "exact" (or "upto" for pre-auth)
-  network: string; // CAIP-2 format: "sapiom:main"
-  amount: string; // Renamed from maxAmountRequired
+  scheme: string;          // "exact" (or "upto" for pre-auth) in V2
+  network: string;         // CAIP-2 format: "sapiom:main" in V2
+  amount: string;          // Renamed from maxAmountRequired in V2
   payTo: string;
   maxTimeoutSeconds: number;
   asset: string;
