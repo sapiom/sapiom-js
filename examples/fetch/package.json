@@ -9,8 +9,7 @@
     "full": "npx tsx index.ts"
   },
   "dependencies": {
-    "@sapiom/core": "file:../../packages/core",
-    "@sapiom/fetch": "file:../../packages/fetch",
+    "@sapiom/fetch": "latest",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
