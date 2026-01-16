@@ -82,6 +82,17 @@ function setHeader(headers: Headers, name: string, value: string): void {
 }
 
 /**
+ * Get the correct payment header name based on x402 version
+ * V1: X-PAYMENT, V2: PAYMENT-SIGNATURE
+ */
+function getPaymentHeaderName(payload: any): string {
+  if (payload?.x402Version === 2) {
+    return "PAYMENT-SIGNATURE";
+  }
+  return "X-PAYMENT";
+}
+
+/**
  * Create authorization wrapper for fetch
  */
 export async function handleAuthorization(
@@ -308,6 +319,7 @@ export async function handlePayment(
 
   const errorResponse = response.clone();
   const errorBody = await errorResponse.text();
+
   let errorData: any;
   try {
     errorData = JSON.parse(errorBody);
@@ -419,11 +431,14 @@ export async function handlePayment(
       ? authorizationPayload
       : btoa(JSON.stringify(authorizationPayload));
 
+  // Select header name based on x402 version (V1: X-PAYMENT, V2: PAYMENT-SIGNATURE)
+  const headerName = getPaymentHeaderName(authorizationPayload);
+
   const newInit = {
     ...originalInit,
     headers: {
       ...(originalInit?.headers || {}),
-      "X-PAYMENT": paymentHeaderValue,
+      [headerName]: paymentHeaderValue,
     },
   };
 

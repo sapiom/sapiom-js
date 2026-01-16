@@ -1,27 +1,44 @@
 // This file contains the core payment error detection logic without HTTP library dependencies
 import { HttpError } from "../types/http";
+import {
+  X402PaymentRequirementV1,
+  X402PaymentRequirementV2,
+  X402ResponseV1,
+  X402ResponseV2,
+} from "../types/transaction";
 
 /**
- * Standard x402 protocol response format
+ * Decode base64 string to UTF-8 (works in both Node.js and browser)
  */
-export interface X402PaymentResponse {
-  x402Version: number;
-  accepts: X402PaymentRequirement[];
+function base64Decode(str: string): string {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(str, "base64").toString("utf-8");
+  }
+  // Browser fallback
+  return decodeURIComponent(
+    atob(str)
+      .split("")
+      .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+      .join("")
+  );
 }
 
-export interface X402PaymentRequirement {
-  scheme: string;
-  network: string;
-  maxAmountRequired: string;
-  resource: string;
-  description: string;
-  mimeType: string;
-  outputSchema?: object | null;
-  payTo: string;
-  maxTimeoutSeconds: number;
-  asset: string;
-  extra?: object | null;
-}
+
+// ============================================================================
+// x402 Payment Response Types (for error detection)
+// ============================================================================
+
+/**
+ * V1 Payment Requirement (re-exported for error detection)
+ */
+export type X402PaymentRequirement =
+  | X402PaymentRequirementV1
+  | X402PaymentRequirementV2;
+
+/**
+ * Standard x402 protocol response format (union of V1 and V2)
+ */
+export type X402PaymentResponse = X402ResponseV1 | X402ResponseV2;
 
 /**
  * Sapiom-specific payment response format
@@ -49,6 +66,9 @@ export interface ErrorDetectorAdapter {
  * Custom error for payment required
  */
 export class PaymentRequiredError extends Error {
+  /** The x402 protocol version (1 or 2) */
+  public readonly x402Version: number;
+
   constructor(
     message: string,
     public x402Response: X402PaymentResponse,
@@ -57,18 +77,40 @@ export class PaymentRequiredError extends Error {
   ) {
     super(message);
     this.name = "PaymentRequiredError";
+    this.x402Version = x402Response.x402Version;
+  }
+
+  /** Check if this error came from a V2 resource server */
+  isV2(): boolean {
+    return this.x402Version === 2;
+  }
+
+  /** Check if this error came from a V1 resource server */
+  isV1(): boolean {
+    return this.x402Version === 1;
   }
 }
 
 // Type guards
 function isX402Response(data: unknown): data is X402PaymentResponse {
-  return (
-    data !== null &&
-    typeof data === "object" &&
-    "x402Version" in data &&
-    "accepts" in data &&
-    Array.isArray((data as any).accepts)
-  );
+  if (data === null || typeof data !== "object") return false;
+
+  const obj = data as Record<string, unknown>;
+
+  // Must have x402Version and accepts array
+  if (!("x402Version" in obj) || !("accepts" in obj)) return false;
+  if (!Array.isArray(obj.accepts)) return false;
+
+  // V2 requires resource object with url
+  if (obj.x402Version === 2) {
+    if (!("resource" in obj) || typeof obj.resource !== "object") {
+      return false;
+    }
+    const resource = obj.resource as Record<string, unknown>;
+    if (typeof resource.url !== "string") return false;
+  }
+
+  return true;
 }
 
 function isSapiomPaymentResponse(data: unknown): data is SapiomPaymentResponse {
@@ -107,7 +149,7 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
 
     const httpError = error as HttpError;
 
-    // Try x402 protocol format
+    // Try x402 protocol format in response body
     if (isX402Response(httpError.data)) {
       return httpError.data;
     }
@@ -115,6 +157,24 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
     // Try Sapiom format (which may wrap x402)
     if (isSapiomPaymentResponse(httpError.data) && httpError.data.x402) {
       return httpError.data.x402;
+    }
+
+    // Try V2 format: payment-required header contains base64-encoded JSON
+    const headers = httpError.response?.headers || httpError.headers;
+    if (headers) {
+      const paymentRequiredHeader = headers["payment-required"];
+      if (paymentRequiredHeader && typeof paymentRequiredHeader === "string") {
+        try {
+          // Decode base64 and parse JSON
+          const decoded = base64Decode(paymentRequiredHeader);
+          const parsed = JSON.parse(decoded);
+          if (isX402Response(parsed)) {
+            return parsed;
+          }
+        } catch {
+          // Failed to decode/parse header, continue to other methods
+        }
+      }
     }
 
     return undefined;
@@ -127,9 +187,45 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
 
     const httpError = error as HttpError;
 
-    // Try to get resource from x402 response
+    // Try to get resource from x402 response in body
     if (isX402Response(httpError.data)) {
-      return httpError.data.accepts[0]?.resource || httpError.request?.url;
+      // V2: resource URL is at response level
+      if (
+        httpError.data.x402Version === 2 &&
+        "resource" in httpError.data &&
+        httpError.data.resource?.url
+      ) {
+        return httpError.data.resource.url;
+      }
+      // V1: resource URL is in first requirement
+      const firstAccept = httpError.data.accepts[0];
+      if (firstAccept && "resource" in firstAccept) {
+        return firstAccept.resource || httpError.request?.url;
+      }
+      return httpError.request?.url;
+    }
+
+    // Try V2 format: payment-required header contains base64-encoded JSON
+    const headers = httpError.response?.headers || httpError.headers;
+    if (headers) {
+      const paymentRequiredHeader = headers["payment-required"];
+      if (paymentRequiredHeader && typeof paymentRequiredHeader === "string") {
+        try {
+          const decoded = base64Decode(paymentRequiredHeader);
+          const parsed = JSON.parse(decoded);
+          if (isX402Response(parsed)) {
+            if (parsed.x402Version === 2 && "resource" in parsed && parsed.resource?.url) {
+              return parsed.resource.url;
+            }
+            const firstAccept = parsed.accepts[0];
+            if (firstAccept && "resource" in firstAccept) {
+              return firstAccept.resource || httpError.request?.url;
+            }
+          }
+        } catch {
+          // Failed to decode/parse header
+        }
+      }
     }
 
     // Fall back to request URL
@@ -148,8 +244,9 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
       return data.transactionId;
     }
 
-    if (httpError.headers?.["x-sapiom-transaction-id"]) {
-      return httpError.headers["x-sapiom-transaction-id"];
+    const headers = httpError.response?.headers || httpError.headers;
+    if (headers?.["x-sapiom-transaction-id"]) {
+      return headers["x-sapiom-transaction-id"];
     }
 
     if (data && typeof data === "object") {

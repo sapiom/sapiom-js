@@ -41,7 +41,19 @@ export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry";
 export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry";
 
 // Types
-export { TransactionStatus, TransactionOutcome } from "./types/transaction";
+export {
+  TransactionStatus,
+  TransactionOutcome,
+  // x402 type guards
+  isV1Response,
+  isV2Response,
+  isV1Requirement,
+  isV2Requirement,
+  // x402 helpers
+  getPaymentAmount,
+  getResourceUrl,
+  getX402Version,
+} from "./types/transaction";
 
 export type {
   CompleteTransactionRequest,
@@ -51,8 +63,14 @@ export type {
   PaymentTransactionResponse,
   ListTransactionsParams,
   PaymentProtocolData,
+  // x402 union types (backward compatible)
   X402Response,
   X402PaymentRequirement,
+  // x402 versioned types
+  X402PaymentRequirementV1,
+  X402PaymentRequirementV2,
+  X402ResponseV1,
+  X402ResponseV2,
 } from "./types/transaction";
 
 // HTTP Types (needed by HTTP integration packages)

@@ -95,6 +95,17 @@ function setHeader(
 }
 
 /**
+ * Get the correct payment header name based on x402 version
+ * V1: X-PAYMENT, V2: PAYMENT-SIGNATURE
+ */
+function getPaymentHeaderName(payload: any): string {
+  if (payload?.x402Version === 2) {
+    return "PAYMENT-SIGNATURE";
+  }
+  return "X-PAYMENT";
+}
+
+/**
  * Add authorization request interceptor to axios instance
  */
 export function addAuthorizationInterceptor(
@@ -571,7 +582,9 @@ export function addPaymentInterceptor(
         __sapiomPaymentHandling: false, // Allow completion on retry
       } as any;
 
-      setHeader(retryConfig.headers, "X-PAYMENT", paymentHeaderValue);
+      // Select header name based on x402 version (V1: X-PAYMENT, V2: PAYMENT-SIGNATURE)
+      const headerName = getPaymentHeaderName(authorizationPayload);
+      setHeader(retryConfig.headers, headerName, paymentHeaderValue);
 
       const response = await axiosInstance.request(retryConfig);
 
