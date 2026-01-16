@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/core",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Core SDK for Sapiom API - Transaction management and core utilities",
   "keywords": [
     "sapiom",
