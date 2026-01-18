@@ -5,12 +5,12 @@
  * Used by both HTTP adapters and LangChain integration.
  */
 
-import { SapiomClient } from "../client/SapiomClient";
-import { TransactionPoller } from "../client/TransactionPoller";
+import { SapiomClient } from "../client/SapiomClient.js";
+import { TransactionPoller } from "../client/TransactionPoller.js";
 import type {
   TransactionResponse,
   CreateTransactionRequest,
-} from "../types/transaction";
+} from "../types/transaction.js";
 
 /**
  * Parameters for creating and authorizing a transaction

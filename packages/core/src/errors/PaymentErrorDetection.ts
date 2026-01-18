@@ -1,11 +1,11 @@
 // This file contains the core payment error detection logic without HTTP library dependencies
-import { HttpError } from "../types/http";
+import { HttpError } from "../types/http.js";
 import {
   X402PaymentRequirementV1,
   X402PaymentRequirementV2,
   X402ResponseV1,
   X402ResponseV2,
-} from "../types/transaction";
+} from "../types/transaction.js";
 
 /**
  * Decode base64 string to UTF-8 (works in both Node.js and browser)

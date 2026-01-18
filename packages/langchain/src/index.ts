@@ -28,8 +28,8 @@
  */
 
 // Main middleware
-export { createSapiomMiddleware } from "./middleware";
-export type { SapiomMiddlewareConfig, SapiomMiddlewareContext } from "./internal/types";
+export { createSapiomMiddleware } from "./middleware.js";
+export type { SapiomMiddlewareConfig, SapiomMiddlewareContext } from "./internal/types.js";
 
 // Re-export LangChain types for convenience
 export type { AgentMiddleware, ToolCallRequest } from "langchain";
@@ -37,7 +37,7 @@ export type { AgentMiddleware, ToolCallRequest } from "langchain";
 // Types (re-exported from middleware, but also available directly)
 export type {
   SapiomMiddlewareState,
-} from "./internal/types";
+} from "./internal/types.js";
 
 // Utilities (for advanced use cases)
 export {
@@ -47,7 +47,7 @@ export {
   AuthorizationDeniedError,
   SDK_VERSION,
   SDK_NAME,
-} from "./internal/utils";
+} from "./internal/utils.js";
 
 // Payment detection (for custom payment handling)
 export {
@@ -56,7 +56,7 @@ export {
   convertX402ToSapiomPayment,
   getPaymentAuthFromTransaction,
   type X402PaymentResponse,
-} from "./internal/payment";
+} from "./internal/payment.js";
 
 // Telemetry (for custom tracking)
 export {
@@ -64,7 +64,7 @@ export {
   getModelId,
   extractActualTokens,
   type TokenUsage,
-} from "./internal/telemetry";
+} from "./internal/telemetry.js";
 
 // Schemas (for type checking)
 export type {
@@ -72,18 +72,18 @@ export type {
   AgentResponseFacts,
   AgentErrorFacts,
   AgentFacts,
-} from "./schemas/agent-v1";
+} from "./schemas/agent-v1.js";
 
 export type {
   ModelRequestFacts,
   ModelResponseFacts,
   ModelErrorFacts,
   ModelFacts,
-} from "./schemas/model-v1";
+} from "./schemas/model-v1.js";
 
 export type {
   ToolRequestFacts,
   ToolResponseFacts,
   ToolErrorFacts,
   ToolFacts,
-} from "./schemas/tool-v1";
+} from "./schemas/tool-v1.js";

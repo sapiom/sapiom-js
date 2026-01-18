@@ -8,7 +8,7 @@ import {
   addAuthorizationInterceptor,
   addPaymentInterceptor,
   addCompletionInterceptor,
-} from "./interceptors";
+} from "./interceptors.js";
 
 /**
  * Configuration for Sapiom-enabled Axios client
