@@ -1,7 +1,7 @@
 // Main client
-export { SapiomClient } from "./client/SapiomClient";
-export type { SapiomClientConfig } from "./client/SapiomClient";
-export { TransactionAPI } from "./client/TransactionAPI";
+export { SapiomClient } from "./client/SapiomClient.js";
+export type { SapiomClientConfig } from "./client/SapiomClient.js";
+export { TransactionAPI } from "./client/TransactionAPI.js";
 
 // Payment Error Detection
 export {
@@ -16,29 +16,29 @@ export {
   registerErrorDetector,
   AxiosErrorDetector,
   HttpErrorDetector,
-} from "./errors/PaymentErrorDetection";
+} from "./errors/PaymentErrorDetection.js";
 
 export type {
   X402PaymentResponse,
   X402PaymentRequirement as X402PaymentRequirementFromError,
   SapiomPaymentResponse,
   ErrorDetectorAdapter,
-} from "./errors/PaymentErrorDetection";
+} from "./errors/PaymentErrorDetection.js";
 
 // Transaction Authorizer
-export { TransactionAuthorizer } from "./utils/TransactionAuthorizer";
-export type { TransactionAuthorizerConfig } from "./utils/TransactionAuthorizer";
+export { TransactionAuthorizer } from "./utils/TransactionAuthorizer.js";
+export type { TransactionAuthorizerConfig } from "./utils/TransactionAuthorizer.js";
 
 // Transaction Polling
-export { TransactionPoller } from "./client/TransactionPoller";
+export { TransactionPoller } from "./client/TransactionPoller.js";
 export type {
   TransactionPollingConfig,
   TransactionPollResult,
-} from "./client/TransactionPoller";
+} from "./client/TransactionPoller.js";
 
 // Telemetry
-export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry";
-export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry";
+export { captureUserCallSite, getRuntimeInfo } from "./utils/telemetry.js";
+export type { CallSiteInfo, RuntimeInfo } from "./types/telemetry.js";
 
 // Types
 export {
@@ -53,7 +53,7 @@ export {
   getPaymentAmount,
   getResourceUrl,
   getX402Version,
-} from "./types/transaction";
+} from "./types/transaction.js";
 
 export type {
   CompleteTransactionRequest,
@@ -71,7 +71,7 @@ export type {
   X402PaymentRequirementV2,
   X402ResponseV1,
   X402ResponseV2,
-} from "./types/transaction";
+} from "./types/transaction.js";
 
 // HTTP Types (needed by HTTP integration packages)
 export type {
@@ -80,7 +80,7 @@ export type {
   HttpResponse,
   HttpError,
   SapiomTransactionMetadata,
-} from "./types/http";
+} from "./types/http.js";
 
 // HTTP Schemas (versioned fact schemas)
 export type {
@@ -88,11 +88,11 @@ export type {
   HttpClientRequestFacts,
   HttpClientResponseFacts,
   HttpClientErrorFacts,
-} from "./schemas/http-client-v1";
+} from "./schemas/http-client-v1.js";
 
 // Shared integration utilities (needed by HTTP integration packages)
-export { initializeSapiomClient } from "./types/config";
-export type { BaseSapiomIntegrationConfig, FailureMode } from "./types/config";
+export { initializeSapiomClient } from "./types/config.js";
+export type { BaseSapiomIntegrationConfig, FailureMode } from "./types/config.js";
 
 // Default export for convenience
-export { SapiomClient as default } from "./client/SapiomClient";
+export { SapiomClient as default } from "./client/SapiomClient.js";

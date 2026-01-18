@@ -1,5 +1,5 @@
-import { HttpClient, HttpRequestConfig } from "./HttpClient";
-import { TransactionAPI } from "./TransactionAPI";
+import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
+import { TransactionAPI } from "./TransactionAPI.js";
 
 export interface SapiomClientConfig {
   apiKey: string;

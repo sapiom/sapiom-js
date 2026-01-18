@@ -5,7 +5,7 @@
  * call sites and runtime information.
  */
 
-import type { CallSiteInfo, RuntimeInfo } from "../types/telemetry";
+import type { CallSiteInfo, RuntimeInfo } from "../types/telemetry.js";
 
 /**
  * Capture user call site from stack trace

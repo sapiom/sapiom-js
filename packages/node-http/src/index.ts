@@ -2,5 +2,5 @@ export {
   createClient,
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
-} from "./node-http";
-export type { SapiomNodeHttpConfig } from "./node-http";
+} from "./node-http.js";
+export type { SapiomNodeHttpConfig } from "./node-http.js";

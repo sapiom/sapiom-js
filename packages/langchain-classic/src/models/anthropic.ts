@@ -23,14 +23,14 @@ import { initializeSapiomClient } from "@sapiom/core";
 import {
   collectDependencyVersions,
   detectEntryMethod,
-} from "../internal/langchain-telemetry";
+} from "../internal/langchain-telemetry.js";
 import {
   estimateInputTokens,
   extractActualTokens,
-} from "../internal/token-estimation";
-import type { SapiomModelConfig } from "../internal/types";
-import { generateSDKTraceId } from "../internal/utils";
-import type { LangChainLLMRequestFacts } from "../schemas/langchain-llm-v1";
+} from "../internal/token-estimation.js";
+import type { SapiomModelConfig } from "../internal/types.js";
+import { generateSDKTraceId } from "../internal/utils.js";
+import type { LangChainLLMRequestFacts } from "../schemas/langchain-llm-v1.js";
 
 // SDK version for facts
 const SDK_VERSION = "1.0.0"; // TODO: Read from package.json

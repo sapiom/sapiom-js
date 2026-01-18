@@ -34,19 +34,19 @@ import type { AgentMiddleware, ToolCallRequest } from "langchain";
 import type {
   SapiomMiddlewareConfig,
   SapiomMiddlewareContext,
-} from "./internal/types";
+} from "./internal/types.js";
 import {
   generateSDKTraceId,
   isAuthorizationDeniedOrTimeout,
   SDK_NAME,
   SDK_VERSION,
-} from "./internal/utils";
+} from "./internal/utils.js";
 import {
   isMCPPaymentError,
   extractPaymentFromMCPError,
   convertX402ToSapiomPayment,
   getPaymentAuthFromTransaction,
-} from "./internal/payment";
+} from "./internal/payment.js";
 import {
   estimateInputTokens,
   getModelId,
@@ -58,7 +58,7 @@ import {
   collectDependencyVersions,
   getRuntimeInfo,
   extractModelParameters,
-} from "./internal/telemetry";
+} from "./internal/telemetry.js";
 
 /**
  * Create Sapiom middleware for LangChain v1.x agents

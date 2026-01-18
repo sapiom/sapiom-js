@@ -18,7 +18,7 @@ import {
   AuthorizationConfig,
   PaymentConfig,
   CompletionConfig,
-} from "./interceptors";
+} from "./interceptors.js";
 
 /**
  * Configuration for Sapiom-enabled Node.js HTTP client
@@ -282,4 +282,4 @@ export function createClient(
 export {
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
-} from "./interceptors";
+} from "./interceptors.js";
