@@ -5,16 +5,16 @@
  * using native Axios interceptors.
  */
 
-export { withSapiom } from "./axios";
-export type { SapiomAxiosConfig } from "./axios";
+export { withSapiom } from "./axios.js";
+export type { SapiomAxiosConfig } from "./axios.js";
 
 export {
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
-} from "./interceptors";
+} from "./interceptors.js";
 
 // Type augmentations for axios
-export {} from "./augmentations";
+export {} from "./augmentations.js";
 
 // Re-export commonly used types from core
 export type {

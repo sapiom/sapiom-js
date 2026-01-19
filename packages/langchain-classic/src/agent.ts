@@ -11,12 +11,12 @@ import type { SapiomClient } from "@sapiom/core";
 import { initializeSapiomClient } from "@sapiom/core";
 import type { BaseSapiomIntegrationConfig } from "@sapiom/core";
 import { captureUserCallSite } from "@sapiom/core";
-import type { SapiomModelConfig } from "./internal/types";
-import { generateSDKTraceId } from "./internal/utils";
-import { wrapChatAnthropic } from "./models/anthropic";
-import { wrapChatOpenAI } from "./models/openai";
-import type { LangChainAgentRequestFacts } from "./schemas/langchain-agent-v1";
-import { wrapSapiomTool } from "./tool";
+import type { SapiomModelConfig } from "./internal/types.js";
+import { generateSDKTraceId } from "./internal/utils.js";
+import { wrapChatAnthropic } from "./models/anthropic.js";
+import { wrapChatOpenAI } from "./models/openai.js";
+import type { LangChainAgentRequestFacts } from "./schemas/langchain-agent-v1.js";
+import { wrapSapiomTool } from "./tool.js";
 
 // SDK version for facts
 const SDK_VERSION = "1.0.0"; // TODO: Read from package.json

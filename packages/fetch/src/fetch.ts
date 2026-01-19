@@ -10,7 +10,7 @@ import {
   AuthorizationConfig,
   PaymentConfig,
   CompletionConfig,
-} from "./interceptors";
+} from "./interceptors.js";
 
 /**
  * Configuration for Sapiom-enabled Fetch client
@@ -149,4 +149,4 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
 export {
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
-} from "./interceptors";
+} from "./interceptors.js";

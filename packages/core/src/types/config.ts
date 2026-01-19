@@ -1,4 +1,4 @@
-import { SapiomClient, SapiomClientConfig } from "../client/SapiomClient";
+import { SapiomClient, SapiomClientConfig } from "../client/SapiomClient.js";
 
 /**
  * Failure mode for Sapiom integration

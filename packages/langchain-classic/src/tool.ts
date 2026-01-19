@@ -18,11 +18,11 @@ import {
   extractPaymentFromMCPError,
   getPaymentAuthFromTransaction,
   isMCPPaymentError,
-} from "./internal/payment-detection";
+} from "./internal/payment-detection.js";
 import { captureUserCallSite } from "@sapiom/core";
-import type { SapiomToolConfig } from "./internal/types";
-import { isAuthorizationDenied } from "./internal/utils";
-import type { LangChainToolRequestFacts } from "./schemas/langchain-tool-v1";
+import type { SapiomToolConfig } from "./internal/types.js";
+import { isAuthorizationDenied } from "./internal/utils.js";
+import type { LangChainToolRequestFacts } from "./schemas/langchain-tool-v1.js";
 
 // SDK version for facts
 const SDK_VERSION = "1.0.0"; // TODO: Read from package.json

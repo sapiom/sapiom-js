@@ -2,5 +2,5 @@ export {
   createFetch,
   AuthorizationDeniedError,
   AuthorizationTimeoutError,
-} from "./fetch";
-export type { SapiomFetchConfig } from "./fetch";
+} from "./fetch.js";
+export type { SapiomFetchConfig } from "./fetch.js";

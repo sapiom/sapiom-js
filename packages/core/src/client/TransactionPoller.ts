@@ -1,6 +1,6 @@
-import { TransactionStatus } from "../types/transaction";
-import { TransactionResponse } from "../types/transaction";
-import { SapiomClient } from "./SapiomClient";
+import { TransactionStatus } from "../types/transaction.js";
+import { TransactionResponse } from "../types/transaction.js";
+import { SapiomClient } from "./SapiomClient.js";
 
 /**
  * Transaction polling result

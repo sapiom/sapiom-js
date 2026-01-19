@@ -8,8 +8,8 @@ import {
   TransactionStatus,
   TransactionCostInput,
   TransactionCostResponse,
-} from "../types/transaction";
-import type { HttpClient } from "./HttpClient";
+} from "../types/transaction.js";
+import type { HttpClient } from "./HttpClient.js";
 
 export class TransactionAPI {
   constructor(private readonly httpClient: HttpClient) {}

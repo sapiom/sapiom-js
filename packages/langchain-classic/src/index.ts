@@ -12,7 +12,7 @@ export type {
   SapiomToolConfig,
   SapiomSessionMetadata,
   SapiomWrapped,
-} from "./internal/types";
+} from "./internal/types.js";
 
 // Tool Wrapper
 export {
@@ -20,18 +20,18 @@ export {
   createSapiomTool,
   sapiomTool,
   SapiomDynamicTool,
-} from "./tool";
+} from "./tool.js";
 
 // Model Wrapper
-export { SapiomChatOpenAI, SapiomChatAnthropic } from "./model";
+export { SapiomChatOpenAI, SapiomChatAnthropic } from "./model.js";
 
 // Model Wrapper Functions
-export { wrapChatOpenAI } from "./models/openai";
-export { wrapChatAnthropic } from "./models/anthropic";
+export { wrapChatOpenAI } from "./models/openai.js";
+export { wrapChatAnthropic } from "./models/anthropic.js";
 
 // Agent Wrapper
-export { wrapSapiomAgent, createSapiomReactAgent } from "./agent";
-export type { WrapSapiomAgentConfig } from "./agent";
+export { wrapSapiomAgent, createSapiomReactAgent } from "./agent.js";
+export type { WrapSapiomAgentConfig } from "./agent.js";
 
 // Re-export SapiomClient from core for convenience
 export { SapiomClient } from "@sapiom/core";

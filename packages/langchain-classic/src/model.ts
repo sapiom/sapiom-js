@@ -9,14 +9,14 @@
  * - Explicit support list for clarity
  */
 
-import { SapiomChatOpenAI } from "./models/openai";
+import { SapiomChatOpenAI } from "./models/openai.js";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { ChatOpenAI } from "@langchain/openai";
 import type { SapiomClient } from "@sapiom/core";
 
 // Re-export provider models
-export { SapiomChatOpenAI } from "./models/openai";
-export { SapiomChatAnthropic } from "./models/anthropic";
+export { SapiomChatOpenAI } from "./models/openai.js";
+export { SapiomChatAnthropic } from "./models/anthropic.js";
 
 /**
  * Note: With drop-in replacement pattern, users create SapiomChatOpenAI directly
