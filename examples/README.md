@@ -33,16 +33,16 @@ Edit `.env` and fill in your keys:
 
 ```bash
 SAPIOM_API_KEY=your-key-from-step-1
-SAPIOM_API_URL=https://api.sapiom.ai/
+SAPIOM_API_URL=https://api.sapiom.ai
 
 # For axios/fetch/node-http examples:
-DUMMY_SERVER_URL=<test-server-url>
+DUMMY_SERVER_URL=https://x402-demo-server.onrender.com
 
 # For langchain examples only:
 ANTHROPIC_API_KEY=sk-ant-your-key
 ```
 
-> **Note:** You'll receive the `DUMMY_SERVER_URL` separately. This points to a test server that simulates paid API endpoints.
+> **Note:** The `DUMMY_SERVER_URL` points to a public demo server that simulates paid API endpoints. The default URL in `.env.example` is ready to use.
 
 ### 3. Run an example
 
@@ -95,8 +95,9 @@ On the second request, you should see an `AuthorizationDeniedError` - this means
 | `axios/` | `@sapiom/axios` | Existing Axios codebases |
 | `fetch/` | `@sapiom/fetch` | Native fetch API users |
 | `node-http/` | `@sapiom/node-http` | Raw Node.js HTTP |
-| `langchain/` | `@sapiom/langchain` | LangChain with middleware |
-| `langchain-classic/` | `@sapiom/langchain-classic` | LangChain with tool wrappers |
+| `langchain-classic/` | `@sapiom/langchain-classic` | LangChain v0.3.x with tool wrappers |
+
+> **Note:** The `langchain/` example is for LangChain v1.x (not yet released). Use `langchain-classic/` for current LangChain versions.
 
 Start with `axios/` or `fetch/` - they're the simplest to understand.
 
