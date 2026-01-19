@@ -1,5 +1,16 @@
 # @sapiom/node-http
 
+## 0.2.1
+
+### Patch Changes
+
+- fix: add .js extensions to ESM imports for Node.js compatibility
+
+  Node.js ESM requires explicit .js extensions in relative imports. This change ensures all packages work correctly when imported as ES modules in Node.js environments.
+
+- Updated dependencies
+  - @sapiom/core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes
