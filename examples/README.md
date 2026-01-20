@@ -36,7 +36,7 @@ SAPIOM_API_KEY=your-key-from-step-1
 SAPIOM_API_URL=https://api.sapiom.ai
 
 # For axios/fetch/node-http examples:
-DUMMY_SERVER_URL=https://x402-demo-server.onrender.com
+DUMMY_SERVER_URL=https://x402-demo.sapiom.ai
 
 # For langchain examples only:
 ANTHROPIC_API_KEY=sk-ant-your-key
