@@ -97,7 +97,7 @@ On the second request, you should see an `AuthorizationDeniedError` - this means
 | `node-http/` | `@sapiom/node-http` | Raw Node.js HTTP |
 | `langchain-classic/` | `@sapiom/langchain-classic` | LangChain v0.3.x with tool wrappers |
 
-> **Note:** The `langchain/` example is for LangChain v1.x (not yet released). Use `langchain-classic/` for current LangChain versions.
+> **Note:** The `langchain/` example is for LangChain v1.x. Use `langchain-classic/` if you're on LangChain v0.3.x.
 
 Start with `axios/` or `fetch/` - they're the simplest to understand.
 

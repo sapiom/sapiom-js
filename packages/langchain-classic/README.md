@@ -12,9 +12,8 @@ LangChain integration for Sapiom SDK providing automatic cost tracking, authoriz
 | Package Version | LangChain Version | Status |
 |----------------|-------------------|---------|
 | v0.x           | v0.3+            | ✅ Active |
-| v1.0           | v1.0+            | 🚧 Planned |
 
-This package currently supports LangChain v0.x. LangChain v1.x support coming in SDK v1.0.
+This package supports LangChain v0.x. For LangChain v1.x, use [`@sapiom/langchain`](../langchain/README.md) instead.
 
 ## Installation
 
