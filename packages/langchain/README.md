@@ -1,5 +1,7 @@
 # @sapiom/langchain
 
+> **LangChain v1.x Integration:** For LangChain v0.3.x, use [`@sapiom/langchain-classic`](../langchain-classic/README.md) instead.
+
 LangChain v1.x integration for Sapiom SDK.
 
 ## Installation
@@ -7,6 +9,8 @@ LangChain v1.x integration for Sapiom SDK.
 ```bash
 npm install @sapiom/langchain langchain
 ```
+
+> **Note:** The `createAgent` API shown below is part of LangChain v1.x.
 
 ## Quick Start
 

@@ -64,14 +64,12 @@ npm install @sapiom/axios axios
 
 ```typescript
 import axios from 'axios';
-import { createSapiomClient } from '@sapiom/axios';
+import { withSapiom } from '@sapiom/axios';
 
-const client = createSapiomClient(axios.create({
+const client = withSapiom(axios.create({
   baseURL: 'https://api.example.com'
 }), {
-  sapiom: {
-    apiKey: process.env.SAPIOM_API_KEY
-  }
+  apiKey: process.env.SAPIOM_API_KEY
 });
 
 // Automatically handles 402 payment flows
@@ -89,16 +87,14 @@ npm install @sapiom/fetch
 ```
 
 ```typescript
-import { createSapiomFetch } from '@sapiom/fetch';
+import { createFetch } from '@sapiom/fetch';
 
-const fetch = createSapiomFetch({
-  sapiom: {
-    apiKey: process.env.SAPIOM_API_KEY
-  }
+const safeFetch = createFetch({
+  apiKey: process.env.SAPIOM_API_KEY
 });
 
 // Drop-in replacement for native fetch
-const response = await fetch('https://api.example.com/data');
+const response = await safeFetch('https://api.example.com/data');
 ```
 
 See [@sapiom/fetch](../fetch/README.md) for complete documentation.
@@ -112,12 +108,10 @@ npm install @sapiom/node-http
 ```
 
 ```typescript
-import { createSapiomClient } from '@sapiom/node-http';
+import { createClient } from '@sapiom/node-http';
 
-const client = createSapiomClient({
-  sapiom: {
-    apiKey: process.env.SAPIOM_API_KEY
-  }
+const client = createClient({
+  apiKey: process.env.SAPIOM_API_KEY
 });
 
 const response = await client.request({
@@ -156,17 +150,6 @@ await client.transactions.create({
   qualifiers?: Record<string, any>;
   paymentData?: PaymentData;
   metadata?: Record<string, any>;
-})
-```
-
-##### transactions.list()
-
-```typescript
-await client.transactions.list({
-  status?: 'pending' | 'authorized' | 'declined' | 'failed' | 'completed' | 'cancelled';
-  service?: string;
-  limit?: number;
-  offset?: number;
 })
 ```
 
@@ -242,10 +225,10 @@ try {
 ### Custom HTTP Adapter
 
 ```typescript
-import { HttpClientAdapter } from '@sapiom/core/core';
+import type { HttpClientAdapter, HttpRequest, HttpResponse } from '@sapiom/core';
 
 class MyCustomAdapter implements HttpClientAdapter {
-  async request(config: RequestConfig): Promise<Response> {
+  async request(config: HttpRequest): Promise<HttpResponse> {
     // Your custom HTTP logic
   }
 }
@@ -254,13 +237,11 @@ class MyCustomAdapter implements HttpClientAdapter {
 ### Payment Error Detection
 
 ```typescript
-import { PaymentErrorDetection } from '@sapiom/core';
+import { isPaymentRequiredError, extractX402Response } from '@sapiom/core';
 
-const detector = new PaymentErrorDetection();
-
-if (detector.is402Error(error)) {
-  const info = detector.extractPaymentInfo(error);
-  console.log('Payment required:', info.paymentData);
+if (isPaymentRequiredError(error)) {
+  const x402Response = extractX402Response(error);
+  console.log('Payment required:', x402Response);
 }
 ```
 
@@ -269,12 +250,12 @@ if (detector.is402Error(error)) {
 ```typescript
 import type {
   SapiomClientConfig,
-  Transaction,
-  PaymentData,
-  PaymentDetails,
+  TransactionResponse,
   HttpClientAdapter,
-  RequestConfig,
-  Response
+  HttpRequest,
+  HttpResponse,
+  X402Response,
+  X402PaymentRequirement,
 } from '@sapiom/core';
 ```
 

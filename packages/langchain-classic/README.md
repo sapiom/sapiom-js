@@ -1,6 +1,6 @@
-# @sapiom/langchain
+# @sapiom/langchain-classic
 
-[![npm version](https://badge.fury.io/js/%40sapiom%2Flangchain.svg)](https://www.npmjs.com/package/@sapiom/langchain)
+[![npm version](https://badge.fury.io/js/%40sapiom%2Flangchain-classic.svg)](https://www.npmjs.com/package/@sapiom/langchain-classic)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > ⚠️ **Beta Status:** Currently in v0.x. API may change before v1.0.0. Production-ready and actively maintained.
@@ -12,15 +12,18 @@ LangChain integration for Sapiom SDK providing automatic cost tracking, authoriz
 | Package Version | LangChain Version | Status |
 |----------------|-------------------|---------|
 | v0.x           | v0.3+            | ✅ Active |
-| v1.0           | v1.0+            | 🚧 Planned |
 
-This package currently supports LangChain v0.x. LangChain v1.x support coming in SDK v1.0.
+This package supports LangChain v0.x. For LangChain v1.x, use [`@sapiom/langchain`](../langchain/README.md) instead.
 
 ## Installation
 
 ```bash
-npm install @sapiom/langchain
+npm install @sapiom/langchain-classic @langchain/core @langchain/anthropic
+# or for OpenAI:
+npm install @sapiom/langchain-classic @langchain/core @langchain/openai
 ```
+
+**Peer dependencies:** This package requires `@langchain/core` and either `@langchain/anthropic` or `@langchain/openai` depending on which model you use.
 
 ## Features
 
@@ -38,7 +41,7 @@ npm install @sapiom/langchain
 The easiest way to add Sapiom tracking to your LangChain agent:
 
 ```typescript
-import { createSapiomReactAgent } from '@sapiom/langchain';
+import { createSapiomReactAgent } from '@sapiom/langchain-classic';
 import { ChatOpenAI } from '@langchain/openai';
 
 // Just replace createReactAgent with createSapiomReactAgent
@@ -66,7 +69,7 @@ That's it! `createSapiomReactAgent` automatically wraps your model and tools wit
 All Sapiom wrappers (models, tools, agents) support the following configuration options:
 
 ```typescript
-import { SapiomChatOpenAI, wrapSapiomTool, wrapSapiomAgent } from '@sapiom/langchain';
+import { SapiomChatOpenAI, wrapSapiomTool, wrapSapiomAgent } from '@sapiom/langchain-classic';
 
 const config = {
   // Required (or use SAPIOM_API_KEY environment variable)
@@ -153,7 +156,7 @@ await model.invoke("User query", {
 Use `createSapiomReactAgent` as a drop-in replacement for LangChain's `createReactAgent`. It automatically wraps your model and tools:
 
 ```typescript
-import { createSapiomReactAgent } from '@sapiom/langchain';
+import { createSapiomReactAgent } from '@sapiom/langchain-classic';
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
 
@@ -187,7 +190,7 @@ For more control, you can manually wrap individual components:
 Drop-in replacements for LangChain chat models:
 
 ```typescript
-import { SapiomChatOpenAI, SapiomChatAnthropic } from '@sapiom/langchain';
+import { SapiomChatOpenAI, SapiomChatAnthropic } from '@sapiom/langchain-classic';
 
 // OpenAI
 const openai = new SapiomChatOpenAI(
@@ -207,7 +210,7 @@ const anthropic = new SapiomChatAnthropic(
 Wrap existing tools or create new ones with Sapiom tracking:
 
 ```typescript
-import { wrapSapiomTool, sapiomTool } from '@sapiom/langchain';
+import { wrapSapiomTool, sapiomTool } from '@sapiom/langchain-classic';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 
@@ -245,7 +248,7 @@ If you need to wrap an existing agent graph:
 
 ```typescript
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { wrapSapiomAgent, SapiomChatOpenAI } from '@sapiom/langchain';
+import { wrapSapiomAgent, SapiomChatOpenAI } from '@sapiom/langchain-classic';
 
 // Create model and tools with Sapiom tracking
 const model = new SapiomChatOpenAI(
