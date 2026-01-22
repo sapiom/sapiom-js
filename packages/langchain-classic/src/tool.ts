@@ -47,7 +47,7 @@ const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
  * @example
  * ```typescript
  * import { tool } from "@langchain/core/tools";
- * import { wrapSapiomTool } from "@sapiom/sdk/langchain";
+ * import { wrapSapiomTool } from "@sapiom/langchain-classic";
  *
  * const existing = tool(
  *   ({ count }) => sendSMS(count),
@@ -559,7 +559,7 @@ export class SapiomDynamicTool<
  *
  * @example
  * ```typescript
- * import { sapiomTool } from "@sapiom/sdk/langchain";
+ * import { sapiomTool } from "@sapiom/langchain-classic";
  * import { z } from "zod";
  *
  * const weatherTool = sapiomTool(

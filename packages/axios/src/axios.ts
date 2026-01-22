@@ -26,9 +26,9 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {}
  * ```typescript
  * // Simplest usage (reads SAPIOM_API_KEY from environment)
  * import axios from 'axios';
- * import { createSapiomAxios } from '@sapiom/axios';
+ * import { withSapiom } from '@sapiom/axios';
  *
- * const client = createSapiomAxios(axios.create({
+ * const client = withSapiom(axios.create({
  *   baseURL: 'https://api.example.com'
  * }));
  *
@@ -39,9 +39,9 @@ export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {}
  * ```typescript
  * // With API key and default metadata
  * import axios from 'axios';
- * import { createSapiomAxios } from '@sapiom/axios';
+ * import { withSapiom } from '@sapiom/axios';
  *
- * const client = createSapiomAxios(axios.create({
+ * const client = withSapiom(axios.create({
  *   baseURL: 'https://api.example.com'
  * }), {
  *   apiKey: 'sk_...',
