@@ -40,9 +40,9 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
  * @example
  * ```typescript
  * // Simplest usage (reads SAPIOM_API_KEY from environment)
- * import { createSapiomNodeHttp } from '@sapiom/node-http';
+ * import { createClient } from '@sapiom/node-http';
  *
- * const client = createSapiomNodeHttp();
+ * const client = createClient();
  *
  * // Auto-handles 402 payment errors and authorization
  * const response = await client.request({
@@ -55,9 +55,9 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
  * @example
  * ```typescript
  * // With API key and default metadata
- * import { createSapiomNodeHttp } from '@sapiom/node-http';
+ * import { createClient } from '@sapiom/node-http';
  *
- * const client = createSapiomNodeHttp({
+ * const client = createClient({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
  *   serviceName: 'my-service'
@@ -74,7 +74,9 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
  * @example
  * ```typescript
  * // With default metadata (applied to all requests)
- * const client = createSapiomNodeHttp({
+ * import { createClient } from '@sapiom/node-http';
+ *
+ * const client = createClient({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
  *   serviceName: 'my-service'

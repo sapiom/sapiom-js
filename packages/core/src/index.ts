@@ -1,3 +1,12 @@
+/**
+ * @sapiom/core - Core SDK for Sapiom API
+ *
+ * Provides the foundational client and utilities for interacting with Sapiom,
+ * including transaction management, authorization, and payment handling.
+ *
+ * @packageDocumentation
+ */
+
 // Main client
 export { SapiomClient } from "./client/SapiomClient.js";
 export type { SapiomClientConfig } from "./client/SapiomClient.js";

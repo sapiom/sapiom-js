@@ -60,7 +60,7 @@ export interface WrapSapiomAgentConfig extends BaseSapiomIntegrationConfig {
  * @example
  * ```typescript
  * import { createReactAgent } from "@langchain/langgraph/prebuilt";
- * import { wrapSapiomAgent, SapiomChatOpenAI, wrapSapiomTool } from "@sapiom/sdk/langchain";
+ * import { wrapSapiomAgent, SapiomChatOpenAI, wrapSapiomTool } from "@sapiom/langchain-classic";
  *
  * // Create wrapped model
  * const model = new SapiomChatOpenAI({ model: "gpt-4" }, { sapiomClient });
@@ -340,9 +340,8 @@ export function wrapSapiomAgent(
  *
  * @example
  * ```typescript
- * import { createSapiomReactAgent } from "@sapiom/sdk/langchain";
+ * import { createSapiomReactAgent } from "@sapiom/langchain-classic";
  * import { ChatOpenAI } from "@langchain/openai";
- * import { pull } from "langchain/hub";
  *
  * // Get tools
  * const tools = [...];
@@ -354,7 +353,7 @@ export function wrapSapiomAgent(
  *     tools,
  *   },
  *   {
- *     sapiomApiKey: process.env.SAPIOM_API_KEY,
+ *     apiKey: process.env.SAPIOM_API_KEY,
  *     traceId: "agent-workflow"
  *   }
  * );

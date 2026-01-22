@@ -30,9 +30,9 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
  * @example
  * ```typescript
  * // Simplest usage (reads SAPIOM_API_KEY from environment)
- * import { createSapiomFetch } from '@sapiom/fetch';
+ * import { createFetch } from '@sapiom/fetch';
  *
- * const fetch = createSapiomFetch();
+ * const fetch = createFetch();
  *
  * // Works exactly like native fetch!
  * const response = await fetch('https://api.example.com/premium-endpoint');
@@ -42,9 +42,9 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
  * @example
  * ```typescript
  * // With API key and default metadata
- * import { createSapiomFetch } from '@sapiom/fetch';
+ * import { createFetch } from '@sapiom/fetch';
  *
- * const fetch = createSapiomFetch({
+ * const fetch = createFetch({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
  *   serviceName: 'my-service'
@@ -56,7 +56,9 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
  * @example
  * ```typescript
  * // With default metadata (applied to all requests)
- * const fetch = createSapiomFetch({
+ * import { createFetch } from '@sapiom/fetch';
+ *
+ * const fetch = createFetch({
  *   apiKey: 'sk_...',
  *   agentName: 'my-agent',
  *   serviceName: 'my-service'
