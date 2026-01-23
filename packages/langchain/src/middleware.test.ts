@@ -33,6 +33,7 @@ interface ToolCallRequest {
   tool: {
     name: string;
     description?: string;
+    metadata?: Record<string, unknown>;
   };
   state: Record<string, unknown>;
   runtime: Record<string, unknown>;
@@ -45,9 +46,9 @@ jest.mock("@sapiom/core", () => ({
 }));
 
 // Helper to extract hook function from BeforeAgentHook/AfterAgentHook union type
-function getHookFn<T extends ((...args: any[]) => any) | { hook: (...args: any[]) => any }>(
-  hook: T | undefined
-): ((...args: any[]) => any) | undefined {
+function getHookFn<
+  T extends ((...args: any[]) => any) | { hook: (...args: any[]) => any },
+>(hook: T | undefined): ((...args: any[]) => any) | undefined {
   if (!hook) return undefined;
   if (typeof hook === "function") return hook;
   if (typeof hook === "object" && "hook" in hook) return hook.hook;
@@ -108,7 +109,7 @@ describe("createSapiomMiddleware", () => {
             source: "langchain-agent",
             version: "v1",
           }),
-        })
+        }),
       );
       expect(result.__sapiomTraceId).toMatch(/^sdk-/);
       expect(result.__sapiomAgentTxId).toBe("tx-123");
@@ -150,7 +151,7 @@ describe("createSapiomMiddleware", () => {
 
     it("continues on failure in open mode", async () => {
       mockAuthorizer.createAndAuthorize.mockRejectedValueOnce(
-        new Error("API error")
+        new Error("API error"),
       );
       const middleware = createSapiomMiddleware({ failureMode: "open" });
       const beforeAgent = getHookFn(middleware.beforeAgent)!;
@@ -165,16 +166,14 @@ describe("createSapiomMiddleware", () => {
 
     it("throws on failure in closed mode", async () => {
       mockAuthorizer.createAndAuthorize.mockRejectedValueOnce(
-        new Error("API error")
+        new Error("API error"),
       );
       const middleware = createSapiomMiddleware({ failureMode: "closed" });
       const beforeAgent = getHookFn(middleware.beforeAgent)!;
       const state = { messages: [] };
       const runtime = {};
 
-      await expect(beforeAgent(state, runtime)).rejects.toThrow(
-        "API error"
-      );
+      await expect(beforeAgent(state, runtime)).rejects.toThrow("API error");
     });
 
     it("always throws authorization denied errors", async () => {
@@ -188,7 +187,7 @@ describe("createSapiomMiddleware", () => {
       const runtime = {};
 
       await expect(beforeAgent(state, runtime)).rejects.toThrow(
-        "Transaction denied"
+        "Transaction denied",
       );
     });
   });
@@ -217,7 +216,7 @@ describe("createSapiomMiddleware", () => {
               outputMessageCount: 1,
             }),
           }),
-        })
+        }),
       );
     });
 
@@ -235,7 +234,7 @@ describe("createSapiomMiddleware", () => {
 
   describe("wrapModelCall", () => {
     const createMockRequest = (
-      overrides: Partial<ModelRequest> = {}
+      overrides: Partial<ModelRequest> = {},
     ): ModelRequest => ({
       model: { modelName: "gpt-4" },
       messages: [{ content: "Hello", role: "user" }],
@@ -246,7 +245,7 @@ describe("createSapiomMiddleware", () => {
     });
 
     const createMockResponse = (
-      overrides: Partial<ModelResponse> = {}
+      overrides: Partial<ModelResponse> = {},
     ): ModelResponse => ({
       usage_metadata: {
         input_tokens: 10,
@@ -271,7 +270,7 @@ describe("createSapiomMiddleware", () => {
               modelId: "gpt-4",
             }),
           }),
-        })
+        }),
       );
       expect(handler).toHaveBeenCalledWith(request);
     });
@@ -299,7 +298,7 @@ describe("createSapiomMiddleware", () => {
               toolCallCount: 1,
             }),
           }),
-        })
+        }),
       );
     });
 
@@ -318,7 +317,7 @@ describe("createSapiomMiddleware", () => {
 
   describe("wrapToolCall", () => {
     const createMockToolRequest = (
-      overrides: Partial<ToolCallRequest> = {}
+      overrides: Partial<ToolCallRequest> = {},
     ): ToolCallRequest => ({
       toolCall: {
         name: "weather",
@@ -351,7 +350,7 @@ describe("createSapiomMiddleware", () => {
               argumentKeys: ["city"],
             }),
           }),
-        })
+        }),
       );
     });
 
@@ -372,7 +371,7 @@ describe("createSapiomMiddleware", () => {
               success: true,
             }),
           }),
-        })
+        }),
       );
     });
 
@@ -381,9 +380,9 @@ describe("createSapiomMiddleware", () => {
       const request = createMockToolRequest();
       const handler = jest.fn().mockRejectedValue(new Error("Tool failed"));
 
-      await expect(
-        middleware.wrapToolCall!(request, handler)
-      ).rejects.toThrow("Tool failed");
+      await expect(middleware.wrapToolCall!(request, handler)).rejects.toThrow(
+        "Tool failed",
+      );
 
       expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
@@ -395,7 +394,7 @@ describe("createSapiomMiddleware", () => {
               errorMessage: "Tool failed",
             }),
           }),
-        })
+        }),
       );
     });
 
@@ -408,7 +407,7 @@ describe("createSapiomMiddleware", () => {
         JSON.stringify({
           x402Version: 1,
           accepts: [{ scheme: "exact", amount: "100", unit: "sats" }],
-        })
+        }),
       );
 
       // Second call succeeds
@@ -434,6 +433,66 @@ describe("createSapiomMiddleware", () => {
       const secondCall = handler.mock.calls[1][0];
       expect(secondCall.toolCall.args._meta["x402/payment"]).toBe("auth-token");
     });
+
+    it("includes MCP metadata in request facts when present", async () => {
+      const middleware = createSapiomMiddleware();
+      const request = createMockToolRequest({
+        tool: {
+          name: "search_docs",
+          description: "Search documentation",
+          metadata: {
+            __sapiom: {
+              mcp: {
+                serverName: "cloudflare",
+                serverUrl: "https://docs.mcp.cloudflare.com/mcp",
+                serverUrlParsed: {
+                  protocol: "https",
+                  hostname: "docs.mcp.cloudflare.com",
+                  pathname: "/mcp",
+                  port: null,
+                },
+                transportType: "http",
+                isRemote: true,
+              },
+            },
+          },
+        } as ToolCallRequest["tool"],
+      });
+      const handler = jest.fn().mockResolvedValue("Result");
+
+      await middleware.wrapToolCall!(request, handler);
+
+      expect(mockAuthorizer.createAndAuthorize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestFacts: expect.objectContaining({
+            source: "langchain-tool",
+            request: expect.objectContaining({
+              toolName: "search_docs",
+              mcp: expect.objectContaining({
+                serverName: "cloudflare",
+                serverUrl: "https://docs.mcp.cloudflare.com/mcp",
+                transportType: "http",
+                isRemote: true,
+                serverUrlParsed: expect.objectContaining({
+                  hostname: "docs.mcp.cloudflare.com",
+                }),
+              }),
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("excludes MCP metadata when not present on tool", async () => {
+      const middleware = createSapiomMiddleware();
+      const request = createMockToolRequest(); // no MCP metadata
+      const handler = jest.fn().mockResolvedValue("Result");
+
+      await middleware.wrapToolCall!(request, handler);
+
+      const call = mockAuthorizer.createAndAuthorize.mock.calls[0][0];
+      expect(call.requestFacts.request.mcp).toBeUndefined();
+    });
   });
 });
 
@@ -452,7 +511,7 @@ describe("utility exports", () => {
     expect(
       isMCPPaymentError({
         message: JSON.stringify({ x402Version: 1, accepts: [] }),
-      })
+      }),
     ).toBe(true);
   });
 

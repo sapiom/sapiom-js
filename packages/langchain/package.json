@@ -9,6 +9,7 @@
     "ai",
     "agent",
     "llm",
+    "mcp",
     "middleware",
     "typescript"
   ],
@@ -70,11 +71,15 @@
     "@sapiom/core": "workspace:*"
   },
   "peerDependencies": {
-    "langchain": ">=1.0.0"
+    "langchain": ">=1.0.0",
+    "@langchain/mcp-adapters": ">=1.0.0"
   },
   "peerDependenciesMeta": {
     "langchain": {
       "optional": false
+    },
+    "@langchain/mcp-adapters": {
+      "optional": true
     }
   },
   "engines": {
