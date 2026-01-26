@@ -34,29 +34,29 @@ import type {
 } from "./types.js";
 
 /**
- * Generic tool type returned by MCP client
+ * Minimal tool interface for type constraints
  *
- * Using a generic interface to avoid direct dependency on @langchain/core.
- * Tools from MultiServerMCPClient are DynamicStructuredTool instances.
+ * This represents the minimum properties we need to access on tools.
+ * The actual tools from MultiServerMCPClient (DynamicStructuredTool) have
+ * many more properties which are preserved through generics.
  */
-interface McpTool {
+interface McpToolBase {
   name: string;
   description?: string;
   metadata?: Record<string, unknown>;
-  [key: string]: unknown;
 }
 
 /**
  * Minimal interface for MultiServerMCPClient
  *
- * Using duck typing to avoid tight coupling with @langchain/mcp-adapters.
- * This allows the function to work with any client that matches this shape.
+ * Using duck typing with generics to avoid tight coupling with @langchain/mcp-adapters
+ * while preserving the actual tool types returned by the client.
  */
-interface McpClientLike {
+interface McpClientLike<TTool extends McpToolBase = McpToolBase> {
   config: {
     mcpServers: Record<string, McpConnectionLike>;
   };
-  getTools(...servers: string[]): Promise<McpTool[]>;
+  getTools(...servers: string[]): Promise<TTool[]>;
 }
 
 /**
@@ -151,7 +151,7 @@ function buildMcpMetadata(
  *
  * @param client - MultiServerMCPClient instance (or compatible client)
  * @param options - Optional configuration
- * @returns Tools with MCP metadata attached to tool.metadata.mcp
+ * @returns Tools with MCP metadata attached to tool.metadata.__sapiom.mcp
  *
  * @example Get all tools
  * ```typescript
@@ -165,13 +165,13 @@ function buildMcpMetadata(
  * });
  * ```
  */
-export async function getMcpTools<T extends McpTool = McpTool>(
-  client: McpClientLike,
+export async function getMcpTools<TTool extends McpToolBase>(
+  client: McpClientLike<TTool>,
   options?: GetMcpToolsOptions,
-): Promise<T[]> {
+): Promise<TTool[]> {
   const config = client.config;
   const serverNames = options?.servers ?? Object.keys(config.mcpServers);
-  const allTools: McpTool[] = [];
+  const allTools: TTool[] = [];
 
   for (const serverName of serverNames) {
     const connection = config.mcpServers[serverName];
@@ -202,7 +202,7 @@ export async function getMcpTools<T extends McpTool = McpTool>(
     allTools.push(...serverTools);
   }
 
-  return allTools as T[];
+  return allTools;
 }
 
 // Re-export the McpClientLike interface for advanced usage
