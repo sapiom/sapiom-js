@@ -1,5 +1,13 @@
 # @sapiom/fetch
 
+## 0.2.2
+
+### Patch Changes
+
+- 797d633: Fix ESM imports in Node.js by adding `{"type": "module"}` package.json to dist/esm folders
+- Updated dependencies [797d633]
+  - @sapiom/core@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes
