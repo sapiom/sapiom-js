@@ -28,7 +28,9 @@ export interface TokenUsage {
  *
  * @example
  * ```typescript
- * const messages = [{ role: 'user', content: 'Hello!' }];
+ * import { HumanMessage } from "@langchain/core/messages";
+ *
+ * const messages = [new HumanMessage("Hello!")];
  * const inputTokens = await estimateInputTokens(messages, model);
  * ```
  */

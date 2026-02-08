@@ -92,16 +92,16 @@ export interface BaseSapiomIntegrationConfig {
  * @example
  * ```typescript
  * // Initialize from environment (requires SAPIOM_API_KEY)
- * const client = initializeSapiomClient();
+ * const client1 = initializeSapiomClient();
  *
  * // Initialize with explicit config
- * const client = initializeSapiomClient({
+ * const client2 = initializeSapiomClient({
  *   apiKey: 'sk_...'
  * });
  *
  * // Use existing client instance
  * const existingClient = new SapiomClient({ apiKey: 'sk_...' });
- * const client = initializeSapiomClient({
+ * const client3 = initializeSapiomClient({
  *   sapiomClient: existingClient
  * });
  * ```

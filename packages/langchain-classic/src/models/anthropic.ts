@@ -46,7 +46,7 @@ const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
  *
  * @example
  * ```typescript
- * import { SapiomChatAnthropic } from "@sapiom/sdk/langchain";
+ * import { SapiomChatAnthropic } from "@sapiom/langchain-classic";
  *
  * const model = new SapiomChatAnthropic(
  *   {
@@ -54,10 +54,8 @@ const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
  *     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
  *   },
  *   {
+ *     apiKey: process.env.SAPIOM_API_KEY,
  *     traceId: "conversation-123",
- *     onAfterGenerate: (txId, tokens, cost) => {
- *       console.log(`Used ${tokens} tokens, cost: $${cost}`);
- *     }
  *   }
  * );
  *
@@ -454,14 +452,14 @@ export class SapiomChatAnthropic<
  * @example
  * ```typescript
  * import { ChatAnthropic } from "@langchain/anthropic";
- * import { wrapChatAnthropic } from "@sapiom/sdk/langchain";
+ * import { wrapChatAnthropic } from "@sapiom/langchain-classic";
  *
  * // Existing model
  * const model = new ChatAnthropic({ model: "claude-3-5-sonnet-20241022" });
  *
  * // Wrap with Sapiom tracking - one line change
  * const tracked = wrapChatAnthropic(model, {
- *   sapiomApiKey: process.env.SAPIOM_API_KEY,
+ *   apiKey: process.env.SAPIOM_API_KEY,
  *   traceId: "conversation-123"
  * });
  *

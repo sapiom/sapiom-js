@@ -58,7 +58,7 @@ const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
  *
  * @example
  * ```typescript
- * import { SapiomChatOpenAI } from "@sapiom/sdk/langchain";
+ * import { SapiomChatOpenAI } from "@sapiom/langchain-classic";
  *
  * const model = new SapiomChatOpenAI(
  *   {
@@ -66,10 +66,8 @@ const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
  *     openAIApiKey: process.env.OPENAI_API_KEY,
  *   },
  *   {
+ *     apiKey: process.env.SAPIOM_API_KEY,
  *     traceId: "conversation-123",
- *     onAfterGenerate: (txId, tokens, cost) => {
- *       console.log(`Used ${tokens} tokens, cost: $${cost}`);
- *     }
  *   }
  * );
  *
@@ -495,14 +493,14 @@ export class SapiomChatOpenAI<
  * @example
  * ```typescript
  * import { ChatOpenAI } from "@langchain/openai";
- * import { wrapChatOpenAI } from "@sapiom/sdk/langchain";
+ * import { wrapChatOpenAI } from "@sapiom/langchain-classic";
  *
  * // Existing model
  * const model = new ChatOpenAI({ model: "gpt-4" });
  *
  * // Wrap with Sapiom tracking - one line change
  * const tracked = wrapChatOpenAI(model, {
- *   sapiomApiKey: process.env.SAPIOM_API_KEY,
+ *   apiKey: process.env.SAPIOM_API_KEY,
  *   traceId: "conversation-123"
  * });
  *
