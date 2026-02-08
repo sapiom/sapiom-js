@@ -12,14 +12,14 @@ declare module "axios" {
   interface AxiosInstance {
     /**
      * Reference to the SapiomClient used for payment and authorization handling
-     * Available when axios instance is wrapped with createSapiomClient from @sapiom/sdk/axios
+     * Available when axios instance is wrapped with withSapiom from @sapiom/axios
      *
      * @example
      * ```typescript
      * import axios from 'axios';
-     * import { createSapiomClient } from '@sapiom/sdk/axios';
+     * import { withSapiom } from '@sapiom/axios';
      *
-     * const client = createSapiomClient(axios.create({
+     * const client = withSapiom(axios.create({
      *   baseURL: 'https://api.example.com'
      * }));
      *

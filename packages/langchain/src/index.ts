@@ -9,7 +9,7 @@
  * import { createSapiomMiddleware } from "@sapiom/langchain";
  *
  * const agent = createAgent({
- *   model: "gpt-4",
+ *   model: "openai:gpt-4",
  *   tools: [getWeather, sendEmail],
  *   middleware: [
  *     createSapiomMiddleware({

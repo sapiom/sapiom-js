@@ -61,6 +61,9 @@ export interface WrapSapiomAgentConfig extends BaseSapiomIntegrationConfig {
  * ```typescript
  * import { createReactAgent } from "@langchain/langgraph/prebuilt";
  * import { wrapSapiomAgent, SapiomChatOpenAI, wrapSapiomTool } from "@sapiom/langchain-classic";
+ * import { SapiomClient } from "@sapiom/core";
+ *
+ * const sapiomClient = new SapiomClient({ apiKey: process.env.SAPIOM_API_KEY! });
  *
  * // Create wrapped model
  * const model = new SapiomChatOpenAI({ model: "gpt-4" }, { sapiomClient });
@@ -360,7 +363,7 @@ export function wrapSapiomAgent(
  *
  * // All operations (model + tools) are tracked
  * const result = await agent.invoke({
- *   input: "What's the weather in SF?"
+ *   messages: [{ role: "user", content: "What's the weather in SF?" }]
  * });
  * ```
  */
