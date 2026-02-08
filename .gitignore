@@ -35,3 +35,5 @@ Thumbs.db
 .changeset/pre.json
 
 .temp/
+.claude/commands/
+.trees
