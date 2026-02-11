@@ -120,12 +120,13 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     let error: Error | null = null;
 
     try {
+      // Clone before sending so we have an unconsumed body for 402 retry
+      const requestForRetry = request.clone();
       response = await globalThis.fetch(request);
 
       if (response.status === 402) {
         response = await handlePayment(
-          input,
-          init,
+          requestForRetry,
           response,
           paymentConfig,
           request,

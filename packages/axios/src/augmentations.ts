@@ -8,6 +8,38 @@ import { AxiosInstance } from "axios";
 
 import { SapiomClient } from "@sapiom/core";
 
+/**
+ * Per-request Sapiom configuration passed via `__sapiom` on axios request config
+ */
+export interface SapiomRequestConfig {
+  enabled?: boolean;
+  serviceName?: string;
+  actionName?: string;
+  resourceName?: string;
+  traceId?: string;
+  traceExternalId?: string;
+  agentId?: string;
+  agentName?: string;
+  qualifiers?: Record<string, string>;
+  metadata?: Record<string, any>;
+
+  /**
+   * Factory function that returns a fresh request body on each call.
+   * Use this when streaming a body (e.g. `fs.createReadStream(...)`) so that
+   * a 402 retry can re-create the stream instead of sending a consumed one.
+   *
+   * @example
+   * ```typescript
+   * await client.post('/upload', fs.createReadStream('file.tar'), {
+   *   __sapiom: {
+   *     bodyFactory: () => fs.createReadStream('file.tar'),
+   *   },
+   * });
+   * ```
+   */
+  bodyFactory?: () => any;
+}
+
 declare module "axios" {
   interface AxiosInstance {
     /**
