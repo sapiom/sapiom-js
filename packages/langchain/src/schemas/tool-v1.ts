@@ -7,6 +7,46 @@
  */
 
 /**
+ * MCP server URL parsed components (for backend fingerprinting)
+ */
+export interface ToolMcpServerUrlParsed {
+  /** URL protocol without colon (e.g., "https") */
+  protocol: string;
+
+  /** Hostname for fingerprinting (e.g., "weather-api.example.com") */
+  hostname: string;
+
+  /** URL pathname (e.g., "/mcp") */
+  pathname: string;
+
+  /** Port number if specified, null otherwise */
+  port: number | null;
+}
+
+/**
+ * MCP server metadata included in tool facts
+ *
+ * Present when tools are loaded via getMcpTools().
+ * Backend uses this for service fingerprinting.
+ */
+export interface ToolMcpMetadata {
+  /** Server name from config (e.g., "weather") */
+  serverName: string;
+
+  /** Server URL for HTTP/SSE transports */
+  serverUrl?: string;
+
+  /** Parsed URL components for fingerprinting */
+  serverUrlParsed?: ToolMcpServerUrlParsed;
+
+  /** Transport type */
+  transportType: "http" | "sse" | "stdio";
+
+  /** Whether this is a remote server */
+  isRemote: boolean;
+}
+
+/**
  * Request facts (pre-execution, from wrapToolCall)
  */
 export interface ToolRequestFacts {
@@ -24,6 +64,14 @@ export interface ToolRequestFacts {
 
   /** Timestamp */
   timestamp: string;
+
+  /**
+   * MCP server metadata (present when tool loaded via getMcpTools)
+   *
+   * Backend uses this for service fingerprinting, similar to how
+   * HTTP API fingerprinting uses URL hostname.
+   */
+  mcp?: ToolMcpMetadata;
 }
 
 /**
