@@ -1,4 +1,13 @@
 # @sapiom/core
+ improve README.md or docs/ folder
+import { Sandbox } from "@vercel/sandbox";
+
+const sandbox = await Sandbox.create();
+
+const cmd = await sandbox.runCommand("echo", ["Hello from Vercel Sandbox!"]);
+console.log(await cmd.stdout());
+
+await sandbox.stop();
 
 [![npm version](https://badge.fury.io/js/%40sapiom%2Fcore.svg)](https://www.npmjs.com/package/@sapiom/core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
