@@ -837,7 +837,8 @@ export function addCompletionInterceptor(
         : undefined;
 
       if (transactionId) {
-        const startTime = (originalConfig as any).__sapiomStartTime || Date.now();
+        const startTime =
+          (originalConfig as any).__sapiomStartTime || Date.now();
         const durationMs = Date.now() - startTime;
 
         const facts: HttpClientErrorFacts = {
@@ -846,7 +847,8 @@ export function addCompletionInterceptor(
           httpStatus: error.response?.status,
           httpStatusText: error.response?.statusText,
           isNetworkError: !error.response,
-          isTimeout: error.code === "ECONNABORTED" || error.code === "ETIMEDOUT",
+          isTimeout:
+            error.code === "ECONNABORTED" || error.code === "ETIMEDOUT",
           elapsedMs: durationMs,
         };
 

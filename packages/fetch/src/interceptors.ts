@@ -224,6 +224,9 @@ export async function handleAuthorization(
           name: "@sapiom/fetch",
           version: SDK_VERSION,
         },
+        ...(userMetadata?.integration && {
+          integration: userMetadata.integration,
+        }),
         request: requestFacts,
       },
       serviceName: userMetadata?.serviceName,
@@ -456,6 +459,7 @@ export function handleCompletion(
   error: Error | null,
   config: CompletionConfig,
   startTime: number,
+  defaultMetadata?: Record<string, any>,
 ): void {
   const transactionId = getHeader(request.headers, "X-Sapiom-Transaction-Id");
 
@@ -495,6 +499,9 @@ export function handleCompletion(
     responseFacts = {
       source: "http-client",
       version: "v1",
+      ...(defaultMetadata?.integration && {
+        integration: defaultMetadata.integration,
+      }),
       facts,
     };
   } else if (error || (response && !response.ok)) {
@@ -513,6 +520,9 @@ export function handleCompletion(
     responseFacts = {
       source: "http-client",
       version: "v1",
+      ...(defaultMetadata?.integration && {
+        integration: defaultMetadata.integration,
+      }),
       facts,
     };
   }

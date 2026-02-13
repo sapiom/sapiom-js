@@ -365,11 +365,10 @@ describe("Node-HTTP Client Integration Tests", () => {
   describe("Payment Flow", () => {
     it("should handle 402 payment required flow", async () => {
       // First authorization - immediately authorized
-      mocks.create
-        .mockResolvedValueOnce({
-          id: "tx-auth",
-          status: TransactionStatus.AUTHORIZED,
-        } as any);
+      mocks.create.mockResolvedValueOnce({
+        id: "tx-auth",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
 
       // Reauthorize with payment - returns authorized with payload
       mocks.reauthorizeWithPayment.mockResolvedValue({

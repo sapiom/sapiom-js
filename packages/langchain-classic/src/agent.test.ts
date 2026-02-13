@@ -23,7 +23,6 @@ describe("wrapSapiomAgent", () => {
   let originalStream: jest.Mock;
 
   beforeEach(() => {
-
     mockClient = {
       transactions: {
         create: jest.fn().mockResolvedValue({

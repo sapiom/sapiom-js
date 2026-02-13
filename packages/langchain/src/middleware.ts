@@ -103,7 +103,7 @@ import {
  * ```
  */
 export function createSapiomMiddleware(
-  config: SapiomMiddlewareConfig = {}
+  config: SapiomMiddlewareConfig = {},
 ): AgentMiddleware {
   // Initialize Sapiom client
   const sapiomClient: SapiomClient =
@@ -131,7 +131,9 @@ export function createSapiomMiddleware(
 
       // Resolve trace ID: context override > config > auto-generate
       const traceId =
-        runtime.context?.sapiomTraceId ?? config.traceId ?? generateSDKTraceId();
+        runtime.context?.sapiomTraceId ??
+        config.traceId ??
+        generateSDKTraceId();
 
       // Resolve agent identity
       const agentId = runtime.context?.sapiomAgentId ?? config.agentId;
@@ -177,7 +179,7 @@ export function createSapiomMiddleware(
 
         console.error(
           "[Sapiom] Agent transaction failed, continuing without tracking:",
-          error
+          error,
         );
         return {
           __sapiomTraceId: traceId,
@@ -237,9 +239,14 @@ export function createSapiomMiddleware(
 
       const startTime = Date.now();
       // Use state trace ID if available, otherwise fall back to middleware-level ID
-      const traceId = (request.state.__sapiomTraceId as string | undefined) ?? fallbackTraceId;
-      const agentId = (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
-      const agentName = (request.state.__sapiomAgentName as string | undefined) ?? config.agentName;
+      const traceId =
+        (request.state.__sapiomTraceId as string | undefined) ??
+        fallbackTraceId;
+      const agentId =
+        (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
+      const agentName =
+        (request.state.__sapiomAgentName as string | undefined) ??
+        config.agentName;
 
       // Collect telemetry
       const estimatedTokens = estimateInputTokens(request.messages);
@@ -324,7 +331,7 @@ export function createSapiomMiddleware(
         }
         console.error(
           "[Sapiom] LLM transaction failed, continuing without tracking:",
-          error
+          error,
         );
         return handler(request);
       }
@@ -374,9 +381,14 @@ export function createSapiomMiddleware(
 
       const startTime = Date.now();
       // Use state trace ID if available, otherwise fall back to middleware-level ID
-      const traceId = (request.state.__sapiomTraceId as string | undefined) ?? fallbackTraceId;
-      const agentId = (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
-      const agentName = (request.state.__sapiomAgentName as string | undefined) ?? config.agentName;
+      const traceId =
+        (request.state.__sapiomTraceId as string | undefined) ??
+        fallbackTraceId;
+      const agentId =
+        (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
+      const agentName =
+        (request.state.__sapiomAgentName as string | undefined) ??
+        config.agentName;
       const args = request.toolCall.args ?? {};
 
       // Get tool name and description safely (works for both ClientTool and ServerTool)
@@ -414,7 +426,7 @@ export function createSapiomMiddleware(
         }
         console.error(
           "[Sapiom] Tool transaction failed, continuing without tracking:",
-          error
+          error,
         );
         return handler(request);
       }
@@ -441,7 +453,7 @@ export function createSapiomMiddleware(
             .catch((err) => {
               console.error(
                 "[Sapiom] Failed to complete tool transaction:",
-                err
+                err,
               );
             });
         }
@@ -451,7 +463,7 @@ export function createSapiomMiddleware(
         // Handle MCP 402 Payment Required
         if (isMCPPaymentError(error)) {
           const paymentData = extractPaymentFromMCPError(
-            error as Record<string, unknown>
+            error as Record<string, unknown>,
           );
 
           // Create and authorize payment transaction
@@ -462,7 +474,7 @@ export function createSapiomMiddleware(
           } as unknown as Parameters<typeof authorizer.createAndAuthorize>[0]);
 
           const paymentAuth = getPaymentAuthFromTransaction(
-            paymentTx as unknown as Record<string, unknown>
+            paymentTx as unknown as Record<string, unknown>,
           );
 
           // Retry with payment in args
@@ -504,7 +516,7 @@ export function createSapiomMiddleware(
             .catch((err) => {
               console.error(
                 "[Sapiom] Failed to complete tool transaction:",
-                err
+                err,
               );
             });
         }

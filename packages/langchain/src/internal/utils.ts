@@ -49,7 +49,7 @@ export function isAuthorizationDeniedOrTimeout(error: unknown): boolean {
 export class AuthorizationDeniedError extends Error {
   constructor(
     message: string,
-    public readonly txId: string
+    public readonly txId: string,
   ) {
     super(message);
     this.name = "AuthorizationDeniedError";
@@ -63,7 +63,7 @@ export class AuthorizationDeniedError extends Error {
  * @returns True if error is AuthorizationDeniedError
  */
 export function isAuthorizationDenied(
-  error: unknown
+  error: unknown,
 ): error is AuthorizationDeniedError {
   return error instanceof AuthorizationDeniedError;
 }

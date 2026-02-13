@@ -92,6 +92,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
   if (config?.traceId) defaultMetadata.traceId = config.traceId;
   if (config?.traceExternalId)
     defaultMetadata.traceExternalId = config.traceExternalId;
+  if (config?.integration) defaultMetadata.integration = config.integration;
   if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
   const failureMode = config?.failureMode ?? "open";
@@ -140,7 +141,14 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
       throw err;
     } finally {
       // Fire-and-forget: complete the transaction
-      handleCompletion(request, response, error, completionConfig, startTime);
+      handleCompletion(
+        request,
+        response,
+        error,
+        completionConfig,
+        startTime,
+        defaultMetadata,
+      );
     }
   };
 

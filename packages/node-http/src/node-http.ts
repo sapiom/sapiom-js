@@ -104,7 +104,7 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
  * ```
  */
 export function createClient(
-  config?: SapiomNodeHttpConfig
+  config?: SapiomNodeHttpConfig,
 ): HttpClientAdapter & { __sapiomClient: SapiomClient } {
   const sapiomClient = initializeSapiomClient(config);
   const isEnabled = config?.enabled !== false;
@@ -125,7 +125,7 @@ export function createClient(
   const completionConfig: CompletionConfig = { sapiomClient };
 
   async function makeRequest<T = any>(
-    request: HttpRequest
+    request: HttpRequest,
   ): Promise<HttpResponse<T>> {
     return new Promise<HttpResponse<T>>((resolve, reject) => {
       const parsedUrl = new URL(request.url);
@@ -231,7 +231,7 @@ export function createClient(
       const modifiedRequest = await handleAuthorization(
         normalizedRequest,
         authConfig,
-        defaultMetadata
+        defaultMetadata,
       );
 
       const startTime = Date.now();
@@ -249,7 +249,7 @@ export function createClient(
             error as HttpError,
             paymentConfig,
             makeRequest,
-            defaultMetadata
+            defaultMetadata,
           );
           error = null; // Clear error since payment succeeded
           return response;
@@ -262,7 +262,7 @@ export function createClient(
           response,
           error,
           completionConfig,
-          startTime
+          startTime,
         );
       }
     },

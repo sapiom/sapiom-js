@@ -152,7 +152,10 @@ describe("getPaymentAmount", () => {
   });
 
   it("works with union type", () => {
-    const requirements: X402PaymentRequirement[] = [v1Requirement, v2Requirement];
+    const requirements: X402PaymentRequirement[] = [
+      v1Requirement,
+      v2Requirement,
+    ];
     requirements.forEach((req) => {
       expect(getPaymentAmount(req)).toBe("1000000");
     });

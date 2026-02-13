@@ -1,0 +1,67 @@
+{
+  "name": "@sapiom/mcp",
+  "version": "0.1.0",
+  "description": "Sapiom MCP server for Claude Code — browser-based authentication and API tools",
+  "mcpName": "io.github.sapiom/mcp",
+  "keywords": [
+    "sapiom",
+    "mcp",
+    "claude",
+    "authentication",
+    "api-keys"
+  ],
+  "homepage": "https://github.com/sapiom/sapiom-js/tree/main/packages/mcp#readme",
+  "bugs": {
+    "url": "https://github.com/sapiom/sapiom-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
+    "directory": "packages/mcp"
+  },
+  "license": "MIT",
+  "author": "Sapiom",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "sapiom-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@sapiom/core": "workspace:*",
+    "@sapiom/fetch": "workspace:*",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@typescript-eslint/eslint-plugin": "^7.3.1",
+    "@typescript-eslint/parser": "^7.3.1",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.2",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

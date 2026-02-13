@@ -79,6 +79,17 @@ export interface BaseSapiomIntegrationConfig {
    * Default external trace ID for transactions
    */
   traceExternalId?: string;
+
+  /**
+   * Integration identity — included in request facts to identify
+   * the higher-level tool or framework driving this SDK instance.
+   *
+   * @example { name: "@sapiom/mcp", version: "0.1.0" }
+   */
+  integration?: {
+    name: string;
+    version: string;
+  };
 }
 
 /**
