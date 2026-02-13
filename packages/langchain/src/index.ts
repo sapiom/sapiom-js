@@ -29,15 +29,16 @@
 
 // Main middleware
 export { createSapiomMiddleware } from "./middleware.js";
-export type { SapiomMiddlewareConfig, SapiomMiddlewareContext } from "./internal/types.js";
+export type {
+  SapiomMiddlewareConfig,
+  SapiomMiddlewareContext,
+} from "./internal/types.js";
 
 // Re-export LangChain types for convenience
 export type { AgentMiddleware, ToolCallRequest } from "langchain";
 
 // Types (re-exported from middleware, but also available directly)
-export type {
-  SapiomMiddlewareState,
-} from "./internal/types.js";
+export type { SapiomMiddlewareState } from "./internal/types.js";
 
 // Utilities (for advanced use cases)
 export {

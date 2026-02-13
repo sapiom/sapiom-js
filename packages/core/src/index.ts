@@ -101,7 +101,10 @@ export type {
 
 // Shared integration utilities (needed by HTTP integration packages)
 export { initializeSapiomClient } from "./types/config.js";
-export type { BaseSapiomIntegrationConfig, FailureMode } from "./types/config.js";
+export type {
+  BaseSapiomIntegrationConfig,
+  FailureMode,
+} from "./types/config.js";
 
 // Default export for convenience
 export { SapiomClient as default } from "./client/SapiomClient.js";

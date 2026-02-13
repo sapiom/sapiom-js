@@ -107,7 +107,7 @@ export function isMCPPaymentError(error: unknown): boolean {
  * @throws Error if payment data cannot be extracted
  */
 export function extractPaymentFromMCPError(
-  error: Record<string, unknown>
+  error: Record<string, unknown>,
 ): X402PaymentResponse {
   // Try structured content first (if MCP error has it)
   if (error.structuredContent) {
@@ -151,7 +151,7 @@ export function extractPaymentFromMCPError(
   }
 
   throw new Error(
-    `Failed to extract x402 payment data from error: ${error.message}`
+    `Failed to extract x402 payment data from error: ${error.message}`,
   );
 }
 
@@ -166,7 +166,7 @@ export function extractPaymentFromMCPError(
  * @internal
  */
 export function convertX402ToSapiomPayment(
-  x402Payment: X402PaymentResponse
+  x402Payment: X402PaymentResponse,
 ): Record<string, unknown> {
   // Take first accepted payment method
   const firstAccept = x402Payment.accepts[0];
@@ -200,14 +200,14 @@ export function convertX402ToSapiomPayment(
  * @internal
  */
 export function getPaymentAuthFromTransaction(
-  transaction: Record<string, unknown>
+  transaction: Record<string, unknown>,
 ): string {
   const payment = transaction.payment as Record<string, unknown> | undefined;
   const authorizationPayload = payment?.authorizationPayload;
 
   if (!authorizationPayload) {
     throw new Error(
-      `Transaction ${transaction.id} is authorized but missing payment.authorizationPayload`
+      `Transaction ${transaction.id} is authorized but missing payment.authorizationPayload`,
     );
   }
 
