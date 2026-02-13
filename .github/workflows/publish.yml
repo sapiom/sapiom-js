@@ -38,39 +38,36 @@ jobs:
         run: pnpm build
 
       - name: Publish to npm
-        run: pnpm changeset publish
+        id: publish
+        run: |
+          OUTPUT=$(pnpm changeset publish 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "@sapiom/mcp@"; then
+            echo "mcp-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mcp-changed=false" >> "$GITHUB_OUTPUT"
+          fi
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Check if MCP package was published
-        id: mcp-check
-        run: |
-          PUBLISHED=$(npm view @sapiom/mcp version 2>/dev/null || echo "")
-          LOCAL=$(node -p "require('./packages/mcp/package.json').version")
-          if [ "$PUBLISHED" = "$LOCAL" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Sync MCP server.json version
-        if: steps.mcp-check.outputs.changed == 'true'
+        if: steps.publish.outputs.mcp-changed == 'true'
         working-directory: packages/mcp
         run: |
           VERSION=$(node -p "require('./package.json').version")
           jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp && mv server.tmp server.json
 
       - name: Install mcp-publisher
-        if: steps.mcp-check.outputs.changed == 'true'
+        if: steps.publish.outputs.mcp-changed == 'true'
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Authenticate to MCP Registry
-        if: steps.mcp-check.outputs.changed == 'true'
+        if: steps.publish.outputs.mcp-changed == 'true'
         run: ./mcp-publisher login github-oidc
 
       - name: Publish MCP server to registry
-        if: steps.mcp-check.outputs.changed == 'true'
+        if: steps.publish.outputs.mcp-changed == 'true'
         working-directory: packages/mcp
         run: ../../mcp-publisher publish
