@@ -24,6 +24,7 @@ export interface CreateTransactionRequest {
     source: string;
     version: string;
     sdk: Record<string, any>;
+    integration?: { name: string; version: string };
     request: Record<string, any>;
   };
   serviceName?: string;
@@ -118,8 +119,8 @@ export interface ListTransactionsParams {
 export interface X402PaymentRequirementV1 {
   scheme: string;
   network: string;
-  maxAmountRequired: string;  // V1 field name
-  resource: string;           // URL embedded in requirement in V1
+  maxAmountRequired: string; // V1 field name
+  resource: string; // URL embedded in requirement in V1
   description: string;
   mimeType: string;
   outputSchema?: object | null;
@@ -145,9 +146,9 @@ export interface X402ResponseV1 {
  * V2 Payment Requirement (new x402 format)
  */
 export interface X402PaymentRequirementV2 {
-  scheme: string;          // "exact" (or "upto" for pre-auth) in V2
-  network: string;         // CAIP-2 format: "sapiom:main" in V2
-  amount: string;          // Renamed from maxAmountRequired in V2
+  scheme: string; // "exact" (or "upto" for pre-auth) in V2
+  network: string; // CAIP-2 format: "sapiom:main" in V2
+  amount: string; // Renamed from maxAmountRequired in V2
   payTo: string;
   maxTimeoutSeconds: number;
   asset: string;
@@ -193,14 +194,18 @@ export type X402Response = X402ResponseV1 | X402ResponseV2;
 /**
  * Check if response is V2 format
  */
-export function isV2Response(response: X402Response): response is X402ResponseV2 {
+export function isV2Response(
+  response: X402Response,
+): response is X402ResponseV2 {
   return response.x402Version === 2;
 }
 
 /**
  * Check if response is V1 format
  */
-export function isV1Response(response: X402Response): response is X402ResponseV1 {
+export function isV1Response(
+  response: X402Response,
+): response is X402ResponseV1 {
   return response.x402Version === 1;
 }
 
@@ -268,6 +273,7 @@ export interface CompleteTransactionRequest {
   responseFacts?: {
     source: string;
     version: string;
+    integration?: { name: string; version: string };
     facts: Record<string, any>;
   };
 }
