@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.sapiom/mcp",
+  "description": "Sapiom MCP server — authentication, verification, and API tools",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/sapiom/sapiom-js",
+    "source": "github",
+    "id": "1094593670",
+    "subfolder": "packages/mcp"
+  },
+  "packages": [
+    {
+      "registry_type": "npm",
+      "identifier": "@sapiom/mcp",
+      "version": "0.1.0",
+      "runtime_hint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtime_arguments": [
+        {
+          "type": "positional",
+          "value": "-y"
+        }
+      ],
+      "package_arguments": []
+    }
+  ]
+}
