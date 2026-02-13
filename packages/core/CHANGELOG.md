@@ -1,5 +1,11 @@
 # @sapiom/core
 
+## 0.3.0
+
+### Minor Changes
+
+- 8423815: implement `@sapiom/mcp`, minor code formatting
+
 ## 0.2.2
 
 ### Patch Changes

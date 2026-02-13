@@ -1,5 +1,16 @@
 # @sapiom/node-http
 
+## 0.3.0
+
+### Minor Changes
+
+- 8423815: implement `@sapiom/mcp`, minor code formatting
+
+### Patch Changes
+
+- Updated dependencies [8423815]
+  - @sapiom/core@0.3.0
+
 ## 0.2.2
 
 ### Patch Changes
