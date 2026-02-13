@@ -106,6 +106,132 @@ function getPaymentHeaderName(payload: any): string {
 }
 
 /**
+ * Reads a stream into a Buffer. Handles two stream flavors:
+ * - Async iterables (Node.js Readable in modern Node)
+ * - Pipe-based streams (e.g. form-data's CombinedStream which lacks Symbol.asyncIterator)
+ */
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  // Async iterable (Node.js Readable in modern Node, ReadableStream adapters)
+  if (typeof stream[Symbol.asyncIterator] === "function") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  // Pipe-based stream (e.g. form-data's CombinedStream)
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk: any) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
+    stream.on("error", reject);
+    // CombinedStream (used by form-data) doesn't auto-flow on data listener —
+    // it needs resume() to start emitting
+    if (typeof stream.resume === "function") {
+      stream.resume();
+    }
+  });
+}
+
+/** Result of converting a request body to a replayable form. */
+interface ReplayableBodyResult {
+  /** The (possibly converted) body data to use for the request. */
+  data: any;
+  /** Byte size of the body, or undefined if not determinable. */
+  bodySizeBytes: number | undefined;
+  /** Headers captured from the original body (e.g. content-type from FormData). */
+  extraHeaders?: Record<string, string>;
+}
+
+/**
+ * Converts the request body to a form that can be replayed on 402 retry.
+ *
+ * Streams and FormData (form-data package) are buffered into memory so they
+ * can be re-sent. If a `bodyFactory` is provided via `__sapiom` config, the
+ * stream is left as-is and a fresh body is created on retry instead.
+ *
+ * Also computes `bodySizeBytes` for request facts, replacing the previous
+ * `JSON.stringify(data).length` which was incorrect for non-JSON bodies.
+ */
+async function ensureReplayableBody(
+  config: InternalAxiosRequestConfig,
+): Promise<ReplayableBodyResult> {
+  const data = config.data;
+
+  // null/undefined — pass through
+  if (data == null) {
+    return { data, bodySizeBytes: undefined };
+  }
+
+  // string
+  if (typeof data === "string") {
+    return { data, bodySizeBytes: Buffer.byteLength(data) };
+  }
+
+  // Buffer
+  if (Buffer.isBuffer(data)) {
+    return { data, bodySizeBytes: data.length };
+  }
+
+  // ArrayBuffer
+  if (data instanceof ArrayBuffer) {
+    const buf = Buffer.from(data);
+    return { data: buf, bodySizeBytes: buf.length };
+  }
+
+  // TypedArray (e.g. Uint8Array)
+  if (ArrayBuffer.isView(data) && !(data instanceof DataView)) {
+    const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    return { data: buf, bodySizeBytes: data.byteLength };
+  }
+
+  // URLSearchParams
+  if (typeof URLSearchParams !== "undefined" && data instanceof URLSearchParams) {
+    const str = data.toString();
+    return { data: str, bodySizeBytes: Buffer.byteLength(str) };
+  }
+
+  // FormData (form-data package): has both getHeaders() and pipe()
+  if (typeof data.getHeaders === "function" && typeof data.pipe === "function") {
+    const extraHeaders = data.getHeaders();
+    const buf = await streamToBuffer(data);
+    return { data: buf, bodySizeBytes: buf.length, extraHeaders };
+  }
+
+  // Node.js Readable stream or async iterable
+  if (typeof data.pipe === "function" || typeof data[Symbol.asyncIterator] === "function") {
+    const bodyFactory = (config as any).__sapiom?.bodyFactory;
+    if (bodyFactory) {
+      // Leave data as-is; on retry, bodyFactory() will produce a fresh stream
+      return { data, bodySizeBytes: undefined };
+    }
+    // Auto-buffer with warning
+    console.warn(
+      "[Sapiom] Buffering stream body into memory for 402 retry support. To avoid this, provide a bodyFactory in __sapiom config.",
+    );
+    const buf = await streamToBuffer(data);
+    return { data: buf, bodySizeBytes: buf.length };
+  }
+
+  // Blob
+  if (typeof Blob !== "undefined" && data instanceof Blob) {
+    const buf = Buffer.from(await data.arrayBuffer());
+    return { data: buf, bodySizeBytes: buf.length };
+  }
+
+  // Plain object or other JSON-serializable value
+  try {
+    const json = JSON.stringify(data);
+    return { data, bodySizeBytes: Buffer.byteLength(json) };
+  } catch {
+    return { data, bodySizeBytes: undefined };
+  }
+}
+
+/**
  * Add authorization request interceptor to axios instance
  */
 export function addAuthorizationInterceptor(
@@ -121,6 +247,24 @@ export function addAuthorizationInterceptor(
     async (axiosConfig: InternalAxiosRequestConfig) => {
       if ((axiosConfig as any).__is402Retry) {
         return axiosConfig;
+      }
+
+      // Ensure request body is replayable for 402 retry
+      let replayableBody: ReplayableBodyResult;
+      try {
+        replayableBody = await ensureReplayableBody(axiosConfig);
+        axiosConfig.data = replayableBody.data;
+        if (replayableBody.extraHeaders) {
+          for (const [key, value] of Object.entries(replayableBody.extraHeaders)) {
+            if (!getHeader(axiosConfig.headers, key)) {
+              setHeader(axiosConfig.headers, key, value);
+            }
+          }
+        }
+      } catch (bufferError) {
+        // If buffering fails, continue with original data (no worse than current behavior)
+        replayableBody = { data: axiosConfig.data, bodySizeBytes: undefined };
+        console.error("[Sapiom] Failed to buffer request body:", bufferError);
       }
 
       const existingTransactionId = getHeader(
@@ -269,9 +413,7 @@ export function addAuthorizationInterceptor(
         urlParsed,
         headers: sanitizedHeaders,
         hasBody: !!axiosConfig.data,
-        bodySizeBytes: axiosConfig.data
-          ? JSON.stringify(axiosConfig.data).length
-          : undefined,
+        bodySizeBytes: replayableBody.bodySizeBytes,
         contentType: axiosConfig.headers?.["content-type"] as
           | string
           | undefined,
@@ -576,10 +718,14 @@ export function addPaymentInterceptor(
               "base64",
             );
 
+      const bodyFactory = (originalConfig as any).__sapiom?.bodyFactory;
+
       const retryConfig = {
         ...originalConfig,
         __is402Retry: true,
         __sapiomPaymentHandling: false, // Allow completion on retry
+        // If bodyFactory exists, call it for a fresh body
+        ...(bodyFactory ? { data: bodyFactory() } : {}),
       } as any;
 
       // Select header name based on x402 version (V1: X-PAYMENT, V2: PAYMENT-SIGNATURE)

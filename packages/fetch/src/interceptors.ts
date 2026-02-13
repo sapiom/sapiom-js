@@ -304,10 +304,11 @@ export async function handleAuthorization(
  *
  * Reauthorizes the existing transaction with payment data from the 402 response,
  * then retries the request with the X-PAYMENT header.
+ *
+ * @param requestForRetry - A cloned Request with an unconsumed body, used to build the retry request
  */
 export async function handlePayment(
-  originalInput: string | URL | Request,
-  originalInit: RequestInit | undefined,
+  requestForRetry: Request,
   response: Response,
   config: PaymentConfig,
   request: Request,
@@ -359,13 +360,6 @@ export async function handlePayment(
     return response;
   }
 
-  const originalUrl =
-    typeof originalInput === "string"
-      ? originalInput
-      : originalInput instanceof URL
-        ? originalInput.toString()
-        : originalInput.url;
-
   let transaction;
   try {
     // Reauthorize the existing transaction with payment data
@@ -375,8 +369,8 @@ export async function handlePayment(
         x402: x402Response,
         metadata: {
           originalRequest: {
-            url: originalUrl,
-            method: originalInit?.method || "GET",
+            url: request.url,
+            method: request.method,
           },
           responseHeaders: Object.fromEntries(response.headers.entries()),
           httpStatusCode: 402,
@@ -434,15 +428,13 @@ export async function handlePayment(
   // Select header name based on x402 version (V1: X-PAYMENT, V2: PAYMENT-SIGNATURE)
   const headerName = getPaymentHeaderName(authorizationPayload);
 
-  const newInit = {
-    ...originalInit,
-    headers: {
-      ...(originalInit?.headers || {}),
-      [headerName]: paymentHeaderValue,
-    },
-  };
+  // Build retry request from the clone (which has an unconsumed body)
+  const retryHeaders = new Headers(requestForRetry.headers);
+  setHeader(retryHeaders, headerName, paymentHeaderValue);
 
-  return await globalThis.fetch(originalInput, newInit);
+  return await globalThis.fetch(
+    new Request(requestForRetry, { headers: retryHeaders }),
+  );
 }
 
 /**

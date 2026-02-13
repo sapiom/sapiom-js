@@ -594,4 +594,222 @@ describe("HTTP Client Integration Tests", () => {
       expect(callSequence[callSequence.length - 1]).toBe("complete");
     });
   });
+
+  // ============================================================================
+  // STREAM AND BODY REPLAY TESTS
+  // ============================================================================
+
+  describe("Stream and Body Replay on 402 Retry", () => {
+    function setup402PaymentFlow() {
+      mocks.create.mockResolvedValue({
+        id: "tx-body",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
+
+      mocks.reauthorizeWithPayment.mockResolvedValue({
+        id: "tx-body",
+        status: TransactionStatus.AUTHORIZED,
+        payment: {
+          authorizationPayload: "payment-token",
+        },
+      } as any);
+
+      mocks.complete.mockResolvedValue({
+        transaction: { id: "tx-body", status: "completed" },
+      } as any);
+    }
+
+    function mock402ThenSuccess(
+      url: string,
+      captureBody?: (body: string) => void,
+    ) {
+      // Temporarily replace fetchMock with a manual jest.fn for body capture
+      const savedFetch = globalThis.fetch;
+      let requestCount = 0;
+      const mockFn = jest.fn(async (input: Request) => {
+        requestCount++;
+        const bodyText = input.body ? await input.clone().text() : "";
+        if (captureBody) captureBody(bodyText);
+
+        if (requestCount === 1) {
+          return new Response(
+            JSON.stringify({
+              x402Version: 1,
+              accepts: [
+                {
+                  scheme: "exact",
+                  network: "base",
+                  maxAmountRequired: "1000",
+                  resource: url,
+                  payTo: "0x123",
+                  asset: "0xUSDC",
+                },
+              ],
+            }),
+            { status: 402, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      globalThis.fetch = mockFn as any;
+      return {
+        getRequestCount: () => requestCount,
+        getMockFn: () => mockFn,
+        restore: () => {
+          globalThis.fetch = savedFetch;
+        },
+      };
+    }
+
+    it("should replay string body on 402 retry", async () => {
+      setup402PaymentFlow();
+      const bodies: string[] = [];
+      const mock = mock402ThenSuccess(
+        "https://api.example.com/upload",
+        (b) => bodies.push(b),
+      );
+
+      try {
+        const fetch = createFetch({ sapiomClient: mockSapiomClient });
+        const response = await fetch("https://api.example.com/upload", {
+          method: "POST",
+          body: "hello world",
+        });
+        await flushPromises();
+
+        expect(response.status).toBe(200);
+        expect(bodies).toHaveLength(2);
+        expect(bodies[0]).toBe("hello world");
+        expect(bodies[1]).toBe("hello world");
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("should replay ReadableStream body on 402 retry", async () => {
+      setup402PaymentFlow();
+      const bodies: string[] = [];
+      const mock = mock402ThenSuccess(
+        "https://api.example.com/upload",
+        (b) => bodies.push(b),
+      );
+
+      try {
+        const fetch = createFetch({ sapiomClient: mockSapiomClient });
+
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("streamed-content"));
+            controller.close();
+          },
+        });
+
+        const response = await fetch("https://api.example.com/upload", {
+          method: "POST",
+          body: stream,
+          duplex: "half",
+        });
+        await flushPromises();
+
+        expect(response.status).toBe(200);
+        expect(bodies).toHaveLength(2);
+        expect(bodies[0]).toBe("streamed-content");
+        expect(bodies[1]).toBe("streamed-content");
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("should replay Blob body on 402 retry", async () => {
+      setup402PaymentFlow();
+      const bodies: string[] = [];
+      const mock = mock402ThenSuccess(
+        "https://api.example.com/upload",
+        (b) => bodies.push(b),
+      );
+
+      try {
+        const fetch = createFetch({ sapiomClient: mockSapiomClient });
+        const blob = new Blob(["blob-data"], {
+          type: "application/octet-stream",
+        });
+
+        const response = await fetch("https://api.example.com/upload", {
+          method: "POST",
+          body: blob,
+        });
+        await flushPromises();
+
+        expect(response.status).toBe(200);
+        expect(bodies).toHaveLength(2);
+        expect(bodies[0]).toBe("blob-data");
+        expect(bodies[1]).toBe("blob-data");
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("should replay FormData body on 402 retry", async () => {
+      setup402PaymentFlow();
+      const bodies: string[] = [];
+      const mock = mock402ThenSuccess(
+        "https://api.example.com/upload",
+        (b) => bodies.push(b),
+      );
+
+      try {
+        const fetch = createFetch({ sapiomClient: mockSapiomClient });
+
+        const formData = new FormData();
+        formData.append("field", "value");
+        formData.append("file", new Blob(["file-content"]), "test.txt");
+
+        const response = await fetch("https://api.example.com/upload", {
+          method: "POST",
+          body: formData,
+        });
+        await flushPromises();
+
+        expect(response.status).toBe(200);
+        expect(bodies).toHaveLength(2);
+        // Both requests should contain the form field values
+        expect(bodies[0]).toContain("value");
+        expect(bodies[0]).toContain("file-content");
+        expect(bodies[1]).toContain("value");
+        expect(bodies[1]).toContain("file-content");
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("should preserve payment header on retry while keeping body", async () => {
+      setup402PaymentFlow();
+      const mock = mock402ThenSuccess("https://api.example.com/upload");
+
+      try {
+        const fetch = createFetch({ sapiomClient: mockSapiomClient });
+        const response = await fetch("https://api.example.com/upload", {
+          method: "POST",
+          body: "test-body",
+        });
+        await flushPromises();
+
+        expect(response.status).toBe(200);
+
+        // Check the retry request (second call)
+        const retryCall = mock.getMockFn().mock.calls[1];
+        const retryRequest = retryCall[0] as Request;
+        expect(retryRequest.headers.get("X-PAYMENT")).toBe("payment-token");
+
+        // Verify body was present on retry
+        const retryBody = await retryRequest.clone().text();
+        expect(retryBody).toBe("test-body");
+      } finally {
+        mock.restore();
+      }
+    });
+  });
 });

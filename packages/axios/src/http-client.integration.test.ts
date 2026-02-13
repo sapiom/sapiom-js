@@ -11,6 +11,7 @@
  */
 import axios, { AxiosInstance } from "axios";
 import MockAdapter from "axios-mock-adapter";
+import { Readable, Stream } from "stream";
 import { withSapiom } from "./axios";
 import { SapiomClient, TransactionAPI, TransactionStatus } from "@sapiom/core";
 
@@ -707,6 +708,263 @@ describe("Axios HTTP Client Integration Tests", () => {
 
       // complete() should only be called once (on the retry, not the original 402)
       expect(mocks.complete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ============================================================================
+  // STREAM AND FORMDATA BODY REPLAY TESTS
+  // ============================================================================
+
+  describe("Stream and FormData Body Replay", () => {
+    /**
+     * Creates a mock FormData-like object that mimics the `form-data` npm package's
+     * CombinedStream: has `.pipe()`, `.getHeaders()`, and emits data/end events,
+     * but does NOT implement Symbol.asyncIterator (unlike Node.js Readable).
+     * This ensures we test the pipe-based fallback path in streamToBuffer.
+     */
+    function createMockFormData(
+      content: string,
+      boundary: string,
+    ) {
+      const body = `--${boundary}\r\nContent-Disposition: form-data; name="file"\r\n\r\n${content}\r\n--${boundary}--\r\n`;
+      const stream = new Stream() as Stream & {
+        pipe: (dest: any) => any;
+        getHeaders: () => Record<string, string>;
+      };
+      stream.pipe = function (dest: any) {
+        dest.write(body);
+        dest.end();
+        return dest;
+      };
+      // Emit data/end on next tick (mimics CombinedStream behavior)
+      let started = false;
+      const originalOn = stream.on.bind(stream);
+      stream.on = function (event: string, listener: (...args: any[]) => void) {
+        originalOn(event, listener);
+        if (event === "data" && !started) {
+          started = true;
+          process.nextTick(() => {
+            stream.emit("data", Buffer.from(body));
+            stream.emit("end");
+          });
+        }
+        return stream;
+      } as any;
+      stream.getHeaders = () => ({
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+      });
+      return stream;
+    }
+
+    function setup402PaymentFlow() {
+      mocks.create.mockResolvedValue({
+        id: "tx-body",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
+
+      mocks.get.mockResolvedValue({
+        id: "tx-body",
+        status: TransactionStatus.AUTHORIZED,
+        requiresPayment: false,
+      } as any);
+
+      mocks.reauthorizeWithPayment.mockResolvedValue({
+        id: "tx-body",
+        status: TransactionStatus.AUTHORIZED,
+        payment: {
+          authorizationPayload: "payment-token",
+        },
+      } as any);
+
+      mocks.complete.mockResolvedValue({
+        transaction: { id: "tx-body", status: "completed" },
+      } as any);
+    }
+
+    function mock402ThenSuccess(
+      method: "onPost" | "onGet",
+      path: string,
+      captureBody?: (data: any) => void,
+    ) {
+      let requestCount = 0;
+      mockAxios[method](path).reply((config) => {
+        requestCount++;
+        if (requestCount === 1) {
+          if (captureBody) captureBody(config.data);
+          return [
+            402,
+            {
+              x402Version: 1,
+              accepts: [
+                {
+                  scheme: "exact",
+                  network: "base",
+                  maxAmountRequired: "1000",
+                  resource: `https://api.example.com${path}`,
+                  payTo: "0x123",
+                  asset: "0xUSDC",
+                },
+              ],
+            },
+          ];
+        }
+        if (captureBody) captureBody(config.data);
+        return [200, { success: true }];
+      });
+      return () => requestCount;
+    }
+
+    it("should replay Buffer body on 402 retry", async () => {
+      setup402PaymentFlow();
+      const bodies: any[] = [];
+      mock402ThenSuccess("onPost", "/upload", (d) => bodies.push(d));
+
+      const client = withSapiom(axiosInstance, {
+        sapiomClient: mockSapiomClient,
+      });
+      const response = await client.post("/upload", Buffer.from("binary-data"));
+      await flushPromises();
+
+      expect(response.status).toBe(200);
+      // Both requests should have received the body
+      expect(bodies).toHaveLength(2);
+      // Retry body should match original (Buffer serialized to JSON by axios-mock-adapter)
+      expect(Buffer.from(bodies[1]).toString()).toContain("binary-data");
+    });
+
+    it("should auto-buffer Readable stream body on 402 retry", async () => {
+      setup402PaymentFlow();
+      const bodies: any[] = [];
+      mock402ThenSuccess("onPost", "/upload", (d) => bodies.push(d));
+
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+
+      const client = withSapiom(axiosInstance, {
+        sapiomClient: mockSapiomClient,
+      });
+
+      const stream = new Readable({
+        read() {
+          this.push("streamed-content");
+          this.push(null);
+        },
+      });
+
+      const response = await client.post("/upload", stream);
+      await flushPromises();
+
+      expect(response.status).toBe(200);
+      expect(bodies).toHaveLength(2);
+      // Both first request and retry should get the buffered content
+      expect(Buffer.from(bodies[0]).toString()).toBe("streamed-content");
+      expect(Buffer.from(bodies[1]).toString()).toBe("streamed-content");
+
+      // Should have warned about buffering
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Buffering stream body into memory"),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("should use bodyFactory for fresh body on 402 retry", async () => {
+      setup402PaymentFlow();
+      const bodies: any[] = [];
+      mock402ThenSuccess("onPost", "/upload", (d) => bodies.push(d));
+
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+
+      let factoryCalls = 0;
+      const bodyFactory = () => {
+        factoryCalls++;
+        return Buffer.from(`factory-body-${factoryCalls}`);
+      };
+
+      const client = withSapiom(axiosInstance, {
+        sapiomClient: mockSapiomClient,
+      });
+
+      // Create a stream for the initial body
+      const stream = new Readable({
+        read() {
+          this.push("initial-stream");
+          this.push(null);
+        },
+      });
+
+      const response = await client.post("/upload", stream, {
+        __sapiom: {
+          bodyFactory,
+        },
+      } as any);
+      await flushPromises();
+
+      expect(response.status).toBe(200);
+      // bodyFactory should have been called once for the retry
+      expect(factoryCalls).toBe(1);
+      // Should NOT have warned about buffering (bodyFactory was provided)
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
+
+    it("should replay mock FormData body on 402 retry with correct headers", async () => {
+      setup402PaymentFlow();
+      const bodies: any[] = [];
+      mock402ThenSuccess("onPost", "/upload", (d) => bodies.push(d));
+
+      const client = withSapiom(axiosInstance, {
+        sapiomClient: mockSapiomClient,
+      });
+
+      const formData = createMockFormData("file-content", "----boundary123");
+
+      const response = await client.post("/upload", formData);
+      await flushPromises();
+
+      expect(response.status).toBe(200);
+      expect(bodies).toHaveLength(2);
+      // Both requests should get the buffered FormData content
+      const retryBody = Buffer.from(bodies[1]).toString();
+      expect(retryBody).toContain("file-content");
+      expect(retryBody).toContain("----boundary123");
+    });
+
+    it("should compute bodySizeBytes correctly for various body types", async () => {
+      mocks.complete.mockResolvedValue({
+        transaction: { id: "tx-size", status: "completed" },
+      } as any);
+
+      mockAxios.onPost("/data").reply(200, { ok: true });
+
+      const testCases: Array<{ body: any; expectedSize: number; label: string }> = [
+        { body: "hello", expectedSize: 5, label: "ASCII string" },
+        { body: "héllo", expectedSize: 6, label: "multi-byte string" },
+        { body: Buffer.from("data"), expectedSize: 4, label: "Buffer" },
+        { body: { key: "value" }, expectedSize: Buffer.byteLength('{"key":"value"}'), label: "plain object" },
+      ];
+
+      for (const { body, expectedSize, label } of testCases) {
+        mocks.create.mockResolvedValue({
+          id: "tx-size",
+          status: TransactionStatus.AUTHORIZED,
+        } as any);
+
+        const client = withSapiom(axios.create({ baseURL: "https://api.example.com" }), {
+          sapiomClient: mockSapiomClient,
+        });
+
+        const localMock = new MockAdapter(client);
+        localMock.onPost("/data").reply(200, { ok: true });
+
+        await client.post("/data", body);
+        await flushPromises();
+
+        const createCall = mocks.create.mock.calls[mocks.create.mock.calls.length - 1][0];
+        expect((createCall.requestFacts as any).request.bodySizeBytes).toBe(expectedSize);
+
+        localMock.restore();
+      }
     });
   });
 });
