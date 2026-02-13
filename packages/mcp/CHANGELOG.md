@@ -1,5 +1,11 @@
 # @sapiom/mcp
 
+## 0.3.0
+
+### Minor Changes
+
+- 3f37cff: update MCP registry schema to latest
+
 ## 0.2.0
 
 ### Minor Changes
