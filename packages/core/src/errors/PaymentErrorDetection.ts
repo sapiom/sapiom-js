@@ -19,10 +19,9 @@ function base64Decode(str: string): string {
     atob(str)
       .split("")
       .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-      .join("")
+      .join(""),
   );
 }
-
 
 // ============================================================================
 // x402 Payment Response Types (for error detection)
@@ -214,7 +213,11 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
           const decoded = base64Decode(paymentRequiredHeader);
           const parsed = JSON.parse(decoded);
           if (isX402Response(parsed)) {
-            if (parsed.x402Version === 2 && "resource" in parsed && parsed.resource?.url) {
+            if (
+              parsed.x402Version === 2 &&
+              "resource" in parsed &&
+              parsed.resource?.url
+            ) {
               return parsed.resource.url;
             }
             const firstAccept = parsed.accepts[0];
@@ -353,7 +356,9 @@ export function extractTransactionId(error: unknown): string | undefined {
  * @param error - HTTP error that might contain x402 data
  * @returns X402 response object or undefined if not present
  */
-export function extractX402Response(error: unknown): X402PaymentResponse | undefined {
+export function extractX402Response(
+  error: unknown,
+): X402PaymentResponse | undefined {
   return globalRegistry.extractX402(error);
 }
 

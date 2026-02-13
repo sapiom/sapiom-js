@@ -75,7 +75,7 @@ export interface ToolUsageInfo {
  * @returns Estimated input token count
  */
 export function estimateInputTokens(
-  messages: Array<{ content?: unknown }>
+  messages: Array<{ content?: unknown }>,
 ): number {
   let charCount = 0;
 
@@ -99,14 +99,17 @@ export function estimateInputTokens(
  * Collect message context info for facts
  */
 export function collectMessageContext(
-  messages: Array<{ content?: unknown; role?: string }>
+  messages: Array<{ content?: unknown; role?: string }>,
 ): MessageContextInfo {
   let totalCharacters = 0;
   let hasSystemMessage = false;
   let hasImages = false;
 
   for (const message of messages) {
-    if ((message as any).role === "system" || (message as any)._getType?.() === "system") {
+    if (
+      (message as any).role === "system" ||
+      (message as any)._getType?.() === "system"
+    ) {
       hasSystemMessage = true;
     }
 
@@ -119,7 +122,10 @@ export function collectMessageContext(
         if (typeof part === "string") {
           totalCharacters += part.length;
         } else if (part && typeof part === "object") {
-          if ((part as any).type === "image" || (part as any).type === "image_url") {
+          if (
+            (part as any).type === "image" ||
+            (part as any).type === "image_url"
+          ) {
             hasImages = true;
           }
           if ((part as any).text) {
@@ -144,7 +150,7 @@ export function collectMessageContext(
  * Collect tool usage info for facts
  */
 export function collectToolUsage(
-  tools: Array<{ name?: string }>
+  tools: Array<{ name?: string }>,
 ): ToolUsageInfo {
   return {
     enabled: tools.length > 0,
@@ -169,7 +175,9 @@ export function getModelClass(model: unknown, depth = 0): string {
 
   // ConfigurableModel is a dynamic wrapper - check _defaultConfig for provider info
   if (constructorName === "ConfigurableModel") {
-    const defaultConfig = m._defaultConfig as Record<string, unknown> | undefined;
+    const defaultConfig = m._defaultConfig as
+      | Record<string, unknown>
+      | undefined;
     if (defaultConfig) {
       // modelProvider tells us the class type
       const modelProvider = defaultConfig.modelProvider as string | undefined;
@@ -193,7 +201,8 @@ export function getModelClass(model: unknown, depth = 0): string {
       const modelId = defaultConfig.model as string | undefined;
       if (modelId) {
         if (modelId.match(/^claude-/i)) return "ChatAnthropic";
-        if (modelId.match(/^gpt-/i) || modelId.match(/^o1-/i)) return "ChatOpenAI";
+        if (modelId.match(/^gpt-/i) || modelId.match(/^o1-/i))
+          return "ChatOpenAI";
         if (modelId.match(/^gemini-/i)) return "ChatGoogleGenerativeAI";
         if (modelId.match(/^command-/i)) return "ChatCohere";
         if (modelId.match(/^mistral-/i)) return "ChatMistralAI";
@@ -252,7 +261,10 @@ export function getModelClass(model: unknown, depth = 0): string {
  * LangChain wraps models in ConfigurableModel, RunnableBinding, etc.
  * For ConfigurableModel, we check _defaultConfig and cached instances.
  */
-function unwrapModel(m: Record<string, unknown>, depth = 0): Record<string, unknown> | null {
+function unwrapModel(
+  m: Record<string, unknown>,
+  depth = 0,
+): Record<string, unknown> | null {
   // Prevent infinite recursion
   if (depth > 5) return null;
 
@@ -270,7 +282,9 @@ function unwrapModel(m: Record<string, unknown>, depth = 0): Record<string, unkn
     }
 
     // Fall back to _defaultConfig
-    const defaultConfig = m._defaultConfig as Record<string, unknown> | undefined;
+    const defaultConfig = m._defaultConfig as
+      | Record<string, unknown>
+      | undefined;
     if (defaultConfig) {
       return defaultConfig;
     }
@@ -355,7 +369,9 @@ export function getModelId(model: unknown, depth = 0): string {
 
   // ConfigurableModel is a dynamic wrapper - check _defaultConfig
   if (constructorName === "ConfigurableModel") {
-    const defaultConfig = m._defaultConfig as Record<string, unknown> | undefined;
+    const defaultConfig = m._defaultConfig as
+      | Record<string, unknown>
+      | undefined;
     if (defaultConfig) {
       // model property in defaultConfig contains the model ID
       if (typeof defaultConfig.model === "string") {
@@ -518,7 +534,9 @@ export function extractModelParameters(model: unknown): ModelParameters {
   }
 
   // Unwrap to find the actual model
-  const m = unwrapModel(model as Record<string, unknown>) ?? (model as Record<string, unknown>);
+  const m =
+    unwrapModel(model as Record<string, unknown>) ??
+    (model as Record<string, unknown>);
   const params: ModelParameters = {};
 
   if (typeof m.temperature === "number") params.temperature = m.temperature;

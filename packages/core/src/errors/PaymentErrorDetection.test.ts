@@ -1,4 +1,7 @@
-import { PaymentRequiredError, X402PaymentResponse } from "./PaymentErrorDetection";
+import {
+  PaymentRequiredError,
+  X402PaymentResponse,
+} from "./PaymentErrorDetection";
 import { X402ResponseV1, X402ResponseV2 } from "../types/transaction";
 
 // ============================================================================
