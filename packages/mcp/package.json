@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sapiom MCP server for Claude Code — browser-based authentication and API tools",
   "mcpName": "io.github.sapiom/mcp",
   "keywords": [
