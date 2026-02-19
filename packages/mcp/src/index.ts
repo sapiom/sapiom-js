@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { resolveEnvironment } from "./credentials.js";
 import { register as registerAuthenticate } from "./tools/authenticate.js";
+import { register as registerAuth } from "./tools/auth.js";
 import { register as registerStatus } from "./tools/status.js";
 import { register as registerVerify } from "./tools/verify.js";
 
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
 
   // Register all tools
   registerAuthenticate(server, env);
+  registerAuth(server, env);
   registerStatus(server, env);
   registerVerify(server, env);
 

@@ -1,23 +1,9 @@
 import { z } from "zod";
-import { createFetch } from "@sapiom/fetch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
+import type { ResolvedEnvironment } from "../credentials.js";
+import { getAuthenticatedFetch } from "./shared.js";
 
 const DEFAULT_PRELUDE_URL = "https://prelude.services.sapiom.ai";
-
-async function getAuthenticatedFetch(
-  env: ResolvedEnvironment,
-): Promise<ReturnType<typeof createFetch> | null> {
-  const creds = await readCredentials(env.name);
-  if (!creds) return null;
-
-  return createFetch({
-    apiKey: creds.apiKey,
-    baseURL: env.apiURL,
-    agentName: "sapiom-mcp",
-    integration: { name: "@sapiom/mcp", version: "0.1.0" },
-  });
-}
 
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   const preludeURL = env.services.prelude ?? DEFAULT_PRELUDE_URL;
