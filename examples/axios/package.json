@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@sapiom/axios": "latest",
-    "axios": "^1.7.9",
+    "axios": "^1.13.5",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
