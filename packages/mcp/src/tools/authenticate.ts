@@ -6,6 +6,10 @@ import {
 } from "../credentials.js";
 import { performBrowserAuth } from "../auth.js";
 
+/**
+ * Registers the `sapiom_authenticate` tool. Opens a browser-based OAuth flow
+ * to authenticate with Sapiom and stores credentials locally.
+ */
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   server.tool(
     "sapiom_authenticate",

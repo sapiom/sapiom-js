@@ -6,30 +6,49 @@ const DEFAULT_APP_URL = "https://app.sapiom.ai";
 const DEFAULT_API_URL = "https://api.sapiom.ai";
 const DEFAULT_ENVIRONMENT = "production";
 
+/** Stored credentials for a single Sapiom environment. */
 export interface CredentialEntry {
+  /** Sapiom API key used to authenticate requests. */
   apiKey: string;
+  /** Tenant ID the credentials belong to. */
   tenantId: string;
+  /** Human-readable organization name. */
   organizationName: string;
+  /** Unique identifier of the API key (not the secret itself). */
   apiKeyId: string;
 }
 
+/** Configuration for a single Sapiom environment as stored on disk. */
 export interface EnvironmentConfig {
+  /** Sapiom web app URL (e.g. `https://app.sapiom.ai`). */
   appURL: string;
+  /** Sapiom API URL (e.g. `https://api.sapiom.ai`). */
   apiURL: string;
+  /** Optional map of service name to base URL overrides. */
   services?: Record<string, string>;
+  /** Stored credentials, if the user has authenticated in this environment. */
   credentials?: CredentialEntry;
 }
 
+/** On-disk shape of `~/.sapiom/credentials.json`. */
 export interface CredentialsFile {
+  /** Name of the currently active environment. */
   currentEnvironment: string;
+  /** Map of environment name to its configuration. */
   environments: Record<string, EnvironmentConfig>;
 }
 
+/** Fully resolved environment configuration used at runtime. */
 export interface ResolvedEnvironment {
+  /** Environment name (e.g. `"production"`). */
   name: string;
+  /** Sapiom web app URL. */
   appURL: string;
+  /** Sapiom API URL. */
   apiURL: string;
+  /** Service URL overrides (empty object when none are configured). */
   services: Record<string, string>;
+  /** Stored credentials, or `null` if not yet authenticated. */
   credentials: CredentialEntry | null;
 }
 
@@ -113,6 +132,12 @@ export async function resolveEnvironment(
   );
 }
 
+/**
+ * Read stored credentials for the given environment.
+ *
+ * @param envName - Environment name to look up.
+ * @returns The stored credentials, or `null` if none exist.
+ */
 export async function readCredentials(
   envName: string,
 ): Promise<CredentialEntry | null> {
@@ -120,6 +145,17 @@ export async function readCredentials(
   return file?.environments[envName]?.credentials ?? null;
 }
 
+/**
+ * Persist credentials for the given environment to `~/.sapiom/credentials.json`.
+ *
+ * Creates the file and directory if they don't exist. Sets the active
+ * environment to {@link envName}.
+ *
+ * @param envName - Environment name to write to.
+ * @param appURL - Sapiom web app URL for this environment.
+ * @param apiURL - Sapiom API URL for this environment.
+ * @param entry - Credentials to store.
+ */
 export async function writeCredentials(
   envName: string,
   appURL: string,
@@ -142,6 +178,13 @@ export async function writeCredentials(
   await writeCredentialsFile(existing);
 }
 
+/**
+ * Remove stored credentials for the given environment.
+ *
+ * No-op if no credentials are stored for the environment.
+ *
+ * @param envName - Environment name whose credentials should be cleared.
+ */
 export async function clearCredentials(envName: string): Promise<void> {
   const existing = await readCredentialsFile();
   if (!existing?.environments[envName]?.credentials) return;

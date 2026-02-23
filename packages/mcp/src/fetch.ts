@@ -2,6 +2,10 @@ import { SapiomClient } from "@sapiom/core";
 import { createFetch } from "@sapiom/fetch";
 import { readCredentials, type ResolvedEnvironment } from "./credentials.js";
 
+/**
+ * Build an authenticated fetch instance for the current environment.
+ * @internal
+ */
 export async function getAuthenticatedFetch(
   env: ResolvedEnvironment,
 ): Promise<ReturnType<typeof createFetch> | null> {
@@ -16,6 +20,10 @@ export async function getAuthenticatedFetch(
   });
 }
 
+/**
+ * Build an authenticated {@link SapiomClient} for the current environment.
+ * @internal
+ */
 export async function getAuthenticatedClient(
   env: ResolvedEnvironment,
 ): Promise<SapiomClient | null> {
