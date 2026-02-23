@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+/**
+ * @packageDocumentation
+ *
+ * Sapiom MCP server binary. This package is meant to be run as a
+ * standalone process (via `npx @sapiom/mcp`), not imported as a library.
+ */
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { resolveEnvironment } from "./credentials.js";

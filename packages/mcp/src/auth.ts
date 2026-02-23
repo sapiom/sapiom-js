@@ -3,13 +3,22 @@ import * as crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { URL, URLSearchParams } from "node:url";
 
+/** Result of a successful browser-based authentication flow. */
 export interface AuthResult {
+  /** Sapiom API key for authenticating subsequent requests. */
   apiKey: string;
+  /** Tenant ID the authenticated user belongs to. */
   tenantId: string;
+  /** Human-readable organization name for display purposes. */
   organizationName: string;
+  /** Unique identifier of the API key (not the key itself). */
   apiKeyId: string;
 }
 
+/**
+ * Attempt to open a URL in the user's default browser.
+ * @internal
+ */
 function openBrowser(url: string): void {
   const platform = process.platform;
   try {
@@ -25,6 +34,16 @@ function openBrowser(url: string): void {
   }
 }
 
+/**
+ * Run a browser-based OAuth flow to authenticate with Sapiom.
+ *
+ * Spins up a temporary local HTTP server, opens the Sapiom login page in
+ * the user's browser, and waits for the OAuth callback with an auth code.
+ *
+ * @param appURL - Sapiom app URL for the OAuth flow (e.g. `https://app.sapiom.ai`).
+ * @param apiURL - Sapiom API URL for the token exchange (e.g. `https://api.sapiom.ai`).
+ * @returns The authentication result containing an API key and tenant info.
+ */
 export async function performBrowserAuth(
   appURL: string,
   apiURL: string,
@@ -142,6 +161,14 @@ export async function performBrowserAuth(
   });
 }
 
+/**
+ * Exchange an OAuth authorization code for a Sapiom API key.
+ * @internal
+ *
+ * @param apiURL - Sapiom API base URL.
+ * @param code - Authorization code received from the OAuth callback.
+ * @param redirectUri - The redirect URI that was used in the OAuth flow.
+ */
 async function exchangeCodeForApiKey(
   apiURL: string,
   code: string,

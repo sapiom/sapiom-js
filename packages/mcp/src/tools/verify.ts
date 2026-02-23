@@ -5,6 +5,10 @@ import { getAuthenticatedFetch } from "../fetch.js";
 
 const DEFAULT_PRELUDE_URL = "https://prelude.services.sapiom.ai";
 
+/**
+ * Registers `sapiom_verify_send` and `sapiom_verify_check` tools for SMS
+ * phone number verification via Prelude.
+ */
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   const preludeURL = env.services.prelude ?? DEFAULT_PRELUDE_URL;
 

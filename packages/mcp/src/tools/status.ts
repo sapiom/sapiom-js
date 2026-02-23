@@ -5,6 +5,10 @@ import {
   type ResolvedEnvironment,
 } from "../credentials.js";
 
+/**
+ * Registers `sapiom_status` and `sapiom_logout` tools for checking
+ * authentication state and clearing credentials.
+ */
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   server.tool(
     "sapiom_status",
