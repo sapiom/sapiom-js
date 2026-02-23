@@ -1,5 +1,11 @@
 # @sapiom/core
 
+## 0.4.0
+
+### Minor Changes
+
+- c9ad2cb: add create transaction scoped API key functionality
+
 ## 0.3.0
 
 ### Minor Changes

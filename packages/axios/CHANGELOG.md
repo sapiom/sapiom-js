@@ -1,5 +1,16 @@
 # @sapiom/axios
 
+## 0.4.0
+
+### Minor Changes
+
+- c9ad2cb: formatting
+
+### Patch Changes
+
+- Updated dependencies [c9ad2cb]
+  - @sapiom/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
