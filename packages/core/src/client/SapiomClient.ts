@@ -1,3 +1,4 @@
+import { ApiKeyAPI } from "./ApiKeyAPI.js";
 import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import { TransactionAPI } from "./TransactionAPI.js";
 
@@ -63,6 +64,7 @@ export interface SapiomClientConfig {
  */
 export class SapiomClient {
   private readonly httpClient: HttpClient;
+  public readonly apiKeys: ApiKeyAPI;
   public readonly transactions: TransactionAPI;
 
   constructor(config: SapiomClientConfig) {
@@ -81,6 +83,7 @@ export class SapiomClient {
     });
 
     // Initialize API modules
+    this.apiKeys = new ApiKeyAPI(this.httpClient);
     this.transactions = new TransactionAPI(this.httpClient);
   }
 
