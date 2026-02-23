@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/langchain",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "LangChain v1.x integration for Sapiom SDK",
   "keywords": [
     "sapiom",
