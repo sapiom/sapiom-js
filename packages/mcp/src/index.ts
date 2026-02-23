@@ -6,6 +6,7 @@ import { resolveEnvironment } from "./credentials.js";
 import { register as registerAuthenticate } from "./tools/authenticate.js";
 import { register as registerStatus } from "./tools/status.js";
 import { register as registerVerify } from "./tools/verify.js";
+import { register as registerApiKeys } from "./tools/api-keys.js";
 
 async function main(): Promise<void> {
   // Resolve environment: SAPIOM_ENVIRONMENT env var > file > "production"
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   registerAuthenticate(server, env);
   registerStatus(server, env);
   registerVerify(server, env);
+  registerApiKeys(server, env);
 
   // Connect via stdio transport
   const transport = new StdioServerTransport();
