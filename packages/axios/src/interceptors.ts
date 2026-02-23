@@ -189,20 +189,29 @@ async function ensureReplayableBody(
   }
 
   // URLSearchParams
-  if (typeof URLSearchParams !== "undefined" && data instanceof URLSearchParams) {
+  if (
+    typeof URLSearchParams !== "undefined" &&
+    data instanceof URLSearchParams
+  ) {
     const str = data.toString();
     return { data: str, bodySizeBytes: Buffer.byteLength(str) };
   }
 
   // FormData (form-data package): has both getHeaders() and pipe()
-  if (typeof data.getHeaders === "function" && typeof data.pipe === "function") {
+  if (
+    typeof data.getHeaders === "function" &&
+    typeof data.pipe === "function"
+  ) {
     const extraHeaders = data.getHeaders();
     const buf = await streamToBuffer(data);
     return { data: buf, bodySizeBytes: buf.length, extraHeaders };
   }
 
   // Node.js Readable stream or async iterable
-  if (typeof data.pipe === "function" || typeof data[Symbol.asyncIterator] === "function") {
+  if (
+    typeof data.pipe === "function" ||
+    typeof data[Symbol.asyncIterator] === "function"
+  ) {
     const bodyFactory = (config as any).__sapiom?.bodyFactory;
     if (bodyFactory) {
       // Leave data as-is; on retry, bodyFactory() will produce a fresh stream
@@ -255,7 +264,9 @@ export function addAuthorizationInterceptor(
         replayableBody = await ensureReplayableBody(axiosConfig);
         axiosConfig.data = replayableBody.data;
         if (replayableBody.extraHeaders) {
-          for (const [key, value] of Object.entries(replayableBody.extraHeaders)) {
+          for (const [key, value] of Object.entries(
+            replayableBody.extraHeaders,
+          )) {
             if (!getHeader(axiosConfig.headers, key)) {
               setHeader(axiosConfig.headers, key, value);
             }

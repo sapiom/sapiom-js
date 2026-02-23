@@ -10,6 +10,7 @@
 // Main client
 export { SapiomClient } from "./client/SapiomClient.js";
 export type { SapiomClientConfig } from "./client/SapiomClient.js";
+export { ApiKeyAPI } from "./client/ApiKeyAPI.js";
 export { TransactionAPI } from "./client/TransactionAPI.js";
 
 // Payment Error Detection
@@ -81,6 +82,13 @@ export type {
   X402ResponseV1,
   X402ResponseV2,
 } from "./types/transaction.js";
+
+// API Key types
+export type {
+  CreateTransactionKeyRequest,
+  CreateApiKeyResponse,
+  ApiKeyResponse,
+} from "./types/api-key.js";
 
 // HTTP Types (needed by HTTP integration packages)
 export type {

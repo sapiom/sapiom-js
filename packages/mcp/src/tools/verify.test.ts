@@ -2,17 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ResolvedEnvironment } from "../credentials.js";
 
-vi.mock("../credentials.js", () => ({
-  readCredentials: vi.fn(),
-}));
-
-vi.mock("@sapiom/fetch", () => ({
-  createFetch: vi.fn(),
+vi.mock("../fetch.js", () => ({
+  getAuthenticatedFetch: vi.fn(),
 }));
 
 import { register } from "./verify.js";
-import { readCredentials } from "../credentials.js";
-import { createFetch } from "@sapiom/fetch";
+import { getAuthenticatedFetch } from "../fetch.js";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
@@ -64,7 +59,7 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue(null);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(null);
 
       const result = await handlers.get("sapiom_verify_send")!({
         phoneNumber: "+15551234567",
@@ -77,18 +72,11 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ id: "ver-123", status: "pending" }),
       });
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       const result = await handlers.get("sapiom_verify_send")!({
         phoneNumber: "+15551234567",
@@ -109,18 +97,11 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, envWithPrelude);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ id: "ver-456", status: "pending" }),
       });
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       await handlers.get("sapiom_verify_send")!({
         phoneNumber: "+15551234567",
@@ -136,19 +117,12 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi.fn().mockResolvedValue({
         ok: false,
         status: 400,
         json: () => Promise.resolve({ message: "Invalid phone number" }),
       });
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       const result = await handlers.get("sapiom_verify_send")!({
         phoneNumber: "+15551234567",
@@ -162,17 +136,10 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi
         .fn()
         .mockRejectedValue(new Error("Network unreachable"));
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       const result = await handlers.get("sapiom_verify_send")!({
         phoneNumber: "+15551234567",
@@ -188,7 +155,7 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue(null);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(null);
 
       const result = await handlers.get("sapiom_verify_check")!({
         verificationId: "ver-123",
@@ -202,18 +169,11 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ id: "ver-123", status: "success" }),
       });
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       const result = await handlers.get("sapiom_verify_check")!({
         verificationId: "ver-123",
@@ -238,18 +198,11 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ id: "ver-123", status: "failed" }),
       });
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       const result = await handlers.get("sapiom_verify_check")!({
         verificationId: "ver-123",
@@ -264,19 +217,12 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi.fn().mockResolvedValue({
         ok: false,
         status: 404,
         json: () => Promise.resolve({ message: "Verification not found" }),
       });
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       const result = await handlers.get("sapiom_verify_check")!({
         verificationId: "invalid-id",
@@ -291,17 +237,10 @@ describe("verify tools", () => {
       const { server, handlers } = createMockServer();
       register(server, env);
 
-      vi.mocked(readCredentials).mockResolvedValue({
-        apiKey: "sk-test",
-        tenantId: "t-123",
-        organizationName: "Test Org",
-        apiKeyId: "k-456",
-      });
-
       const mockFetch = vi
         .fn()
         .mockRejectedValue(new Error("Connection refused"));
-      vi.mocked(createFetch).mockReturnValue(mockFetch as any);
+      vi.mocked(getAuthenticatedFetch).mockResolvedValue(mockFetch as any);
 
       const result = await handlers.get("sapiom_verify_check")!({
         verificationId: "ver-123",

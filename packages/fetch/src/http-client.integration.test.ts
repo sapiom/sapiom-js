@@ -667,9 +667,8 @@ describe("HTTP Client Integration Tests", () => {
     it("should replay string body on 402 retry", async () => {
       setup402PaymentFlow();
       const bodies: string[] = [];
-      const mock = mock402ThenSuccess(
-        "https://api.example.com/upload",
-        (b) => bodies.push(b),
+      const mock = mock402ThenSuccess("https://api.example.com/upload", (b) =>
+        bodies.push(b),
       );
 
       try {
@@ -692,9 +691,8 @@ describe("HTTP Client Integration Tests", () => {
     it("should replay ReadableStream body on 402 retry", async () => {
       setup402PaymentFlow();
       const bodies: string[] = [];
-      const mock = mock402ThenSuccess(
-        "https://api.example.com/upload",
-        (b) => bodies.push(b),
+      const mock = mock402ThenSuccess("https://api.example.com/upload", (b) =>
+        bodies.push(b),
       );
 
       try {
@@ -726,9 +724,8 @@ describe("HTTP Client Integration Tests", () => {
     it("should replay Blob body on 402 retry", async () => {
       setup402PaymentFlow();
       const bodies: string[] = [];
-      const mock = mock402ThenSuccess(
-        "https://api.example.com/upload",
-        (b) => bodies.push(b),
+      const mock = mock402ThenSuccess("https://api.example.com/upload", (b) =>
+        bodies.push(b),
       );
 
       try {
@@ -755,9 +752,8 @@ describe("HTTP Client Integration Tests", () => {
     it("should replay FormData body on 402 retry", async () => {
       setup402PaymentFlow();
       const bodies: string[] = [];
-      const mock = mock402ThenSuccess(
-        "https://api.example.com/upload",
-        (b) => bodies.push(b),
+      const mock = mock402ThenSuccess("https://api.example.com/upload", (b) =>
+        bodies.push(b),
       );
 
       try {

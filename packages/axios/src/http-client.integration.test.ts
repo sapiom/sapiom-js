@@ -722,10 +722,7 @@ describe("Axios HTTP Client Integration Tests", () => {
      * but does NOT implement Symbol.asyncIterator (unlike Node.js Readable).
      * This ensures we test the pipe-based fallback path in streamToBuffer.
      */
-    function createMockFormData(
-      content: string,
-      boundary: string,
-    ) {
+    function createMockFormData(content: string, boundary: string) {
       const body = `--${boundary}\r\nContent-Disposition: form-data; name="file"\r\n\r\n${content}\r\n--${boundary}--\r\n`;
       const stream = new Stream() as Stream & {
         pipe: (dest: any) => any;
@@ -937,11 +934,19 @@ describe("Axios HTTP Client Integration Tests", () => {
 
       mockAxios.onPost("/data").reply(200, { ok: true });
 
-      const testCases: Array<{ body: any; expectedSize: number; label: string }> = [
+      const testCases: Array<{
+        body: any;
+        expectedSize: number;
+        label: string;
+      }> = [
         { body: "hello", expectedSize: 5, label: "ASCII string" },
         { body: "héllo", expectedSize: 6, label: "multi-byte string" },
         { body: Buffer.from("data"), expectedSize: 4, label: "Buffer" },
-        { body: { key: "value" }, expectedSize: Buffer.byteLength('{"key":"value"}'), label: "plain object" },
+        {
+          body: { key: "value" },
+          expectedSize: Buffer.byteLength('{"key":"value"}'),
+          label: "plain object",
+        },
       ];
 
       for (const { body, expectedSize, label } of testCases) {
@@ -950,9 +955,12 @@ describe("Axios HTTP Client Integration Tests", () => {
           status: TransactionStatus.AUTHORIZED,
         } as any);
 
-        const client = withSapiom(axios.create({ baseURL: "https://api.example.com" }), {
-          sapiomClient: mockSapiomClient,
-        });
+        const client = withSapiom(
+          axios.create({ baseURL: "https://api.example.com" }),
+          {
+            sapiomClient: mockSapiomClient,
+          },
+        );
 
         const localMock = new MockAdapter(client);
         localMock.onPost("/data").reply(200, { ok: true });
@@ -960,8 +968,11 @@ describe("Axios HTTP Client Integration Tests", () => {
         await client.post("/data", body);
         await flushPromises();
 
-        const createCall = mocks.create.mock.calls[mocks.create.mock.calls.length - 1][0];
-        expect((createCall.requestFacts as any).request.bodySizeBytes).toBe(expectedSize);
+        const createCall =
+          mocks.create.mock.calls[mocks.create.mock.calls.length - 1][0];
+        expect((createCall.requestFacts as any).request.bodySizeBytes).toBe(
+          expectedSize,
+        );
 
         localMock.restore();
       }
