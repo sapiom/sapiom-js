@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as http from "node:http";
-import { performBrowserAuth } from "./auth.js";
+import { performBrowserAuth, performDeviceAuth } from "./auth.js";
 import { execSync } from "node:child_process";
 
 // Mock child_process to prevent actual browser opening
@@ -186,5 +186,235 @@ describe("performBrowserAuth", () => {
     });
     await callbackToServer(Number(port), { code: "c", state });
     await authPromise;
+  });
+});
+
+describe("performDeviceAuth", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    // Auto-advance fake timers so sleep() resolves quickly in tests
+    vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 1000 });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("should initiate device auth and return initiation data", async () => {
+    const mockInitiation = {
+      device_code: "dev-code-123",
+      user_code: "WDJB-MJHT",
+      verification_uri: "https://app.sapiom.ai/auth/device",
+      verification_uri_complete:
+        "https://app.sapiom.ai/auth/device?code=WDJBMJHT",
+      expires_in: 600,
+      interval: 0,
+    };
+
+    const mockTokenResponse = {
+      access_token: "sk-new-key",
+      token_type: "Bearer",
+      tenant_id: "t-456",
+      organization_name: "Device Org",
+      api_key_id: "k-789",
+    };
+
+    let pollCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/auth/device/token")) {
+        pollCount++;
+        if (pollCount < 3) {
+          return Promise.resolve({
+            ok: false,
+            status: 400,
+            json: () =>
+              Promise.resolve({ error: "authorization_pending" }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockTokenResponse),
+        });
+      }
+      // Initiation endpoint
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockInitiation),
+      });
+    });
+
+    const { initiation, result } = await performDeviceAuth(
+      "https://api.test.com",
+    );
+
+    expect(initiation.user_code).toBe("WDJB-MJHT");
+    expect(initiation.verification_uri).toBe(
+      "https://app.sapiom.ai/auth/device",
+    );
+
+    // Advance timers to let polls happen
+    const authResult = await result;
+
+    expect(authResult.apiKey).toBe("sk-new-key");
+    expect(authResult.tenantId).toBe("t-456");
+    expect(authResult.organizationName).toBe("Device Org");
+    expect(pollCount).toBe(3);
+  });
+
+  it("should handle slow_down by increasing poll interval", { timeout: 15_000 }, async () => {
+    const mockInitiation = {
+      device_code: "dev-code",
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://app.sapiom.ai/auth/device",
+      verification_uri_complete: "https://app.sapiom.ai/auth/device?code=ABCDEFGH",
+      expires_in: 600,
+      interval: 0,
+    };
+
+    let pollCount = 0;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/auth/device/token")) {
+        pollCount++;
+        if (pollCount === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 400,
+            json: () => Promise.resolve({ error: "slow_down" }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              access_token: "sk-key",
+              tenant_id: "t-1",
+              organization_name: "Org",
+              api_key_id: "k-1",
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockInitiation),
+      });
+    });
+
+    const { result } = await performDeviceAuth("https://api.test.com");
+    const authResult = await result;
+
+    expect(authResult.apiKey).toBe("sk-key");
+    expect(pollCount).toBe(2);
+  });
+
+  it("should reject on access_denied", async () => {
+    const mockInitiation = {
+      device_code: "dev-code",
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://app.sapiom.ai/auth/device",
+      verification_uri_complete: "https://app.sapiom.ai/auth/device?code=ABCDEFGH",
+      expires_in: 600,
+      interval: 0,
+    };
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/auth/device/token")) {
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          json: () => Promise.resolve({ error: "access_denied" }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockInitiation),
+      });
+    });
+
+    const { result } = await performDeviceAuth("https://api.test.com");
+
+    await expect(result).rejects.toThrow("denied by the user");
+  });
+
+  it("should reject on expired_token", async () => {
+    const mockInitiation = {
+      device_code: "dev-code",
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://app.sapiom.ai/auth/device",
+      verification_uri_complete: "https://app.sapiom.ai/auth/device?code=ABCDEFGH",
+      expires_in: 600,
+      interval: 0,
+    };
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/auth/device/token")) {
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          json: () => Promise.resolve({ error: "expired_token" }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockInitiation),
+      });
+    });
+
+    const { result } = await performDeviceAuth("https://api.test.com");
+
+    await expect(result).rejects.toThrow("expired");
+  });
+
+  it("should reject when initiation fails", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ message: "Server error" }),
+    });
+
+    await expect(performDeviceAuth("https://api.test.com")).rejects.toThrow(
+      "Device auth initiation failed",
+    );
+  });
+
+  it("should send correct client_id", async () => {
+    const mockInitiation = {
+      device_code: "dev-code",
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://app.sapiom.ai/auth/device",
+      verification_uri_complete: "https://app.sapiom.ai/auth/device?code=ABCDEFGH",
+      expires_in: 600,
+      interval: 0,
+    };
+
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/auth/device/token")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              access_token: "sk-key",
+              tenant_id: "t-1",
+              organization_name: "Org",
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockInitiation),
+      });
+    });
+
+    await performDeviceAuth("https://api.test.com", "custom-client");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.test.com/v1/auth/device",
+      expect.objectContaining({
+        body: JSON.stringify({ client_id: "custom-client" }),
+      }),
+    );
   });
 });

@@ -3,11 +3,26 @@ import * as crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { URL, URLSearchParams } from "node:url";
 
+/** Result of a successful authentication flow (browser or device). */
 export interface AuthResult {
+  /** Sapiom API key for authenticating subsequent requests. */
   apiKey: string;
+  /** Tenant ID the authenticated user belongs to. */
   tenantId: string;
+  /** Human-readable organization name for display purposes. */
   organizationName: string;
+  /** Unique identifier of the API key (not the key itself). */
   apiKeyId: string;
+}
+
+/** Response from POST /auth/device (RFC 8628 §3.2). */
+export interface DeviceAuthInitiation {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete: string;
+  expires_in: number;
+  interval: number;
 }
 
 function openBrowser(url: string): void {
@@ -140,6 +155,125 @@ export async function performBrowserAuth(
       }
     });
   });
+}
+
+/**
+ * Run an RFC 8628 device authorization flow.
+ *
+ * Initiates the flow and returns the device/user codes immediately so the
+ * caller can display them. The returned `result` promise resolves when the
+ * user approves the code on another device.
+ *
+ * @param apiURL - Sapiom API URL (e.g. `https://api.sapiom.ai`).
+ * @param clientId - Client identifier sent with the device auth request.
+ */
+export async function performDeviceAuth(
+  apiURL: string,
+  clientId = "sapiom-mcp",
+): Promise<{ initiation: DeviceAuthInitiation; result: Promise<AuthResult> }> {
+  // Step 1: Initiate device auth
+  const initResponse = await fetch(`${apiURL}/v1/auth/device`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
+
+  if (!initResponse.ok) {
+    let message = `Device auth initiation failed (${initResponse.status})`;
+    try {
+      const body = (await initResponse.json()) as { message?: string };
+      if (body.message) message = `Device auth initiation failed: ${body.message}`;
+    } catch {
+      // Ignore JSON parse errors
+    }
+    throw new Error(message);
+  }
+
+  const initiation = (await initResponse.json()) as DeviceAuthInitiation;
+
+  // Step 2: Poll for token in the background
+  const result = pollForDeviceToken(
+    apiURL,
+    initiation.device_code,
+    clientId,
+    initiation.interval,
+    initiation.expires_in,
+  );
+
+  return { initiation, result };
+}
+
+/**
+ * Poll the device token endpoint until the user approves, denies, or the code expires.
+ * @internal
+ */
+async function pollForDeviceToken(
+  apiURL: string,
+  deviceCode: string,
+  clientId: string,
+  initialInterval: number,
+  expiresIn: number,
+): Promise<AuthResult> {
+  let interval = initialInterval;
+  const deadline = Date.now() + expiresIn * 1000;
+
+  while (Date.now() < deadline) {
+    await sleep(interval * 1000);
+
+    const response = await fetch(`${apiURL}/v1/auth/device/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        device_code: deviceCode,
+        client_id: clientId,
+      }),
+    });
+
+    const body = (await response.json()) as {
+      error?: string;
+      access_token?: string;
+      token_type?: string;
+      tenant_id?: string;
+      organization_name?: string;
+      api_key_id?: string;
+    };
+
+    if (response.ok && body.access_token) {
+      return {
+        apiKey: body.access_token,
+        tenantId: body.tenant_id!,
+        organizationName: body.organization_name!,
+        apiKeyId: body.api_key_id ?? "",
+      };
+    }
+
+    if (body.error === "authorization_pending") {
+      continue;
+    }
+
+    if (body.error === "slow_down") {
+      interval += 5;
+      continue;
+    }
+
+    if (body.error === "access_denied") {
+      throw new Error("Device authorization was denied by the user.");
+    }
+
+    if (body.error === "expired_token") {
+      throw new Error("Device code expired. Please start a new authorization flow.");
+    }
+
+    // Unknown error
+    throw new Error(`Device auth failed: ${body.error ?? `HTTP ${response.status}`}`);
+  }
+
+  throw new Error("Device code expired. Please start a new authorization flow.");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function exchangeCodeForApiKey(

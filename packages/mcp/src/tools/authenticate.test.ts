@@ -10,11 +10,12 @@ vi.mock("../credentials.js", () => ({
 
 vi.mock("../auth.js", () => ({
   performBrowserAuth: vi.fn(),
+  performDeviceAuth: vi.fn(),
 }));
 
 import { register } from "./authenticate.js";
 import { readCredentials, writeCredentials } from "../credentials.js";
-import { performBrowserAuth } from "../auth.js";
+import { performBrowserAuth, performDeviceAuth } from "../auth.js";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
@@ -28,7 +29,12 @@ function createMockServer(): {
   let captured: ToolHandler | null = null;
   const server = {
     tool: vi.fn(
-      (_name: string, _desc: string, _schema: any, handler: ToolHandler) => {
+      (
+        _name: string,
+        _desc: string,
+        _schema: any,
+        handler: ToolHandler,
+      ) => {
         captured = handler;
       },
     ),
@@ -55,13 +61,13 @@ describe("sapiom_authenticate tool", () => {
     vi.clearAllMocks();
   });
 
-  it("should register the tool with correct name", () => {
+  it("should register the tool with correct name and schema", () => {
     const { server } = createMockServer();
     register(server, env);
     expect(server.tool).toHaveBeenCalledWith(
       "sapiom_authenticate",
       expect.any(String),
-      {},
+      expect.objectContaining({ method: expect.anything() }),
       expect.any(Function),
     );
   });
@@ -81,6 +87,7 @@ describe("sapiom_authenticate tool", () => {
     expect(result.content[0].text).toContain("Already authenticated");
     expect(result.content[0].text).toContain("Test Org");
     expect(performBrowserAuth).not.toHaveBeenCalled();
+    expect(performDeviceAuth).not.toHaveBeenCalled();
   });
 
   it("should perform browser auth and save credentials on success", async () => {
@@ -111,7 +118,92 @@ describe("sapiom_authenticate tool", () => {
     );
   });
 
-  it("should return error when browser auth fails", async () => {
+  it("should fall back to device auth when browser auth fails (default mode)", async () => {
+    const { server, getHandler } = createMockServer();
+    register(server, env);
+
+    vi.mocked(readCredentials).mockResolvedValue(null);
+    vi.mocked(performBrowserAuth).mockRejectedValue(
+      new Error("Failed to start local server"),
+    );
+    vi.mocked(performDeviceAuth).mockResolvedValue({
+      initiation: {
+        device_code: "dc",
+        user_code: "WDJB-MJHT",
+        verification_uri: "https://app.sapiom.ai/auth/device",
+        verification_uri_complete:
+          "https://app.sapiom.ai/auth/device?code=WDJBMJHT",
+        expires_in: 600,
+        interval: 5,
+      },
+      result: Promise.resolve({
+        apiKey: "sk-device",
+        tenantId: "t-device",
+        organizationName: "Device Org",
+        apiKeyId: "k-device",
+      }),
+    });
+
+    const result = await getHandler()({});
+    expect(result.content[0].text).toContain("Successfully authenticated");
+    expect(result.content[0].text).toContain("Device Org");
+    expect(result.content[0].text).toContain("device code");
+    expect(writeCredentials).toHaveBeenCalledWith(
+      "production",
+      "https://app.sapiom.ai",
+      "https://api.sapiom.ai",
+      expect.objectContaining({ apiKey: "sk-device" }),
+    );
+  });
+
+  it('should use device auth when method is "device"', async () => {
+    const { server, getHandler } = createMockServer();
+    register(server, env);
+
+    vi.mocked(readCredentials).mockResolvedValue(null);
+    vi.mocked(performDeviceAuth).mockResolvedValue({
+      initiation: {
+        device_code: "dc",
+        user_code: "ABCD-EFGH",
+        verification_uri: "https://app.sapiom.ai/auth/device",
+        verification_uri_complete:
+          "https://app.sapiom.ai/auth/device?code=ABCDEFGH",
+        expires_in: 600,
+        interval: 5,
+      },
+      result: Promise.resolve({
+        apiKey: "sk-dev",
+        tenantId: "t-dev",
+        organizationName: "Dev Org",
+        apiKeyId: "k-dev",
+      }),
+    });
+
+    const result = await getHandler()({ method: "device" });
+    expect(result.content[0].text).toContain("Successfully authenticated");
+    expect(performBrowserAuth).not.toHaveBeenCalled();
+    expect(performDeviceAuth).toHaveBeenCalled();
+  });
+
+  it('should use browser auth when method is "browser"', async () => {
+    const { server, getHandler } = createMockServer();
+    register(server, env);
+
+    vi.mocked(readCredentials).mockResolvedValue(null);
+    vi.mocked(performBrowserAuth).mockResolvedValue({
+      apiKey: "sk-browser",
+      tenantId: "t-browser",
+      organizationName: "Browser Org",
+      apiKeyId: "k-browser",
+    });
+
+    const result = await getHandler()({ method: "browser" });
+    expect(result.content[0].text).toContain("Successfully authenticated");
+    expect(performBrowserAuth).toHaveBeenCalled();
+    expect(performDeviceAuth).not.toHaveBeenCalled();
+  });
+
+  it("should return error when browser auth fails with explicit method", async () => {
     const { server, getHandler } = createMockServer();
     register(server, env);
 
@@ -120,9 +212,23 @@ describe("sapiom_authenticate tool", () => {
       new Error("Timed out after 5 minutes"),
     );
 
-    const result = await getHandler()({});
-    expect(result.content[0].text).toContain("Authentication failed");
+    const result = await getHandler()({ method: "browser" });
+    expect(result.content[0].text).toContain("Browser authentication failed");
     expect(result.content[0].text).toContain("Timed out");
+    expect(result.isError).toBe(true);
+  });
+
+  it("should return error when device auth fails", async () => {
+    const { server, getHandler } = createMockServer();
+    register(server, env);
+
+    vi.mocked(readCredentials).mockResolvedValue(null);
+    vi.mocked(performDeviceAuth).mockRejectedValue(
+      new Error("Device auth initiation failed (500)"),
+    );
+
+    const result = await getHandler()({ method: "device" });
+    expect(result.content[0].text).toContain("Device authentication failed");
     expect(result.isError).toBe(true);
   });
 
@@ -133,7 +239,7 @@ describe("sapiom_authenticate tool", () => {
     vi.mocked(readCredentials).mockResolvedValue(null);
     vi.mocked(performBrowserAuth).mockRejectedValue("string error");
 
-    const result = await getHandler()({});
+    const result = await getHandler()({ method: "browser" });
     expect(result.content[0].text).toContain("Unknown error");
     expect(result.isError).toBe(true);
   });
