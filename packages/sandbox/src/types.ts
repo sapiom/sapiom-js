@@ -1,3 +1,12 @@
+/** Memory tier for sandbox allocation. */
+export type SandboxTier = "xs" | "s" | "m" | "l" | "xl";
+
+/** Port specification for exposed ports. */
+export interface PortSpec {
+  port: number;
+  [key: string]: unknown;
+}
+
 /**
  * Configuration for creating a sandbox instance.
  */
@@ -14,24 +23,41 @@ export interface SandboxCreateOptions {
    */
   fetch?: typeof globalThis.fetch;
 
-  /** Sandbox image to use. */
-  image?: string;
+  /** Sandbox name. Lowercase alphanumeric and hyphens, 2-63 characters. */
+  name: string;
 
-  /** Memory allocation in MB. */
-  memory?: number;
+  /** Memory tier. @default 's' */
+  tier?: SandboxTier;
 
-  /** CPU allocation in cores. */
-  cpu?: number;
+  /** Time-to-live (e.g. '1h', '24h', '7d'). */
+  ttl?: string;
 
   /** Environment variables to set in the sandbox. */
-  env?: Record<string, string>;
+  envs?: Record<string, string>;
+
+  /** Single port number to expose. */
+  port?: number;
+
+  /** Array of port specs to expose. */
+  ports?: PortSpec[];
+
+  /** Pre-built Docker image for instant creation. */
+  image?: string;
 }
 
 /** Raw response from POST /v1/sandboxes. */
 export interface SandboxCreateResponse {
   name: string;
-  workspaceRoot: string;
+  source: string;
   status: string;
+  tier: string;
+  url: string;
+  image: string;
+  uploadUrl: string;
+  workspaceRoot: string;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
   [key: string]: unknown;
 }
 
@@ -48,6 +74,7 @@ export interface ExecOptions {
   /**
    * Wait for the process to complete before returning.
    * When false, returns immediately after process creation (fire-and-forget).
+   * Ignored when `stream` is true.
    * @default true
    */
   waitForCompletion?: boolean;
@@ -57,10 +84,30 @@ export interface ExecOptions {
 
   /** Timeout in ms when waiting for completion. @default 60000 */
   timeout?: number;
+
+  /**
+   * Stream process output in real time via an async iterable.
+   * When true, returns a {@link StreamingExecResult} instead of {@link ExecResult}.
+   * @default false
+   */
+  stream?: boolean;
+
+  /** AbortSignal to cancel the operation. */
+  signal?: AbortSignal;
 }
 
 /**
- * Result of a process execution.
+ * A single line of process output from a streaming exec.
+ */
+export interface OutputLine {
+  /** Which output stream this line came from. */
+  stream: "stdout" | "stderr";
+  /** The line content (without the stream prefix). */
+  data: string;
+}
+
+/**
+ * Result of a process execution (non-streaming).
  */
 export interface ExecResult {
   /** Process ID in the sandbox. */
@@ -77,6 +124,25 @@ export interface ExecResult {
 
   /** Standard error. */
   stderr: string;
+}
+
+/**
+ * Result of a streaming process execution.
+ * Iterate `output` to receive lines in real time.
+ * `exitCode` is populated after the output iterable is fully consumed.
+ */
+export interface StreamingExecResult {
+  /** Process ID in the sandbox. */
+  readonly pid: number;
+
+  /**
+   * Exit code of the process.
+   * -1 until the output stream has been fully consumed.
+   */
+  readonly exitCode: number;
+
+  /** Async iterable of output lines, yielded in real time. */
+  readonly output: AsyncIterable<OutputLine>;
 }
 
 /** Raw response from POST /v1/sandboxes/:name/process. */

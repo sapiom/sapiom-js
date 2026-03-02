@@ -4,6 +4,8 @@ import type {
   SandboxCreateResponse,
   ExecOptions,
   ExecResult,
+  StreamingExecResult,
+  OutputLine,
   ProcessCreateResponse,
   ProcessStatusResponse,
 } from "./types.js";
@@ -46,11 +48,20 @@ function fileUrl(
   sandboxName: string,
   absolutePath: string,
 ): string {
-  // Strip leading slash so the URL path is well-formed, then encode each segment
   const pathSegment = absolutePath.startsWith("/")
     ? absolutePath.slice(1)
     : absolutePath;
   return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${encodePathSegments(pathSegment)}`;
+}
+
+function parseOutputLine(line: string): OutputLine | null {
+  if (line.startsWith("stdout:")) {
+    return { stream: "stdout", data: line.slice(7) };
+  }
+  if (line.startsWith("stderr:")) {
+    return { stream: "stderr", data: line.slice(7) };
+  }
+  return null;
 }
 
 export class SapiomSandbox {
@@ -78,16 +89,17 @@ export class SapiomSandbox {
   /**
    * Create a new sandbox and return a handle for interacting with it.
    */
-  static async create(opts?: SandboxCreateOptions): Promise<SapiomSandbox> {
-    const baseUrl = opts?.baseUrl ?? DEFAULT_BASE_URL;
-    const fetchFn = opts?.fetch ?? createFetch({ apiKey: opts?.apiKey });
+  static async create(opts: SandboxCreateOptions): Promise<SapiomSandbox> {
+    const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
+    const fetchFn = opts.fetch ?? createFetch({ apiKey: opts.apiKey });
 
-    // Build POST body from sandbox-specific options only
-    const body: Record<string, unknown> = {};
-    if (opts?.image !== undefined) body.image = opts.image;
-    if (opts?.memory !== undefined) body.memory = opts.memory;
-    if (opts?.cpu !== undefined) body.cpu = opts.cpu;
-    if (opts?.env !== undefined) body.env = opts.env;
+    const body: Record<string, unknown> = { name: opts.name };
+    if (opts.tier !== undefined) body.tier = opts.tier;
+    if (opts.ttl !== undefined) body.ttl = opts.ttl;
+    if (opts.envs !== undefined) body.envs = opts.envs;
+    if (opts.port !== undefined) body.port = opts.port;
+    if (opts.ports !== undefined) body.ports = opts.ports;
+    if (opts.image !== undefined) body.image = opts.image;
 
     const response = await fetchFn(`${baseUrl}/v1/sandboxes`, {
       method: "POST",
@@ -158,6 +170,17 @@ export class SapiomSandbox {
   }
 
   /**
+   * Execute a command in the sandbox with streaming output.
+   *
+   * @param command - The shell command to run.
+   * @param opts - Execution options with `stream: true`.
+   * @returns A streaming result with an async iterable of output lines.
+   */
+  async exec(
+    command: string,
+    opts: ExecOptions & { stream: true },
+  ): Promise<StreamingExecResult>;
+  /**
    * Execute a command in the sandbox.
    *
    * By default waits for the process to finish (polls process status).
@@ -166,32 +189,16 @@ export class SapiomSandbox {
    * @param command - The shell command to run.
    * @param opts - Execution options.
    */
-  async exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
-    const waitForCompletion = opts?.waitForCompletion ?? true;
-
-    const body: Record<string, unknown> = { command };
-    if (opts?.cwd !== undefined) {
-      body.cwd = resolvePath(this.workspaceRoot, opts.cwd);
-    }
-    if (opts?.env !== undefined) body.env = opts.env;
-
-    const response = await this._fetch(
-      `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      },
-    );
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to execute command: ${response.status} ${text}`,
-      );
+  async exec(command: string, opts?: ExecOptions): Promise<ExecResult>;
+  async exec(
+    command: string,
+    opts?: ExecOptions,
+  ): Promise<ExecResult | StreamingExecResult> {
+    if (opts?.stream) {
+      return this._execStreaming(command, opts);
     }
 
-    const proc = (await response.json()) as ProcessCreateResponse;
+    const proc = await this._createProcess(command, opts);
 
     // If the process already completed synchronously, return immediately
     if (proc.completed) {
@@ -203,6 +210,7 @@ export class SapiomSandbox {
       };
     }
 
+    const waitForCompletion = opts?.waitForCompletion ?? true;
     if (!waitForCompletion) {
       return {
         pid: proc.pid,
@@ -232,6 +240,123 @@ export class SapiomSandbox {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
+
+  private async _createProcess(
+    command: string,
+    opts?: ExecOptions,
+  ): Promise<ProcessCreateResponse> {
+    const body: Record<string, unknown> = { command };
+    if (opts?.cwd !== undefined) {
+      body.cwd = resolvePath(this.workspaceRoot, opts.cwd);
+    }
+    if (opts?.env !== undefined) body.env = opts.env;
+
+    const response = await this._fetch(
+      `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `Failed to execute command: ${response.status} ${text}`,
+      );
+    }
+
+    return (await response.json()) as ProcessCreateResponse;
+  }
+
+  private async _execStreaming(
+    command: string,
+    opts?: ExecOptions,
+  ): Promise<StreamingExecResult> {
+    const proc = await this._createProcess(command, opts);
+
+    let finalExitCode = -1;
+
+    // Capture what the generator closure needs
+    const fetchFn = this._fetch;
+    const baseUrl = this._baseUrl;
+    const sandboxName = this.name;
+    const signal = opts?.signal;
+
+    async function* streamOutput(): AsyncGenerator<OutputLine> {
+      const response = await fetchFn(
+        `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/process/${proc.pid}/logs/stream`,
+        { signal },
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(
+          `Failed to stream process ${proc.pid}: ${response.status} ${text}`,
+        );
+      }
+
+      if (!response.body) {
+        throw new Error(
+          `No response body for process ${proc.pid} log stream`,
+        );
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop()!;
+
+          for (const line of lines) {
+            if (!line) continue;
+            const parsed = parseOutputLine(line);
+            if (parsed) yield parsed;
+          }
+        }
+
+        // Flush remaining buffer
+        if (buffer) {
+          const parsed = parseOutputLine(buffer);
+          if (parsed) yield parsed;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      // After stream ends, fetch final process status for the exit code
+      const statusResponse = await fetchFn(
+        `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/process/${proc.pid}`,
+        { signal },
+      );
+      if (statusResponse.ok) {
+        const status =
+          (await statusResponse.json()) as ProcessStatusResponse;
+        finalExitCode = status.exitCode ?? 0;
+      }
+    }
+
+    return {
+      pid: proc.pid,
+      get exitCode() {
+        return finalExitCode;
+      },
+      output: streamOutput(),
+    };
+  }
+
   private async _pollProcess(
     pid: number,
     opts?: ExecOptions,
@@ -243,6 +368,7 @@ export class SapiomSandbox {
     while (Date.now() < deadline) {
       const response = await this._fetch(
         `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process/${pid}`,
+        { signal: opts?.signal },
       );
 
       if (!response.ok) {
