@@ -12,7 +12,19 @@ const DEFAULT_BASE_URL = "https://blaxel.services.sapiom.ai";
 const DEFAULT_POLL_INTERVAL = 1000;
 const DEFAULT_EXEC_TIMEOUT = 60_000;
 
+function assertRelativePath(path: string): void {
+  const segments = path.split("/");
+  for (const seg of segments) {
+    if (seg === "..") {
+      throw new Error(
+        `Path must not contain '..' segments: ${path}`,
+      );
+    }
+  }
+}
+
 function resolvePath(workspaceRoot: string, relativePath: string): string {
+  assertRelativePath(relativePath);
   const base = workspaceRoot.endsWith("/")
     ? workspaceRoot.slice(0, -1)
     : workspaceRoot;
@@ -22,16 +34,23 @@ function resolvePath(workspaceRoot: string, relativePath: string): string {
   return `${base}/${rel}`;
 }
 
+function encodePathSegments(path: string): string {
+  return path
+    .split("/")
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+}
+
 function fileUrl(
   baseUrl: string,
   sandboxName: string,
   absolutePath: string,
 ): string {
-  // Strip leading slash so the URL path is well-formed
+  // Strip leading slash so the URL path is well-formed, then encode each segment
   const pathSegment = absolutePath.startsWith("/")
     ? absolutePath.slice(1)
     : absolutePath;
-  return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${pathSegment}`;
+  return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${encodePathSegments(pathSegment)}`;
 }
 
 export class SapiomSandbox {
@@ -151,7 +170,9 @@ export class SapiomSandbox {
     const waitForCompletion = opts?.waitForCompletion ?? true;
 
     const body: Record<string, unknown> = { command };
-    if (opts?.cwd !== undefined) body.cwd = opts.cwd;
+    if (opts?.cwd !== undefined) {
+      body.cwd = resolvePath(this.workspaceRoot, opts.cwd);
+    }
     if (opts?.env !== undefined) body.env = opts.env;
 
     const response = await this._fetch(
@@ -172,20 +193,20 @@ export class SapiomSandbox {
 
     const proc = (await response.json()) as ProcessCreateResponse;
 
-    if (!waitForCompletion) {
-      return {
-        pid: proc.pid,
-        exitCode: -1,
-        stdout: proc.stdout ?? "",
-        stderr: proc.stderr ?? "",
-      };
-    }
-
     // If the process already completed synchronously, return immediately
     if (proc.completed) {
       return {
         pid: proc.pid,
         exitCode: proc.exitCode ?? 0,
+        stdout: proc.stdout ?? "",
+        stderr: proc.stderr ?? "",
+      };
+    }
+
+    if (!waitForCompletion) {
+      return {
+        pid: proc.pid,
+        exitCode: -1,
         stdout: proc.stdout ?? "",
         stderr: proc.stderr ?? "",
       };

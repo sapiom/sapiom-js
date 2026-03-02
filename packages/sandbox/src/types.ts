@@ -39,7 +39,7 @@ export interface SandboxCreateResponse {
  * Options for executing a command in the sandbox.
  */
 export interface ExecOptions {
-  /** Working directory for the command (relative to workspaceRoot). */
+  /** Working directory for the command, resolved relative to workspaceRoot. */
   cwd?: string;
 
   /** Environment variables for the process. */
