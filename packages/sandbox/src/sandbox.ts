@@ -313,8 +313,26 @@ export class SapiomSandbox {
         );
       }
 
-      const status =
+      let status =
         (await statusResponse.json()) as ProcessStatusResponse;
+
+      // If the process hasn't completed yet (e.g. stream disconnected
+      // before the process finished), poll until it does.
+      while (status.status !== "completed") {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const retry = await fetchFn(
+          `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/process/${proc.pid}`,
+          { signal },
+        );
+        if (!retry.ok) {
+          const text = await retry.text();
+          throw new Error(
+            `Failed to get final status for process ${proc.pid}: ${retry.status} ${text}`,
+          );
+        }
+        status = (await retry.json()) as ProcessStatusResponse;
+      }
+
       finalExitCode = status.exitCode ?? 0;
     }
 

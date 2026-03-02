@@ -73,7 +73,6 @@ Writes a file relative to the sandbox's workspace root.
 
 ```typescript
 await sandbox.writeFile("src/index.ts", 'console.log("hi")');
-await sandbox.writeFile("binary.dat", new Uint8Array([0x00, 0xff]));
 ```
 
 ### `sandbox.readFile(path)`
