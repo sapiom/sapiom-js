@@ -47,12 +47,14 @@ function encodePathSegments(path: string): string {
 function fileUrl(
   baseUrl: string,
   sandboxName: string,
-  absolutePath: string,
+  relativePath: string,
 ): string {
-  const pathSegment = absolutePath.startsWith("/")
-    ? absolutePath.slice(1)
-    : absolutePath;
-  return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${encodePathSegments(pathSegment)}`;
+  // The API root is already the workspace root, so use the user-relative
+  // path directly — do NOT prepend workspaceRoot.
+  const cleanPath = relativePath.startsWith("/")
+    ? relativePath.slice(1)
+    : relativePath;
+  return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${encodePathSegments(cleanPath)}`;
 }
 
 function parseOutputLine(line: string): OutputLine {
@@ -128,21 +130,16 @@ export class SapiomSandbox {
    * Write a file inside the sandbox.
    *
    * @param path - File path relative to workspaceRoot.
-   * @param content - File content as a string or binary data.
+   * @param content - File content as a string.
    */
-  async writeFile(path: string, content: string | Uint8Array): Promise<void> {
-    const fullPath = resolvePath(this.workspaceRoot, path);
-    const url = fileUrl(this._baseUrl, this.name, fullPath);
-
-    const body =
-      typeof content === "string"
-        ? new TextEncoder().encode(content)
-        : content;
+  async writeFile(path: string, content: string): Promise<void> {
+    assertRelativePath(path);
+    const url = fileUrl(this._baseUrl, this.name, path);
 
     const response = await this._fetch(url, {
       method: "PUT",
-      headers: { "Content-Type": "application/octet-stream" },
-      body,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
     });
 
     if (!response.ok) {
@@ -160,8 +157,8 @@ export class SapiomSandbox {
    * @returns The file content as a string.
    */
   async readFile(path: string): Promise<string> {
-    const fullPath = resolvePath(this.workspaceRoot, path);
-    const url = fileUrl(this._baseUrl, this.name, fullPath);
+    assertRelativePath(path);
+    const url = fileUrl(this._baseUrl, this.name, path);
 
     const response = await this._fetch(url);
 
@@ -172,7 +169,8 @@ export class SapiomSandbox {
       );
     }
 
-    return response.text();
+    const data = (await response.json()) as { content: string };
+    return data.content;
   }
 
   /**
