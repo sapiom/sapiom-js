@@ -1,5 +1,6 @@
 module.exports = {
   testEnvironment: 'node',
+  passWithNoTests: true,
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
   transform: {
