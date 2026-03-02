@@ -186,7 +186,7 @@ export class SapiomSandbox {
     const proc = await this._createProcess(command, opts);
 
     // If the process already completed synchronously, return immediately
-    if (proc.completed) {
+    if (proc.status === "completed") {
       return {
         pid: proc.pid,
         exitCode: proc.exitCode ?? 0,
@@ -227,7 +227,7 @@ export class SapiomSandbox {
     // If the process already completed synchronously, return without
     // opening the log stream — yield the stdout/stderr from the create
     // response directly.
-    if (proc.completed) {
+    if (proc.status === "completed") {
       const code = proc.exitCode ?? 0;
       const stdout = proc.stdout ?? "";
       const stderr = proc.stderr ?? "";
@@ -335,7 +335,7 @@ export class SapiomSandbox {
    *
    * @param pid - The process ID returned from exec.
    */
-  async getProcess(pid: number): Promise<ProcessStatusResponse> {
+  async getProcess(pid: string): Promise<ProcessStatusResponse> {
     const response = await this._fetch(
       `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process/${pid}`,
     );
@@ -360,7 +360,7 @@ export class SapiomSandbox {
    * @param opts - Polling options.
    */
   async waitForProcess(
-    pid: number,
+    pid: string,
     opts?: { pollInterval?: number; timeout?: number; signal?: AbortSignal },
   ): Promise<ExecResult> {
     return this._pollProcess(pid, opts);
@@ -418,7 +418,7 @@ export class SapiomSandbox {
   }
 
   private async _pollProcess(
-    pid: number,
+    pid: string,
     opts?: { pollInterval?: number; timeout?: number; signal?: AbortSignal },
   ): Promise<ExecResult> {
     const pollInterval = opts?.pollInterval ?? DEFAULT_POLL_INTERVAL;
@@ -440,7 +440,7 @@ export class SapiomSandbox {
 
       const status = (await response.json()) as ProcessStatusResponse;
 
-      if (status.completed) {
+      if (status.status === "completed") {
         return {
           pid,
           exitCode: status.exitCode ?? 0,

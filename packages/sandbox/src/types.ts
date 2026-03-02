@@ -123,7 +123,7 @@ export interface OutputLine {
  */
 export interface ExecResult {
   /** Process ID in the sandbox. */
-  pid: number;
+  pid: string;
 
   /**
    * Exit code of the process.
@@ -145,7 +145,7 @@ export interface ExecResult {
  */
 export interface StreamingExecResult {
   /** Process ID in the sandbox. */
-  readonly pid: number;
+  readonly pid: string;
 
   /**
    * Exit code of the process.
@@ -159,18 +159,18 @@ export interface StreamingExecResult {
 
 /** Raw response from POST /v1/sandboxes/:name/process. */
 export interface ProcessCreateResponse {
-  pid: number;
+  pid: string;
+  status: string;
   stdout?: string;
   stderr?: string;
-  completed?: boolean;
   exitCode?: number;
   [key: string]: unknown;
 }
 
 /** Raw response from GET /v1/sandboxes/:name/process/:pid. */
 export interface ProcessStatusResponse {
-  pid: number;
-  completed: boolean;
+  pid: string;
+  status: string;
   exitCode?: number;
   stdout?: string;
   stderr?: string;
