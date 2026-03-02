@@ -132,8 +132,8 @@ export class SapiomSandbox {
    * @param content - File content as a string.
    */
   async writeFile(path: string, content: string): Promise<void> {
-    const fullPath = resolvePath(this.workspaceRoot, path);
-    const url = fileUrl(this._baseUrl, this.name, fullPath);
+    assertRelativePath(path);
+    const url = fileUrl(this._baseUrl, this.name, path);
 
     const response = await this._fetch(url, {
       method: "PUT",
@@ -156,8 +156,8 @@ export class SapiomSandbox {
    * @returns The file content as a string.
    */
   async readFile(path: string): Promise<string> {
-    const fullPath = resolvePath(this.workspaceRoot, path);
-    const url = fileUrl(this._baseUrl, this.name, fullPath);
+    assertRelativePath(path);
+    const url = fileUrl(this._baseUrl, this.name, path);
 
     const response = await this._fetch(url);
 
