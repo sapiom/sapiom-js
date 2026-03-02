@@ -1,5 +1,18 @@
 # @sapiom/mcp
 
+## 0.4.0
+
+### Minor Changes
+
+- c9ad2cb: add create transaction scoped API key functionality
+
+### Patch Changes
+
+- Updated dependencies [c9ad2cb]
+- Updated dependencies [c9ad2cb]
+  - @sapiom/core@0.4.0
+  - @sapiom/fetch@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
