@@ -5,6 +5,7 @@ export type {
   SandboxTier,
   PortSpec,
   ExecOptions,
+  ExecStreamOptions,
   ExecResult,
   StreamingExecResult,
   OutputLine,

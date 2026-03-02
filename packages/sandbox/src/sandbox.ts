@@ -4,6 +4,7 @@ import type {
   SandboxCreateResponse,
   ExecOptions,
   ExecResult,
+  ExecStreamOptions,
   StreamingExecResult,
   OutputLine,
   ProcessCreateResponse,
@@ -54,14 +55,15 @@ function fileUrl(
   return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${encodePathSegments(pathSegment)}`;
 }
 
-function parseOutputLine(line: string): OutputLine | null {
+function parseOutputLine(line: string): OutputLine {
   if (line.startsWith("stdout:")) {
     return { stream: "stdout", data: line.slice(7) };
   }
   if (line.startsWith("stderr:")) {
     return { stream: "stderr", data: line.slice(7) };
   }
-  return null;
+  // Unrecognized framing — treat as stdout rather than dropping
+  return { stream: "stdout", data: line };
 }
 
 export class SapiomSandbox {
@@ -92,6 +94,10 @@ export class SapiomSandbox {
   static async create(opts: SandboxCreateOptions): Promise<SapiomSandbox> {
     const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
     const fetchFn = opts.fetch ?? createFetch({ apiKey: opts.apiKey });
+
+    if (opts.port !== undefined && opts.ports !== undefined) {
+      throw new Error("Cannot specify both 'port' and 'ports'");
+    }
 
     const body: Record<string, unknown> = { name: opts.name };
     if (opts.tier !== undefined) body.tier = opts.tier;
@@ -170,34 +176,16 @@ export class SapiomSandbox {
   }
 
   /**
-   * Execute a command in the sandbox with streaming output.
-   *
-   * @param command - The shell command to run.
-   * @param opts - Execution options with `stream: true`.
-   * @returns A streaming result with an async iterable of output lines.
-   */
-  async exec(
-    command: string,
-    opts: ExecOptions & { stream: true },
-  ): Promise<StreamingExecResult>;
-  /**
    * Execute a command in the sandbox.
    *
    * By default waits for the process to finish (polls process status).
    * Set `opts.waitForCompletion = false` for fire-and-forget execution.
+   * Use {@link execStream} for real-time streaming output.
    *
    * @param command - The shell command to run.
    * @param opts - Execution options.
    */
-  async exec(command: string, opts?: ExecOptions): Promise<ExecResult>;
-  async exec(
-    command: string,
-    opts?: ExecOptions,
-  ): Promise<ExecResult | StreamingExecResult> {
-    if (opts?.stream) {
-      return this._execStreaming(command, opts);
-    }
-
+  async exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
     const proc = await this._createProcess(command, opts);
 
     // If the process already completed synchronously, return immediately
@@ -224,65 +212,44 @@ export class SapiomSandbox {
   }
 
   /**
-   * Destroy the sandbox and release all resources.
+   * Execute a command and stream its output in real time.
+   *
+   * Returns a {@link StreamingExecResult} whose `output` property is an
+   * async iterable of {@link OutputLine} objects. `exitCode` is populated
+   * after the iterable is fully consumed.
+   *
+   * @param command - The shell command to run.
+   * @param opts - Stream execution options.
    */
-  async destroy(): Promise<void> {
-    const response = await this._fetch(
-      `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}`,
-      { method: "DELETE" },
-    );
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to destroy sandbox: ${response.status} ${text}`,
-      );
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Private helpers
-  // ---------------------------------------------------------------------------
-
-  private async _createProcess(
+  async execStream(
     command: string,
-    opts?: ExecOptions,
-  ): Promise<ProcessCreateResponse> {
-    const body: Record<string, unknown> = { command };
-    if (opts?.cwd !== undefined) {
-      body.cwd = resolvePath(this.workspaceRoot, opts.cwd);
-    }
-    if (opts?.env !== undefined) body.env = opts.env;
-
-    const response = await this._fetch(
-      `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: opts?.signal,
-      },
-    );
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to execute command: ${response.status} ${text}`,
-      );
-    }
-
-    return (await response.json()) as ProcessCreateResponse;
-  }
-
-  private async _execStreaming(
-    command: string,
-    opts?: ExecOptions,
+    opts?: ExecStreamOptions,
   ): Promise<StreamingExecResult> {
     const proc = await this._createProcess(command, opts);
 
+    // If the process already completed synchronously, return without
+    // opening the log stream — yield the stdout/stderr from the create
+    // response directly.
+    if (proc.completed) {
+      const code = proc.exitCode ?? 0;
+      const stdout = proc.stdout ?? "";
+      const stderr = proc.stderr ?? "";
+      const output = (async function* (): AsyncGenerator<OutputLine> {
+        if (stdout) yield { stream: "stdout" as const, data: stdout };
+        if (stderr) yield { stream: "stderr" as const, data: stderr };
+      })();
+      return {
+        pid: proc.pid,
+        get exitCode() {
+          return code;
+        },
+        output,
+      };
+    }
+
     let finalExitCode = -1;
 
-    // Capture what the generator closure needs
+    // Capture references for the generator closure
     const fetchFn = this._fetch;
     const baseUrl = this._baseUrl;
     const sandboxName = this.name;
@@ -322,30 +289,36 @@ export class SapiomSandbox {
 
           for (const line of lines) {
             if (!line) continue;
-            const parsed = parseOutputLine(line);
-            if (parsed) yield parsed;
+            yield parseOutputLine(line);
           }
         }
 
-        // Flush remaining buffer
+        // Flush remaining multibyte bytes from the decoder
+        buffer += decoder.decode();
+
         if (buffer) {
-          const parsed = parseOutputLine(buffer);
-          if (parsed) yield parsed;
+          yield parseOutputLine(buffer);
         }
       } finally {
         reader.releaseLock();
       }
 
-      // After stream ends, fetch final process status for the exit code
+      // Fetch final process status for the exit code
       const statusResponse = await fetchFn(
         `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/process/${proc.pid}`,
         { signal },
       );
-      if (statusResponse.ok) {
-        const status =
-          (await statusResponse.json()) as ProcessStatusResponse;
-        finalExitCode = status.exitCode ?? 0;
+
+      if (!statusResponse.ok) {
+        const text = await statusResponse.text();
+        throw new Error(
+          `Failed to get final status for process ${proc.pid}: ${statusResponse.status} ${text}`,
+        );
       }
+
+      const status =
+        (await statusResponse.json()) as ProcessStatusResponse;
+      finalExitCode = status.exitCode ?? 0;
     }
 
     return {
@@ -357,9 +330,99 @@ export class SapiomSandbox {
     };
   }
 
+  /**
+   * Get the current status of a process by PID.
+   *
+   * Useful for checking on processes started with
+   * `exec(cmd, { waitForCompletion: false })`.
+   *
+   * @param pid - The process ID returned from exec.
+   */
+  async getProcess(pid: number): Promise<ProcessStatusResponse> {
+    const response = await this._fetch(
+      `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process/${pid}`,
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `Failed to get process ${pid}: ${response.status} ${text}`,
+      );
+    }
+
+    return (await response.json()) as ProcessStatusResponse;
+  }
+
+  /**
+   * Wait for a process to complete by polling its status.
+   *
+   * Useful for processes started with
+   * `exec(cmd, { waitForCompletion: false })`.
+   *
+   * @param pid - The process ID returned from exec.
+   * @param opts - Polling options.
+   */
+  async waitForProcess(
+    pid: number,
+    opts?: { pollInterval?: number; timeout?: number; signal?: AbortSignal },
+  ): Promise<ExecResult> {
+    return this._pollProcess(pid, opts);
+  }
+
+  /**
+   * Destroy the sandbox and release all resources.
+   */
+  async destroy(): Promise<void> {
+    const response = await this._fetch(
+      `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}`,
+      { method: "DELETE" },
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `Failed to destroy sandbox: ${response.status} ${text}`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
+
+  private async _createProcess(
+    command: string,
+    opts?: ExecStreamOptions,
+  ): Promise<ProcessCreateResponse> {
+    const body: Record<string, unknown> = { command };
+    if (opts?.cwd !== undefined) {
+      body.cwd = resolvePath(this.workspaceRoot, opts.cwd);
+    }
+    if (opts?.env !== undefined) body.env = opts.env;
+
+    const response = await this._fetch(
+      `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `Failed to execute command: ${response.status} ${text}`,
+      );
+    }
+
+    return (await response.json()) as ProcessCreateResponse;
+  }
+
   private async _pollProcess(
     pid: number,
-    opts?: ExecOptions,
+    opts?: { pollInterval?: number; timeout?: number; signal?: AbortSignal },
   ): Promise<ExecResult> {
     const pollInterval = opts?.pollInterval ?? DEFAULT_POLL_INTERVAL;
     const timeout = opts?.timeout ?? DEFAULT_EXEC_TIMEOUT;

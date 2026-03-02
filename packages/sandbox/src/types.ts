@@ -35,10 +35,16 @@ export interface SandboxCreateOptions {
   /** Environment variables to set in the sandbox. */
   envs?: Record<string, string>;
 
-  /** Single port number to expose. */
+  /**
+   * Single port number to expose.
+   * Cannot be used together with `ports`.
+   */
   port?: number;
 
-  /** Array of port specs to expose. */
+  /**
+   * Array of port specs to expose.
+   * Cannot be used together with `port`.
+   */
   ports?: PortSpec[];
 
   /** Pre-built Docker image for instant creation. */
@@ -74,7 +80,6 @@ export interface ExecOptions {
   /**
    * Wait for the process to complete before returning.
    * When false, returns immediately after process creation (fire-and-forget).
-   * Ignored when `stream` is true.
    * @default true
    */
   waitForCompletion?: boolean;
@@ -85,12 +90,19 @@ export interface ExecOptions {
   /** Timeout in ms when waiting for completion. @default 60000 */
   timeout?: number;
 
-  /**
-   * Stream process output in real time via an async iterable.
-   * When true, returns a {@link StreamingExecResult} instead of {@link ExecResult}.
-   * @default false
-   */
-  stream?: boolean;
+  /** AbortSignal to cancel the operation. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Options for streaming command execution.
+ */
+export interface ExecStreamOptions {
+  /** Working directory for the command, resolved relative to workspaceRoot. */
+  cwd?: string;
+
+  /** Environment variables for the process. */
+  env?: Record<string, string>;
 
   /** AbortSignal to cancel the operation. */
   signal?: AbortSignal;

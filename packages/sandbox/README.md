@@ -26,7 +26,7 @@ const result = await sandbox.exec("python hello.py");
 console.log(result.stdout); // "Hello from the sandbox!"
 
 // Stream output from a long-running process
-const proc = await sandbox.exec("node runner.js", { stream: true });
+const proc = await sandbox.execStream("node runner.js");
 for await (const line of proc.output) {
   console.log(`[${line.stream}] ${line.data}`);
 }
@@ -63,8 +63,8 @@ const sandbox = await SapiomSandbox.create({
 | `tier`    | `SandboxTier`            | No       | Memory tier: `'xs'`, `'s'`, `'m'`, `'l'`, `'xl'` (default `'s'`) |
 | `ttl`     | `string`                 | No       | Time-to-live (e.g. `'1h'`, `'24h'`, `'7d'`)           |
 | `envs`    | `Record<string, string>` | No       | Environment variables                                  |
-| `port`    | `number`                 | No       | Single port to expose                                  |
-| `ports`   | `PortSpec[]`             | No       | Array of port specs to expose                          |
+| `port`    | `number`                 | No       | Single port to expose (mutually exclusive with `ports`) |
+| `ports`   | `PortSpec[]`             | No       | Array of port specs to expose (mutually exclusive with `port`) |
 | `image`   | `string`                 | No       | Pre-built Docker image for instant creation             |
 
 ### `sandbox.writeFile(path, content)`
@@ -86,30 +86,45 @@ const content = await sandbox.readFile("src/index.ts");
 
 ### `sandbox.exec(command, opts?)`
 
-Executes a shell command inside the sandbox. Three modes:
-
-#### Wait for completion (default)
+Executes a shell command inside the sandbox. By default waits for the process to finish.
 
 ```typescript
+// Wait for completion (default)
 const result = await sandbox.exec("npm install");
 console.log(result.exitCode); // 0
 console.log(result.stdout);
 console.log(result.stderr);
-```
 
-#### Fire-and-forget
-
-```typescript
+// Fire-and-forget
 const bg = await sandbox.exec("npm start", { waitForCompletion: false });
 console.log(bg.pid);
+
+// Check on it later
+const status = await sandbox.getProcess(bg.pid);
+console.log(status.completed, status.exitCode);
+
+// Or wait for it to finish
+const final = await sandbox.waitForProcess(bg.pid);
+console.log(final.exitCode);
 ```
 
-#### Streaming
+**Options:**
 
-Real-time output via async iterable — ideal for long-running processes:
+| Option               | Type                     | Default | Description                                      |
+|----------------------|--------------------------|---------|--------------------------------------------------|
+| `cwd`                | `string`                 | —       | Working directory (resolved relative to workspaceRoot) |
+| `env`                | `Record<string, string>` | —       | Environment variables for the process             |
+| `waitForCompletion`  | `boolean`                | `true`  | Wait for the process to finish                    |
+| `pollInterval`       | `number`                 | `1000`  | Polling interval in ms                            |
+| `timeout`            | `number`                 | `60000` | Timeout in ms when waiting                        |
+| `signal`             | `AbortSignal`            | —       | Signal to cancel the operation                    |
+
+### `sandbox.execStream(command, opts?)`
+
+Executes a command and streams output in real time via an async iterable. Ideal for long-running processes like AI agent runs.
 
 ```typescript
-const proc = await sandbox.exec("node agent.js", { stream: true });
+const proc = await sandbox.execStream("node agent.js");
 for await (const line of proc.output) {
   // line.stream is 'stdout' or 'stderr'
   process.stdout.write(line.data);
@@ -121,8 +136,7 @@ Supports cancellation via `AbortSignal`:
 
 ```typescript
 const controller = new AbortController();
-const proc = await sandbox.exec("long-task", {
-  stream: true,
+const proc = await sandbox.execStream("long-task", {
   signal: controller.signal,
 });
 
@@ -135,15 +149,29 @@ for await (const line of proc.output) {
 
 **Options:**
 
-| Option               | Type                     | Default | Description                                      |
-|----------------------|--------------------------|---------|--------------------------------------------------|
-| `cwd`                | `string`                 | —       | Working directory (resolved relative to workspaceRoot) |
-| `env`                | `Record<string, string>` | —       | Environment variables for the process             |
-| `waitForCompletion`  | `boolean`                | `true`  | Wait for the process to finish (ignored when streaming) |
-| `pollInterval`       | `number`                 | `1000`  | Polling interval in ms                            |
-| `timeout`            | `number`                 | `60000` | Timeout in ms when waiting                        |
-| `stream`             | `boolean`                | `false` | Stream output via async iterable                  |
-| `signal`             | `AbortSignal`            | —       | Signal to cancel the operation                    |
+| Option    | Type                     | Default | Description                                      |
+|-----------|--------------------------|---------|--------------------------------------------------|
+| `cwd`     | `string`                 | —       | Working directory (resolved relative to workspaceRoot) |
+| `env`     | `Record<string, string>` | —       | Environment variables for the process             |
+| `signal`  | `AbortSignal`            | —       | Signal to cancel the operation                    |
+
+### `sandbox.getProcess(pid)`
+
+Gets the current status of a process by PID.
+
+```typescript
+const status = await sandbox.getProcess(pid);
+console.log(status.completed, status.exitCode);
+```
+
+### `sandbox.waitForProcess(pid, opts?)`
+
+Waits for a process to complete by polling its status. Returns the same `ExecResult` as `exec()`.
+
+```typescript
+const result = await sandbox.waitForProcess(pid, { timeout: 120_000 });
+console.log(result.exitCode, result.stdout);
+```
 
 ### `sandbox.destroy()`
 
