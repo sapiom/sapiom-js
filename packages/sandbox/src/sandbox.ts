@@ -47,13 +47,12 @@ function encodePathSegments(path: string): string {
 function fileUrl(
   baseUrl: string,
   sandboxName: string,
-  relativePath: string,
+  absolutePath: string,
 ): string {
-  // The API root is already the workspace root, so use the user-relative
-  // path directly — do NOT prepend workspaceRoot.
-  const cleanPath = relativePath.startsWith("/")
-    ? relativePath.slice(1)
-    : relativePath;
+  // Strip leading slash so the URL path is well-formed, then encode each segment
+  const cleanPath = absolutePath.startsWith("/")
+    ? absolutePath.slice(1)
+    : absolutePath;
   return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${encodePathSegments(cleanPath)}`;
 }
 
@@ -133,8 +132,8 @@ export class SapiomSandbox {
    * @param content - File content as a string.
    */
   async writeFile(path: string, content: string): Promise<void> {
-    assertRelativePath(path);
-    const url = fileUrl(this._baseUrl, this.name, path);
+    const fullPath = resolvePath(this.workspaceRoot, path);
+    const url = fileUrl(this._baseUrl, this.name, fullPath);
 
     const response = await this._fetch(url, {
       method: "PUT",
@@ -157,8 +156,8 @@ export class SapiomSandbox {
    * @returns The file content as a string.
    */
   async readFile(path: string): Promise<string> {
-    assertRelativePath(path);
-    const url = fileUrl(this._baseUrl, this.name, path);
+    const fullPath = resolvePath(this.workspaceRoot, path);
+    const url = fileUrl(this._baseUrl, this.name, fullPath);
 
     const response = await this._fetch(url);
 
