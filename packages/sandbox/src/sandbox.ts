@@ -74,6 +74,13 @@ export class SapiomSandbox {
   /** Absolute workspace root path inside the sandbox. */
   readonly workspaceRoot: string;
 
+  /**
+   * Presigned S3 upload URL for custom image builds.
+   * Only present when the sandbox was created with `upload: true`.
+   * Upload a ZIP containing a Dockerfile to this URL via PUT.
+   */
+  readonly uploadUrl?: string;
+
   private readonly _fetch: typeof globalThis.fetch;
   private readonly _baseUrl: string;
 
@@ -82,11 +89,13 @@ export class SapiomSandbox {
     workspaceRoot: string,
     fetchFn: typeof globalThis.fetch,
     baseUrl: string,
+    uploadUrl?: string,
   ) {
     this.name = name;
     this.workspaceRoot = workspaceRoot;
     this._fetch = fetchFn;
     this._baseUrl = baseUrl;
+    if (uploadUrl) this.uploadUrl = uploadUrl;
   }
 
   /**
@@ -99,6 +108,9 @@ export class SapiomSandbox {
     if (opts.port !== undefined && opts.ports !== undefined) {
       throw new Error("Cannot specify both 'port' and 'ports'");
     }
+    if (opts.image !== undefined && opts.upload) {
+      throw new Error("Cannot specify both 'image' and 'upload'");
+    }
 
     const body: Record<string, unknown> = { name: opts.name };
     if (opts.tier !== undefined) body.tier = opts.tier;
@@ -108,7 +120,11 @@ export class SapiomSandbox {
     if (opts.ports !== undefined) body.ports = opts.ports;
     if (opts.image !== undefined) body.image = opts.image;
 
-    const response = await fetchFn(`${baseUrl}/v1/sandboxes`, {
+    const url = opts.upload
+      ? `${baseUrl}/v1/sandboxes?upload=true`
+      : `${baseUrl}/v1/sandboxes`;
+
+    const response = await fetchFn(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -122,7 +138,7 @@ export class SapiomSandbox {
     }
 
     const data = (await response.json()) as SandboxCreateResponse;
-    return new SapiomSandbox(data.name, data.workspaceRoot, fetchFn, baseUrl);
+    return new SapiomSandbox(data.name, data.workspaceRoot, fetchFn, baseUrl, data.uploadUrl);
   }
 
   /**

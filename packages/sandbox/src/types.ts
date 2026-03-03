@@ -49,6 +49,20 @@ export interface SandboxCreateOptions {
 
   /** Pre-built Docker image for instant creation. */
   image?: string;
+
+  /**
+   * If true, returns a presigned S3 upload URL for a ZIP containing a Dockerfile.
+   * Blaxel builds a reusable Docker image from the upload.
+   *
+   * The Dockerfile **must** include the sandbox-api runtime agent:
+   * ```dockerfile
+   * COPY --from=ghcr.io/blaxel-ai/sandbox:latest /sandbox-api /usr/local/bin/sandbox-api
+   * ENTRYPOINT ["/usr/local/bin/sandbox-api"]
+   * ```
+   *
+   * Cannot be combined with `image`.
+   */
+  upload?: boolean;
 }
 
 /** Raw response from POST /v1/sandboxes. */
@@ -58,8 +72,8 @@ export interface SandboxCreateResponse {
   status: string;
   tier: string;
   url: string;
-  image: string;
-  uploadUrl: string;
+  image?: string;
+  uploadUrl?: string;
   workspaceRoot: string;
   expiresAt: string;
   createdAt: string;
