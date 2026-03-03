@@ -1,5 +1,11 @@
 # @sapiom/sandbox
 
+## 0.3.0
+
+### Minor Changes
+
+- 0cde98e: support upload and uploadUrl when creating sandboxes
+
 ## 0.2.0
 
 ### Minor Changes
