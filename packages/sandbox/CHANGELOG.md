@@ -1,5 +1,11 @@
 # @sapiom/sandbox
 
+## 0.4.0
+
+### Minor Changes
+
+- 2376a14: yield final stdout/stderr before closing
+
 ## 0.3.0
 
 ### Minor Changes

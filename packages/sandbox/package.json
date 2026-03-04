@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/sandbox",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Sandbox environment management for Sapiom SDK",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
