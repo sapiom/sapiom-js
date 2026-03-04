@@ -10,7 +10,15 @@ import {
   HttpClientErrorFacts,
 } from "@sapiom/core";
 
-import type { FailureMode } from "@sapiom/core";
+import type { FailureMode, TransactionPollingConfig } from "@sapiom/core";
+
+/**
+ * Retry configuration for transient failures (e.g. transaction creation 500s)
+ */
+export interface RetryConfig {
+  maxAttempts: number;
+  baseDelayMs: number;
+}
 
 /**
  * Authorization configuration for fetch
@@ -18,6 +26,8 @@ import type { FailureMode } from "@sapiom/core";
 export interface AuthorizationConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
+  polling?: TransactionPollingConfig;
+  retry?: RetryConfig;
 }
 
 /**
@@ -26,11 +36,48 @@ export interface AuthorizationConfig {
 export interface PaymentConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
+  polling?: TransactionPollingConfig;
+  retry?: RetryConfig;
 }
 
 const SDK_VERSION = "1.0.0";
-const AUTHORIZATION_TIMEOUT = 30000;
-const POLL_INTERVAL = 1000;
+
+/** Default polling configuration (shared with TransactionPoller defaults) */
+const DEFAULT_POLLING: Required<TransactionPollingConfig> = {
+  timeout: 30000,
+  pollInterval: 1000,
+};
+
+/** Default retry configuration for transaction creation */
+const DEFAULT_RETRY: RetryConfig = {
+  maxAttempts: 3,
+  baseDelayMs: 200,
+};
+
+/**
+ * Retry an async operation with exponential backoff.
+ * Throws the last error if all attempts fail.
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  config: RetryConfig,
+  sleepFn: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < config.maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < config.maxAttempts - 1) {
+        const delay = config.baseDelayMs * Math.pow(2, attempt);
+        await sleepFn(delay);
+      }
+    }
+  }
+  throw lastError;
+}
 
 /**
  * Custom error classes
@@ -105,11 +152,17 @@ export async function handleAuthorization(
     "X-Sapiom-Transaction-Id",
   );
 
+  const polling = {
+    ...DEFAULT_POLLING,
+    ...config.polling,
+  };
+  const retry = {
+    ...DEFAULT_RETRY,
+    ...config.retry,
+  };
+
   if (existingTransactionId) {
-    const poller = new TransactionPoller(config.sapiomClient, {
-      timeout: AUTHORIZATION_TIMEOUT,
-      pollInterval: POLL_INTERVAL,
-    });
+    const poller = new TransactionPoller(config.sapiomClient, polling);
 
     let transaction;
     try {
@@ -153,7 +206,7 @@ export async function handleAuthorization(
           throw new AuthorizationTimeoutError(
             existingTransactionId,
             endpoint,
-            AUTHORIZATION_TIMEOUT,
+            polling.timeout,
           );
         }
       }
@@ -216,36 +269,40 @@ export async function handleAuthorization(
 
   let transaction;
   try {
-    transaction = await config.sapiomClient.transactions.create({
-      requestFacts: {
-        source: "http-client",
-        version: "v1",
-        sdk: {
-          name: "@sapiom/fetch",
-          version: SDK_VERSION,
-        },
-        ...(userMetadata?.integration && {
-          integration: userMetadata.integration,
+    transaction = await withRetry(
+      () =>
+        config.sapiomClient.transactions.create({
+          requestFacts: {
+            source: "http-client",
+            version: "v1",
+            sdk: {
+              name: "@sapiom/fetch",
+              version: SDK_VERSION,
+            },
+            ...(userMetadata?.integration && {
+              integration: userMetadata.integration,
+            }),
+            request: requestFacts,
+          },
+          serviceName: userMetadata?.serviceName,
+          actionName: userMetadata?.actionName,
+          resourceName: userMetadata?.resourceName,
+          traceId: userMetadata?.traceId,
+          traceExternalId: userMetadata?.traceExternalId,
+          agentId: userMetadata?.agentId,
+          agentName: userMetadata?.agentName,
+          qualifiers: userMetadata?.qualifiers,
+          metadata: {
+            ...userMetadata?.metadata,
+            preemptiveAuthorization: true,
+          },
         }),
-        request: requestFacts,
-      },
-      serviceName: userMetadata?.serviceName,
-      actionName: userMetadata?.actionName,
-      resourceName: userMetadata?.resourceName,
-      traceId: userMetadata?.traceId,
-      traceExternalId: userMetadata?.traceExternalId,
-      agentId: userMetadata?.agentId,
-      agentName: userMetadata?.agentName,
-      qualifiers: userMetadata?.qualifiers,
-      metadata: {
-        ...userMetadata?.metadata,
-        preemptiveAuthorization: true,
-      },
-    });
+      retry,
+    );
   } catch (error) {
     if (config.failureMode === "closed") throw error;
     console.error(
-      "[Sapiom] Failed to create transaction, allowing request:",
+      "[Sapiom] Failed to create transaction after retries, allowing request:",
       error,
     );
     return request;
@@ -257,10 +314,7 @@ export async function handleAuthorization(
 
     case TransactionStatus.PENDING:
     case TransactionStatus.PREPARING: {
-      const poller = new TransactionPoller(config.sapiomClient, {
-        timeout: AUTHORIZATION_TIMEOUT,
-        pollInterval: POLL_INTERVAL,
-      });
+      const poller = new TransactionPoller(config.sapiomClient, polling);
 
       let authResult;
       try {
@@ -280,7 +334,7 @@ export async function handleAuthorization(
         throw new AuthorizationTimeoutError(
           transaction.id,
           endpoint,
-          AUTHORIZATION_TIMEOUT,
+          polling.timeout,
         );
       }
       break;
@@ -351,16 +405,85 @@ export async function handlePayment(
     return response;
   }
 
+  const polling = {
+    ...DEFAULT_POLLING,
+    ...config.polling,
+  };
+  const retry = {
+    ...DEFAULT_RETRY,
+    ...config.retry,
+  };
+
   // Get existing transaction ID from the request (set by authorization interceptor)
-  const existingTransactionId = getHeader(
+  let existingTransactionId = getHeader(
     request.headers,
     "X-Sapiom-Transaction-Id",
   );
 
+  // If no transaction ID exists (authorization was skipped/failed in failureMode:open),
+  // create one on-demand so we can still handle the 402 payment flow.
   if (!existingTransactionId) {
-    // No existing transaction - return the 402 response
-    // This can happen if authorization was skipped or failed
-    return response;
+    const requestMetadata = { ...defaultMetadata, ...((request as any).__sapiom || {}) };
+    const callSite = captureUserCallSite();
+    const parsedUrl = new URL(request.url);
+
+    try {
+      const newTransaction = await withRetry(
+        () =>
+          config.sapiomClient.transactions.create({
+            requestFacts: {
+              source: "http-client",
+              version: "v1",
+              sdk: {
+                name: "@sapiom/fetch",
+                version: SDK_VERSION,
+              },
+              ...(requestMetadata?.integration && {
+                integration: requestMetadata.integration,
+              }),
+              request: {
+                method: request.method.toUpperCase(),
+                url: request.url,
+                urlParsed: {
+                  protocol: parsedUrl.protocol.replace(":", ""),
+                  hostname: parsedUrl.hostname,
+                  pathname: parsedUrl.pathname,
+                  search: parsedUrl.search,
+                  port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
+                },
+                headers: {},
+                hasBody: request.body !== null,
+                bodySizeBytes: undefined,
+                contentType: request.headers.get("content-type") || undefined,
+                clientType: "fetch",
+                callSite,
+                timestamp: new Date().toISOString(),
+              },
+            },
+            serviceName: requestMetadata?.serviceName,
+            actionName: requestMetadata?.actionName,
+            resourceName: requestMetadata?.resourceName,
+            traceId: requestMetadata?.traceId,
+            traceExternalId: requestMetadata?.traceExternalId,
+            agentId: requestMetadata?.agentId,
+            agentName: requestMetadata?.agentName,
+            qualifiers: requestMetadata?.qualifiers,
+            metadata: {
+              ...requestMetadata?.metadata,
+              onDemandPayment: true,
+            },
+          }),
+        retry,
+      );
+      existingTransactionId = newTransaction.id;
+    } catch (error) {
+      if (config.failureMode === "closed") throw error;
+      console.error(
+        "[Sapiom] Failed to create on-demand transaction for payment, returning 402:",
+        error,
+      );
+      return response;
+    }
   }
 
   let transaction;
@@ -391,10 +514,7 @@ export async function handlePayment(
 
   // Poll for authorization if not already authorized
   if (transaction.status !== TransactionStatus.AUTHORIZED) {
-    const poller = new TransactionPoller(config.sapiomClient, {
-      timeout: AUTHORIZATION_TIMEOUT,
-      pollInterval: POLL_INTERVAL,
-    });
+    const poller = new TransactionPoller(config.sapiomClient, polling);
 
     let authResult;
     try {

@@ -3,6 +3,7 @@ import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
 } from "@sapiom/core";
+import type { TransactionPollingConfig } from "@sapiom/core";
 import {
   handleAuthorization,
   handlePayment,
@@ -10,12 +11,25 @@ import {
   AuthorizationConfig,
   PaymentConfig,
   CompletionConfig,
+  RetryConfig,
 } from "./interceptors.js";
 
 /**
  * Configuration for Sapiom-enabled Fetch client
  */
-export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
+export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
+  /**
+   * Polling configuration for transaction authorization.
+   * Overrides default timeout (30s) and poll interval (1s).
+   */
+  polling?: TransactionPollingConfig;
+
+  /**
+   * Retry configuration for transient failures (e.g. transaction creation 500s).
+   * Default: 3 attempts with 200ms base delay (exponential backoff).
+   */
+  retry?: RetryConfig;
+}
 
 /**
  * Creates a Sapiom-enabled fetch function with automatic authorization and payment handling
@@ -97,8 +111,18 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
 
   const failureMode = config?.failureMode ?? "open";
 
-  const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
-  const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
+  const authConfig: AuthorizationConfig = {
+    sapiomClient,
+    failureMode,
+    polling: config?.polling,
+    retry: config?.retry,
+  };
+  const paymentConfig: PaymentConfig = {
+    sapiomClient,
+    failureMode,
+    polling: config?.polling,
+    retry: config?.retry,
+  };
   const completionConfig: CompletionConfig = { sapiomClient };
 
   const sapiomFetch = async (
