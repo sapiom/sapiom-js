@@ -350,6 +350,21 @@ export class SapiomSandbox {
       }
 
       finalExitCode = status.exitCode ?? 0;
+
+      // Yield any stdout/stderr from the final status response that the
+      // stream may have missed.  The server can buffer output that wasn't
+      // flushed into the HTTP stream body before it closed — without this,
+      // those final lines are silently lost.
+      if (status.stdout) {
+        for (const line of status.stdout.split("\n")) {
+          if (line) yield parseOutputLine(line);
+        }
+      }
+      if (status.stderr) {
+        for (const line of status.stderr.split("\n")) {
+          if (line) yield { stream: "stderr" as const, data: line };
+        }
+      }
     }
 
     return {
