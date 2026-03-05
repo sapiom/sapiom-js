@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   SapiomClient,
   TransactionPoller,
@@ -313,7 +314,7 @@ export async function handleAuthorization(
   try {
     // Generate idempotency key before first attempt so all retries use the
     // same value, preventing duplicate transaction creation on the server.
-    const idempotencyKey = crypto.randomUUID();
+    const idempotencyKey = randomUUID();
 
     transaction = await withRetry(
       () =>
@@ -475,7 +476,7 @@ export async function handlePayment(
     const parsedUrl = new URL(request.url);
 
     try {
-      const idempotencyKey = crypto.randomUUID();
+      const idempotencyKey = randomUUID();
 
       const newTransaction = await withRetry(
         () =>
