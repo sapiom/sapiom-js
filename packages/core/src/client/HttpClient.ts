@@ -89,7 +89,7 @@ export class HttpClient {
     const needsIdempotencyKey = ["POST", "PUT", "PATCH"].includes(method);
 
     // Generate idempotency key once, reuse across retries
-    let headers = { ...config.headers };
+    const headers = { ...config.headers };
     if (needsIdempotencyKey) {
       const hasKey = Object.keys(headers).some(
         (k) => k.toLowerCase() === "x-idempotency-key",
