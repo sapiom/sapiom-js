@@ -55,8 +55,42 @@ const DEFAULT_RETRY: RetryConfig = {
 };
 
 /**
+ * Determine whether an error is safe to retry.
+ *
+ * Retryable: network errors (connection refused, DNS) and server 5xx.
+ * NOT retryable: 4xx client errors, timeouts (server may have processed).
+ */
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  const msg = error.message;
+
+  // HttpClient wraps timeouts as "Request timeout after Xms" — NOT safe to
+  // retry because the server may have already processed the request.
+  if (msg.includes("Request timeout")) return false;
+
+  // HttpClient wraps HTTP errors as "Request failed with status NNN: ..."
+  const statusMatch = msg.match(/Request failed with status (\d+)/);
+  if (statusMatch) {
+    const status = parseInt(statusMatch[1]!, 10);
+    // Only retry 5xx server errors, never 4xx
+    return status >= 500;
+  }
+
+  // Network-level errors (fetch throws TypeError for DNS / connection refused /
+  // TLS failures) — always safe to retry since the request never reached the
+  // server.
+  if (error instanceof TypeError) return true;
+
+  // Unknown error shape — default to NOT retrying to avoid duplicates.
+  return false;
+}
+
+/**
  * Retry an async operation with exponential backoff.
- * Throws the last error if all attempts fail.
+ * Only retries errors classified as retryable (5xx, network).
+ * Throws immediately on non-retryable errors (4xx, timeouts).
+ * Throws the last error if all attempts are exhausted.
  */
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -64,12 +98,20 @@ async function withRetry<T>(
   sleepFn: (ms: number) => Promise<void> = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<T> {
+  if (config.maxAttempts < 1) {
+    throw new Error("withRetry: maxAttempts must be >= 1");
+  }
+
   let lastError: unknown;
   for (let attempt = 0; attempt < config.maxAttempts; attempt++) {
     try {
       return await fn();
     } catch (error) {
       lastError = error;
+      // Non-retryable errors (4xx, timeouts) — throw immediately
+      if (!isRetryableError(error)) {
+        throw error;
+      }
       if (attempt < config.maxAttempts - 1) {
         const delay = config.baseDelayMs * Math.pow(2, attempt);
         await sleepFn(delay);
@@ -269,6 +311,10 @@ export async function handleAuthorization(
 
   let transaction;
   try {
+    // Generate idempotency key before first attempt so all retries use the
+    // same value, preventing duplicate transaction creation on the server.
+    const idempotencyKey = crypto.randomUUID();
+
     transaction = await withRetry(
       () =>
         config.sapiomClient.transactions.create({
@@ -295,6 +341,7 @@ export async function handleAuthorization(
           metadata: {
             ...userMetadata?.metadata,
             preemptiveAuthorization: true,
+            idempotencyKey,
           },
         }),
       retry,
@@ -428,6 +475,8 @@ export async function handlePayment(
     const parsedUrl = new URL(request.url);
 
     try {
+      const idempotencyKey = crypto.randomUUID();
+
       const newTransaction = await withRetry(
         () =>
           config.sapiomClient.transactions.create({
@@ -471,6 +520,7 @@ export async function handlePayment(
             metadata: {
               ...requestMetadata?.metadata,
               onDemandPayment: true,
+              idempotencyKey,
             },
           }),
         retry,
