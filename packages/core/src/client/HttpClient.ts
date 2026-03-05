@@ -90,8 +90,13 @@ export class HttpClient {
 
     // Generate idempotency key once, reuse across retries
     let headers = { ...config.headers };
-    if (needsIdempotencyKey && !headers["X-Idempotency-Key"]) {
-      headers["X-Idempotency-Key"] = randomUUID();
+    if (needsIdempotencyKey) {
+      const hasKey = Object.keys(headers).some(
+        (k) => k.toLowerCase() === "x-idempotency-key",
+      );
+      if (!hasKey) {
+        headers["X-Idempotency-Key"] = randomUUID();
+      }
     }
 
     const configWithHeaders = { ...config, headers };

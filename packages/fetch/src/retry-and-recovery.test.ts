@@ -233,6 +233,52 @@ describe("handlePayment on-demand transaction creation (402 cascade fix)", () =>
       }),
     );
   });
+
+  it("should complete on-demand transaction via handleCompletion", async () => {
+    // handleAuthorization fails → failureMode open → no txn ID on request
+    // Server returns 402 → handlePayment creates on-demand txn
+    // handleCompletion should still call transactions.complete() with the on-demand txn ID
+    mockTransactionAPI.create
+      .mockRejectedValueOnce(server500Error())
+      .mockResolvedValueOnce({
+        id: "tx_ondemand_complete",
+        status: "authorized",
+      } as any);
+
+    mockTransactionAPI.reauthorizeWithPayment.mockResolvedValueOnce({
+      id: "tx_ondemand_complete",
+      status: "authorized",
+      payment: { authorizationPayload: "token" },
+    } as any);
+
+    mockTransactionAPI.complete.mockResolvedValue({} as any);
+
+    fetchMock.getOnce("https://api.example.com/premium", {
+      status: 402,
+      body: x402Body,
+    });
+    fetchMock.get("https://api.example.com/premium", {
+      status: 200,
+      body: { data: "ok" },
+    });
+
+    const fetch = createFetch({
+      sapiomClient: mockSapiomClient,
+      failureMode: "open",
+    });
+
+    await fetch("https://api.example.com/premium");
+
+    // Wait a tick for the fire-and-forget complete() call
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockTransactionAPI.complete).toHaveBeenCalledWith(
+      "tx_ondemand_complete",
+      expect.objectContaining({
+        outcome: "success",
+      }),
+    );
+  });
 });
 
 describe("Configurable polling", () => {

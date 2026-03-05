@@ -898,6 +898,28 @@ describe("SapiomClient", () => {
       expect(headers["X-Idempotency-Key"]).toBe("my-custom-key");
     });
 
+    it("should respect caller-provided idempotency key in lowercase", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch.mockResolvedValueOnce(mockOkResponse());
+
+      await client.request({
+        url: "/test",
+        method: "POST",
+        body: { a: 1 },
+        headers: { "x-idempotency-key": "my-lowercase-key" },
+      });
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      // Should not add a second key
+      expect(headers["X-Idempotency-Key"]).toBeUndefined();
+      expect(headers["x-idempotency-key"]).toBe("my-lowercase-key");
+    });
+
     it("maxAttempts: 1 means no retries", async () => {
       const client = new SapiomClient({
         apiKey: "test-api-key",

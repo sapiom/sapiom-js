@@ -419,6 +419,10 @@ export async function handlePayment(
         },
       });
       existingTransactionId = newTransaction.id;
+      // Write the transaction ID back to the original request so
+      // handleCompletion (which reads X-Sapiom-Transaction-Id from
+      // request headers) can complete this on-demand transaction.
+      setHeader(request.headers, "X-Sapiom-Transaction-Id", existingTransactionId);
     } catch (error) {
       if (config.failureMode === "closed") throw error;
       console.error(
