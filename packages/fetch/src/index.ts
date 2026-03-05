@@ -13,4 +13,3 @@ export {
   AuthorizationTimeoutError,
 } from "./fetch.js";
 export type { SapiomFetchConfig } from "./fetch.js";
-export type { RetryConfig } from "./interceptors.js";

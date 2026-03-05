@@ -1,5 +1,6 @@
 import { ApiKeyAPI } from "./ApiKeyAPI.js";
 import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
+import type { RetryConfig } from "./HttpClient.js";
 import { TransactionAPI } from "./TransactionAPI.js";
 
 /**
@@ -27,6 +28,12 @@ export interface SapiomClientConfig {
    * Additional headers to include with all requests
    */
   headers?: Record<string, string>;
+
+  /**
+   * Retry configuration for transient failures (5xx, network errors).
+   * Default: 3 attempts with 200ms base delay (exponential backoff).
+   */
+  retry?: RetryConfig;
 }
 
 /**
@@ -80,6 +87,7 @@ export class SapiomClient {
         "x-api-key": config.apiKey,
         ...config.headers,
       },
+      retry: config.retry,
     });
 
     // Initialize API modules
@@ -103,6 +111,7 @@ export class SapiomClient {
       baseURL: string;
       timeout: number;
       headers: Record<string, string>;
+      retry: RetryConfig;
     };
   } {
     return {

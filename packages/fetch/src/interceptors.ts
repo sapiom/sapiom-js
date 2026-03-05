@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   SapiomClient,
   TransactionPoller,
@@ -14,21 +13,12 @@ import {
 import type { FailureMode, TransactionPollingConfig } from "@sapiom/core";
 
 /**
- * Retry configuration for transient failures (e.g. transaction creation 500s)
- */
-export interface RetryConfig {
-  maxAttempts: number;
-  baseDelayMs: number;
-}
-
-/**
  * Authorization configuration for fetch
  */
 export interface AuthorizationConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
   polling?: TransactionPollingConfig;
-  retry?: RetryConfig;
 }
 
 /**
@@ -38,7 +28,6 @@ export interface PaymentConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
   polling?: TransactionPollingConfig;
-  retry?: RetryConfig;
 }
 
 const SDK_VERSION = "1.0.0";
@@ -48,79 +37,6 @@ const DEFAULT_POLLING: Required<TransactionPollingConfig> = {
   timeout: 30000,
   pollInterval: 1000,
 };
-
-/** Default retry configuration for transaction creation */
-const DEFAULT_RETRY: RetryConfig = {
-  maxAttempts: 3,
-  baseDelayMs: 200,
-};
-
-/**
- * Determine whether an error is safe to retry.
- *
- * Retryable: network errors (connection refused, DNS) and server 5xx.
- * NOT retryable: 4xx client errors, timeouts (server may have processed).
- */
-function isRetryableError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-
-  const msg = error.message;
-
-  // HttpClient wraps timeouts as "Request timeout after Xms" — NOT safe to
-  // retry because the server may have already processed the request.
-  if (msg.includes("Request timeout")) return false;
-
-  // HttpClient wraps HTTP errors as "Request failed with status NNN: ..."
-  const statusMatch = msg.match(/Request failed with status (\d+)/);
-  if (statusMatch) {
-    const status = parseInt(statusMatch[1]!, 10);
-    // Only retry 5xx server errors, never 4xx
-    return status >= 500;
-  }
-
-  // Network-level errors (fetch throws TypeError for DNS / connection refused /
-  // TLS failures) — always safe to retry since the request never reached the
-  // server.
-  if (error instanceof TypeError) return true;
-
-  // Unknown error shape — default to NOT retrying to avoid duplicates.
-  return false;
-}
-
-/**
- * Retry an async operation with exponential backoff.
- * Only retries errors classified as retryable (5xx, network).
- * Throws immediately on non-retryable errors (4xx, timeouts).
- * Throws the last error if all attempts are exhausted.
- */
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  config: RetryConfig,
-  sleepFn: (ms: number) => Promise<void> = (ms) =>
-    new Promise((resolve) => setTimeout(resolve, ms)),
-): Promise<T> {
-  if (config.maxAttempts < 1) {
-    throw new Error("withRetry: maxAttempts must be >= 1");
-  }
-
-  let lastError: unknown;
-  for (let attempt = 0; attempt < config.maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      // Non-retryable errors (4xx, timeouts) — throw immediately
-      if (!isRetryableError(error)) {
-        throw error;
-      }
-      if (attempt < config.maxAttempts - 1) {
-        const delay = config.baseDelayMs * Math.pow(2, attempt);
-        await sleepFn(delay);
-      }
-    }
-  }
-  throw lastError;
-}
 
 /**
  * Custom error classes
@@ -198,10 +114,6 @@ export async function handleAuthorization(
   const polling = {
     ...DEFAULT_POLLING,
     ...config.polling,
-  };
-  const retry = {
-    ...DEFAULT_RETRY,
-    ...config.retry,
   };
 
   if (existingTransactionId) {
@@ -312,45 +224,36 @@ export async function handleAuthorization(
 
   let transaction;
   try {
-    // Generate idempotency key before first attempt so all retries use the
-    // same value, preventing duplicate transaction creation on the server.
-    const idempotencyKey = randomUUID();
-
-    transaction = await withRetry(
-      () =>
-        config.sapiomClient.transactions.create({
-          requestFacts: {
-            source: "http-client",
-            version: "v1",
-            sdk: {
-              name: "@sapiom/fetch",
-              version: SDK_VERSION,
-            },
-            ...(userMetadata?.integration && {
-              integration: userMetadata.integration,
-            }),
-            request: requestFacts,
-          },
-          serviceName: userMetadata?.serviceName,
-          actionName: userMetadata?.actionName,
-          resourceName: userMetadata?.resourceName,
-          traceId: userMetadata?.traceId,
-          traceExternalId: userMetadata?.traceExternalId,
-          agentId: userMetadata?.agentId,
-          agentName: userMetadata?.agentName,
-          qualifiers: userMetadata?.qualifiers,
-          metadata: {
-            ...userMetadata?.metadata,
-            preemptiveAuthorization: true,
-            idempotencyKey,
-          },
+    transaction = await config.sapiomClient.transactions.create({
+      requestFacts: {
+        source: "http-client",
+        version: "v1",
+        sdk: {
+          name: "@sapiom/fetch",
+          version: SDK_VERSION,
+        },
+        ...(userMetadata?.integration && {
+          integration: userMetadata.integration,
         }),
-      retry,
-    );
+        request: requestFacts,
+      },
+      serviceName: userMetadata?.serviceName,
+      actionName: userMetadata?.actionName,
+      resourceName: userMetadata?.resourceName,
+      traceId: userMetadata?.traceId,
+      traceExternalId: userMetadata?.traceExternalId,
+      agentId: userMetadata?.agentId,
+      agentName: userMetadata?.agentName,
+      qualifiers: userMetadata?.qualifiers,
+      metadata: {
+        ...userMetadata?.metadata,
+        preemptiveAuthorization: true,
+      },
+    });
   } catch (error) {
     if (config.failureMode === "closed") throw error;
     console.error(
-      "[Sapiom] Failed to create transaction after retries, allowing request:",
+      "[Sapiom] Failed to create transaction, allowing request:",
       error,
     );
     return request;
@@ -457,10 +360,6 @@ export async function handlePayment(
     ...DEFAULT_POLLING,
     ...config.polling,
   };
-  const retry = {
-    ...DEFAULT_RETRY,
-    ...config.retry,
-  };
 
   // Get existing transaction ID from the request (set by authorization interceptor)
   let existingTransactionId = getHeader(
@@ -476,56 +375,49 @@ export async function handlePayment(
     const parsedUrl = new URL(request.url);
 
     try {
-      const idempotencyKey = randomUUID();
-
-      const newTransaction = await withRetry(
-        () =>
-          config.sapiomClient.transactions.create({
-            requestFacts: {
-              source: "http-client",
-              version: "v1",
-              sdk: {
-                name: "@sapiom/fetch",
-                version: SDK_VERSION,
-              },
-              ...(requestMetadata?.integration && {
-                integration: requestMetadata.integration,
-              }),
-              request: {
-                method: request.method.toUpperCase(),
-                url: request.url,
-                urlParsed: {
-                  protocol: parsedUrl.protocol.replace(":", ""),
-                  hostname: parsedUrl.hostname,
-                  pathname: parsedUrl.pathname,
-                  search: parsedUrl.search,
-                  port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
-                },
-                headers: {},
-                hasBody: request.body !== null,
-                bodySizeBytes: undefined,
-                contentType: request.headers.get("content-type") || undefined,
-                clientType: "fetch",
-                callSite,
-                timestamp: new Date().toISOString(),
-              },
-            },
-            serviceName: requestMetadata?.serviceName,
-            actionName: requestMetadata?.actionName,
-            resourceName: requestMetadata?.resourceName,
-            traceId: requestMetadata?.traceId,
-            traceExternalId: requestMetadata?.traceExternalId,
-            agentId: requestMetadata?.agentId,
-            agentName: requestMetadata?.agentName,
-            qualifiers: requestMetadata?.qualifiers,
-            metadata: {
-              ...requestMetadata?.metadata,
-              onDemandPayment: true,
-              idempotencyKey,
-            },
+      const newTransaction = await config.sapiomClient.transactions.create({
+        requestFacts: {
+          source: "http-client",
+          version: "v1",
+          sdk: {
+            name: "@sapiom/fetch",
+            version: SDK_VERSION,
+          },
+          ...(requestMetadata?.integration && {
+            integration: requestMetadata.integration,
           }),
-        retry,
-      );
+          request: {
+            method: request.method.toUpperCase(),
+            url: request.url,
+            urlParsed: {
+              protocol: parsedUrl.protocol.replace(":", ""),
+              hostname: parsedUrl.hostname,
+              pathname: parsedUrl.pathname,
+              search: parsedUrl.search,
+              port: parsedUrl.port ? parseInt(parsedUrl.port) : null,
+            },
+            headers: {},
+            hasBody: request.body !== null,
+            bodySizeBytes: undefined,
+            contentType: request.headers.get("content-type") || undefined,
+            clientType: "fetch",
+            callSite,
+            timestamp: new Date().toISOString(),
+          },
+        },
+        serviceName: requestMetadata?.serviceName,
+        actionName: requestMetadata?.actionName,
+        resourceName: requestMetadata?.resourceName,
+        traceId: requestMetadata?.traceId,
+        traceExternalId: requestMetadata?.traceExternalId,
+        agentId: requestMetadata?.agentId,
+        agentName: requestMetadata?.agentName,
+        qualifiers: requestMetadata?.qualifiers,
+        metadata: {
+          ...requestMetadata?.metadata,
+          onDemandPayment: true,
+        },
+      });
       existingTransactionId = newTransaction.id;
     } catch (error) {
       if (config.failureMode === "closed") throw error;

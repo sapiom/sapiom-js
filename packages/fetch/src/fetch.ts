@@ -11,7 +11,6 @@ import {
   AuthorizationConfig,
   PaymentConfig,
   CompletionConfig,
-  RetryConfig,
 } from "./interceptors.js";
 
 /**
@@ -23,12 +22,6 @@ export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
    * Overrides default timeout (30s) and poll interval (1s).
    */
   polling?: TransactionPollingConfig;
-
-  /**
-   * Retry configuration for transient failures (e.g. transaction creation 500s).
-   * Default: 3 attempts with 200ms base delay (exponential backoff).
-   */
-  retry?: RetryConfig;
 }
 
 /**
@@ -115,13 +108,11 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     sapiomClient,
     failureMode,
     polling: config?.polling,
-    retry: config?.retry,
   };
   const paymentConfig: PaymentConfig = {
     sapiomClient,
     failureMode,
     polling: config?.polling,
-    retry: config?.retry,
   };
   const completionConfig: CompletionConfig = { sapiomClient };
 
