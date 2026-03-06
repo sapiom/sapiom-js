@@ -1,5 +1,11 @@
 import { SapiomClient } from "./SapiomClient";
 
+// Mock randomUUID for deterministic idempotency key tests
+const mockRandomUUID = jest.fn(() => "test-uuid-1234-5678-9abc-def012345678");
+jest.mock("node:crypto", () => ({
+  randomUUID: () => mockRandomUUID(),
+}));
+
 // Mock global fetch
 const mockFetch = jest.fn();
 global.fetch = mockFetch as any;
@@ -55,6 +61,7 @@ describe("SapiomClient", () => {
       client = new SapiomClient({
         apiKey: "test-api-key",
         baseURL: "https://api.test.com",
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
       });
     });
 
@@ -227,6 +234,7 @@ describe("SapiomClient", () => {
         apiKey: "test-api-key",
         baseURL: "https://api.test.com",
         timeout: 100,
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
       });
 
       // Mock fetch that respects AbortController
@@ -363,6 +371,7 @@ describe("SapiomClient", () => {
       client = new SapiomClient({
         apiKey: "test-api-key",
         baseURL: "https://api.test.com",
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
       });
     });
 
@@ -454,6 +463,7 @@ describe("SapiomClient", () => {
       client = new SapiomClient({
         apiKey: "test-api-key",
         baseURL: "https://api.test.com",
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
       });
     });
 
@@ -683,6 +693,246 @@ describe("SapiomClient", () => {
           body: undefined,
         }),
       );
+    });
+  });
+
+  describe("retry logic", () => {
+    const FAST_RETRY = { maxAttempts: 3, baseDelayMs: 1 };
+
+    function mockOkResponse() {
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ success: true }),
+        text: jest.fn().mockResolvedValue('{"success":true}'),
+      };
+    }
+
+    function mock500Response() {
+      return {
+        ok: false,
+        status: 500,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ error: "Internal Server Error" }),
+        text: jest
+          .fn()
+          .mockResolvedValue('{"error":"Internal Server Error"}'),
+      };
+    }
+
+    function mock400Response(status = 400) {
+      return {
+        ok: false,
+        status,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ error: "Bad Request" }),
+        text: jest.fn().mockResolvedValue('{"error":"Bad Request"}'),
+      };
+    }
+
+    it("should retry on 5xx and succeed on 2nd attempt", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch
+        .mockResolvedValueOnce(mock500Response())
+        .mockResolvedValueOnce(mockOkResponse());
+
+      const result = await client.request({ url: "/test" });
+      expect(result).toEqual({ success: true });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("should retry on network TypeError", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce(mockOkResponse());
+
+      const result = await client.request({ url: "/test" });
+      expect(result).toEqual({ success: true });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("should NOT retry 4xx errors (throws immediately)", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch.mockResolvedValueOnce(mock400Response(422));
+
+      await expect(client.request({ url: "/test" })).rejects.toThrow(
+        /Request failed with status 422/,
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("should NOT retry timeout (throws immediately)", async () => {
+      jest.useFakeTimers();
+
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        timeout: 100,
+        retry: FAST_RETRY,
+      });
+
+      mockFetch.mockImplementation(
+        (_url: any, options: any) =>
+          new Promise((_resolve, reject) => {
+            const timer = setTimeout(() => {
+              _resolve(mockOkResponse());
+            }, 200);
+            if (options?.signal) {
+              options.signal.addEventListener("abort", () => {
+                clearTimeout(timer);
+                const error: any = new Error("The operation was aborted");
+                error.name = "AbortError";
+                reject(error);
+              });
+            }
+          }),
+      );
+
+      const requestPromise = client.request({ url: "/test" });
+      jest.advanceTimersByTime(101);
+
+      await expect(requestPromise).rejects.toThrow(/Request timeout/);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      jest.useRealTimers();
+    });
+
+    it("should exhaust maxAttempts then throw", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch
+        .mockResolvedValueOnce(mock500Response())
+        .mockResolvedValueOnce(mock500Response())
+        .mockResolvedValueOnce(mock500Response());
+
+      await expect(client.request({ url: "/test" })).rejects.toThrow(
+        /Request failed with status 500/,
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("should send same X-Idempotency-Key across retries for POST", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch
+        .mockResolvedValueOnce(mock500Response())
+        .mockResolvedValueOnce(mockOkResponse());
+
+      await client.request({ url: "/test", method: "POST", body: { a: 1 } });
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const headers1 = mockFetch.mock.calls[0][1].headers;
+      const headers2 = mockFetch.mock.calls[1][1].headers;
+      expect(headers1["X-Idempotency-Key"]).toBeDefined();
+      expect(headers1["X-Idempotency-Key"]).toBe(
+        headers2["X-Idempotency-Key"],
+      );
+    });
+
+    it("should NOT add X-Idempotency-Key for GET", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch.mockResolvedValueOnce(mockOkResponse());
+
+      await client.request({ url: "/test", method: "GET" });
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      expect(headers["X-Idempotency-Key"]).toBeUndefined();
+    });
+
+    it("should respect caller-provided idempotency key", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch.mockResolvedValueOnce(mockOkResponse());
+
+      await client.request({
+        url: "/test",
+        method: "POST",
+        body: { a: 1 },
+        headers: { "X-Idempotency-Key": "my-custom-key" },
+      });
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      expect(headers["X-Idempotency-Key"]).toBe("my-custom-key");
+    });
+
+    it("should respect caller-provided idempotency key in lowercase", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: FAST_RETRY,
+      });
+
+      mockFetch.mockResolvedValueOnce(mockOkResponse());
+
+      await client.request({
+        url: "/test",
+        method: "POST",
+        body: { a: 1 },
+        headers: { "x-idempotency-key": "my-lowercase-key" },
+      });
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      // Should not add a second key
+      expect(headers["X-Idempotency-Key"]).toBeUndefined();
+      expect(headers["x-idempotency-key"]).toBe("my-lowercase-key");
+    });
+
+    it("maxAttempts: 1 means no retries", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        baseURL: "https://api.test.com",
+        retry: { maxAttempts: 1, baseDelayMs: 1 },
+      });
+
+      mockFetch.mockResolvedValueOnce(mock500Response());
+
+      await expect(client.request({ url: "/test" })).rejects.toThrow(
+        /Request failed with status 500/,
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

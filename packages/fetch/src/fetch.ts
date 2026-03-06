@@ -3,6 +3,7 @@ import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
 } from "@sapiom/core";
+import type { TransactionPollingConfig } from "@sapiom/core";
 import {
   handleAuthorization,
   handlePayment,
@@ -15,7 +16,13 @@ import {
 /**
  * Configuration for Sapiom-enabled Fetch client
  */
-export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {}
+export interface SapiomFetchConfig extends BaseSapiomIntegrationConfig {
+  /**
+   * Polling configuration for transaction authorization.
+   * Overrides default timeout (30s) and poll interval (1s).
+   */
+  polling?: TransactionPollingConfig;
+}
 
 /**
  * Creates a Sapiom-enabled fetch function with automatic authorization and payment handling
@@ -97,8 +104,16 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
 
   const failureMode = config?.failureMode ?? "open";
 
-  const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
-  const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
+  const authConfig: AuthorizationConfig = {
+    sapiomClient,
+    failureMode,
+    polling: config?.polling,
+  };
+  const paymentConfig: PaymentConfig = {
+    sapiomClient,
+    failureMode,
+    polling: config?.polling,
+  };
   const completionConfig: CompletionConfig = { sapiomClient };
 
   const sapiomFetch = async (

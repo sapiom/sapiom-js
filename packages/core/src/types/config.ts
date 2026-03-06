@@ -1,4 +1,5 @@
 import { SapiomClient, SapiomClientConfig } from "../client/SapiomClient.js";
+import type { RetryConfig } from "../client/HttpClient.js";
 
 /**
  * Failure mode for Sapiom integration
@@ -90,6 +91,12 @@ export interface BaseSapiomIntegrationConfig {
     name: string;
     version: string;
   };
+
+  /**
+   * Retry configuration for transient failures (5xx, network errors).
+   * Default: 3 attempts with 200ms base delay (exponential backoff).
+   */
+  retry?: RetryConfig;
 }
 
 /**
@@ -144,5 +151,6 @@ export function initializeSapiomClient(
         ? parseInt(process.env.SAPIOM_TIMEOUT)
         : undefined),
     headers: config?.headers,
+    retry: config?.retry,
   });
 }
