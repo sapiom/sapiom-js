@@ -111,7 +111,8 @@ export class HttpClient {
           throw error;
         }
         if (attempt < this.retry.maxAttempts - 1) {
-          const delay = this.retry.baseDelayMs * Math.pow(2, attempt);
+          const base = this.retry.baseDelayMs * Math.pow(2, attempt);
+          const delay = Math.random() * base; // full jitter: spreads retries across [0, base]
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
