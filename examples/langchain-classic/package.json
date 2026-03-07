@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@langchain/anthropic": "^0.3.0",
-    "@langchain/core": "^0.3.0",
+    "@langchain/core": "^1.1.8",
     "@langchain/langgraph": "^0.2.0",
     "@langchain/openai": "^1.2.2",
     "@sapiom/langchain-classic": "latest",
