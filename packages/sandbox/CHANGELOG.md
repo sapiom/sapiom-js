@@ -1,5 +1,11 @@
 # @sapiom/sandbox
 
+## 0.5.0
+
+### Minor Changes
+
+- 96afc06: reverts "yield final stdout/stderr before closing"
+
 ## 0.4.0
 
 ### Minor Changes
