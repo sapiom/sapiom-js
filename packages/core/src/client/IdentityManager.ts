@@ -55,10 +55,16 @@ export class IdentityManager {
    * Get the current identity token, fetching lazily if needed.
    * Returns null if the facilitator is unreachable.
    */
-  async getToken(): Promise<{ identity: string; identityExpiresAt: string } | null> {
+  async getToken(): Promise<{
+    identity: string;
+    identityExpiresAt: string;
+  } | null> {
     const token = await this.resolveToken();
     if (!token) return null;
-    return { identity: token.jwt, identityExpiresAt: token.expiresAt.toISOString() };
+    return {
+      identity: token.jwt,
+      identityExpiresAt: token.expiresAt.toISOString(),
+    };
   }
 
   /**
@@ -173,7 +179,11 @@ export class IdentityManager {
     }, BACKGROUND_REFRESH_INTERVAL_MS);
 
     // unref() so the timer doesn't prevent clean process exit
-    if (this.refreshTimer && typeof this.refreshTimer === "object" && "unref" in this.refreshTimer) {
+    if (
+      this.refreshTimer &&
+      typeof this.refreshTimer === "object" &&
+      "unref" in this.refreshTimer
+    ) {
       (this.refreshTimer as NodeJS.Timeout).unref();
     }
   }
@@ -202,7 +212,8 @@ export class IdentityManager {
       const aud = payload.aud;
       if (!aud) return [];
       if (typeof aud === "string") return [aud];
-      if (Array.isArray(aud)) return aud.filter((a: unknown) => typeof a === "string");
+      if (Array.isArray(aud))
+        return aud.filter((a: unknown) => typeof a === "string");
       return [];
     } catch {
       return [];

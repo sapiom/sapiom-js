@@ -2,7 +2,6 @@ import { ApiKeyAPI } from "./ApiKeyAPI.js";
 import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import type { RetryConfig } from "./HttpClient.js";
 import { IdentityManager } from "./IdentityManager.js";
-import type { IdentityManagerOptions } from "./IdentityManager.js";
 import { TransactionAPI } from "./TransactionAPI.js";
 
 /**

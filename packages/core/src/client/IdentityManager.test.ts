@@ -1,4 +1,5 @@
 import { IdentityManager } from "./IdentityManager";
+import { HttpClient } from "./HttpClient";
 
 // Mock global fetch
 const mockFetch = jest.fn();
@@ -13,7 +14,6 @@ jest.mock("node:crypto", () => ({
  * Helper: create a minimal HttpClient that uses mocked global fetch
  */
 function createMockHttpClient(baseURL = "https://api.sapiom.ai") {
-  const { HttpClient } = require("./HttpClient");
   return new HttpClient({
     baseURL,
     timeout: 5000,
@@ -29,7 +29,9 @@ function createMockHttpClient(baseURL = "https://api.sapiom.ai") {
  * Helper: create a JWT with given payload (no signature verification needed)
  */
 function createTestJWT(payload: Record<string, any>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const header = Buffer.from(
+    JSON.stringify({ alg: "RS256", typ: "JWT" }),
+  ).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = "fake-signature";
   return `${header}.${body}.${signature}`;
@@ -57,8 +59,14 @@ function mockTokenResponse(
       get: (name: string) =>
         name === "content-type" ? "application/json" : null,
     },
-    json: jest.fn().mockResolvedValue({ identity: jwt, identityExpiresAt: expiresAt }),
-    text: jest.fn().mockResolvedValue(JSON.stringify({ identity: jwt, identityExpiresAt: expiresAt })),
+    json: jest
+      .fn()
+      .mockResolvedValue({ identity: jwt, identityExpiresAt: expiresAt }),
+    text: jest
+      .fn()
+      .mockResolvedValue(
+        JSON.stringify({ identity: jwt, identityExpiresAt: expiresAt }),
+      ),
   });
 
   return { jwt, expiresAt };
@@ -407,8 +415,14 @@ describe("IdentityManager", () => {
           get: (name: string) =>
             name === "content-type" ? "application/json" : null,
         },
-        json: jest.fn().mockResolvedValue({ identity: jwt, identityExpiresAt: expiresAt }),
-        text: jest.fn().mockResolvedValue(JSON.stringify({ identity: jwt, identityExpiresAt: expiresAt })),
+        json: jest
+          .fn()
+          .mockResolvedValue({ identity: jwt, identityExpiresAt: expiresAt }),
+        text: jest
+          .fn()
+          .mockResolvedValue(
+            JSON.stringify({ identity: jwt, identityExpiresAt: expiresAt }),
+          ),
       });
 
       const headers = await manager.getHeaderIfMatch(
@@ -432,8 +446,20 @@ describe("IdentityManager", () => {
           get: (name: string) =>
             name === "content-type" ? "application/json" : null,
         },
-        json: jest.fn().mockResolvedValue({ identity: "not-a-jwt", identityExpiresAt: expiresAt }),
-        text: jest.fn().mockResolvedValue(JSON.stringify({ identity: "not-a-jwt", identityExpiresAt: expiresAt })),
+        json: jest
+          .fn()
+          .mockResolvedValue({
+            identity: "not-a-jwt",
+            identityExpiresAt: expiresAt,
+          }),
+        text: jest
+          .fn()
+          .mockResolvedValue(
+            JSON.stringify({
+              identity: "not-a-jwt",
+              identityExpiresAt: expiresAt,
+            }),
+          ),
       });
 
       const headers = await manager.getHeaderIfMatch(
