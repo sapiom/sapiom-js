@@ -225,8 +225,8 @@ export function createClient(
         return makeRequest<T>(request);
       }
 
-      // Normalize request to ensure headers is always defined
-      const normalizedRequest = { ...request, headers: request.headers || {} };
+      // Normalize request: shallow-copy headers to avoid mutating caller's object
+      const normalizedRequest = { ...request, headers: { ...request.headers } };
 
       // Attach identity header if target matches token audience
       if (sapiomClient.identity) {
