@@ -1,6 +1,8 @@
 import { ApiKeyAPI } from "./ApiKeyAPI.js";
 import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import type { RetryConfig } from "./HttpClient.js";
+import { IdentityManager } from "./IdentityManager.js";
+import type { IdentityManagerOptions } from "./IdentityManager.js";
 import { TransactionAPI } from "./TransactionAPI.js";
 
 /**
@@ -34,6 +36,12 @@ export interface SapiomClientConfig {
    * Default: 3 attempts with 200ms base delay (exponential backoff).
    */
   retry?: RetryConfig;
+
+  /**
+   * Enable proactive timer-based identity token refresh for long-running servers.
+   * @see IdentityManagerOptions.backgroundRefresh
+   */
+  backgroundRefresh?: boolean;
 }
 
 /**
@@ -72,6 +80,7 @@ export interface SapiomClientConfig {
 export class SapiomClient {
   private readonly httpClient: HttpClient;
   public readonly apiKeys: ApiKeyAPI;
+  public readonly identity: IdentityManager;
   public readonly transactions: TransactionAPI;
 
   constructor(config: SapiomClientConfig) {
@@ -92,6 +101,9 @@ export class SapiomClient {
 
     // Initialize API modules
     this.apiKeys = new ApiKeyAPI(this.httpClient);
+    this.identity = new IdentityManager(this.httpClient, {
+      backgroundRefresh: config.backgroundRefresh,
+    });
     this.transactions = new TransactionAPI(this.httpClient);
   }
 

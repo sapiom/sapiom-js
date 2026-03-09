@@ -129,6 +129,18 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
       return globalThis.fetch(request);
     }
 
+    // Attach identity header if target matches token audience
+    if (sapiomClient.identity) {
+      const identityHeaders = await sapiomClient.identity.getHeaderIfMatch(
+        request.url,
+      );
+      if (identityHeaders["Sapiom-Identity"]) {
+        const headers = new Headers(request.headers);
+        headers.set("Sapiom-Identity", identityHeaders["Sapiom-Identity"]);
+        request = new Request(request, { headers });
+      }
+    }
+
     request = await handleAuthorization(request, authConfig, defaultMetadata);
 
     const startTime = Date.now();

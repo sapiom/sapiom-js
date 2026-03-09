@@ -97,6 +97,13 @@ export interface BaseSapiomIntegrationConfig {
    * Default: 3 attempts with 200ms base delay (exponential backoff).
    */
   retry?: RetryConfig;
+
+  /**
+   * Enable proactive timer-based identity token refresh for long-running servers.
+   * When true, the SDK periodically refreshes the identity token before it expires.
+   * Default: false (optimistic refresh triggered by requests near token expiry)
+   */
+  backgroundRefresh?: boolean;
 }
 
 /**
@@ -152,5 +159,6 @@ export function initializeSapiomClient(
         : undefined),
     headers: config?.headers,
     retry: config?.retry,
+    backgroundRefresh: config?.backgroundRefresh,
   });
 }
