@@ -1,5 +1,11 @@
 # @sapiom/core
 
+## 0.5.0
+
+### Minor Changes
+
+- 658e8fb: New: SDK Identity Token Lifecycle. Adds automatic Sapiom-Identity JWT management across all SDK packages. The SDK lazily fetches identity tokens from POST /v1/auth/tokens, caches them in-memory, and attaches the Sapiom-Identity header to requests whose target hostname matches the token's aud claim (direct or subdomain match).
+
 ## 0.4.0
 
 ### Minor Changes
