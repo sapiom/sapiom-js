@@ -11,6 +11,8 @@
 export { SapiomClient } from "./client/SapiomClient.js";
 export type { SapiomClientConfig } from "./client/SapiomClient.js";
 export type { RetryConfig } from "./client/HttpClient.js";
+export { IdentityManager } from "./client/IdentityManager.js";
+export type { IdentityManagerOptions } from "./client/IdentityManager.js";
 export { ApiKeyAPI } from "./client/ApiKeyAPI.js";
 export { TransactionAPI } from "./client/TransactionAPI.js";
 

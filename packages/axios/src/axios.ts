@@ -89,6 +89,28 @@ export function withSapiom(
 
   (axiosInstance as any).__sapiomFailureMode = failureMode;
 
+  // Identity header interceptor: attach Sapiom-Identity when target matches token audience
+  if (sapiomClient.identity) {
+    axiosInstance.interceptors.request.use(async (config) => {
+      const url = config.url
+        ? config.baseURL
+          ? `${config.baseURL}${config.url}`
+          : config.url
+        : undefined;
+      if (url) {
+        const identityHeaders =
+          await sapiomClient.identity.getHeaderIfMatch(url);
+        if (identityHeaders["Sapiom-Identity"]) {
+          config.headers.set(
+            "Sapiom-Identity",
+            identityHeaders["Sapiom-Identity"],
+          );
+        }
+      }
+      return config;
+    });
+  }
+
   addAuthorizationInterceptor(axiosInstance, { sapiomClient, failureMode });
   // IMPORTANT: Completion interceptor must be added BEFORE payment interceptor
   // because Axios response interceptors run in LIFO order (last added runs first).
