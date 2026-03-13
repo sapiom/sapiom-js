@@ -1,5 +1,11 @@
 # @sapiom/sandbox
 
+## 0.7.0
+
+### Minor Changes
+
+- 0f8d6cd: support keepAlive and processTimeout opts
+
 ## 0.6.0
 
 ### Minor Changes
