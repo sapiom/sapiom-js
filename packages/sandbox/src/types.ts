@@ -104,6 +104,18 @@ export interface ExecOptions {
   /** Timeout in ms when waiting for completion. @default 60000 */
   timeout?: number;
 
+  /**
+   * Prevent the sandbox from entering standby while this process runs.
+   * Passed through to the Blaxel process API.
+   */
+  keepAlive?: boolean;
+
+  /**
+   * Auto-terminate the process after this many seconds.
+   * 0 means no auto-termination. Passed through to the Blaxel process API.
+   */
+  processTimeout?: number;
+
   /** AbortSignal to cancel the operation. */
   signal?: AbortSignal;
 }

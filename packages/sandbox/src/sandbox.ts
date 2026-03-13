@@ -423,13 +423,15 @@ export class SapiomSandbox {
 
   private async _createProcess(
     command: string,
-    opts?: ExecStreamOptions,
+    opts?: ExecStreamOptions & { keepAlive?: boolean; processTimeout?: number },
   ): Promise<ProcessCreateResponse> {
     const body: Record<string, unknown> = { command };
     if (opts?.cwd !== undefined) {
       body.cwd = resolvePath(this.workspaceRoot, opts.cwd);
     }
     if (opts?.env !== undefined) body.env = opts.env;
+    if (opts?.keepAlive !== undefined) body.keepAlive = opts.keepAlive;
+    if (opts?.processTimeout !== undefined) body.timeout = opts.processTimeout;
 
     const response = await this._fetch(
       `${this._baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/process`,
