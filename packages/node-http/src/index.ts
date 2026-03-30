@@ -13,3 +13,6 @@ export {
   AuthorizationTimeoutError,
 } from "./node-http.js";
 export type { SapiomNodeHttpConfig } from "./node-http.js";
+
+// Re-export commonly used types from core
+export type { TransactionPollingConfig } from "@sapiom/core";

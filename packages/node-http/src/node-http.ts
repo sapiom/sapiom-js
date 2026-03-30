@@ -11,6 +11,7 @@ import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
 } from "@sapiom/core";
+import type { TransactionPollingConfig } from "@sapiom/core";
 import {
   handleAuthorization,
   handlePayment,
@@ -23,7 +24,13 @@ import {
 /**
  * Configuration for Sapiom-enabled Node.js HTTP client
  */
-export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {}
+export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
+  /**
+   * Polling configuration for transaction authorization.
+   * Overrides default timeout (30s) and poll interval (1s).
+   */
+  polling?: TransactionPollingConfig;
+}
 
 /**
  * Creates a Sapiom-enabled Node.js HTTP client with automatic authorization and payment handling
@@ -120,8 +127,8 @@ export function createClient(
 
   const failureMode = config?.failureMode ?? "open";
 
-  const authConfig: AuthorizationConfig = { sapiomClient, failureMode };
-  const paymentConfig: PaymentConfig = { sapiomClient, failureMode };
+  const authConfig: AuthorizationConfig = { sapiomClient, failureMode, polling: config?.polling };
+  const paymentConfig: PaymentConfig = { sapiomClient, failureMode, polling: config?.polling };
   const completionConfig: CompletionConfig = { sapiomClient };
 
   async function makeRequest<T = any>(

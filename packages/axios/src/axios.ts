@@ -4,6 +4,7 @@ import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
 } from "@sapiom/core";
+import type { TransactionPollingConfig } from "@sapiom/core";
 import {
   addAuthorizationInterceptor,
   addPaymentInterceptor,
@@ -13,7 +14,13 @@ import {
 /**
  * Configuration for Sapiom-enabled Axios client
  */
-export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {}
+export interface SapiomAxiosConfig extends BaseSapiomIntegrationConfig {
+  /**
+   * Polling configuration for transaction authorization.
+   * Overrides default timeout (30s) and poll interval (1s).
+   */
+  polling?: TransactionPollingConfig;
+}
 
 /**
  * Creates a Sapiom-enabled Axios client with automatic authorization and payment handling
@@ -111,12 +118,12 @@ export function withSapiom(
     });
   }
 
-  addAuthorizationInterceptor(axiosInstance, { sapiomClient, failureMode });
+  addAuthorizationInterceptor(axiosInstance, { sapiomClient, failureMode, polling: config?.polling });
   // IMPORTANT: Completion interceptor must be added BEFORE payment interceptor
   // because Axios response interceptors run in LIFO order (last added runs first).
   // We want: request -> payment handling (retry on 402) -> completion
   addCompletionInterceptor(axiosInstance, { sapiomClient });
-  addPaymentInterceptor(axiosInstance, { sapiomClient, failureMode });
+  addPaymentInterceptor(axiosInstance, { sapiomClient, failureMode, polling: config?.polling });
 
   (axiosInstance as any).__sapiomClient = sapiomClient;
 
