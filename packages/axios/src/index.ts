@@ -21,6 +21,7 @@ export type {
   SapiomClient,
   SapiomClientConfig,
   BaseSapiomIntegrationConfig,
+  TransactionPollingConfig,
   TransactionResponse,
   PaymentTransactionResponse,
   TransactionStatus,

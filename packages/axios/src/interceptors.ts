@@ -19,12 +19,15 @@ import {
   FailureMode,
 } from "@sapiom/core";
 
+import type { TransactionPollingConfig } from "@sapiom/core";
+
 /**
  * Authorization interceptor configuration
  */
 export interface AuthorizationInterceptorConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
+  polling?: TransactionPollingConfig;
 }
 
 /**
@@ -33,11 +36,15 @@ export interface AuthorizationInterceptorConfig {
 export interface PaymentInterceptorConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
+  polling?: TransactionPollingConfig;
 }
 
 const SDK_VERSION = "1.0.0";
-const AUTHORIZATION_TIMEOUT = 30000;
-const POLL_INTERVAL = 1000;
+
+const DEFAULT_POLLING: Required<TransactionPollingConfig> = {
+  timeout: 30000,
+  pollInterval: 1000,
+};
 
 /**
  * Custom error classes
@@ -247,10 +254,8 @@ export function addAuthorizationInterceptor(
   axiosInstance: AxiosInstance,
   config: AuthorizationInterceptorConfig,
 ): () => void {
-  const poller = new TransactionPoller(config.sapiomClient, {
-    timeout: AUTHORIZATION_TIMEOUT,
-    pollInterval: POLL_INTERVAL,
-  });
+  const polling = { ...DEFAULT_POLLING, ...config.polling };
+  const poller = new TransactionPoller(config.sapiomClient, polling);
 
   const interceptorId = axiosInstance.interceptors.request.use(
     async (axiosConfig: InternalAxiosRequestConfig) => {
@@ -329,7 +334,7 @@ export function addAuthorizationInterceptor(
               throw new AuthorizationTimeoutError(
                 existingTransactionId,
                 axiosConfig.url || "",
-                AUTHORIZATION_TIMEOUT,
+                polling.timeout,
               );
             }
           }
@@ -516,7 +521,7 @@ export function addAuthorizationInterceptor(
         throw new AuthorizationTimeoutError(
           transaction.id,
           endpoint,
-          AUTHORIZATION_TIMEOUT,
+          polling.timeout,
         );
       }
     },
@@ -559,10 +564,8 @@ export function addPaymentInterceptor(
   axiosInstance: AxiosInstance,
   config: PaymentInterceptorConfig,
 ): () => void {
-  const poller = new TransactionPoller(config.sapiomClient, {
-    timeout: AUTHORIZATION_TIMEOUT,
-    pollInterval: POLL_INTERVAL,
-  });
+  const polling = { ...DEFAULT_POLLING, ...config.polling };
+  const poller = new TransactionPoller(config.sapiomClient, polling);
 
   const interceptorId = axiosInstance.interceptors.response.use(
     (response: AxiosResponse) => response,

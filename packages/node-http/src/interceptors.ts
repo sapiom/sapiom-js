@@ -14,12 +14,15 @@ import {
   FailureMode,
 } from "@sapiom/core";
 
+import type { TransactionPollingConfig } from "@sapiom/core";
+
 /**
  * Authorization configuration
  */
 export interface AuthorizationConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
+  polling?: TransactionPollingConfig;
 }
 
 /**
@@ -28,11 +31,15 @@ export interface AuthorizationConfig {
 export interface PaymentConfig {
   sapiomClient: SapiomClient;
   failureMode: FailureMode;
+  polling?: TransactionPollingConfig;
 }
 
 const SDK_VERSION = "1.0.0";
-const AUTHORIZATION_TIMEOUT = 30000;
-const POLL_INTERVAL = 1000;
+
+const DEFAULT_POLLING: Required<TransactionPollingConfig> = {
+  timeout: 30000,
+  pollInterval: 1000,
+};
 
 /**
  * Custom error classes
@@ -107,16 +114,15 @@ export async function handleAuthorization(
   config: AuthorizationConfig,
   defaultMetadata?: Record<string, any>,
 ): Promise<HttpRequest> {
+  const polling = { ...DEFAULT_POLLING, ...config.polling };
+
   const existingTransactionId = getHeader(
     request.headers,
     "X-Sapiom-Transaction-Id",
   );
 
   if (existingTransactionId) {
-    const poller = new TransactionPoller(config.sapiomClient, {
-      timeout: AUTHORIZATION_TIMEOUT,
-      pollInterval: POLL_INTERVAL,
-    });
+    const poller = new TransactionPoller(config.sapiomClient, polling);
 
     let transaction;
     try {
@@ -160,7 +166,7 @@ export async function handleAuthorization(
           throw new AuthorizationTimeoutError(
             existingTransactionId,
             endpoint,
-            AUTHORIZATION_TIMEOUT,
+            polling.timeout,
           );
         }
       }
@@ -275,10 +281,7 @@ export async function handleAuthorization(
 
   let result;
   try {
-    const poller = new TransactionPoller(config.sapiomClient, {
-      timeout: AUTHORIZATION_TIMEOUT,
-      pollInterval: POLL_INTERVAL,
-    });
+    const poller = new TransactionPoller(config.sapiomClient, polling);
     result = await poller.waitForAuthorization(transaction.id);
   } catch (error) {
     if (config.failureMode === "closed") throw error;
@@ -304,7 +307,7 @@ export async function handleAuthorization(
     throw new AuthorizationTimeoutError(
       transaction.id,
       endpoint,
-      AUTHORIZATION_TIMEOUT,
+      polling.timeout,
     );
   }
 }
@@ -380,12 +383,10 @@ export async function handlePayment(
   }
 
   if (transaction.status !== TransactionStatus.AUTHORIZED) {
+    const polling = { ...DEFAULT_POLLING, ...config.polling };
     let authResult;
     try {
-      const poller = new TransactionPoller(config.sapiomClient, {
-        timeout: AUTHORIZATION_TIMEOUT,
-        pollInterval: POLL_INTERVAL,
-      });
+      const poller = new TransactionPoller(config.sapiomClient, polling);
       authResult = await poller.waitForAuthorization(transaction.id);
     } catch (pollError) {
       if (config.failureMode === "closed") throw pollError;
