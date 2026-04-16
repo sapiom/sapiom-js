@@ -1,4 +1,15 @@
 import { createFetch } from "@sapiom/fetch";
+import {
+  DEFAULT_CONCURRENCY,
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_PART_SIZE,
+  DEFAULT_RETRY_BASE_DELAY_MS,
+  ensureOk,
+  planParts,
+  runWithConcurrency,
+  toBlob,
+  withRetry,
+} from "./multipart.js";
 import type {
   SandboxCreateOptions,
   SandboxCreateResponse,
@@ -9,6 +20,10 @@ import type {
   OutputLine,
   ProcessCreateResponse,
   ProcessStatusResponse,
+  MultipartInitiateResponse,
+  MultipartPartInfo,
+  MultipartUploadedPart,
+  UploadFileOptions,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://blaxel.services.sapiom.ai";
@@ -54,6 +69,14 @@ function fileUrl(
     ? absolutePath.slice(1)
     : absolutePath;
   return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/${encodePathSegments(cleanPath)}`;
+}
+
+function multipartUrl(
+  baseUrl: string,
+  sandboxName: string,
+  suffix: string,
+): string {
+  return `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/filesystem/multipart${suffix}`;
 }
 
 function parseOutputLine(line: string): OutputLine {
@@ -186,6 +209,236 @@ export class SapiomSandbox {
 
     const data = (await response.json()) as { content: string };
     return data.content;
+  }
+
+  /**
+   * Upload a file to the sandbox using multipart upload.
+   *
+   * Handles the full initiate → part upload → complete lifecycle, with
+   * parallel part uploads and automatic abort on any failure (including
+   * `signal` aborts).
+   *
+   * Prefer this over {@link writeFile} for binary content or any file over
+   * a few MB. `writeFile` stays available for small text files.
+   *
+   * @param path - File path relative to workspaceRoot.
+   * @param content - Blob, Uint8Array, or string. Strings are UTF-8 encoded.
+   * @param opts - Upload options.
+   */
+  async uploadFile(
+    path: string,
+    content: Blob | Uint8Array | string,
+    opts?: UploadFileOptions,
+  ): Promise<void> {
+    assertRelativePath(path);
+
+    const blob = toBlob(content);
+    const partSize = opts?.partSize ?? DEFAULT_PART_SIZE;
+    const concurrency = opts?.concurrency ?? DEFAULT_CONCURRENCY;
+    const totalBytes = blob.size;
+    const plans = planParts(totalBytes, partSize);
+
+    const { uploadId } = await this.initiateMultipartUpload(path, {
+      permissions: opts?.permissions,
+      signal: opts?.signal,
+    });
+
+    try {
+      let partsUploaded = 0;
+      let bytesUploaded = 0;
+
+      const maxRetries = opts?.maxRetries ?? DEFAULT_MAX_RETRIES;
+      const retryBaseDelayMs =
+        opts?.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+
+      const uploaded = await runWithConcurrency(
+        plans,
+        concurrency,
+        async (plan) => {
+          const slice = blob.slice(plan.start, plan.end);
+          const ack = await withRetry(
+            () =>
+              this.uploadPart(uploadId, plan.partNumber, slice, {
+                signal: opts?.signal,
+              }),
+            { maxRetries, retryBaseDelayMs, signal: opts?.signal },
+          );
+          partsUploaded += 1;
+          bytesUploaded += ack.size;
+          opts?.onPartUploaded?.(ack, {
+            partsUploaded,
+            totalParts: plans.length,
+            bytesUploaded,
+            totalBytes,
+          });
+          return ack;
+        },
+      );
+
+      const parts = uploaded
+        .map(({ partNumber, etag }) => ({ partNumber, etag }))
+        .sort((a, b) => a.partNumber - b.partNumber);
+
+      await this.completeMultipartUpload(uploadId, parts, {
+        signal: opts?.signal,
+      });
+    } catch (err) {
+      // Best-effort cleanup; don't mask the original error.
+      this.abortMultipartUpload(uploadId).catch(() => {});
+      throw err;
+    }
+  }
+
+  /**
+   * Initiate a multipart upload for a file path.
+   *
+   * Low-level: prefer {@link uploadFile} for the full lifecycle. Use this
+   * when you need custom retry/progress/resumable behavior.
+   */
+  async initiateMultipartUpload(
+    path: string,
+    opts?: { permissions?: string; signal?: AbortSignal },
+  ): Promise<MultipartInitiateResponse> {
+    assertRelativePath(path);
+    const cleanPath = path.startsWith("/") ? path.slice(1) : path;
+    const url = multipartUrl(
+      this._baseUrl,
+      this.name,
+      `/initiate/${encodePathSegments(cleanPath)}`,
+    );
+
+    const body: Record<string, unknown> = {};
+    if (opts?.permissions !== undefined) body.permissions = opts.permissions;
+
+    const response = await ensureOk(
+      await this._fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+      }),
+      `Failed to initiate multipart upload for '${path}'`,
+    );
+
+    return (await response.json()) as MultipartInitiateResponse;
+  }
+
+  /**
+   * Upload a single part of a multipart upload.
+   *
+   * Low-level: prefer {@link uploadFile} for the full lifecycle.
+   *
+   * @param uploadId - Upload session ID from {@link initiateMultipartUpload}.
+   * @param partNumber - 1-indexed part number (1 to 10000).
+   * @param part - The part bytes.
+   */
+  async uploadPart(
+    uploadId: string,
+    partNumber: number,
+    part: Blob | Uint8Array,
+    opts?: { signal?: AbortSignal },
+  ): Promise<MultipartUploadedPart> {
+    const url =
+      multipartUrl(
+        this._baseUrl,
+        this.name,
+        `/${encodeURIComponent(uploadId)}/part`,
+      ) + `?partNumber=${encodeURIComponent(String(partNumber))}`;
+
+    const form = new FormData();
+    form.append("file", part instanceof Blob ? part : new Blob([part]));
+
+    // Intentionally no Content-Type header — fetch sets the multipart
+    // boundary automatically.
+    const response = await ensureOk(
+      await this._fetch(url, {
+        method: "PUT",
+        body: form,
+        signal: opts?.signal,
+      }),
+      `Failed to upload part ${partNumber} for upload '${uploadId}'`,
+    );
+
+    return (await response.json()) as MultipartUploadedPart;
+  }
+
+  /**
+   * Complete a multipart upload by committing the uploaded parts.
+   *
+   * Low-level: prefer {@link uploadFile} for the full lifecycle.
+   */
+  async completeMultipartUpload(
+    uploadId: string,
+    parts: Array<{ partNumber: number; etag: string }>,
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ message: string; path: string }> {
+    const url = multipartUrl(
+      this._baseUrl,
+      this.name,
+      `/${encodeURIComponent(uploadId)}/complete`,
+    );
+
+    const response = await ensureOk(
+      await this._fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts }),
+        signal: opts?.signal,
+      }),
+      `Failed to complete multipart upload '${uploadId}'`,
+    );
+
+    return (await response.json()) as { message: string; path: string };
+  }
+
+  /**
+   * Abort a multipart upload and clean up any uploaded parts on the server.
+   */
+  async abortMultipartUpload(
+    uploadId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<void> {
+    const url = multipartUrl(
+      this._baseUrl,
+      this.name,
+      `/${encodeURIComponent(uploadId)}`,
+    );
+
+    await ensureOk(
+      await this._fetch(url, {
+        method: "DELETE",
+        signal: opts?.signal,
+      }),
+      `Failed to abort multipart upload '${uploadId}'`,
+    );
+  }
+
+  /**
+   * List the parts already uploaded for a multipart upload.
+   *
+   * Useful for resumable uploads: after reconnecting, call this to see
+   * which part numbers you still need to upload.
+   */
+  async listMultipartParts(
+    uploadId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<MultipartPartInfo[]> {
+    const url = multipartUrl(
+      this._baseUrl,
+      this.name,
+      `/${encodeURIComponent(uploadId)}/parts`,
+    );
+
+    const response = await ensureOk(
+      await this._fetch(url, { signal: opts?.signal }),
+      `Failed to list parts for multipart upload '${uploadId}'`,
+    );
+
+    const data = (await response.json()) as {
+      uploadId: string;
+      parts: MultipartPartInfo[];
+    };
+    return data.parts;
   }
 
   /**

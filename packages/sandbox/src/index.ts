@@ -1,4 +1,5 @@
 export { SapiomSandbox } from "./sandbox.js";
+export { SandboxHttpError } from "./multipart.js";
 export type {
   SandboxCreateOptions,
   SandboxCreateResponse,
@@ -11,4 +12,9 @@ export type {
   OutputLine,
   ProcessCreateResponse,
   ProcessStatusResponse,
+  MultipartInitiateResponse,
+  MultipartUploadedPart,
+  MultipartPartInfo,
+  UploadFileOptions,
+  UploadProgress,
 } from "./types.js";
