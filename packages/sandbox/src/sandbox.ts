@@ -1,10 +1,14 @@
 import { createFetch } from "@sapiom/fetch";
 import {
   DEFAULT_CONCURRENCY,
+  DEFAULT_MAX_RETRIES,
   DEFAULT_PART_SIZE,
+  DEFAULT_RETRY_BASE_DELAY_MS,
+  ensureOk,
   planParts,
   runWithConcurrency,
   toBlob,
+  withRetry,
 } from "./multipart.js";
 import type {
   SandboxCreateOptions,
@@ -243,14 +247,22 @@ export class SapiomSandbox {
       let partsUploaded = 0;
       let bytesUploaded = 0;
 
+      const maxRetries = opts?.maxRetries ?? DEFAULT_MAX_RETRIES;
+      const retryBaseDelayMs =
+        opts?.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+
       const uploaded = await runWithConcurrency(
         plans,
         concurrency,
         async (plan) => {
           const slice = blob.slice(plan.start, plan.end);
-          const ack = await this.uploadPart(uploadId, plan.partNumber, slice, {
-            signal: opts?.signal,
-          });
+          const ack = await withRetry(
+            () =>
+              this.uploadPart(uploadId, plan.partNumber, slice, {
+                signal: opts?.signal,
+              }),
+            { maxRetries, retryBaseDelayMs, signal: opts?.signal },
+          );
           partsUploaded += 1;
           bytesUploaded += ack.size;
           opts?.onPartUploaded?.(ack, {
@@ -298,19 +310,15 @@ export class SapiomSandbox {
     const body: Record<string, unknown> = {};
     if (opts?.permissions !== undefined) body.permissions = opts.permissions;
 
-    const response = await this._fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: opts?.signal,
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to initiate multipart upload for '${path}': ${response.status} ${text}`,
-      );
-    }
+    const response = await ensureOk(
+      await this._fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+      }),
+      `Failed to initiate multipart upload for '${path}'`,
+    );
 
     return (await response.json()) as MultipartInitiateResponse;
   }
@@ -342,18 +350,14 @@ export class SapiomSandbox {
 
     // Intentionally no Content-Type header — fetch sets the multipart
     // boundary automatically.
-    const response = await this._fetch(url, {
-      method: "PUT",
-      body: form,
-      signal: opts?.signal,
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to upload part ${partNumber} for upload '${uploadId}': ${response.status} ${text}`,
-      );
-    }
+    const response = await ensureOk(
+      await this._fetch(url, {
+        method: "PUT",
+        body: form,
+        signal: opts?.signal,
+      }),
+      `Failed to upload part ${partNumber} for upload '${uploadId}'`,
+    );
 
     return (await response.json()) as MultipartUploadedPart;
   }
@@ -374,19 +378,15 @@ export class SapiomSandbox {
       `/${encodeURIComponent(uploadId)}/complete`,
     );
 
-    const response = await this._fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parts }),
-      signal: opts?.signal,
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to complete multipart upload '${uploadId}': ${response.status} ${text}`,
-      );
-    }
+    const response = await ensureOk(
+      await this._fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts }),
+        signal: opts?.signal,
+      }),
+      `Failed to complete multipart upload '${uploadId}'`,
+    );
 
     return (await response.json()) as { message: string; path: string };
   }
@@ -404,17 +404,13 @@ export class SapiomSandbox {
       `/${encodeURIComponent(uploadId)}`,
     );
 
-    const response = await this._fetch(url, {
-      method: "DELETE",
-      signal: opts?.signal,
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to abort multipart upload '${uploadId}': ${response.status} ${text}`,
-      );
-    }
+    await ensureOk(
+      await this._fetch(url, {
+        method: "DELETE",
+        signal: opts?.signal,
+      }),
+      `Failed to abort multipart upload '${uploadId}'`,
+    );
   }
 
   /**
@@ -433,14 +429,10 @@ export class SapiomSandbox {
       `/${encodeURIComponent(uploadId)}/parts`,
     );
 
-    const response = await this._fetch(url, { signal: opts?.signal });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Failed to list parts for multipart upload '${uploadId}': ${response.status} ${text}`,
-      );
-    }
+    const response = await ensureOk(
+      await this._fetch(url, { signal: opts?.signal }),
+      `Failed to list parts for multipart upload '${uploadId}'`,
+    );
 
     const data = (await response.json()) as {
       uploadId: string;

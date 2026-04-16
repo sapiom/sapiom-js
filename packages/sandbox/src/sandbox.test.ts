@@ -488,6 +488,105 @@ describe("SapiomSandbox — multipart methods", () => {
       expect(peak).toBeGreaterThanOrEqual(2);
     });
 
+    it("retries failed parts on retryable status codes", async () => {
+      const attemptsByPart: Record<number, number> = {};
+      const { sandbox } = await makeSandbox([
+        (call) => {
+          if (call.init.method === "POST" && call.url.includes("/initiate/")) {
+            return jsonResponse({ uploadId: "u-retry", path: "p" });
+          }
+          if (call.init.method === "PUT" && call.url.includes("/part")) {
+            const n = Number(
+              new URL(call.url).searchParams.get("partNumber")!,
+            );
+            attemptsByPart[n] = (attemptsByPart[n] ?? 0) + 1;
+            // Part 2 fails twice with 503 before succeeding
+            if (n === 2 && attemptsByPart[n] < 3) {
+              return new Response("upstream hiccup", { status: 503 });
+            }
+            return jsonResponse({ partNumber: n, etag: `e${n}`, size: 1000 });
+          }
+          if (call.init.method === "POST" && call.url.includes("/complete")) {
+            return jsonResponse({ message: "ok", path: "p" });
+          }
+          return null;
+        },
+      ]);
+
+      await sandbox.uploadFile("p", new Uint8Array(3000), {
+        partSize: 1000,
+        concurrency: 1,
+        retryBaseDelayMs: 1,
+      });
+
+      expect(attemptsByPart).toEqual({ 1: 1, 2: 3, 3: 1 });
+    });
+
+    it("gives up and aborts after exhausting maxRetries", async () => {
+      let attempts = 0;
+      let abortCalled = false;
+      const { sandbox } = await makeSandbox([
+        (call) => {
+          if (call.init.method === "POST" && call.url.includes("/initiate/")) {
+            return jsonResponse({ uploadId: "u-x", path: "p" });
+          }
+          if (call.init.method === "PUT" && call.url.includes("/part")) {
+            attempts += 1;
+            return new Response("always broken", { status: 500 });
+          }
+          if (
+            call.init.method === "DELETE" &&
+            call.url.includes("/multipart/u-x")
+          ) {
+            abortCalled = true;
+            return jsonResponse({ message: "aborted" });
+          }
+          return null;
+        },
+      ]);
+
+      await expect(
+        sandbox.uploadFile("p", new Uint8Array(1000), {
+          partSize: 1000,
+          maxRetries: 2,
+          retryBaseDelayMs: 1,
+        }),
+      ).rejects.toThrow(/Failed to upload part 1/);
+
+      // 1 initial + 2 retries = 3
+      expect(attempts).toBe(3);
+      await new Promise((r) => setImmediate(r));
+      expect(abortCalled).toBe(true);
+    });
+
+    it("does not retry deterministic 4xx like 413", async () => {
+      let attempts = 0;
+      const { sandbox } = await makeSandbox([
+        (call) => {
+          if (call.init.method === "POST" && call.url.includes("/initiate/")) {
+            return jsonResponse({ uploadId: "u-413", path: "p" });
+          }
+          if (call.init.method === "PUT" && call.url.includes("/part")) {
+            attempts += 1;
+            return new Response("too big", { status: 413 });
+          }
+          if (call.init.method === "DELETE") {
+            return jsonResponse({ message: "aborted" });
+          }
+          return null;
+        },
+      ]);
+
+      await expect(
+        sandbox.uploadFile("p", new Uint8Array(1000), {
+          partSize: 1000,
+          retryBaseDelayMs: 1,
+        }),
+      ).rejects.toThrow(/413/);
+      // No retry — 413 is not retryable
+      expect(attempts).toBe(1);
+    });
+
     it("works with a string input (UTF-8 encoded)", async () => {
       let totalBytes = 0;
       const { sandbox } = await makeSandbox([

@@ -240,6 +240,20 @@ export interface UploadFileOptions {
   /** File permissions string passed to initiate. @default "0644" */
   permissions?: string;
 
+  /**
+   * Max retries per failed part upload. Retries on 408/425/429/5xx and
+   * network errors; honors `Retry-After`. Pass `0` to disable.
+   * @default 3
+   */
+  maxRetries?: number;
+
+  /**
+   * Initial retry backoff in ms. Doubles each attempt with up to `base` ms
+   * jitter, so 3 retries take ≤ ~400ms total at the default.
+   * @default 50
+   */
+  retryBaseDelayMs?: number;
+
   /** AbortSignal to cancel the upload. Triggers an auto-abort of the multipart upload on the server. */
   signal?: AbortSignal;
 

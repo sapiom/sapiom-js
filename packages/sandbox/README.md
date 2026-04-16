@@ -106,11 +106,13 @@ await sandbox.uploadFile("big.bin", blob, { signal: ctrl.signal });
 
 | Option            | Type                    | Default         | Description                                                                 |
 |-------------------|-------------------------|-----------------|-----------------------------------------------------------------------------|
-| `partSize`        | `number`                | `5 * 1024 * 1024` | Part size in bytes. The Sapiom ingress rejects uploads over ~8 MiB, so keep this ≤ 7 MiB. |
-| `concurrency`     | `number`                | `4`             | Number of parallel part uploads. Blaxel recommends 3–5.                      |
-| `permissions`     | `string`                | `"0644"`        | Unix file permissions.                                                      |
-| `signal`          | `AbortSignal`           | —               | Cancel the upload. Triggers an auto-abort of the server-side session.        |
-| `onPartUploaded`  | `(part, progress) => void` | —            | Fired after each part finishes (completion order — not `partNumber` order).  |
+| `partSize`          | `number`                | `5 * 1024 * 1024` | Part size in bytes. The Sapiom ingress rejects uploads over ~8 MiB, so keep this ≤ 7 MiB. |
+| `concurrency`       | `number`                | `4`               | Number of parallel part uploads. Blaxel recommends 3–5.                     |
+| `permissions`       | `string`                | `"0644"`          | Unix file permissions.                                                       |
+| `maxRetries`        | `number`                | `3`               | Retries per failed part on 408/425/429/5xx and network errors. `0` disables.  |
+| `retryBaseDelayMs`  | `number`                | `50`              | Initial backoff in ms. Doubles per attempt with jitter; honors `Retry-After`. |
+| `signal`            | `AbortSignal`           | —                 | Cancel the upload. Triggers an auto-abort of the server-side session.         |
+| `onPartUploaded`    | `(part, progress) => void` | —              | Fired after each part finishes (completion order — not `partNumber` order).   |
 
 The server accepts at most **10,000 parts per upload**. If `content.size / partSize > 10_000`, `uploadFile` throws before making any request and suggests a larger `partSize`.
 

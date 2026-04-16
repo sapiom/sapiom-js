@@ -1,8 +1,11 @@
 import {
   MAX_PARTS,
+  SandboxHttpError,
+  parseRetryAfter,
   planParts,
   runWithConcurrency,
   toBlob,
+  withRetry,
 } from "./multipart";
 
 describe("toBlob", () => {
@@ -113,5 +116,141 @@ describe("runWithConcurrency", () => {
     await expect(
       runWithConcurrency([1], 0, async (n) => n),
     ).rejects.toThrow(/concurrency must be >= 1/);
+  });
+});
+
+describe("parseRetryAfter", () => {
+  it("returns undefined for null / empty", () => {
+    expect(parseRetryAfter(null)).toBeUndefined();
+    expect(parseRetryAfter("")).toBeUndefined();
+  });
+
+  it("parses delta-seconds integer form", () => {
+    expect(parseRetryAfter("0")).toBe(0);
+    expect(parseRetryAfter("30")).toBe(30_000);
+    expect(parseRetryAfter("0.5")).toBe(500);
+  });
+
+  it("parses HTTP-date form", () => {
+    const future = new Date(Date.now() + 5_000).toUTCString();
+    const parsed = parseRetryAfter(future);
+    expect(parsed).toBeGreaterThan(0);
+    // within a reasonable window of 5s
+    expect(parsed).toBeLessThanOrEqual(6_000);
+  });
+
+  it("clamps past HTTP-date to 0", () => {
+    const past = new Date(Date.now() - 60_000).toUTCString();
+    expect(parseRetryAfter(past)).toBe(0);
+  });
+
+  it("returns undefined for unparseable input", () => {
+    expect(parseRetryAfter("soon")).toBeUndefined();
+  });
+});
+
+describe("withRetry", () => {
+  it("returns immediately on first success", async () => {
+    let calls = 0;
+    const result = await withRetry(async () => {
+      calls += 1;
+      return "ok";
+    });
+    expect(result).toBe("ok");
+    expect(calls).toBe(1);
+  });
+
+  it("retries on retryable HTTP errors and ultimately succeeds", async () => {
+    let attempts = 0;
+    const result = await withRetry(
+      async () => {
+        attempts += 1;
+        if (attempts < 3) throw new SandboxHttpError("boom", 503);
+        return "done";
+      },
+      { retryBaseDelayMs: 1 }, // keep tests fast
+    );
+    expect(result).toBe("done");
+    expect(attempts).toBe(3);
+  });
+
+  it("does not retry non-retryable HTTP errors (e.g. 413)", async () => {
+    let attempts = 0;
+    await expect(
+      withRetry(
+        async () => {
+          attempts += 1;
+          throw new SandboxHttpError("too big", 413);
+        },
+        { retryBaseDelayMs: 1 },
+      ),
+    ).rejects.toThrow(/too big/);
+    expect(attempts).toBe(1);
+  });
+
+  it("gives up after maxRetries", async () => {
+    let attempts = 0;
+    await expect(
+      withRetry(
+        async () => {
+          attempts += 1;
+          throw new SandboxHttpError("nope", 500);
+        },
+        { maxRetries: 2, retryBaseDelayMs: 1 },
+      ),
+    ).rejects.toThrow(/nope/);
+    expect(attempts).toBe(3); // 1 initial + 2 retries
+  });
+
+  it("does not retry on AbortError", async () => {
+    let attempts = 0;
+    await expect(
+      withRetry(
+        async () => {
+          attempts += 1;
+          throw Object.assign(new Error("aborted"), { name: "AbortError" });
+        },
+        { retryBaseDelayMs: 1 },
+      ),
+    ).rejects.toThrow(/aborted/);
+    expect(attempts).toBe(1);
+  });
+
+  it("respects an aborted signal during backoff", async () => {
+    const controller = new AbortController();
+    let attempts = 0;
+
+    const promise = withRetry(
+      async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          // schedule abort during the backoff between attempt 1 and 2
+          setTimeout(() => controller.abort(), 5);
+          throw new SandboxHttpError("retry me", 503);
+        }
+        return "never";
+      },
+      { retryBaseDelayMs: 100, signal: controller.signal },
+    );
+
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    expect(attempts).toBe(1);
+  });
+
+  it("honors Retry-After from SandboxHttpError", async () => {
+    let attempts = 0;
+    const started = Date.now();
+    await withRetry(
+      async () => {
+        attempts += 1;
+        if (attempts === 1) throw new SandboxHttpError("429", 429, 50);
+        return "ok";
+      },
+      { retryBaseDelayMs: 1 },
+    );
+    expect(attempts).toBe(2);
+    const elapsed = Date.now() - started;
+    // Should have waited ~50ms (the Retry-After), not the 1ms retryBaseDelayMs
+    expect(elapsed).toBeGreaterThanOrEqual(40);
   });
 });
