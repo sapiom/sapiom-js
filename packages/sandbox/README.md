@@ -75,6 +75,78 @@ Writes a file relative to the sandbox's workspace root.
 await sandbox.writeFile("src/index.ts", 'console.log("hi")');
 ```
 
+### `sandbox.uploadFile(path, content, opts?)`
+
+Uploads a file using multipart upload. Handles the full `initiate → upload parts → complete` lifecycle, with parallel part uploads and automatic abort on any failure. Prefer this over `writeFile` for binary content or files over a few MB.
+
+```typescript
+import { openAsBlob } from "node:fs";
+
+// From a buffer / Uint8Array
+await sandbox.uploadFile("data/snapshot.bin", new Uint8Array(bytes));
+
+// From a file on disk without slurping it into memory (Node 20+)
+const blob = await openAsBlob("./huge.parquet");
+await sandbox.uploadFile("datasets/huge.parquet", blob, {
+  partSize: 5 * 1024 * 1024,
+  concurrency: 4,
+  onPartUploaded: (part, progress) => {
+    const pct = ((progress.bytesUploaded / progress.totalBytes) * 100).toFixed(1);
+    console.log(`part ${part.partNumber} ok — ${pct}%`);
+  },
+});
+
+// Cancel a running upload — the server-side multipart session is auto-aborted
+const ctrl = new AbortController();
+setTimeout(() => ctrl.abort(), 10_000);
+await sandbox.uploadFile("big.bin", blob, { signal: ctrl.signal });
+```
+
+**Options:**
+
+| Option            | Type                    | Default         | Description                                                                 |
+|-------------------|-------------------------|-----------------|-----------------------------------------------------------------------------|
+| `partSize`        | `number`                | `5 * 1024 * 1024` | Part size in bytes. The Sapiom ingress rejects uploads over ~8 MiB, so keep this ≤ 7 MiB. |
+| `concurrency`     | `number`                | `4`             | Number of parallel part uploads. Blaxel recommends 3–5.                      |
+| `permissions`     | `string`                | `"0644"`        | Unix file permissions.                                                      |
+| `signal`          | `AbortSignal`           | —               | Cancel the upload. Triggers an auto-abort of the server-side session.        |
+| `onPartUploaded`  | `(part, progress) => void` | —            | Fired after each part finishes (completion order — not `partNumber` order).  |
+
+The server accepts at most **10,000 parts per upload**. If `content.size / partSize > 10_000`, `uploadFile` throws before making any request and suggests a larger `partSize`.
+
+### Low-level multipart API
+
+For resumable uploads or custom retry logic, drive the multipart lifecycle directly:
+
+```typescript
+const { uploadId } = await sandbox.initiateMultipartUpload("large.bin");
+
+try {
+  // ...upload parts as bytes become available
+  const part1 = await sandbox.uploadPart(uploadId, 1, chunk1);
+  const part2 = await sandbox.uploadPart(uploadId, 2, chunk2);
+
+  // Inspect server-side state (useful after a crash/reconnect)
+  const uploaded = await sandbox.listMultipartParts(uploadId);
+
+  await sandbox.completeMultipartUpload(uploadId, [
+    { partNumber: part1.partNumber, etag: part1.etag },
+    { partNumber: part2.partNumber, etag: part2.etag },
+  ]);
+} catch (err) {
+  await sandbox.abortMultipartUpload(uploadId);
+  throw err;
+}
+```
+
+| Method                                               | Description                                 |
+|------------------------------------------------------|---------------------------------------------|
+| `initiateMultipartUpload(path, opts?)`               | Start a session. Returns `{ uploadId, path }`. |
+| `uploadPart(uploadId, partNumber, bytes, opts?)`     | Upload one part (1-indexed, 1–10000).        |
+| `listMultipartParts(uploadId, opts?)`                | List parts already uploaded.                 |
+| `completeMultipartUpload(uploadId, parts, opts?)`    | Commit the upload.                           |
+| `abortMultipartUpload(uploadId, opts?)`              | Discard the session and clean up parts.      |
+
 ### `sandbox.readFile(path)`
 
 Reads a file relative to the sandbox's workspace root and returns its content as a string.

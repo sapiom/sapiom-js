@@ -202,3 +202,47 @@ export interface ProcessStatusResponse {
   stderr?: string;
   [key: string]: unknown;
 }
+
+/** Raw response from POST /v1/sandboxes/:name/filesystem/multipart/initiate/:path. */
+export interface MultipartInitiateResponse {
+  uploadId: string;
+  path: string;
+}
+
+/** Ack returned after a part upload or needed to complete an upload. */
+export interface MultipartUploadedPart {
+  partNumber: number;
+  etag: string;
+  size: number;
+}
+
+/** Full part record returned by GET .../multipart/:uploadId/parts. */
+export interface MultipartPartInfo extends MultipartUploadedPart {
+  uploadedAt: string;
+}
+
+/** Progress reported to {@link UploadFileOptions.onPartUploaded}. */
+export interface UploadProgress {
+  partsUploaded: number;
+  totalParts: number;
+  bytesUploaded: number;
+  totalBytes: number;
+}
+
+/** Options for {@link SapiomSandbox.uploadFile}. */
+export interface UploadFileOptions {
+  /** Part size in bytes. @default 5 * 1024 * 1024 (5 MiB) */
+  partSize?: number;
+
+  /** Number of parallel part uploads. @default 4 */
+  concurrency?: number;
+
+  /** File permissions string passed to initiate. @default "0644" */
+  permissions?: string;
+
+  /** AbortSignal to cancel the upload. Triggers an auto-abort of the multipart upload on the server. */
+  signal?: AbortSignal;
+
+  /** Invoked after each part finishes uploading (in completion order, not partNumber order). */
+  onPartUploaded?: (part: MultipartUploadedPart, progress: UploadProgress) => void;
+}
