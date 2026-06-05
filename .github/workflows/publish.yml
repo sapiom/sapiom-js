@@ -40,13 +40,21 @@ jobs:
       - name: Publish to npm
         id: publish
         run: |
-          OUTPUT=$(pnpm changeset publish 2>&1)
-          echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -q "@sapiom/mcp@"; then
+          # Stream output live and capture the real exit code. The previous
+          # `OUTPUT=$(...)` form ran under `set -e`, so a failed publish killed
+          # the step on the assignment before its output could be printed —
+          # hiding the actual error. `tee` keeps the log visible; PIPESTATUS
+          # preserves the publish exit code so we still fail on a real failure.
+          set +e
+          pnpm changeset publish 2>&1 | tee publish.log
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          if grep -q "@sapiom/mcp@" publish.log; then
             echo "mcp-changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "mcp-changed=false" >> "$GITHUB_OUTPUT"
           fi
+          exit "$STATUS"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
