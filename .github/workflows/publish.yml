@@ -1,11 +1,12 @@
 name: Publish
 
+# Auto-publish on release is disabled: npm requires an interactive 2FA flow
+# (browser / security key) that CI cannot perform, so the publish step always
+# fails. Packages are published manually for now — see PUBLISHING.md. This
+# workflow is kept as manual-dispatch-only so it can be revived once a
+# 2FA-bypass automation token is in place.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - '**/CHANGELOG.md'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
