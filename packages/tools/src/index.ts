@@ -13,7 +13,7 @@
  */
 export { createClient } from "./client.js";
 export type { Sapiom } from "./client.js";
-export type { TransportConfig } from "./_client/index.js";
+export type { TransportConfig, Attribution } from "./_client/index.js";
 
 export * as sandboxes from "./sandboxes/index.js";
 export { Sandbox } from "./sandboxes/index.js";

@@ -8,9 +8,13 @@
  *
  * Inside a workflow step the engine hands you an already-auth'd `sapiom` of this
  * same shape; you can also barrel-import the ambient-bound namespaces directly
- * (`import { sandbox } from "@sapiom/tools"`).
+ * (`import { sandboxes } from "@sapiom/tools"`).
+ *
+ * Attribution is set once (the engine constructs the per-execution client with
+ * it; standalone callers pass it to `createClient`), never per capability call.
+ * `withAttribution(...)` derives a client for the router case — see `_client`.
  */
-import { Transport, type TransportConfig } from "./_client/index.js";
+import { Transport, type TransportConfig, type Attribution } from "./_client/index.js";
 import { Sandbox } from "./sandboxes/index.js";
 import type { SandboxCreateOptions } from "./sandboxes/index.js";
 import { Repository } from "./repositories/index.js";
@@ -35,11 +39,17 @@ export interface Sapiom {
       launch(spec: CodingRunSpec): Promise<RunHandle>;
     };
   };
+  /**
+   * Derive a client that attributes its calls to a different agent/trace. For the
+   * router case (one process acting for many agents); step-authoring code doesn't
+   * need this — attribution is set once when the client is constructed.
+   */
+  withAttribution(attribution: Attribution): Sapiom;
   // domains, scrape, search, … land here as they're ported.
 }
 
-export function createClient(config?: TransportConfig): Sapiom {
-  const transport = new Transport(config);
+/** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
+function bind(transport: Transport): Sapiom {
   return {
     sandboxes: {
       create: (opts) => Sandbox.create(opts, transport),
@@ -58,5 +68,10 @@ export function createClient(config?: TransportConfig): Sapiom {
         launch: (spec) => codingLaunch(spec, transport),
       },
     },
+    withAttribution: (attribution) => bind(transport.withAttribution(attribution)),
   };
+}
+
+export function createClient(config?: TransportConfig): Sapiom {
+  return bind(new Transport(config));
 }

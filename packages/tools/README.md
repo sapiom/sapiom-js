@@ -45,6 +45,22 @@ There are two ways to authenticate, both exposing the identical capability surfa
   await sandboxes.create({ name: "demo" });
   ```
 
+## Attribution
+
+Calls can be attributed to an agent and trace so they show up correctly in your transaction history. Attribution is set **once, on the client** — not per call:
+
+```typescript
+const sapiom = createClient({
+  apiKey: process.env.SAPIOM_API_KEY,
+  attribution: { agentName: "digest-bot", traceId },
+});
+// every call this client makes is now attributed to digest-bot / traceId
+```
+
+Inside a Sapiom workflow you don't set this at all — the runtime constructs the client with the running execution's attribution, so every tool call is attributed automatically.
+
+If a single process makes calls on behalf of more than one agent or trace, derive a client per context with `sapiom.withAttribution({ ... })`.
+
 ## Capabilities
 
 Each capability is a namespace, importable from the barrel or its own subpath (e.g. `@sapiom/tools/sandboxes`). Every capability has its own README with usage details, preconditions, and gotchas the type signatures can't express — read it before first use.
