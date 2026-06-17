@@ -31,7 +31,8 @@
     "dev": "tsc --watch -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
