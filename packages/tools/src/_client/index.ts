@@ -62,7 +62,7 @@ function attributionToHeaders(a: Attribution): Record<string, string> {
  * attribution by constructing the per-execution client instead. Safe only for the
  * one-execution-per-process case (CLI, scripts).
  */
-function attributionFromEnv(): Attribution {
+export function attributionFromEnv(): Attribution {
   const a: Attribution = {};
   if (process.env.SAPIOM_AGENT_ID) a.agentId = process.env.SAPIOM_AGENT_ID;
   if (process.env.SAPIOM_AGENT_NAME) a.agentName = process.env.SAPIOM_AGENT_NAME;

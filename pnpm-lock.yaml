@@ -307,6 +307,10 @@ importers:
         version: 5.9.3
 
   packages/orchestration:
+    dependencies:
+      '@sapiom/tools':
+        specifier: workspace:*
+        version: link:../tools
     devDependencies:
       '@types/jest':
         specifier: ^29.5.14
