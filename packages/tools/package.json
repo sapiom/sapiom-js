@@ -2,6 +2,13 @@
   "name": "@sapiom/tools",
   "version": "0.1.0",
   "description": "Typed client for Sapiom capabilities (sandboxes, repositories, agent, …) — the same tools your agents call over MCP, callable from your code, auth'd to your tenant.",
+  "license": "MIT",
+  "author": "Sapiom",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
+    "directory": "packages/tools"
+  },
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/cjs/index.d.ts",
