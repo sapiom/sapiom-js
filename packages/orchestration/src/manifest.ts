@@ -71,13 +71,21 @@ export interface WorkflowManifest {
   /** Per-step metadata map (keyed by step name). */
   readonly steps: Readonly<Record<string, WorkflowStepManifest>>;
   /**
-   * Vault secret key names the orchestration declared; injected into step env at
-   * dispatch. Optional on the type (legacy/hand-built manifests omit it); the zod
-   * schema defaults it to `[]` and `buildManifest` always sets it.
+   * Vault secret bindings the orchestration declared; injected into step env at
+   * dispatch. Each binding pulls `keys` from one secret-set (`ref`). Optional on
+   * the type (legacy/hand-built manifests omit it); the zod schema defaults it to
+   * `[]` and `buildManifest` always sets it.
    */
-  readonly secrets?: readonly string[];
-  /** Vault secret-set ref the secrets live under; engine defaults to 'workflows' when absent. */
-  readonly secretsRef?: string;
+  readonly secrets?: readonly SecretBinding[];
+}
+
+/**
+ * A vault secret binding: pull `keys` (env-var names) from the secret-set `ref`.
+ * A workflow can declare several bindings to read from different sets.
+ */
+export interface SecretBinding {
+  readonly ref: string;
+  readonly keys: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +105,13 @@ const workflowStepManifestSchema = z.object({
   transitions: z.array(manifestTransitionSchema),
 });
 
+// Charset mirrors defineOrchestration's check so the engine enforces the trust
+// boundary where it parses — not just the producer (these flow into a vault URL).
+const secretBindingSchema = z.object({
+  ref: z.string().regex(/^[A-Za-z0-9._:-]+$/),
+  keys: z.array(z.string().regex(/^[A-Za-z0-9._-]+$/)),
+});
+
 /**
  * Zod schema that parses and validates a WorkflowManifest.
  * The engine uses this when it receives a manifest from the build phase.
@@ -111,11 +126,5 @@ export const workflowManifestSchema = z.object({
     entryFile: z.string().min(1),
   }),
   steps: z.record(z.string(), workflowStepManifestSchema),
-  // Charset mirrors defineOrchestration's check so the engine enforces the trust
-  // boundary where it parses — not just the producer (these flow into a vault URL).
-  secrets: z.array(z.string().regex(/^[A-Za-z0-9._-]+$/)).default([]),
-  secretsRef: z
-    .string()
-    .regex(/^[A-Za-z0-9._:-]+$/)
-    .optional(),
+  secrets: z.array(secretBindingSchema).default([]),
 });

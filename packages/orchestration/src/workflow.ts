@@ -1,4 +1,5 @@
 import { UnknownStepError } from './errors.js';
+import type { SecretBinding } from './manifest.js';
 import type { StepDefinition } from './step.js';
 
 /**
@@ -47,13 +48,8 @@ export interface OrchestrationDefinition<
   readonly name: string;
   readonly entry: string;
   readonly steps: Readonly<Record<string, StepDefinition<TShared>>>;
-  /** Vault secret keys the orchestration needs; injected into step env at dispatch. */
-  readonly secrets?: readonly string[];
-  /**
-   * Vault secret-set ref to read `secrets` from; engine defaults to 'workflows'
-   * when absent. May use `:` for namespacing (e.g. 'billing:prod').
-   */
-  readonly secretsRef?: string;
+  /** Vault secret bindings the orchestration needs; injected into step env at dispatch. */
+  readonly secrets?: readonly SecretBinding[];
   /**
    * Phantom marker that carries the entry-step input type so `runner.run(def, input)`
    * can infer it (see TInput in the doc above). The steps map is deliberately
@@ -78,25 +74,27 @@ export function isOrchestrationDefinition(val: unknown): val is OrchestrationDef
 }
 
 /**
- * Validate an orchestration's optional secret declaration: each `secrets` key and
- * the `secretsRef` must match the vault charset. Extracted from `defineOrchestration`
- * to keep its cognitive complexity within bounds.
+ * Validate an orchestration's optional secret bindings: each binding's `ref` and
+ * every `keys` entry must match the vault charset. Extracted from
+ * `defineOrchestration` to keep its cognitive complexity within bounds.
  */
-function validateSecretsDeclaration(def: { name: string; secrets?: readonly string[]; secretsRef?: string }): void {
-  if (def.secrets !== undefined) {
-    const secretKeyPattern = /^[A-Za-z0-9._-]+$/;
-    for (const key of def.secrets) {
-      if (typeof key !== 'string' || key.length === 0 || !secretKeyPattern.test(key)) {
+function validateSecretsDeclaration(def: { name: string; secrets?: readonly SecretBinding[] }): void {
+  if (def.secrets === undefined) return;
+  const refPattern = /^[A-Za-z0-9._:-]+$/;
+  const keyPattern = /^[A-Za-z0-9._-]+$/;
+  for (const binding of def.secrets) {
+    if (!binding || typeof binding.ref !== 'string' || !refPattern.test(binding.ref)) {
+      throw new Error(
+        `Workflow '${def.name}' has an invalid secret binding ref: '${binding?.ref}' (must match /^[A-Za-z0-9._:-]+$/)`,
+      );
+    }
+    for (const key of binding.keys ?? []) {
+      if (typeof key !== 'string' || key.length === 0 || !keyPattern.test(key)) {
         throw new Error(
-          `Workflow '${def.name}' has invalid secret key: '${key}' (must be non-empty, matching /^[A-Za-z0-9._-]+$/)`,
+          `Workflow '${def.name}' has an invalid secret key '${key}' in ref '${binding.ref}' (must match /^[A-Za-z0-9._-]+$/)`,
         );
       }
     }
-  }
-  if (def.secretsRef !== undefined && !/^[A-Za-z0-9._:-]+$/.test(def.secretsRef)) {
-    throw new Error(
-      `Workflow '${def.name}' has invalid secretsRef: '${def.secretsRef}' (must be non-empty, matching /^[A-Za-z0-9._:-]+$/)`,
-    );
   }
 }
 

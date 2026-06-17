@@ -130,25 +130,25 @@ describe('defineOrchestration', () => {
     expect(Object.keys(def.steps)).toHaveLength(3);
   });
 
-  it('accepts a valid secretsRef', () => {
+  it('accepts valid secret bindings', () => {
     const def = defineOrchestration({
       name: 'wf',
       entry: 'start',
       steps: { start: makeStep('start') },
-      secretsRef: 'billing',
+      secrets: [{ ref: 'billing', keys: ['STRIPE_KEY'] }],
     });
-    expect(def.secretsRef).toBe('billing');
+    expect(def.secrets?.[0].ref).toBe('billing');
   });
 
-  it('throws on an invalid secretsRef', () => {
+  it('throws on an invalid binding ref', () => {
     expect(() =>
       defineOrchestration({
         name: 'wf',
         entry: 'start',
         steps: { start: makeStep('start') },
-        secretsRef: 'bad ref!',
+        secrets: [{ ref: 'bad ref!', keys: ['STRIPE_KEY'] }],
       }),
-    ).toThrow('invalid secretsRef');
+    ).toThrow('invalid secret binding ref');
   });
 
   it('throws on an invalid secret key', () => {
@@ -157,7 +157,7 @@ describe('defineOrchestration', () => {
         name: 'wf',
         entry: 'start',
         steps: { start: makeStep('start') },
-        secrets: ['BAD KEY!'],
+        secrets: [{ ref: 'billing', keys: ['BAD KEY!'] }],
       }),
     ).toThrow('invalid secret key');
   });

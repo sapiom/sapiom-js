@@ -54,7 +54,6 @@ export function buildManifest(
     artifact: opts.artifact,
     steps,
     secrets: def.secrets ?? [],
-    secretsRef: def.secretsRef,
   };
 }
 
