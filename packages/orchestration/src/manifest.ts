@@ -70,6 +70,14 @@ export interface WorkflowManifest {
   };
   /** Per-step metadata map (keyed by step name). */
   readonly steps: Readonly<Record<string, WorkflowStepManifest>>;
+  /**
+   * Vault secret key names the orchestration declared; injected into step env at
+   * dispatch. Optional on the type (legacy/hand-built manifests omit it); the zod
+   * schema defaults it to `[]` and `buildManifest` always sets it.
+   */
+  readonly secrets?: readonly string[];
+  /** Vault secret-set ref the secrets live under; engine defaults to 'workflows' when absent. */
+  readonly secretsRef?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,4 +111,11 @@ export const workflowManifestSchema = z.object({
     entryFile: z.string().min(1),
   }),
   steps: z.record(z.string(), workflowStepManifestSchema),
+  // Charset mirrors defineOrchestration's check so the engine enforces the trust
+  // boundary where it parses — not just the producer (these flow into a vault URL).
+  secrets: z.array(z.string().regex(/^[A-Za-z0-9._-]+$/)).default([]),
+  secretsRef: z
+    .string()
+    .regex(/^[A-Za-z0-9._:-]+$/)
+    .optional(),
 });

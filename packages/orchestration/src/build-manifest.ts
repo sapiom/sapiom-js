@@ -53,6 +53,8 @@ export function buildManifest(
     sdkVersion: opts.sdkVersion,
     artifact: opts.artifact,
     steps,
+    secrets: def.secrets ?? [],
+    secretsRef: def.secretsRef,
   };
 }
 

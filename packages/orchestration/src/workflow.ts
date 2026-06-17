@@ -47,6 +47,13 @@ export interface OrchestrationDefinition<
   readonly name: string;
   readonly entry: string;
   readonly steps: Readonly<Record<string, StepDefinition<TShared>>>;
+  /** Vault secret keys the orchestration needs; injected into step env at dispatch. */
+  readonly secrets?: readonly string[];
+  /**
+   * Vault secret-set ref to read `secrets` from; engine defaults to 'workflows'
+   * when absent. May use `:` for namespacing (e.g. 'billing:prod').
+   */
+  readonly secretsRef?: string;
   /**
    * Phantom marker that carries the entry-step input type so `runner.run(def, input)`
    * can infer it (see TInput in the doc above). The steps map is deliberately
@@ -68,6 +75,29 @@ export interface OrchestrationDefinition<
 export function isOrchestrationDefinition(val: unknown): val is OrchestrationDefinition {
   if (val === null || typeof val !== 'object') return false;
   return (val as Record<symbol, unknown>)[ORCHESTRATION_DEFINITION_BRAND] === 1;
+}
+
+/**
+ * Validate an orchestration's optional secret declaration: each `secrets` key and
+ * the `secretsRef` must match the vault charset. Extracted from `defineOrchestration`
+ * to keep its cognitive complexity within bounds.
+ */
+function validateSecretsDeclaration(def: { name: string; secrets?: readonly string[]; secretsRef?: string }): void {
+  if (def.secrets !== undefined) {
+    const secretKeyPattern = /^[A-Za-z0-9._-]+$/;
+    for (const key of def.secrets) {
+      if (typeof key !== 'string' || key.length === 0 || !secretKeyPattern.test(key)) {
+        throw new Error(
+          `Workflow '${def.name}' has invalid secret key: '${key}' (must be non-empty, matching /^[A-Za-z0-9._-]+$/)`,
+        );
+      }
+    }
+  }
+  if (def.secretsRef !== undefined && !/^[A-Za-z0-9._:-]+$/.test(def.secretsRef)) {
+    throw new Error(
+      `Workflow '${def.name}' has invalid secretsRef: '${def.secretsRef}' (must be non-empty, matching /^[A-Za-z0-9._:-]+$/)`,
+    );
+  }
 }
 
 /**
@@ -104,6 +134,7 @@ export function defineOrchestration<TInput = unknown, TShared extends Record<str
       throw new Error(`Workflow '${def.name}' step name mismatch at key '${key}': step.name='${step.name}'`);
     }
   }
+  validateSecretsDeclaration(def);
   // Attach the brand as a non-enumerable property so it:
   //   - survives esbuild bundling (symbol properties pass through)
   //   - survives dynamic import (the imported object is the same reference)
