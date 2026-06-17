@@ -14,7 +14,7 @@
  * it; standalone callers pass it to `createClient`), never per capability call.
  * `withAttribution(...)` derives a client for the router case — see `_client`.
  */
-import { Transport, type TransportConfig, type Attribution } from "./_client/index.js";
+import { Transport, attributionFromEnv, type TransportConfig, type Attribution } from "./_client/index.js";
 import { Sandbox } from "./sandboxes/index.js";
 import type { SandboxCreateOptions } from "./sandboxes/index.js";
 import { Repository } from "./repositories/index.js";
@@ -74,4 +74,17 @@ function bind(transport: Transport): Sapiom {
 
 export function createClient(config?: TransportConfig): Sapiom {
   return bind(new Transport(config));
+}
+
+/**
+ * Build a client from the ambient environment — credential from `SAPIOM_API_KEY`
+ * and attribution from `SAPIOM_AGENT_*` / `SAPIOM_TRACE_*` — as a FRESH,
+ * non-memoized transport. This is the per-execution constructor the workflow
+ * runner uses to build `ctx.sapiom`: unlike the barrel's `defaultTransport()`
+ * (process-global + memoized, which would bleed credentials/attribution when one
+ * process serves multiple step executions), each call reads the current env, so
+ * a runner constructing one per execution attributes each correctly.
+ */
+export function createClientFromEnv(): Sapiom {
+  return bind(new Transport({ attribution: attributionFromEnv() }));
 }

@@ -1,3 +1,5 @@
+import type { Sapiom } from '@sapiom/tools';
+
 import type { NextStepDirective } from './directives.js';
 
 /**
@@ -83,6 +85,21 @@ export interface OrchestrationExecutionContext<TShared extends Record<string, un
   readonly attempts: number;
 
   readonly logger: StepLogger;
+
+  /**
+   * The pre-auth'd Sapiom capability client — the same tools your agents call
+   * over MCP, now callable from step code (`ctx.sapiom.sandboxes.create(...)`,
+   * `ctx.sapiom.agent.coding.run(...)`, …). The runner constructs it from the
+   * per-execution tenant credential the engine injects into the step sandbox,
+   * so every capability call is tenant-scoped, metered, and traced with zero
+   * auth plumbing in the step.
+   *
+   * Provided via `ctx` (never a module import): each artifact is an independent
+   * self-contained bundle with its own inlined SDK copy, so a ctx-carried client
+   * is the only form that crosses the bundle boundary already bound — the same
+   * reason `logger` rides on `ctx`.
+   */
+  readonly sapiom: Sapiom;
 }
 
 export interface TypedContextStore<TShared extends Record<string, unknown>> {

@@ -11,7 +11,7 @@
  * Auth is implicit: ambient (engine-injected) inside a workflow step, or explicit
  * via `createClient({ apiKey })` standalone.
  */
-export { createClient } from "./client.js";
+export { createClient, createClientFromEnv } from "./client.js";
 export type { Sapiom } from "./client.js";
 export type { TransportConfig, Attribution } from "./_client/index.js";
 
