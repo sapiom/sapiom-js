@@ -12,6 +12,8 @@
  * pause directives in the shape the routing layer will consume.
  */
 
+import type { DispatchHandle } from '@sapiom/tools';
+
 /**
  * Single source of truth for directive `kind` values.
  *
@@ -215,9 +217,26 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
 }
 
 /**
- * Pause until `signal` arrives, then resume at `resumeStep`. `correlationId`
- * defaults to the ambient `executionId` (filled by the runner) when omitted.
- * Requires a matching `pause: { signal, resumeStep }` declaration on the step.
+ * Pause until a signal arrives, then resume at `resumeStep`. Two ways to specify
+ * the wait — both still require a matching `pause: { signal, resumeStep }`
+ * declaration on the step (the build-time graph edge):
+ *
+ *   1. Explicit args (synchronous). For human approval or any external webhook
+ *      that isn't a dispatched Sapiom capability. `correlationId` defaults to the
+ *      ambient `executionId` (filled by the runner) when omitted.
+ *
+ *        return pauseUntilSignal({ signal: 'demo.approval', resumeStep: 'finalize' });
+ *
+ *   2. A dispatched-capability handle, or the launch promise itself (async — it
+ *      awaits the launch). Reads the `signal` + `correlationId` off the handle's
+ *      `dispatch` member, so the author writes neither. Erases to the identical
+ *      `Pause` directive as form (1).
+ *
+ *        return pauseUntilSignal(ctx.sapiom.agent.coding.launch({ task }), { resumeStep: 'review' });
+ *
+ * Both are consumed as `return pauseUntilSignal(...)` from an async `run()`, so
+ * async-return flattening makes the sync/async distinction invisible at the call
+ * site.
  */
 export function pauseUntilSignal<const Resume extends string>(args: {
   signal: string;
@@ -225,13 +244,50 @@ export function pauseUntilSignal<const Resume extends string>(args: {
   correlationId?: string;
   timeoutMs?: number;
   output?: unknown;
-}): Pause<Resume> {
+}): Pause<Resume>;
+export function pauseUntilSignal<const Resume extends string>(
+  handle: DispatchHandle | Promise<DispatchHandle>,
+  opts?: { resumeStep?: Resume; timeoutMs?: number; output?: unknown },
+): Promise<Pause<Resume>>;
+export function pauseUntilSignal<const Resume extends string>(
+  argOrHandle:
+    | { signal: string; resumeStep?: Resume; correlationId?: string; timeoutMs?: number; output?: unknown }
+    | DispatchHandle
+    | Promise<DispatchHandle>,
+  opts?: { resumeStep?: Resume; timeoutMs?: number; output?: unknown },
+): Pause<Resume> | Promise<Pause<Resume>> {
+  // The launch promise — await it, then build from the resolved handle.
+  if (isThenable(argOrHandle)) {
+    return Promise.resolve(argOrHandle).then((handle) => pauseFromHandle(handle, opts));
+  }
+  // A resolved dispatch handle — async for a uniform handle-form contract.
+  if ('dispatch' in argOrHandle) {
+    return Promise.resolve(pauseFromHandle(argOrHandle, opts));
+  }
+  // Explicit args — synchronous.
   return {
     kind: DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL,
-    signal: { name: args.signal, correlationId: args.correlationId },
-    resumeStep: args.resumeStep,
-    timeoutMs: args.timeoutMs,
-    output: args.output,
+    signal: { name: argOrHandle.signal, correlationId: argOrHandle.correlationId },
+    resumeStep: argOrHandle.resumeStep,
+    timeoutMs: argOrHandle.timeoutMs,
+    output: argOrHandle.output,
+  };
+}
+
+function isThenable(x: unknown): x is Promise<DispatchHandle> {
+  return x != null && typeof (x as { then?: unknown }).then === 'function';
+}
+
+function pauseFromHandle<Resume extends string>(
+  handle: DispatchHandle,
+  opts: { resumeStep?: Resume; timeoutMs?: number; output?: unknown } | undefined,
+): Pause<Resume> {
+  return {
+    kind: DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL,
+    signal: { name: handle.dispatch.resultSignal, correlationId: handle.dispatch.correlationId },
+    resumeStep: opts?.resumeStep,
+    timeoutMs: opts?.timeoutMs,
+    output: opts?.output,
   };
 }
 

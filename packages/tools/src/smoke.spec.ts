@@ -8,43 +8,50 @@
  * transport (the missing-credential error fires on a request, not at
  * construction), so constructing + shape-checking is side-effect-free.
  */
-import { createClient, sandboxes, repositories, agent, Sandbox, Repository } from './index.js';
+import {
+  createClient,
+  sandboxes,
+  repositories,
+  agent,
+  Sandbox,
+  Repository,
+} from "./index.js";
 
-describe('@sapiom/tools public surface', () => {
-  it('exposes createClient as a function', () => {
-    expect(typeof createClient).toBe('function');
+describe("@sapiom/tools public surface", () => {
+  it("exposes createClient as a function", () => {
+    expect(typeof createClient).toBe("function");
   });
 
-  it('createClient builds a Sapiom with the expected capability namespaces', () => {
-    const sapiom = createClient({ apiKey: 'test-key' });
+  it("createClient builds a Sapiom with the expected capability namespaces", () => {
+    const sapiom = createClient({ apiKey: "test-key" });
 
-    expect(typeof sapiom.sandboxes.create).toBe('function');
-    expect(typeof sapiom.sandboxes.attach).toBe('function');
+    expect(typeof sapiom.sandboxes.create).toBe("function");
+    expect(typeof sapiom.sandboxes.attach).toBe("function");
 
-    expect(typeof sapiom.repositories.create).toBe('function');
-    expect(typeof sapiom.repositories.get).toBe('function');
-    expect(typeof sapiom.repositories.list).toBe('function');
-    expect(typeof sapiom.repositories.delete).toBe('function');
-    expect(typeof sapiom.repositories.attach).toBe('function');
+    expect(typeof sapiom.repositories.create).toBe("function");
+    expect(typeof sapiom.repositories.get).toBe("function");
+    expect(typeof sapiom.repositories.list).toBe("function");
+    expect(typeof sapiom.repositories.delete).toBe("function");
+    expect(typeof sapiom.repositories.attach).toBe("function");
 
-    expect(typeof sapiom.agent.coding.run).toBe('function');
-    expect(typeof sapiom.agent.coding.launch).toBe('function');
+    expect(typeof sapiom.agent.coding.run).toBe("function");
+    expect(typeof sapiom.agent.coding.launch).toBe("function");
 
-    expect(typeof sapiom.withAttribution).toBe('function');
+    expect(typeof sapiom.withAttribution).toBe("function");
   });
 
-  it('withAttribution derives a client of the same shape', () => {
-    const derived = createClient({ apiKey: 'test-key' }).withAttribution({});
-    expect(typeof derived.sandboxes.create).toBe('function');
-    expect(typeof derived.agent.coding.run).toBe('function');
-    expect(typeof derived.withAttribution).toBe('function');
+  it("withAttribution derives a client of the same shape", () => {
+    const derived = createClient({ apiKey: "test-key" }).withAttribution({});
+    expect(typeof derived.sandboxes.create).toBe("function");
+    expect(typeof derived.agent.coding.run).toBe("function");
+    expect(typeof derived.withAttribution).toBe("function");
   });
 
-  it('barrel re-exports the capability namespaces and resource classes', () => {
-    expect(typeof sandboxes).toBe('object');
-    expect(typeof repositories).toBe('object');
-    expect(typeof agent).toBe('object');
-    expect(typeof Sandbox).toBe('function'); // class constructor
-    expect(typeof Repository).toBe('function');
+  it("barrel re-exports the capability namespaces and resource classes", () => {
+    expect(typeof sandboxes).toBe("object");
+    expect(typeof repositories).toBe("object");
+    expect(typeof agent).toBe("object");
+    expect(typeof Sandbox).toBe("function"); // class constructor
+    expect(typeof Repository).toBe("function");
   });
 });

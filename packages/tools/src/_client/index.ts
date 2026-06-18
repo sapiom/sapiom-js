@@ -65,9 +65,11 @@ function attributionToHeaders(a: Attribution): Record<string, string> {
 export function attributionFromEnv(): Attribution {
   const a: Attribution = {};
   if (process.env.SAPIOM_AGENT_ID) a.agentId = process.env.SAPIOM_AGENT_ID;
-  if (process.env.SAPIOM_AGENT_NAME) a.agentName = process.env.SAPIOM_AGENT_NAME;
+  if (process.env.SAPIOM_AGENT_NAME)
+    a.agentName = process.env.SAPIOM_AGENT_NAME;
   if (process.env.SAPIOM_TRACE_ID) a.traceId = process.env.SAPIOM_TRACE_ID;
-  if (process.env.SAPIOM_TRACE_EXTERNAL_ID) a.traceExternalId = process.env.SAPIOM_TRACE_EXTERNAL_ID;
+  if (process.env.SAPIOM_TRACE_EXTERNAL_ID)
+    a.traceExternalId = process.env.SAPIOM_TRACE_EXTERNAL_ID;
   return a;
 }
 
@@ -126,7 +128,9 @@ export class Transport {
       headers: { "content-type": "application/json", ...(init.headers ?? {}) },
     });
     if (!res.ok) {
-      throw new Error(`${init.method ?? "GET"} ${url} → ${res.status} ${await res.text()}`);
+      throw new Error(
+        `${init.method ?? "GET"} ${url} → ${res.status} ${await res.text()}`,
+      );
     }
     return (await res.json()) as T;
   }
