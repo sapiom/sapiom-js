@@ -241,7 +241,7 @@ importers:
   packages/orchestration:
     dependencies:
       '@sapiom/tools':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../tools
     devDependencies:
       '@types/jest':
