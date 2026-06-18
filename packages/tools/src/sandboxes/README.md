@@ -19,12 +19,14 @@ await box.destroy();
 
 - **Credentials are not injected automatically.** The sandbox environment is empty by default. Pass anything your workload needs explicitly via `envs` when you create the sandbox.
 
-- **`exec` waits for the command to finish.** It returns once the command exits, with `{ exitCode, stdout, stderr }`. For commands that run longer than a single request, use `execStream` for live output, or start the process and poll it with `getProcess` / `waitForProcess`.
+- **`exec` waits for the command to finish.** It returns once the command exits, with `{ exitCode, stdout, stderr }` — including non-zero exits (a failed command resolves with its real `exitCode`; it does not throw). For commands that run longer than a single request, use `execStream` for live output, or start the process and poll it with `getProcess` / `waitForProcess`.
+
+- **Use `uploadFile` for binary or large files.** `writeFile` sends the whole body in one JSON request and is bounded by the ingress body-size ceiling. `uploadFile(path, content, opts?)` runs a chunked multipart upload (parallel parts, retries, auto-abort on failure) and accepts a `Blob`, `Uint8Array`, or string.
 
 - **`/workspace` is the conventional working directory.** Other capabilities assume it — the `agent` capability clones repos into `/workspace/<slug>`, and `repositories.pushFromSandbox` pushes from there. Keep your files under `/workspace` to stay compatible.
 
 ## Reference
 
-`create` · `attach` · `exec` · `execStream` · `readFile` · `writeFile` · `getProcess` · `waitForProcess` · `destroy`
+`create` · `attach` · `exec` · `execStream` · `readFile` · `writeFile` · `uploadFile` · `getProcess` · `waitForProcess` · `destroy`
 
 See the exported types for full signatures and options.
