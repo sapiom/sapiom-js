@@ -21,13 +21,28 @@
  * wire; this module maps them to the camelCase SDK surface below.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import type { DispatchHandle } from "../dispatch.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { Repository } from "../repositories/index.js";
 
-const DEFAULT_BASE_URL = process.env.SAPIOM_AGENTS_URL || "https://agents.services.sapiom.ai";
+const DEFAULT_BASE_URL =
+  process.env.SAPIOM_AGENTS_URL || "https://agents.services.sapiom.ai";
+
+/**
+ * Capability-stable signal a coding run fires when it reaches a terminal state
+ * (completed OR failed — it carries the result either way, the resumed step
+ * branches). A workflow step paused on a coding-run handle resumes on this; it is
+ * the value carried in the handle's `dispatch.resultSignal`.
+ */
+export const CODING_RESULT_SIGNAL = "agent.coding.result";
 
 /** Run lifecycle, mirrored from the gateway's `AgentsRunStatus`. */
-export type RunStatus = "pending" | "queued" | "running" | "completed" | "failed";
+export type RunStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed";
 const TERMINAL = new Set<RunStatus>(["completed", "failed"]);
 
 export interface CodingRunSpec {
@@ -78,14 +93,33 @@ export interface CodingRunResult {
   sandbox: Sandbox;
 }
 
-/** A launched-but-not-awaited run. */
-export interface RunHandle {
+/**
+ * A launched-but-not-awaited run. Satisfies {@link DispatchHandle}, so it can be
+ * handed straight to `pauseUntilSignal(handle, { resumeStep })` to suspend a
+ * workflow step until the run finishes — or `wait()`-ed inline for standalone use.
+ */
+export interface RunHandle extends DispatchHandle {
   runId: string;
   sandbox: Sandbox;
   /** Fetch the current status without blocking. */
   status(): Promise<RunStatus>;
   /** Poll to a terminal state and resolve the full result. */
-  wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<CodingRunResult>;
+  wait(opts?: {
+    timeoutMs?: number;
+    pollMs?: number;
+  }): Promise<CodingRunResult>;
+}
+
+/**
+ * When launched from inside a Sapiom workflow step, the engine injects an opaque
+ * per-execution resume token into the sandbox env. Forwarding it as a header — NOT
+ * a body field, so author-supplied request fields can't clobber it — lets the
+ * gateway call back into the engine to resume the paused workflow when the run
+ * finishes. Absent outside a workflow → no header, no behavior change.
+ */
+function workflowResumeHeaders(): Record<string, string> {
+  const token = process.env.SAPIOM_CAPABILITY_RESUME_TOKEN;
+  return token ? { "x-sapiom-workflow-token": token } : {};
 }
 
 // --- wire shapes (snake_case, as served by the gateway serializer) ---
@@ -156,6 +190,7 @@ export async function launch(
   const doc = await transport.request<RunDoc>(`${baseUrl}/v1/coding/runs`, {
     method: "POST",
     body: JSON.stringify(buildBody(spec)),
+    headers: workflowResumeHeaders(),
   });
   const runId = doc.data.id;
   const envId = doc.data.relationships?.execution_environment?.data?.id;
@@ -164,7 +199,10 @@ export async function launch(
   // can act on it.
   const sandbox = spec.sandbox ?? Sandbox.attach(envId ?? runId, {}, transport);
 
-  const fetchDoc = () => transport.request<RunDoc>(`${baseUrl}/v1/coding/runs/${encodeURIComponent(runId)}`);
+  const fetchDoc = () =>
+    transport.request<RunDoc>(
+      `${baseUrl}/v1/coding/runs/${encodeURIComponent(runId)}`,
+    );
   const toResult = (d: RunDoc): CodingRunResult => ({
     runId,
     status: d.data.attributes.status,
@@ -177,6 +215,9 @@ export async function launch(
   return {
     runId,
     sandbox,
+    // Framework plumbing for `pauseUntilSignal` — see DispatchHandle. correlationId
+    // is the run id (the join key x402 echoes back when it forwards completion).
+    dispatch: { correlationId: runId, resultSignal: CODING_RESULT_SIGNAL },
     async status() {
       return (await fetchDoc()).data.attributes.status;
     },
@@ -187,7 +228,9 @@ export async function launch(
         const d = await fetchDoc();
         if (TERMINAL.has(d.data.attributes.status)) return toResult(d);
         if (Date.now() > deadline) {
-          throw new Error(`coding run ${runId} timed out after ${timeoutMs}ms (last status: ${d.data.attributes.status})`);
+          throw new Error(
+            `coding run ${runId} timed out after ${timeoutMs}ms (last status: ${d.data.attributes.status})`,
+          );
         }
         await new Promise((r) => setTimeout(r, pollMs));
       }

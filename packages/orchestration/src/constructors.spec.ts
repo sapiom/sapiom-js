@@ -4,6 +4,8 @@
  * engine then validates the directive against the pinned manifest.
  */
 
+import type { DispatchHandle } from '@sapiom/tools';
+
 import { DIRECTIVE_KIND, fail, goto, pauseUntilSignal, retry, terminate } from './index.js';
 
 describe('goto', () => {
@@ -52,6 +54,35 @@ describe('pauseUntilSignal', () => {
   it('passes through an explicit correlationId', () => {
     const d = pauseUntilSignal({ signal: 's', resumeStep: 'r', correlationId: 'key-1' });
     expect(d.signal.correlationId).toBe('key-1');
+  });
+});
+
+describe('pauseUntilSignal — dispatch handle overload', () => {
+  const handle: DispatchHandle = { dispatch: { correlationId: 'run-9', resultSignal: 'agent.coding.result' } };
+
+  it('builds a Pause from a resolved handle, reading signal + correlationId off it', async () => {
+    const d = await pauseUntilSignal(handle, { resumeStep: 'review' });
+    expect(d).toEqual({
+      kind: DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL,
+      signal: { name: 'agent.coding.result', correlationId: 'run-9' },
+      resumeStep: 'review',
+      timeoutMs: undefined,
+      output: undefined,
+    });
+  });
+
+  it('awaits a launch promise and builds the identical Pause directive', async () => {
+    const d = await pauseUntilSignal(Promise.resolve(handle), { resumeStep: 'review', timeoutMs: 1000 });
+    expect(d.signal).toEqual({ name: 'agent.coding.result', correlationId: 'run-9' });
+    expect(d.resumeStep).toBe('review');
+    expect(d.timeoutMs).toBe(1000);
+  });
+
+  it('leaves the explicit-args form synchronous and unchanged', () => {
+    const d = pauseUntilSignal({ signal: 's', resumeStep: 'r' });
+    // Not a promise — the args form returns the directive directly.
+    expect((d as { then?: unknown }).then).toBeUndefined();
+    expect(d.signal).toEqual({ name: 's', correlationId: undefined });
   });
 });
 

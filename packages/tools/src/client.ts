@@ -14,17 +14,29 @@
  * it; standalone callers pass it to `createClient`), never per capability call.
  * `withAttribution(...)` derives a client for the router case — see `_client`.
  */
-import { Transport, attributionFromEnv, type TransportConfig, type Attribution } from "./_client/index.js";
+import {
+  Transport,
+  attributionFromEnv,
+  type TransportConfig,
+  type Attribution,
+} from "./_client/index.js";
 import { Sandbox } from "./sandboxes/index.js";
 import type { SandboxCreateOptions } from "./sandboxes/index.js";
 import { Repository } from "./repositories/index.js";
 import { run as codingRun, launch as codingLaunch } from "./agent/index.js";
-import type { CodingRunSpec, CodingRunResult, RunHandle } from "./agent/index.js";
+import type {
+  CodingRunSpec,
+  CodingRunResult,
+  RunHandle,
+} from "./agent/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
     create(opts: SandboxCreateOptions): Promise<Sandbox>;
-    attach(name: string, opts?: { workspaceRoot?: string; baseUrl?: string }): Sandbox;
+    attach(
+      name: string,
+      opts?: { workspaceRoot?: string; baseUrl?: string },
+    ): Sandbox;
   };
   readonly repositories: {
     create(slug: string): Promise<Repository>;
@@ -68,7 +80,8 @@ function bind(transport: Transport): Sapiom {
         launch: (spec) => codingLaunch(spec, transport),
       },
     },
-    withAttribution: (attribution) => bind(transport.withAttribution(attribution)),
+    withAttribution: (attribution) =>
+      bind(transport.withAttribution(attribution)),
   };
 }
 
