@@ -1,29 +1,17 @@
 /**
  * `repositories` capability — in-network git repos: create, get, list, delete, and
- * the first cross-capability mesh method, `repo.pushFromSandbox(sandbox)`.
+ * `repo.pushFromSandbox(sandbox)` to commit + push a sandbox checkout.
  *
  *   import { repositories } from "@sapiom/tools";
  *   const repo = await repositories.create("my-app");
  *   // … an agent or your code writes files in a sandbox checkout of the repo …
  *   await repo.pushFromSandbox(box, { message: "build: page" });
- *
- * `pushFromSandbox` is the deterministic counterpart to a fuzzy agent step: it
- * composes the `sandboxes` capability (calls `sandbox.exec`) to commit + push the
- * repo's working tree. It references the `Sandbox` TYPE only — no module cycle.
- *
- * Note: `cloneUrl` is the unauthenticated origin. The gateway authenticates clones
- * via basic-auth (the `auth` block returned by create); inside an agent run the
- * `gitRepository` auto-clone wires that credential into the in-sandbox origin, so
- * `pushFromSandbox` doesn't need it.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import type { Sandbox } from "../sandboxes/index.js";
 
 const DEFAULT_BASE_URL =
   process.env.SAPIOM_GIT_URL || "https://git.services.sapiom.ai";
-
-/** Canonical in-sandbox checkout path (matches the agent's `gitRepository` auto-clone). */
-const checkoutDir = (slug: string) => `/workspace/${slug}`;
 
 /** `GET`/`list` shape from the git gateway. */
 interface RepoSummary {
@@ -47,9 +35,12 @@ interface CreateRepositoryResponse {
 }
 
 export interface PushResult {
-  /** False when there was nothing to commit. */
+  /** True once your work has been pushed to the repo. */
   pushed: boolean;
+  /** The pushed commit SHA, when available. */
   sha: string | null;
+  /** The branch it was pushed to, when available. */
+  branch?: string | null;
 }
 
 /** A connected in-network repository. */
@@ -147,33 +138,31 @@ export class Repository {
   }
 
   /**
-   * Deterministically stage + commit + push this repo's working tree FROM a
-   * sandbox checkout (no LLM). Assumes the repo is checked out at the canonical
-   * `/workspace/<slug>` with an authenticated `origin` (which the agent's
-   * `gitRepository` auto-clone sets up). No-op when there's nothing to commit.
+   * Commit and push this repo's working tree from a sandbox checkout. Commits any
+   * pending changes and pushes the current commit, so the agent's work is
+   * published whether it left changes uncommitted, already committed them, or
+   * both. Returns `{ pushed, sha, branch }`; throws if the push fails.
+   *
+   * `workingDirectory` defaults to the repo's checkout at `/workspace/<slug>`
+   * (where a coding agent run with `gitRepository: repo` clones it).
    */
   async pushFromSandbox(
     sandbox: Sandbox,
-    opts: { message?: string } = {},
+    opts: { message?: string; workingDirectory?: string } = {},
   ): Promise<PushResult> {
-    const message = (opts.message ?? `update ${this.slug}`).replace(/'/g, ""); // single-quote-safe for sh -c
-    const script =
-      `cd ${checkoutDir(this.slug)} && git add -A && ` +
-      `if git diff --cached --quiet; then echo NO_CHANGES; else ` +
-      `git -c user.email=workflow@sapiom.ai -c user.name=sapiom-workflow commit -m "${message}" >/dev/null && ` +
-      `git push origin HEAD && printf "SHA:%s\\n" "$(git rev-parse HEAD)"; fi`;
-    const { stdout, stderr, exitCode } = await sandbox.exec(
-      `sh -c '${script}'`,
+    return this.transport.request<PushResult>(
+      `${this.baseUrl}/v1/git/repositories/${encodeURIComponent(this.slug)}/push-from-sandbox`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          executionEnvironmentId: sandbox.name,
+          ...(opts.workingDirectory
+            ? { workingDirectory: opts.workingDirectory }
+            : {}),
+          ...(opts.message ? { message: opts.message } : {}),
+        }),
+      },
     );
-    const out = `${stdout}\n${stderr}`;
-    if (out.includes("NO_CHANGES")) return { pushed: false, sha: null };
-    const sha = out.match(/SHA:([0-9a-f]{7,40})/)?.[1] ?? null;
-    if (exitCode !== 0 || !sha) {
-      throw new Error(
-        `pushFromSandbox(${this.slug}) failed (exit ${exitCode}): ${out.slice(-300)}`,
-      );
-    }
-    return { pushed: true, sha };
   }
 }
 
