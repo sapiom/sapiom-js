@@ -1,10 +1,8 @@
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
+import { OrchestrationError, scaffold } from '@sapiom/orchestration-core';
+
 import { CliError, ok } from '../../lib/output.js';
-import { scaffold } from '../../scaffold/scaffold.js';
-import { resolveTemplate } from '../../scaffold/templates.js';
-import { resolveVersions } from '../../scaffold/versions.js';
 
 /**
  * `sapiom orchestrations init [dir]` — scaffold a new orchestration project.
@@ -20,29 +18,13 @@ export async function runInit(dir: string | undefined, opts: { template: string 
   }
 
   const targetDir = path.resolve(dir);
-  if (existsSync(targetDir) && readdirSync(targetDir).length > 0) {
-    throw new CliError({
-      code: 'DIR_NOT_EMPTY',
-      message: `Target directory '${dir}' already exists and is not empty.`,
-    });
+
+  try {
+    await scaffold({ targetDir, template: opts.template });
+  } catch (err) {
+    if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+    throw err;
   }
-
-  // Throws (clear message) on an unknown template — the resolver seam.
-  const templateDir = resolveTemplate(opts.template);
-  const versions = await resolveVersions();
-
-  mkdirSync(targetDir, { recursive: true });
-  scaffold({
-    templateDir,
-    targetDir,
-    replacements: {
-      __PROJECT_NAME__: path.basename(targetDir),
-      __ORCHESTRATION_VERSION__: versions.orchestration,
-      __TOOLS_VERSION__: versions.tools,
-      __ZOD_VERSION__: versions.zod,
-      __CLI_VERSION__: versions.cli,
-    },
-  });
 
   ok({ dir, path: targetDir }, [
     '',

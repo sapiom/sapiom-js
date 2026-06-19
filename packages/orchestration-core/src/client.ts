@@ -1,0 +1,104 @@
+/**
+ * Configurable HTTP client for the Sapiom workflows gateway. All inputs are
+ * passed explicitly (base URL + API key) — no process.env reads, no global
+ * state — so the client is usable from a CLI, an MCP tool, or a test harness.
+ *
+ * The same endpoints as #85's CLI client are targeted; retargeting to a
+ * different host is SAP-929 / SAP-927 and explicitly out of scope here.
+ */
+import { OrchestrationError } from './errors.js';
+
+export const DEFAULT_WORKFLOWS_HOST = 'https://workflows.services.sapiom.ai';
+
+export interface ClientOptions {
+  /** Full host URL; defaults to the production workflows gateway. */
+  host?: string;
+  /** API key sent as `x-sapiom-api-key`. */
+  apiKey: string;
+}
+
+/** Result shape from a failed gateway request. */
+export interface GatewayErrorBody {
+  message?: string | string[];
+}
+
+/**
+ * A minimal, stateless HTTP client for the Sapiom workflows gateway. Construct
+ * one per call-site with explicit credentials; pass it into networked core
+ * functions rather than relying on environment look-ups.
+ */
+export class GatewayClient {
+  private readonly base: string;
+  private readonly apiKey: string;
+
+  constructor(opts: ClientOptions) {
+    const host = (opts.host ?? DEFAULT_WORKFLOWS_HOST).replace(/\/$/, '');
+    this.base = `${host}/v1/workflows`;
+    this.apiKey = opts.apiKey;
+  }
+
+  async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.base}${path}`, {
+        method,
+        headers: { 'x-sapiom-api-key': this.apiKey, 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      throw new OrchestrationError({
+        code: 'NETWORK',
+        message: `Could not reach ${this.base}.`,
+        hint: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const text = await res.text();
+    const data = text ? safeParse(text) : undefined;
+    if (!res.ok) {
+      throw new OrchestrationError({
+        code: `HTTP_${res.status}`,
+        message: messageFrom(data) ?? `Request failed (${res.status} ${res.statusText}).`,
+        hint:
+          res.status === 401 || res.status === 403
+            ? 'Check your API key and that it has access to this orchestration.'
+            : undefined,
+      });
+    }
+    return data as T;
+  }
+
+  get<T = unknown>(path: string): Promise<T> {
+    return this.request<T>('GET', path);
+  }
+
+  post<T = unknown>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>('POST', path, body);
+  }
+}
+
+/**
+ * Build a GatewayClient from explicit options. The factory is the recommended
+ * entry point: it makes dependency injection obvious and keeps consumers
+ * (CLI arg parse → factory → core fn) easy to read.
+ */
+export function createClient(opts: ClientOptions): GatewayClient {
+  return new GatewayClient(opts);
+}
+
+function safeParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function messageFrom(data: unknown): string | undefined {
+  if (data && typeof data === 'object' && 'message' in data) {
+    const m = (data as GatewayErrorBody).message;
+    if (Array.isArray(m)) return m.join('; ');
+    if (typeof m === 'string') return m;
+  }
+  return undefined;
+}

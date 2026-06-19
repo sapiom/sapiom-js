@@ -39,8 +39,8 @@
   },
   "dependencies": {
     "@sapiom/orchestration": "workspace:^",
+    "@sapiom/orchestration-core": "workspace:^",
     "commander": "^14.0.2",
-    "esbuild": "^0.28.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
