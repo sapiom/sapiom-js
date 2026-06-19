@@ -1,6 +1,6 @@
 import { inspect, inspectBuild, listExecutions, OrchestrationError } from '@sapiom/orchestration-core';
 
-import { makeClient } from '../../lib/client.js';
+import { type CliTarget, makeClient } from '../../lib/client.js';
 import { readConfig, requireConfig } from '../../lib/config.js';
 import { CliError, isJsonMode, ok } from '../../lib/output.js';
 
@@ -10,14 +10,14 @@ import { CliError, isJsonMode, ok } from '../../lib/output.js';
  */
 export async function runLogs(
   executionId: string | undefined,
-  opts: { build?: string },
+  opts: { build?: string; host?: string; target?: CliTarget },
 ): Promise<void> {
   try {
     const dir = process.cwd();
 
     if (opts.build) {
       const cfg = requireConfig(dir);
-      const client = makeClient(cfg.host);
+      const client = makeClient({ projectHost: cfg.host, flagHost: opts.host, flagTarget: opts.target });
       const { build } = await inspectBuild({ definitionId: cfg.definitionId, buildRunId: opts.build }, client);
       if (isJsonMode()) ok({ build });
       else ok({}, [`build ${opts.build}: ${build.status ?? 'unknown'}`]);
@@ -25,7 +25,7 @@ export async function runLogs(
     }
 
     const cfg = readConfig(dir);
-    const client = makeClient(cfg?.host);
+    const client = makeClient({ projectHost: cfg?.host, flagHost: opts.host, flagTarget: opts.target });
 
     if (!executionId) {
       const { executions } = await listExecutions(client);

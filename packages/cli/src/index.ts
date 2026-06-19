@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import { registerAuthCommands } from './commands/auth/index.js';
+import { registerConfigCommands } from './commands/config/index.js';
 import { registerOrchestrationsCommands } from './commands/orchestrations/index.js';
 
 /**
@@ -13,6 +14,7 @@ export function buildProgram(): Command {
   const program = new Command('sapiom').description('The Sapiom command-line interface.');
 
   registerAuthCommands(program);
+  registerConfigCommands(program);
   registerOrchestrationsCommands(program);
 
   return program;
