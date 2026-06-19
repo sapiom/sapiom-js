@@ -11,7 +11,6 @@
  * pattern @sapiom/mcp (SAP-930) will use when it becomes a second consumer.
  */
 import { createClient, GatewayClient } from '../client';
-import { OrchestrationError } from '../errors';
 import { inspect, inspectBuild, listExecutions } from '../inspect';
 import { link } from '../link';
 import { run, parseJsonInput } from '../run';

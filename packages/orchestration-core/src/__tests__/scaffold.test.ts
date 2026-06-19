@@ -4,7 +4,7 @@
  * These tests are fully local — no network calls. They use a temp directory
  * for the target so the filesystem is the only external dependency.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -69,7 +69,7 @@ describe('scaffold', () => {
   it('throws DIR_NOT_EMPTY when target exists and is non-empty', async () => {
     const targetDir = makeTmp();
     // mkdtempSync creates a non-empty-ish dir — add a file to be sure
-    require('node:fs').writeFileSync(path.join(targetDir, 'existing.txt'), 'x');
+    writeFileSync(path.join(targetDir, 'existing.txt'), 'x');
     try {
       await expect(
         scaffold({ targetDir, versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0', cli: '0.1.0' } }),
