@@ -20,8 +20,11 @@ function openBrowser(url: string): void {
   }
   if (parsed.protocol !== 'https:') return;
 
+  // Use parsed.href (re-serialized from the validated URL object) rather than
+  // the original `url` string so CodeQL's taint tracker sees a sanitized value.
+  const safeUrl = parsed.href;
   const os = platform();
-  const [cmd, args] = os === 'darwin' ? ['open', [url]] : os === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+  const [cmd, args] = os === 'darwin' ? ['open', [safeUrl]] : os === 'win32' ? ['cmd', ['/c', 'start', '', safeUrl]] : ['xdg-open', [safeUrl]];
   try {
     execFile(cmd as string, args as string[], () => {
       /* best-effort; the URL is always printed too */
