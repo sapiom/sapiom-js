@@ -64,7 +64,7 @@ export interface ResolvedVersions {
 
 async function latestNpmVersion(pkg: string): Promise<string | null> {
   try {
-    const res = await fetch(`${REGISTRY}/${pkg.replace('/', '%2F')}/latest`, {
+    const res = await fetch(`${REGISTRY}/${encodeURIComponent(pkg)}/latest`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;

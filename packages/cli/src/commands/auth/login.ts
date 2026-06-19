@@ -8,6 +8,18 @@ import { writeCredential } from '../../lib/session.js';
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function openBrowser(url: string): void {
+  // Validate the URL is a safe https:// link before handing it to the OS
+  // shell opener. The URL comes from the server's device-auth response; this
+  // guard prevents CodeQL CWE-88 (argument injection) if that response were
+  // ever tampered with.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return; // unparseable — user can open from the printed URL
+  }
+  if (parsed.protocol !== 'https:') return;
+
   const os = platform();
   const [cmd, args] = os === 'darwin' ? ['open', [url]] : os === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
   try {
