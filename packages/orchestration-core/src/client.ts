@@ -1,19 +1,20 @@
 /**
- * Configurable HTTP client for the Sapiom workflows gateway. All inputs are
+ * Configurable HTTP client for the Sapiom workflows backend API. All inputs are
  * passed explicitly (base URL + API key) — no process.env reads, no global
  * state — so the client is usable from a CLI, an MCP tool, or a test harness.
- *
- * The same endpoints as #85's CLI client are targeted; retargeting to a
- * different host is SAP-929 / SAP-927 and explicitly out of scope here.
  */
 import { OrchestrationError } from './errors.js';
 
-export const DEFAULT_WORKFLOWS_HOST = 'https://workflows.services.sapiom.ai';
+/**
+ * Production host for the Sapiom backend tenant API.
+ * The `/v1/workflows` path is appended internally.
+ */
+export const DEFAULT_WORKFLOWS_HOST = 'https://api.sapiom.ai';
 
 export interface ClientOptions {
-  /** Full host URL; defaults to the production workflows gateway. */
+  /** Full host URL; defaults to the production backend host. */
   host?: string;
-  /** API key sent as `x-sapiom-api-key`. */
+  /** API key sent as `x-api-key`. Must start with `sk_`. */
   apiKey: string;
 }
 
@@ -42,7 +43,7 @@ export class GatewayClient {
     try {
       res = await fetch(`${this.base}${path}`, {
         method,
-        headers: { 'x-sapiom-api-key': this.apiKey, 'content-type': 'application/json' },
+        headers: { 'x-api-key': this.apiKey, 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
@@ -61,7 +62,7 @@ export class GatewayClient {
         message: messageFrom(data) ?? `Request failed (${res.status} ${res.statusText}).`,
         hint:
           res.status === 401 || res.status === 403
-            ? 'Check your API key and that it has access to this orchestration.'
+            ? 'Check your API key (`sapiom login` or SAPIOM_API_KEY) and that it has access to this orchestration.'
             : undefined,
       });
     }

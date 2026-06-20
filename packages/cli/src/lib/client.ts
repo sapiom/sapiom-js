@@ -1,19 +1,19 @@
 /**
- * CLI-level client factory. Resolves host and API key from the environment and
- * stored session, then delegates to @sapiom/orchestration-core's GatewayClient.
+ * CLI-level client factory. Resolves host and API key from the environment,
+ * stored CLI config, and the optional project-level host — then delegates to
+ * @sapiom/orchestration-core's GatewayClient.
  *
  * Auth resolution stays here (in the CLI) because it reads process.env and the
  * local session store — both are CLI concerns. The core client itself is stateless.
  */
-import { createClient, DEFAULT_WORKFLOWS_HOST, GatewayClient } from '@sapiom/orchestration-core';
+import { createClient, GatewayClient } from '@sapiom/orchestration-core';
 
+import { type CliTarget, resolveHost } from './cli-config.js';
 import { CliError } from './output.js';
 import { readCredential } from './session.js';
 
-/** Host precedence: explicit env override → linked project's host → default. */
-export function resolveHost(configHost?: string): string {
-  return process.env.SAPIOM_WORKFLOWS_HOST ?? configHost ?? DEFAULT_WORKFLOWS_HOST;
-}
+export { resolveHost };
+export type { CliTarget };
 
 /**
  * Credential precedence: the environment always wins (CI / ephemeral /
@@ -25,6 +25,8 @@ function resolveApiKey(): string {
   if (env) return env;
 
   const stored = readCredential();
+  // accessToken from the device flow or a raw API key both work — the backend
+  // accepts either via `x-api-key` or `Authorization: Bearer` for `sk_` tokens.
   const token = stored?.accessToken ?? stored?.apiKey;
   if (token) return token;
 
@@ -36,9 +38,22 @@ function resolveApiKey(): string {
 }
 
 /**
- * Build a GatewayClient for a CLI command. Reads host and API key from the
- * environment / session; callers pass the optional project host override.
+ * Build a GatewayClient for a CLI command. Resolves host from env / CLI config /
+ * project override; resolves credentials from env or stored session.
+ *
+ * @param projectHost  Optional host stored in the project's `sapiom.json`.
+ * @param flagHost     Optional `--host <url>` flag value.
+ * @param flagTarget   Optional `--target local|prod` flag value.
  */
-export function makeClient(configHost?: string): GatewayClient {
-  return createClient({ host: resolveHost(configHost), apiKey: resolveApiKey() });
+export function makeClient(opts?: {
+  projectHost?: string;
+  flagHost?: string;
+  flagTarget?: CliTarget;
+}): GatewayClient {
+  const host = resolveHost({
+    flagHost: opts?.flagHost,
+    flagTarget: opts?.flagTarget,
+    projectHost: opts?.projectHost,
+  });
+  return createClient({ host, apiKey: resolveApiKey() });
 }

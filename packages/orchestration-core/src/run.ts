@@ -3,6 +3,9 @@
  *
  * Networked operation: requires a GatewayClient. All inputs passed explicitly;
  * no file-system reads — the caller supplies the definition id and input.
+ *
+ * The backend route is `POST /v1/workflows/executions` and takes the definition
+ * id in the body alongside the execution input (not as a path segment).
  */
 import { GatewayClient } from './client.js';
 import { OrchestrationError } from './errors.js';
@@ -31,9 +34,12 @@ export interface RunResult {
 export async function run(opts: RunOptions, client: GatewayClient): Promise<RunResult> {
   const { definitionId, input = {} } = opts;
 
+  // Backend route: POST /v1/workflows/executions — definition id is in the body,
+  // not the path. The tenant scope is resolved server-side from the caller's
+  // authenticated API key; it cannot be overridden by the client.
   const res = await client.post<{ executionId?: string; id?: string } & Record<string, unknown>>(
-    `/definitions/${definitionId}/execute`,
-    { input },
+    '/executions',
+    { definitionId, input },
   );
   const executionId = res.executionId ?? res.id;
   if (!executionId) {

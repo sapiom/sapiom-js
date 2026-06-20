@@ -41,7 +41,7 @@ afterEach(() => {
 // ── GatewayClient ─────────────────────────────────────────────────────────────
 
 describe('createClient / GatewayClient', () => {
-  it('sends x-sapiom-api-key header and targets /v1/workflows', async () => {
+  it('sends x-api-key header and targets /v1/workflows', async () => {
     const spy = mockFetch([{ status: 200, body: { ok: true } }]);
     const client = createClient({ host: 'https://example.com', apiKey: 'sk_test' });
     await client.get('/foo');
@@ -49,7 +49,7 @@ describe('createClient / GatewayClient', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://example.com/v1/workflows/foo');
-    expect((init.headers as Record<string, string>)['x-sapiom-api-key']).toBe('sk_test');
+    expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk_test');
   });
 
   it('throws OrchestrationError with HTTP_4xx code on error status', async () => {
@@ -61,13 +61,13 @@ describe('createClient / GatewayClient', () => {
     });
   });
 
-  it('defaults to the production workflows host', () => {
+  it('defaults to the production backend host', () => {
     const client = new GatewayClient({ apiKey: 'sk_test' });
     // Access the private base via a GET call
     const spy = mockFetch([{ status: 200, body: {} }]);
     void client.get('/ping');
     const [url] = spy.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('workflows.services.sapiom.ai/v1/workflows/ping');
+    expect(url).toContain('api.sapiom.ai/v1/workflows/ping');
   });
 
   it('throws NETWORK error when fetch rejects', async () => {
@@ -82,11 +82,17 @@ describe('createClient / GatewayClient', () => {
 describe('run', () => {
   const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
 
-  it('posts to /definitions/:id/execute and returns executionId (CLI-style)', async () => {
-    mockFetch([{ status: 200, body: { executionId: 'exec-1', status: 'running' } }]);
+  it('posts to /executions with definitionId in the body and returns executionId (CLI-style)', async () => {
+    const spy = mockFetch([{ status: 200, body: { executionId: 'exec-1', status: 'running' } }]);
     const result = await run({ definitionId: 'def-1', input: { foo: 'bar' } }, client);
     expect(result.executionId).toBe('exec-1');
     expect(result.raw).toMatchObject({ executionId: 'exec-1' });
+
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://example.com/v1/workflows/executions');
+    const body = JSON.parse(init.body as string);
+    expect(body.definitionId).toBe('def-1');
+    expect(body.input).toEqual({ foo: 'bar' });
   });
 
   it('accepts id field as fallback for executionId (MCP-style)', async () => {

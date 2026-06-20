@@ -5,7 +5,7 @@
     "moduleResolution": "NodeNext",
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"],
+    "types": ["node", "jest"],
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
