@@ -109,6 +109,7 @@ describe("orchestration_scaffold", () => {
     vi.mocked(resolveVersions).mockResolvedValue({
       orchestration: "0.1.0",
       tools: "0.1.0",
+      zod: "3.25.0",
       cli: "0.1.0",
     });
     vi.mocked(scaffold).mockResolvedValue({
@@ -126,7 +127,7 @@ describe("orchestration_scaffold", () => {
       targetDir: "/tmp/my-workflow",
       projectName: "my-workflow",
       template: undefined,
-      versions: { orchestration: "0.1.0", tools: "0.1.0", cli: "0.1.0" },
+      versions: { orchestration: "0.1.0", tools: "0.1.0", zod: "3.25.0", cli: "0.1.0" },
     });
     expect(result.content[0].text).toContain("scaffolded successfully");
     expect(result.content[0].text).toContain("/tmp/my-workflow");
@@ -140,6 +141,7 @@ describe("orchestration_scaffold", () => {
     vi.mocked(resolveVersions).mockResolvedValue({
       orchestration: "0.1.0",
       tools: "0.1.0",
+      zod: "3.25.0",
       cli: "0.1.0",
     });
     vi.mocked(scaffold).mockRejectedValue(new Error("Directory not empty"));
