@@ -1,0 +1,65 @@
+{
+  "name": "@sapiom/orchestration-mcp",
+  "version": "0.1.0",
+  "description": "Stdio MCP server that exposes Sapiom orchestration lifecycle tools — scaffold, check, deploy, run, inspect, and signal — for use with Claude Code and other MCP clients.",
+  "keywords": [
+    "sapiom",
+    "orchestration",
+    "workflows",
+    "mcp",
+    "claude"
+  ],
+  "homepage": "https://github.com/sapiom/sapiom-js/tree/main/packages/orchestration-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/sapiom/sapiom-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
+    "directory": "packages/orchestration-mcp"
+  },
+  "license": "MIT",
+  "author": "Sapiom",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "sapiom-orchestration-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@sapiom/orchestration-core": "workspace:^",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@typescript-eslint/eslint-plugin": "^7.3.1",
+    "@typescript-eslint/parser": "^7.3.1",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.2",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
