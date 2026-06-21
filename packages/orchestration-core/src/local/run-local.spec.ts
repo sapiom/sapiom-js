@@ -4,11 +4,13 @@ import {
   defineStep,
   fail,
   goto,
+  pauseUntilSignal,
   terminate,
   workflowManifestSchema,
   type OrchestrationDefinition,
   type WorkflowManifest,
 } from '@sapiom/orchestration';
+import { CODING_RESULT_SIGNAL } from '@sapiom/tools';
 
 import { runLocal } from './run-local.js';
 import type { StubFile } from './stubs.js';
@@ -113,6 +115,36 @@ describe('runLocal', () => {
 
     expect(result.outcome).toBe('failed');
     expect(runs).toBe(1);
+  });
+
+  // The canonical coding pattern: launch + pauseUntilSignal + resume. The local
+  // runner auto-resumes with the stub coding result, so it completes locally.
+  it('auto-resumes a pauseUntilSignal(launch) workflow with the stub result', async () => {
+    const launch = defineStep({
+      name: 'launch',
+      next: [],
+      pause: { signal: CODING_RESULT_SIGNAL, resumeStep: 'review' },
+      async run(_input, ctx) {
+        return pauseUntilSignal(ctx.sapiom.agent.coding.launch({ task: 'do the thing' }), { resumeStep: 'review' });
+      },
+    });
+    const review = defineStep({
+      name: 'review',
+      next: [],
+      terminal: true,
+      async run(input) {
+        // `input` is the resumed signal payload — the coding-run result.
+        const r = input as { status?: string; result?: { success?: boolean } };
+        return terminate({ resumedStatus: r.status, success: r.result?.success });
+      },
+    });
+    const def = defineOrchestration({ name: 'coding-pause', entry: 'launch', steps: { launch, review } });
+
+    const result = await runLocal({ definition: def, manifest: manifestFor(def), input: {} });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.output).toEqual({ resumedStatus: 'completed', success: true });
+    expect(result.steps.map((s) => s.step)).toEqual(['launch', 'review']);
   });
 
   it('retries a thrown step and fails at the cap', async () => {

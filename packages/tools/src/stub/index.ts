@@ -29,6 +29,36 @@ export type StubOverrides = Record<string, unknown | ((...args: unknown[]) => un
 
 export interface StubClientOptions {
   overrides?: StubOverrides;
+  /**
+   * When provided, any dispatch-able capability records `(correlationId →
+   * result)` here (via {@link dispatchable}). A local runner uses it to
+   * auto-resume a `pauseUntilSignal(handle, …)` with the result the handle's
+   * signal would have carried.
+   */
+  signals?: Map<string, unknown>;
+}
+
+// Module-scoped so correlation ids are unique across launches within a run.
+let launchSeq = 0;
+
+/** A launched, pausable capability handle (the `DispatchHandle` shape). */
+function isDispatchHandle(v: unknown): v is { dispatch: { correlationId: string }; wait: () => Promise<unknown> } {
+  if (!v || typeof v !== 'object') return false;
+  const h = v as { dispatch?: { correlationId?: unknown }; wait?: unknown };
+  return typeof h.wait === 'function' && typeof h.dispatch?.correlationId === 'string';
+}
+
+/**
+ * Register a dispatch-able handle's eventual result so a pause on its signal can
+ * be auto-resumed, then return the handle. Capability-agnostic: any launch-style
+ * stub method wraps its returned handle in this — the result a `pauseUntilSignal`
+ * resumes with is exactly what the handle's `wait()` resolves to.
+ */
+async function dispatchable<T>(handle: T, signals?: Map<string, unknown>): Promise<T> {
+  if (signals && isDispatchHandle(handle)) {
+    signals.set(handle.dispatch.correlationId, await handle.wait());
+  }
+  return handle;
 }
 
 // Method names of each handle, reflected from the real classes so the stub stays
@@ -125,13 +155,13 @@ function stubCodingResult(overrides: StubOverrides): CodingRunResult {
   };
 }
 
-function stubRunHandle(overrides: StubOverrides): RunHandle {
+function stubRunHandle(overrides: StubOverrides, correlationId: string, result: CodingRunResult): RunHandle {
   const handle = {
-    runId: 'stub-run',
-    sandbox: stubSandbox({ name: 'stub-sandbox' }, overrides),
-    dispatch: { correlationId: 'stub-run', resultSignal: CODING_RESULT_SIGNAL },
-    status: () => Promise.resolve('completed' as RunStatus),
-    wait: () => Promise.resolve(stubCodingResult(overrides)),
+    runId: correlationId,
+    sandbox: result.sandbox,
+    dispatch: { correlationId, resultSignal: CODING_RESULT_SIGNAL },
+    status: () => Promise.resolve(result.status),
+    wait: () => Promise.resolve(result),
   };
   return makeHandle('runHandle', RUN_HANDLE_METHODS, handle as unknown as Record<string, unknown>, overrides, {}) as RunHandle;
 }
@@ -176,7 +206,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     agent: {
       coding: {
         run: (spec) => Promise.resolve(r('agent.coding.run', [spec], () => stubCodingResult(overrides)) as CodingRunResult),
-        launch: (spec) => Promise.resolve(r('agent.coding.launch', [spec], () => stubRunHandle(overrides)) as RunHandle),
+        launch: (spec) => {
+          const correlationId = `stub-run-${++launchSeq}`;
+          // The resume payload IS the run result, so `agent.coding.run`
+          // overrides control both `await run()` and `launch()` + pause.
+          const result = {
+            ...(r('agent.coding.run', [spec], () => stubCodingResult(overrides)) as CodingRunResult),
+            runId: correlationId,
+          };
+          // Generic: any dispatch-able handle registers itself for pause-resume.
+          return dispatchable(stubRunHandle(overrides, correlationId, result), opts.signals);
+        },
       },
     },
     withAttribution: () => client,

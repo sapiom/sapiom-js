@@ -12,7 +12,6 @@ import path from 'node:path';
 
 import type { OrchestrationDefinition, WorkflowManifest } from '@sapiom/orchestration';
 import {
-  ADVANCE_RESULT_KIND,
   DEFAULT_MAX_ATTEMPTS_PER_STEP,
   InMemoryExecutionStore,
   NOOP_OBSERVER,
@@ -74,6 +73,10 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
 
   const store = new InMemoryExecutionStore();
   const dispatcher = new LocalStubDispatcher(opts.definition, stubs);
+  // Shared registry: a launched capability (e.g. agent.coding.launch) records the
+  // result that should resume a pause on its signal.
+  const signals = new Map<string, unknown>();
+  dispatcher.setSignals(signals);
   const core = new WorkflowRunnerCore({ store, dispatcher, observer: NOOP_OBSERVER });
   dispatcher.setCore(core);
   dispatcher.setMaxAttempts(max);
@@ -83,11 +86,19 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
   });
 
   // The dispatcher runs each step body + its completion inline, so one advance()
-  // fully processes one step. Loop until the execution reaches a terminal/paused state.
+  // fully processes one step. Drive on the execution's resulting status: keep
+  // advancing while running; auto-resume a pause (feeding the recorded signal
+  // result as the resumed step's input); stop on a terminal state.
   let guard = 0;
   while (guard++ < MAX_ADVANCES) {
-    const result = await core.advance(executionId, max);
-    if (result.kind !== ADVANCE_RESULT_KIND.RUNNING && result.kind !== ADVANCE_RESULT_KIND.DISPATCHED) break;
+    await core.advance(executionId, max);
+    const row = await store.loadExecution(executionId);
+    if (!row || row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled') break;
+    if (row.status === 'paused') {
+      const payload = signals.get(row.pausedSignalCorrelationId ?? '') ?? {};
+      await core.resetForResume(executionId, { fromStepInput: payload });
+    }
+    // 'running' (or just-resumed) → advance again
   }
 
   const final = await store.loadExecution(executionId);

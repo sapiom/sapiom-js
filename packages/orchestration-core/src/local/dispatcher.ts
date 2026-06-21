@@ -47,6 +47,8 @@ export interface LocalStepTrace {
 export class LocalStubDispatcher implements StepDispatcher {
   private core: WorkflowRunnerCore | null = null;
   private maxAttemptsPerStep: number | undefined;
+  /** Run-scoped registry: launch correlationId → the result to resume a pause with. */
+  private signals = new Map<string, unknown>();
 
   /** Per-step-attempt trace, in execution order. */
   readonly trace: LocalStepTrace[] = [];
@@ -64,6 +66,11 @@ export class LocalStubDispatcher implements StepDispatcher {
     this.maxAttemptsPerStep = max;
   }
 
+  /** Share the signal registry with runLocal so it can auto-resume pauses. */
+  setSignals(signals: Map<string, unknown>): void {
+    this.signals = signals;
+  }
+
   async dispatch(request: StepDispatchRequest): Promise<void> {
     if (!this.core) throw new Error('LocalStubDispatcher: setCore() was not called');
     const step = this.definition.steps[request.stepName];
@@ -77,7 +84,7 @@ export class LocalStubDispatcher implements StepDispatcher {
     // The step's stub block is interpreted as capability overrides; unmatched
     // calls fall back to @sapiom/tools/stub's built-in defaults.
     const overrides = (this.stubs.steps[request.stepName] ?? {}) as Record<string, unknown>;
-    const sapiom = createStubClient({ overrides });
+    const sapiom = createStubClient({ overrides, signals: this.signals });
 
     const ctx = {
       executionId: request.executionId,
