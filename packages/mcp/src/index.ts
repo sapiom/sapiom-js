@@ -5,8 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { resolveEnvironment } from "./credentials.js";
 import { register as registerAuthenticate } from "./tools/authenticate.js";
 import { register as registerStatus } from "./tools/status.js";
-import { register as registerVerify } from "./tools/verify.js";
-import { register as registerApiKeys } from "./tools/api-keys.js";
+import { register as registerOrchestrations } from "./tools/orchestrations.js";
 
 async function main(): Promise<void> {
   // Resolve environment: SAPIOM_ENVIRONMENT env var > file > "production"
@@ -19,20 +18,20 @@ async function main(): Promise<void> {
   }
 
   const server = new McpServer({
-    name: "sapiom",
+    // The local dev surface — distinct from the remote Sapiom capabilities MCP.
+    name: "sapiom-dev",
     version: "0.1.0",
   });
 
   // Register all tools
   registerAuthenticate(server, env);
   registerStatus(server, env);
-  registerVerify(server, env);
-  registerApiKeys(server, env);
+  registerOrchestrations(server, env);
 
   // Connect via stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Sapiom MCP server running on stdio");
+  console.error("Sapiom dev MCP server running on stdio");
 }
 
 main().catch((err) => {

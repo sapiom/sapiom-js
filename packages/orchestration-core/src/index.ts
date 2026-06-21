@@ -62,3 +62,15 @@ export type { SignalOptions, SignalResult } from './signal.js';
 
 // git helpers (used by deploy; exported for consumers that need them directly)
 export { assertDeployable, pushHead } from './git.js';
+
+// local stub file model (per-step capability overrides for run_local)
+export { parseStubFile, STUB_FILE_VERSION } from './local/stubs.js';
+export type { StubFile, StepStubs, StubResponse } from './local/stubs.js';
+
+// local execution (runs step bodies in-process against stub capabilities)
+export { runLocal, runLocalFromDir, STUBS_FILE } from './local/run-local.js';
+export type { RunLocalOptions, LocalRunResult, LocalRunOutcome } from './local/run-local.js';
+export { loadDefinition } from './local/load.js';
+export type { LoadedDefinition } from './local/load.js';
+export { LocalStubDispatcher } from './local/dispatcher.js';
+export type { LocalStepTrace, LogEntry } from './local/dispatcher.js';

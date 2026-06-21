@@ -9,6 +9,5 @@ module.exports = {
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
-    '^@sapiom/tools/stub$': '<rootDir>/../tools/dist/cjs/stub/index.js',
   },
 };

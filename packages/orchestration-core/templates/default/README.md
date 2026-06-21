@@ -19,9 +19,12 @@ No credentials to wire — a per-execution tenant credential is injected when yo
 
 ## The loop
 
-```sh
-npm run check     # validate locally: bundles, builds the manifest, checks the graph (offline)
-npm run deploy    # build and ship
-```
+Author and run this orchestration with the Sapiom dev tools:
 
-See `AGENTS.md` for how to work in this project with a coding agent.
+- **check** — validate locally (bundle, manifest, step graph). Offline.
+- **run_local** — execute the steps locally against stubs (no real capability calls), iterating until it completes.
+- **deploy** — build and ship.
+
+`npm run typecheck` and `npm run format` are also available for editor-level checks.
+
+See `AGENTS.md` for the full authoring loop.

@@ -36,7 +36,7 @@ describe('scaffold', () => {
         targetDir,
         template: 'default',
         projectName: 'my-orch',
-        versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0', cli: '0.1.0' },
+        versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0' },
       });
 
       expect(result.targetDir).toBe(targetDir);
@@ -58,7 +58,7 @@ describe('scaffold', () => {
     try {
       const result = await scaffold({
         targetDir,
-        versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0', cli: '0.1.0' },
+        versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0' },
       });
       expect(result.projectName).toBe('auto-named');
     } finally {
@@ -72,7 +72,7 @@ describe('scaffold', () => {
     writeFileSync(path.join(targetDir, 'existing.txt'), 'x');
     try {
       await expect(
-        scaffold({ targetDir, versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0', cli: '0.1.0' } }),
+        scaffold({ targetDir, versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0' } }),
       ).rejects.toMatchObject({ code: 'DIR_NOT_EMPTY' });
     } finally {
       rmSync(targetDir, { recursive: true, force: true });
@@ -84,7 +84,7 @@ describe('scaffold', () => {
     const targetDir = path.join(base, 'no-template');
     try {
       await expect(
-        scaffold({ targetDir, template: 'does-not-exist', versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0', cli: '0.1.0' } }),
+        scaffold({ targetDir, template: 'does-not-exist', versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0' } }),
       ).rejects.toMatchObject({ code: 'UNKNOWN_TEMPLATE' });
     } finally {
       rmSync(base, { recursive: true, force: true });
@@ -97,7 +97,7 @@ describe('scaffold', () => {
     try {
       await scaffold({
         targetDir,
-        versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0', cli: '0.1.0' },
+        versions: { orchestration: '1.0.0', tools: '1.0.0', zod: '3.0.0' },
       });
       expect(existsSync(path.join(targetDir, '.gitignore'))).toBe(true);
       expect(existsSync(path.join(targetDir, '_gitignore'))).toBe(false);

@@ -32,6 +32,11 @@
       "types": "./dist/cjs/agent/index.d.ts",
       "import": "./dist/esm/agent/index.js",
       "require": "./dist/cjs/agent/index.js"
+    },
+    "./stub": {
+      "types": "./dist/cjs/stub/index.d.ts",
+      "import": "./dist/esm/stub/index.js",
+      "require": "./dist/cjs/stub/index.js"
     }
   },
   "files": [

@@ -1,9 +1,10 @@
 /**
- * check — local bundle + manifest + graph validation. No network required.
- *
- * Pure local operation: all inputs are passed explicitly. Mirrors what the
- * server build validates so `check` is a fast, offline pre-flight before deploy.
+ * check — local typecheck + bundle + manifest + graph validation. No network
+ * required; the offline pre-flight before deploy. The typecheck step is what
+ * catches type errors and references to capabilities that don't exist (which
+ * the bundle, being type-stripped, cannot).
  */
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,30 @@ import { assertValidGraph, buildManifest, isOrchestrationDefinition, workflowMan
 import * as esbuild from 'esbuild';
 
 import { OrchestrationError } from './errors.js';
+
+/**
+ * Run the project's TypeScript compiler in no-emit mode. Returns a warning
+ * string if typecheck was skipped (TypeScript not installed), or null on
+ * success. Throws `TYPECHECK_FAILED` with the compiler output on type errors.
+ */
+function runTypecheck(sourceDir: string): string | null {
+  const tscBin = path.join(sourceDir, 'node_modules', '.bin', 'tsc');
+  if (!existsSync(tscBin)) {
+    return 'typecheck skipped — TypeScript is not installed (run npm install first)';
+  }
+  try {
+    execFileSync(tscBin, ['--noEmit'], { cwd: sourceDir, stdio: ['ignore', 'pipe', 'pipe'] });
+    return null;
+  } catch (err) {
+    const e = err as { stdout?: Buffer; stderr?: Buffer };
+    const output = (e.stdout?.toString() ?? '').trim() || (e.stderr?.toString() ?? '').trim();
+    throw new OrchestrationError({
+      code: 'TYPECHECK_FAILED',
+      message: 'The orchestration has type errors.',
+      hint: output || 'Run `tsc --noEmit` for details.',
+    });
+  }
+}
 
 // The authoritative SDK version is stamped by the server build; locally we
 // record a placeholder so `check` stays a fast, dependency-light pre-flight.
@@ -36,8 +61,8 @@ export interface CheckResult {
  * derive and Zod-parse the manifest, and check the step graph.
  *
  * Throws `OrchestrationError` on any validation failure (codes:
- * `NO_ENTRY` | `BUNDLE_FAILED` | `NO_DEFINITION` | `MULTIPLE_DEFINITIONS` |
- * `MANIFEST_INVALID` | `GRAPH_INVALID`).
+ * `NO_ENTRY` | `TYPECHECK_FAILED` | `BUNDLE_FAILED` | `NO_DEFINITION` |
+ * `MULTIPLE_DEFINITIONS` | `MANIFEST_INVALID` | `GRAPH_INVALID`).
  */
 export async function check(opts: CheckOptions): Promise<CheckResult> {
   const { sourceDir } = opts;
@@ -50,6 +75,12 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
       hint: 'Run this from an orchestration project, or pass its directory.',
     });
   }
+
+  // Typecheck first — it's the only step that validates types and capability
+  // references (the bundle is type-stripped). Throws TYPECHECK_FAILED on errors.
+  const warnings: string[] = [];
+  const typecheckSkip = runTypecheck(sourceDir);
+  if (typecheckSkip) warnings.push(typecheckSkip);
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'sapiom-check-'));
   const bundlePath = path.join(tmp, 'definition.mjs');
@@ -112,9 +143,8 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
       });
     }
 
-    let warnings: string[] = [];
     try {
-      warnings = assertValidGraph(manifest as Parameters<typeof assertValidGraph>[0]);
+      warnings.push(...assertValidGraph(manifest as Parameters<typeof assertValidGraph>[0]));
     } catch (err) {
       throw new OrchestrationError({
         code: 'GRAPH_INVALID',

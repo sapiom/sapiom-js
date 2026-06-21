@@ -47,6 +47,7 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sapiom/core": "workspace:*",
     "@sapiom/fetch": "workspace:*",
+    "@sapiom/orchestration-core": "workspace:^",
     "zod": "^3.25.0"
   },
   "devDependencies": {

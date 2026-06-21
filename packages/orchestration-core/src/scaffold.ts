@@ -15,26 +15,21 @@ import path from 'node:path';
 import { OrchestrationError } from './errors.js';
 
 /**
- * Where bundled templates live relative to this file after compilation.
- *
- * The compiled output lives at dist/cjs/scaffold.js or dist/esm/scaffold.js;
- * templates/ is two levels up at the package root.
- *
- * `__dirname` is available in CJS; in ESM TypeScript's `importHelpers` or an
- * explicit shim can provide it. We also accept an env override
- * (SAPIOM_getTemplatesDir()) for tests that need to point at a fixture directory.
- *
- * eslint-disable-next-line @typescript-eslint/no-explicit-any
+ * Directory of this module. `__dirname` exists in the CommonJS build; the ESM
+ * build has no `__dirname`, so an ESM caller must supply the templates location
+ * explicitly (via the `templatesDir` option or the `SAPIOM_TEMPLATES_DIR`
+ * environment override). See {@link getTemplatesDir}.
  */
-/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-const _dirname: string = typeof __dirname !== 'undefined' ? __dirname : (globalThis as any).__dirname ?? '';
+const moduleDir: string = typeof __dirname !== 'undefined' ? __dirname : '';
 
 /**
- * Return the active templates directory. Evaluated lazily so the
- * SAPIOM_TEMPLATES_DIR override (used in tests) can be set after module load.
+ * Resolve the active templates directory. Priority: explicit `override` →
+ * `SAPIOM_TEMPLATES_DIR` env → the bundled `templates/` two levels up from the
+ * compiled module (available in the CommonJS build). Evaluated lazily so the
+ * override can be set after module load.
  */
-function getTemplatesDir(): string {
-  return process.env.SAPIOM_TEMPLATES_DIR ?? path.resolve(_dirname, '..', '..', 'templates');
+function getTemplatesDir(override?: string): string {
+  return override ?? process.env.SAPIOM_TEMPLATES_DIR ?? path.resolve(moduleDir, '..', '..', 'templates');
 }
 
 export const DEFAULT_TEMPLATE = 'default';
@@ -49,7 +44,6 @@ const REGISTRY = 'https://registry.npmjs.org';
 const VERSION_FALLBACK = {
   orchestration: '0.1.1',
   tools: '0.1.1',
-  cli: '0.1.0',
 };
 
 /** Pinned to the zod 3.25.x line the SDK requires. */
@@ -59,7 +53,6 @@ export interface ResolvedVersions {
   orchestration: string;
   tools: string;
   zod: string;
-  cli: string;
 }
 
 async function latestNpmVersion(pkg: string): Promise<string | null> {
@@ -81,31 +74,30 @@ async function latestNpmVersion(pkg: string): Promise<string | null> {
  * constants if the registry is unreachable.
  */
 export async function resolveVersions(): Promise<ResolvedVersions> {
-  const [orchestration, tools, cli] = await Promise.all([
+  const [orchestration, tools] = await Promise.all([
     latestNpmVersion('@sapiom/orchestration'),
     latestNpmVersion('@sapiom/tools'),
-    latestNpmVersion('@sapiom/cli'),
   ]);
   return {
     orchestration: orchestration ?? VERSION_FALLBACK.orchestration,
     tools: tools ?? VERSION_FALLBACK.tools,
     zod: ZOD_VERSION,
-    cli: cli ?? VERSION_FALLBACK.cli,
   };
 }
 
 // ── Template helpers ──────────────────────────────────────────────────────────
 
-export function listTemplates(): string[] {
-  if (!existsSync(getTemplatesDir())) return [];
-  return readdirSync(getTemplatesDir()).filter((name) => statSync(path.join(getTemplatesDir(), name)).isDirectory());
+export function listTemplates(templatesDir?: string): string[] {
+  const root = getTemplatesDir(templatesDir);
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter((name) => statSync(path.join(root, name)).isDirectory());
 }
 
 /** Absolute path to a bundled template directory. Throws on an unknown name. */
-export function resolveTemplate(name: string): string {
-  const dir = path.join(getTemplatesDir(), name);
+export function resolveTemplate(name: string, templatesDir?: string): string {
+  const dir = path.join(getTemplatesDir(templatesDir), name);
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    const available = listTemplates();
+    const available = listTemplates(templatesDir);
     throw new OrchestrationError({
       code: 'UNKNOWN_TEMPLATE',
       message:
@@ -166,6 +158,12 @@ export interface ScaffoldOptions {
   /** Project name stamped into templates as __PROJECT_NAME__. */
   projectName?: string;
   /**
+   * Directory holding the bundled templates. Required when calling from an ESM
+   * context (no `__dirname`); a CommonJS caller can omit it (resolved relative
+   * to the compiled module). Also overridable via `SAPIOM_TEMPLATES_DIR`.
+   */
+  templatesDir?: string;
+  /**
    * Pre-resolved dependency versions. If omitted, `scaffold` fetches them from
    * the npm registry (may add ~5 s on slow connections).
    */
@@ -196,7 +194,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     });
   }
 
-  const templateDir = resolveTemplate(template);
+  const templateDir = resolveTemplate(template, opts.templatesDir);
   const versions = opts.versions ?? (await resolveVersions());
 
   mkdirSync(targetDir, { recursive: true });
@@ -205,8 +203,14 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     __ORCHESTRATION_VERSION__: versions.orchestration,
     __TOOLS_VERSION__: versions.tools,
     __ZOD_VERSION__: versions.zod,
-    __CLI_VERSION__: versions.cli,
   });
+
+  // Seed the committed stub file for the local-run loop. Created here (not
+  // shipped in the template) so it doesn't depend on how the registry treats
+  // dotfiles in a published package.
+  const devDir = path.join(targetDir, '.sapiom-dev');
+  mkdirSync(devDir, { recursive: true });
+  writeFileSync(path.join(devDir, 'stubs.json'), JSON.stringify({ version: 1, steps: {} }, null, 2) + '\n');
 
   return { targetDir, template, projectName };
 }
