@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/orchestration-core",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Pure, stateless core functions for scaffolding, validating, and operating Sapiom orchestrations — shared by the CLI and MCP packages.",
   "license": "MIT",
   "author": "Sapiom",
