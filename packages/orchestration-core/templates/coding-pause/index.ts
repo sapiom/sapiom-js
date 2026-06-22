@@ -37,7 +37,9 @@ const prepare = defineStep({
   next: ["kickoff"],
   async run(_input, ctx) {
     const existing = await ctx.sapiom.repositories.list();
-    const repo = existing.find((r) => r.slug === REPO_SLUG) ?? (await ctx.sapiom.repositories.create(REPO_SLUG));
+    const repo =
+      existing.find((r) => r.slug === REPO_SLUG) ??
+      (await ctx.sapiom.repositories.create(REPO_SLUG));
     ctx.shared.set("slug", repo.slug);
     ctx.shared.set("cloneUrl", repo.cloneUrl);
     return goto("kickoff", {});
@@ -58,7 +60,9 @@ const kickoff = defineStep({
       task: "Make a small, self-contained change to this repository and commit it.",
       gitRepository: repo, // auto-cloned into the sandbox at /workspace/<slug>
     });
-    ctx.logger.info("agent launched; suspending until it finishes", { runId: run.runId });
+    ctx.logger.info("agent launched; suspending until it finishes", {
+      runId: run.runId,
+    });
     return pauseUntilSignal(run, { resumeStep: "finalize" });
   },
 });
@@ -71,7 +75,9 @@ const finalize = defineStep({
   canFail: true,
   async run(run: CodingResultPayload, ctx) {
     if (run.status !== "completed" || !run.result?.success) {
-      return fail(`coding agent did not succeed: ${run.error?.message ?? run.status}`);
+      return fail(
+        `coding agent did not succeed: ${run.error?.message ?? run.status}`,
+      );
     }
     // Re-attach live handles from plain values, then publish the agent's work.
     const repo = ctx.sapiom.repositories.attach(
@@ -79,8 +85,15 @@ const finalize = defineStep({
       ctx.shared.get("cloneUrl") as string,
     );
     const sandbox = ctx.sapiom.sandboxes.attach(run.sandbox.name);
-    const push = await repo.pushFromSandbox(sandbox, { message: "chore: automated change" });
-    return terminate({ runId: run.runId, pushed: push.pushed, sha: push.sha, summary: run.summary });
+    const push = await repo.pushFromSandbox(sandbox, {
+      message: "chore: automated change",
+    });
+    return terminate({
+      runId: run.runId,
+      pushed: push.pushed,
+      sha: push.sha,
+      summary: run.summary,
+    });
   },
 });
 
