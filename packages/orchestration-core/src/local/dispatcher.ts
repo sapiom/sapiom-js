@@ -13,7 +13,7 @@ import {
   type OrchestrationExecutionContext,
   type OrchestrationDefinition,
   InMemoryContextStore,
-} from '@sapiom/orchestration';
+} from "@sapiom/orchestration";
 import {
   type StepCompletionPayload,
   type StepDispatcher,
@@ -21,13 +21,13 @@ import {
   type WorkflowRunnerCore,
   parseCorrelationId,
   STEP_COMPLETION_OUTCOME,
-} from '@sapiom/orchestration-runtime';
-import { createStubClient } from '@sapiom/tools/stub';
+} from "@sapiom/orchestration-runtime";
+import { createStubClient } from "@sapiom/tools/stub";
 
-import type { StubFile } from './stubs.js';
+import type { StubFile } from "./stubs.js";
 
 export interface LogEntry {
-  level: 'info' | 'warn' | 'error' | 'debug';
+  level: "info" | "warn" | "error" | "debug";
   msg: string;
   meta?: Record<string, unknown>;
 }
@@ -37,7 +37,7 @@ export interface LocalStepTrace {
   step: string;
   attempt: number;
   input: unknown;
-  status: 'succeeded' | 'threw';
+  status: "succeeded" | "threw";
   output?: unknown;
   directive?: NextStepDirective;
   error?: { name: string; message: string; stack?: string };
@@ -52,6 +52,14 @@ export class LocalStubDispatcher implements StepDispatcher {
 
   /** Per-step-attempt trace, in execution order. */
   readonly trace: LocalStepTrace[] = [];
+
+  /** stepName → override keys that actually matched a capability call (across
+   *  attempts). Diffed against the supplied stub keys to flag unmatched ones. */
+  readonly usedKeysByStep = new Map<string, Set<string>>();
+
+  /** Warnings about malformed stub *values* (right key, wrong shape), collected
+   *  across all steps in execution order. */
+  readonly stubWarnings = new Set<string>();
 
   constructor(
     private readonly definition: OrchestrationDefinition,
@@ -72,19 +80,41 @@ export class LocalStubDispatcher implements StepDispatcher {
   }
 
   async dispatch(request: StepDispatchRequest): Promise<void> {
-    if (!this.core) throw new Error('LocalStubDispatcher: setCore() was not called');
+    if (!this.core)
+      throw new Error("LocalStubDispatcher: setCore() was not called");
     const step = this.definition.steps[request.stepName];
-    if (!step) throw new Error(`LocalStubDispatcher: no step '${request.stepName}' in the definition`);
+    if (!step)
+      throw new Error(
+        `LocalStubDispatcher: no step '${request.stepName}' in the definition`,
+      );
 
     const parsed = parseCorrelationId(request.correlationId);
-    if (!parsed) throw new Error(`LocalStubDispatcher: malformed correlationId '${request.correlationId}'`);
+    if (!parsed)
+      throw new Error(
+        `LocalStubDispatcher: malformed correlationId '${request.correlationId}'`,
+      );
 
     const logs: LogEntry[] = [];
-    const sharedStore = new InMemoryContextStore<Record<string, unknown>>(request.shared);
+    const sharedStore = new InMemoryContextStore<Record<string, unknown>>(
+      request.shared,
+    );
     // The step's stub block is interpreted as capability overrides; unmatched
     // calls fall back to @sapiom/tools/stub's built-in defaults.
-    const overrides = (this.stubs.steps[request.stepName] ?? {}) as Record<string, unknown>;
-    const sapiom = createStubClient({ overrides, signals: this.signals });
+    const overrides = (this.stubs.steps[request.stepName] ?? {}) as Record<
+      string,
+      unknown
+    >;
+    let usedKeys = this.usedKeysByStep.get(request.stepName);
+    if (!usedKeys) {
+      usedKeys = new Set<string>();
+      this.usedKeysByStep.set(request.stepName, usedKeys);
+    }
+    const sapiom = createStubClient({
+      overrides,
+      signals: this.signals,
+      usedKeys,
+      warnings: this.stubWarnings,
+    });
 
     const ctx = {
       executionId: request.executionId,
@@ -108,7 +138,7 @@ export class LocalStubDispatcher implements StepDispatcher {
         step: request.stepName,
         attempt: request.attempt,
         input: request.input,
-        status: 'threw',
+        status: "threw",
         error: { name: e.name, message: e.message, stack: e.stack },
         logs,
       });
@@ -131,7 +161,7 @@ export class LocalStubDispatcher implements StepDispatcher {
       step: request.stepName,
       attempt: request.attempt,
       input: request.input,
-      status: 'succeeded',
+      status: "succeeded",
       output,
       directive,
       logs,
@@ -143,37 +173,68 @@ export class LocalStubDispatcher implements StepDispatcher {
       result: { output, directive: wire },
       shared: sharedStore.snapshot(),
     };
-    await this.core.completeDispatchedStep(payload, parsed, this.maxAttemptsPerStep);
+    await this.core.completeDispatchedStep(
+      payload,
+      parsed,
+      this.maxAttemptsPerStep,
+    );
   }
 }
 
-function makeLogger(sink: LogEntry[]): OrchestrationExecutionContext['logger'] {
-  const at = (level: LogEntry['level']) => (msg: string, meta?: Record<string, unknown>) => {
-    sink.push({ level, msg, ...(meta ? { meta } : {}) });
+function makeLogger(sink: LogEntry[]): OrchestrationExecutionContext["logger"] {
+  const at =
+    (level: LogEntry["level"]) =>
+    (msg: string, meta?: Record<string, unknown>) => {
+      sink.push({ level, msg, ...(meta ? { meta } : {}) });
+    };
+  return {
+    info: at("info"),
+    warn: at("warn"),
+    error: at("error"),
+    debug: at("debug"),
   };
-  return { info: at('info'), warn: at('warn'), error: at('error'), debug: at('debug') };
 }
 
-type WireDirective = NonNullable<StepCompletionPayload['result']>['directive'];
+type WireDirective = NonNullable<StepCompletionPayload["result"]>["directive"];
 
 /**
  * Split a returned authoring directive into the audit `output` and the clean
  * wire directive the completion contract carries.
  */
-function splitDirective(d: NextStepDirective): { output: unknown; wire: WireDirective } {
+function splitDirective(d: NextStepDirective): {
+  output: unknown;
+  wire: WireDirective;
+} {
   switch (d.kind) {
-    case 'continue':
-      return { output: d.input, wire: { kind: 'continue', stepName: d.stepName, input: d.input } };
-    case 'terminate':
-      return { output: (d as { output?: unknown }).output, wire: { kind: 'terminate', reason: d.reason } };
-    case 'fail':
-      return { output: (d as { output?: unknown }).output, wire: { kind: 'fail', reason: d.reason } };
-    case 'pause_until_signal':
+    case "continue":
+      return {
+        output: d.input,
+        wire: { kind: "continue", stepName: d.stepName, input: d.input },
+      };
+    case "terminate":
       return {
         output: (d as { output?: unknown }).output,
-        wire: { kind: 'pause_until_signal', signal: d.signal, timeoutMs: d.timeoutMs, resumeStep: d.resumeStep },
+        wire: { kind: "terminate", reason: d.reason },
       };
-    case 'retry':
-      return { output: undefined, wire: { kind: 'retry', delayMs: d.delayMs, reason: d.reason } };
+    case "fail":
+      return {
+        output: (d as { output?: unknown }).output,
+        wire: { kind: "fail", reason: d.reason },
+      };
+    case "pause_until_signal":
+      return {
+        output: (d as { output?: unknown }).output,
+        wire: {
+          kind: "pause_until_signal",
+          signal: d.signal,
+          timeoutMs: d.timeoutMs,
+          resumeStep: d.resumeStep,
+        },
+      };
+    case "retry":
+      return {
+        output: undefined,
+        wire: { kind: "retry", delayMs: d.delayMs, reason: d.reason },
+      };
   }
 }

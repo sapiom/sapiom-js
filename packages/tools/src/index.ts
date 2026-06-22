@@ -28,6 +28,9 @@ export { Repository } from "./repositories/index.js";
 export * as agent from "./agent/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { CODING_RESULT_SIGNAL } from "./agent/index.js";
+// The shape a step resumed from `pauseUntilSignal(codingHandle, …)` receives as
+// input — annotate the resumed step with it instead of hand-rolling the shape.
+export type { CodingResultPayload } from "./agent/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";

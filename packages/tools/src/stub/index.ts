@@ -18,15 +18,23 @@
  * replaces that capability's default; a function `(…args) => value` computes it
  * from the call arguments.
  */
-import { CODING_RESULT_SIGNAL } from '../agent/index.js';
-import type { CodingRunResult, RunHandle, RunStatus } from '../agent/index.js';
-import type { Sapiom } from '../client.js';
-import { Repository } from '../repositories/index.js';
-import { Sandbox } from '../sandboxes/index.js';
-import type { UploadResponse, DownloadUrlResponse, ListResponse, FileMetadata } from '../file-storage/index.js';
+import { CODING_RESULT_SIGNAL } from "../agent/index.js";
+import type { CodingRunResult, RunHandle, RunStatus } from "../agent/index.js";
+import type { Sapiom } from "../client.js";
+import { Repository } from "../repositories/index.js";
+import { Sandbox } from "../sandboxes/index.js";
+import type {
+  UploadResponse,
+  DownloadUrlResponse,
+  ListResponse,
+  FileMetadata,
+} from "../file-storage/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
-export type StubOverrides = Record<string, unknown | ((...args: unknown[]) => unknown)>;
+export type StubOverrides = Record<
+  string,
+  unknown | ((...args: unknown[]) => unknown)
+>;
 
 export interface StubClientOptions {
   overrides?: StubOverrides;
@@ -37,16 +45,36 @@ export interface StubClientOptions {
    * signal would have carried.
    */
   signals?: Map<string, unknown>;
+  /**
+   * When provided, every override key that is actually matched by a capability
+   * call is added here. A local runner diffs this against the keys the author
+   * supplied to warn about stub keys that matched nothing (a typo'd path, or the
+   * wrong plural/singular form) — which otherwise fail silently.
+   */
+  usedKeys?: Set<string>;
+  /**
+   * When provided, collects human-readable warnings about stub *values* that are
+   * present but malformed for the capability they override (e.g. a
+   * `repositories.list` stub that isn't an array of repositories). Catches the
+   * silent-wrong-data trap that `usedKeys` can't — a key that matched but carried
+   * the wrong shape.
+   */
+  warnings?: Set<string>;
 }
 
 // Module-scoped so correlation ids are unique across launches within a run.
 let launchSeq = 0;
 
 /** A launched, pausable capability handle (the `DispatchHandle` shape). */
-function isDispatchHandle(v: unknown): v is { dispatch: { correlationId: string }; wait: () => Promise<unknown> } {
-  if (!v || typeof v !== 'object') return false;
+function isDispatchHandle(
+  v: unknown,
+): v is { dispatch: { correlationId: string }; wait: () => Promise<unknown> } {
+  if (!v || typeof v !== "object") return false;
   const h = v as { dispatch?: { correlationId?: unknown }; wait?: unknown };
-  return typeof h.wait === 'function' && typeof h.dispatch?.correlationId === 'string';
+  return (
+    typeof h.wait === "function" &&
+    typeof h.dispatch?.correlationId === "string"
+  );
 }
 
 /**
@@ -55,29 +83,164 @@ function isDispatchHandle(v: unknown): v is { dispatch: { correlationId: string 
  * stub method wraps its returned handle in this — the result a `pauseUntilSignal`
  * resumes with is exactly what the handle's `wait()` resolves to.
  */
-async function dispatchable<T>(handle: T, signals?: Map<string, unknown>): Promise<T> {
+async function dispatchable<T>(
+  handle: T,
+  signals?: Map<string, unknown>,
+): Promise<T> {
   if (signals && isDispatchHandle(handle)) {
-    signals.set(handle.dispatch.correlationId, await handle.wait());
+    // The resume payload is delivered as the dispatched run's terminal signal,
+    // which in production crosses a wire boundary — it reaches the resumed step
+    // as plain JSON, never a live handle. Round-trip it here so a local run sees
+    // exactly that shape (e.g. `result.sandbox` is plain data, so the author
+    // re-attaches it with `sandboxes.attach(name)` just as they would in prod —
+    // no local-only handle methods to lean on). Relies on stub handles being
+    // JSON-safe (see `makeHandle`).
+    signals.set(
+      handle.dispatch.correlationId,
+      toPlainJson(await handle.wait()),
+    );
   }
   return handle;
+}
+
+/** Deep-plainify a value the way a wire boundary would (drops handle behavior). */
+function toPlainJson(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value ?? null));
 }
 
 // Method names of each handle, reflected from the real classes so the stub stays
 // in lockstep with the SDK (a renamed/added method is picked up automatically).
 const REPOSITORY_METHODS = handleMethods(Repository.prototype);
 const SANDBOX_METHODS = handleMethods(Sandbox.prototype);
-const RUN_HANDLE_METHODS = new Set(['status', 'wait']); // RunHandle is a literal, not a class
+const RUN_HANDLE_METHODS = new Set(["status", "wait"]); // RunHandle is a literal, not a class
 
 function handleMethods(proto: object): Set<string> {
-  return new Set(Object.getOwnPropertyNames(proto).filter((n) => n !== 'constructor'));
+  return new Set(
+    Object.getOwnPropertyNames(proto).filter((n) => n !== "constructor"),
+  );
 }
 
-function resolve(overrides: StubOverrides, path: string, args: unknown[], fallback: () => unknown): unknown {
-  if (Object.prototype.hasOwnProperty.call(overrides, path)) {
-    const o = overrides[path];
-    return typeof o === 'function' ? (o as (...a: unknown[]) => unknown)(...args) : o;
+/**
+ * Resolve an override for a capability call. `paths` is one path or an ordered
+ * list of candidates — the first that is present wins, so a dispatched method can
+ * honor both its own key and the shared result key (see {@link dispatchedKeys}).
+ * Only the candidate that actually matches is consulted (and thus recorded as
+ * used), so unmatched-key reporting stays precise.
+ */
+function resolve(
+  overrides: StubOverrides,
+  paths: string | string[],
+  args: unknown[],
+  fallback: () => unknown,
+): unknown {
+  for (const path of typeof paths === "string" ? [paths] : paths) {
+    if (Object.prototype.hasOwnProperty.call(overrides, path)) {
+      const o = overrides[path];
+      return typeof o === "function"
+        ? (o as (...a: unknown[]) => unknown)(...args)
+        : o;
+    }
   }
   return fallback();
+}
+
+/**
+ * The stub keys a dispatched capability accepts, in precedence order: the
+ * method actually called (`<ns>.launch`) wins, then the shared blocking-result
+ * key (`<ns>.run`) that produces the same payload. Lets an author stub the key
+ * matching the call they wrote — `agent.coding.launch` — while the canonical
+ * `agent.coding.run` keeps working for both `run()` and `launch()`. Uniform
+ * across the dispatchable/pause family (coding today; deep research,
+ * sub-workflows, browser sessions later).
+ */
+function dispatchedKeys(namespace: string): string[] {
+  return [`${namespace}.launch`, `${namespace}.run`];
+}
+
+/**
+ * Wrap an overrides object so that every present key `resolve` consults is
+ * recorded in `used` (via the `hasOwnProperty` probe → `getOwnPropertyDescriptor`
+ * trap). Lets a runner report supplied-but-unmatched stub keys without threading
+ * a tracker through every factory.
+ */
+function recordingOverrides(
+  raw: StubOverrides,
+  used?: Set<string>,
+): StubOverrides {
+  if (!used) return raw;
+  return new Proxy(raw, {
+    getOwnPropertyDescriptor(target, prop) {
+      const desc = Object.getOwnPropertyDescriptor(target, prop);
+      if (desc && typeof prop === "string") used.add(prop);
+      return desc;
+    },
+  });
+}
+
+/** Coerce a resolved value (override or default; plain JSON or an existing stub
+ *  handle) into a Repository handle, so stubbing a handle-returning capability
+ *  with plain JSON never strips the handle's instance methods. */
+function asRepository(data: unknown, overrides: StubOverrides): Repository {
+  const d = (data ?? {}) as {
+    slug?: string;
+    cloneUrl?: string;
+    status?: string;
+  };
+  const slug = d.slug ?? "stub-repo";
+  return stubRepository(
+    {
+      slug,
+      cloneUrl: d.cloneUrl ?? `https://git.local/${slug}.git`,
+      status: d.status,
+    },
+    overrides,
+  );
+}
+
+/** Sandbox counterpart to {@link asRepository}. */
+function asSandbox(data: unknown, overrides: StubOverrides): Sandbox {
+  const d = (data ?? {}) as { name?: string; workspaceRoot?: string };
+  return stubSandbox(
+    { name: d.name ?? "stub-sandbox", workspaceRoot: d.workspaceRoot },
+    overrides,
+  );
+}
+
+/** Coerce a `repositories.list` override (or default) into Repository handles,
+ *  warning when the value or an element is the wrong shape — so a malformed list
+ *  stub surfaces instead of silently yielding repos with `slug: undefined`. */
+function asRepositoryList(
+  data: unknown,
+  overrides: StubOverrides,
+  warnings?: Set<string>,
+): Repository[] {
+  if (!Array.isArray(data)) {
+    warnings?.add(
+      `'repositories.list' stub must be an array of repositories (e.g. [{ "slug": "...", "cloneUrl": "..." }]); ` +
+        `got ${describeShape(data)}. Returning an empty list.`,
+    );
+    return [];
+  }
+  return data.map((el, i) => {
+    if (
+      !el ||
+      typeof el !== "object" ||
+      typeof (el as { slug?: unknown }).slug !== "string"
+    ) {
+      warnings?.add(
+        `'repositories.list'[${i}] is not a repository shape (expected { slug, cloneUrl }); got ${describeShape(el)}. ` +
+          `Note: stub values are NOT consumed one-per-call — a list stub is the array list() returns, so write ` +
+          `[{ "slug": "..." }], not [[{ ... }]].`,
+      );
+    }
+    return asRepository(el, overrides);
+  });
+}
+
+function describeShape(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return `an array (length ${v.length})`;
+  return typeof v;
 }
 
 /**
@@ -86,7 +249,7 @@ function resolve(overrides: StubOverrides, path: string, args: unknown[], fallba
  * not part of the handle.
  */
 function makeHandle(
-  type: 'repository' | 'sandbox' | 'runHandle',
+  type: "repository" | "sandbox" | "runHandle",
   methods: Set<string>,
   data: Record<string, unknown>,
   overrides: StubOverrides,
@@ -94,45 +257,76 @@ function makeHandle(
 ): unknown {
   return new Proxy(data, {
     get(target, prop) {
-      if (typeof prop === 'symbol' || prop === 'then') return undefined;
+      if (typeof prop === "symbol" || prop === "then") return undefined;
       const key = String(prop);
       if (key in target) return target[key]; // data field (incl. nested handles)
+      // Serialization / coercion hooks: a stub handle must survive being
+      // JSON.stringify'd, logged, or string-coerced — these flow through the
+      // local runner's trace, `ctx.shared` snapshots, and the resume payload. We
+      // answer them with the handle's plain data instead of letting the
+      // unknown-property guard below throw (which surfaced as the opaque
+      // "'sandbox.toJSON' is not a method or field" failure). `{ ...target }`
+      // copies only the data fields; nested handles serialize via their own
+      // toJSON in turn.
+      if (key === "toJSON") return () => ({ ...target });
+      if (key === "toString") return () => `[stub ${type}]`;
+      if (key === "valueOf") return () => target;
       if (methods.has(key)) {
         return (...args: unknown[]): Promise<unknown> =>
-          Promise.resolve(resolve(overrides, `${type}.${key}`, args, () => defaults[key]?.(args)));
+          Promise.resolve(
+            resolve(overrides, `${type}.${key}`, args, () =>
+              defaults[key]?.(args),
+            ),
+          );
       }
-      throw new Error(`'${type}.${key}' is not a method or field on this handle.`);
+      throw new Error(
+        `'${type}.${key}' is not a method or field on this handle.`,
+      );
     },
   });
 }
 
 const REPO_METHOD_DEFAULTS: Record<string, (args: unknown[]) => unknown> = {
   delete: () => undefined,
-  pushFromSandbox: () => ({ pushed: true, sha: 'stub00000000', branch: 'main' }),
+  pushFromSandbox: () => ({
+    pushed: true,
+    sha: "stub00000000",
+    branch: "main",
+  }),
 };
 
 const SANDBOX_METHOD_DEFAULTS: Record<string, (args: unknown[]) => unknown> = {
-  exec: () => ({ pid: 'stub-proc', exitCode: 0, stdout: '', stderr: '' }),
-  readFile: () => '',
+  exec: () => ({ pid: "stub-proc", exitCode: 0, stdout: "", stderr: "" }),
+  readFile: () => "",
   writeFile: () => undefined,
   destroy: () => undefined,
 };
 
-function stubRepository(data: { slug: string; cloneUrl: string; status?: string }, overrides: StubOverrides): Repository {
+function stubRepository(
+  data: { slug: string; cloneUrl: string; status?: string },
+  overrides: StubOverrides,
+): Repository {
   return makeHandle(
-    'repository',
+    "repository",
     REPOSITORY_METHODS,
-    { slug: data.slug, cloneUrl: data.cloneUrl, status: data.status ?? 'active' },
+    {
+      slug: data.slug,
+      cloneUrl: data.cloneUrl,
+      status: data.status ?? "active",
+    },
     overrides,
     REPO_METHOD_DEFAULTS,
   ) as Repository;
 }
 
-function stubSandbox(data: { name: string; workspaceRoot?: string }, overrides: StubOverrides): Sandbox {
+function stubSandbox(
+  data: { name: string; workspaceRoot?: string },
+  overrides: StubOverrides,
+): Sandbox {
   return makeHandle(
-    'sandbox',
+    "sandbox",
     SANDBOX_METHODS,
-    { name: data.name, workspaceRoot: data.workspaceRoot ?? '/workspace' },
+    { name: data.name, workspaceRoot: data.workspaceRoot ?? "/workspace" },
     overrides,
     SANDBOX_METHOD_DEFAULTS,
   ) as Sandbox;
@@ -140,23 +334,33 @@ function stubSandbox(data: { name: string; workspaceRoot?: string }, overrides: 
 
 function stubCodingResult(overrides: StubOverrides): CodingRunResult {
   return {
-    runId: 'stub-run',
-    status: 'completed' as RunStatus,
-    summary: '(stub) coding run completed locally',
+    runId: "stub-run",
+    status: "completed" as RunStatus,
+    summary: "(stub) coding run completed locally",
     result: {
       success: true,
       turns: 1,
-      modelUsed: 'stub-model',
+      modelUsed: "stub-model",
       durationMs: 0,
       toolCallCount: 0,
-      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, thinkingTokens: 0 },
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+        thinkingTokens: 0,
+      },
     },
     error: null,
-    sandbox: stubSandbox({ name: 'stub-sandbox' }, overrides),
+    sandbox: stubSandbox({ name: "stub-sandbox" }, overrides),
   };
 }
 
-function stubRunHandle(overrides: StubOverrides, correlationId: string, result: CodingRunResult): RunHandle {
+function stubRunHandle(
+  overrides: StubOverrides,
+  correlationId: string,
+  result: CodingRunResult,
+): RunHandle {
   const handle = {
     runId: correlationId,
     sandbox: result.sandbox,
@@ -164,7 +368,13 @@ function stubRunHandle(overrides: StubOverrides, correlationId: string, result: 
     status: () => Promise.resolve(result.status),
     wait: () => Promise.resolve(result),
   };
-  return makeHandle('runHandle', RUN_HANDLE_METHODS, handle as unknown as Record<string, unknown>, overrides, {}) as RunHandle;
+  return makeHandle(
+    "runHandle",
+    RUN_HANDLE_METHODS,
+    handle as unknown as Record<string, unknown>,
+    overrides,
+    {},
+  ) as RunHandle;
 }
 
 /**
@@ -172,51 +382,100 @@ function stubRunHandle(overrides: StubOverrides, correlationId: string, result: 
  * pass `overrides` to control the results a step branches on.
  */
 export function createStubClient(opts: StubClientOptions = {}): Sapiom {
-  const overrides = opts.overrides ?? {};
-  const r = (path: string, args: unknown[], fallback: () => unknown) => resolve(overrides, path, args, fallback);
+  // Record which override keys actually match a call, so the runner can flag
+  // supplied-but-unmatched keys (typos / wrong plural-singular form).
+  const overrides = recordingOverrides(opts.overrides ?? {}, opts.usedKeys);
+  const r = (
+    paths: string | string[],
+    args: unknown[],
+    fallback: () => unknown,
+  ) => resolve(overrides, paths, args, fallback);
+
+  // Resolve a coding run result, then re-wrap its `sandbox` as a handle so the
+  // blocking `run()` path keeps a method-capable Sandbox even when the result was
+  // overridden with plain JSON. `keys` lets `launch()` accept `agent.coding.launch`
+  // (the call the author wrote) as well as the shared `agent.coding.run`.
+  const resolveCodingResult = (
+    spec: unknown,
+    keys: string | string[],
+  ): CodingRunResult => {
+    const res = r(keys, [spec], () =>
+      stubCodingResult(overrides),
+    ) as CodingRunResult;
+    return { ...res, sandbox: asSandbox(res.sandbox, overrides) };
+  };
 
   const client: Sapiom = {
     sandboxes: {
       create: (sandboxOpts) =>
         Promise.resolve(
-          r('sandboxes.create', [sandboxOpts], () =>
-            stubSandbox({ name: sandboxOpts?.name ?? 'stub-sandbox' }, overrides),
-          ) as Sandbox,
+          asSandbox(
+            r("sandboxes.create", [sandboxOpts], () => ({
+              name: sandboxOpts?.name ?? "stub-sandbox",
+            })),
+            overrides,
+          ),
         ),
       attach: (name, attachOpts) =>
-        r('sandboxes.attach', [name, attachOpts], () => stubSandbox({ name }, overrides)) as Sandbox,
+        asSandbox(
+          r("sandboxes.attach", [name, attachOpts], () => ({ name })),
+          overrides,
+        ),
     },
     repositories: {
       create: (slug) =>
         Promise.resolve(
-          r('repositories.create', [slug], () =>
-            stubRepository({ slug, cloneUrl: `https://git.local/${slug}.git` }, overrides),
-          ) as Repository,
+          asRepository(
+            r("repositories.create", [slug], () => ({ slug })),
+            overrides,
+          ),
         ),
       get: (slug) =>
         Promise.resolve(
-          r('repositories.get', [slug], () =>
-            stubRepository({ slug, cloneUrl: `https://git.local/${slug}.git` }, overrides),
-          ) as Repository,
+          asRepository(
+            r("repositories.get", [slug], () => ({ slug })),
+            overrides,
+          ),
         ),
-      list: () => Promise.resolve(r('repositories.list', [], () => []) as Repository[]),
-      delete: (slug) => Promise.resolve(r('repositories.delete', [slug], () => undefined) as void),
+      list: () =>
+        Promise.resolve(
+          asRepositoryList(
+            r("repositories.list", [], () => []),
+            overrides,
+            opts.warnings,
+          ),
+        ),
+      delete: (slug) =>
+        Promise.resolve(
+          r("repositories.delete", [slug], () => undefined) as void,
+        ),
       attach: (slug, cloneUrl) =>
-        r('repositories.attach', [slug, cloneUrl], () => stubRepository({ slug, cloneUrl }, overrides)) as Repository,
+        asRepository(
+          r("repositories.attach", [slug, cloneUrl], () => ({
+            slug,
+            cloneUrl,
+          })),
+          overrides,
+        ),
     },
     agent: {
       coding: {
-        run: (spec) => Promise.resolve(r('agent.coding.run', [spec], () => stubCodingResult(overrides)) as CodingRunResult),
+        run: (spec) =>
+          Promise.resolve(resolveCodingResult(spec, "agent.coding.run")),
         launch: (spec) => {
           const correlationId = `stub-run-${++launchSeq}`;
-          // The resume payload IS the run result, so `agent.coding.run`
-          // overrides control both `await run()` and `launch()` + pause.
+          // The resume payload IS the run result. `launch()` honors the key
+          // matching the call the author wrote (`agent.coding.launch`) first,
+          // then the shared `agent.coding.run` that controls both paths.
           const result = {
-            ...(r('agent.coding.run', [spec], () => stubCodingResult(overrides)) as CodingRunResult),
+            ...resolveCodingResult(spec, dispatchedKeys("agent.coding")),
             runId: correlationId,
           };
           // Generic: any dispatch-able handle registers itself for pause-resume.
-          return dispatchable(stubRunHandle(overrides, correlationId, result), opts.signals);
+          return dispatchable(
+            stubRunHandle(overrides, correlationId, result),
+            opts.signals,
+          );
         },
       },
     },
