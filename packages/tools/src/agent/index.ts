@@ -94,6 +94,26 @@ export interface CodingRunResult {
 }
 
 /**
+ * The coding run's terminal result as it arrives at a step **resumed** from
+ * `pauseUntilSignal(runHandle, { resumeStep })`. It is exactly the signal
+ * payload the engine delivers as that step's `input`, and — because it crossed
+ * the pause/resume (wire) boundary — `sandbox` is the plain `{ name,
+ * workspaceRoot }` it serialized to, not a live handle. Re-attach it with
+ * `ctx.sapiom.sandboxes.attach(name)` to act on it.
+ *
+ * Annotate a resumed step's input with this so you don't have to hand-roll the
+ * shape:
+ *
+ *   const finalize = defineStep({
+ *     name: "finalize", terminal: true,
+ *     async run(result: CodingResultPayload, ctx) { … },
+ *   });
+ */
+export interface CodingResultPayload extends Omit<CodingRunResult, "sandbox"> {
+  sandbox: { name: string; workspaceRoot: string };
+}
+
+/**
  * A launched-but-not-awaited run. Satisfies {@link DispatchHandle}, so it can be
  * handed straight to `pauseUntilSignal(handle, { resumeStep })` to suspend a
  * workflow step until the run finishes — or `wait()`-ed inline for standalone use.
