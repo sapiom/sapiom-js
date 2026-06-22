@@ -1,5 +1,17 @@
 # @sapiom/sandbox
 
+## 0.8.2
+
+### Patch Changes
+
+- b857467: Republish to fix the `@sapiom/fetch` dependency. The `0.8.1` artifact shipped with the unresolved `workspace:*` specifier, making it uninstallable; this release ships it resolved to a real version range.
+
+## 0.8.1
+
+### Patch Changes
+
+- 17880a2: Fix process polling treating only `"completed"` as terminal. Non-zero exits (status `"failed"`) and `"killed"`/`"stopped"` are now recognized as finished, so `exec`/`execStream`/`waitForProcess` return promptly with the real exit code instead of hanging until the timeout. Terminal statuses that omit an exit code now report a non-zero code instead of falsely reporting success.
+
 ## 0.8.0
 
 ### Minor Changes

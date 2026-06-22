@@ -1,7 +1,7 @@
 /**
- * Error thrown by SapiomFileStorage methods when the gateway returns a non-2xx
- * response. Exposes `status` (HTTP status code) and `body` (parsed response
- * body or raw text when JSON parsing fails) for programmatic inspection.
+ * Error thrown by the file-storage capability when the gateway returns a non-2xx
+ * response. Exposes `status` (HTTP status code) and `body` (parsed JSON body, or
+ * raw text when the body isn't JSON) for programmatic inspection.
  */
 export class FileStorageHttpError extends Error {
   readonly status: number;
@@ -16,8 +16,8 @@ export class FileStorageHttpError extends Error {
 }
 
 /**
- * Throw a FileStorageHttpError if the response status is not 2xx.
- * Parses the body as JSON when possible; falls back to text.
+ * Return the response when 2xx, otherwise throw a {@link FileStorageHttpError}.
+ * Parses the error body as JSON when possible; falls back to raw text.
  */
 export async function ensureOk(
   response: Response,

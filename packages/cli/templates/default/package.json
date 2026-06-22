@@ -1,0 +1,24 @@
+{
+  "name": "__PROJECT_NAME__",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "sapiom orchestrations check",
+    "deploy": "sapiom orchestrations deploy",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\""
+  },
+  "dependencies": {
+    "@sapiom/orchestration": "__ORCHESTRATION_VERSION__",
+    "@sapiom/tools": "__TOOLS_VERSION__",
+    "zod": "__ZOD_VERSION__"
+  },
+  "devDependencies": {
+    "@sapiom/cli": "__CLI_VERSION__",
+    "@types/node": "^20.11.30",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.2"
+  }
+}

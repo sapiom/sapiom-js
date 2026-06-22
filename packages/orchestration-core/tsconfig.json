@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node", "jest"],
+    "removeComments": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    // Classic `node` resolution (inherited) doesn't read package `exports`, so the
+    // `@sapiom/tools/stub` subpath needs a type hint. Emit keeps the specifier;
+    // Node resolves it via exports at runtime.
+    "baseUrl": ".",
+    "paths": {
+      "@sapiom/tools/stub": ["../tools/dist/cjs/stub/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

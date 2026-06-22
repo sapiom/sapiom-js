@@ -73,6 +73,40 @@ async function makeSandbox(
   return { sandbox, calls };
 }
 
+interface ProcessBody {
+  status: string;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+/**
+ * Build fetch handlers for an `exec`/`execStream` call: the POST to `/process`
+ * returns `createResponse`; each subsequent GET `/process/:pid` returns the next
+ * entry of `pollStatuses` (the last entry repeats so a "running" poll can loop).
+ */
+function execHandlers(
+  pollStatuses: ProcessBody[],
+  createResponse: ProcessBody = { status: "running" },
+): Array<(call: FetchCall) => Response | null> {
+  let i = 0;
+  return [
+    (call: FetchCall) => {
+      if (/\/process$/.test(call.url)) {
+        return jsonResponse({ pid: "p1", ...createResponse });
+      }
+      if (/\/process\/[^/]+$/.test(call.url)) {
+        const body = pollStatuses[Math.min(i, pollStatuses.length - 1)] ?? {
+          status: "running",
+        };
+        i += 1;
+        return jsonResponse({ pid: "p1", ...body });
+      }
+      return null;
+    },
+  ];
+}
+
 describe("SapiomSandbox — multipart methods", () => {
   describe("initiateMultipartUpload", () => {
     it("POSTs to the correct URL with permissions in the body", async () => {
@@ -610,5 +644,150 @@ describe("SapiomSandbox — multipart methods", () => {
       // UTF-8 encoding of 'héllo' = 6 bytes
       expect(totalBytes).toBe(6);
     });
+  });
+});
+
+describe("SapiomSandbox — exec process polling", () => {
+  // Regression: a non-zero exit is reported as status "failed", not
+  // "completed". exec must recognize it as finished and return promptly
+  // instead of polling until the timeout and throwing.
+  it("resolves a non-zero exit (status 'failed') instead of hanging", async () => {
+    const { sandbox } = await makeSandbox(
+      execHandlers([{ status: "failed", exitCode: 1, stdout: "", stderr: "boom" }]),
+    );
+
+    const result = await sandbox.exec("[ -d node_modules ]", {
+      pollInterval: 1,
+      timeout: 1000,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("boom");
+  });
+
+  it("resolves a 'killed' process with its exit code", async () => {
+    const { sandbox } = await makeSandbox(
+      execHandlers([{ status: "killed", exitCode: 137 }]),
+    );
+
+    const result = await sandbox.exec("sleep 999", {
+      pollInterval: 1,
+      timeout: 1000,
+    });
+
+    expect(result.exitCode).toBe(137);
+  });
+
+  it("resolves a 'stopped' process and honors exit code 0", async () => {
+    const { sandbox } = await makeSandbox(
+      execHandlers([{ status: "stopped", exitCode: 0 }]),
+    );
+
+    const result = await sandbox.exec("true", { pollInterval: 1, timeout: 1000 });
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("keeps polling while 'running' then returns on 'completed'", async () => {
+    const { sandbox, calls } = await makeSandbox(
+      execHandlers([
+        { status: "running" },
+        { status: "completed", exitCode: 0, stdout: "hi" },
+      ]),
+    );
+
+    const result = await sandbox.exec("echo hi", {
+      pollInterval: 1,
+      timeout: 1000,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("hi");
+    const polls = calls.filter((c) => /\/process\/[^/]+$/.test(c.url));
+    expect(polls.length).toBe(2);
+  });
+
+  it("defaults a non-completed terminal status with no exitCode to non-zero", async () => {
+    const { sandbox } = await makeSandbox(execHandlers([{ status: "failed" }]));
+
+    const result = await sandbox.exec("x", { pollInterval: 1, timeout: 1000 });
+
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("defaults a 'completed' status with no exitCode to 0", async () => {
+    const { sandbox } = await makeSandbox(execHandlers([{ status: "completed" }]));
+
+    const result = await sandbox.exec("x", { pollInterval: 1, timeout: 1000 });
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("still times out when the process never reaches a terminal status", async () => {
+    const { sandbox } = await makeSandbox(execHandlers([{ status: "running" }]));
+
+    await expect(
+      sandbox.exec("sleep 999", { pollInterval: 5, timeout: 40 }),
+    ).rejects.toThrow(/timed out after 40ms/);
+  });
+
+  it("short-circuits when the create response is already terminal (no poll)", async () => {
+    const { sandbox, calls } = await makeSandbox(
+      execHandlers([], { status: "failed", exitCode: 1, stderr: "nope" }),
+    );
+
+    const result = await sandbox.exec("false", {
+      pollInterval: 1,
+      timeout: 1000,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("nope");
+    // Only the create POST happened — no GET /process/:pid poll round-trip.
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.init.method).toBe("POST");
+  });
+
+  it("waitForProcess resolves a 'failed' status with its exit code", async () => {
+    const { sandbox } = await makeSandbox([
+      (call) => {
+        if (/\/process\/p1$/.test(call.url)) {
+          return jsonResponse({ pid: "p1", status: "failed", exitCode: 2 });
+        }
+        return null;
+      },
+    ]);
+
+    const result = await sandbox.waitForProcess("p1", {
+      pollInterval: 1,
+      timeout: 1000,
+    });
+
+    expect(result.exitCode).toBe(2);
+  });
+
+  it("execStream short-circuits a synchronously failed process without streaming", async () => {
+    const { sandbox, calls } = await makeSandbox(
+      execHandlers([], {
+        status: "failed",
+        exitCode: 1,
+        stdout: "out",
+        stderr: "err",
+      }),
+    );
+
+    const stream = await sandbox.execStream("false");
+    const lines: Array<{ stream: string; data: string }> = [];
+    for await (const line of stream.output) {
+      lines.push(line);
+    }
+
+    expect(stream.exitCode).toBe(1);
+    expect(lines).toEqual([
+      { stream: "stdout", data: "out" },
+      { stream: "stderr", data: "err" },
+    ]);
+    // The log stream endpoint was never opened for an already-finished process.
+    expect(calls.some((c) => c.url.includes("/logs/stream"))).toBe(false);
   });
 });

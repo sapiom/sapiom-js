@@ -30,6 +30,45 @@ const DEFAULT_BASE_URL = "https://blaxel.services.sapiom.ai";
 const DEFAULT_POLL_INTERVAL = 1000;
 const DEFAULT_EXEC_TIMEOUT = 60_000;
 
+/**
+ * Process statuses that mean the process has finished. The Blaxel sandbox-api
+ * reports a non-zero exit as `"failed"` (enum: running/completed/failed/killed/
+ * stopped), so polling must treat all of these — not just `"completed"` — as
+ * done. Any unrecognized status keeps polling and ultimately hits the exec
+ * timeout, which is a loud, debuggable failure rather than a silent wrong result.
+ */
+const TERMINAL_PROCESS_STATUSES = new Set([
+  "completed",
+  "failed",
+  "killed",
+  "stopped",
+]);
+
+function isProcessTerminal(status: string | undefined): boolean {
+  return status !== undefined && TERMINAL_PROCESS_STATUSES.has(status);
+}
+
+/**
+ * Resolve a process exit code. A non-`"completed"` terminal status
+ * (failed/killed/stopped) that omits `exitCode` must not report success, so it
+ * defaults to a non-zero code.
+ */
+function terminalExitCode(s: { status: string; exitCode?: number }): number {
+  return s.exitCode ?? (s.status === "completed" ? 0 : 1);
+}
+
+function toExecResult(
+  pid: string,
+  s: { status: string; exitCode?: number; stdout?: string; stderr?: string },
+): ExecResult {
+  return {
+    pid,
+    exitCode: terminalExitCode(s),
+    stdout: s.stdout ?? "",
+    stderr: s.stderr ?? "",
+  };
+}
+
 function assertRelativePath(path: string): void {
   const segments = path.split("/");
   for (const seg of segments) {
@@ -454,14 +493,9 @@ export class SapiomSandbox {
   async exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
     const proc = await this._createProcess(command, opts);
 
-    // If the process already completed synchronously, return immediately
-    if (proc.status === "completed") {
-      return {
-        pid: proc.pid,
-        exitCode: proc.exitCode ?? 0,
-        stdout: proc.stdout ?? "",
-        stderr: proc.stderr ?? "",
-      };
+    // If the process already finished synchronously, return immediately
+    if (isProcessTerminal(proc.status)) {
+      return toExecResult(proc.pid, proc);
     }
 
     const waitForCompletion = opts?.waitForCompletion ?? true;
@@ -493,11 +527,11 @@ export class SapiomSandbox {
   ): Promise<StreamingExecResult> {
     const proc = await this._createProcess(command, opts);
 
-    // If the process already completed synchronously, return without
+    // If the process already finished synchronously, return without
     // opening the log stream — yield the stdout/stderr from the create
     // response directly.
-    if (proc.status === "completed") {
-      const code = proc.exitCode ?? 0;
+    if (isProcessTerminal(proc.status)) {
+      const code = terminalExitCode(proc);
       const stdout = proc.stdout ?? "";
       const stderr = proc.stderr ?? "";
       const output = (async function* (): AsyncGenerator<OutputLine> {
@@ -585,9 +619,9 @@ export class SapiomSandbox {
       let status =
         (await statusResponse.json()) as ProcessStatusResponse;
 
-      // If the process hasn't completed yet (e.g. stream disconnected
+      // If the process hasn't finished yet (e.g. stream disconnected
       // before the process finished), poll until it does.
-      while (status.status !== "completed") {
+      while (!isProcessTerminal(status.status)) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         const retry = await fetchFn(
           `${baseUrl}/v1/sandboxes/${encodeURIComponent(sandboxName)}/process/${proc.pid}`,
@@ -602,7 +636,7 @@ export class SapiomSandbox {
         status = (await retry.json()) as ProcessStatusResponse;
       }
 
-      finalExitCode = status.exitCode ?? 0;
+      finalExitCode = terminalExitCode(status);
     }
 
     return {
@@ -729,13 +763,8 @@ export class SapiomSandbox {
 
       const status = (await response.json()) as ProcessStatusResponse;
 
-      if (status.status === "completed") {
-        return {
-          pid,
-          exitCode: status.exitCode ?? 0,
-          stdout: status.stdout ?? "",
-          stderr: status.stderr ?? "",
-        };
+      if (isProcessTerminal(status.status)) {
+        return toExecResult(pid, status);
       }
 
       await new Promise((resolve) => setTimeout(resolve, pollInterval));

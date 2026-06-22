@@ -1,2 +1,10 @@
 packages:
   - 'packages/*'
+  # Quarantined 2026-06-16: the @sapiom/langchain* packages break under the current
+  # lockfile — they mix @langchain/langgraph ^0.2 / @langchain/openai ^1.0 (which pulls
+  # langgraph/core 1.x) against @langchain/core ^0.3, a latent conflict an older lockfile
+  # masked (langchain fails to build; langchain-classic fails its tests). Both are leaves
+  # (nothing depends on them) and not actively maintained. Excluded from the workspace —
+  # so -r build/test/publish skip them — until their @langchain/* deps are realigned.
+  - '!packages/langchain'
+  - '!packages/langchain-classic'
