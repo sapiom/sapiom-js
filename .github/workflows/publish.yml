@@ -57,12 +57,23 @@ jobs:
       - name: Publish to npm (OIDC trusted publishing — no token)
         id: publish
         run: |
-          OUTPUT=$(pnpm changeset publish 2>&1)
-          echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -q "@sapiom/mcp@"; then
+          # Stream output live AND capture it. `set +e` + PIPESTATUS so a failing
+          # `changeset publish` doesn't kill the step before we've logged its
+          # output and recorded the real exit code — the old `OUTPUT=$(... 2>&1)`
+          # form died at the assignment under `set -e`, hiding the actual error
+          # (e.g. an E404 from a package with no trusted publisher configured).
+          set +e
+          pnpm changeset publish 2>&1 | tee publish-output.txt
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          if grep -q "@sapiom/mcp@" publish-output.txt; then
             echo "mcp-changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "mcp-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::changeset publish failed (exit $STATUS) — see output above. A common cause is a new package missing its per-package Trusted Publisher on npmjs.com (E404)."
+            exit "$STATUS"
           fi
 
       # --- MCP registry publish (unchanged; already OIDC via github-oidc) ---
