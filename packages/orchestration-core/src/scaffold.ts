@@ -11,16 +11,35 @@
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { OrchestrationError } from './errors.js';
 
 /**
- * Directory of this module. `__dirname` exists in the CommonJS build; the ESM
- * build has no `__dirname`, so an ESM caller must supply the templates location
- * explicitly (via the `templatesDir` option or the `SAPIOM_TEMPLATES_DIR`
- * environment override). See {@link getTemplatesDir}.
+ * Directory of this compiled module, resolved for BOTH build formats so the
+ * bundled `templates/` resolves out of the box for CommonJS and ESM callers
+ * alike (no explicit `templatesDir`/`SAPIOM_TEMPLATES_DIR` required):
+ *   - CommonJS build → `__dirname` (a real global).
+ *   - ESM build → derived from `import.meta.url` (there is no `__dirname`).
+ *
+ * `import.meta.url` is read via `eval` on purpose: this single source file is
+ * also compiled under `module: commonjs`, where a literal `import.meta` is a hard
+ * compile error (TS1343). Direct `eval` hides it from the compiler while still
+ * resolving it at runtime inside the ESM module scope. Node-targeted only.
  */
-const moduleDir: string = typeof __dirname !== 'undefined' ? __dirname : '';
+function resolveModuleDir(): string {
+  if (typeof __dirname !== 'undefined') return __dirname;
+  try {
+    // eslint-disable-next-line no-eval
+    const metaUrl = eval('import.meta.url') as string | undefined;
+    if (typeof metaUrl === 'string') return path.dirname(fileURLToPath(metaUrl));
+  } catch {
+    // Not an ESM runtime — fall through to the empty default.
+  }
+  return '';
+}
+
+const moduleDir: string = resolveModuleDir();
 
 /**
  * Resolve the active templates directory. Priority: explicit `override` →
