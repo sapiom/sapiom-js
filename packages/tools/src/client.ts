@@ -29,6 +29,15 @@ import type {
   CodingRunResult,
   RunHandle,
 } from "./agent/index.js";
+import * as fileStorage from "./file-storage/index.js";
+import type {
+  UploadInput,
+  UploadResponse,
+  DownloadUrlResponse,
+  ListOptions,
+  ListResponse,
+  FileMetadata,
+} from "./file-storage/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -50,6 +59,16 @@ export interface Sapiom {
       run(spec: CodingRunSpec): Promise<CodingRunResult>;
       launch(spec: CodingRunSpec): Promise<RunHandle>;
     };
+  };
+  readonly fileStorage: {
+    upload(input: UploadInput): Promise<UploadResponse>;
+    getDownloadUrl(fileId: string): Promise<DownloadUrlResponse>;
+    list(opts?: ListOptions): Promise<ListResponse>;
+    delete(fileId: string): Promise<void>;
+    setVisibility(
+      fileId: string,
+      visibility: "private" | "public",
+    ): Promise<FileMetadata>;
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -79,6 +98,14 @@ function bind(transport: Transport): Sapiom {
         run: (spec) => codingRun(spec, transport),
         launch: (spec) => codingLaunch(spec, transport),
       },
+    },
+    fileStorage: {
+      upload: (input) => fileStorage.upload(input, transport),
+      getDownloadUrl: (fileId) => fileStorage.getDownloadUrl(fileId, transport),
+      list: (opts) => fileStorage.list(opts, transport),
+      delete: (fileId) => fileStorage.delete(fileId, transport),
+      setVisibility: (fileId, visibility) =>
+        fileStorage.setVisibility(fileId, visibility, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

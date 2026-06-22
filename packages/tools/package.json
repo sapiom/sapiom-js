@@ -1,7 +1,7 @@
 {
   "name": "@sapiom/tools",
   "version": "0.1.3",
-  "description": "Typed client for Sapiom capabilities (sandboxes, repositories, agent, …) — the same tools your agents call over MCP, callable from your code, auth'd to your tenant.",
+  "description": "Typed client for Sapiom capabilities (sandboxes, repositories, agent, file storage, …) — the same tools your agents call over MCP, callable from your code, auth'd to your tenant.",
   "license": "MIT",
   "author": "Sapiom",
   "repository": {
@@ -32,6 +32,11 @@
       "types": "./dist/cjs/agent/index.d.ts",
       "import": "./dist/esm/agent/index.js",
       "require": "./dist/cjs/agent/index.js"
+    },
+    "./file-storage": {
+      "types": "./dist/cjs/file-storage/index.d.ts",
+      "import": "./dist/esm/file-storage/index.js",
+      "require": "./dist/cjs/file-storage/index.js"
     },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",

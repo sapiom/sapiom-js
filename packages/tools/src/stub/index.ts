@@ -23,6 +23,7 @@ import type { CodingRunResult, RunHandle, RunStatus } from '../agent/index.js';
 import type { Sapiom } from '../client.js';
 import { Repository } from '../repositories/index.js';
 import { Sandbox } from '../sandboxes/index.js';
+import type { UploadResponse, DownloadUrlResponse, ListResponse, FileMetadata } from '../file-storage/index.js';
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<string, unknown | ((...args: unknown[]) => unknown)>;
@@ -218,6 +219,40 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           return dispatchable(stubRunHandle(overrides, correlationId, result), opts.signals);
         },
       },
+    },
+    fileStorage: {
+      upload: (input) =>
+        Promise.resolve(
+          r('fileStorage.upload', [input], () => ({
+            fileId: 'stub-file',
+            uploadUrl: 'https://storage.local/upload/stub-file',
+            expiresAt: '2099-01-01T00:00:00Z',
+            requiredHeaders: {},
+          })) as UploadResponse,
+        ),
+      getDownloadUrl: (fileId) =>
+        Promise.resolve(
+          r('fileStorage.getDownloadUrl', [fileId], () => ({
+            downloadUrl: `https://storage.local/download/${fileId}`,
+            expiresAt: '2099-01-01T00:00:00Z',
+          })) as DownloadUrlResponse,
+        ),
+      list: (listOpts) =>
+        Promise.resolve(
+          r('fileStorage.list', [listOpts], () => ({ files: [], limit: 20, offset: 0, hasMore: false })) as ListResponse,
+        ),
+      delete: (fileId) => Promise.resolve(r('fileStorage.delete', [fileId], () => undefined) as void),
+      setVisibility: (fileId, visibility) =>
+        Promise.resolve(
+          r('fileStorage.setVisibility', [fileId, visibility], () => ({
+            fileId,
+            contentType: 'application/octet-stream',
+            visibility,
+            status: 'uploaded',
+            createdAt: '2099-01-01T00:00:00Z',
+            downloadRequestCount: 0,
+          })) as FileMetadata,
+        ),
     },
     withAttribution: () => client,
   };
