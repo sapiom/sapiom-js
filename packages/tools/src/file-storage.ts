@@ -32,8 +32,9 @@ interface GatewayFileMetadata {
   content_type: string;
   visibility: "private" | "public";
   status: string;
-  expected_file_size?: number;
-  actual_file_size?: number;
+  // int64 byte counts serialized as strings by the gateway (precision-safe); null when unset.
+  expected_file_size?: string | null;
+  actual_file_size?: string | null;
   created_at: string;
   uploaded_at?: string;
   deleted_at?: string;

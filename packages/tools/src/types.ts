@@ -98,11 +98,18 @@ export interface FileMetadata {
   /** Upload lifecycle status (e.g. "pending", "uploaded", "deleted"). */
   status: string;
 
-  /** Expected file size in bytes, if provided at upload time. */
-  expectedFileSize?: number;
+  /**
+   * Expected (client-declared) file size in bytes, if provided at upload time.
+   * A string (not a number): the gateway serializes int64 byte counts as strings
+   * to avoid JS Number precision loss on large files. `null` when not declared.
+   */
+  expectedFileSize?: string | null;
 
-  /** Actual file size in bytes after upload completes. */
-  actualFileSize?: number;
+  /**
+   * Actual file size in bytes after upload completes (string, see expectedFileSize).
+   * `null` until the verification sweep records it.
+   */
+  actualFileSize?: string | null;
 
   /** ISO-8601 timestamp when the file record was created. */
   createdAt: string;
