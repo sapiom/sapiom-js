@@ -266,7 +266,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       name: z
         .string()
         .optional()
-        .describe("Orchestration name. Defaults to the directory name."),
+        .describe(
+          "Orchestration name (matches defineOrchestration({ name })). Defaults to the orchestration's name read from index.ts.",
+        ),
       create: z
         .boolean()
         .optional()
@@ -277,7 +279,27 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       if (!client) return NOT_AUTHED;
       try {
         const projectDir = dir ?? process.cwd();
-        const result = await link({ name: name ?? "", create }, client);
+        // Default the link name to the orchestration's own name (from index.ts)
+        // so the link matches what deploy ships — the directory name can drift
+        // from defineOrchestration({ name }).
+        let linkName = name;
+        if (!linkName) {
+          try {
+            linkName = (await check({ sourceDir: projectDir })).name;
+          } catch {
+            // Couldn't read the manifest — fall through to the explicit error.
+          }
+        }
+        if (!linkName) {
+          return fail(
+            new OrchestrationError({
+              code: "NAME_REQUIRED",
+              message: "No orchestration name to link.",
+              hint: "Pass name, or ensure index.ts bundles (run check) so the name can be read from defineOrchestration({ name }).",
+            }),
+          );
+        }
+        const result = await link({ name: linkName, create }, client);
         writeConfig(projectDir, {
           definitionId: result.definitionId,
           name: result.name,
