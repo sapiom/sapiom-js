@@ -18,6 +18,7 @@ import path from 'node:path';
 import { resolveHost } from '../lib/cli-config.js';
 
 const PROD = 'https://api.sapiom.ai';
+const STAGING = 'https://api.sapiom.dev';
 const LOCAL = 'http://localhost:3000';
 
 function makeTmpDir(): string {
@@ -87,6 +88,19 @@ describe('resolveHost', () => {
     const tmp = makeTmpDir();
     process.env.XDG_CONFIG_HOME = tmp;
     expect(resolveHost({ flagTarget: 'prod' })).toBe(PROD);
+  });
+
+  it('--target staging maps to api.sapiom.dev', () => {
+    const tmp = makeTmpDir();
+    process.env.XDG_CONFIG_HOME = tmp;
+    expect(resolveHost({ flagTarget: 'staging' })).toBe(STAGING);
+  });
+
+  it('persisted target=staging in config.json is picked up when no flag is set', () => {
+    const tmp = makeTmpDir();
+    process.env.XDG_CONFIG_HOME = tmp;
+    writeConfigJson(tmp, { target: 'staging' });
+    expect(resolveHost({})).toBe(STAGING);
   });
 
   it('persisted target=local in config.json is picked up when no flag is set', () => {
