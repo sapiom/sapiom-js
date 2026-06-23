@@ -144,6 +144,26 @@ describe("fal.run()", () => {
     expect(body).not.toHaveProperty("storage");
   });
 
+  it("treats a null `storage` (JS caller bypassing types) as absent — no null leaks upstream", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ images: [] }),
+    ]);
+
+    await fal.run(
+      {
+        model: "fal-ai/flux/schnell",
+        input: { prompt: "x" },
+        storage: null as unknown as undefined,
+      },
+      transport,
+      BASE,
+    );
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body).toEqual({ prompt: "x" });
+    expect(body).not.toHaveProperty("storage");
+  });
+
   it("passes each image's own file_id / storage_error through on a multi-image response", async () => {
     const { transport } = makeTransport([
       () =>
@@ -226,7 +246,7 @@ describe("fal.run()", () => {
     ).rejects.toBeInstanceOf(FalHttpError);
   });
 
-  it("throws before fetching when the model id is empty / all-slashes", async () => {
+  it("throws a clear error (not a TypeError) when model is empty / all-slashes / nullish", async () => {
     const { transport, calls } = makeTransport([() => jsonResponse({})]);
 
     await expect(
@@ -234,6 +254,14 @@ describe("fal.run()", () => {
     ).rejects.toThrow(/model.*required/i);
     await expect(
       fal.run({ model: "///", input: { prompt: "x" } }, transport, BASE),
+    ).rejects.toThrow(/model.*required/i);
+    // JS caller bypassing the types — a clean error, not "Cannot read properties of undefined".
+    await expect(
+      fal.run(
+        { model: undefined as unknown as string, input: {} },
+        transport,
+        BASE,
+      ),
     ).rejects.toThrow(/model.*required/i);
     expect(calls).toHaveLength(0);
   });

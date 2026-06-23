@@ -105,16 +105,19 @@ export async function run(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<FalRunResponse> {
-  const path = modelToPath(input.model);
+  // Guard `model` for nullish too (JS callers bypass the types) so a missing model
+  // is a clear error, not a `.split` TypeError.
+  const path = input.model ? modelToPath(input.model) : "";
   if (!path) {
     throw new Error(
       "fal.run: 'model' is required (e.g. 'fal-ai/flux/schnell')",
     );
   }
   // Fal model input is forwarded verbatim; `storage` is the one Sapiom-owned field
-  // the gateway reads + strips before proxying upstream.
+  // the gateway reads + strips before proxying upstream. Truthy check (not `!== undefined`)
+  // so a JS caller passing `storage: null` doesn't leak a null field upstream.
   const body: Record<string, unknown> = { ...input.input };
-  if (input.storage !== undefined) body.storage = input.storage;
+  if (input.storage) body.storage = input.storage;
 
   const res = await ensureOk(
     await transport.fetch(`${baseUrl}/run/${path}`, {
