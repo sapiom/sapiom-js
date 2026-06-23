@@ -1,5 +1,12 @@
 # @sapiom/orchestration
 
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [e17b2d1]
+  - @sapiom/tools@0.4.0
+
 ## 0.1.7
 
 ### Patch Changes

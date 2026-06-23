@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/orchestration",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Versioned public contract for authoring Sapiom orchestrations: types, directive constructors/guards, defineOrchestration, defineStep, InMemoryContextStore. Shared by customer orchestration definitions, the sandbox step-runner, and the engine.",
   "license": "MIT",
   "author": "Sapiom",
