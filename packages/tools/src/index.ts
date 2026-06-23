@@ -45,3 +45,6 @@ export {
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";
+
+export * as contentGeneration from "./content-generation/index.js";
+export { ContentGenerationHttpError } from "./content-generation/index.js";

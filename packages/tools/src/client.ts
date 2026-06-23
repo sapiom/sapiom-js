@@ -38,6 +38,11 @@ import type {
   ListResponse,
   FileMetadata,
 } from "./file-storage/index.js";
+import * as contentGeneration from "./content-generation/index.js";
+import type {
+  ImageCreateInput,
+  ImageGenerationResult,
+} from "./content-generation/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -69,6 +74,15 @@ export interface Sapiom {
       fileId: string,
       visibility: "private" | "public",
     ): Promise<FileMetadata>;
+  };
+  readonly contentGeneration: {
+    images: {
+      /**
+       * Generate image(s) from a prompt. Pass `storage` to persist each output into
+       * file-storage (the returned images then carry `file_id`).
+       */
+      create(input: ImageCreateInput): Promise<ImageGenerationResult>;
+    };
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -106,6 +120,11 @@ function bind(transport: Transport): Sapiom {
       delete: (fileId) => fileStorage.delete(fileId, transport),
       setVisibility: (fileId, visibility) =>
         fileStorage.setVisibility(fileId, visibility, transport),
+    },
+    contentGeneration: {
+      images: {
+        create: (input) => contentGeneration.createImage(input, transport),
+      },
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

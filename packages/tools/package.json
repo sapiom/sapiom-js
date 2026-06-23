@@ -38,6 +38,11 @@
       "import": "./dist/esm/file-storage/index.js",
       "require": "./dist/cjs/file-storage/index.js"
     },
+    "./content-generation": {
+      "types": "./dist/cjs/content-generation/index.d.ts",
+      "import": "./dist/esm/content-generation/index.js",
+      "require": "./dist/cjs/content-generation/index.js"
+    },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",
       "import": "./dist/esm/stub/index.js",
