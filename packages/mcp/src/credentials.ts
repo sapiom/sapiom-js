@@ -2,9 +2,28 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const DEFAULT_APP_URL = "https://app.sapiom.ai";
-const DEFAULT_API_URL = "https://api.sapiom.ai";
 const DEFAULT_ENVIRONMENT = "production";
+
+/** Friendly aliases → canonical environment name. */
+const ENVIRONMENT_ALIASES: Record<string, string> = {
+  prod: "production",
+  dev: "staging",
+};
+
+/**
+ * Built-in environment presets, so the common targets resolve to the right URLs
+ * without anyone hand-editing `~/.sapiom/credentials.json`. A matching
+ * environment defined in the file always takes precedence over a preset (so a
+ * custom override, or one carrying credentials, still wins).
+ */
+const ENVIRONMENT_PRESETS: Record<string, { appURL: string; apiURL: string }> = {
+  production: { appURL: "https://app.sapiom.ai", apiURL: "https://api.sapiom.ai" },
+  staging: { appURL: "https://app.sapiom.dev", apiURL: "https://api.sapiom.dev" },
+};
+
+function canonicalEnvironmentName(name: string): string {
+  return ENVIRONMENT_ALIASES[name] ?? name;
+}
 
 export interface CredentialEntry {
   apiKey: string;
@@ -57,20 +76,25 @@ async function writeCredentialsFile(file: CredentialsFile): Promise<void> {
 /**
  * Resolve the active environment configuration.
  *
- * Priority: SAPIOM_ENVIRONMENT env var > file's currentEnvironment > "production"
+ * Priority: SAPIOM_ENVIRONMENT env var > file's currentEnvironment > "production".
+ * The names `prod` and `dev` are accepted as aliases for `production` and
+ * `staging`.
  *
- * If the file doesn't exist and environment is "production", returns hardcoded defaults.
- * If the file doesn't exist and environment is custom, throws (file must define custom envs).
+ * Resolution order for the chosen environment:
+ *   1. A matching entry in `~/.sapiom/credentials.json` (carries URLs + creds).
+ *   2. A built-in preset (`production`, `staging`) — no file edit required.
+ *   3. Otherwise throws (a custom environment must be defined in the file).
  */
 export async function resolveEnvironment(
   envOverride?: string,
 ): Promise<ResolvedEnvironment> {
   const file = await readCredentialsFile();
-  const name = envOverride ?? file?.currentEnvironment ?? DEFAULT_ENVIRONMENT;
+  const name = canonicalEnvironmentName(
+    envOverride ?? file?.currentEnvironment ?? DEFAULT_ENVIRONMENT,
+  );
 
-  // Look up in file
+  // A matching environment in the file always wins.
   const envConfig = file?.environments[name];
-
   if (envConfig) {
     return {
       name,
@@ -81,12 +105,13 @@ export async function resolveEnvironment(
     };
   }
 
-  // Environment not in file — use production defaults or error
-  if (name === DEFAULT_ENVIRONMENT) {
+  // Otherwise fall back to a built-in preset (no creds file needed).
+  const preset = ENVIRONMENT_PRESETS[name];
+  if (preset) {
     return {
       name,
-      appURL: DEFAULT_APP_URL,
-      apiURL: DEFAULT_API_URL,
+      appURL: preset.appURL,
+      apiURL: preset.apiURL,
       services: {},
       credentials: null,
     };

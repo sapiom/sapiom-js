@@ -76,9 +76,34 @@ describe("resolveEnvironment", () => {
     });
   });
 
+  it("should resolve staging from the built-in preset without a file", async () => {
+    const env = await resolveEnvironment("staging");
+    expect(env).toEqual({
+      name: "staging",
+      appURL: "https://app.sapiom.dev",
+      apiURL: "https://api.sapiom.dev",
+      services: {},
+      credentials: null,
+    });
+  });
+
+  it("should treat 'dev' as an alias for staging", async () => {
+    const env = await resolveEnvironment("dev");
+    expect(env.name).toBe("staging");
+    expect(env.apiURL).toBe("https://api.sapiom.dev");
+  });
+
+  it("should treat 'prod' as an alias for production", async () => {
+    const env = await resolveEnvironment("prod");
+    expect(env.name).toBe("production");
+    expect(env.apiURL).toBe("https://api.sapiom.ai");
+  });
+
   it("should use env override over file's currentEnvironment", async () => {
     vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(sampleFile));
 
+    // sampleFile defines a staging env with *.sapiom.ai URLs, so the file entry
+    // takes precedence over the built-in *.sapiom.dev preset.
     const env = await resolveEnvironment("staging");
     expect(env.name).toBe("staging");
     expect(env.appURL).toBe("https://staging.app.sapiom.ai");
