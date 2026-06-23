@@ -20,6 +20,7 @@ import {
   GatewayClient,
   inspect,
   inspectBuild,
+  isExecutionTerminal,
   link,
   listExecutions,
   OrchestrationError,
@@ -29,6 +30,7 @@ import {
   runLocalFromDir,
   scaffold,
   signal,
+  waitForExecution,
   writeConfig,
   type StubFile,
 } from "@sapiom/orchestration-core";
@@ -349,7 +351,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
 
   server.tool(
     "sapiom_dev_orchestrations_inspect",
-    "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local.",
+    "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local.\n\nReads are a fresh point-in-time snapshot. To wait for a still-running execution to finish, set wait:true (the tool polls until it settles or the wait window elapses) — do NOT sleep-and-poll this tool yourself. If a wait returns waiting:true, just call inspect again with wait:true.",
     {
       dir: z
         .string()
@@ -362,8 +364,20 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .string()
         .optional()
         .describe("Build to inspect (requires a linked project)."),
+      wait: z
+        .boolean()
+        .optional()
+        .describe(
+          "When inspecting an executionId, block until it reaches a terminal state (or settles on a pause needing a signal) instead of returning the current snapshot. Lets the tool own the polling so you don't have to.",
+        ),
+      maxWaitSeconds: z
+        .number()
+        .optional()
+        .describe(
+          "Max seconds to wait when wait:true (default 45, capped at 55). On timeout it returns the latest snapshot with waiting:true — call again to keep waiting.",
+        ),
     },
-    async ({ dir, executionId, buildRunId }) => {
+    async ({ dir, executionId, buildRunId, wait, maxWaitSeconds }) => {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
@@ -376,7 +390,35 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
             ),
           );
         }
-        if (executionId) return ok(await inspect({ executionId }, client));
+        if (executionId) {
+          if (wait) {
+            const maxWaitMs =
+              Math.min(Math.max(maxWaitSeconds ?? 45, 1), 55) * 1000;
+            const { execution, reason, done } = await waitForExecution(
+              { executionId, maxWaitMs },
+              client,
+            );
+            const hint =
+              reason === "timeout"
+                ? "Still running after the wait window — call inspect again with wait:true to keep waiting."
+                : reason === "needs-signal"
+                  ? `Paused on signal '${execution.pausedSignalName ?? "?"}' — deliver it with sapiom_dev_orchestrations_signal to resume.`
+                  : undefined;
+            return ok({
+              execution,
+              done,
+              waiting: !done,
+              ...(hint ? { hint } : {}),
+            });
+          }
+          const { execution } = await inspect({ executionId }, client);
+          // Self-correcting nudge: on a non-terminal snapshot, point at wait:true
+          // so a caller reaches for the tool's loop instead of polling by hand.
+          const hint = isExecutionTerminal(execution.status)
+            ? undefined
+            : `Execution is '${execution.status}', not terminal — call inspect with wait:true to block until it finishes instead of polling manually.`;
+          return ok({ execution, ...(hint ? { hint } : {}) });
+        }
         return ok(await listExecutions(client));
       } catch (err) {
         return fail(err);

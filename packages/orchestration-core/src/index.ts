@@ -12,39 +12,64 @@
  */
 
 // Errors
-export { OrchestrationError } from './errors.js';
-export type { StructuredError } from './errors.js';
+export { OrchestrationError } from "./errors.js";
+export type { StructuredError } from "./errors.js";
 
 // HTTP client factory
-export { GatewayClient, createClient, DEFAULT_WORKFLOWS_HOST } from './client.js';
-export type { ClientOptions, GatewayErrorBody } from './client.js';
+export {
+  GatewayClient,
+  createClient,
+  DEFAULT_WORKFLOWS_HOST,
+} from "./client.js";
+export type { ClientOptions, GatewayErrorBody } from "./client.js";
 
 // Config (sapiom.json)
-export { readConfig, requireConfig, writeConfig, CONFIG_FILE } from './config.js';
-export type { SapiomConfig } from './config.js';
+export {
+  readConfig,
+  requireConfig,
+  writeConfig,
+  CONFIG_FILE,
+} from "./config.js";
+export type { SapiomConfig } from "./config.js";
 
 // scaffold (local, no network)
-export { scaffold, resolveVersions, resolveTemplate, listTemplates, DEFAULT_TEMPLATE } from './scaffold.js';
-export type { ScaffoldOptions, ScaffoldResult, ResolvedVersions } from './scaffold.js';
+export {
+  scaffold,
+  resolveVersions,
+  resolveTemplate,
+  listTemplates,
+  DEFAULT_TEMPLATE,
+} from "./scaffold.js";
+export type {
+  ScaffoldOptions,
+  ScaffoldResult,
+  ResolvedVersions,
+} from "./scaffold.js";
 
 // check (local, no network)
-export { check } from './check.js';
-export type { CheckOptions, CheckResult } from './check.js';
+export { check } from "./check.js";
+export type { CheckOptions, CheckResult } from "./check.js";
 
 // link (networked)
-export { link } from './link.js';
-export type { LinkOptions, LinkResult, DefinitionSummary } from './link.js';
+export { link } from "./link.js";
+export type { LinkOptions, LinkResult, DefinitionSummary } from "./link.js";
 
 // deploy (networked)
-export { deploy } from './deploy.js';
-export type { DeployOptions, DeployResult } from './deploy.js';
+export { deploy } from "./deploy.js";
+export type { DeployOptions, DeployResult } from "./deploy.js";
 
 // run (networked)
-export { run, parseJsonInput } from './run.js';
-export type { RunOptions, RunResult } from './run.js';
+export { run, parseJsonInput } from "./run.js";
+export type { RunOptions, RunResult } from "./run.js";
 
 // inspect / logs (networked)
-export { inspect, listExecutions, inspectBuild } from './inspect.js';
+export {
+  inspect,
+  listExecutions,
+  inspectBuild,
+  waitForExecution,
+  isExecutionTerminal,
+} from "./inspect.js";
 export type {
   InspectOptions,
   InspectResult,
@@ -54,23 +79,30 @@ export type {
   ExecutionDetail,
   StepRecord,
   BuildDetail,
-} from './inspect.js';
+  WaitForExecutionOptions,
+  WaitForExecutionResult,
+  WaitStopReason,
+} from "./inspect.js";
 
 // signal (networked)
-export { signal, parseSignalPayload } from './signal.js';
-export type { SignalOptions, SignalResult } from './signal.js';
+export { signal, parseSignalPayload } from "./signal.js";
+export type { SignalOptions, SignalResult } from "./signal.js";
 
 // git helpers (used by deploy; exported for consumers that need them directly)
-export { assertDeployable, pushHead } from './git.js';
+export { assertDeployable, pushHead } from "./git.js";
 
 // local stub file model (per-step capability overrides for run_local)
-export { parseStubFile, STUB_FILE_VERSION } from './local/stubs.js';
-export type { StubFile, StepStubs, StubResponse } from './local/stubs.js';
+export { parseStubFile, STUB_FILE_VERSION } from "./local/stubs.js";
+export type { StubFile, StepStubs, StubResponse } from "./local/stubs.js";
 
 // local execution (runs step bodies in-process against stub capabilities)
-export { runLocal, runLocalFromDir, STUBS_FILE } from './local/run-local.js';
-export type { RunLocalOptions, LocalRunResult, LocalRunOutcome } from './local/run-local.js';
-export { loadDefinition } from './local/load.js';
-export type { LoadedDefinition } from './local/load.js';
-export { LocalStubDispatcher } from './local/dispatcher.js';
-export type { LocalStepTrace, LogEntry } from './local/dispatcher.js';
+export { runLocal, runLocalFromDir, STUBS_FILE } from "./local/run-local.js";
+export type {
+  RunLocalOptions,
+  LocalRunResult,
+  LocalRunOutcome,
+} from "./local/run-local.js";
+export { loadDefinition } from "./local/load.js";
+export type { LoadedDefinition } from "./local/load.js";
+export { LocalStubDispatcher } from "./local/dispatcher.js";
+export type { LocalStepTrace, LogEntry } from "./local/dispatcher.js";
