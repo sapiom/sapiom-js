@@ -29,7 +29,7 @@ import type {
   ListResponse,
   FileMetadata,
 } from "../file-storage/index.js";
-import type { FalRunResponse } from "../fal/index.js";
+import type { ImageGenerationResult } from "../content-generation/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -522,22 +522,24 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           })) as FileMetadata,
         ),
     },
-    fal: {
-      run: (input) =>
-        Promise.resolve(
-          r("fal.run", [input], () => ({
-            images: [
-              {
-                url: "https://fal.local/stub-image.png",
-                content_type: "image/png",
-                width: 512,
-                height: 512,
-                // mirror the real stitch: a file_id only when storage was requested.
-                ...(input.storage ? { file_id: "stub-file" } : {}),
-              },
-            ],
-          })) as FalRunResponse,
-        ),
+    contentGeneration: {
+      images: {
+        create: (input) =>
+          Promise.resolve(
+            r("contentGeneration.images.create", [input], () => ({
+              images: [
+                {
+                  url: "https://content.local/stub-image.png",
+                  content_type: "image/png",
+                  width: 512,
+                  height: 512,
+                  // mirror the real stitch: a file_id only when storage was requested.
+                  ...(input.storage ? { file_id: "stub-file" } : {}),
+                },
+              ],
+            })) as ImageGenerationResult,
+          ),
+      },
     },
     withAttribution: () => client,
   };

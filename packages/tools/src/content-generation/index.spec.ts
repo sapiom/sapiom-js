@@ -1,7 +1,6 @@
 import { createClient } from "../index.js";
 import { Transport } from "../_client/index.js";
-import * as fal from "./index.js";
-import { FalHttpError } from "./errors.js";
+import { images, createImage, ContentGenerationHttpError } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — the capability fn is tested directly with a real Transport wired to
@@ -54,69 +53,66 @@ const headerOf = (c: FetchCall, k: string) =>
   (c.init.headers as Record<string, string>)[k];
 
 // ---------------------------------------------------------------------------
-// fal.run()
+// contentGeneration.images.create()
 // ---------------------------------------------------------------------------
 
-describe("fal.run()", () => {
-  it("POSTs /run/<model> with the Fal input + credential and returns the response verbatim", async () => {
+describe("contentGeneration.images.create()", () => {
+  it("POSTs the default model with just the prompt + credential and returns the result verbatim", async () => {
     const { transport, calls } = makeTransport([
       () =>
         jsonResponse({
-          images: [
-            {
-              url: "https://fal.media/x.png",
-              content_type: "image/png",
-              width: 512,
-              height: 512,
-            },
-          ],
-          seed: 42,
+          images: [{ url: "https://media/x.png", content_type: "image/png" }],
+          seed: 7,
         }),
     ]);
 
-    const out = await fal.run(
-      {
-        model: "fal-ai/flux/schnell",
-        input: { prompt: "a red bike", num_images: 1 },
-      },
-      transport,
-      BASE,
-    );
+    const out = await createImage({ prompt: "a red bike" }, transport, BASE);
 
-    // Passthrough: Fal-native shape returned verbatim, including non-image fields.
     expect(out).toEqual({
-      images: [
-        {
-          url: "https://fal.media/x.png",
-          content_type: "image/png",
-          width: 512,
-          height: 512,
-        },
-      ],
-      seed: 42,
+      images: [{ url: "https://media/x.png", content_type: "image/png" }],
+      seed: 7,
     });
-
+    // model defaults internally — the caller named no provider.
     expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/flux/schnell`);
     expect(calls[0]!.init.method).toBe("POST");
     expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
     expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "a red bike",
-      num_images: 1,
     });
   });
 
-  it("merges the optional `storage` param into the request body", async () => {
+  it("forwards passthrough params and an explicit model (slashes preserved, no %2F)", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ images: [] }),
+    ]);
+
+    await createImage(
+      {
+        prompt: "x",
+        num_images: 3,
+        image_size: "square",
+        model: "/some/other/model/",
+      },
+      transport,
+      BASE,
+    );
+
+    expect(calls[0]!.url).toBe(`${BASE}/run/some/other/model`);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      num_images: 3,
+      image_size: "square",
+    });
+  });
+
+  it("merges the optional `storage` param into the body; the image carries file_id", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [{ url: "u", file_id: "f1" }] }),
     ]);
 
-    const out = await fal.run(
-      {
-        model: "fal-ai/flux/schnell",
-        input: { prompt: "x" },
-        storage: { visibility: "public" },
-      },
+    const out = await createImage(
+      { prompt: "x", storage: { visibility: "public" } },
       transport,
       BASE,
     );
@@ -128,60 +124,32 @@ describe("fal.run()", () => {
     expect(out.images?.[0]?.file_id).toBe("f1");
   });
 
-  it("omits `storage` from the body when not provided", async () => {
+  it("omits `storage` when not provided", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [] }),
     ]);
 
-    await fal.run(
-      { model: "fal-ai/flux/schnell", input: { prompt: "x" } },
-      transport,
-      BASE,
-    );
+    await createImage({ prompt: "x" }, transport, BASE);
 
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body).toEqual({ prompt: "x" });
-    expect(body).not.toHaveProperty("storage");
+    expect(JSON.parse(calls[0]!.init.body as string)).not.toHaveProperty(
+      "storage",
+    );
   });
 
-  it("treats a null `storage` (JS caller bypassing types) as absent — no null leaks upstream", async () => {
+  it("treats a null `storage` (JS caller bypassing types) as absent", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [] }),
     ]);
 
-    await fal.run(
-      {
-        model: "fal-ai/flux/schnell",
-        input: { prompt: "x" },
-        storage: null as unknown as undefined,
-      },
+    await createImage(
+      { prompt: "x", storage: null as unknown as undefined },
       transport,
       BASE,
     );
 
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body).toEqual({ prompt: "x" });
-    expect(body).not.toHaveProperty("storage");
-  });
-
-  it("the top-level `storage` arg wins over a colliding `storage` key inside input (reserved)", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ images: [] }),
-    ]);
-
-    await fal.run(
-      {
-        model: "fal-ai/flux/schnell",
-        input: { prompt: "x", storage: "native-collision" },
-        storage: { visibility: "public" },
-      },
-      transport,
-      BASE,
+    expect(JSON.parse(calls[0]!.init.body as string)).not.toHaveProperty(
+      "storage",
     );
-
-    expect(JSON.parse(calls[0]!.init.body as string).storage).toEqual({
-      visibility: "public",
-    });
   });
 
   it("passes each image's own file_id / storage_error through on a multi-image response", async () => {
@@ -196,12 +164,8 @@ describe("fal.run()", () => {
         }),
     ]);
 
-    const out = await fal.run(
-      {
-        model: "fal-ai/flux/schnell",
-        input: { prompt: "x", num_images: 3 },
-        storage: {},
-      },
+    const out = await createImage(
+      { prompt: "x", num_images: 3, storage: {} },
       transport,
       BASE,
     );
@@ -214,85 +178,43 @@ describe("fal.run()", () => {
     expect(out.images?.[2]?.storage_error).toBe("exceeded max upload size");
   });
 
-  it("preserves '/' in the model path (no %2F) and drops empty segments", async () => {
-    const { transport, calls } = makeTransport([
-      () => jsonResponse({ images: [] }),
-    ]);
-
-    await fal.run(
-      {
-        model: "/fal-ai/flux-pro/kontext/text-to-image/",
-        input: { prompt: "x" },
-      },
-      transport,
-      BASE,
-    );
-
-    expect(calls[0]!.url).toBe(
-      `${BASE}/run/fal-ai/flux-pro/kontext/text-to-image`,
-    );
-  });
-
-  it("throws FalHttpError (with status + body) on a non-2xx — e.g. storage on an async model → 400", async () => {
+  it("throws ContentGenerationHttpError (with status + body) on a non-2xx", async () => {
     const { transport } = makeTransport([
       () =>
         new Response(
-          JSON.stringify({
-            message: "storage on asynchronous (queued) Fal models …",
-            error: "Bad Request",
-            statusCode: 400,
-          }),
+          JSON.stringify({ message: "bad request", error: "Bad Request" }),
           { status: 400 },
         ),
     ]);
 
     await expect(
-      fal.run(
-        { model: "fal-ai/veo3/fast", input: { prompt: "x" }, storage: {} },
-        transport,
-        BASE,
-      ),
+      createImage({ prompt: "x" }, transport, BASE),
     ).rejects.toMatchObject({
-      name: "FalHttpError",
+      name: "ContentGenerationHttpError",
       status: 400,
       body: { error: "Bad Request" },
     });
     await expect(
-      fal.run(
-        { model: "fal-ai/veo3/fast", input: { prompt: "x" }, storage: {} },
-        transport,
-        BASE,
-      ),
-    ).rejects.toBeInstanceOf(FalHttpError);
+      createImage({ prompt: "x" }, transport, BASE),
+    ).rejects.toBeInstanceOf(ContentGenerationHttpError);
   });
 
-  it("throws a clear error (not a TypeError) when model is empty / all-slashes / nullish", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+  it("`images.create` is the same operation as `createImage`", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ images: [{ url: "u" }] }),
+    ]);
 
-    await expect(
-      fal.run({ model: "", input: { prompt: "x" } }, transport, BASE),
-    ).rejects.toThrow(/model.*required/i);
-    await expect(
-      fal.run({ model: "///", input: { prompt: "x" } }, transport, BASE),
-    ).rejects.toThrow(/model.*required/i);
-    // JS caller bypassing the types — a clean error, not "Cannot read properties of undefined".
-    await expect(
-      fal.run(
-        { model: undefined as unknown as string, input: {} },
-        transport,
-        BASE,
-      ),
-    ).rejects.toThrow(/model.*required/i);
-    expect(calls).toHaveLength(0);
+    await images.create({ prompt: "x" }, transport, BASE);
+    expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/flux/schnell`);
   });
 });
 
 // ---------------------------------------------------------------------------
-// createClient().fal — binding
+// createClient().contentGeneration.images — binding
 // ---------------------------------------------------------------------------
 
-describe("createClient().fal", () => {
-  it("binds run() to the client's credential + default Fal host, merging storage", async () => {
+describe("createClient().contentGeneration.images.create", () => {
+  it("binds to the client's credential + default generation host, merging storage", async () => {
     const calls: FetchCall[] = [];
     const fetchMock = (async (
       input: Parameters<typeof globalThis.fetch>[0],
@@ -303,9 +225,8 @@ describe("createClient().fal", () => {
     }) as typeof globalThis.fetch;
 
     const sapiom = createClient({ apiKey: "client-key", fetch: fetchMock });
-    const out = await sapiom.fal.run({
-      model: "fal-ai/flux/schnell",
-      input: { prompt: "x" },
+    const out = await sapiom.contentGeneration.images.create({
+      prompt: "x",
       storage: { visibility: "private" },
     });
 

@@ -1,6 +1,6 @@
 # @sapiom/tools
 
-A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, and file storage — authenticated to your tenant.
+A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, file storage, and content generation — authenticated to your tenant.
 
 These are the same capabilities your Sapiom agents call as tools; this package makes them callable directly from your own code.
 
@@ -71,7 +71,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `repositories` | Private, in-network git repos | [src/repositories](./src/repositories/README.md) |
 | `agent` | Coding agents (LLM execution) | [src/agent](./src/agent/README.md) |
 | `fileStorage` | Tenant-scoped object storage (presigned GCS) | [src/file-storage](./src/file-storage/README.md) |
-| `fal` | Image generation (Fal), with optional `storage` stitch | [src/fal](./src/fal/README.md) |
+| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` stitch | [src/content-generation](./src/content-generation/README.md) |
 
 ## Composing capabilities
 
@@ -84,12 +84,11 @@ await repo.pushFromSandbox(run.sandbox);
 
 A useful pattern: let the agent do the open-ended work (writing files) and perform exact, repeatable actions — committing, pushing, deploying — in your own code rather than in the agent's prompt. The agent produces the changes; `pushFromSandbox` publishes them deterministically.
 
-Some compositions are server-side and need nothing but a param. `fal.run` takes an optional `storage`, and the gateway persists each generated image into `fileStorage` as it returns — handing you a durable `file_id` with no extra call:
+Some compositions are server-side and need nothing but a param. `contentGeneration.images.create` takes an optional `storage`, and the gateway persists each generated image into `fileStorage` as it returns — handing you a durable `file_id` with no extra call:
 
 ```typescript
-const out = await fal.run({
-  model: "fal-ai/flux/schnell",
-  input: { prompt: "a logo" },
+const out = await contentGeneration.images.create({
+  prompt: "a logo",
   storage: { visibility: "private" },
 });
 const { downloadUrl } = await fileStorage.getDownloadUrl(out.images![0].file_id!);
