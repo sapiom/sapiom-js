@@ -9,14 +9,14 @@
  *     prompt: "a red bicycle",
  *     storage: { visibility: "private" },                     // optional — persist outputs
  *   });
- *   out.images[0].url;        // hosted URL of the generated image
- *   out.images[0].file_id;    // present when `storage` was passed → use with fileStorage
+ *   out.images[0].url;       // hosted URL of the generated image
+ *   out.images[0].fileId;    // present when `storage` was passed → use with fileStorage
  *
  * Or via an explicit client: `createClient({ apiKey }).contentGeneration.images.create(...)`.
  *
- * The result is forwarded from the generation gateway largely verbatim (snake_case
- * fields like `content_type`, `seed`); the stitch only adds `file_id` /
- * `storage_error` inline on each output.
+ * Wire fields are snake_case; this module maps them to the camelCase SDK surface
+ * (matching `fileStorage` / `agent`). Model-specific input goes through `params`
+ * verbatim; provider-native response extras (`seed`, `timings`, …) pass through.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { ensureOk, ContentGenerationHttpError } from "./errors.js";
@@ -30,7 +30,7 @@ const DEFAULT_BASE_URL =
 /** Default image model when the caller doesn't pick one — a fast, low-cost model. */
 const DEFAULT_IMAGE_MODEL = "fal-ai/flux/schnell";
 
-// ----- SDK-facing types -----
+// ----- SDK-facing types (camelCase) -----
 
 export interface StorageOptions {
   /**
@@ -44,6 +44,8 @@ export interface StorageOptions {
 export interface ImageCreateInput {
   /** Text prompt describing the image to generate. */
   prompt: string;
+  /** Number of images to generate. */
+  numImages?: number;
   /**
    * Optional model selector. Defaults to a fast image model; most callers omit it.
    * (Model identifiers are an advanced, evolving surface.)
@@ -51,43 +53,79 @@ export interface ImageCreateInput {
   model?: string;
   /**
    * Optional: persist each generated output into Sapiom file-storage server-side.
-   * When set, every item in `images` comes back annotated with `file_id` (or
-   * `storage_error` if persisting that one failed).
+   * When set, every item in `images` comes back annotated with `fileId` (or
+   * `storageError` if persisting that one failed).
    */
   storage?: StorageOptions;
   /**
-   * Additional generation parameters, passed through to the model verbatim
-   * (e.g. `num_images`, `image_size`, `seed`).
+   * Advanced: extra model-specific parameters, forwarded to the model verbatim
+   * (provider-native names, e.g. `image_size`, `seed`, `guidance_scale`).
    */
-  [key: string]: unknown;
+  params?: Record<string, unknown>;
 }
 
 export interface GeneratedImage {
   /** Hosted URL of the generated image. */
   url: string;
   /** MIME type, when reported. */
-  content_type?: string;
+  contentType?: string;
   width?: number;
   height?: number;
   /**
    * Present when `storage` was requested and this output was persisted — pass to
-   * `fileStorage.getDownloadUrl(file_id)` to retrieve it.
+   * `fileStorage.getDownloadUrl(fileId)` to retrieve it.
    */
-  file_id?: string;
+  fileId?: string;
   /**
    * Present when `storage` was requested but persisting THIS output failed
-   * (best-effort: other images in the same response may still carry `file_id`).
+   * (best-effort: other images in the same response may still carry `fileId`).
    */
-  storage_error?: string;
-  /** Other model-specific fields (kept verbatim). */
-  [key: string]: unknown;
+  storageError?: string;
 }
 
 export interface ImageGenerationResult {
   /** Generated images. */
   images?: GeneratedImage[];
-  /** Other top-level fields the model returns (`seed`, `timings`, `has_nsfw_concepts`, …). */
+  /**
+   * Provider-native top-level extras the model returns (`seed`, `timings`,
+   * `has_nsfw_concepts`, …), passed through as-is.
+   */
   [key: string]: unknown;
+}
+
+// ----- wire shapes (snake_case, as served by the gateway) -----
+
+interface WireImage {
+  url: string;
+  content_type?: string;
+  width?: number;
+  height?: number;
+  file_id?: string;
+  storage_error?: string;
+}
+
+interface WireImageResult {
+  images?: WireImage[];
+  [key: string]: unknown;
+}
+
+function mapImage(raw: WireImage): GeneratedImage {
+  return {
+    url: raw.url,
+    ...(raw.content_type !== undefined && { contentType: raw.content_type }),
+    ...(raw.width !== undefined && { width: raw.width }),
+    ...(raw.height !== undefined && { height: raw.height }),
+    ...(raw.file_id !== undefined && { fileId: raw.file_id }),
+    ...(raw.storage_error !== undefined && { storageError: raw.storage_error }),
+  };
+}
+
+function mapResult(raw: WireImageResult): ImageGenerationResult {
+  const { images, ...rest } = raw;
+  // `rest` carries provider-native top-level extras (seed, timings, …) verbatim.
+  return images === undefined
+    ? { ...rest }
+    : { ...rest, images: images.map(mapImage) };
 }
 
 // ----- capability operations -----
@@ -102,7 +140,7 @@ function modelToPath(model: string): string {
 
 /**
  * Generate one or more images from a prompt. Pass `storage` to persist each output
- * (the returned images then carry `file_id`). Non-2xx responses throw
+ * (the returned images then carry `fileId`). Non-2xx responses throw
  * {@link ContentGenerationHttpError}.
  */
 export async function createImage(
@@ -110,16 +148,18 @@ export async function createImage(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ImageGenerationResult> {
-  const { model, storage, ...params } = input;
-  const path = modelToPath(model || DEFAULT_IMAGE_MODEL);
+  const path = modelToPath(input.model || DEFAULT_IMAGE_MODEL);
 
-  // `params` (prompt + any passthrough fields) is forwarded verbatim; `storage` is
-  // the one Sapiom-owned field the gateway reads + strips before proxying upstream.
-  // The top-level `storage` arg intentionally wins over any same-named passthrough
-  // key — `storage` is reserved for the stitch. Truthy check (not `!== undefined`)
-  // so a JS caller passing `storage: null` doesn't leak a null field upstream.
-  const body: Record<string, unknown> = { ...params };
-  if (storage) body.storage = storage;
+  // camelCase surface → snake wire: `prompt` + the model-native `params` are
+  // forwarded; `numImages` maps to `num_images`. `storage` is the one Sapiom-owned
+  // field the gateway reads + strips before proxying upstream. Truthy check (not
+  // `!== undefined`) so a JS caller passing `storage: null` doesn't leak a null field.
+  const body: Record<string, unknown> = {
+    prompt: input.prompt,
+    ...input.params,
+  };
+  if (input.numImages !== undefined) body.num_images = input.numImages;
+  if (input.storage) body.storage = input.storage;
 
   const res = await ensureOk(
     await transport.fetch(`${baseUrl}/run/${path}`, {
@@ -129,7 +169,7 @@ export async function createImage(
     }),
     "Failed to generate image",
   );
-  return (await res.json()) as ImageGenerationResult;
+  return mapResult((await res.json()) as WireImageResult);
 }
 
 /**

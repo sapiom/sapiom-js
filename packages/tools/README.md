@@ -91,7 +91,7 @@ const out = await contentGeneration.images.create({
   prompt: "a logo",
   storage: { visibility: "private" },
 });
-const { downloadUrl } = await fileStorage.getDownloadUrl(out.images![0].file_id!);
+const { downloadUrl } = await fileStorage.getDownloadUrl(out.images![0].fileId!);
 ```
 
 ## License

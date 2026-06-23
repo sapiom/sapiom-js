@@ -530,11 +530,11 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               images: [
                 {
                   url: "https://content.local/stub-image.png",
-                  content_type: "image/png",
+                  contentType: "image/png",
                   width: 512,
                   height: 512,
-                  // mirror the real stitch: a file_id only when storage was requested.
-                  ...(input.storage ? { file_id: "stub-file" } : {}),
+                  // mirror the real stitch: a fileId only when storage was requested.
+                  ...(input.storage ? { fileId: "stub-file" } : {}),
                 },
               ],
             })) as ImageGenerationResult,

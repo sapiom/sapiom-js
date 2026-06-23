@@ -57,7 +57,7 @@ const headerOf = (c: FetchCall, k: string) =>
 // ---------------------------------------------------------------------------
 
 describe("contentGeneration.images.create()", () => {
-  it("POSTs the default model with just the prompt + credential and returns the result verbatim", async () => {
+  it("POSTs the default model with just the prompt + credential and maps the wire result to camelCase", async () => {
     const { transport, calls } = makeTransport([
       () =>
         jsonResponse({
@@ -68,8 +68,9 @@ describe("contentGeneration.images.create()", () => {
 
     const out = await createImage({ prompt: "a red bike" }, transport, BASE);
 
+    // wire snake (content_type) → camelCase surface (contentType); top-level extras pass through.
     expect(out).toEqual({
-      images: [{ url: "https://media/x.png", content_type: "image/png" }],
+      images: [{ url: "https://media/x.png", contentType: "image/png" }],
       seed: 7,
     });
     // model defaults internally — the caller named no provider.
@@ -82,7 +83,7 @@ describe("contentGeneration.images.create()", () => {
     });
   });
 
-  it("forwards passthrough params and an explicit model (slashes preserved, no %2F)", async () => {
+  it("maps numImages → num_images, forwards `params` verbatim, honors an explicit model (slashes preserved)", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [] }),
     ]);
@@ -90,8 +91,8 @@ describe("contentGeneration.images.create()", () => {
     await createImage(
       {
         prompt: "x",
-        num_images: 3,
-        image_size: "square",
+        numImages: 3,
+        params: { image_size: "square", seed: 42 },
         model: "/some/other/model/",
       },
       transport,
@@ -101,12 +102,13 @@ describe("contentGeneration.images.create()", () => {
     expect(calls[0]!.url).toBe(`${BASE}/run/some/other/model`);
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "x",
-      num_images: 3,
       image_size: "square",
+      seed: 42,
+      num_images: 3,
     });
   });
 
-  it("merges the optional `storage` param into the body; the image carries file_id", async () => {
+  it("merges the optional `storage` param; the mapped image carries fileId", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [{ url: "u", file_id: "f1" }] }),
     ]);
@@ -121,7 +123,7 @@ describe("contentGeneration.images.create()", () => {
       prompt: "x",
       storage: { visibility: "public" },
     });
-    expect(out.images?.[0]?.file_id).toBe("f1");
+    expect(out.images?.[0]?.fileId).toBe("f1");
   });
 
   it("omits `storage` when not provided", async () => {
@@ -152,7 +154,7 @@ describe("contentGeneration.images.create()", () => {
     );
   });
 
-  it("passes each image's own file_id / storage_error through on a multi-image response", async () => {
+  it("maps each image's fileId / storageError on a multi-image response", async () => {
     const { transport } = makeTransport([
       () =>
         jsonResponse({
@@ -165,17 +167,13 @@ describe("contentGeneration.images.create()", () => {
     ]);
 
     const out = await createImage(
-      { prompt: "x", num_images: 3, storage: {} },
+      { prompt: "x", numImages: 3, storage: {} },
       transport,
       BASE,
     );
 
-    expect(out.images?.map((i) => i.file_id)).toEqual([
-      "f-a",
-      "f-b",
-      undefined,
-    ]);
-    expect(out.images?.[2]?.storage_error).toBe("exceeded max upload size");
+    expect(out.images?.map((i) => i.fileId)).toEqual(["f-a", "f-b", undefined]);
+    expect(out.images?.[2]?.storageError).toBe("exceeded max upload size");
   });
 
   it("throws ContentGenerationHttpError (with status + body) on a non-2xx", async () => {
@@ -214,7 +212,7 @@ describe("contentGeneration.images.create()", () => {
 // ---------------------------------------------------------------------------
 
 describe("createClient().contentGeneration.images.create", () => {
-  it("binds to the client's credential + default generation host, merging storage", async () => {
+  it("binds to the client's credential + default generation host, merging storage, mapping the result", async () => {
     const calls: FetchCall[] = [];
     const fetchMock = (async (
       input: Parameters<typeof globalThis.fetch>[0],
@@ -230,7 +228,7 @@ describe("createClient().contentGeneration.images.create", () => {
       storage: { visibility: "private" },
     });
 
-    expect(out.images?.[0]?.file_id).toBe("f");
+    expect(out.images?.[0]?.fileId).toBe("f");
     expect(calls[0]!.url).toBe(
       "https://fal.services.sapiom.ai/run/fal-ai/flux/schnell",
     );
