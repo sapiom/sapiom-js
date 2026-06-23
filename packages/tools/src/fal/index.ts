@@ -114,8 +114,10 @@ export async function run(
     );
   }
   // Fal model input is forwarded verbatim; `storage` is the one Sapiom-owned field
-  // the gateway reads + strips before proxying upstream. Truthy check (not `!== undefined`)
-  // so a JS caller passing `storage: null` doesn't leak a null field upstream.
+  // the gateway reads + strips before proxying upstream. The top-level `storage` arg
+  // intentionally wins over any same-named key inside `input` — `storage` is reserved
+  // for the stitch. Truthy check (not `!== undefined`) so a JS caller passing
+  // `storage: null` doesn't leak a null field upstream.
   const body: Record<string, unknown> = { ...input.input };
   if (input.storage) body.storage = input.storage;
 

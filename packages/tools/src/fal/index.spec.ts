@@ -164,6 +164,26 @@ describe("fal.run()", () => {
     expect(body).not.toHaveProperty("storage");
   });
 
+  it("the top-level `storage` arg wins over a colliding `storage` key inside input (reserved)", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ images: [] }),
+    ]);
+
+    await fal.run(
+      {
+        model: "fal-ai/flux/schnell",
+        input: { prompt: "x", storage: "native-collision" },
+        storage: { visibility: "public" },
+      },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string).storage).toEqual({
+      visibility: "public",
+    });
+  });
+
   it("passes each image's own file_id / storage_error through on a multi-image response", async () => {
     const { transport } = makeTransport([
       () =>
