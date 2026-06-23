@@ -130,6 +130,38 @@ describe('defineOrchestration', () => {
     expect(Object.keys(def.steps)).toHaveLength(3);
   });
 
+  it('accepts valid secret bindings', () => {
+    const def = defineOrchestration({
+      name: 'wf',
+      entry: 'start',
+      steps: { start: makeStep('start') },
+      secrets: [{ ref: 'billing', keys: ['STRIPE_KEY'] }],
+    });
+    expect(def.secrets?.[0].ref).toBe('billing');
+  });
+
+  it('throws on an invalid binding ref', () => {
+    expect(() =>
+      defineOrchestration({
+        name: 'wf',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+        secrets: [{ ref: 'bad ref!', keys: ['STRIPE_KEY'] }],
+      }),
+    ).toThrow('invalid secret binding ref');
+  });
+
+  it('throws on an invalid secret key', () => {
+    expect(() =>
+      defineOrchestration({
+        name: 'wf',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+        secrets: [{ ref: 'billing', keys: ['BAD KEY!'] }],
+      }),
+    ).toThrow('invalid secret key');
+  });
+
   it('attaches a non-enumerable ORCHESTRATION_DEFINITION_BRAND symbol to the returned object', () => {
     const def = defineOrchestration({
       name: 'branded',
