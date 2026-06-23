@@ -38,6 +38,8 @@ import type {
   ListResponse,
   FileMetadata,
 } from "./file-storage/index.js";
+import * as fal from "./fal/index.js";
+import type { FalRunInput, FalRunResponse } from "./fal/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -69,6 +71,13 @@ export interface Sapiom {
       fileId: string,
       visibility: "private" | "public",
     ): Promise<FileMetadata>;
+  };
+  readonly fal: {
+    /**
+     * Run a Fal model. Pass `storage` to persist each output into file-storage
+     * (the returned images then carry `file_id`).
+     */
+    run(input: FalRunInput): Promise<FalRunResponse>;
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -106,6 +115,9 @@ function bind(transport: Transport): Sapiom {
       delete: (fileId) => fileStorage.delete(fileId, transport),
       setVisibility: (fileId, visibility) =>
         fileStorage.setVisibility(fileId, visibility, transport),
+    },
+    fal: {
+      run: (input) => fal.run(input, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
