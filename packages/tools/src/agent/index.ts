@@ -93,13 +93,28 @@ export interface CodingRunResult {
   sandbox: Sandbox;
 }
 
+/** Execution-environment `type` for a remote cloud sandbox; its `id` is the sandbox name. */
+export const EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX = "blaxel_sandbox";
+
+/**
+ * The execution environment a coding run used. For a `"blaxel_sandbox"`, `id` is
+ * the sandbox NAME — the value `ctx.sapiom.sandboxes.attach(id)` takes.
+ */
+export interface ExecutionEnvironmentRef {
+  /** Environment kind (today: `"blaxel_sandbox"` | `"local_host"`). */
+  type: string;
+  /** Type-specific id; for `"blaxel_sandbox"`, the sandbox name. */
+  id: string;
+}
+
 /**
  * The coding run's terminal result as it arrives at a step **resumed** from
- * `pauseUntilSignal(runHandle, { resumeStep })`. It is exactly the signal
- * payload the engine delivers as that step's `input`, and — because it crossed
- * the pause/resume (wire) boundary — `sandbox` is the plain `{ name,
- * workspaceRoot }` it serialized to, not a live handle. Re-attach it with
- * `ctx.sapiom.sandboxes.attach(name)` to act on it.
+ * `pauseUntilSignal(runHandle, { resumeStep })` — the signal payload delivered as
+ * that step's `input`. It crossed a wire boundary, so there are no live handles:
+ * to act on the run's sandbox, re-attach one from `executionEnvironment` —
+ * `ctx.sapiom.sandboxes.attach(result.executionEnvironment.id)` (when its `type`
+ * is `"blaxel_sandbox"`). `executionEnvironment` is `null` when the run never
+ * provisioned one (e.g. a launch-stage failure).
  *
  * Annotate a resumed step's input with this so you don't have to hand-roll the
  * shape:
@@ -109,9 +124,107 @@ export interface CodingRunResult {
  *     async run(result: CodingResultPayload, ctx) { … },
  *   });
  */
-export interface CodingResultPayload extends Omit<CodingRunResult, "sandbox"> {
-  sandbox: { name: string; workspaceRoot: string };
+export interface CodingResultPayload {
+  runId: string;
+  status: RunStatus;
+  summary: string | null;
+  result: CodingRunOutcome | null;
+  error: CodingRunError | null;
+  executionEnvironment: ExecutionEnvironmentRef | null;
 }
+
+/**
+ * Map a live, awaited {@link CodingRunResult} to the plain {@link CodingResultPayload}
+ * a resumed step receives across the wire boundary (live handles become an
+ * `executionEnvironment` reference).
+ */
+export function toResumePayload(run: CodingRunResult): CodingResultPayload {
+  return {
+    runId: run.runId,
+    status: run.status,
+    summary: run.summary,
+    result: run.result,
+    error: run.error,
+    executionEnvironment: {
+      type: EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX,
+      id: run.sandbox.name,
+    },
+  };
+}
+
+/** Thrown by {@link codingResultSchema}.parse on a malformed resume payload. */
+export class CodingResultSchemaError extends Error {}
+
+const RUN_STATUSES: readonly RunStatus[] = [
+  "pending",
+  "queued",
+  "running",
+  "completed",
+  "failed",
+];
+
+/**
+ * Runtime validator for {@link CodingResultPayload}. `parse` returns the value typed
+ * on success and throws a {@link CodingResultSchemaError} on any divergence. The
+ * `executionEnvironment` key is required (use `null` when no environment was
+ * provisioned).
+ */
+export const codingResultSchema = {
+  parse(value: unknown): CodingResultPayload {
+    const fail = (msg: string): never => {
+      throw new CodingResultSchemaError(
+        `invalid coding result payload: ${msg}`,
+      );
+    };
+    if (!value || typeof value !== "object") fail("not an object");
+    const v = value as Record<string, unknown>;
+
+    if (typeof v.runId !== "string") fail("runId must be a string");
+    if (!RUN_STATUSES.includes(v.status as RunStatus))
+      fail(`status must be one of ${RUN_STATUSES.join(", ")}`);
+    if (v.summary !== null && typeof v.summary !== "string")
+      fail("summary must be a string or null");
+
+    if (v.result !== null) {
+      const r = v.result as Record<string, unknown>;
+      if (!r || typeof r !== "object") fail("result must be an object or null");
+      if (typeof r.success !== "boolean")
+        fail("result.success must be a boolean");
+      if (typeof r.turns !== "number") fail("result.turns must be a number");
+      if (r.modelUsed !== null && typeof r.modelUsed !== "string")
+        fail("result.modelUsed must be a string or null");
+      if (typeof r.durationMs !== "number")
+        fail("result.durationMs must be a number");
+      if (typeof r.toolCallCount !== "number")
+        fail("result.toolCallCount must be a number");
+      if (!r.usage || typeof r.usage !== "object")
+        fail("result.usage must be an object");
+    }
+
+    if (v.error !== null) {
+      const e = v.error as Record<string, unknown>;
+      if (!e || typeof e !== "object") fail("error must be an object or null");
+      if (typeof e.stage !== "string") fail("error.stage must be a string");
+      if (typeof e.message !== "string") fail("error.message must be a string");
+    }
+
+    if (!("executionEnvironment" in v))
+      fail(
+        "executionEnvironment is required (use null when no environment was provisioned)",
+      );
+    if (v.executionEnvironment !== null) {
+      const env = v.executionEnvironment as Record<string, unknown>;
+      if (!env || typeof env !== "object")
+        fail("executionEnvironment must be an object or null");
+      if (typeof env.type !== "string")
+        fail("executionEnvironment.type must be a string");
+      if (typeof env.id !== "string")
+        fail("executionEnvironment.id must be a string");
+    }
+
+    return value as CodingResultPayload;
+  },
+};
 
 /**
  * A launched-but-not-awaited run. Satisfies {@link DispatchHandle}, so it can be

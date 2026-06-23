@@ -18,7 +18,7 @@
  * replaces that capability's default; a function `(…args) => value` computes it
  * from the call arguments.
  */
-import { CODING_RESULT_SIGNAL } from "../agent/index.js";
+import { CODING_RESULT_SIGNAL, toResumePayload } from "../agent/index.js";
 import type { CodingRunResult, RunHandle, RunStatus } from "../agent/index.js";
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
@@ -86,19 +86,16 @@ function isDispatchHandle(
 async function dispatchable<T>(
   handle: T,
   signals?: Map<string, unknown>,
+  resumePayload?: () => unknown | Promise<unknown>,
 ): Promise<T> {
   if (signals && isDispatchHandle(handle)) {
-    // The resume payload is delivered as the dispatched run's terminal signal,
-    // which in production crosses a wire boundary — it reaches the resumed step
-    // as plain JSON, never a live handle. Round-trip it here so a local run sees
-    // exactly that shape (e.g. `result.sandbox` is plain data, so the author
-    // re-attaches it with `sandboxes.attach(name)` just as they would in prod —
-    // no local-only handle methods to lean on). Relies on stub handles being
-    // JSON-safe (see `makeHandle`).
-    signals.set(
-      handle.dispatch.correlationId,
-      toPlainJson(await handle.wait()),
-    );
+    // The resume payload crosses a wire boundary — it reaches the resumed step as
+    // plain JSON, never a live handle. A capability may supply `resumePayload` to
+    // produce that wire shape; absent, the awaited result IS the payload. Round-trip
+    // it either way so a local run sees exactly the wire shape — no local-only
+    // handle methods to lean on.
+    const payload = resumePayload ? await resumePayload() : await handle.wait();
+    signals.set(handle.dispatch.correlationId, toPlainJson(payload));
   }
   return handle;
 }
@@ -464,17 +461,20 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           Promise.resolve(resolveCodingResult(spec, "agent.coding.run")),
         launch: (spec) => {
           const correlationId = `stub-run-${++launchSeq}`;
-          // The resume payload IS the run result. `launch()` honors the key
-          // matching the call the author wrote (`agent.coding.launch`) first,
-          // then the shared `agent.coding.run` that controls both paths.
+          // `launch()` honors the key matching the call the author wrote
+          // (`agent.coding.launch`) first, then the shared `agent.coding.run`
+          // that controls both paths.
           const result = {
             ...resolveCodingResult(spec, dispatchedKeys("agent.coding")),
             runId: correlationId,
           };
-          // Generic: any dispatch-able handle registers itself for pause-resume.
+          // Register for pause-resume with the wire shape a resumed step receives:
+          // `toResumePayload` maps the live result to a `CodingResultPayload` (an
+          // `executionEnvironment` reference, not a live sandbox handle).
           return dispatchable(
             stubRunHandle(overrides, correlationId, result),
             opts.signals,
+            () => toResumePayload(result),
           );
         },
       },
