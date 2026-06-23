@@ -1,8 +1,7 @@
 /**
- * `contentGeneration` capability — generate media (images today; video / audio to
- * come) with an optional `storage` param that persists each output into Sapiom
- * file-storage server-side. Provider-neutral by design: the surface names the
- * *capability*, never the upstream provider.
+ * `contentGeneration` capability — generate media (images today; video and audio
+ * to come), with an optional `storage` param that persists each output to Sapiom
+ * file storage so you get a durable `fileId` back inline.
  *
  *   import { contentGeneration } from "@sapiom/tools";        // ambient auth
  *   const out = await contentGeneration.images.create({
@@ -13,24 +12,19 @@
  *   out.images[0].fileId;    // present when `storage` was passed → use with fileStorage
  *
  * Or via an explicit client: `createClient({ apiKey }).contentGeneration.images.create(...)`.
- *
- * Wire fields are snake_case; this module maps them to the camelCase SDK surface
- * (matching `fileStorage` / `agent`). Model-specific input goes through `params`
- * verbatim; provider-native response extras (`seed`, `timings`, …) pass through.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { ensureOk, ContentGenerationHttpError } from "./errors.js";
 
 export { ContentGenerationHttpError };
 
-/** Generation gateway host. An internal detail — override via SAPIOM_CONTENT_GENERATION_URL. */
 const DEFAULT_BASE_URL =
   process.env.SAPIOM_CONTENT_GENERATION_URL || "https://fal.services.sapiom.ai";
 
 /** Default image model when the caller doesn't pick one — a fast, low-cost model. */
 const DEFAULT_IMAGE_MODEL = "fal-ai/flux/schnell";
 
-// ----- SDK-facing types (camelCase) -----
+// ----- Types -----
 
 export interface StorageOptions {
   /**
@@ -52,14 +46,14 @@ export interface ImageCreateInput {
    */
   model?: string;
   /**
-   * Optional: persist each generated output into Sapiom file-storage server-side.
-   * When set, every item in `images` comes back annotated with `fileId` (or
-   * `storageError` if persisting that one failed).
+   * Optional: persist each generated output to Sapiom file storage. When set, every
+   * item in `images` comes back annotated with `fileId` (or `storageError` if
+   * persisting that one failed).
    */
   storage?: StorageOptions;
   /**
-   * Advanced: extra model-specific parameters, forwarded to the model verbatim
-   * (provider-native names, e.g. `image_size`, `seed`, `guidance_scale`).
+   * Advanced: extra model-specific parameters, forwarded verbatim
+   * (e.g. `image_size`, `seed`, `guidance_scale`).
    */
   params?: Record<string, unknown>;
 }
@@ -86,16 +80,13 @@ export interface GeneratedImage {
 export interface ImageGenerationResult {
   /** Generated images. */
   images?: GeneratedImage[];
-  /**
-   * Provider-native top-level extras the model returns (`seed`, `timings`,
-   * `has_nsfw_concepts`, …), passed through as-is.
-   */
+  /** Additional model-specific fields (e.g. `seed`, `timings`), returned as-is. */
   [key: string]: unknown;
 }
 
-// ----- wire shapes (snake_case, as served by the gateway) -----
+// ----- Internal request/response shapes -----
 
-interface WireImage {
+interface RawImage {
   url: string;
   content_type?: string;
   width?: number;
@@ -104,12 +95,12 @@ interface WireImage {
   storage_error?: string;
 }
 
-interface WireImageResult {
-  images?: WireImage[];
+interface RawImageResult {
+  images?: RawImage[];
   [key: string]: unknown;
 }
 
-function mapImage(raw: WireImage): GeneratedImage {
+function mapImage(raw: RawImage): GeneratedImage {
   return {
     url: raw.url,
     ...(raw.content_type !== undefined && { contentType: raw.content_type }),
@@ -120,27 +111,23 @@ function mapImage(raw: WireImage): GeneratedImage {
   };
 }
 
-function mapResult(raw: WireImageResult): ImageGenerationResult {
+function mapResult(raw: RawImageResult): ImageGenerationResult {
   const { images, ...rest } = raw;
-  // `rest` carries provider-native top-level extras (seed, timings, …) verbatim.
   return images === undefined
     ? { ...rest }
     : { ...rest, images: images.map(mapImage) };
 }
 
-// ----- capability operations -----
+// ----- Capability operations -----
 
-/**
- * Encode a model id as a path while preserving its `/` separators (the gateway
- * routes on them). Empty segments (leading/trailing/double slashes) are dropped.
- */
+/** Encode a model id into a URL path, preserving its `/` separators. */
 function modelToPath(model: string): string {
   return model.split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
 /**
  * Generate one or more images from a prompt. Pass `storage` to persist each output
- * (the returned images then carry `fileId`). Non-2xx responses throw
+ * (the returned images then carry `fileId`). Failed requests throw
  * {@link ContentGenerationHttpError}.
  */
 export async function createImage(
@@ -150,15 +137,13 @@ export async function createImage(
 ): Promise<ImageGenerationResult> {
   const path = modelToPath(input.model || DEFAULT_IMAGE_MODEL);
 
-  // camelCase surface → snake wire: `prompt` + the model-native `params` are
-  // forwarded; `numImages` maps to `num_images`. `storage` is the one Sapiom-owned
-  // field the gateway reads + strips before proxying upstream. Truthy check (not
-  // `!== undefined`) so a JS caller passing `storage: null` doesn't leak a null field.
   const body: Record<string, unknown> = {
     prompt: input.prompt,
     ...input.params,
   };
   if (input.numImages !== undefined) body.num_images = input.numImages;
+  // Truthy check (not `!== undefined`) so a caller passing `storage: null` is
+  // treated as "no storage" rather than sending a null field.
   if (input.storage) body.storage = input.storage;
 
   const res = await ensureOk(
@@ -169,12 +154,12 @@ export async function createImage(
     }),
     "Failed to generate image",
   );
-  return mapResult((await res.json()) as WireImageResult);
+  return mapResult((await res.json()) as RawImageResult);
 }
 
 /**
- * The `images` sub-namespace, so both the ambient barrel import and the bound
- * client read `contentGeneration.images.create(...)`. Video / audio land here as
- * sibling sub-namespaces (SAP-970).
+ * The `images` sub-namespace, so `contentGeneration.images.create(...)` reads the
+ * same whether imported from the barrel or used on a client. Video and audio will
+ * land here as sibling sub-namespaces.
  */
 export const images = { create: createImage };
