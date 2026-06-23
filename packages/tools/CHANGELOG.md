@@ -28,7 +28,7 @@
 
 ### Minor Changes
 
-- 7f6859e: Add the `fileStorage` capability — tenant-scoped object storage on presigned GCS URLs. Exposes `upload`, `getDownloadUrl`, `list`, `setVisibility`, and `delete` via `createClient().fileStorage`, the ambient `fileStorage` namespace, or the `@sapiom/tools/file-storage` subpath. Non-2xx responses throw `FileStorageHttpError`. Byte transfer stays client-side (presigned URLs); the capability owns only the control plane.
+- 7f6859e: Add the `fileStorage` capability — tenant-scoped object storage with presigned URLs. Exposes `upload`, `getDownloadUrl`, `list`, `setVisibility`, and `delete` via `createClient().fileStorage`, the ambient `fileStorage` namespace, or the `@sapiom/tools/file-storage` subpath. Failed requests throw `FileStorageHttpError`. You transfer the bytes yourself via the presigned URLs.
 
 ## 0.1.3
 

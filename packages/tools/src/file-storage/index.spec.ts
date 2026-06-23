@@ -116,7 +116,11 @@ describe("fileStorage.upload()", () => {
         ),
     ]);
 
-    await fileStorage.upload({ contentType: "application/pdf" }, transport, BASE);
+    await fileStorage.upload(
+      { contentType: "application/pdf" },
+      transport,
+      BASE,
+    );
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body).toEqual({ content_type: "application/pdf" });
     expect(body).not.toHaveProperty("file_name");
@@ -126,7 +130,10 @@ describe("fileStorage.upload()", () => {
 
   it("throws FileStorageHttpError on non-2xx", async () => {
     const { transport } = makeTransport([
-      () => new Response(JSON.stringify({ message: "unauthorized" }), { status: 401 }),
+      () =>
+        new Response(JSON.stringify({ message: "unauthorized" }), {
+          status: 401,
+        }),
     ]);
 
     await expect(
@@ -207,7 +214,12 @@ describe("fileStorage.list()", () => {
   it("GETs /files and maps snake_case to camelCase (sizes stay strings)", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ files: [mockFile], limit: 20, offset: 0, has_more: false }),
+        jsonResponse({
+          files: [mockFile],
+          limit: 20,
+          offset: 0,
+          has_more: false,
+        }),
     ]);
 
     const result = await fileStorage.list(undefined, transport, BASE);
@@ -319,7 +331,9 @@ describe("fileStorage.setVisibility()", () => {
   };
 
   it("PATCHes /:fileId with visibility body and maps response", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse(rawMetadata)]);
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(rawMetadata),
+    ]);
 
     const result = await fileStorage.setVisibility(
       "f-xyz",
@@ -406,7 +420,9 @@ describe("fileStorage — client wiring + credential", () => {
     const saved = process.env["SAPIOM_API_KEY"];
     delete process.env["SAPIOM_API_KEY"];
     try {
-      const transport = new Transport({ fetch: (async () => new Response("{}")) as typeof globalThis.fetch });
+      const transport = new Transport({
+        fetch: (async () => new Response("{}")) as typeof globalThis.fetch,
+      });
       await expect(
         fileStorage.list(undefined, transport, BASE),
       ).rejects.toThrow(/no tenant credential/i);

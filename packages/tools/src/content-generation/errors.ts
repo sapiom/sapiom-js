@@ -1,8 +1,7 @@
 /**
- * Error thrown by the `contentGeneration` capability when the generation gateway
- * returns a non-2xx response. Exposes `status` (HTTP status code) and `body`
- * (parsed JSON body, or raw text when the body isn't JSON) for programmatic
- * inspection.
+ * Error thrown by the `contentGeneration` capability when a request fails
+ * (non-2xx response). Exposes `status` (HTTP status code) and `body` (parsed JSON
+ * body, or raw text when the body isn't JSON) for programmatic inspection.
  */
 export class ContentGenerationHttpError extends Error {
   readonly status: number;

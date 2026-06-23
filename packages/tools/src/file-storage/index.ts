@@ -1,8 +1,8 @@
 /**
- * `fileStorage` capability — tenant-scoped object storage on presigned GCS URLs.
+ * `fileStorage` capability — tenant-scoped object storage with presigned URLs.
  *
- * The control plane only: `upload` hands back a presigned URL you PUT the bytes to
- * yourself (so you own streaming / progress / resumable uploads), and
+ * You transfer the bytes yourself: `upload` hands back a presigned URL you PUT the
+ * bytes to (so you own streaming / progress / resumable uploads), and
  * `getDownloadUrl` hands back a presigned URL you GET. `list`, `setVisibility`, and
  * `delete` round out the lifecycle.
  *
@@ -15,16 +15,14 @@
  *
  * Or via an explicit client: `createClient({ apiKey }).fileStorage.upload(...)`.
  *
- * Wire fields are snake_case; this module maps them to the camelCase SDK surface.
- * Byte counts are int64 — the gateway serializes them as strings (precision-safe),
- * so `expectedFileSize` / `actualFileSize` on returned metadata are `string | null`.
+ * Byte-size fields (`expectedFileSize` / `actualFileSize` on returned metadata) are
+ * returned as `string | null` to stay precise for large files.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { ensureOk, FileStorageHttpError } from "./errors.js";
 
 export { FileStorageHttpError };
 
-/** Object storage service. Host routing is an internal detail — override via SAPIOM_FILE_STORAGE_URL. */
 const DEFAULT_BASE_URL =
   process.env.SAPIOM_FILE_STORAGE_URL ||
   "https://file-storage.services.sapiom.ai";
@@ -42,14 +40,14 @@ export interface UploadInput {
    * - "public"  — download URL is unauthenticated.
    */
   visibility?: "private" | "public";
-  /** Expected file size in bytes. Used to pre-allocate storage. */
+  /** Expected file size in bytes. */
   expectedFileSize?: number;
 }
 
 export interface UploadResponse {
   /** Unique file identifier. Use this in subsequent calls. */
   fileId: string;
-  /** GCS presigned upload URL. PUT the file bytes here directly. Expires at `expiresAt`. */
+  /** Presigned upload URL. PUT the file bytes here directly. Expires at `expiresAt`. */
   uploadUrl: string;
   /** ISO-8601 timestamp when the upload URL expires. */
   expiresAt: string;
@@ -58,7 +56,7 @@ export interface UploadResponse {
 }
 
 export interface DownloadUrlResponse {
-  /** Presigned GCS download URL. Expires at `expiresAt`. */
+  /** Presigned download URL. Expires at `expiresAt`. */
   downloadUrl: string;
   /** ISO-8601 timestamp when the download URL expires. */
   expiresAt: string;
@@ -75,12 +73,9 @@ export interface FileMetadata {
   visibility: "private" | "public";
   /** Upload lifecycle status (e.g. "pending_upload", "uploaded", "deleted"). */
   status: string;
-  /**
-   * Expected (client-declared) size in bytes — a string (int64, precision-safe),
-   * `null` when not declared.
-   */
+  /** Expected (client-declared) size in bytes — a string, `null` when not declared. */
   expectedFileSize?: string | null;
-  /** Actual size in bytes after upload (string; `null` until the verify sweep records it). */
+  /** Actual size in bytes after upload (string; `null` until the upload is verified). */
   actualFileSize?: string | null;
   /** ISO-8601 timestamp when the record was created. */
   createdAt: string;
@@ -110,27 +105,27 @@ export interface ListResponse {
   hasMore: boolean;
 }
 
-// ----- wire shapes (snake_case, as served by the gateway) -----
+// ----- Internal request/response shapes -----
 
-interface GatewayUploadResponse {
+interface RawUploadResponse {
   file_id: string;
   upload_url: string;
   expires_at: string;
   required_headers: Record<string, string>;
 }
 
-interface GatewayDownloadResponse {
+interface RawDownloadResponse {
   download_url: string;
   expires_at: string;
 }
 
-interface GatewayFileMetadata {
+interface RawFileMetadata {
   file_id: string;
   file_name?: string;
   content_type: string;
   visibility: "private" | "public";
   status: string;
-  // int64 byte counts serialized as strings by the gateway (precision-safe); null when unset.
+  // Byte counts are strings (precise for large files); null when unset.
   expected_file_size?: string | null;
   actual_file_size?: string | null;
   created_at: string;
@@ -139,14 +134,14 @@ interface GatewayFileMetadata {
   download_request_count: number;
 }
 
-interface GatewayListResponse {
-  files: GatewayFileMetadata[];
+interface RawListResponse {
+  files: RawFileMetadata[];
   limit: number;
   offset: number;
   has_more: boolean;
 }
 
-function mapFileMetadata(raw: GatewayFileMetadata): FileMetadata {
+function mapFileMetadata(raw: RawFileMetadata): FileMetadata {
   return {
     fileId: raw.file_id,
     ...(raw.file_name !== undefined && { fileName: raw.file_name }),
@@ -169,8 +164,8 @@ function mapFileMetadata(raw: GatewayFileMetadata): FileMetadata {
 // ----- capability operations -----
 
 /**
- * Initiate an upload. Returns a presigned GCS URL; PUT the bytes to `uploadUrl`
- * with `requiredHeaders` yourself (this capability owns only the control plane).
+ * Initiate an upload. Returns a presigned URL; PUT the bytes to `uploadUrl` with
+ * `requiredHeaders` yourself.
  */
 export async function upload(
   input: UploadInput,
@@ -192,7 +187,7 @@ export async function upload(
     }),
     "Failed to initiate file upload",
   );
-  const raw = (await res.json()) as GatewayUploadResponse;
+  const raw = (await res.json()) as RawUploadResponse;
   return {
     fileId: raw.file_id,
     uploadUrl: raw.upload_url,
@@ -211,7 +206,7 @@ export async function getDownloadUrl(
     await transport.fetch(`${baseUrl}/download/${encodeURIComponent(fileId)}`),
     `Failed to get download URL for file '${fileId}'`,
   );
-  const raw = (await res.json()) as GatewayDownloadResponse;
+  const raw = (await res.json()) as RawDownloadResponse;
   return { downloadUrl: raw.download_url, expiresAt: raw.expires_at };
 }
 
@@ -232,7 +227,7 @@ export async function list(
     await transport.fetch(url.toString()),
     "Failed to list files",
   );
-  const raw = (await res.json()) as GatewayListResponse;
+  const raw = (await res.json()) as RawListResponse;
   return {
     files: raw.files.map(mapFileMetadata),
     limit: raw.limit,
@@ -256,13 +251,13 @@ export async function setVisibility(
     }),
     `Failed to set visibility for file '${fileId}'`,
   );
-  const raw = (await res.json()) as GatewayFileMetadata;
+  const raw = (await res.json()) as RawFileMetadata;
   return mapFileMetadata(raw);
 }
 
 /**
- * Delete a file. Idempotent on the gateway (deleting an already-deleted file is a
- * no-op success). Exported as `delete`:
+ * Delete a file. Idempotent (deleting an already-deleted file is a no-op success).
+ * Exported as `delete`:
  * `import { fileStorage } from "@sapiom/tools"; await fileStorage.delete(id)`.
  */
 async function deleteFile(

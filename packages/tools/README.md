@@ -70,8 +70,8 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `sandboxes` | Isolated, ephemeral compute | [src/sandboxes](./src/sandboxes/README.md) |
 | `repositories` | Private, in-network git repos | [src/repositories](./src/repositories/README.md) |
 | `agent` | Coding agents (LLM execution) | [src/agent](./src/agent/README.md) |
-| `fileStorage` | Tenant-scoped object storage (presigned GCS) | [src/file-storage](./src/file-storage/README.md) |
-| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` stitch | [src/content-generation](./src/content-generation/README.md) |
+| `fileStorage` | Tenant-scoped object storage (presigned URLs) | [src/file-storage](./src/file-storage/README.md) |
+| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` | [src/content-generation](./src/content-generation/README.md) |
 
 ## Composing capabilities
 
@@ -84,7 +84,7 @@ await repo.pushFromSandbox(run.sandbox);
 
 A useful pattern: let the agent do the open-ended work (writing files) and perform exact, repeatable actions — committing, pushing, deploying — in your own code rather than in the agent's prompt. The agent produces the changes; `pushFromSandbox` publishes them deterministically.
 
-Some compositions are server-side and need nothing but a param. `contentGeneration.images.create` takes an optional `storage`, and the gateway persists each generated image into `fileStorage` as it returns — handing you a durable `file_id` with no extra call:
+Some compositions need nothing but a param. `contentGeneration.images.create` takes an optional `storage`, and each generated image is persisted into `fileStorage` as it returns — handing you a durable `fileId` with no extra call:
 
 ```typescript
 const out = await contentGeneration.images.create({
