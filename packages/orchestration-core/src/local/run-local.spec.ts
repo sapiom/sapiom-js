@@ -222,10 +222,9 @@ describe("runLocal", () => {
     expect(result.steps.map((s) => s.step)).toEqual(["launch", "review"]);
   });
 
-  // Regression for the opaque `'sandbox.toJSON' is not a method or field` crash:
-  // the resume payload must reach the resumed step as plain JSON (a wire-faithful
-  // shape), so the whole result — trace included — serializes cleanly and the
-  // step re-attaches the sandbox by name exactly as it would in production.
+  // The resume payload must reach the resumed step as plain JSON (a wire-faithful
+  // shape), so the whole result — trace included — serializes cleanly and the step
+  // re-attaches the sandbox from `executionEnvironment` exactly as in production.
   it("delivers a JSON-faithful resume payload and the full result serializes", async () => {
     const launch = defineStep({
       name: "launch",
@@ -241,11 +240,11 @@ describe("runLocal", () => {
       name: "finish",
       next: [],
       terminal: true,
-      async run(input: { sandbox?: { name?: string } }, ctx) {
-        // Production-faithful: the signal payload is plain JSON, so reconstruct a
-        // live sandbox handle by name before pushing.
+      async run(input: { executionEnvironment?: { id?: string } | null }, ctx) {
+        // The signal payload is plain JSON, so reconstruct a live sandbox handle
+        // from the executionEnvironment id before pushing.
         const sandbox = ctx.sapiom.sandboxes.attach(
-          input.sandbox?.name ?? "unknown",
+          input.executionEnvironment?.id ?? "unknown",
         );
         const repo = ctx.sapiom.repositories.attach(
           "demo",
@@ -253,7 +252,7 @@ describe("runLocal", () => {
         );
         const push = await repo.pushFromSandbox(sandbox);
         return terminate({
-          sandboxName: input.sandbox?.name,
+          sandboxName: input.executionEnvironment?.id,
           pushed: push.pushed,
         });
       },
@@ -275,11 +274,11 @@ describe("runLocal", () => {
       sandboxName: "stub-sandbox",
       pushed: true,
     });
-    // The resumed step's recorded input is plain data — a stub Sandbox *handle*
-    // here used to throw when the trace was JSON.stringify'd at the MCP boundary.
+    // The resumed step's recorded input is plain data and serializes cleanly at
+    // the MCP boundary (no live handles).
     const finishTrace = result.steps.find((s) => s.step === "finish");
     expect(finishTrace?.input).toMatchObject({
-      sandbox: { name: "stub-sandbox" },
+      executionEnvironment: { type: "blaxel_sandbox", id: "stub-sandbox" },
     });
     expect(() => JSON.stringify(result)).not.toThrow();
   });

@@ -30,7 +30,18 @@ export * as agent from "./agent/index.js";
 export { CODING_RESULT_SIGNAL } from "./agent/index.js";
 // The shape a step resumed from `pauseUntilSignal(codingHandle, …)` receives as
 // input — annotate the resumed step with it instead of hand-rolling the shape.
-export type { CodingResultPayload } from "./agent/index.js";
+export type {
+  CodingResultPayload,
+  ExecutionEnvironmentRef,
+} from "./agent/index.js";
+// Validate / build a `CodingResultPayload`, and the env `type` whose `id` is a
+// sandbox name for `sandboxes.attach(id)`.
+export {
+  codingResultSchema,
+  CodingResultSchemaError,
+  toResumePayload,
+  EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX,
+} from "./agent/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";

@@ -19,9 +19,10 @@ import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
  * the engine resumes `finalize` with the run result as its input.
  *
  * Key idea: the resumed step's `input` IS the signal payload (typed here as
- * `CodingResultPayload`). It crossed a wire boundary, so `sandbox` arrives as
- * plain data — re-attach a live handle with `ctx.sapiom.sandboxes.attach(name)`.
- * Anything else the resumed step needs is stashed in `ctx.shared` before pausing.
+ * `CodingResultPayload`). It crossed a wire boundary, so there are no live
+ * handles — re-attach the run's sandbox from `executionEnvironment` with
+ * `ctx.sapiom.sandboxes.attach(executionEnvironment.id)`. Anything else the
+ * resumed step needs is stashed in `ctx.shared` before pausing.
  */
 
 const REPO_SLUG = "__PROJECT_NAME__-notes";
@@ -84,7 +85,11 @@ const finalize = defineStep({
       ctx.shared.get("slug") as string,
       ctx.shared.get("cloneUrl") as string,
     );
-    const sandbox = ctx.sapiom.sandboxes.attach(run.sandbox.name);
+    const env = run.executionEnvironment;
+    if (!env) {
+      return fail("coding run did not provision an execution environment");
+    }
+    const sandbox = ctx.sapiom.sandboxes.attach(env.id);
     const push = await repo.pushFromSandbox(sandbox, {
       message: "chore: automated change",
     });

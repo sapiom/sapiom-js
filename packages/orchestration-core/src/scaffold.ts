@@ -9,11 +9,21 @@
  * remote-fetch or richer template registries can slot in without touching the
  * function signature.
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { execFileSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { OrchestrationError } from './errors.js';
+import { OrchestrationError } from "./errors.js";
 
 /**
  * Directory of this compiled module, resolved for BOTH build formats so the
@@ -28,15 +38,16 @@ import { OrchestrationError } from './errors.js';
  * resolving it at runtime inside the ESM module scope. Node-targeted only.
  */
 function resolveModuleDir(): string {
-  if (typeof __dirname !== 'undefined') return __dirname;
+  if (typeof __dirname !== "undefined") return __dirname;
   try {
     // eslint-disable-next-line no-eval
-    const metaUrl = eval('import.meta.url') as string | undefined;
-    if (typeof metaUrl === 'string') return path.dirname(fileURLToPath(metaUrl));
+    const metaUrl = eval("import.meta.url") as string | undefined;
+    if (typeof metaUrl === "string")
+      return path.dirname(fileURLToPath(metaUrl));
   } catch {
     // Not an ESM runtime — fall through to the empty default.
   }
-  return '';
+  return "";
 }
 
 const moduleDir: string = resolveModuleDir();
@@ -48,25 +59,29 @@ const moduleDir: string = resolveModuleDir();
  * override can be set after module load.
  */
 function getTemplatesDir(override?: string): string {
-  return override ?? process.env.SAPIOM_TEMPLATES_DIR ?? path.resolve(moduleDir, '..', '..', 'templates');
+  return (
+    override ??
+    process.env.SAPIOM_TEMPLATES_DIR ??
+    path.resolve(moduleDir, "..", "..", "templates")
+  );
 }
 
-export const DEFAULT_TEMPLATE = 'default';
+export const DEFAULT_TEMPLATE = "default";
 
-const DOTFILE_NAMES = new Set(['_gitignore', '_npmrc']);
+const DOTFILE_NAMES = new Set(["_gitignore", "_npmrc"]);
 
 // ── Version resolution ────────────────────────────────────────────────────────
 
-const REGISTRY = 'https://registry.npmjs.org';
+const REGISTRY = "https://registry.npmjs.org";
 
 /** Offline fallbacks — bump alongside notable releases. */
 const VERSION_FALLBACK = {
-  orchestration: '0.1.1',
-  tools: '0.1.1',
+  orchestration: "0.1.1",
+  tools: "0.1.1",
 };
 
 /** Pinned to the zod 3.25.x line the SDK requires. */
-const ZOD_VERSION = '3.25.76';
+const ZOD_VERSION = "3.25.76";
 
 export interface ResolvedVersions {
   orchestration: string;
@@ -81,7 +96,7 @@ async function latestNpmVersion(pkg: string): Promise<string | null> {
     });
     if (!res.ok) return null;
     const json = (await res.json()) as { version?: string };
-    return typeof json.version === 'string' ? json.version : null;
+    return typeof json.version === "string" ? json.version : null;
   } catch {
     return null;
   }
@@ -94,8 +109,8 @@ async function latestNpmVersion(pkg: string): Promise<string | null> {
  */
 export async function resolveVersions(): Promise<ResolvedVersions> {
   const [orchestration, tools] = await Promise.all([
-    latestNpmVersion('@sapiom/orchestration'),
-    latestNpmVersion('@sapiom/tools'),
+    latestNpmVersion("@sapiom/orchestration"),
+    latestNpmVersion("@sapiom/tools"),
   ]);
   return {
     orchestration: orchestration ?? VERSION_FALLBACK.orchestration,
@@ -109,7 +124,9 @@ export async function resolveVersions(): Promise<ResolvedVersions> {
 export function listTemplates(templatesDir?: string): string[] {
   const root = getTemplatesDir(templatesDir);
   if (!existsSync(root)) return [];
-  return readdirSync(root).filter((name) => statSync(path.join(root, name)).isDirectory());
+  return readdirSync(root).filter((name) =>
+    statSync(path.join(root, name)).isDirectory(),
+  );
 }
 
 /** Absolute path to a bundled template directory. Throws on an unknown name. */
@@ -118,19 +135,24 @@ export function resolveTemplate(name: string, templatesDir?: string): string {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     const available = listTemplates(templatesDir);
     throw new OrchestrationError({
-      code: 'UNKNOWN_TEMPLATE',
+      code: "UNKNOWN_TEMPLATE",
       message:
         `Unknown template '${name}'.` +
-        (available.length ? ` Available: ${available.join(', ')}.` : ' No templates are bundled.'),
+        (available.length
+          ? ` Available: ${available.join(", ")}.`
+          : " No templates are bundled."),
     });
   }
   return dir;
 }
 
-function applyReplacements(file: string, replacements: Record<string, string>): void {
+function applyReplacements(
+  file: string,
+  replacements: Record<string, string>,
+): void {
   let content: string;
   try {
-    content = readFileSync(file, 'utf8');
+    content = readFileSync(file, "utf8");
   } catch {
     return; // unreadable / binary — leave as-is
   }
@@ -152,19 +174,59 @@ function walk(dir: string, onFile: (file: string) => void): void {
   }
 }
 
-function copyTemplate(templateDir: string, targetDir: string, replacements: Record<string, string>): void {
+function copyTemplate(
+  templateDir: string,
+  targetDir: string,
+  replacements: Record<string, string>,
+): void {
   cpSync(templateDir, targetDir, { recursive: true });
   walk(targetDir, (file) => {
     const base = path.basename(file);
     // Restore dotfiles: _gitignore → .gitignore (npm strips literal .gitignore from published packages)
     if (DOTFILE_NAMES.has(base)) {
-      const dotted = path.join(path.dirname(file), '.' + base.slice(1));
+      const dotted = path.join(path.dirname(file), "." + base.slice(1));
       renameSync(file, dotted);
       applyReplacements(dotted, replacements);
       return;
     }
     applyReplacements(file, replacements);
   });
+}
+
+/**
+ * Best-effort: initialize a git repository with a single commit so the project
+ * is immediately deployable (`deploy` requires a repo with at least one commit).
+ * Each scaffolded project is a self-contained, independently deployable unit, so
+ * it always gets its own repo — including when scaffolded inside another repo (a
+ * nested repo is the deployable unit). Never throws: if `git` is unavailable the
+ * project is simply left uninitialized for the author to `git init` themselves.
+ */
+function initGitRepo(dir: string): boolean {
+  const tryGit = (args: string[]): boolean => {
+    try {
+      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!tryGit(["init"])) return false;
+  tryGit(["add", "-A"]);
+  // Commit with the author's configured identity; fall back to a neutral one so
+  // the initial commit (and therefore deploy) succeeds even with no git identity
+  // configured. The `-c` flags apply only to this invocation.
+  return (
+    tryGit(["commit", "-m", "Initial commit"]) ||
+    tryGit([
+      "-c",
+      "user.name=Sapiom",
+      "-c",
+      "user.email=noreply@sapiom.ai",
+      "commit",
+      "-m",
+      "Initial commit",
+    ])
+  );
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -193,6 +255,8 @@ export interface ScaffoldResult {
   targetDir: string;
   template: string;
   projectName: string;
+  /** Whether a git repo with an initial commit was created (false if `git` was unavailable). */
+  gitInitialized: boolean;
 }
 
 /**
@@ -208,7 +272,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
 
   if (existsSync(targetDir) && readdirSync(targetDir).length > 0) {
     throw new OrchestrationError({
-      code: 'DIR_NOT_EMPTY',
+      code: "DIR_NOT_EMPTY",
       message: `Target directory '${targetDir}' already exists and is not empty.`,
     });
   }
@@ -227,9 +291,14 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
   // Seed the committed stub file for the local-run loop. Created here (not
   // shipped in the template) so it doesn't depend on how the registry treats
   // dotfiles in a published package.
-  const devDir = path.join(targetDir, '.sapiom-dev');
+  const devDir = path.join(targetDir, ".sapiom-dev");
   mkdirSync(devDir, { recursive: true });
-  writeFileSync(path.join(devDir, 'stubs.json'), JSON.stringify({ version: 1, steps: {} }, null, 2) + '\n');
+  writeFileSync(
+    path.join(devDir, "stubs.json"),
+    JSON.stringify({ version: 1, steps: {} }, null, 2) + "\n",
+  );
 
-  return { targetDir, template, projectName };
+  const gitInitialized = initGitRepo(targetDir);
+
+  return { targetDir, template, projectName, gitInitialized };
 }
