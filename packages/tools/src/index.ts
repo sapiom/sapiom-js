@@ -48,3 +48,6 @@ export { FileStorageHttpError } from "./file-storage/index.js";
 
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
+
+export * as memory from "./memory/index.js";
+export { MemoryHttpError } from "./memory/index.js";

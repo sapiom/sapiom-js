@@ -30,6 +30,11 @@ import type {
   FileMetadata,
 } from "../file-storage/index.js";
 import type { ImageGenerationResult } from "../content-generation/index.js";
+import type {
+  AppendResult,
+  RecallResponse,
+  Memory,
+} from "../memory/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -540,6 +545,47 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as ImageGenerationResult,
           ),
       },
+    },
+    memory: {
+      append: (input) =>
+        Promise.resolve(
+          r("memory.append", [input], () => ({
+            id: "stub-memory",
+            content: input.content,
+            scope: input.scope ?? "default",
+            status: "active",
+            decision: "ADDED",
+            supersededId: null,
+            similarityScore: null,
+            createdAt: "2099-01-01T00:00:00Z",
+            metadata: input.metadata ?? {},
+          })) as AppendResult,
+        ),
+      recall: (input) =>
+        Promise.resolve(
+          r("memory.recall", [input], () => ({
+            results: [],
+            query: input.query,
+            topK: input.topK ?? 10,
+            count: 0,
+          })) as RecallResponse,
+        ),
+      get: (id) =>
+        Promise.resolve(
+          r("memory.get", [id], () => ({
+            id,
+            content: "(stub) memory content",
+            scope: "default",
+            status: "active",
+            supersededBy: null,
+            supersededReason: null,
+            createdAt: "2099-01-01T00:00:00Z",
+            updatedAt: "2099-01-01T00:00:00Z",
+            metadata: {},
+          })) as Memory,
+        ),
+      forget: (id) =>
+        Promise.resolve(r("memory.forget", [id], () => undefined) as void),
     },
     withAttribution: () => client,
   };

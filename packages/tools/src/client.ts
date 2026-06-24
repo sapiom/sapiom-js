@@ -43,6 +43,14 @@ import type {
   ImageCreateInput,
   ImageGenerationResult,
 } from "./content-generation/index.js";
+import * as memory from "./memory/index.js";
+import type {
+  AppendInput,
+  AppendResult,
+  RecallInput,
+  RecallResponse,
+  Memory,
+} from "./memory/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -83,6 +91,12 @@ export interface Sapiom {
        */
       create(input: ImageCreateInput): Promise<ImageGenerationResult>;
     };
+  };
+  readonly memory: {
+    append(input: AppendInput): Promise<AppendResult>;
+    recall(input: RecallInput): Promise<RecallResponse>;
+    get(id: string): Promise<Memory>;
+    forget(id: string): Promise<void>;
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -125,6 +139,12 @@ function bind(transport: Transport): Sapiom {
       images: {
         create: (input) => contentGeneration.createImage(input, transport),
       },
+    },
+    memory: {
+      append: (input) => memory.append(input, transport),
+      recall: (input) => memory.recall(input, transport),
+      get: (id) => memory.get(id, transport),
+      forget: (id) => memory.forget(id, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

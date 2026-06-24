@@ -72,6 +72,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `agent` | Coding agents (LLM execution) | [src/agent](./src/agent/README.md) |
 | `fileStorage` | Tenant-scoped object storage (presigned URLs) | [src/file-storage](./src/file-storage/README.md) |
 | `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` | [src/content-generation](./src/content-generation/README.md) |
+| `memory` | Tenant-scoped long-term memory (hybrid vector + full-text) | [src/memory](./src/memory/README.md) |
 
 ## Composing capabilities
 

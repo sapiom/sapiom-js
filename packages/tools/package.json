@@ -43,6 +43,11 @@
       "import": "./dist/esm/content-generation/index.js",
       "require": "./dist/cjs/content-generation/index.js"
     },
+    "./memory": {
+      "types": "./dist/cjs/memory/index.d.ts",
+      "import": "./dist/esm/memory/index.js",
+      "require": "./dist/cjs/memory/index.js"
+    },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",
       "import": "./dist/esm/stub/index.js",
