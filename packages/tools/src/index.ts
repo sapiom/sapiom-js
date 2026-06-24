@@ -63,3 +63,5 @@ export { ContentGenerationHttpError } from "./content-generation/index.js";
 
 export * as search from "./search/index.js";
 export { SearchHttpError } from "./search/index.js";
+export * as memory from "./memory/index.js";
+export { MemoryHttpError } from "./memory/index.js";

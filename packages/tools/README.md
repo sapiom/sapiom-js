@@ -76,6 +76,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `contentGeneration` | Media generation (images; video/audio soon), with optional `storage`                   | [src/content-generation](./src/content-generation/README.md) |
 | `search`            | Search the web with `webSearch`, read a page with `scrape` (email lookup landing soon) | [src/search](./src/search/README.md)                         |
 | `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result         | [src/orchestrations](./src/orchestrations/README.md)         |
+| `memory`            | Tenant-scoped long-term memory (hybrid vector + full-text)                             | [src/memory](./src/memory/README.md)                         |
 
 ## Composing capabilities
 

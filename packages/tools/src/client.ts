@@ -59,6 +59,14 @@ import type {
   WebSearchInput,
   WebSearchResponse,
 } from "./search/index.js";
+import * as memory from "./memory/index.js";
+import type {
+  AppendInput,
+  AppendResult,
+  RecallInput,
+  RecallResponse,
+  Memory,
+} from "./memory/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -105,6 +113,12 @@ export interface Sapiom {
        */
       create(input: ImageCreateInput): Promise<ImageGenerationResult>;
     };
+  };
+  readonly memory: {
+    append(input: AppendInput): Promise<AppendResult>;
+    recall(input: RecallInput): Promise<RecallResponse>;
+    get(id: string): Promise<Memory>;
+    forget(id: string): Promise<void>;
   };
   /**
    * Search the web, read pages, and look up professional emails. More operations
@@ -165,6 +179,12 @@ function bind(transport: Transport): Sapiom {
     search: {
       scrape: (input) => scrape(input, transport),
       webSearch: (input) => webSearch(input, transport),
+    },
+    memory: {
+      append: (input) => memory.append(input, transport),
+      recall: (input) => memory.recall(input, transport),
+      get: (id) => memory.get(id, transport),
+      forget: (id) => memory.forget(id, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

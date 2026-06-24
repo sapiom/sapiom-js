@@ -1,0 +1,20 @@
+{
+  "name": "@sapiom/example-memory-coding-conventions-live",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LIVE variant: recall -> inject -> append against a REAL Sapiom memory engine (local unified-gateway memory provider)",
+  "scripts": {
+    "start": "npx tsx index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "_localDevNote": "Dep uses `workspace:*` so this example resolves the UNPUBLISHED local @sapiom/tools build (the `./memory` capability). For END USERS, post-publish, this is `@sapiom/tools` at `latest`. See README → 'Run'.",
+  "dependencies": {
+    "@sapiom/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2"
+  }
+}

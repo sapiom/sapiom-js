@@ -1,0 +1,22 @@
+{
+  "name": "@sapiom/example-memory-coding-conventions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sapiom workflow example: recall house conventions into a coding agent's context, then append what it learned",
+  "scripts": {
+    "start": "npx tsx index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "_localDevNote": "Deps use `workspace:*` so this example resolves the UNPUBLISHED local SDK build (the memory capability + runLocal/stub harness). For END USERS, post-publish, these are `@sapiom/orchestration`, `@sapiom/orchestration-core`, `@sapiom/tools` at `latest`. See README → 'Run it'.",
+  "dependencies": {
+    "@sapiom/orchestration": "workspace:*",
+    "@sapiom/orchestration-core": "workspace:*",
+    "@sapiom/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2"
+  }
+}

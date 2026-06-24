@@ -8,3 +8,12 @@ packages:
   # so -r build/test/publish skip them — until their @langchain/* deps are realigned.
   - '!packages/langchain'
   - '!packages/langchain-classic'
+  # The three SAP-785 memory examples are workspace members ON PURPOSE: they depend on
+  # the unpublished memory capability (@sapiom/tools `./memory`) + the runLocal/stub
+  # harness (@sapiom/orchestration-core), and the local SDK packages reference each
+  # other via the `workspace:` protocol — which only a pnpm workspace install can
+  # resolve. Listed individually (NOT `examples/*`) so the other examples keep using
+  # their published `latest` deps and install standalone, untouched.
+  - 'examples/memory-coding-conventions'
+  - 'examples/memory-coding-conventions-live'
+  - 'examples/memory-coding-conventions-workflow'
