@@ -1,0 +1,25 @@
+{
+  "name": "@sapiom/example-memory-coding-conventions-workflow",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sapiom workflow example: the recall -> apply -> learn -> verify memory loop, authored as a deployable orchestration that runs three ways (stub-local, live-local, Sapiom execution)",
+  "scripts": {
+    "start": "npx tsx run-local.ts",
+    "start:live": "npx tsx run-local.ts --mode live",
+    "check": "npx tsx run-local.ts --mode stub",
+    "typecheck": "tsc --noEmit"
+  },
+  "_localDevNote": "Deps use `workspace:*` so this example resolves the UNPUBLISHED local SDK build (the memory capability on @sapiom/tools + the runLocal/stub harness in @sapiom/orchestration-core + the orchestration authoring surface). For END USERS, post-publish, these are `@sapiom/orchestration`, `@sapiom/orchestration-core`, `@sapiom/tools` at `latest`. See README -> 'Run'.",
+  "dependencies": {
+    "@sapiom/orchestration": "workspace:*",
+    "@sapiom/orchestration-core": "workspace:*",
+    "@sapiom/tools": "workspace:*",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2"
+  }
+}

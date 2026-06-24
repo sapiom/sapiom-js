@@ -96,10 +96,18 @@ On the second request, you should see an `AuthorizationDeniedError` - this means
 | `fetch/` | `@sapiom/fetch` | Native fetch API users |
 | `node-http/` | `@sapiom/node-http` | Raw Node.js HTTP |
 | `langchain-classic/` | `@sapiom/langchain-classic` | LangChain v0.3.x with tool wrappers |
+| `memory-coding-conventions/` | `@sapiom/orchestration` + `@sapiom/tools` | Custom **workflows** + agent **memory** |
 
 > **Note:** The `langchain/` example is for LangChain v1.x. Use `langchain-classic/` if you're on LangChain v0.3.x.
 
 Start with `axios/` or `fetch/` - they're the simplest to understand.
+
+> **`memory-coding-conventions/` is different from the rest.** It's a **workflow**
+> example, not an SDK-adapter one: it runs entirely locally against mocked
+> capabilities (no API key, no demo server, no balance) and demonstrates giving a
+> coding agent durable memory of your house conventions — `recall` prior facts
+> into its prompt, then `append` what it learned. `cd memory-coding-conventions
+> && npm install && npm start`.
 
 ## About the Demo Server
 

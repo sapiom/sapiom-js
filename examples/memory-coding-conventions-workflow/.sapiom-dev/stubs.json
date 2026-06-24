@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "steps": {
+    "recall": {
+      "memory.recall": {
+        "results": [
+          {
+            "id": "mem_prior_1",
+            "content": "Validate every request body with a zod schema before using it.",
+            "scope": "house-conventions",
+            "vectorScore": 0.6,
+            "textScore": 0.4,
+            "combinedScore": 0.55,
+            "status": "active",
+            "createdAt": "2026-06-01T00:00:00Z",
+            "metadata": {}
+          }
+        ],
+        "query": "stubbed",
+        "topK": 5,
+        "count": 1
+      }
+    },
+    "learn": {
+      "memory.append": {
+        "id": "mem_stub_1",
+        "content": "stubbed convention",
+        "scope": "house-conventions",
+        "status": "active",
+        "decision": "ADDED",
+        "supersededId": null,
+        "similarityScore": null,
+        "createdAt": "2026-06-24T00:00:00Z",
+        "metadata": { "source": "memory-coding-conventions-workflow" }
+      }
+    },
+    "verify": {
+      "memory.get": {
+        "id": "mem_stub_1",
+        "content": "stubbed convention",
+        "scope": "house-conventions",
+        "status": "active",
+        "supersededBy": null,
+        "supersededReason": null,
+        "createdAt": "2026-06-24T00:00:00Z",
+        "updatedAt": "2026-06-24T00:00:00Z",
+        "metadata": { "source": "memory-coding-conventions-workflow" }
+      }
+    }
+  }
+}

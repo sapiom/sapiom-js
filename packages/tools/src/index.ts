@@ -73,3 +73,6 @@ export { SearchHttpError } from "./search/index.js";
 
 export * as database from "./database/index.js";
 export { DatabaseHttpError } from "./database/index.js";
+
+export * as memory from "./memory/index.js";
+export { MemoryHttpError } from "./memory/index.js";
