@@ -79,6 +79,14 @@ export interface StepDefinition<TShared extends Record<string, unknown> = Record
   readonly canFail: boolean;
   /** Declared pause edge, if any. */
   readonly pause?: { readonly signal: string; readonly resumeStep: string };
+  /**
+   * The canonical dotted capability id this step calls (`web.search`,
+   * `agent.coding.run`), if declared. A step invokes capabilities dynamically
+   * via `ctx.sapiom.*`, so the binding can't be inferred — declaring it lets
+   * `buildManifest` emit it into the step manifest (`capabilityId`). Undeclared
+   * → the step is treated as running in-process (manifest `capabilityId: null`).
+   */
+  readonly capability?: string;
   readonly inputSchema?: ZodType<unknown>;
   readonly timeoutMs?: number;
   run(input: unknown, ctx: OrchestrationExecutionContext<TShared>): Promise<NextStepDirective>;
@@ -94,6 +102,12 @@ export interface StepDefinition<TShared extends Record<string, unknown> = Record
  * (`ctx: OrchestrationExecutionContext<MyShared>`); `TIn` from `inputSchema` or the
  * `input` annotation. `next`/`terminal`/`canFail`/`pause` are inferred as
  * literals (`const` type params), so no `as const` is needed.
+ *
+ * `capability` optionally declares the canonical dotted capability id this step
+ * calls (`web.search`). It is metadata only — it does not constrain `run` — and
+ * is stored as a runtime property for `buildManifest` to emit (exactly like
+ * `inputSchema`). The platform validates the declared id against its capability
+ * registry; an undeclared step is treated as running in-process.
  */
 export function defineStep<
   TIn = unknown,
@@ -111,6 +125,8 @@ export function defineStep<
   terminal?: Term;
   canFail?: CanFail;
   pause?: PauseDecl;
+  /** Canonical dotted capability id this step calls (`web.search`), if any. */
+  capability?: string;
   inputSchema?: ZodType<TIn>;
   timeoutMs?: number;
   // Arrow-property (not method) type so `def.run` can be read as a value below
@@ -126,6 +142,9 @@ export function defineStep<
     terminal: def.terminal ?? false,
     canFail: def.canFail ?? false,
     ...(def.pause ? { pause: def.pause } : {}),
+    // Omit when falsy (undefined / empty) so an undeclared capability emits a
+    // manifest `capabilityId: null` rather than an empty string.
+    ...(def.capability ? { capability: def.capability } : {}),
     ...(def.inputSchema ? { inputSchema: def.inputSchema as ZodType<unknown> } : {}),
     ...(def.timeoutMs !== undefined ? { timeoutMs: def.timeoutMs } : {}),
     run: def.run as unknown as (input: unknown, ctx: OrchestrationExecutionContext<TShared>) => Promise<NextStepDirective>,

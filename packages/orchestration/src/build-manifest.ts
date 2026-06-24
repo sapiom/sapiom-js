@@ -20,6 +20,9 @@ import type { OrchestrationDefinition } from "./workflow.js";
  *     `next`/`terminal`/`canFail`/`pause` runtime properties (set by
  *     `defineStep`). This is a runtime-value read, exactly like inputSchema —
  *     no type reflection, no AST parsing.
+ *   - capabilityId: the step's declared `capability` (the canonical dotted id),
+ *     or null when undeclared (the step runs in-process). Another runtime-value
+ *     read; the platform validates the id against its capability registry.
  * - name/entry from def; protocol 1 (locked); sdkVersion/artifact from opts.
  */
 export function buildManifest(
@@ -34,6 +37,7 @@ export function buildManifest(
     {
       timeoutMs: number | null;
       inputSchema: Record<string, unknown> | null;
+      capabilityId: string | null;
       transitions: ManifestTransition[];
     }
   > = {};
@@ -49,6 +53,7 @@ export function buildManifest(
     steps[stepName] = {
       timeoutMs: step.timeoutMs ?? null,
       inputSchema,
+      capabilityId: step.capability ?? null,
       transitions: transitionsFor(step),
     };
   }

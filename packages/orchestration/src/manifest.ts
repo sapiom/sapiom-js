@@ -41,6 +41,19 @@ export interface WorkflowStepManifest {
    */
   readonly inputSchema: Record<string, unknown> | null;
   /**
+   * The canonical dotted capability id this step declares it calls
+   * (`web.search`, `agent.coding.run`), or null when the step runs in-process and
+   * invokes no capability. A step's `run` invokes capabilities dynamically
+   * (`ctx.sapiom.*`), so the binding cannot be inferred — it is declared via
+   * `defineStep({ capability })` and emitted here by the build phase. The engine
+   * indexes it per step and validates it against the capability registry.
+   *
+   * Optional for back-compat: manifests built before this field existed omit it
+   * (read as null). When declared, it is always the canonical dotted id — the
+   * registry key — never a per-surface rendering.
+   */
+  readonly capabilityId?: string | null;
+  /**
    * The declared transitions out of this step (the graph edges). Built from the
    * step's `next`/`terminal`/`canFail`/`pause` declarations. The engine
    * validates every completion's directive against this set (per-step,
@@ -86,6 +99,9 @@ const manifestTransitionSchema = z.discriminatedUnion('kind', [
 const workflowStepManifestSchema = z.object({
   timeoutMs: z.union([z.number().int().positive(), z.null()]),
   inputSchema: z.union([z.record(z.string(), z.unknown()), z.null()]),
+  // Optional so manifests built before this field existed still validate; a
+  // declared id is a non-empty canonical dotted string, otherwise null.
+  capabilityId: z.union([z.string().min(1), z.null()]).optional(),
   transitions: z.array(manifestTransitionSchema),
 });
 

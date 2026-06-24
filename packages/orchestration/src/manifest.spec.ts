@@ -28,7 +28,7 @@ import { defineOrchestration } from "./workflow.js";
 /** A terminal step (declares `terminal: true`) for the schema/inputSchema/timeout tests. */
 function makeStep(
   name: string,
-  opts: { inputSchema?: z.ZodType; timeoutMs?: number } = {},
+  opts: { inputSchema?: z.ZodType; timeoutMs?: number; capability?: string } = {},
 ) {
   return defineStep({
     name,
@@ -36,6 +36,7 @@ function makeStep(
     terminal: true,
     inputSchema: opts.inputSchema,
     timeoutMs: opts.timeoutMs,
+    capability: opts.capability,
     async run() {
       return terminate(null);
     },
@@ -448,5 +449,111 @@ describe("buildManifest transitions", () => {
 
   it("produces a manifest that validates against the schema", () => {
     expect(() => workflowManifestSchema.parse(manifest)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildManifest — capability binding (the declared step→capability id)
+// ---------------------------------------------------------------------------
+
+describe("buildManifest capability binding", () => {
+  it("emits the declared capability as the step's canonical dotted capabilityId", () => {
+    const def = defineOrchestration({
+      name: "wf",
+      entry: "search",
+      steps: { search: makeStep("search", { capability: "web.search" }) },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    expect(manifest.steps.search.capabilityId).toBe("web.search");
+  });
+
+  it("emits capabilityId: null for a step that declares no capability (runs in-process)", () => {
+    const def = defineOrchestration({
+      name: "wf",
+      entry: "plain",
+      steps: { plain: makeStep("plain") },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    expect(manifest.steps.plain.capabilityId).toBeNull();
+  });
+
+  it("maps each step's capability independently across a multi-step definition", () => {
+    const def = defineOrchestration({
+      name: "multi",
+      entry: "search",
+      steps: {
+        search: defineStep({
+          name: "search",
+          next: ["code"],
+          capability: "web.search",
+          async run() {
+            return goto("code");
+          },
+        }),
+        code: defineStep({
+          name: "code",
+          next: ["done"],
+          capability: "agent.coding.run",
+          async run() {
+            return goto("done");
+          },
+        }),
+        done: makeStep("done"),
+      },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    expect(manifest.steps.search.capabilityId).toBe("web.search");
+    expect(manifest.steps.code.capabilityId).toBe("agent.coding.run");
+    expect(manifest.steps.done.capabilityId).toBeNull();
+  });
+
+  it("a manifest carrying a capabilityId validates against the schema", () => {
+    const def = defineOrchestration({
+      name: "wf",
+      entry: "search",
+      steps: { search: makeStep("search", { capability: "web.search" }) },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    const parsed = workflowManifestSchema.parse(manifest);
+    expect(parsed.steps.search.capabilityId).toBe("web.search");
+  });
+
+  it("schema accepts a step manifest that omits capabilityId (back-compat)", () => {
+    const legacy = {
+      protocol: MANIFEST_PROTOCOL,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      // no capabilityId on the step — a manifest built before the field existed
+      steps: { a: { timeoutMs: null, inputSchema: null, transitions: [] } },
+    };
+    expect(() => workflowManifestSchema.parse(legacy)).not.toThrow();
+  });
+
+  it("schema rejects an empty-string capabilityId (declared ids are non-empty)", () => {
+    const bad = {
+      protocol: MANIFEST_PROTOCOL,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      steps: {
+        a: { timeoutMs: null, inputSchema: null, capabilityId: "", transitions: [] },
+      },
+    };
+    expect(() => workflowManifestSchema.parse(bad)).toThrow();
   });
 });
