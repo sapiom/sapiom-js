@@ -20,6 +20,11 @@
  */
 import { CODING_RESULT_SIGNAL, toResumePayload } from "../agent/index.js";
 import type { CodingRunResult, RunHandle, RunStatus } from "../agent/index.js";
+import { ORCHESTRATIONS_RESULT_SIGNAL } from "../orchestrations/index.js";
+import type {
+  OrchestrationRunResult,
+  RunHandle as OrchestrationRunHandle,
+} from "../orchestrations/index.js";
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
 import { Sandbox } from "../sandboxes/index.js";
@@ -478,6 +483,43 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             () => toResumePayload(result),
           );
         },
+      },
+    },
+    orchestrations: {
+      run: (spec) =>
+        Promise.resolve(
+          r("orchestrations.run", [spec], () => ({
+            executionId: `stub-exec-${++launchSeq}`,
+            status: "completed" as const,
+            output: {},
+            error: null,
+          })) as OrchestrationRunResult,
+        ),
+      launch: (spec) => {
+        const executionId = `stub-exec-${++launchSeq}`;
+        const result: OrchestrationRunResult = {
+          executionId,
+          status: "completed",
+          output: {},
+          error: null,
+        };
+        const handle: OrchestrationRunHandle = {
+          executionId,
+          dispatch: { correlationId: executionId, resultSignal: ORCHESTRATIONS_RESULT_SIGNAL },
+          status: () => Promise.resolve("completed" as const),
+          wait: () => Promise.resolve(result),
+        };
+        // Register the resume payload so a local `pauseUntilSignal` on this handle
+        // resolves with an OrchestrationRunResultPayload.
+        return dispatchable(handle, opts.signals, () => ({
+          status: "completed" as const,
+          executionId,
+          definition: spec.definition,
+          version: "stub",
+          output: {},
+          startedAt: "2099-01-01T00:00:00.000Z",
+          finishedAt: "2099-01-01T00:00:00.000Z",
+        }));
       },
     },
     fileStorage: {

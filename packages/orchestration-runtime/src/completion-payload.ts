@@ -1,5 +1,4 @@
-// `zod/v4` subpath (zod 3.25.x) — matches the SDK's zod regime.
-import { z } from 'zod/v4';
+import { z } from 'zod';
 
 /**
  * The step-completion wire contract (protocol 1) — what an executor reports

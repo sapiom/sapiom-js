@@ -17,8 +17,8 @@ const FALLBACK = {
   tools: '0.1.1',
 };
 
-/** Pinned to the zod 3.25.x line the SDK's `zod/v4` subpath requires. */
-const ZOD_VERSION = '3.25.76';
+/** The zod major the authoring SDK is built against. */
+const ZOD_VERSION = '4.1.12';
 
 export interface ResolvedVersions {
   orchestration: string;
