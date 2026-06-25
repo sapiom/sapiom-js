@@ -71,7 +71,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `repositories` | Private, in-network git repos | [src/repositories](./src/repositories/README.md) |
 | `agent` | Coding agents (LLM execution) | [src/agent](./src/agent/README.md) |
 | `fileStorage` | Tenant-scoped object storage (presigned URLs) | [src/file-storage](./src/file-storage/README.md) |
-| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` | [src/content-generation](./src/content-generation/README.md) |
+| `contentGeneration` | Media generation (images + video; audio soon), with optional `storage` | [src/content-generation](./src/content-generation/README.md) |
 
 ## Composing capabilities
 

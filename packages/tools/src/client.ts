@@ -42,6 +42,8 @@ import * as contentGeneration from "./content-generation/index.js";
 import type {
   ImageCreateInput,
   ImageGenerationResult,
+  VideoCreateInput,
+  VideoGenerationResult,
 } from "./content-generation/index.js";
 
 export interface Sapiom {
@@ -82,6 +84,14 @@ export interface Sapiom {
        * file-storage (the returned images then carry `file_id`).
        */
       create(input: ImageCreateInput): Promise<ImageGenerationResult>;
+    };
+    video: {
+      /**
+       * Generate a video from a prompt — async (submits, then polls until ready, then
+       * returns it). Pass `storage` to persist the output (the returned video carries
+       * `fileId`).
+       */
+      create(input: VideoCreateInput): Promise<VideoGenerationResult>;
     };
   };
   /**
@@ -124,6 +134,9 @@ function bind(transport: Transport): Sapiom {
     contentGeneration: {
       images: {
         create: (input) => contentGeneration.createImage(input, transport),
+      },
+      video: {
+        create: (input) => contentGeneration.createVideo(input, transport),
       },
     },
     withAttribution: (attribution) =>

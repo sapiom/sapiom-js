@@ -29,7 +29,10 @@ import type {
   ListResponse,
   FileMetadata,
 } from "../file-storage/index.js";
-import type { ImageGenerationResult } from "../content-generation/index.js";
+import type {
+  ImageGenerationResult,
+  VideoGenerationResult,
+} from "../content-generation/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -538,6 +541,19 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 },
               ],
             })) as ImageGenerationResult,
+          ),
+      },
+      video: {
+        create: (input) =>
+          Promise.resolve(
+            r("contentGeneration.video.create", [input], () => ({
+              video: {
+                url: "https://content.local/stub-video.mp4",
+                contentType: "video/mp4",
+                // mirror the real stitch: a fileId only when storage was requested.
+                ...(input.storage ? { fileId: "stub-file" } : {}),
+              },
+            })) as VideoGenerationResult,
           ),
       },
     },
