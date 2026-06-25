@@ -37,3 +37,7 @@ Thumbs.db
 .temp/
 .claude/commands/
 .trees
+
+# Local Verdaccio registry (SDK dev loop) — storage + runtime auth, never committed
+.verdaccio/storage/
+.verdaccio/.npmrc
