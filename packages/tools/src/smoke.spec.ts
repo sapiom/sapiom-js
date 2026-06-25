@@ -40,6 +40,7 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.agent.coding.launch).toBe("function");
 
     expect(typeof sapiom.search).toBe("object");
+    expect(typeof sapiom.search.scrape).toBe("function");
 
     expect(typeof sapiom.withAttribution).toBe("function");
   });

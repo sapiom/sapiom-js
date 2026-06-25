@@ -67,14 +67,14 @@ If a single process makes calls on behalf of more than one agent or trace, deriv
 
 Each capability is a namespace, importable from the barrel or its own subpath (e.g. `@sapiom/tools/sandboxes`). Every capability has its own README with usage details, preconditions, and gotchas the type signatures can't express — read it before first use.
 
-| Namespace           | What it is                                                                        | Docs                                                         |
-| ------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `sandboxes`         | Isolated, ephemeral compute                                                       | [src/sandboxes](./src/sandboxes/README.md)                   |
-| `repositories`      | Private, in-network git repos                                                     | [src/repositories](./src/repositories/README.md)             |
-| `agent`             | Coding agents (LLM execution)                                                     | [src/agent](./src/agent/README.md)                           |
-| `fileStorage`       | Tenant-scoped object storage (presigned URLs)                                     | [src/file-storage](./src/file-storage/README.md)             |
-| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage`              | [src/content-generation](./src/content-generation/README.md) |
-| `search`            | Web search, page reading, and professional email lookup (operations landing soon) | `@sapiom/tools/search`                                       |
+| Namespace           | What it is                                                           | Docs                                                         |
+| ------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `sandboxes`         | Isolated, ephemeral compute                                          | [src/sandboxes](./src/sandboxes/README.md)                   |
+| `repositories`      | Private, in-network git repos                                        | [src/repositories](./src/repositories/README.md)             |
+| `agent`             | Coding agents (LLM execution)                                        | [src/agent](./src/agent/README.md)                           |
+| `fileStorage`       | Tenant-scoped object storage (presigned URLs)                        | [src/file-storage](./src/file-storage/README.md)             |
+| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` | [src/content-generation](./src/content-generation/README.md) |
+| `search`            | Read a page with `scrape` (web search and email lookup landing soon) | [src/search](./src/search/README.md)                         |
 
 ## Composing capabilities
 

@@ -35,6 +35,7 @@ import type {
   FileMetadata,
 } from "../file-storage/index.js";
 import type { ImageGenerationResult } from "../content-generation/index.js";
+import type { ScrapeResult } from "../search/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -586,9 +587,20 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           ),
       },
     },
-    // The `search` namespace is empty for now; operations gain stub defaults as
-    // they ship.
-    search: {},
+    search: {
+      scrape: (input) =>
+        Promise.resolve(
+          r("search.scrape", [input], () => ({
+            url: input.url,
+            markdown: `# ${input.url}\n\n(stub) scraped content`,
+            metadata: {
+              title: "Stub Page",
+              sourceUrl: input.url,
+              statusCode: 200,
+            },
+          })) as ScrapeResult,
+        ),
+    },
     withAttribution: () => client,
   };
 
