@@ -392,6 +392,31 @@ describe("contentGeneration.video.create()", () => {
       ),
     ).rejects.toThrow(/did not complete within/);
   });
+
+  it("tolerates a transient non-ok poll, then returns once the result is ready", async () => {
+    let polls = 0;
+    const { transport } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ request_id: "req-5", response_url: `${BASE}/queue/req-5` })
+          : null,
+      (c) => {
+        if (c.init.method !== "GET") return null;
+        polls += 1;
+        return polls < 2
+          ? jsonResponse({ error: "upstream hiccup" }, { status: 503 })
+          : jsonResponse({ video: { url: "https://media/v5.mp4" } });
+      },
+    ]);
+
+    const out = await createVideo(
+      { prompt: "x", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    expect(out.video?.url).toBe("https://media/v5.mp4");
+  });
 });
 
 // ---------------------------------------------------------------------------

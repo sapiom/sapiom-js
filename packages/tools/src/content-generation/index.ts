@@ -295,6 +295,15 @@ export async function createVideo(
     if (res.ok) {
       const raw = (await res.json()) as RawVideoResult;
       if (raw.video?.url) return mapVideoResult(raw);
+    } else {
+      // Still generating, or a transient error. Drain the unread body so the
+      // connection can be reused, then keep polling — `timeoutMs` is the backstop
+      // for a result that never arrives.
+      try {
+        await res.body?.cancel();
+      } catch {
+        // best-effort drain
+      }
     }
     await sleep(intervalMs);
   }
