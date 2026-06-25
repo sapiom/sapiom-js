@@ -128,15 +128,3 @@ list grows as capabilities land:
 | Capability   | Launch                              | Pause signal                             |
 | ------------ | ----------------------------------- | ---------------------------------------- |
 | Coding agent | `ctx.sapiom.agent.coding.launch(…)` | `CODING_RESULT_SIGNAL` (`@sapiom/tools`) |
-
-## Compatibility: zod
-
-Author your step schemas with zod the way you normally would:
-
-```ts
-import { z } from "zod";
-```
-
-Step `inputSchema`s are zod schemas, and the build converts them to JSON Schema
-for the manifest — so your project's `zod` is the one to reach for. `zod` is a
-peer dependency (`^4.0.0`); install it alongside this package.
