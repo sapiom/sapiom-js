@@ -13,6 +13,7 @@
  *   await box.destroy();
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import {
   DEFAULT_CONCURRENCY,
   DEFAULT_MAX_RETRIES,
@@ -60,8 +61,10 @@ export type {
 } from "./types.js";
 
 /** Platform sandbox service. Host routing is an internal detail — override via `baseUrl` or SAPIOM_SANDBOX_URL. */
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_SANDBOX_URL || "https://blaxel.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl(
+  "blaxel",
+  process.env.SAPIOM_SANDBOX_URL,
+);
 const DEFAULT_POLL_INTERVAL = 1000;
 const DEFAULT_EXEC_TIMEOUT = 60_000;
 
