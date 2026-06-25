@@ -52,12 +52,24 @@ import type {
   ImageCreateInput,
   ImageGenerationResult,
 } from "./content-generation/index.js";
-import { scrape, webSearch } from "./search/index.js";
+import {
+  scrape,
+  webSearch,
+  findEmail,
+  verifyEmail,
+  domainSearch,
+} from "./search/index.js";
 import type {
   ScrapeInput,
   ScrapeResult,
   WebSearchInput,
   WebSearchResponse,
+  FindEmailInput,
+  FindEmailResult,
+  VerifyEmailInput,
+  VerifyEmailResult,
+  DomainSearchInput,
+  DomainSearchResult,
 } from "./search/index.js";
 
 export interface Sapiom {
@@ -115,6 +127,15 @@ export interface Sapiom {
     scrape(input: ScrapeInput): Promise<ScrapeResult>;
     /** Search the web — a synthesized answer plus results by default. */
     webSearch(input: WebSearchInput): Promise<WebSearchResponse>;
+    /** Find, verify, and discover professional email addresses. */
+    readonly emailSearch: {
+      /** Find a person's email from their name and company. */
+      findEmail(input: FindEmailInput): Promise<FindEmailResult>;
+      /** Verify that an email address is deliverable. */
+      verifyEmail(input: VerifyEmailInput): Promise<VerifyEmailResult>;
+      /** Discover the emails published at a company domain. */
+      domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
+    };
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -165,6 +186,11 @@ function bind(transport: Transport): Sapiom {
     search: {
       scrape: (input) => scrape(input, transport),
       webSearch: (input) => webSearch(input, transport),
+      emailSearch: {
+        findEmail: (input) => findEmail(input, transport),
+        verifyEmail: (input) => verifyEmail(input, transport),
+        domainSearch: (input) => domainSearch(input, transport),
+      },
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
