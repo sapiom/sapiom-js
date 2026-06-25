@@ -1,3 +1,5 @@
+// `zod/v4/core` subpath (present in zod 3.25.x AND zod 4.x): the issue type while
+// the `zod` peer can resolve to v3 or v4. See introspection.ts.
 import type { $ZodIssue } from 'zod/v4/core';
 
 /** Base class for every error the primitive can throw. */

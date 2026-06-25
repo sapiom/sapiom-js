@@ -1,5 +1,41 @@
 # @sapiom/tools
 
+## 0.6.2
+
+### Patch Changes
+
+- 9fca481: Forward the workflow resume token explicitly via `createClient({ resumeToken })`.
+
+  `agent.coding.run`/`launch` send the per-execution resume token as the `x-sapiom-workflow-token` header so the gateway can resume the paused workflow step. Previously the token was read ONLY from `process.env.SAPIOM_CAPABILITY_RESUME_TOKEN` — fine for the sandbox runtime (which injects that env var) but invisible to the engine's in-process runtime, which must not set process-global env (it would bleed across concurrent step executions sharing the worker). `TransportConfig` now accepts an optional `resumeToken`; the client prefers it and falls back to the env var, so the sandbox path is unchanged and the in-process runtime can pass the token per-call. Additive and backward-compatible.
+
+## 0.6.1
+
+### Patch Changes
+
+- 3d45ec6: Document the `orchestrations` capability: add it to the README's Capabilities table + intro, and add a per-capability `src/orchestrations/README.md` (run a deployed orchestration, or dispatch one from a step and pause on its result).
+
+## 0.6.0
+
+### Minor Changes
+
+- b2c5612: Add the `orchestrations` capability — run a deployed orchestration by slug, or dispatch one from a workflow step and pause on its result.
+
+  ```ts
+  import { orchestrations } from "@sapiom/tools";
+
+  // run inline:
+  const result = await orchestrations.run({ definition: "enrich-lead", input });
+
+  // or dispatch from a step and resume when it finishes:
+  const child = await orchestrations.launch({
+    definition: "enrich-lead",
+    input,
+  });
+  return pauseUntilSignal(child, { resumeStep: "use-result" });
+  ```
+
+  `launch` returns a handle usable with `pauseUntilSignal`; the resumed step receives an `OrchestrationRunResultPayload` (validate with `orchestrationResultSchema`). Also exports `ORCHESTRATIONS_RESULT_SIGNAL` for the static `pause` declaration on a step.
+
 ## 0.5.0
 
 ### Minor Changes

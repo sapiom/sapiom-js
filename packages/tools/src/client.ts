@@ -29,6 +29,15 @@ import type {
   CodingRunResult,
   RunHandle,
 } from "./agent/index.js";
+import {
+  run as orchestrationsRun,
+  launch as orchestrationsLaunch,
+} from "./orchestrations/index.js";
+import type {
+  OrchestrationRunSpec,
+  OrchestrationRunResult,
+  RunHandle as OrchestrationRunHandle,
+} from "./orchestrations/index.js";
 import * as fileStorage from "./file-storage/index.js";
 import type {
   UploadInput,
@@ -45,6 +54,8 @@ import type {
   VideoCreateInput,
   VideoGenerationResult,
 } from "./content-generation/index.js";
+import { scrape } from "./search/index.js";
+import type { ScrapeInput, ScrapeResult } from "./search/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -66,6 +77,12 @@ export interface Sapiom {
       run(spec: CodingRunSpec): Promise<CodingRunResult>;
       launch(spec: CodingRunSpec): Promise<RunHandle>;
     };
+  };
+  readonly orchestrations: {
+    /** Run a deployed orchestration by slug and await its terminal result. */
+    run(spec: OrchestrationRunSpec): Promise<OrchestrationRunResult>;
+    /** Launch a deployed orchestration; pass the handle to `pauseUntilSignal` to suspend on it. */
+    launch(spec: OrchestrationRunSpec): Promise<OrchestrationRunHandle>;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -95,12 +112,20 @@ export interface Sapiom {
     };
   };
   /**
+   * Search the web, read pages, and look up professional emails. More operations
+   * are added to this namespace as they ship.
+   */
+  readonly search: {
+    /** Read a page and return its content (markdown by default). */
+    scrape(input: ScrapeInput): Promise<ScrapeResult>;
+  };
+  /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
    * need this — attribution is set once when the client is constructed.
    */
   withAttribution(attribution: Attribution): Sapiom;
-  // domains, scrape, search, … land here as they're ported.
+  // domains, … land here as they're ported.
 }
 
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
@@ -123,6 +148,10 @@ function bind(transport: Transport): Sapiom {
         launch: (spec) => codingLaunch(spec, transport),
       },
     },
+    orchestrations: {
+      run: (spec) => orchestrationsRun(spec, transport),
+      launch: (spec) => orchestrationsLaunch(spec, transport),
+    },
     fileStorage: {
       upload: (input) => fileStorage.upload(input, transport),
       getDownloadUrl: (fileId) => fileStorage.getDownloadUrl(fileId, transport),
@@ -138,6 +167,9 @@ function bind(transport: Transport): Sapiom {
       video: {
         create: (input) => contentGeneration.createVideo(input, transport),
       },
+    },
+    search: {
+      scrape: (input) => scrape(input, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

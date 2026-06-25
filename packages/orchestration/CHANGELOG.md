@@ -1,5 +1,46 @@
 # @sapiom/orchestration
 
+## 0.4.0
+
+### Minor Changes
+
+- 56fd77d: Broaden `zod` peer support to `^3.25.76 || ^4.0.0` (was `^4.0.0`).
+
+  The package now uses zod's v4 API via the `zod/v4` subpath internally (types, `z.toJSONSchema`) instead of importing from `zod` directly. That subpath ships in **both** zod 3.25.x and zod 4.x, so the package can be consumed on either — restoring support for zod-3.25 projects (which `^4.0.0` had excluded) while keeping zod 4 working. Author step schemas with `import { z } from "zod/v4"` (equivalent to `import { z } from "zod"` on zod 4).
+
+  Non-breaking for existing zod-4 consumers: `zod/v4` and `zod` resolve to the same v4 implementation there.
+
+## 0.3.0
+
+### Minor Changes
+
+- f41ab95: Declare `zod` as a `peerDependency` (`^4.0.0`) instead of a direct dependency, and remove the `z` / `ZodType` compatibility re-exports from the package entry.
+
+  Step `inputSchema`s are zod schemas authored in the consumer's project and passed into this package, so there must be a single shared `zod` instance — bundling our own copy could otherwise cause type and `instanceof` mismatches against the consumer's `zod`. zod 4 is required; npm 7+ and pnpm install the peer automatically (consumers on older package managers should add `zod` alongside this package).
+
+  The previous `export { z } from "zod"` shim only worked because the package bundled its own `zod`; with `zod` as a peer it would just re-export the consumer's own instance, so it has been removed. Import `z` from `zod` directly.
+
+## 0.2.0
+
+### Minor Changes
+
+- b2c5612: Move the orchestration authoring SDK onto zod 4 via the bare `zod` import (no
+  more `zod/v4` subpath), so installing is just:
+
+  ```sh
+  npm install @sapiom/orchestration
+  ```
+
+  `zod` is now a regular dependency rather than a peer. Author your step schemas
+  with your own `import { z } from "zod"` as usual; a compatibility re-export
+  (`import { z } from "@sapiom/orchestration"`) is available for projects pinned
+  to an incompatible zod. Scaffolded projects now pin zod 4.
+
+### Patch Changes
+
+- Updated dependencies [b2c5612]
+  - @sapiom/tools@0.6.0
+
 ## 0.1.9
 
 ### Patch Changes

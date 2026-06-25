@@ -2,8 +2,8 @@
 
 The versioned public contract for authoring Sapiom orchestrations.
 
-A lean, dependency-light package (types + a small protocol runtime, with a single
-strictly-pinned `zod` peer) shared by three consumers:
+A lean, dependency-light package (types + a small protocol runtime) shared by
+three consumers:
 
 - **Customer orchestration definitions** — authored against this package's types and
   compiled by the build.
@@ -14,11 +14,8 @@ strictly-pinned `zod` peer) shared by three consumers:
 ## Install
 
 ```sh
-npm install @sapiom/orchestration zod
+npm install @sapiom/orchestration
 ```
-
-`zod` is a peer dependency, pinned to the `3.25.x` line (the SDK uses the `zod/v4`
-subpath).
 
 ## Authoring surface
 

@@ -6,9 +6,8 @@
  *   - The sandbox step-runner (reads input.json, builds ctx, runs one step)
  *   - The engine (uses types + directive guards; steps implement these interfaces)
  *
- * Design rule: LEAN. Types + ~100 lines of protocol runtime + one strictly-pinned
- * zod peer dep (`zod/v4` subpath on zod 3.25.x). No capability clients, no engine
- * internals, no NestJS imports.
+ * Design rule: LEAN. Types + ~100 lines of protocol runtime over zod. No
+ * capability clients, no engine internals, no NestJS imports.
  */
 
 // Directives — the load-bearing protocol contract

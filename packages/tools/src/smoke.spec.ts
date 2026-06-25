@@ -13,8 +13,10 @@ import {
   sandboxes,
   repositories,
   agent,
+  search,
   Sandbox,
   Repository,
+  SearchHttpError,
 } from "./index.js";
 
 describe("@sapiom/tools public surface", () => {
@@ -37,6 +39,9 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.agent.coding.run).toBe("function");
     expect(typeof sapiom.agent.coding.launch).toBe("function");
 
+    expect(typeof sapiom.search).toBe("object");
+    expect(typeof sapiom.search.scrape).toBe("function");
+
     expect(typeof sapiom.withAttribution).toBe("function");
   });
 
@@ -51,7 +56,16 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sandboxes).toBe("object");
     expect(typeof repositories).toBe("object");
     expect(typeof agent).toBe("object");
+    expect(typeof search).toBe("object");
+    expect(typeof SearchHttpError).toBe("function"); // error class constructor
     expect(typeof Sandbox).toBe("function"); // class constructor
     expect(typeof Repository).toBe("function");
+  });
+
+  it("the search namespace has no self-named nested key", () => {
+    // The barrel creates the `search` namespace via `export * as search`; the
+    // module itself must not export a const named after itself, or methods would
+    // read as `search.search.webSearch()`.
+    expect("search" in search).toBe(false);
   });
 });

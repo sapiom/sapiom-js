@@ -1,5 +1,5 @@
-// `zod/v4` subpath (zod 3.25.x): keeps the shared `zod` resolution on v3
-// while this engine uses the v4 type + API surface. See introspection.ts.
+// `zod/v4` subpath (present in zod 3.25.x AND zod 4.x): the v4 `ZodType` surface
+// while the `zod` peer can resolve to v3 or v4. See introspection.ts.
 import type { ZodType } from 'zod/v4';
 
 import type { OrchestrationExecutionContext } from './context.js';

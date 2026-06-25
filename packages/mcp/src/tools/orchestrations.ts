@@ -364,7 +364,16 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       if (!client) return NOT_AUTHED;
       try {
         const cfg = requireConfig(dir ?? process.cwd());
-        return ok(await run({ definitionId: cfg.definitionId, input }, client));
+        // Coerce a string-serialized input back to JSON (some MCP clients
+        // stringify object-valued args), mirroring run_local — the execution API
+        // requires an object, so a raw `"{}"` string would be rejected. Default an
+        // absent input to {} (the entry step's empty input).
+        return ok(
+          await run(
+            { definitionId: cfg.definitionId, input: coerceJson(input) ?? {} },
+            client,
+          ),
+        );
       } catch (err) {
         return fail(err);
       }

@@ -1,8 +1,6 @@
-// Use the Zod 4 API via the `zod/v4` subpath: the workspace pins zod at
-// 3.25.x (which ships v4 under this subpath), so we get `z.toJSONSchema`
-// without bumping the shared `zod` resolution to v4 for the rest of the
-// monorepo (wagmi/wallet peers). errors.ts uses `zod/v4/core` for the same
-// reason.
+// `zod/v4` subpath (present in zod 3.25.x AND zod 4.x): gives `z.toJSONSchema`
+// while the `zod` peer can resolve to v3 or v4, so the engine (zod 3.25) and
+// external zod-4 authors can both consume this package.
 import { z } from 'zod/v4';
 
 import type { OrchestrationDefinition } from './workflow.js';

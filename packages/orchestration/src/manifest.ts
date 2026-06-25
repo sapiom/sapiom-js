@@ -1,5 +1,5 @@
-// `zod/v4` subpath (zod 3.25.x): keeps the shared `zod` resolution on v3
-// while this SDK uses the v4 type + API surface.
+// `zod/v4` subpath (present in zod 3.25.x AND zod 4.x): use the v4 type + API
+// surface (incl. `z.toJSONSchema`) while the `zod` peer can resolve to v3 or v4.
 import { z } from 'zod/v4';
 
 /**
