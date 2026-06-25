@@ -60,10 +60,3 @@ export type { WorkflowManifest, WorkflowStepManifest, ManifestTransition } from 
 // Manifest generator + graph validation — called by the build phase.
 export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';
 export type { GraphValidation } from './build-manifest.js';
-
-// Compatibility re-export. Authoring code should `import { z } from "zod"` as
-// normal — this is only for projects pinned to a zod that's incompatible with
-// the authoring types, so they can pull a known-good `z` from here without
-// touching their own zod. See the README's "Compatibility" note.
-export { z } from 'zod';
-export type { ZodType } from 'zod';
