@@ -15,8 +15,6 @@ import { SearchHttpError } from "./errors.js";
 
 export { SearchHttpError };
 
-/**
- * The `search` namespace. Operations (web search, page reading, email lookup) are
- * added here as they ship.
- */
-export const search = {};
+// Operations (web search, page reading, email lookup) are added here as they
+// ship. Each becomes a named export and the barrel re-exports this module as the
+// `search` namespace, so a method reads as `search.webSearch(...)`.

@@ -52,7 +52,6 @@ import type {
   ImageCreateInput,
   ImageGenerationResult,
 } from "./content-generation/index.js";
-import { search } from "./search/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -104,7 +103,7 @@ export interface Sapiom {
    * Search the web, read pages, and look up professional emails. Operations are
    * added to this namespace as they ship.
    */
-  readonly search: typeof search;
+  readonly search: Record<string, never>;
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
@@ -151,7 +150,9 @@ function bind(transport: Transport): Sapiom {
         create: (input) => contentGeneration.createImage(input, transport),
       },
     },
-    search,
+    // search methods land in follow-up tickets — bind each as a transport-bound
+    // closure (cf. contentGeneration) so withAttribution works.
+    search: {},
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
   };
