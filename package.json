@@ -23,7 +23,9 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "pnpm build && changeset publish",
-    "dev:watch": "pnpm -r --filter='./packages/*' --parallel run dev"
+    "dev:watch": "pnpm -r --filter='./packages/*' --parallel run dev",
+    "registry:local": "npx -y verdaccio@6 --config .verdaccio/config.yaml",
+    "publish:local": "node scripts/publish-local.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.1",

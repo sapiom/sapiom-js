@@ -43,6 +43,15 @@ export interface TransportConfig {
   fetch?: typeof globalThis.fetch;
   /** Default attribution applied to every request this transport makes (see class doc). */
   attribution?: Attribution;
+  /**
+   * Opaque per-execution workflow resume token. Forwarded as the
+   * `x-sapiom-workflow-token` header on a coding launch so the gateway can resume
+   * the paused step. The SANDBOX runtime injects it ambiently
+   * (`SAPIOM_CAPABILITY_RESUME_TOKEN`) and this is left unset; the IN-PROCESS
+   * runtime — which must not touch process-global env — passes it explicitly here.
+   * When omitted, falls back to the env var, so both runtimes work.
+   */
+  resumeToken?: string;
 }
 
 function attributionToHeaders(a: Attribution): Record<string, string> {
@@ -77,17 +86,25 @@ export class Transport {
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly attribution: Attribution;
+  /**
+   * The workflow resume token to forward (see {@link TransportConfig.resumeToken}).
+   * Explicit config wins; otherwise the ambient env var, so the sandbox runtime —
+   * which injects `SAPIOM_CAPABILITY_RESUME_TOKEN` — keeps working unchanged.
+   */
+  readonly resumeToken: string | undefined;
 
   constructor(config: TransportConfig = {}) {
     this.apiKey = config.apiKey ?? process.env.SAPIOM_API_KEY ?? undefined;
     this.fetchImpl = config.fetch ?? globalThis.fetch;
     this.attribution = config.attribution ?? {};
+    this.resumeToken =
+      config.resumeToken ?? process.env.SAPIOM_CAPABILITY_RESUME_TOKEN ?? undefined;
   }
 
   /**
-   * A new transport sharing this one's credential and fetch, with `attribution`
-   * merged over the current defaults. The escape hatch for the cases where one
-   * process attributes to many agents/traces (a router) — not something
+   * A new transport sharing this one's credential, fetch, and resume token, with
+   * `attribution` merged over the current defaults. The escape hatch for the cases
+   * where one process attributes to many agents/traces (a router) — not something
    * step-authoring code reaches for.
    */
   withAttribution(attribution: Attribution): Transport {
@@ -95,6 +112,7 @@ export class Transport {
       apiKey: this.apiKey,
       fetch: this.fetchImpl,
       attribution: { ...this.attribution, ...attribution },
+      resumeToken: this.resumeToken,
     });
   }
 
