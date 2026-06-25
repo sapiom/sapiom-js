@@ -8,10 +8,10 @@
  *   await repo.pushFromSandbox(box, { message: "build: page" });
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import type { Sandbox } from "../sandboxes/index.js";
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_GIT_URL || "https://git.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl("git", process.env.SAPIOM_GIT_URL);
 
 /** `GET`/`list` shape from the git gateway. */
 interface RepoSummary {

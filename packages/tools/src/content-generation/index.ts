@@ -14,12 +14,15 @@
  * Or via an explicit client: `createClient({ apiKey }).contentGeneration.images.create(...)`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, ContentGenerationHttpError } from "./errors.js";
 
 export { ContentGenerationHttpError };
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_CONTENT_GENERATION_URL || "https://fal.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl(
+  "fal",
+  process.env.SAPIOM_CONTENT_GENERATION_URL,
+);
 
 /** Default image model when the caller doesn't pick one — a fast, low-cost model. */
 const DEFAULT_IMAGE_MODEL = "fal-ai/flux/schnell";
