@@ -35,7 +35,7 @@ import type {
   FileMetadata,
 } from "../file-storage/index.js";
 import type { ImageGenerationResult } from "../content-generation/index.js";
-import type { ScrapeResult } from "../search/index.js";
+import type { ScrapeResult, WebSearchResponse } from "../search/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -599,6 +599,23 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               statusCode: 200,
             },
           })) as ScrapeResult,
+        ),
+      webSearch: (input) =>
+        Promise.resolve(
+          r("search.webSearch", [input], () => ({
+            query: input.query,
+            // mirror the real shape: an answer for the default intent, omitted for "links".
+            ...(input.intent === "links"
+              ? {}
+              : { answer: `(stub) answer for "${input.query}"` }),
+            results: [
+              {
+                title: "Stub Result",
+                url: "https://example.com",
+                snippet: `(stub) result for "${input.query}"`,
+              },
+            ],
+          })) as WebSearchResponse,
         ),
     },
     withAttribution: () => client,
