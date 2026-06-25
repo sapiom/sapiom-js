@@ -29,6 +29,15 @@ import type {
   CodingRunResult,
   RunHandle,
 } from "./agent/index.js";
+import {
+  run as orchestrationsRun,
+  launch as orchestrationsLaunch,
+} from "./orchestrations/index.js";
+import type {
+  OrchestrationRunSpec,
+  OrchestrationRunResult,
+  RunHandle as OrchestrationRunHandle,
+} from "./orchestrations/index.js";
 import * as fileStorage from "./file-storage/index.js";
 import type {
   UploadInput,
@@ -64,6 +73,12 @@ export interface Sapiom {
       run(spec: CodingRunSpec): Promise<CodingRunResult>;
       launch(spec: CodingRunSpec): Promise<RunHandle>;
     };
+  };
+  readonly orchestrations: {
+    /** Run a deployed orchestration by slug and await its terminal result. */
+    run(spec: OrchestrationRunSpec): Promise<OrchestrationRunResult>;
+    /** Launch a deployed orchestration; pass the handle to `pauseUntilSignal` to suspend on it. */
+    launch(spec: OrchestrationRunSpec): Promise<OrchestrationRunHandle>;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -112,6 +127,10 @@ function bind(transport: Transport): Sapiom {
         run: (spec) => codingRun(spec, transport),
         launch: (spec) => codingLaunch(spec, transport),
       },
+    },
+    orchestrations: {
+      run: (spec) => orchestrationsRun(spec, transport),
+      launch: (spec) => orchestrationsLaunch(spec, transport),
     },
     fileStorage: {
       upload: (input) => fileStorage.upload(input, transport),
