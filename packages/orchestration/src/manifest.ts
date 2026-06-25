@@ -1,4 +1,6 @@
-import { z } from 'zod';
+// `zod/v4` subpath (present in zod 3.25.x AND zod 4.x): use the v4 type + API
+// surface (incl. `z.toJSONSchema`) while the `zod` peer can resolve to v3 or v4.
+import { z } from 'zod/v4';
 
 /**
  * Protocol version for the workflow manifest format. Bumped when the schema
