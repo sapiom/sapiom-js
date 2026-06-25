@@ -1,6 +1,6 @@
 import { createClient } from "../index.js";
 import { Transport } from "../_client/index.js";
-import { scrape, SearchHttpError } from "./index.js";
+import { scrape, webSearch, SearchHttpError } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — the capability fn is tested directly with a real Transport wired to
@@ -92,7 +92,10 @@ describe("search.scrape()", () => {
     });
     expect(calls[0]!.url).toBe(`${BASE}/v2/scrape`);
     expect(calls[0]!.init.method).toBe("POST");
+    // scrape sends the default credential header, NOT x-api-key (guards against
+    // regression from the per-destination auth-header change).
     expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-api-key")).toBeUndefined();
     expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
     // formats is omitted entirely when the caller didn't pass it.
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
@@ -356,6 +359,208 @@ describe("createClient().search.scrape", () => {
     expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       url: "https://example.com",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search.webSearch()
+// ---------------------------------------------------------------------------
+
+describe("search.webSearch()", () => {
+  it("POSTs query + default intent, sends x-api-key (not x-sapiom-api-key), and maps the result", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          query: "llm agents",
+          answer: "An LLM agent is …",
+          results: [
+            {
+              title: "Agents 101",
+              url: "https://example.com/a",
+              snippet: "intro",
+            },
+          ],
+        }),
+    ]);
+
+    const out = await webSearch({ query: "llm agents" }, transport, BASE);
+
+    expect(out).toEqual({
+      query: "llm agents",
+      answer: "An LLM agent is …",
+      results: [
+        { title: "Agents 101", url: "https://example.com/a", snippet: "intro" },
+      ],
+    });
+    expect(calls[0]!.url).toBe(`${BASE}/v1/capabilities/web.search`);
+    expect(calls[0]!.init.method).toBe("POST");
+    // This destination authenticates via x-api-key — the SDK must send that
+    // header here, and must NOT send the default x-sapiom-api-key for this call.
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
+    expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
+    // intent defaults to "answer"; depth omitted when not provided.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      query: "llm agents",
+      intent: "answer",
+    });
+  });
+
+  it("forwards depth and an explicit intent", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ query: "q", results: [] }),
+    ]);
+
+    await webSearch(
+      { query: "q", depth: "deep", intent: "links" },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      query: "q",
+      depth: "deep",
+      intent: "links",
+    });
+  });
+
+  it("defaults intent to answer even when depth is set", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ query: "q", results: [] }),
+    ]);
+
+    await webSearch({ query: "q", depth: "standard" }, transport, BASE);
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      query: "q",
+      depth: "standard",
+      intent: "answer",
+    });
+  });
+
+  it("treats a null depth (JS caller bypassing types) as absent in the body", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ query: "q", results: [] }),
+    ]);
+
+    await webSearch(
+      { query: "q", depth: null as unknown as undefined },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      query: "q",
+      intent: "answer",
+    });
+  });
+
+  it("omits answer when the wire has none (intent:'links') and defaults missing results to []", async () => {
+    const { transport } = makeTransport([() => jsonResponse({ query: "q" })]);
+
+    const out = await webSearch(
+      { query: "q", intent: "links" },
+      transport,
+      BASE,
+    );
+
+    expect(out).toEqual({ query: "q", results: [] });
+    expect(out).not.toHaveProperty("answer");
+  });
+
+  it("drops unknown extra fields from the response and result rows (defensive)", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          query: "q",
+          answer: "a",
+          // an unexpected top-level field that must never reach a caller
+          extraTopLevel: "should-not-surface",
+          results: [
+            {
+              title: "T",
+              url: "https://example.com",
+              snippet: "s",
+              extraOnRow: "should-not-surface",
+            },
+          ],
+        }),
+    ]);
+
+    const out = await webSearch({ query: "q" }, transport, BASE);
+
+    // The result is built from known fields only, so any extra field is dropped.
+    expect(out).toEqual({
+      query: "q",
+      answer: "a",
+      results: [{ title: "T", url: "https://example.com", snippet: "s" }],
+    });
+    expect(out).not.toHaveProperty("extraTopLevel");
+    expect(out.results[0]).not.toHaveProperty("extraOnRow");
+  });
+
+  it("falls back to the input query when the wire omits it", async () => {
+    const { transport } = makeTransport([() => jsonResponse({ results: [] })]);
+
+    const out = await webSearch({ query: "fallback" }, transport, BASE);
+
+    expect(out.query).toBe("fallback");
+  });
+
+  it("throws SearchHttpError (with status + body) on a non-2xx", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(JSON.stringify({ error: "Bad Request" }), {
+          status: 400,
+        }),
+    ]);
+
+    await expect(
+      webSearch({ query: "q" }, transport, BASE),
+    ).rejects.toMatchObject({
+      name: "SearchHttpError",
+      status: 400,
+      body: { error: "Bad Request" },
+    });
+    await expect(
+      webSearch({ query: "q" }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createClient().search.webSearch — binding
+// ---------------------------------------------------------------------------
+
+describe("createClient().search.webSearch", () => {
+  it("binds to the client's credential + default host, sending x-api-key", async () => {
+    const calls: FetchCall[] = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      calls.push({ url: String(input), init });
+      return jsonResponse({
+        query: "q",
+        answer: "a",
+        results: [{ title: "T", url: "https://example.com", snippet: "s" }],
+      });
+    }) as typeof globalThis.fetch;
+
+    const sapiom = createClient({ apiKey: "client-key", fetch: fetchMock });
+    const out = await sapiom.search.webSearch({ query: "q" });
+
+    expect(out.answer).toBe("a");
+    expect(out.results[0]!.url).toBe("https://example.com");
+    expect(calls[0]!.url).toBe(
+      "https://api.sapiom.ai/v1/capabilities/web.search",
+    );
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("client-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      query: "q",
+      intent: "answer",
     });
   });
 });

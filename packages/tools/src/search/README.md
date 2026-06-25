@@ -2,7 +2,58 @@
 
 Find information across the web and beyond — searching the web, reading pages,
 and looking up professional emails. More operations land in this namespace as
-they ship; today it offers `scrape`.
+they ship; today it offers `webSearch` and `scrape`.
+
+## `webSearch` — search the web
+
+Search the web and get a synthesized answer plus supporting results:
+
+```typescript
+import { createClient } from "@sapiom/tools";
+const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
+
+const hits = await sapiom.search.webSearch({ query: "what is an LLM agent?" });
+hits.answer; // a synthesized answer
+hits.results; // supporting results: [{ title, url, snippet }]
+```
+
+Ambient import works too: `import { search } from "@sapiom/tools"`.
+
+### Choosing what you get back
+
+Pass `intent: "links"` for a list of relevant results instead of a synthesized
+answer, and `depth: "deep"` for a more thorough search:
+
+```typescript
+const hits = await sapiom.search.webSearch({
+  query: "best practices for prompt caching",
+  intent: "links",
+  depth: "deep",
+});
+hits.results; // [{ title, url, snippet }, …]
+```
+
+### Input
+
+- `query` (required) — what to search for.
+- `depth` (optional) — `"standard"` (default) or `"deep"` for a more thorough
+  search.
+- `intent` (optional) — `"answer"` (default) for a synthesized answer plus
+  supporting results, or `"links"` for a list of relevant results.
+
+### Result
+
+```typescript
+{
+  query: string;          // the query that was searched
+  answer?: string;        // a synthesized answer (present for intent: "answer")
+  results: Array<{
+    title: string;
+    url: string;
+    snippet: string;
+  }>;
+}
+```
 
 ## `scrape` — read a page
 
