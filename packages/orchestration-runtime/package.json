@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/orchestration-runtime",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "The Sapiom orchestration runtime: the host-agnostic graph-walker decision logic + the host interfaces (execution store, step dispatcher, observer) it runs against. One runtime, two hosts (server engine + local runner).",
   "license": "MIT",
   "author": "Sapiom",
