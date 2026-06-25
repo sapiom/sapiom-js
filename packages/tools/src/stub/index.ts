@@ -505,7 +505,10 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         };
         const handle: OrchestrationRunHandle = {
           executionId,
-          dispatch: { correlationId: executionId, resultSignal: ORCHESTRATIONS_RESULT_SIGNAL },
+          dispatch: {
+            correlationId: executionId,
+            resultSignal: ORCHESTRATIONS_RESULT_SIGNAL,
+          },
           status: () => Promise.resolve("completed" as const),
           wait: () => Promise.resolve(result),
         };
@@ -583,6 +586,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           ),
       },
     },
+    // The `search` namespace is empty for now; operations gain stub defaults as
+    // they ship.
+    search: {},
     withAttribution: () => client,
   };
 

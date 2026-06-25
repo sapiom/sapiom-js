@@ -1,6 +1,6 @@
 # @sapiom/tools
 
-A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, file storage, and content generation — authenticated to your tenant.
+A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, file storage, content generation, and search — authenticated to your tenant.
 
 These are the same capabilities your Sapiom agents call as tools; this package makes them callable directly from your own code.
 
@@ -25,7 +25,9 @@ const run = await sapiom.agent.coding.run({
 });
 
 if (run.result?.success) {
-  const { sha } = await repo.pushFromSandbox(run.sandbox, { message: "build: landing" });
+  const { sha } = await repo.pushFromSandbox(run.sandbox, {
+    message: "build: landing",
+  });
   console.log("published", sha);
 }
 ```
@@ -65,13 +67,14 @@ If a single process makes calls on behalf of more than one agent or trace, deriv
 
 Each capability is a namespace, importable from the barrel or its own subpath (e.g. `@sapiom/tools/sandboxes`). Every capability has its own README with usage details, preconditions, and gotchas the type signatures can't express — read it before first use.
 
-| Namespace | What it is | Docs |
-|---|---|---|
-| `sandboxes` | Isolated, ephemeral compute | [src/sandboxes](./src/sandboxes/README.md) |
-| `repositories` | Private, in-network git repos | [src/repositories](./src/repositories/README.md) |
-| `agent` | Coding agents (LLM execution) | [src/agent](./src/agent/README.md) |
-| `fileStorage` | Tenant-scoped object storage (presigned URLs) | [src/file-storage](./src/file-storage/README.md) |
-| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` | [src/content-generation](./src/content-generation/README.md) |
+| Namespace           | What it is                                                                        | Docs                                                         |
+| ------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `sandboxes`         | Isolated, ephemeral compute                                                       | [src/sandboxes](./src/sandboxes/README.md)                   |
+| `repositories`      | Private, in-network git repos                                                     | [src/repositories](./src/repositories/README.md)             |
+| `agent`             | Coding agents (LLM execution)                                                     | [src/agent](./src/agent/README.md)                           |
+| `fileStorage`       | Tenant-scoped object storage (presigned URLs)                                     | [src/file-storage](./src/file-storage/README.md)             |
+| `contentGeneration` | Media generation (images; video/audio soon), with optional `storage`              | [src/content-generation](./src/content-generation/README.md) |
+| `search`            | Web search, page reading, and professional email lookup (operations landing soon) | `@sapiom/tools/search`                                       |
 
 ## Composing capabilities
 
@@ -91,7 +94,9 @@ const out = await contentGeneration.images.create({
   prompt: "a logo",
   storage: { visibility: "private" },
 });
-const { downloadUrl } = await fileStorage.getDownloadUrl(out.images![0].fileId!);
+const { downloadUrl } = await fileStorage.getDownloadUrl(
+  out.images![0].fileId!,
+);
 ```
 
 ## License
