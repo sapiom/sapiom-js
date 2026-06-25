@@ -2,8 +2,8 @@
 
 The versioned public contract for authoring Sapiom orchestrations.
 
-A lean, dependency-light package (types + a small protocol runtime, with a single
-strictly-pinned `zod` peer) shared by three consumers:
+A lean, dependency-light package (types + a small protocol runtime) shared by
+three consumers:
 
 - **Customer orchestration definitions** — authored against this package's types and
   compiled by the build.
@@ -14,11 +14,8 @@ strictly-pinned `zod` peer) shared by three consumers:
 ## Install
 
 ```sh
-npm install @sapiom/orchestration zod
+npm install @sapiom/orchestration
 ```
-
-`zod` is a peer dependency, pinned to the `3.25.x` line (the SDK uses the `zod/v4`
-subpath).
 
 ## Authoring surface
 
@@ -131,3 +128,25 @@ list grows as capabilities land:
 | Capability   | Launch                              | Pause signal                             |
 | ------------ | ----------------------------------- | ---------------------------------------- |
 | Coding agent | `ctx.sapiom.agent.coding.launch(…)` | `CODING_RESULT_SIGNAL` (`@sapiom/tools`) |
+
+## Compatibility: zod
+
+Author your step schemas with zod the way you normally would:
+
+```ts
+import { z } from "zod";
+```
+
+Step `inputSchema`s are zod schemas, and the build converts them to JSON Schema
+for the manifest — so your project's `zod` is the one to reach for.
+
+If your project is pinned to an older `zod` that the authoring types reject, you
+can import a known-good `z` directly from this package instead, without changing
+your own `zod`:
+
+```ts
+import { z } from "@sapiom/orchestration";
+```
+
+This is a compatibility shim, not the recommended import — prefer your own `zod`
+unless you hit a version conflict.

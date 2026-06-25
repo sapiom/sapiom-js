@@ -1,6 +1,4 @@
-// `zod/v4` subpath (zod 3.25.x): keeps the shared `zod` resolution on v3
-// while this engine uses the v4 type + API surface. See introspection.ts.
-import type { ZodType } from 'zod/v4';
+import type { ZodType } from 'zod';
 
 import type { OrchestrationExecutionContext } from './context.js';
 import type { Fail, Goto, NextStepDirective, Pause, Retry, Terminate } from './directives.js';

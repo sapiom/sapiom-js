@@ -1,4 +1,4 @@
-import type { $ZodIssue } from 'zod/v4/core';
+import type { core } from 'zod';
 
 /** Base class for every error the primitive can throw. */
 export class WorkflowError extends Error {
@@ -18,8 +18,8 @@ export class WorkflowError extends Error {
  */
 export class StepInputValidationError extends WorkflowError {
   readonly stepName: string;
-  readonly issues: readonly $ZodIssue[];
-  constructor(stepName: string, issues: readonly $ZodIssue[]) {
+  readonly issues: readonly core.$ZodIssue[];
+  constructor(stepName: string, issues: readonly core.$ZodIssue[]) {
     super(`Input for step '${stepName}' failed validation: ${formatIssues(issues)}`);
     this.name = 'StepInputValidationError';
     this.stepName = stepName;
@@ -28,7 +28,7 @@ export class StepInputValidationError extends WorkflowError {
 }
 
 /** `path.to.field: message; other: message` — compact, human-readable. */
-function formatIssues(issues: readonly $ZodIssue[]): string {
+function formatIssues(issues: readonly core.$ZodIssue[]): string {
   if (issues.length === 0) return 'unknown validation error';
   return issues
     .map((issue) => {

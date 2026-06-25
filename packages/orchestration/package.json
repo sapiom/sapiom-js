@@ -49,10 +49,8 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@sapiom/tools": "workspace:^"
-  },
-  "peerDependencies": {
-    "zod": "^3.25.76"
+    "@sapiom/tools": "workspace:^",
+    "zod": "^4.1.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
@@ -64,7 +62,7 @@
     "prettier": "^3.2.5",
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.2",
-    "zod": "^3.25.76"
+    "zod": "^4.1.0"
   },
   "engines": {
     "node": ">=18.0.0"

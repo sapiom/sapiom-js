@@ -9,7 +9,7 @@
  *   5. buildManifest: step with timeoutMs → timeoutMs; without → null
  *   6. buildManifest: protocol is always 1, sdkVersion/artifact from opts
  */
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { buildManifest } from "./build-manifest.js";
 import { goto, pauseUntilSignal, terminate } from "./directives.js";

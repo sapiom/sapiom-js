@@ -6,9 +6,8 @@
  *   - The sandbox step-runner (reads input.json, builds ctx, runs one step)
  *   - The engine (uses types + directive guards; steps implement these interfaces)
  *
- * Design rule: LEAN. Types + ~100 lines of protocol runtime + one strictly-pinned
- * zod peer dep (`zod/v4` subpath on zod 3.25.x). No capability clients, no engine
- * internals, no NestJS imports.
+ * Design rule: LEAN. Types + ~100 lines of protocol runtime over zod. No
+ * capability clients, no engine internals, no NestJS imports.
  */
 
 // Directives — the load-bearing protocol contract
@@ -61,3 +60,10 @@ export type { WorkflowManifest, WorkflowStepManifest, ManifestTransition } from 
 // Manifest generator + graph validation — called by the build phase.
 export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';
 export type { GraphValidation } from './build-manifest.js';
+
+// Compatibility re-export. Authoring code should `import { z } from "zod"` as
+// normal — this is only for projects pinned to a zod that's incompatible with
+// the authoring types, so they can pull a known-good `z` from here without
+// touching their own zod. See the README's "Compatibility" note.
+export { z } from 'zod';
+export type { ZodType } from 'zod';

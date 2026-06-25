@@ -1,6 +1,4 @@
-// `zod/v4` subpath (zod 3.25.x): keeps the shared `zod` resolution on v3
-// while this SDK uses the v4 type + API surface.
-import { z } from 'zod/v4';
+import { z } from 'zod';
 
 /**
  * Protocol version for the workflow manifest format. Bumped when the schema
