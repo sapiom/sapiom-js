@@ -59,13 +59,17 @@ PASSES=0
 pass() { echo "  [PASS ] $1"; PASSES=$((PASSES + 1)); }
 fail() { echo "  [FAIL ] $1"; FAILS=$((FAILS + 1)); }
 
-# Run a curl, print only the HTTP status code on the last line. Body captured to
-# the file named by $4 (optional).
+# Run a curl, print only the HTTP status code. Body captured to the file named by
+# $3 (pass /dev/null to discard). Remaining args ($4+) are forwarded to curl
+# VERBATIM as a properly-quoted array — so a JSON body or a header VALUE may
+# contain spaces without being word-split into extra "URLs" (which would make
+# curl emit a 000 per stray token AND, since -o maps only to the first URL, leak
+# the real response body onto stdout).
 http_status() {
-  # $1=method $2=url $3=extra-curl-args (string) $4=body-out-file (optional)
-  local method="$1" url="$2" extra="$3" outfile="${4:-/dev/null}"
-  # shellcheck disable=SC2086
-  curl -sS -o "$outfile" -w '%{http_code}' -X "$method" $extra "$url" 2>/dev/null
+  # $1=method $2=url $3=body-out-file $4...=extra curl args (each already quoted)
+  local method="$1" url="$2" outfile="$3"
+  shift 3
+  curl -sS -o "$outfile" -w '%{http_code}' -X "$method" "$@" "$url" 2>/dev/null
 }
 
 # True when status is a 4xx (>=400 and <500).
@@ -81,9 +85,10 @@ trap cleanup EXIT
 # 1. Valid request → 200 + normalized body, NO servedBy.
 # ---------------------------------------------------------------------------
 echo "1) valid {query} + x-api-key → 200, normalized, no servedBy"
-code="$(http_status POST "$CAP_URL" \
-  "-H content-type:application/json -H x-api-key:$API_KEY --data {\"query\":\"what is an LLM agent?\"}" \
-  "$BODY_FILE")"
+code="$(http_status POST "$CAP_URL" "$BODY_FILE" \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $API_KEY" \
+  --data '{"query":"what is an LLM agent?"}')"
 if [ "$code" = "200" ]; then
   pass "status 200"
   if grep -qi '"servedby"' "$BODY_FILE"; then
@@ -113,8 +118,10 @@ echo
 # 2. Unknown capability id → 404.
 # ---------------------------------------------------------------------------
 echo "2) unknown capability id → 404"
-code="$(http_status POST "$UNKNOWN_URL" \
-  "-H content-type:application/json -H x-api-key:$API_KEY --data {\"query\":\"x\"}")"
+code="$(http_status POST "$UNKNOWN_URL" /dev/null \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $API_KEY" \
+  --data '{"query":"x"}')"
 if [ "$code" = "404" ]; then
   pass "status 404"
 else
@@ -126,8 +133,9 @@ echo
 # 3. Missing auth → 401.
 # ---------------------------------------------------------------------------
 echo "3) missing auth → 401"
-code="$(http_status POST "$CAP_URL" \
-  "-H content-type:application/json --data {\"query\":\"x\"}")"
+code="$(http_status POST "$CAP_URL" /dev/null \
+  -H 'content-type: application/json' \
+  --data '{"query":"x"}')"
 if [ "$code" = "401" ]; then
   pass "status 401"
 else
@@ -139,8 +147,10 @@ echo
 # 4. Bad / non-`sk_` Bearer → 401.
 # ---------------------------------------------------------------------------
 echo "4) bad/non-sk_ Bearer → 401"
-code="$(http_status POST "$CAP_URL" \
-  "-H content-type:application/json -H Authorization:Bearer\ not-a-real-key --data {\"query\":\"x\"}")"
+code="$(http_status POST "$CAP_URL" /dev/null \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer not-a-real-key' \
+  --data '{"query":"x"}')"
 if [ "$code" = "401" ]; then
   pass "status 401"
 else
@@ -152,8 +162,10 @@ echo
 # 5. Empty query → 4xx (never 5xx).
 # ---------------------------------------------------------------------------
 echo "5) empty query → 4xx (never 5xx)"
-code="$(http_status POST "$CAP_URL" \
-  "-H content-type:application/json -H x-api-key:$API_KEY --data {\"query\":\"\"}")"
+code="$(http_status POST "$CAP_URL" /dev/null \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $API_KEY" \
+  --data '{"query":""}')"
 if is_5xx "$code"; then
   fail "5xx ($code) — a real hole"
 elif is_4xx "$code"; then
@@ -167,8 +179,10 @@ echo
 # 6. Malformed JSON body → 4xx (never 5xx).
 # ---------------------------------------------------------------------------
 echo "6) malformed JSON body → 4xx (never 5xx)"
-code="$(http_status POST "$CAP_URL" \
-  "-H content-type:application/json -H x-api-key:$API_KEY --data {not-valid-json")"
+code="$(http_status POST "$CAP_URL" /dev/null \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $API_KEY" \
+  --data '{not-valid-json')"
 if is_5xx "$code"; then
   fail "5xx ($code) — a real hole"
 elif is_4xx "$code"; then
@@ -191,7 +205,7 @@ echo "7) charge-on-reject: a 4xx must not settle"
 tx_count() {
   local f="$1"
   local code
-  code="$(http_status GET "$TX_URL" "-H x-api-key:$API_KEY" "$f")"
+  code="$(http_status GET "$TX_URL" "$f" -H "x-api-key: $API_KEY")"
   if [ "$code" != "200" ]; then
     echo "ERR:$code"
     return
@@ -209,8 +223,10 @@ if [ "${before#ERR:}" != "$before" ]; then
   fail "GET /v1/transactions before failed (${before})"
 else
   # Fire a deliberately-rejected (4xx) request — empty query.
-  reject_code="$(http_status POST "$CAP_URL" \
-    "-H content-type:application/json -H x-api-key:$API_KEY --data {\"query\":\"\"}")"
+  reject_code="$(http_status POST "$CAP_URL" /dev/null \
+    -H 'content-type: application/json' \
+    -H "x-api-key: $API_KEY" \
+    --data '{"query":""}')"
   if is_4xx "$reject_code"; then
     sleep 2
     after="$(tx_count "$AFTER_FILE")"
