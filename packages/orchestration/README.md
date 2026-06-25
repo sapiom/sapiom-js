@@ -128,25 +128,3 @@ list grows as capabilities land:
 | Capability   | Launch                              | Pause signal                             |
 | ------------ | ----------------------------------- | ---------------------------------------- |
 | Coding agent | `ctx.sapiom.agent.coding.launch(…)` | `CODING_RESULT_SIGNAL` (`@sapiom/tools`) |
-
-## Compatibility: zod
-
-Author your step schemas with zod the way you normally would:
-
-```ts
-import { z } from "zod";
-```
-
-Step `inputSchema`s are zod schemas, and the build converts them to JSON Schema
-for the manifest — so your project's `zod` is the one to reach for.
-
-If your project is pinned to an older `zod` that the authoring types reject, you
-can import a known-good `z` directly from this package instead, without changing
-your own `zod`:
-
-```ts
-import { z } from "@sapiom/orchestration";
-```
-
-This is a compatibility shim, not the recommended import — prefer your own `zod`
-unless you hit a version conflict.

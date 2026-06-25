@@ -250,8 +250,7 @@ export interface RunHandle extends DispatchHandle {
  * gateway call back into the engine to resume the paused workflow when the run
  * finishes. Absent outside a workflow → no header, no behavior change.
  */
-function workflowResumeHeaders(): Record<string, string> {
-  const token = process.env.SAPIOM_CAPABILITY_RESUME_TOKEN;
+function workflowResumeHeaders(token: string | undefined): Record<string, string> {
   return token ? { "x-sapiom-workflow-token": token } : {};
 }
 
@@ -323,7 +322,7 @@ export async function launch(
   const doc = await transport.request<RunDoc>(`${baseUrl}/v1/coding/runs`, {
     method: "POST",
     body: JSON.stringify(buildBody(spec)),
-    headers: workflowResumeHeaders(),
+    headers: workflowResumeHeaders(transport.resumeToken),
   });
   const runId = doc.data.id;
   const envId = doc.data.relationships?.execution_environment?.data?.id;

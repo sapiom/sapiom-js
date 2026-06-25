@@ -1,0 +1,39 @@
+# Local-only Verdaccio registry for Sapiom SDK development.
+#
+# Serves @sapiom/* from your LOCAL publishes (`pnpm publish:local`) and proxies
+# everything else from npmjs. This is the supported way to develop the public
+# SDKs against a local Sapiom stack and a customer-like MCP session without a real
+# npm publish on every change. See docs/guides/workflows-authoring-quickstart.md §4.
+#
+# NOT for production: anonymous publish, no auth. Local machine only.
+
+storage: ./storage
+# No web UI plugin / no auth plugin needed for local dev. Anonymous everything.
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    # Cache upstream tarballs so the local stack still installs npm deps offline-ish.
+    cache: true
+
+packages:
+  # First-party scope: NEVER proxy to npm — local publishes are authoritative, so a
+  # locally-published 0.5.x always wins over the real-npm version of the same name.
+  "@sapiom/*":
+    access: $all
+    publish: $all
+    unpublish: $all
+
+  # Everything else proxies through npmjs (so non-@sapiom deps resolve normally).
+  "@*/*":
+    access: $all
+    publish: $all
+    proxy: npmjs
+  "**":
+    access: $all
+    publish: $all
+    proxy: npmjs
+
+log: { type: stdout, format: pretty, level: warn }
+
+listen: 0.0.0.0:4873

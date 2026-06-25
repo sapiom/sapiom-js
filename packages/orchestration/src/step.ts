@@ -1,4 +1,6 @@
-import type { ZodType } from 'zod';
+// `zod/v4` subpath (present in zod 3.25.x AND zod 4.x): the v4 `ZodType` surface
+// while the `zod` peer can resolve to v3 or v4. See introspection.ts.
+import type { ZodType } from 'zod/v4';
 
 import type { OrchestrationExecutionContext } from './context.js';
 import type { Fail, Goto, NextStepDirective, Pause, Retry, Terminate } from './directives.js';

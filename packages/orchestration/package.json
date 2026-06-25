@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/orchestration",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Versioned public contract for authoring Sapiom orchestrations: types, directive constructors/guards, defineOrchestration, defineStep, InMemoryContextStore. Shared by customer orchestration definitions, the sandbox step-runner, and the engine.",
   "license": "MIT",
   "author": "Sapiom",
@@ -49,8 +49,10 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@sapiom/tools": "workspace:^",
-    "zod": "^4.1.0"
+    "@sapiom/tools": "workspace:^"
+  },
+  "peerDependencies": {
+    "zod": "^3.25.76 || ^4.0.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
@@ -62,7 +64,7 @@
     "prettier": "^3.2.5",
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.2",
-    "zod": "^4.1.0"
+    "zod": "^3.25.76"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -71,4 +71,27 @@ describe("agent.coding.launch — workflow resume token", () => {
     await sapiom.agent.coding.launch({ task: "t" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBeUndefined();
   });
+
+  it("forwards an explicit createClient({ resumeToken }) — the in-process runtime path", async () => {
+    const capture: { headers?: Record<string, string> } = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      resumeToken: "tok-explicit",
+      fetch: fakeLaunchFetch(capture),
+    });
+    await sapiom.agent.coding.launch({ task: "t" });
+    expect(capture.headers?.["x-sapiom-workflow-token"]).toBe("tok-explicit");
+  });
+
+  it("explicit resumeToken wins over the ambient env token", async () => {
+    process.env[KEY] = "tok-env";
+    const capture: { headers?: Record<string, string> } = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      resumeToken: "tok-explicit",
+      fetch: fakeLaunchFetch(capture),
+    });
+    await sapiom.agent.coding.launch({ task: "t" });
+    expect(capture.headers?.["x-sapiom-workflow-token"]).toBe("tok-explicit");
+  });
 });
