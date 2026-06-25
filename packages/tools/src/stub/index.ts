@@ -35,6 +35,7 @@ import type {
   FileMetadata,
 } from "../file-storage/index.js";
 import type { ImageGenerationResult } from "../content-generation/index.js";
+import type { ScrapeResult } from "../search/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -505,7 +506,10 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         };
         const handle: OrchestrationRunHandle = {
           executionId,
-          dispatch: { correlationId: executionId, resultSignal: ORCHESTRATIONS_RESULT_SIGNAL },
+          dispatch: {
+            correlationId: executionId,
+            resultSignal: ORCHESTRATIONS_RESULT_SIGNAL,
+          },
           status: () => Promise.resolve("completed" as const),
           wait: () => Promise.resolve(result),
         };
@@ -582,6 +586,20 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as ImageGenerationResult,
           ),
       },
+    },
+    search: {
+      scrape: (input) =>
+        Promise.resolve(
+          r("search.scrape", [input], () => ({
+            url: input.url,
+            markdown: `# ${input.url}\n\n(stub) scraped content`,
+            metadata: {
+              title: "Stub Page",
+              sourceUrl: input.url,
+              statusCode: 200,
+            },
+          })) as ScrapeResult,
+        ),
     },
     withAttribution: () => client,
   };

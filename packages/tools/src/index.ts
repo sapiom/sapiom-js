@@ -50,10 +50,16 @@ export { ORCHESTRATIONS_RESULT_SIGNAL } from "./orchestrations/index.js";
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { OrchestrationRunResultPayload } from "./orchestrations/index.js";
 // Validate an OrchestrationRunResultPayload at the resume boundary.
-export { orchestrationResultSchema, OrchestrationResultSchemaError } from "./orchestrations/index.js";
+export {
+  orchestrationResultSchema,
+  OrchestrationResultSchemaError,
+} from "./orchestrations/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";
 
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
+
+export * as search from "./search/index.js";
+export { SearchHttpError } from "./search/index.js";

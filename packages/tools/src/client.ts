@@ -52,6 +52,8 @@ import type {
   ImageCreateInput,
   ImageGenerationResult,
 } from "./content-generation/index.js";
+import { scrape } from "./search/index.js";
+import type { ScrapeInput, ScrapeResult } from "./search/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -100,12 +102,20 @@ export interface Sapiom {
     };
   };
   /**
+   * Search the web, read pages, and look up professional emails. More operations
+   * are added to this namespace as they ship.
+   */
+  readonly search: {
+    /** Read a page and return its content (markdown by default). */
+    scrape(input: ScrapeInput): Promise<ScrapeResult>;
+  };
+  /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
    * need this — attribution is set once when the client is constructed.
    */
   withAttribution(attribution: Attribution): Sapiom;
-  // domains, scrape, search, … land here as they're ported.
+  // domains, … land here as they're ported.
 }
 
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
@@ -144,6 +154,9 @@ function bind(transport: Transport): Sapiom {
       images: {
         create: (input) => contentGeneration.createImage(input, transport),
       },
+    },
+    search: {
+      scrape: (input) => scrape(input, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
