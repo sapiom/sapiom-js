@@ -1,5 +1,13 @@
 # @sapiom/cli
 
+## 0.2.3
+
+### Patch Changes
+
+- Updated dependencies [56fd77d]
+  - @sapiom/orchestration@0.4.0
+  - @sapiom/orchestration-core@0.3.4
+
 ## 0.2.2
 
 ### Patch Changes
