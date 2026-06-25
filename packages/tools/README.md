@@ -1,6 +1,6 @@
 # @sapiom/tools
 
-A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, file storage, and content generation — authenticated to your tenant.
+A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, file storage, content generation, and orchestrations — authenticated to your tenant.
 
 These are the same capabilities your Sapiom agents call as tools; this package makes them callable directly from your own code.
 
@@ -72,6 +72,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `agent` | Coding agents (LLM execution) | [src/agent](./src/agent/README.md) |
 | `fileStorage` | Tenant-scoped object storage (presigned URLs) | [src/file-storage](./src/file-storage/README.md) |
 | `contentGeneration` | Media generation (images; video/audio soon), with optional `storage` | [src/content-generation](./src/content-generation/README.md) |
+| `orchestrations` | Run a deployed orchestration, or dispatch one from a step and await its result | [src/orchestrations](./src/orchestrations/README.md) |
 
 ## Composing capabilities
 
