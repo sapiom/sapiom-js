@@ -49,8 +49,10 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@sapiom/tools": "workspace:^",
-    "zod": "^4.1.0"
+    "@sapiom/tools": "workspace:^"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
