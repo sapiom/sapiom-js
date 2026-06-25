@@ -15,10 +15,13 @@
  * a pausable handle). An orchestration is addressed by its **slug** (its stable handle).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import type { DispatchHandle } from "../dispatch.js";
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_WORKFLOWS_URL || "https://workflows.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl(
+  "workflows",
+  process.env.SAPIOM_WORKFLOWS_URL,
+);
 
 /**
  * Signal a run fires when it reaches a terminal state (completed OR failed — the
@@ -96,7 +99,9 @@ export class OrchestrationResultSchemaError extends Error {}
  * `output` itself is the child orchestration's contract, not validated here.
  */
 export const orchestrationResultSchema = {
-  parse<TOutput = unknown>(value: unknown): OrchestrationRunResultPayload<TOutput> {
+  parse<TOutput = unknown>(
+    value: unknown,
+  ): OrchestrationRunResultPayload<TOutput> {
     const fail = (msg: string): never => {
       throw new OrchestrationResultSchemaError(
         `invalid orchestration result payload: ${msg}`,
@@ -131,7 +136,10 @@ export interface RunHandle extends DispatchHandle {
   /** Fetch the current status without blocking. */
   status(): Promise<ExecutionStatus>;
   /** Poll to a terminal state and resolve the run result. */
-  wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<OrchestrationRunResult>;
+  wait(opts?: {
+    timeoutMs?: number;
+    pollMs?: number;
+  }): Promise<OrchestrationRunResult>;
 }
 
 /**
@@ -169,7 +177,10 @@ export async function launch(
     `${baseUrl}/v1/workflows/${encodeURIComponent(spec.definition)}/executions`,
     {
       method: "POST",
-      body: JSON.stringify({ input: spec.input ?? {}, idempotencyKey: spec.idempotencyKey }),
+      body: JSON.stringify({
+        input: spec.input ?? {},
+        idempotencyKey: spec.idempotencyKey,
+      }),
       headers: workflowResumeHeaders(),
     },
   );
@@ -184,7 +195,10 @@ export async function launch(
     executionId,
     // Framework plumbing for `pauseUntilSignal` — see DispatchHandle. correlationId
     // is this run's id (the resume's correlation key).
-    dispatch: { correlationId: executionId, resultSignal: ORCHESTRATIONS_RESULT_SIGNAL },
+    dispatch: {
+      correlationId: executionId,
+      resultSignal: ORCHESTRATIONS_RESULT_SIGNAL,
+    },
     async status() {
       return (await fetchDoc()).status;
     },
@@ -194,7 +208,12 @@ export async function launch(
       while (true) {
         const d = await fetchDoc();
         if (TERMINAL.has(d.status)) {
-          return { executionId, status: d.status, output: d.output ?? null, error: d.error ?? null };
+          return {
+            executionId,
+            status: d.status,
+            output: d.output ?? null,
+            error: d.error ?? null,
+          };
         }
         if (Date.now() > deadline) {
           throw new Error(
