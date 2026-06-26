@@ -60,6 +60,13 @@ export { FileStorageHttpError } from "./file-storage/index.js";
 
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
+// Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
+export { VIDEO_RESULT_SIGNAL } from "./content-generation/index.js";
+// The shape a step resumed from `pauseUntilSignal(videoLaunchHandle, …)` receives
+// as input — annotate the resumed step with it instead of hand-rolling the shape.
+export type { VideoResultPayload } from "./content-generation/index.js";
+// Map a live VideoGenerationResult to the wire shape the resumed step receives.
+export { toVideoResumePayload } from "./content-generation/index.js";
 
 export * as search from "./search/index.js";
 export { SearchHttpError } from "./search/index.js";

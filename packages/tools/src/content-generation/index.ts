@@ -12,14 +12,29 @@
  *   out.images[0].fileId;    // present when `storage` was passed → use with fileStorage
  *
  * Or via an explicit client: `createClient({ apiKey }).contentGeneration.images.create(...)`.
+ *
+ * `video.launch` is the dispatchable surface: it submits the job and returns a
+ * handle immediately. Pass the handle to `pauseUntilSignal(handle, { resumeStep })`
+ * to suspend the workflow step until the video is ready, or call `handle.wait()`
+ * inline to block until done — same as `video.create` but with the ability to
+ * pause a running workflow.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { ensureOk, ContentGenerationHttpError } from "./errors.js";
+import type { DispatchHandle } from "../dispatch.js";
 
 export { ContentGenerationHttpError };
 
 const DEFAULT_BASE_URL =
   process.env.SAPIOM_CONTENT_GENERATION_URL || "https://fal.services.sapiom.ai";
+
+/**
+ * Capability-stable signal a video launch fires when the video reaches a terminal
+ * state (ready OR failed — it carries the result either way, the resumed step
+ * branches). A workflow step paused on a launch handle resumes on this; it is the
+ * value carried in the handle's `dispatch.resultSignal`.
+ */
+export const VIDEO_RESULT_SIGNAL = "contentGeneration.video.result";
 
 /** Default image model when the caller doesn't pick one — a fast, low-cost model. */
 const DEFAULT_IMAGE_MODEL = "fal-ai/flux/schnell";
@@ -126,6 +141,35 @@ function modelToPath(model: string): string {
 }
 
 /**
+ * Guard a prompt value: throw a clear error before a paid job is submitted when
+ * the prompt is absent, empty, or not a string. A JS caller passing `null`,
+ * `undefined`, or `""` gets an immediate, actionable error instead of a silent
+ * paid request with a blank prompt.
+ */
+function assertPrompt(prompt: unknown): void {
+  if (typeof prompt !== "string" || prompt.trim() === "") {
+    throw new ContentGenerationHttpError(
+      "prompt is required and must be a non-empty string",
+      400,
+      { error: "invalid_prompt" },
+    );
+  }
+}
+
+/**
+ * When launched from inside a Sapiom workflow step, the engine injects an opaque
+ * per-execution resume token into the transport. Forwarding it as a header — NOT
+ * a body field, so author-supplied request fields can't clobber it — lets the
+ * service call back into the engine to resume the paused workflow when the job
+ * finishes. Absent outside a workflow → no header, no behavior change.
+ */
+function workflowResumeHeaders(
+  token: string | undefined,
+): Record<string, string> {
+  return token ? { "x-sapiom-workflow-token": token } : {};
+}
+
+/**
  * Generate one or more images from a prompt. Pass `storage` to persist each output
  * (the returned images then carry `fileId`). Failed requests throw
  * {@link ContentGenerationHttpError}.
@@ -135,6 +179,7 @@ export async function createImage(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ImageGenerationResult> {
+  assertPrompt(input.prompt);
   const path = modelToPath(input.model || DEFAULT_IMAGE_MODEL);
 
   const body: Record<string, unknown> = {
@@ -246,7 +291,9 @@ function mapVideo(raw: RawMedia): GeneratedVideo {
 
 function mapVideoResult(raw: RawVideoResult): VideoGenerationResult {
   const { video, ...rest } = raw;
-  return video === undefined ? { ...rest } : { ...rest, video: mapVideo(video) };
+  return video === undefined
+    ? { ...rest }
+    : { ...rest, video: mapVideo(video) };
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -265,9 +312,13 @@ export async function createVideo(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<VideoGenerationResult> {
+  assertPrompt(input.prompt);
   const path = modelToPath(input.model || DEFAULT_VIDEO_MODEL);
 
-  const body: Record<string, unknown> = { prompt: input.prompt, ...input.params };
+  const body: Record<string, unknown> = {
+    prompt: input.prompt,
+    ...input.params,
+  };
   // Truthy check (not `!== undefined`) so `storage: null` is treated as "no storage".
   if (input.storage) body.storage = input.storage;
 
@@ -312,5 +363,140 @@ export async function createVideo(
   );
 }
 
-/** The `video` sub-namespace: `contentGeneration.video.create(...)`. Async (submit + poll). */
-export const video = { create: createVideo };
+/**
+ * A launched-but-not-awaited video generation job. Satisfies {@link DispatchHandle},
+ * so it can be handed straight to `pauseUntilSignal(handle, { resumeStep })` to
+ * suspend a workflow step until the video is ready — or `wait()`-ed inline for
+ * standalone use (same as `video.create`, but with the dispatchable surface).
+ */
+export interface VideoLaunchHandle extends DispatchHandle {
+  /** The queue request id for this job. */
+  requestId: string;
+  /** Poll to completion and resolve the full result. */
+  wait(opts?: {
+    timeoutMs?: number;
+    pollMs?: number;
+  }): Promise<VideoGenerationResult>;
+}
+
+/**
+ * The video job's terminal result as it arrives at a step **resumed** from
+ * `pauseUntilSignal(launchHandle, { resumeStep })`. It crossed a wire boundary,
+ * so the shape is plain JSON. Annotate a resumed step's input with this type.
+ *
+ *   const finalize = defineStep({
+ *     name: "finalize", terminal: true,
+ *     async run(result: VideoResultPayload, ctx) { … },
+ *   });
+ */
+export interface VideoResultPayload {
+  outputs: Array<{
+    /** Present when the output was persisted to file storage. */
+    fileId?: string;
+    /** Present when storage was requested but persisting this output failed. */
+    storageError?: string;
+  }>;
+}
+
+/**
+ * Map a live, awaited {@link VideoGenerationResult} to the plain
+ * {@link VideoResultPayload} a resumed step receives across the wire boundary.
+ */
+export function toVideoResumePayload(
+  result: VideoGenerationResult,
+): VideoResultPayload {
+  if (!result.video) return { outputs: [] };
+  return {
+    outputs: [
+      {
+        ...(result.video.fileId !== undefined && {
+          fileId: result.video.fileId,
+        }),
+        ...(result.video.storageError !== undefined && {
+          storageError: result.video.storageError,
+        }),
+      },
+    ],
+  };
+}
+
+/**
+ * Submit a video generation job and return a dispatchable handle immediately.
+ * The handle's `dispatch` member lets a workflow step pause until the video
+ * is ready; `handle.wait()` blocks inline instead — same as `video.create` but
+ * with the ability to suspend a running workflow.
+ *
+ * Pass `storage` to persist the output (the result then carries `fileId`).
+ * Throws {@link ContentGenerationHttpError} when the submit fails.
+ */
+export async function launchVideo(
+  input: VideoCreateInput,
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<VideoLaunchHandle> {
+  assertPrompt(input.prompt);
+  const path = modelToPath(input.model || DEFAULT_VIDEO_MODEL);
+
+  const body: Record<string, unknown> = {
+    prompt: input.prompt,
+    ...input.params,
+  };
+  if (input.storage) body.storage = input.storage;
+
+  // Submit — includes the workflow resume token header so the service can resume
+  // the paused step when the job completes (no-op outside a workflow context).
+  const submitRes = await ensureOk(
+    await transport.fetch(`${baseUrl}/run/${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...workflowResumeHeaders(transport.resumeToken),
+      },
+      body: JSON.stringify(body),
+    }),
+    "Failed to submit video generation",
+  );
+  const handle = (await submitRes.json()) as QueueHandle;
+  if (!handle.response_url) {
+    throw new Error("Video submit did not return a result URL to poll");
+  }
+
+  const requestId = handle.request_id ?? "unknown";
+  const responseUrl = handle.response_url;
+
+  const wait = async ({
+    timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS,
+    pollMs = input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS,
+  }: {
+    timeoutMs?: number;
+    pollMs?: number;
+  } = {}): Promise<VideoGenerationResult> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const res = await transport.fetch(responseUrl, { method: "GET" });
+      if (res.ok) {
+        const raw = (await res.json()) as RawVideoResult;
+        if (raw.video?.url) return mapVideoResult(raw);
+      } else {
+        try {
+          await res.body?.cancel();
+        } catch {
+          // best-effort drain
+        }
+      }
+      await sleep(pollMs);
+    }
+    throw new Error(
+      `Video generation did not complete within ${timeoutMs}ms (request id: ${requestId})`,
+    );
+  };
+
+  return {
+    requestId,
+    dispatch: { correlationId: requestId, resultSignal: VIDEO_RESULT_SIGNAL },
+    wait,
+  };
+}
+
+/** The `video` sub-namespace: `contentGeneration.video.create(...)` and `contentGeneration.video.launch(...)`. */
+export const video = { create: createVideo, launch: launchVideo };

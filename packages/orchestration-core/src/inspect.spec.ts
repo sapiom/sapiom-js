@@ -70,6 +70,21 @@ describe("waitForExecution", () => {
     expect(res.done).toBe(true);
   });
 
+  it("keeps waiting through a video generation pause (auto-resume signal)", async () => {
+    const { client } = fakeClient([
+      { status: "paused", pausedSignalName: "contentGeneration.video.result" },
+      { status: "completed" },
+    ]);
+
+    const res = await waitForExecution(
+      { executionId: "e1", sleep: noopSleep, now: () => 0 },
+      client,
+    );
+
+    expect(res.reason).toBe("terminal");
+    expect(res.done).toBe(true);
+  });
+
   it("returns needs-signal on a pause that won't auto-resume", async () => {
     const { client, calls } = fakeClient([
       { status: "paused", pausedSignalName: "await-approval" },

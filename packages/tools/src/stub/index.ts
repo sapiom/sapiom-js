@@ -34,9 +34,14 @@ import type {
   ListResponse,
   FileMetadata,
 } from "../file-storage/index.js";
+import {
+  VIDEO_RESULT_SIGNAL,
+  toVideoResumePayload,
+} from "../content-generation/index.js";
 import type {
   ImageGenerationResult,
   VideoGenerationResult,
+  VideoLaunchHandle,
 } from "../content-generation/index.js";
 import type {
   ScrapeResult,
@@ -588,7 +593,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                   contentType: "image/png",
                   width: 512,
                   height: 512,
-                  // mirror the real stitch: a fileId only when storage was requested.
+                  // mirror the real behavior: a fileId only when storage was requested.
                   ...(input.storage ? { fileId: "stub-file" } : {}),
                 },
               ],
@@ -602,11 +607,40 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               video: {
                 url: "https://content.local/stub-video.mp4",
                 contentType: "video/mp4",
-                // mirror the real stitch: a fileId only when storage was requested.
+                // mirror the real behavior: a fileId only when storage was requested.
                 ...(input.storage ? { fileId: "stub-file" } : {}),
               },
             })) as VideoGenerationResult,
           ),
+        launch: (input) => {
+          const requestId = `stub-video-${++launchSeq}`;
+          const result = r(
+            dispatchedKeys("contentGeneration.video"),
+            [input],
+            () => ({
+              video: {
+                url: "https://content.local/stub-video.mp4",
+                contentType: "video/mp4",
+                ...(input.storage ? { fileId: "stub-file" } : {}),
+              },
+            }),
+          ) as VideoGenerationResult;
+
+          const handle: VideoLaunchHandle = {
+            requestId,
+            dispatch: {
+              correlationId: requestId,
+              resultSignal: VIDEO_RESULT_SIGNAL,
+            },
+            wait: () => Promise.resolve(result),
+          };
+
+          // Register the resume payload so a local `pauseUntilSignal` on this handle
+          // resolves with a VideoResultPayload.
+          return dispatchable(handle, opts.signals, () =>
+            toVideoResumePayload(result),
+          );
+        },
       },
     },
     search: {
