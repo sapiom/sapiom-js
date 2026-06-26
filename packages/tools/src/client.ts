@@ -51,6 +51,8 @@ import * as contentGeneration from "./content-generation/index.js";
 import type {
   ImageCreateInput,
   ImageGenerationResult,
+  VideoCreateInput,
+  VideoGenerationResult,
 } from "./content-generation/index.js";
 import {
   scrape,
@@ -117,6 +119,14 @@ export interface Sapiom {
        */
       create(input: ImageCreateInput): Promise<ImageGenerationResult>;
     };
+    video: {
+      /**
+       * Generate a video from a prompt — async (submits, then polls until ready, then
+       * returns it). Pass `storage` to persist the output (the returned video carries
+       * `fileId`).
+       */
+      create(input: VideoCreateInput): Promise<VideoGenerationResult>;
+    };
   };
   /**
    * Search the web, read pages, and look up professional emails. More operations
@@ -181,6 +191,9 @@ function bind(transport: Transport): Sapiom {
     contentGeneration: {
       images: {
         create: (input) => contentGeneration.createImage(input, transport),
+      },
+      video: {
+        create: (input) => contentGeneration.createVideo(input, transport),
       },
     },
     search: {
