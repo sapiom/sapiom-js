@@ -1,12 +1,11 @@
 /**
- * MCP server `instructions` — returned in the `initialize` handshake. Capable clients
- * (e.g. Claude Code) inject this into the agent's context on connect, so any coding agent
- * that adds this MCP gets the workflow-authoring primer automatically — no skill to install,
- * no docs to hand over.
+ * The MCP server `instructions` string, returned during the `initialize` handshake.
+ * Capable MCP clients surface it to the model on connect, so an agent that adds this
+ * server gets a workflow-authoring primer without any extra setup.
  *
- * Keep this CONCISE: it is always in context while the server is connected. It POINTS to the
- * single-source full docs (https://docs.sapiom.ai/workflows) and the `AGENTS.md` the scaffold
- * writes into every project, rather than restating them — so it rarely needs to change.
+ * Kept intentionally short — it stays in the model's context for the whole session, and
+ * points to the full documentation and the `AGENTS.md` generated into each scaffolded
+ * project rather than restating them.
  */
 export const AUTHORING_INSTRUCTIONS = `# Sapiom Workflow Authoring
 

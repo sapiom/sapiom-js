@@ -33,7 +33,7 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("defineOrchestration");
     // the stale names appear only inside the explicit "NEVER use" warning
     expect(AUTHORING_INSTRUCTIONS).toContain("NEVER `defineWorkflow`");
-    // Single-source pointer to the full docs + the scaffold guide
+    // Pointer to the full docs + the scaffold guide
     expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/workflows");
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");
   });

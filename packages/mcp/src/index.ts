@@ -25,9 +25,9 @@ async function main(): Promise<void> {
       version: "0.1.0",
     },
     {
-      // Auto-delivered to capable clients on connect (the MCP `initialize` handshake),
-      // so any agent that adds this server gets the workflow-authoring primer with no
-      // skill install or docs hand-off. See ./instructions.ts.
+      // Returned in the MCP `initialize` handshake; capable clients surface it to the
+      // model on connect, so an agent that adds this server gets the authoring primer
+      // automatically. See ./instructions.ts.
       instructions: AUTHORING_INSTRUCTIONS,
     },
   );
