@@ -56,18 +56,22 @@ export interface CreateDatabaseInput {
 }
 
 export interface DatabaseConnection {
-  /** The full Postgres connection URI — pass this to any Postgres client. */
+  /**
+   * The full Postgres connection URI — pass this to any Postgres client. This is
+   * the canonical value and is always present; the component fields below are
+   * parsed from it on a best-effort basis and may be absent if it can't be parsed.
+   */
   connectionString: string;
   /** Database host. */
-  host: string;
+  host?: string;
   /** Database port. */
-  port: number;
+  port?: number;
   /** Database user. */
-  username: string;
+  username?: string;
   /** Database password. */
-  password: string;
+  password?: string;
   /** Name of the database to connect to. */
-  databaseName: string;
+  databaseName?: string;
   /** SSL mode from the connection URI, when present (e.g. "require"). */
   sslmode?: string;
 }
@@ -140,7 +144,7 @@ function parseConnectionUri(uri: string): DatabaseConnection {
       sslmode: u.searchParams.get("sslmode") ?? undefined,
     };
   } catch {
-    return { connectionString: uri } as DatabaseConnection;
+    return { connectionString: uri };
   }
 }
 

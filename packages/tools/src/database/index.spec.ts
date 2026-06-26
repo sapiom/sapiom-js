@@ -195,7 +195,7 @@ describe("database.create()", () => {
     expect(db.connection).toBeNull();
   });
 
-  it("preserves connectionString even when the URI is malformed", async () => {
+  it("preserves connectionString (canonical) and leaves components undefined when the URI is malformed", async () => {
     const { transport } = makeTransport([
       () =>
         jsonResponse(rawDatabase({ connectionUri: "not-a-valid-uri" }), {
@@ -203,9 +203,17 @@ describe("database.create()", () => {
         }),
     ]);
 
+    // Does not throw out of the mapper; connectionString is always preserved and
+    // the best-effort component fields are simply absent.
     const db = await database.create({ duration: "1h" }, transport, BASE);
+    expect(db.connection).toEqual({ connectionString: "not-a-valid-uri" });
     expect(db.connection?.connectionString).toBe("not-a-valid-uri");
     expect(db.connection?.host).toBeUndefined();
+    expect(db.connection?.port).toBeUndefined();
+    expect(db.connection?.username).toBeUndefined();
+    expect(db.connection?.password).toBeUndefined();
+    expect(db.connection?.databaseName).toBeUndefined();
+    expect(db.connection?.sslmode).toBeUndefined();
   });
 
   it("throws a clean error (before any fetch) when duration is missing", async () => {
