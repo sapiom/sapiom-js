@@ -291,7 +291,9 @@ describe("contentGeneration.video.create()", () => {
     // submit: default model, prompt only (no provider named, no storage).
     expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/veo3/fast`);
     expect(calls[0]!.init.method).toBe("POST");
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ prompt: "a wave" });
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "a wave",
+    });
     // polled the rewritten result URL until it carried output.
     expect(
       calls.filter(
@@ -344,7 +346,10 @@ describe("contentGeneration.video.create()", () => {
     const { transport } = makeTransport([
       (c) =>
         c.init.method === "POST"
-          ? jsonResponse({ request_id: "req-4", response_url: `${BASE}/queue/req-4` })
+          ? jsonResponse({
+              request_id: "req-4",
+              response_url: `${BASE}/queue/req-4`,
+            })
           : null,
       (c) =>
         c.init.method === "GET"
@@ -381,10 +386,15 @@ describe("contentGeneration.video.create()", () => {
     const { transport } = makeTransport([
       (c) =>
         c.init.method === "POST"
-          ? jsonResponse({ request_id: "req-3", response_url: `${BASE}/queue/req-3` })
+          ? jsonResponse({
+              request_id: "req-3",
+              response_url: `${BASE}/queue/req-3`,
+            })
           : null,
       (c) =>
-        c.init.method === "GET" ? jsonResponse({ status: "IN_PROGRESS" }) : null,
+        c.init.method === "GET"
+          ? jsonResponse({ status: "IN_PROGRESS" })
+          : null,
     ]);
 
     await expect(
@@ -401,7 +411,10 @@ describe("contentGeneration.video.create()", () => {
     const { transport } = makeTransport([
       (c) =>
         c.init.method === "POST"
-          ? jsonResponse({ request_id: "req-5", response_url: `${BASE}/queue/req-5` })
+          ? jsonResponse({
+              request_id: "req-5",
+              response_url: `${BASE}/queue/req-5`,
+            })
           : null,
       (c) => {
         if (c.init.method !== "GET") return null;
@@ -487,7 +500,11 @@ function makeLaunchTransport(
     return jsonResponse(pollResponse);
   }) as typeof globalThis.fetch;
   return {
-    transport: new Transport({ apiKey: "test-key", fetch: fetchMock, resumeToken }),
+    transport: new Transport({
+      apiKey: "test-key",
+      fetch: fetchMock,
+      resumeToken,
+    }),
     calls,
   };
 }
@@ -495,7 +512,10 @@ function makeLaunchTransport(
 describe("contentGeneration.video.launch()", () => {
   it("submits to the right URL and method, returns a handle with requestId and dispatch", async () => {
     const { transport, calls } = makeLaunchTransport(
-      { request_id: "req-launch-1", response_url: `${BASE}/queue/req-launch-1` },
+      {
+        request_id: "req-launch-1",
+        response_url: `${BASE}/queue/req-launch-1`,
+      },
       { video: { url: "https://media/v.mp4" } },
     );
 
@@ -508,7 +528,10 @@ describe("contentGeneration.video.launch()", () => {
 
   it("dispatch.correlationId equals requestId and dispatch.resultSignal equals VIDEO_RESULT_SIGNAL", async () => {
     const { transport } = makeLaunchTransport(
-      { request_id: "req-dispatch", response_url: `${BASE}/queue/req-dispatch` },
+      {
+        request_id: "req-dispatch",
+        response_url: `${BASE}/queue/req-dispatch`,
+      },
       { video: { url: "https://media/v.mp4" } },
     );
 
@@ -557,12 +580,17 @@ describe("contentGeneration.video.launch()", () => {
         init: RequestInit = {},
       ): Promise<Response> => {
         calls.push({ url: String(input), init });
-        return jsonResponse({ request_id: "req-env", response_url: `${BASE}/queue/req-env` });
+        return jsonResponse({
+          request_id: "req-env",
+          response_url: `${BASE}/queue/req-env`,
+        });
       }) as typeof globalThis.fetch;
       // Transport reads env var when resumeToken is not explicitly set
       const transport = new Transport({ apiKey: "test-key", fetch: fetchMock });
       await launchVideo({ prompt: "x" }, transport, BASE);
-      expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBe("tok-env-video");
+      expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBe(
+        "tok-env-video",
+      );
     } finally {
       delete process.env[KEY];
     }
@@ -586,11 +614,19 @@ describe("contentGeneration.video.launch()", () => {
       polls += 1;
       return polls < 2
         ? jsonResponse({ status: "IN_PROGRESS" })
-        : jsonResponse({ video: { url: "https://media/v.mp4", content_type: "video/mp4" } });
+        : jsonResponse({
+            video: { url: "https://media/v.mp4", content_type: "video/mp4" },
+          });
     }) as typeof globalThis.fetch;
     const transport = new Transport({ apiKey: "test-key", fetch: fetchMock });
 
-    const handle = await launchVideo({ prompt: "a wave", pollIntervalMs: 1 } as Parameters<typeof launchVideo>[0], transport, BASE);
+    const handle = await launchVideo(
+      { prompt: "a wave", pollIntervalMs: 1 } as Parameters<
+        typeof launchVideo
+      >[0],
+      transport,
+      BASE,
+    );
     const result = await handle.wait({ pollMs: 1 });
 
     expect(result.video).toEqual({
@@ -654,7 +690,9 @@ describe("createClient().contentGeneration.video.launch", () => {
       }) as typeof globalThis.fetch;
 
       const sapiom = createClient({ apiKey: "client-key", fetch: fetchMock });
-      const handle = await sapiom.contentGeneration.video.launch({ prompt: "x" });
+      const handle = await sapiom.contentGeneration.video.launch({
+        prompt: "x",
+      });
 
       expect(handle.requestId).toBe("r-client");
       expect(handle.dispatch.resultSignal).toBe(VIDEO_RESULT_SIGNAL);
@@ -662,7 +700,9 @@ describe("createClient().contentGeneration.video.launch", () => {
         "https://fal.services.sapiom.ai/run/fal-ai/veo3/fast",
       );
       expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
-      expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBe("tok-client-bind");
+      expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBe(
+        "tok-client-bind",
+      );
     } finally {
       delete process.env[KEY];
     }
@@ -689,7 +729,9 @@ describe("toVideoResumePayload()", () => {
   });
 
   it("maps a video with neither fileId nor storageError to an empty-field outputs[0]", () => {
-    const payload = toVideoResumePayload({ video: { url: "https://media/v.mp4" } });
+    const payload = toVideoResumePayload({
+      video: { url: "https://media/v.mp4" },
+    });
     expect(payload).toEqual({ outputs: [{}] });
   });
 
