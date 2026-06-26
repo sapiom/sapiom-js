@@ -1,6 +1,13 @@
 import { createClient } from "../index.js";
 import { Transport } from "../_client/index.js";
-import { scrape, webSearch, SearchHttpError } from "./index.js";
+import {
+  scrape,
+  webSearch,
+  findEmail,
+  verifyEmail,
+  domainSearch,
+  SearchHttpError,
+} from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — the capability fn is tested directly with a real Transport wired to
@@ -562,5 +569,505 @@ describe("createClient().search.webSearch", () => {
       query: "q",
       intent: "answer",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for the email-search GET ops
+// ---------------------------------------------------------------------------
+
+/** Parse a request URL's path and query params for assertions. */
+function parseUrl(url: string): {
+  path: string;
+  params: Record<string, string>;
+} {
+  const u = new URL(url);
+  const params: Record<string, string> = {};
+  u.searchParams.forEach((value, key) => {
+    params[key] = value;
+  });
+  return { path: `${u.origin}${u.pathname}`, params };
+}
+
+// ---------------------------------------------------------------------------
+// search.emailSearch.findEmail()
+// ---------------------------------------------------------------------------
+
+describe("search.emailSearch.findEmail()", () => {
+  it("GETs the email-finder with query params (snake_case) and the default credential, mapping snake→camel", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          data: {
+            email: "ada@example.com",
+            score: 97,
+            first_name: "Ada",
+            last_name: "Lovelace",
+            position: "Engineer",
+            company: "Example",
+            linkedin_url: "https://linkedin.com/in/ada",
+            verification: { status: "valid", date: "2026-01-01" },
+          },
+          meta: { params: {} },
+        }),
+    ]);
+
+    const out = await findEmail(
+      { domain: "example.com", firstName: "Ada", lastName: "Lovelace" },
+      transport,
+      BASE,
+    );
+
+    // linkedin_url → linkedinUrl; first_name → firstName; etc.
+    expect(out).toEqual({
+      email: "ada@example.com",
+      score: 97,
+      firstName: "Ada",
+      lastName: "Lovelace",
+      position: "Engineer",
+      company: "Example",
+      linkedinUrl: "https://linkedin.com/in/ada",
+      verification: { status: "valid", date: "2026-01-01" },
+    });
+
+    const { path, params } = parseUrl(calls[0]!.url);
+    expect(path).toBe(`${BASE}/v2/email-finder`);
+    expect(calls[0]!.init.method).toBe("GET");
+    expect(params).toEqual({
+      domain: "example.com",
+      first_name: "Ada",
+      last_name: "Lovelace",
+    });
+    // email-search hosts authenticate via the default x-sapiom-api-key, NOT
+    // x-api-key (which is the backend-hub-only path used by webSearch).
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-api-key")).toBeUndefined();
+  });
+
+  it("accepts company + fullName as a valid combination", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ data: { email: "ada@example.com" } }),
+    ]);
+
+    await findEmail(
+      { company: "Example Inc", fullName: "Ada Lovelace" },
+      transport,
+      BASE,
+    );
+
+    const { params } = parseUrl(calls[0]!.url);
+    expect(params).toEqual({
+      company: "Example Inc",
+      full_name: "Ada Lovelace",
+    });
+  });
+
+  it("returns email: null (not a thrown error) when the lookup finds nothing", async () => {
+    const { transport } = makeTransport([
+      () => jsonResponse({ data: { email: null, score: 0 } }),
+    ]);
+
+    const out = await findEmail(
+      { domain: "example.com", fullName: "Nobody Here" },
+      transport,
+      BASE,
+    );
+
+    expect(out.email).toBeNull();
+    expect(out.score).toBe(0);
+  });
+
+  it("treats null optional output fields as absent (not field: null)", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          data: {
+            email: "ada@example.com",
+            score: 80,
+            first_name: "Ada",
+            last_name: null,
+            position: null,
+            company: null,
+            linkedin_url: null,
+          },
+        }),
+    ]);
+
+    const out = await findEmail(
+      { domain: "example.com", fullName: "Ada Lovelace" },
+      transport,
+      BASE,
+    );
+
+    expect(out).toEqual({
+      email: "ada@example.com",
+      score: 80,
+      firstName: "Ada",
+    });
+    expect(out).not.toHaveProperty("lastName");
+    expect(out).not.toHaveProperty("position");
+    expect(out).not.toHaveProperty("linkedinUrl");
+  });
+
+  describe("required-combination guard (no network call when invalid)", () => {
+    // Each invalid combination must throw a SearchHttpError BEFORE any fetch.
+    const invalid: Array<[string, Record<string, string>]> = [
+      ["nothing at all", {}],
+      ["org only (domain, no person)", { domain: "example.com" }],
+      ["org only (company, no person)", { company: "Example" }],
+      ["person only (fullName, no org)", { fullName: "Ada Lovelace" }],
+      [
+        "person only (first+last, no org)",
+        { firstName: "Ada", lastName: "Lovelace" },
+      ],
+      [
+        "org + firstName but no lastName",
+        { domain: "x.com", firstName: "Ada" },
+      ],
+      [
+        "org + lastName but no firstName",
+        { domain: "x.com", lastName: "Lovelace" },
+      ],
+    ];
+
+    for (const [label, input] of invalid) {
+      it(`throws SearchHttpError and does not fetch: ${label}`, async () => {
+        const { transport, calls } = makeTransport([
+          () => jsonResponse({ data: {} }),
+        ]);
+
+        await expect(findEmail(input, transport, BASE)).rejects.toBeInstanceOf(
+          SearchHttpError,
+        );
+        await expect(findEmail(input, transport, BASE)).rejects.toMatchObject({
+          status: 400,
+        });
+        // The guard fires before any network round-trip.
+        expect(calls).toHaveLength(0);
+      });
+    }
+  });
+
+  it("throws SearchHttpError (status + body) on a non-2xx", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(JSON.stringify({ errors: [{ details: "Bad domain" }] }), {
+          status: 400,
+        }),
+    ]);
+
+    await expect(
+      findEmail(
+        { domain: "example.com", fullName: "Ada Lovelace" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toMatchObject({
+      name: "SearchHttpError",
+      status: 400,
+      body: { errors: [{ details: "Bad domain" }] },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search.emailSearch.verifyEmail()
+// ---------------------------------------------------------------------------
+
+describe("search.emailSearch.verifyEmail()", () => {
+  it("GETs the email-verifier with the email param and maps snake→camel", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          data: {
+            email: "ada@example.com",
+            status: "valid",
+            result: "deliverable",
+            score: 95,
+            smtp_check: true,
+            accept_all: false,
+            disposable: false,
+            webmail: false,
+          },
+        }),
+    ]);
+
+    const out = await verifyEmail(
+      { email: "ada@example.com" },
+      transport,
+      BASE,
+    );
+
+    expect(out).toEqual({
+      email: "ada@example.com",
+      status: "valid",
+      result: "deliverable",
+      score: 95,
+      smtpCheck: true,
+      acceptAll: false,
+      disposable: false,
+      webmail: false,
+    });
+
+    const { path, params } = parseUrl(calls[0]!.url);
+    expect(path).toBe(`${BASE}/v2/email-verifier`);
+    expect(calls[0]!.init.method).toBe("GET");
+    expect(params).toEqual({ email: "ada@example.com" });
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-api-key")).toBeUndefined();
+  });
+
+  it("preserves boolean false flags (not dropped as falsy)", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          data: {
+            email: "ada@example.com",
+            smtp_check: false,
+            accept_all: false,
+            disposable: false,
+            webmail: false,
+          },
+        }),
+    ]);
+
+    const out = await verifyEmail(
+      { email: "ada@example.com" },
+      transport,
+      BASE,
+    );
+
+    expect(out.smtpCheck).toBe(false);
+    expect(out.acceptAll).toBe(false);
+    expect(out.disposable).toBe(false);
+    expect(out.webmail).toBe(false);
+  });
+
+  it("falls back to the input email when the wire omits it", async () => {
+    const { transport } = makeTransport([
+      () => jsonResponse({ data: { status: "valid" } }),
+    ]);
+
+    const out = await verifyEmail(
+      { email: "fallback@example.com" },
+      transport,
+      BASE,
+    );
+
+    expect(out.email).toBe("fallback@example.com");
+  });
+
+  it("throws SearchHttpError before fetching when email is empty (JS caller)", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ data: {} }),
+    ]);
+
+    await expect(
+      verifyEmail({ email: "" as string }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws SearchHttpError (status + body) on a non-2xx", async () => {
+    const { transport } = makeTransport([
+      () => new Response(JSON.stringify({ error: "nope" }), { status: 422 }),
+    ]);
+
+    await expect(
+      verifyEmail({ email: "ada@example.com" }, transport, BASE),
+    ).rejects.toMatchObject({
+      name: "SearchHttpError",
+      status: 422,
+      body: { error: "nope" },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search.emailSearch.domainSearch()
+// ---------------------------------------------------------------------------
+
+describe("search.emailSearch.domainSearch()", () => {
+  it("GETs the domain-search, joins array filters to CSV, and maps value→email", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          data: {
+            domain: "example.com",
+            organization: "Example Inc",
+            pattern: "{first}.{last}",
+            accept_all: false,
+            emails: [
+              {
+                value: "ada@example.com",
+                type: "personal",
+                confidence: 99,
+                first_name: "Ada",
+                last_name: "Lovelace",
+                position: "CTO",
+                department: "engineering",
+                seniority: "executive",
+              },
+            ],
+          },
+        }),
+    ]);
+
+    const out = await domainSearch(
+      {
+        domain: "example.com",
+        limit: 5,
+        type: "personal",
+        seniority: ["senior", "executive"],
+        department: ["engineering", "sales"],
+      },
+      transport,
+      BASE,
+    );
+
+    // Hunter's `value` → our `email`; snake → camel on each row.
+    expect(out).toEqual({
+      domain: "example.com",
+      organization: "Example Inc",
+      pattern: "{first}.{last}",
+      acceptAll: false,
+      emails: [
+        {
+          email: "ada@example.com",
+          type: "personal",
+          confidence: 99,
+          firstName: "Ada",
+          lastName: "Lovelace",
+          position: "CTO",
+          department: "engineering",
+          seniority: "executive",
+        },
+      ],
+    });
+
+    const { path, params } = parseUrl(calls[0]!.url);
+    expect(path).toBe(`${BASE}/v2/domain-search`);
+    expect(calls[0]!.init.method).toBe("GET");
+    // arrays serialize as comma-separated values on the wire.
+    expect(params).toEqual({
+      domain: "example.com",
+      limit: "5",
+      type: "personal",
+      seniority: "senior,executive",
+      department: "engineering,sales",
+    });
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-api-key")).toBeUndefined();
+  });
+
+  it("omits array filters entirely when empty, and optional scalars when absent", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ data: { domain: "example.com", emails: [] } }),
+    ]);
+
+    await domainSearch(
+      { domain: "example.com", seniority: [], department: [] },
+      transport,
+      BASE,
+    );
+
+    const { params } = parseUrl(calls[0]!.url);
+    // empty arrays produce no query param at all.
+    expect(params).toEqual({ domain: "example.com" });
+    expect(params).not.toHaveProperty("seniority");
+    expect(params).not.toHaveProperty("department");
+    expect(params).not.toHaveProperty("limit");
+  });
+
+  it("defaults missing emails to [] and omits absent top-level fields", async () => {
+    const { transport } = makeTransport([
+      () => jsonResponse({ data: { domain: "example.com" } }),
+    ]);
+
+    const out = await domainSearch({ domain: "example.com" }, transport, BASE);
+
+    expect(out).toEqual({ domain: "example.com", emails: [] });
+    expect(out).not.toHaveProperty("organization");
+    expect(out).not.toHaveProperty("pattern");
+  });
+
+  it("throws SearchHttpError before fetching when domain is empty (JS caller)", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ data: {} }),
+    ]);
+
+    await expect(
+      domainSearch({ domain: "" } as { domain: string }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws SearchHttpError (status + body) on a non-2xx", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(JSON.stringify({ error: "rate limited" }), {
+          status: 429,
+        }),
+    ]);
+
+    await expect(
+      domainSearch({ domain: "example.com" }, transport, BASE),
+    ).rejects.toMatchObject({
+      name: "SearchHttpError",
+      status: 429,
+      body: { error: "rate limited" },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createClient().search.emailSearch — bindings
+// ---------------------------------------------------------------------------
+
+describe("createClient().search.emailSearch", () => {
+  it("binds findEmail to the client's credential + default host", async () => {
+    const calls: FetchCall[] = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      calls.push({ url: String(input), init });
+      return jsonResponse({ data: { email: "ada@example.com", score: 90 } });
+    }) as typeof globalThis.fetch;
+
+    const sapiom = createClient({ apiKey: "client-key", fetch: fetchMock });
+    const out = await sapiom.search.emailSearch.findEmail({
+      domain: "example.com",
+      fullName: "Ada Lovelace",
+    });
+
+    expect(out.email).toBe("ada@example.com");
+    const { path } = parseUrl(calls[0]!.url);
+    expect(path).toBe("https://hunter.services.sapiom.ai/v2/email-finder");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
+  });
+
+  it("binds verifyEmail and domainSearch to the default host", async () => {
+    const calls: FetchCall[] = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      calls.push({ url: String(input), init });
+      return jsonResponse({ data: { domain: "example.com", emails: [] } });
+    }) as typeof globalThis.fetch;
+
+    const sapiom = createClient({ apiKey: "client-key", fetch: fetchMock });
+    await sapiom.search.emailSearch.verifyEmail({ email: "ada@example.com" });
+    await sapiom.search.emailSearch.domainSearch({ domain: "example.com" });
+
+    expect(parseUrl(calls[0]!.url).path).toBe(
+      "https://hunter.services.sapiom.ai/v2/email-verifier",
+    );
+    expect(parseUrl(calls[1]!.url).path).toBe(
+      "https://hunter.services.sapiom.ai/v2/domain-search",
+    );
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
+    expect(headerOf(calls[1]!, "x-sapiom-api-key")).toBe("client-key");
   });
 });

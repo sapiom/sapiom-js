@@ -34,8 +34,17 @@ import type {
   ListResponse,
   FileMetadata,
 } from "../file-storage/index.js";
-import type { ImageGenerationResult } from "../content-generation/index.js";
-import type { ScrapeResult, WebSearchResponse } from "../search/index.js";
+import type {
+  ImageGenerationResult,
+  VideoGenerationResult,
+} from "../content-generation/index.js";
+import type {
+  ScrapeResult,
+  WebSearchResponse,
+  FindEmailResult,
+  VerifyEmailResult,
+  DomainSearchResult,
+} from "../search/index.js";
 import type {
   AppendResult,
   RecallResponse,
@@ -591,6 +600,19 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as ImageGenerationResult,
           ),
       },
+      video: {
+        create: (input) =>
+          Promise.resolve(
+            r("contentGeneration.video.create", [input], () => ({
+              video: {
+                url: "https://content.local/stub-video.mp4",
+                contentType: "video/mp4",
+                // mirror the real stitch: a fileId only when storage was requested.
+                ...(input.storage ? { fileId: "stub-file" } : {}),
+              },
+            })) as VideoGenerationResult,
+          ),
+      },
     },
     search: {
       scrape: (input) =>
@@ -622,6 +644,56 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             ],
           })) as WebSearchResponse,
         ),
+      emailSearch: {
+        findEmail: (input) =>
+          Promise.resolve(
+            r("search.emailSearch.findEmail", [input], () => {
+              const domain = input.domain ?? "example.com";
+              const name = input.fullName
+                ? input.fullName.toLowerCase().replace(/\s+/g, ".")
+                : [input.firstName, input.lastName]
+                    .filter(Boolean)
+                    .join(".")
+                    .toLowerCase() || "contact";
+              return {
+                email: `${name}@${domain}`,
+                score: 90,
+                ...(input.firstName && { firstName: input.firstName }),
+                ...(input.lastName && { lastName: input.lastName }),
+                ...(input.company && { company: input.company }),
+              };
+            }) as FindEmailResult,
+          ),
+        verifyEmail: (input) =>
+          Promise.resolve(
+            r("search.emailSearch.verifyEmail", [input], () => ({
+              email: input.email,
+              status: "valid",
+              result: "deliverable",
+              score: 95,
+              smtpCheck: true,
+              acceptAll: false,
+              disposable: false,
+              webmail: false,
+            })) as VerifyEmailResult,
+          ),
+        domainSearch: (input) =>
+          Promise.resolve(
+            r("search.emailSearch.domainSearch", [input], () => ({
+              domain: input.domain,
+              organization: "Stub Org",
+              pattern: "{first}.{last}",
+              acceptAll: false,
+              emails: [
+                {
+                  email: `contact@${input.domain}`,
+                  type: "generic",
+                  confidence: 90,
+                },
+              ],
+            })) as DomainSearchResult,
+          ),
+      },
     },
     memory: {
       append: (input) =>

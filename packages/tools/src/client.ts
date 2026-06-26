@@ -51,13 +51,27 @@ import * as contentGeneration from "./content-generation/index.js";
 import type {
   ImageCreateInput,
   ImageGenerationResult,
+  VideoCreateInput,
+  VideoGenerationResult,
 } from "./content-generation/index.js";
-import { scrape, webSearch } from "./search/index.js";
+import {
+  scrape,
+  webSearch,
+  findEmail,
+  verifyEmail,
+  domainSearch,
+} from "./search/index.js";
 import type {
   ScrapeInput,
   ScrapeResult,
   WebSearchInput,
   WebSearchResponse,
+  FindEmailInput,
+  FindEmailResult,
+  VerifyEmailInput,
+  VerifyEmailResult,
+  DomainSearchInput,
+  DomainSearchResult,
 } from "./search/index.js";
 import * as memory from "./memory/index.js";
 import type {
@@ -113,6 +127,14 @@ export interface Sapiom {
        */
       create(input: ImageCreateInput): Promise<ImageGenerationResult>;
     };
+    video: {
+      /**
+       * Generate a video from a prompt — async (submits, then polls until ready, then
+       * returns it). Pass `storage` to persist the output (the returned video carries
+       * `fileId`).
+       */
+      create(input: VideoCreateInput): Promise<VideoGenerationResult>;
+    };
   };
   readonly memory: {
     append(input: AppendInput): Promise<AppendResult>;
@@ -129,6 +151,15 @@ export interface Sapiom {
     scrape(input: ScrapeInput): Promise<ScrapeResult>;
     /** Search the web — a synthesized answer plus results by default. */
     webSearch(input: WebSearchInput): Promise<WebSearchResponse>;
+    /** Find, verify, and discover professional email addresses. */
+    readonly emailSearch: {
+      /** Find a person's email from their name and company. */
+      findEmail(input: FindEmailInput): Promise<FindEmailResult>;
+      /** Verify that an email address is deliverable. */
+      verifyEmail(input: VerifyEmailInput): Promise<VerifyEmailResult>;
+      /** Discover the emails published at a company domain. */
+      domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
+    };
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -175,10 +206,18 @@ function bind(transport: Transport): Sapiom {
       images: {
         create: (input) => contentGeneration.createImage(input, transport),
       },
+      video: {
+        create: (input) => contentGeneration.createVideo(input, transport),
+      },
     },
     search: {
       scrape: (input) => scrape(input, transport),
       webSearch: (input) => webSearch(input, transport),
+      emailSearch: {
+        findEmail: (input) => findEmail(input, transport),
+        verifyEmail: (input) => verifyEmail(input, transport),
+        domainSearch: (input) => domainSearch(input, transport),
+      },
     },
     memory: {
       append: (input) => memory.append(input, transport),

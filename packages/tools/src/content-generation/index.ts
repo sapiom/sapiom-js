@@ -1,5 +1,5 @@
 /**
- * `contentGeneration` capability — generate media (images today; video and audio
+ * `contentGeneration` capability — generate media (images and video today; audio
  * to come), with an optional `storage` param that persists each output to Sapiom
  * file storage so you get a durable `fileId` back inline.
  *
@@ -162,7 +162,158 @@ export async function createImage(
 
 /**
  * The `images` sub-namespace, so `contentGeneration.images.create(...)` reads the
- * same whether imported from the barrel or used on a client. Video and audio will
- * land here as sibling sub-namespaces.
+ * same whether imported from the barrel or used on a client.
  */
 export const images = { create: createImage };
+
+// ----- Video (async) -----
+
+/** Default video model when the caller doesn't pick one. */
+const DEFAULT_VIDEO_MODEL = "fal-ai/veo3/fast";
+/** How often to poll for the async result, and when to give up. Caller-overridable. */
+const DEFAULT_VIDEO_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_VIDEO_TIMEOUT_MS = 5 * 60_000;
+
+export interface VideoCreateInput {
+  /** Text prompt describing the video to generate. */
+  prompt: string;
+  /**
+   * Optional model selector. Defaults to a standard video model; most callers omit it.
+   * (Model identifiers are an advanced, evolving surface.)
+   */
+  model?: string;
+  /**
+   * Optional: persist the generated output to Sapiom file storage. When set, the
+   * returned `video` comes back annotated with `fileId` (or `storageError` if
+   * persisting failed).
+   */
+  storage?: StorageOptions;
+  /** Advanced: extra model-specific parameters, forwarded verbatim. */
+  params?: Record<string, unknown>;
+  /** How often to poll while the video generates (default 5s). */
+  pollIntervalMs?: number;
+  /** Give up and throw if the result isn't ready within this window (default 5 min). */
+  timeoutMs?: number;
+}
+
+export interface GeneratedVideo {
+  /** Hosted URL of the generated video. */
+  url: string;
+  /** MIME type, when reported. */
+  contentType?: string;
+  /**
+   * Present when `storage` was requested and the output was persisted — pass to
+   * `fileStorage.getDownloadUrl(fileId)` to retrieve it.
+   */
+  fileId?: string;
+  /** Present when `storage` was requested but persisting the output failed. */
+  storageError?: string;
+}
+
+export interface VideoGenerationResult {
+  /** The generated video. */
+  video?: GeneratedVideo;
+  /** Additional model-specific fields (e.g. `seed`, `timings`), returned as-is. */
+  [key: string]: unknown;
+}
+
+// ----- Internal request/response shapes -----
+
+interface RawMedia {
+  url: string;
+  content_type?: string;
+  file_id?: string;
+  storage_error?: string;
+}
+
+interface RawVideoResult {
+  video?: RawMedia;
+  [key: string]: unknown;
+}
+
+/** The async submit handle: a queue id + the Sapiom URL to poll for the result. */
+interface QueueHandle {
+  request_id?: string;
+  response_url?: string;
+  status_url?: string;
+}
+
+function mapVideo(raw: RawMedia): GeneratedVideo {
+  return {
+    url: raw.url,
+    ...(raw.content_type !== undefined && { contentType: raw.content_type }),
+    ...(raw.file_id !== undefined && { fileId: raw.file_id }),
+    ...(raw.storage_error !== undefined && { storageError: raw.storage_error }),
+  };
+}
+
+function mapVideoResult(raw: RawVideoResult): VideoGenerationResult {
+  const { video, ...rest } = raw;
+  return video === undefined ? { ...rest } : { ...rest, video: mapVideo(video) };
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Generate a video from a prompt. Video generation is asynchronous: this submits the
+ * job, then polls the result through Sapiom until it's ready and returns it — so you
+ * `await` it just like {@link createImage}, it just takes longer. Pass `storage` to
+ * persist the output (the returned `video` then carries `fileId`). Throws
+ * {@link ContentGenerationHttpError} on a failed submit, or an `Error` if the result
+ * isn't ready within `timeoutMs`.
+ */
+export async function createVideo(
+  input: VideoCreateInput,
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<VideoGenerationResult> {
+  const path = modelToPath(input.model || DEFAULT_VIDEO_MODEL);
+
+  const body: Record<string, unknown> = { prompt: input.prompt, ...input.params };
+  // Truthy check (not `!== undefined`) so `storage: null` is treated as "no storage".
+  if (input.storage) body.storage = input.storage;
+
+  // Submit — for an async model Sapiom returns a queue handle, not the result.
+  const submitRes = await ensureOk(
+    await transport.fetch(`${baseUrl}/run/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    "Failed to submit video generation",
+  );
+  const handle = (await submitRes.json()) as QueueHandle;
+  if (!handle.response_url) {
+    throw new Error("Video submit did not return a result URL to poll");
+  }
+
+  // Poll the result THROUGH Sapiom until it's ready. The poll is what persists the
+  // output when `storage` was requested, so `fileId` is filled in by the time it returns.
+  const intervalMs = input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS;
+  const timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await transport.fetch(handle.response_url, { method: "GET" });
+    if (res.ok) {
+      const raw = (await res.json()) as RawVideoResult;
+      if (raw.video?.url) return mapVideoResult(raw);
+    } else {
+      // Still generating, or a transient error. Drain the unread body so the
+      // connection can be reused, then keep polling — `timeoutMs` is the backstop
+      // for a result that never arrives.
+      try {
+        await res.body?.cancel();
+      } catch {
+        // best-effort drain
+      }
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(
+    `Video generation did not complete within ${timeoutMs}ms (request id: ${handle.request_id ?? "unknown"})`,
+  );
+}
+
+/** The `video` sub-namespace: `contentGeneration.video.create(...)`. Async (submit + poll). */
+export const video = { create: createVideo };

@@ -1,6 +1,6 @@
 # contentGeneration
 
-Generate media — images today (video and audio to come) — with an optional
+Generate media — images and video today (audio to come) — with an optional
 `storage` param that persists each output to Sapiom file storage, so you get a
 durable `fileId` back inline.
 
@@ -41,7 +41,28 @@ for (const img of out.images ?? []) {
 Persisting is best-effort per image: if one fails, that image carries a
 `storageError` string instead of a `fileId` while the others still succeed.
 
-## Input
+## Video (async)
+
+Video generation is **asynchronous** — `create` submits the job, polls for the
+result, and resolves once it's ready, so you `await` it like an image (it just
+takes longer). `storage` works the same way — the output comes back with a `fileId`.
+
+```typescript
+const out = await sapiom.contentGeneration.video.create({
+  prompt: "a calm ocean wave at sunset",
+  storage: { visibility: "private" }, // optional — persist the output
+});
+
+out.video?.url; // hosted URL of the generated video
+out.video?.fileId; // present when `storage` was passed — use with `fileStorage`
+```
+
+Video input takes `prompt`, plus optional `storage`, `model`, and `params` (as with
+images), and two async controls: `pollIntervalMs` (poll cadence, default 5s) and
+`timeoutMs` (give up and throw if it isn't ready in time, default 5 min). The
+returned `video` is `{ url, contentType?, fileId?, storageError? }`.
+
+## Image input
 
 - `prompt` (required) — the text prompt.
 - `numImages` (optional) — how many images to generate.

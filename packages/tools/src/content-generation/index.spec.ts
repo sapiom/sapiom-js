@@ -1,6 +1,11 @@
 import { createClient } from "../index.js";
 import { Transport } from "../_client/index.js";
-import { images, createImage, ContentGenerationHttpError } from "./index.js";
+import {
+  images,
+  createImage,
+  createVideo,
+  ContentGenerationHttpError,
+} from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — the capability fn is tested directly with a real Transport wired to
@@ -237,5 +242,219 @@ describe("createClient().contentGeneration.images.create", () => {
       prompt: "x",
       storage: { visibility: "private" },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// contentGeneration.video.create()  — async: submit, then poll until ready
+// ---------------------------------------------------------------------------
+
+describe("contentGeneration.video.create()", () => {
+  it("submits the default video model, polls until ready, and maps the result to camelCase", async () => {
+    let polls = 0;
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({
+              request_id: "req-1",
+              response_url: `${BASE}/queue/fal-ai/veo3/requests/req-1`,
+              status_url: `${BASE}/queue/fal-ai/veo3/requests/req-1/status`,
+            })
+          : null,
+      (c) => {
+        if (c.init.method !== "GET") return null;
+        polls += 1;
+        // pending first, completed result second
+        return polls < 2
+          ? jsonResponse({ status: "IN_PROGRESS" })
+          : jsonResponse({
+              video: { url: "https://media/v.mp4", content_type: "video/mp4" },
+              seed: 9,
+            });
+      },
+    ]);
+
+    const out = await createVideo(
+      { prompt: "a wave", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    // wire snake (content_type) → camelCase (contentType); top-level extras pass through.
+    expect(out).toEqual({
+      video: { url: "https://media/v.mp4", contentType: "video/mp4" },
+      seed: 9,
+    });
+    // submit: default model, prompt only (no provider named, no storage).
+    expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/veo3/fast`);
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ prompt: "a wave" });
+    // polled the rewritten result URL until it carried output.
+    expect(
+      calls.filter(
+        (c) =>
+          c.init.method === "GET" &&
+          c.url === `${BASE}/queue/fal-ai/veo3/requests/req-1`,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("sends storage on submit and surfaces fileId on the polled result", async () => {
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({
+              request_id: "req-2",
+              response_url: `${BASE}/queue/req-2`,
+            })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({
+              video: {
+                url: "https://media/v2.mp4",
+                content_type: "video/mp4",
+                file_id: "vid-file-1",
+              },
+            })
+          : null,
+    ]);
+
+    const out = await createVideo(
+      { prompt: "x", storage: { visibility: "private" }, pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    expect(out.video).toEqual({
+      url: "https://media/v2.mp4",
+      contentType: "video/mp4",
+      fileId: "vid-file-1",
+    });
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      storage: { visibility: "private" },
+    });
+  });
+
+  it("maps a per-output storage_error to camelCase", async () => {
+    const { transport } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ request_id: "req-4", response_url: `${BASE}/queue/req-4` })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({
+              video: { url: "https://media/v4.mp4", storage_error: "nope" },
+            })
+          : null,
+    ]);
+
+    const out = await createVideo(
+      { prompt: "x", storage: {}, pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    expect(out.video).toEqual({
+      url: "https://media/v4.mp4",
+      storageError: "nope",
+    });
+  });
+
+  it("throws ContentGenerationHttpError when the submit fails — never polls", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ error: "bad model" }, { status: 422 }),
+    ]);
+
+    await expect(
+      createVideo({ prompt: "x", pollIntervalMs: 1 }, transport, BASE),
+    ).rejects.toBeInstanceOf(ContentGenerationHttpError);
+    expect(calls).toHaveLength(1); // submit only
+  });
+
+  it("throws if the result isn't ready before the timeout", async () => {
+    const { transport } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ request_id: "req-3", response_url: `${BASE}/queue/req-3` })
+          : null,
+      (c) =>
+        c.init.method === "GET" ? jsonResponse({ status: "IN_PROGRESS" }) : null,
+    ]);
+
+    await expect(
+      createVideo(
+        { prompt: "x", pollIntervalMs: 1, timeoutMs: 20 },
+        transport,
+        BASE,
+      ),
+    ).rejects.toThrow(/did not complete within/);
+  });
+
+  it("tolerates a transient non-ok poll, then returns once the result is ready", async () => {
+    let polls = 0;
+    const { transport } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({ request_id: "req-5", response_url: `${BASE}/queue/req-5` })
+          : null,
+      (c) => {
+        if (c.init.method !== "GET") return null;
+        polls += 1;
+        return polls < 2
+          ? jsonResponse({ error: "upstream hiccup" }, { status: 503 })
+          : jsonResponse({ video: { url: "https://media/v5.mp4" } });
+      },
+    ]);
+
+    const out = await createVideo(
+      { prompt: "x", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    expect(out.video?.url).toBe("https://media/v5.mp4");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createClient().contentGeneration.video — binding
+// ---------------------------------------------------------------------------
+
+describe("createClient().contentGeneration.video.create", () => {
+  it("binds to the client credential + default host, submits then polls to the result", async () => {
+    let polls = 0;
+    const calls: FetchCall[] = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      calls.push({ url: String(input), init });
+      if (init.method === "POST") {
+        return jsonResponse({
+          request_id: "r",
+          response_url: "https://fal.services.sapiom.ai/queue/r",
+        });
+      }
+      polls += 1;
+      return polls < 2
+        ? jsonResponse({ status: "IN_PROGRESS" })
+        : jsonResponse({ video: { url: "u", file_id: "f" } });
+    }) as typeof globalThis.fetch;
+
+    const sapiom = createClient({ apiKey: "client-key", fetch: fetchMock });
+    const out = await sapiom.contentGeneration.video.create({
+      prompt: "x",
+      storage: { visibility: "private" },
+      pollIntervalMs: 1,
+    });
+
+    expect(out.video?.fileId).toBe("f");
+    expect(calls[0]!.url).toBe(
+      "https://fal.services.sapiom.ai/run/fal-ai/veo3/fast",
+    );
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
   });
 });

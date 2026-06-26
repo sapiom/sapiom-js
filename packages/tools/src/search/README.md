@@ -2,7 +2,7 @@
 
 Find information across the web and beyond — searching the web, reading pages,
 and looking up professional emails. More operations land in this namespace as
-they ship; today it offers `webSearch` and `scrape`.
+they ship; today it offers `webSearch`, `scrape`, and `emailSearch`.
 
 ## `webSearch` — search the web
 
@@ -120,7 +120,136 @@ that format was requested.
 `scrape` works on HTML pages and common documents (PDF, DOCX, TXT). It is not
 meant for images, video, or archives.
 
+## `emailSearch` — work with professional emails
+
+`emailSearch` groups three operations: `findEmail` (find a person's email),
+`verifyEmail` (check an address is deliverable), and `domainSearch` (discover the
+emails published at a company domain).
+
+### `findEmail` — find a person's email
+
+```typescript
+import { createClient } from "@sapiom/tools";
+const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
+
+const found = await sapiom.search.emailSearch.findEmail({
+  domain: "example.com",
+  firstName: "Ada",
+  lastName: "Lovelace",
+});
+found.email; // the discovered email, or null when none was found
+found.score; // confidence (0–100)
+```
+
+You must give enough to identify both the person and where they work: a `domain`
+**or** `company`, **and** either a `fullName` **or** both `firstName` and
+`lastName`. Calling without a valid combination throws `SearchHttpError` before
+any request is made.
+
+```typescript
+const found = await sapiom.search.emailSearch.findEmail({
+  company: "Example Inc",
+  fullName: "Ada Lovelace",
+});
+```
+
+#### Input
+
+- `domain` — company domain, e.g. `"example.com"` (provide `domain` or `company`).
+- `company` — company name (alternative to `domain`).
+- `firstName` / `lastName` — the person's name (provide both, or use `fullName`).
+- `fullName` — the person's full name (alternative to `firstName` + `lastName`).
+
+#### Result
+
+```typescript
+{
+  email: string | null;   // null when not found
+  score?: number;         // confidence 0–100
+  firstName?: string;
+  lastName?: string;
+  position?: string;
+  company?: string;
+  linkedinUrl?: string;
+  verification?: { status?: string; date?: string };
+}
+```
+
+### `verifyEmail` — verify deliverability
+
+```typescript
+const check = await sapiom.search.emailSearch.verifyEmail({
+  email: "ada@example.com",
+});
+check.status; // deliverability status
+check.score; // confidence 0–100
+```
+
+#### Input
+
+- `email` (required) — the address to verify.
+
+#### Result
+
+```typescript
+{
+  email: string;
+  status?: string;
+  result?: string;
+  score?: number;
+  smtpCheck?: boolean;
+  acceptAll?: boolean;    // domain accepts any address (a positive is weak)
+  disposable?: boolean;
+  webmail?: boolean;
+}
+```
+
+### `domainSearch` — discover emails at a domain
+
+```typescript
+const hits = await sapiom.search.emailSearch.domainSearch({
+  domain: "example.com",
+  limit: 5,
+  seniority: ["executive"],
+  department: ["engineering", "sales"],
+});
+hits.emails; // [{ email, type?, confidence?, firstName?, ... }, …]
+hits.pattern; // the detected email pattern, e.g. "{first}.{last}"
+```
+
+#### Input
+
+- `domain` (required) — the company domain to search.
+- `limit` — max emails to return (max 100, default 10).
+- `type` — `"personal"` or `"generic"`.
+- `seniority` — any of `"junior" | "senior" | "executive"`.
+- `department` — one or more departments, e.g. `["engineering", "sales"]`.
+
+#### Result
+
+```typescript
+{
+  domain: string;
+  organization?: string;
+  pattern?: string;
+  acceptAll?: boolean;
+  emails: Array<{
+    email: string;
+    type?: string;
+    confidence?: number;
+    firstName?: string;
+    lastName?: string;
+    position?: string;
+    department?: string;
+    seniority?: string;
+  }>;
+}
+```
+
 ## Gotchas
 
 - **Failed requests throw `SearchHttpError`** (carries `status` + parsed `body`),
   exported from `@sapiom/tools`.
+- **`findEmail` validates its inputs before calling.** An under-specified lookup
+  (missing the org or the person) throws `SearchHttpError` immediately, with no
+  network round-trip.
