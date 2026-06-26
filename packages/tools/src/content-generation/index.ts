@@ -465,8 +465,8 @@ export async function launchVideo(
   const responseUrl = handle.response_url;
 
   const wait = async ({
-    timeoutMs = DEFAULT_VIDEO_TIMEOUT_MS,
-    pollMs = DEFAULT_VIDEO_POLL_INTERVAL_MS,
+    timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS,
+    pollMs = input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS,
   }: {
     timeoutMs?: number;
     pollMs?: number;

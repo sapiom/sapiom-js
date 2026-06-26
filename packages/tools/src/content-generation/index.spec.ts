@@ -621,9 +621,7 @@ describe("contentGeneration.video.launch()", () => {
     const transport = new Transport({ apiKey: "test-key", fetch: fetchMock });
 
     const handle = await launchVideo(
-      { prompt: "a wave", pollIntervalMs: 1 } as Parameters<
-        typeof launchVideo
-      >[0],
+      { prompt: "a wave", pollIntervalMs: 1 },
       transport,
       BASE,
     );
@@ -665,6 +663,47 @@ describe("contentGeneration.video.launch()", () => {
       launchVideo({ prompt: "x" }, transport, BASE),
     ).rejects.toBeInstanceOf(ContentGenerationHttpError);
     expect(calls).toHaveLength(1);
+  });
+
+  it("wait() throws if the result isn't ready before the timeout", async () => {
+    const { transport } = makeLaunchTransport(
+      { request_id: "req-timeout", response_url: `${BASE}/queue/req-timeout` },
+      { status: "IN_PROGRESS" },
+    );
+
+    const handle = await launchVideo({ prompt: "x" }, transport, BASE);
+    await expect(handle.wait({ timeoutMs: 20, pollMs: 1 })).rejects.toThrow(
+      /did not complete within/,
+    );
+  });
+
+  it("explicit resumeToken wins over the ambient env token", async () => {
+    const KEY = "SAPIOM_CAPABILITY_RESUME_TOKEN";
+    process.env[KEY] = "tok-env-should-lose";
+    try {
+      const calls: FetchCall[] = [];
+      const fetchMock = (async (
+        input: Parameters<typeof globalThis.fetch>[0],
+        init: RequestInit = {},
+      ): Promise<Response> => {
+        calls.push({ url: String(input), init });
+        return jsonResponse({
+          request_id: "req-explicit",
+          response_url: `${BASE}/queue/req-explicit`,
+        });
+      }) as typeof globalThis.fetch;
+      const transport = new Transport({
+        apiKey: "test-key",
+        resumeToken: "tok-explicit",
+        fetch: fetchMock,
+      });
+      await launchVideo({ prompt: "x" }, transport, BASE);
+      expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBe(
+        "tok-explicit",
+      );
+    } finally {
+      delete process.env[KEY];
+    }
   });
 });
 

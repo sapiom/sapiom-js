@@ -593,7 +593,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                   contentType: "image/png",
                   width: 512,
                   height: 512,
-                  // mirror the real stitch: a fileId only when storage was requested.
+                  // mirror the real behavior: a fileId only when storage was requested.
                   ...(input.storage ? { fileId: "stub-file" } : {}),
                 },
               ],
@@ -607,7 +607,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               video: {
                 url: "https://content.local/stub-video.mp4",
                 contentType: "video/mp4",
-                // mirror the real stitch: a fileId only when storage was requested.
+                // mirror the real behavior: a fileId only when storage was requested.
                 ...(input.storage ? { fileId: "stub-file" } : {}),
               },
             })) as VideoGenerationResult,
