@@ -181,7 +181,7 @@ export async function create(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<Database> {
   if (
-    !input.duration ||
+    !input?.duration ||
     !(DATABASE_DURATIONS as readonly string[]).includes(input.duration)
   ) {
     throw new DatabaseHttpError(
