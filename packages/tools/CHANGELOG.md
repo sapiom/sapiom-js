@@ -1,5 +1,40 @@
 # @sapiom/tools
 
+## 0.8.1
+
+### Patch Changes
+
+- bfd2382: Validate the `duration` input in `database.create` and reject invalid values before the request.
+
+## 0.8.0
+
+### Minor Changes
+
+- 2b94dff: Add the `database` namespace for on-demand Postgres databases:
+
+  - `database.create` — provision a database for a chosen `duration`, returned with direct connection credentials (`connection.connectionString`, `host`, `port`, `username`, `password`, `databaseName`).
+  - `database.get` — retrieve a database by its id or handle.
+  - `database.delete` — delete a database by its id or handle.
+
+  Results use normalized camelCase types, and a typed `DatabaseHttpError` (`{ status, body }`) is thrown on non-2xx responses.
+
+- ac71754: Add the `search` namespace with provider-agnostic operations:
+
+  - `search.webSearch` — web search returning normalized `{ query, answer?, results }`.
+  - `search.scrape` — fetch a URL as clean Markdown/HTML with page metadata.
+  - `search.emailSearch.findEmail` / `verifyEmail` / `domainSearch` — find, verify, and discover professional email addresses for a domain.
+
+  Results use normalized camelCase types, and a typed `SearchHttpError` (`{ status, body }`) is thrown on non-2xx responses.
+
+- f078ed5: Add `contentGeneration.video.launch()` — the dispatchable surface for video generation.
+
+  - `contentGeneration.video.launch(input)` submits a video generation job and returns a `VideoLaunchHandle` immediately. Pass the handle to `pauseUntilSignal(handle, { resumeStep })` to suspend a workflow step until the video is ready, or call `handle.wait()` to block inline.
+  - `VideoLaunchHandle` satisfies `DispatchHandle` — `dispatch.correlationId` and `dispatch.resultSignal` are the join keys the orchestration engine uses to resume a paused step.
+  - `VIDEO_RESULT_SIGNAL` (`"contentGeneration.video.result"`) is the capability-stable signal constant; use it in the static `pause: { signal }` declaration of a workflow step.
+  - `VideoResultPayload` and `toVideoResumePayload` describe the payload a resumed step receives across the wire boundary (plain JSON with `outputs[].fileId` / `outputs[].storageError`).
+  - Prompt-guard hardening: `images.create`, `video.create`, and `video.launch` now throw a typed error immediately when `prompt` is null, empty, or not a string — before any network request is made.
+  - `createStubClient()` wires `contentGeneration.video.launch` as a dispatchable stub that auto-registers a resume payload when `signals` is provided, enabling local workflow testing.
+
 ## 0.7.0
 
 ### Minor Changes

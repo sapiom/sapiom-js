@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/tools",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "description": "Typed client for Sapiom capabilities (sandboxes, repositories, agent, file storage, …) — the same tools your agents call over MCP, callable from your code, auth'd to your tenant.",
   "license": "MIT",
   "author": "Sapiom",
