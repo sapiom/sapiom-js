@@ -45,6 +45,7 @@ import type {
   VerifyEmailResult,
   DomainSearchResult,
 } from "../search/index.js";
+import type { Database } from "../database/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -689,6 +690,62 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as DomainSearchResult,
           ),
       },
+    },
+    database: {
+      create: (input) =>
+        Promise.resolve(
+          r("database.create", [input], () => {
+            const handle = input.handle ?? null;
+            const name = `stub-${handle ?? "db"}`;
+            return {
+              id: "stub-db",
+              handle,
+              name: input.name ?? null,
+              description: input.description ?? null,
+              status: "active",
+              region: input.region ?? "us-east-1",
+              pgVersion: input.pgVersion ?? 17,
+              duration: input.duration,
+              connection: {
+                connectionString: `postgresql://stub_user:stub_pass@localhost:5432/${name}`,
+                host: "localhost",
+                port: 5432,
+                username: "stub_user",
+                password: "stub_pass",
+                databaseName: name,
+              },
+              expiresAt: "2099-01-01T00:00:00Z",
+              createdAt: "2099-01-01T00:00:00Z",
+            };
+          }) as Database,
+        ),
+      get: (idOrHandle) =>
+        Promise.resolve(
+          r("database.get", [idOrHandle], () => ({
+            id: "stub-db",
+            handle: idOrHandle,
+            name: `stub-${idOrHandle}`,
+            description: null,
+            status: "active",
+            region: "us-east-1",
+            pgVersion: 17,
+            duration: "1h",
+            connection: {
+              connectionString: `postgresql://stub_user:stub_pass@localhost:5432/stub-${idOrHandle}`,
+              host: "localhost",
+              port: 5432,
+              username: "stub_user",
+              password: "stub_pass",
+              databaseName: `stub-${idOrHandle}`,
+            },
+            expiresAt: "2099-01-01T00:00:00Z",
+            createdAt: "2099-01-01T00:00:00Z",
+          })) as Database,
+        ),
+      delete: (idOrHandle) =>
+        Promise.resolve(
+          r("database.delete", [idOrHandle], () => undefined) as void,
+        ),
     },
     withAttribution: () => client,
   };
