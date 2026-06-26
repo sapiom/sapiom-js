@@ -76,6 +76,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `contentGeneration` | Media generation (images + video; audio soon), with optional `storage`                                | [src/content-generation](./src/content-generation/README.md) |
 | `search`            | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`) | [src/search](./src/search/README.md)                         |
 | `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result                        | [src/orchestrations](./src/orchestrations/README.md)         |
+| `database`          | On-demand Postgres databases, returned with direct connection credentials                             | [src/database](./src/database/README.md)                     |
 
 ## Composing capabilities
 

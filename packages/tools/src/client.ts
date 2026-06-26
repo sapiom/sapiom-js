@@ -74,6 +74,8 @@ import type {
   DomainSearchInput,
   DomainSearchResult,
 } from "./search/index.js";
+import * as database from "./database/index.js";
+import type { CreateDatabaseInput, Database } from "./database/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -155,6 +157,15 @@ export interface Sapiom {
       domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
     };
   };
+  /** On-demand Postgres databases, returned with direct connection credentials. */
+  readonly database: {
+    /** Provision a database (returns connection credentials). `duration` is required. */
+    create(input: CreateDatabaseInput): Promise<Database>;
+    /** Retrieve a database by its id or handle. */
+    get(idOrHandle: string): Promise<Database>;
+    /** Delete a database by its id or handle. */
+    delete(idOrHandle: string): Promise<void>;
+  };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
@@ -213,6 +224,11 @@ function bind(transport: Transport): Sapiom {
         verifyEmail: (input) => verifyEmail(input, transport),
         domainSearch: (input) => domainSearch(input, transport),
       },
+    },
+    database: {
+      create: (input) => database.create(input, transport),
+      get: (idOrHandle) => database.get(idOrHandle, transport),
+      delete: (idOrHandle) => database.delete(idOrHandle, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

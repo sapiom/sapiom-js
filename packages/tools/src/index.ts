@@ -70,3 +70,6 @@ export { toVideoResumePayload } from "./content-generation/index.js";
 
 export * as search from "./search/index.js";
 export { SearchHttpError } from "./search/index.js";
+
+export * as database from "./database/index.js";
+export { DatabaseHttpError } from "./database/index.js";
