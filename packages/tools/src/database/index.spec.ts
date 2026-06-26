@@ -229,6 +229,18 @@ describe("database.create()", () => {
     expect(calls.length).toBe(0);
   });
 
+  it("throws a clean error (before any fetch) when duration is invalid", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+    await expect(
+      database.create({ duration: "bogus" } as never, transport, BASE),
+    ).rejects.toMatchObject({ name: "DatabaseHttpError", status: 400 });
+    await expect(
+      database.create({ duration: "bogus" } as never, transport, BASE),
+    ).rejects.toBeInstanceOf(DatabaseHttpError);
+    expect(calls.length).toBe(0);
+  });
+
   it("throws DatabaseHttpError (with status + body) on a non-2xx", async () => {
     const { transport } = makeTransport([
       () =>

@@ -25,8 +25,11 @@ const DEFAULT_BASE_URL =
 
 // ----- Types -----
 
+/** The set of valid database lifetimes, in ascending order. */
+export const DATABASE_DURATIONS = ["15m", "1h", "4h", "24h", "7d"] as const;
+
 /** How long the database lives before it is automatically removed. */
-export type DatabaseDuration = "15m" | "1h" | "4h" | "24h" | "7d";
+export type DatabaseDuration = (typeof DATABASE_DURATIONS)[number];
 
 /** Lifecycle state of a database. */
 export type DatabaseStatus =
@@ -177,10 +180,15 @@ export async function create(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<Database> {
-  if (!input.duration) {
-    throw new DatabaseHttpError("duration is required", 400, {
-      message: "duration is required",
-    });
+  if (
+    !input.duration ||
+    !(DATABASE_DURATIONS as readonly string[]).includes(input.duration)
+  ) {
+    throw new DatabaseHttpError(
+      "duration must be one of: 15m, 1h, 4h, 24h, 7d",
+      400,
+      { duration: input?.duration },
+    );
   }
 
   const body: RawCreateDatabaseRequest = { duration: input.duration };
