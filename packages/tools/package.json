@@ -53,6 +53,11 @@
       "import": "./dist/esm/memory/index.js",
       "require": "./dist/cjs/memory/index.js"
     },
+    "./database": {
+      "types": "./dist/cjs/database/index.d.ts",
+      "import": "./dist/esm/database/index.js",
+      "require": "./dist/cjs/database/index.js"
+    },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",
       "import": "./dist/esm/stub/index.js",

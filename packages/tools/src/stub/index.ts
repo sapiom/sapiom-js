@@ -34,9 +34,14 @@ import type {
   ListResponse,
   FileMetadata,
 } from "../file-storage/index.js";
+import {
+  VIDEO_RESULT_SIGNAL,
+  toVideoResumePayload,
+} from "../content-generation/index.js";
 import type {
   ImageGenerationResult,
   VideoGenerationResult,
+  VideoLaunchHandle,
 } from "../content-generation/index.js";
 import type {
   ScrapeResult,
@@ -50,6 +55,7 @@ import type {
   RecallResponse,
   Memory,
 } from "../memory/index.js";
+import type { Database } from "../database/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -593,7 +599,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                   contentType: "image/png",
                   width: 512,
                   height: 512,
-                  // mirror the real stitch: a fileId only when storage was requested.
+                  // mirror the real behavior: a fileId only when storage was requested.
                   ...(input.storage ? { fileId: "stub-file" } : {}),
                 },
               ],
@@ -607,11 +613,40 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               video: {
                 url: "https://content.local/stub-video.mp4",
                 contentType: "video/mp4",
-                // mirror the real stitch: a fileId only when storage was requested.
+                // mirror the real behavior: a fileId only when storage was requested.
                 ...(input.storage ? { fileId: "stub-file" } : {}),
               },
             })) as VideoGenerationResult,
           ),
+        launch: (input) => {
+          const requestId = `stub-video-${++launchSeq}`;
+          const result = r(
+            dispatchedKeys("contentGeneration.video"),
+            [input],
+            () => ({
+              video: {
+                url: "https://content.local/stub-video.mp4",
+                contentType: "video/mp4",
+                ...(input.storage ? { fileId: "stub-file" } : {}),
+              },
+            }),
+          ) as VideoGenerationResult;
+
+          const handle: VideoLaunchHandle = {
+            requestId,
+            dispatch: {
+              correlationId: requestId,
+              resultSignal: VIDEO_RESULT_SIGNAL,
+            },
+            wait: () => Promise.resolve(result),
+          };
+
+          // Register the resume payload so a local `pauseUntilSignal` on this handle
+          // resolves with a VideoResultPayload.
+          return dispatchable(handle, opts.signals, () =>
+            toVideoResumePayload(result),
+          );
+        },
       },
     },
     search: {
@@ -735,6 +770,62 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         ),
       forget: (id) =>
         Promise.resolve(r("memory.forget", [id], () => undefined) as void),
+    },
+    database: {
+      create: (input) =>
+        Promise.resolve(
+          r("database.create", [input], () => {
+            const handle = input.handle ?? null;
+            const name = `stub-${handle ?? "db"}`;
+            return {
+              id: "stub-db",
+              handle,
+              name: input.name ?? null,
+              description: input.description ?? null,
+              status: "active",
+              region: input.region ?? "us-east-1",
+              pgVersion: input.pgVersion ?? 17,
+              duration: input.duration,
+              connection: {
+                connectionString: `postgresql://stub_user:stub_pass@localhost:5432/${name}`,
+                host: "localhost",
+                port: 5432,
+                username: "stub_user",
+                password: "stub_pass",
+                databaseName: name,
+              },
+              expiresAt: "2099-01-01T00:00:00Z",
+              createdAt: "2099-01-01T00:00:00Z",
+            };
+          }) as Database,
+        ),
+      get: (idOrHandle) =>
+        Promise.resolve(
+          r("database.get", [idOrHandle], () => ({
+            id: "stub-db",
+            handle: idOrHandle,
+            name: `stub-${idOrHandle}`,
+            description: null,
+            status: "active",
+            region: "us-east-1",
+            pgVersion: 17,
+            duration: "1h",
+            connection: {
+              connectionString: `postgresql://stub_user:stub_pass@localhost:5432/stub-${idOrHandle}`,
+              host: "localhost",
+              port: 5432,
+              username: "stub_user",
+              password: "stub_pass",
+              databaseName: `stub-${idOrHandle}`,
+            },
+            expiresAt: "2099-01-01T00:00:00Z",
+            createdAt: "2099-01-01T00:00:00Z",
+          })) as Database,
+        ),
+      delete: (idOrHandle) =>
+        Promise.resolve(
+          r("database.delete", [idOrHandle], () => undefined) as void,
+        ),
     },
     withAttribution: () => client,
   };

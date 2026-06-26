@@ -53,6 +53,7 @@ import type {
   ImageGenerationResult,
   VideoCreateInput,
   VideoGenerationResult,
+  VideoLaunchHandle,
 } from "./content-generation/index.js";
 import {
   scrape,
@@ -81,6 +82,8 @@ import type {
   RecallResponse,
   Memory,
 } from "./memory/index.js";
+import * as database from "./database/index.js";
+import type { CreateDatabaseInput, Database } from "./database/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -134,6 +137,13 @@ export interface Sapiom {
        * `fileId`).
        */
       create(input: VideoCreateInput): Promise<VideoGenerationResult>;
+      /**
+       * Submit a video generation job and return a dispatchable handle immediately.
+       * Pass the handle to `pauseUntilSignal(handle, { resumeStep })` to suspend the
+       * workflow step until the video is ready, or call `handle.wait()` to block
+       * inline (equivalent to `video.create`). Pass `storage` to persist the output.
+       */
+      launch(input: VideoCreateInput): Promise<VideoLaunchHandle>;
     };
   };
   readonly memory: {
@@ -160,6 +170,15 @@ export interface Sapiom {
       /** Discover the emails published at a company domain. */
       domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
     };
+  };
+  /** On-demand Postgres databases, returned with direct connection credentials. */
+  readonly database: {
+    /** Provision a database (returns connection credentials). `duration` is required. */
+    create(input: CreateDatabaseInput): Promise<Database>;
+    /** Retrieve a database by its id or handle. */
+    get(idOrHandle: string): Promise<Database>;
+    /** Delete a database by its id or handle. */
+    delete(idOrHandle: string): Promise<void>;
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -208,6 +227,7 @@ function bind(transport: Transport): Sapiom {
       },
       video: {
         create: (input) => contentGeneration.createVideo(input, transport),
+        launch: (input) => contentGeneration.launchVideo(input, transport),
       },
     },
     search: {
@@ -224,6 +244,11 @@ function bind(transport: Transport): Sapiom {
       recall: (input) => memory.recall(input, transport),
       get: (id) => memory.get(id, transport),
       forget: (id) => memory.forget(id, transport),
+    },
+    database: {
+      create: (input) => database.create(input, transport),
+      get: (idOrHandle) => database.get(idOrHandle, transport),
+      delete: (idOrHandle) => database.delete(idOrHandle, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

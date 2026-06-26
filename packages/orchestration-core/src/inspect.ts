@@ -72,10 +72,12 @@ export function isExecutionTerminal(status: string): boolean {
 /**
  * Pause signals the engine resumes on its own (a dispatched capability reports
  * completion via a callback), so a wait should keep polling through them.
- * Mirrors `CODING_RESULT_SIGNAL` from `@sapiom/tools`; extend as more dispatched
- * capabilities land.
+ * Extend as more dispatched capabilities land.
  */
-const AUTO_RESUME_PAUSE_SIGNALS = ["agent.coding.result"];
+const AUTO_RESUME_PAUSE_SIGNALS = [
+  "agent.coding.result",
+  "contentGeneration.video.result",
+];
 
 export type WaitStopReason = "terminal" | "needs-signal" | "timeout";
 
