@@ -1,5 +1,11 @@
 # @sapiom/tools
 
+## 0.8.1
+
+### Patch Changes
+
+- bfd2382: Validate the `duration` input in `database.create` and reject invalid values before the request.
+
 ## 0.8.0
 
 ### Minor Changes
