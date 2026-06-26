@@ -54,8 +54,13 @@ import type {
   VideoCreateInput,
   VideoGenerationResult,
 } from "./content-generation/index.js";
-import { scrape } from "./search/index.js";
-import type { ScrapeInput, ScrapeResult } from "./search/index.js";
+import { scrape, webSearch } from "./search/index.js";
+import type {
+  ScrapeInput,
+  ScrapeResult,
+  WebSearchInput,
+  WebSearchResponse,
+} from "./search/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -118,6 +123,8 @@ export interface Sapiom {
   readonly search: {
     /** Read a page and return its content (markdown by default). */
     scrape(input: ScrapeInput): Promise<ScrapeResult>;
+    /** Search the web — a synthesized answer plus results by default. */
+    webSearch(input: WebSearchInput): Promise<WebSearchResponse>;
   };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
@@ -170,6 +177,7 @@ function bind(transport: Transport): Sapiom {
     },
     search: {
       scrape: (input) => scrape(input, transport),
+      webSearch: (input) => webSearch(input, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

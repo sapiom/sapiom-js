@@ -54,6 +54,26 @@ export interface TransportConfig {
   resumeToken?: string;
 }
 
+/**
+ * Which header carries the tenant credential. Sapiom has two authenticated
+ * surfaces with different conventions: most operations send `x-sapiom-api-key`
+ * (the default), while a few send `x-api-key`. A capability that targets the
+ * latter passes `authHeader: "x-api-key"`; everything else uses the default.
+ * The credential value is the same — the Transport holds it; callers never do.
+ */
+export type AuthHeader = "x-sapiom-api-key" | "x-api-key";
+
+const DEFAULT_AUTH_HEADER: AuthHeader = "x-sapiom-api-key";
+
+/** Per-request options the Transport understands, layered over a normal `RequestInit`. */
+export interface TransportRequestOptions {
+  /**
+   * Which header carries the tenant credential. Defaults to `x-sapiom-api-key`.
+   * A capability sets this only when its destination expects a different header.
+   */
+  authHeader?: AuthHeader;
+}
+
 function attributionToHeaders(a: Attribution): Record<string, string> {
   const h: Record<string, string> = {};
   if (a.agentName) h["x-sapiom-agent-name"] = a.agentName;
@@ -98,7 +118,9 @@ export class Transport {
     this.fetchImpl = config.fetch ?? globalThis.fetch;
     this.attribution = config.attribution ?? {};
     this.resumeToken =
-      config.resumeToken ?? process.env.SAPIOM_CAPABILITY_RESUME_TOKEN ?? undefined;
+      config.resumeToken ??
+      process.env.SAPIOM_CAPABILITY_RESUME_TOKEN ??
+      undefined;
   }
 
   /**
@@ -121,8 +143,16 @@ export class Transport {
    * response handling (filesystem, log streams) use this and inspect the
    * `Response` themselves. Injects the tenant credential + attribution headers;
    * sets no content-type.
+   *
+   * The credential rides `x-sapiom-api-key` by default; pass
+   * `{ authHeader: "x-api-key" }` for a destination that expects that header
+   * instead (the value is identical — the Transport owns the key either way).
    */
-  async fetch(url: string, init: RequestInit = {}): Promise<Response> {
+  async fetch(
+    url: string,
+    init: RequestInit = {},
+    options: TransportRequestOptions = {},
+  ): Promise<Response> {
     if (!this.apiKey) {
       throw new Error(
         "@sapiom/tools: no tenant credential. Pass createClient({ apiKey }) for standalone use, " +
@@ -132,7 +162,7 @@ export class Transport {
     return this.fetchImpl(url, {
       ...init,
       headers: {
-        "x-sapiom-api-key": this.apiKey,
+        [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
         ...attributionToHeaders(this.attribution),
         ...(init.headers ?? {}),
       },
@@ -140,11 +170,22 @@ export class Transport {
   }
 
   /** Authenticated JSON request — parses the body and throws on a non-2xx status. */
-  async request<T>(url: string, init: RequestInit = {}): Promise<T> {
-    const res = await this.fetch(url, {
-      ...init,
-      headers: { "content-type": "application/json", ...(init.headers ?? {}) },
-    });
+  async request<T>(
+    url: string,
+    init: RequestInit = {},
+    options: TransportRequestOptions = {},
+  ): Promise<T> {
+    const res = await this.fetch(
+      url,
+      {
+        ...init,
+        headers: {
+          "content-type": "application/json",
+          ...(init.headers ?? {}),
+        },
+      },
+      options,
+    );
     if (!res.ok) {
       throw new Error(
         `${init.method ?? "GET"} ${url} → ${res.status} ${await res.text()}`,

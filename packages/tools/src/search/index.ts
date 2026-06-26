@@ -2,15 +2,17 @@
  * `search` capability — find information across the web and beyond.
  *
  * This is the home for Sapiom's search primitives: searching the web, reading the
- * contents of a page, and looking up professional email addresses. The first
- * operation — `scrape`, which reads a page and returns its content — lands here;
- * more operations follow.
+ * contents of a page, and looking up professional email addresses. Today it
+ * offers `webSearch` (search the web) and `scrape` (read a page); more operations
+ * follow.
  *
  *   import { search } from "@sapiom/tools";        // ambient auth
+ *   const hits = await search.webSearch({ query: "what is an LLM agent?" });
+ *   hits.answer;     // a synthesized answer
  *   const page = await search.scrape({ url: "https://example.com" });
  *   page.markdown;   // the page content as markdown
  *
- * Or via an explicit client: `createClient({ apiKey }).search.scrape(...)`.
+ * Or via an explicit client: `createClient({ apiKey }).search.webSearch(...)`.
  *
  * Failed requests throw {@link SearchHttpError} (carries `status` + parsed `body`).
  */
@@ -21,6 +23,9 @@ export { SearchHttpError };
 
 const DEFAULT_BASE_URL =
   process.env.SAPIOM_SCRAPE_URL || "https://firecrawl.services.sapiom.ai";
+
+const DEFAULT_WEB_SEARCH_BASE_URL =
+  process.env.SAPIOM_SEARCH_URL || "https://api.sapiom.ai";
 
 // ----- Types -----
 
@@ -166,4 +171,110 @@ export async function scrape(
     "Failed to scrape",
   );
   return mapScrape(input.url, (await res.json()) as RawScrapeResponse);
+}
+
+// ----- search.webSearch -----
+
+export interface WebSearchInput {
+  /** What to search for. */
+  query: string;
+  /** How thoroughly to search. Defaults to `"standard"`. */
+  depth?: "standard" | "deep";
+  /**
+   * What you want back. `"answer"` (default) returns a synthesized answer plus
+   * supporting results; `"links"` returns a list of relevant results.
+   */
+  intent?: "answer" | "links";
+}
+
+export interface WebSearchResult {
+  /** Result title. */
+  title: string;
+  /** Result URL. */
+  url: string;
+  /** Short excerpt for the result. */
+  snippet: string;
+}
+
+export interface WebSearchResponse {
+  /** The query that was searched (echoes the input). */
+  query: string;
+  /** A synthesized answer, when `intent` is `"answer"`. */
+  answer?: string;
+  /** The results found for the query. */
+  results: WebSearchResult[];
+}
+
+interface RawWebSearchResult {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  [key: string]: unknown;
+}
+
+interface RawWebSearchResponse {
+  query?: string;
+  answer?: string;
+  results?: RawWebSearchResult[];
+  [key: string]: unknown;
+}
+
+function mapWebSearchResult(raw: RawWebSearchResult): WebSearchResult {
+  return {
+    title: raw.title ?? "",
+    url: raw.url ?? "",
+    snippet: raw.snippet ?? "",
+  };
+}
+
+function mapWebSearch(
+  query: string,
+  raw: RawWebSearchResponse,
+): WebSearchResponse {
+  // Build the result from only the public fields. A defensive measure: any
+  // extra top-level field on the wire (e.g. bookkeeping not meant for callers)
+  // is dropped by construction rather than spread through.
+  const results = Array.isArray(raw.results)
+    ? raw.results.map(mapWebSearchResult)
+    : [];
+  return {
+    query: raw.query ?? query,
+    ...(raw.answer != null && { answer: raw.answer }),
+    results,
+  };
+}
+
+/**
+ * Search the web. By default you get a synthesized answer plus supporting
+ * results; pass `intent: "links"` for a list of relevant results, and
+ * `depth: "deep"` for a more thorough search.
+ *
+ * Failed requests throw {@link SearchHttpError}.
+ */
+export async function webSearch(
+  input: WebSearchInput,
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_WEB_SEARCH_BASE_URL,
+): Promise<WebSearchResponse> {
+  // `!= null` so an optional explicitly passed as null (a JS caller bypassing the
+  // types) is treated as absent rather than forwarded as a null field.
+  const body: Record<string, unknown> = {
+    query: input.query,
+    intent: input.intent ?? "answer",
+  };
+  if (input.depth != null) body.depth = input.depth;
+
+  const res = await ensureOk(
+    await transport.fetch(
+      `${baseUrl}/v1/capabilities/web.search`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      { authHeader: "x-api-key" },
+    ),
+    "Failed to search the web",
+  );
+  return mapWebSearch(input.query, (await res.json()) as RawWebSearchResponse);
 }
