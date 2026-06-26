@@ -19,13 +19,15 @@
  * returned as `string | null` to stay precise for large files.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, FileStorageHttpError } from "./errors.js";
 
 export { FileStorageHttpError };
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_FILE_STORAGE_URL ||
-  "https://file-storage.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl(
+  "file-storage",
+  process.env.SAPIOM_FILE_STORAGE_URL,
+);
 
 // ----- SDK-facing types -----
 

@@ -21,12 +21,15 @@
  * wire; this module maps them to the camelCase SDK surface below.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import type { DispatchHandle } from "../dispatch.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { Repository } from "../repositories/index.js";
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_AGENTS_URL || "https://agents.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl(
+  "agents",
+  process.env.SAPIOM_AGENTS_URL,
+);
 
 /**
  * Capability-stable signal a coding run fires when it reaches a terminal state
@@ -250,7 +253,9 @@ export interface RunHandle extends DispatchHandle {
  * gateway call back into the engine to resume the paused workflow when the run
  * finishes. Absent outside a workflow → no header, no behavior change.
  */
-function workflowResumeHeaders(token: string | undefined): Record<string, string> {
+function workflowResumeHeaders(
+  token: string | undefined,
+): Record<string, string> {
   return token ? { "x-sapiom-workflow-token": token } : {};
 }
 

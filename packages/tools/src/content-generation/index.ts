@@ -20,13 +20,16 @@
  * pause a running workflow.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, ContentGenerationHttpError } from "./errors.js";
 import type { DispatchHandle } from "../dispatch.js";
 
 export { ContentGenerationHttpError };
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_CONTENT_GENERATION_URL || "https://fal.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl(
+  "fal",
+  process.env.SAPIOM_CONTENT_GENERATION_URL,
+);
 
 /**
  * Capability-stable signal a video launch fires when the video reaches a terminal

@@ -21,12 +21,15 @@
  * Failed requests throw {@link SearchHttpError} (carries `status` + parsed `body`).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import { SearchHttpError, ensureOk } from "./errors.js";
 
 export { SearchHttpError };
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_SCRAPE_URL || "https://firecrawl.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl(
+  "firecrawl",
+  process.env.SAPIOM_SCRAPE_URL,
+);
 
 const DEFAULT_WEB_SEARCH_BASE_URL =
   process.env.SAPIOM_SEARCH_URL || "https://api.sapiom.ai";
