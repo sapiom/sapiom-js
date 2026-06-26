@@ -53,6 +53,7 @@ import type {
   ImageGenerationResult,
   VideoCreateInput,
   VideoGenerationResult,
+  VideoLaunchHandle,
 } from "./content-generation/index.js";
 import {
   scrape,
@@ -126,6 +127,13 @@ export interface Sapiom {
        * `fileId`).
        */
       create(input: VideoCreateInput): Promise<VideoGenerationResult>;
+      /**
+       * Submit a video generation job and return a dispatchable handle immediately.
+       * Pass the handle to `pauseUntilSignal(handle, { resumeStep })` to suspend the
+       * workflow step until the video is ready, or call `handle.wait()` to block
+       * inline (equivalent to `video.create`). Pass `storage` to persist the output.
+       */
+      launch(input: VideoCreateInput): Promise<VideoLaunchHandle>;
     };
   };
   /**
@@ -194,6 +202,7 @@ function bind(transport: Transport): Sapiom {
       },
       video: {
         create: (input) => contentGeneration.createVideo(input, transport),
+        launch: (input) => contentGeneration.launchVideo(input, transport),
       },
     },
     search: {
