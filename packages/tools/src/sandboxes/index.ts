@@ -27,6 +27,8 @@ import {
 } from "./multipart.js";
 import type {
   CreateResponse,
+  DeployInput,
+  DeployResult,
   ExecOptions,
   ExecResult,
   ExecStreamOptions,
@@ -34,8 +36,11 @@ import type {
   MultipartPartInfo,
   MultipartUploadedPart,
   OutputLine,
+  PreviewInput,
+  PreviewResult,
   ProcessCreateResponse,
   ProcessStatus,
+  RawPreviewResponse,
   SandboxCreateOptions,
   StreamingExecResult,
   UploadFileOptions,
@@ -44,6 +49,9 @@ import type {
 export { SandboxHttpError } from "./multipart.js";
 
 export type {
+  DeployInput,
+  DeployResult,
+  DeployRuntime,
   ExecOptions,
   ExecResult,
   ExecStreamOptions,
@@ -52,6 +60,8 @@ export type {
   MultipartUploadedPart,
   OutputLine,
   PortSpec,
+  PreviewInput,
+  PreviewResult,
   ProcessStatus,
   SandboxCreateOptions,
   SandboxTier,
@@ -563,6 +573,34 @@ export class Sandbox {
       );
   }
 
+  /**
+   * Deploy source files to this sandbox and start the app — uploads the file
+   * map, installs dependencies, and starts the entrypoint, resolving once the
+   * app is running. Returns the sandbox record, including its public `url` when
+   * the gateway has previews enabled. See the module-level {@link deploy}.
+   *
+   * PREVIEW-grade: the app lives only as long as the sandbox (TTL-bound, ~4h by
+   * default) and the runtime is node-only.
+   */
+  async deploy(input: Omit<DeployInput, "name">): Promise<DeployResult> {
+    return deploy({ ...input, name: this.name }, this.transport, this.baseUrl);
+  }
+
+  /**
+   * Create a public preview URL for a port on this sandbox. The URL is reachable
+   * only when the gateway has previews enabled (`COMPUTE_PREVIEWS_ENABLED`). See
+   * the module-level {@link createPreview}.
+   */
+  async createPreview(
+    input: Omit<PreviewInput, "name">,
+  ): Promise<PreviewResult> {
+    return createPreview(
+      { ...input, name: this.name },
+      this.transport,
+      this.baseUrl,
+    );
+  }
+
   // --- internal ---
 
   private async createProcess(
@@ -631,4 +669,94 @@ export function attach(
   opts?: { workspaceRoot?: string; baseUrl?: string },
 ): Sandbox {
   return Sandbox.attach(name, opts);
+}
+
+/**
+ * Deploy source files to an existing sandbox and start the app. Uploads the file
+ * map, installs dependencies (`npm install`), and starts the entrypoint, then
+ * resolves with the sandbox record once the app is running. `url` is the public
+ * app URL when the gateway has previews enabled (`COMPUTE_PREVIEWS_ENABLED`),
+ * otherwise `null`. Non-2xx responses throw {@link SandboxHttpError}.
+ *
+ * The sandbox must already exist (create it via {@link create}) and be in a
+ * deployable state. PREVIEW-grade: node-only, and the app lives only as long as
+ * the sandbox (TTL-bound).
+ */
+export async function deploy(
+  input: DeployInput,
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<DeployResult> {
+  const body: Record<string, unknown> = { files: input.files };
+  if (input.runtime !== undefined) body.runtime = input.runtime;
+  if (input.entrypoint !== undefined) body.entrypoint = input.entrypoint;
+
+  const res = await ensureOk(
+    await transport.fetch(
+      `${baseUrl}/v1/sandboxes/${encodeURIComponent(input.name)}/deploy`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+    `Failed to deploy to sandbox '${input.name}'`,
+  );
+  return (await res.json()) as DeployResult;
+}
+
+/**
+ * Create a public preview URL for a port on an existing sandbox. Resolves with
+ * the normalized preview, including its `url`. The URL is reachable only when the
+ * gateway has previews enabled (`COMPUTE_PREVIEWS_ENABLED`). Non-2xx responses
+ * throw {@link SandboxHttpError}.
+ */
+export async function createPreview(
+  input: PreviewInput,
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<PreviewResult> {
+  const spec: Record<string, unknown> = { port: input.port };
+  if (input.public !== undefined) spec.public = input.public;
+  if (input.prefixUrl !== undefined) spec.prefixUrl = input.prefixUrl;
+  if (input.customDomain !== undefined) spec.customDomain = input.customDomain;
+  if (input.label !== undefined) spec.label = input.label;
+
+  const body: Record<string, unknown> = { spec };
+  if (input.previewName !== undefined) {
+    body.metadata = { name: input.previewName };
+  }
+
+  const res = await ensureOk(
+    await transport.fetch(
+      `${baseUrl}/v1/sandboxes/${encodeURIComponent(input.name)}/previews`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+    `Failed to create preview for sandbox '${input.name}'`,
+  );
+  return normalizePreview(await res.json());
+}
+
+/**
+ * Normalize the platform's preview response into {@link PreviewResult}. The
+ * underlying Blaxel shape may be flat (`{ url, port }`) or nested under `spec` /
+ * `metadata`, so read both — mirrors the remote MCP's normalization.
+ */
+function normalizePreview(raw: unknown): PreviewResult {
+  const data = (raw ?? {}) as RawPreviewResponse;
+  const spec = data.spec ?? {};
+  return {
+    name: data.metadata?.name ?? data.name,
+    url: spec.url ?? data.url,
+    port: spec.port ?? data.port,
+    status: spec.status ?? data.status,
+    public: spec.public ?? data.public,
+    prefixUrl: spec.prefixUrl ?? data.prefixUrl,
+    customDomain: spec.customDomain ?? data.customDomain,
+    label: spec.label ?? data.label,
+  };
 }

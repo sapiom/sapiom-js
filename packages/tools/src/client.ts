@@ -20,8 +20,18 @@ import {
   type TransportConfig,
   type Attribution,
 } from "./_client/index.js";
-import { Sandbox } from "./sandboxes/index.js";
-import type { SandboxCreateOptions } from "./sandboxes/index.js";
+import {
+  Sandbox,
+  deploy as deploySandbox,
+  createPreview as createSandboxPreview,
+} from "./sandboxes/index.js";
+import type {
+  SandboxCreateOptions,
+  DeployInput,
+  DeployResult,
+  PreviewInput,
+  PreviewResult,
+} from "./sandboxes/index.js";
 import { Repository } from "./repositories/index.js";
 import { run as codingRun, launch as codingLaunch } from "./agent/index.js";
 import type {
@@ -92,6 +102,13 @@ export interface Sapiom {
       name: string,
       opts?: { workspaceRoot?: string; baseUrl?: string },
     ): Sandbox;
+    /**
+     * Deploy files to an existing sandbox and start the app. Returns the public
+     * URL when the gateway has previews enabled. Sandbox-scoped — pass `name`.
+     */
+    deploy(input: DeployInput): Promise<DeployResult>;
+    /** Create a public preview URL for a port on an existing sandbox. Sandbox-scoped — pass `name`. */
+    createPreview(input: PreviewInput): Promise<PreviewResult>;
   };
   readonly repositories: {
     create(slug: string): Promise<Repository>;
@@ -195,6 +212,8 @@ function bind(transport: Transport): Sapiom {
     sandboxes: {
       create: (opts) => Sandbox.create(opts, transport),
       attach: (name, opts) => Sandbox.attach(name, opts, transport),
+      deploy: (input) => deploySandbox(input, transport),
+      createPreview: (input) => createSandboxPreview(input, transport),
     },
     repositories: {
       create: (slug) => Repository.create(slug, transport),

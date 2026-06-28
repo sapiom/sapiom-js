@@ -177,7 +177,133 @@ export interface UploadFileOptions {
   ) => void;
 }
 
+// --- deploy & preview ---
+
+/** Runtime for a deploy. Only Node.js is supported today. */
+export type DeployRuntime = "node";
+
+/**
+ * Input for the module-level {@link deploy}. The {@link Sandbox.deploy} method
+ * takes the same shape minus `name` (it uses the handle's own name).
+ */
+export interface DeployInput {
+  /** Name of an existing sandbox to deploy to. */
+  name: string;
+
+  /** File map: path → content. At least one file is required. */
+  files: Record<string, string>;
+
+  /**
+   * Start command. Auto-detected from `package.json`'s `start` script (else
+   * `node index.js`) when omitted.
+   */
+  entrypoint?: string;
+
+  /** Runtime. Auto-detected from the file map when omitted. Only `"node"` today. */
+  runtime?: DeployRuntime;
+}
+
+/** Result of a deploy — the gateway's sandbox record after the app starts. */
+export interface DeployResult {
+  /** Sandbox name (primary identifier). */
+  name: string;
+
+  /** Lifecycle status — `"running"` once the deploy succeeds. */
+  status: string;
+
+  /**
+   * Public URL of the running app, or `null`. Non-null only when the gateway has
+   * previews enabled (`COMPUTE_PREVIEWS_ENABLED`); otherwise the app is reachable
+   * only from inside the platform.
+   */
+  url: string | null;
+
+  /** How the sandbox was created (e.g. `"sandbox"`). */
+  source?: string;
+
+  /** Memory tier assigned to the sandbox. */
+  tier?: string;
+
+  /** ISO-8601 timestamp of sandbox creation. */
+  createdAt?: string;
+}
+
+/**
+ * Input for the module-level {@link createPreview}. The
+ * {@link Sandbox.createPreview} method takes the same shape minus `name`.
+ */
+export interface PreviewInput {
+  /** Name of the sandbox to expose. */
+  name: string;
+
+  /** Port inside the sandbox to expose. */
+  port: number;
+
+  /** Stable preview name. Pin it for blue-green pivots / idempotent re-creates. */
+  previewName?: string;
+
+  /**
+   * If true, the preview is reachable without an access token. When omitted, the
+   * platform default applies.
+   */
+  public?: boolean;
+
+  /** Subdomain prefix when paired with `customDomain` (final URL: `https://{prefixUrl}.{customDomain}`). */
+  prefixUrl?: string;
+
+  /** Workspace-level custom domain to mint the preview under (paired with `prefixUrl`). */
+  customDomain?: string;
+
+  /** Optional human-readable label. */
+  label?: string;
+}
+
+/** Result of creating a preview — the public URL plus its normalized metadata. */
+export interface PreviewResult {
+  /** The HTTPS URL that proxies to the sandbox port. Present once the preview is live. */
+  url?: string;
+
+  /** Preview status as reported by the platform. */
+  status?: string;
+
+  /** Preview name. */
+  name?: string;
+
+  /** The exposed port. */
+  port?: number;
+
+  /** Whether the preview is publicly reachable without a token. */
+  public?: boolean;
+
+  /** Subdomain prefix, when a custom domain was used. */
+  prefixUrl?: string;
+
+  /** Custom domain, when one was used. */
+  customDomain?: string;
+
+  /** Human-readable label, when set. */
+  label?: string;
+}
+
 // --- internal wire shapes (not part of the public surface) ---
+
+/** @internal Raw preview spec — fields the platform may return flat or under `spec`. */
+export interface RawPreviewSpec {
+  port?: number;
+  url?: string;
+  status?: string;
+  label?: string;
+  public?: boolean;
+  prefixUrl?: string;
+  customDomain?: string;
+}
+
+/** @internal Raw preview response — fields may be flat or nested under `spec` / `metadata`. */
+export interface RawPreviewResponse extends RawPreviewSpec {
+  name?: string;
+  metadata?: { name?: string };
+  spec?: RawPreviewSpec;
+}
 
 /** @internal Raw create response. */
 export interface CreateResponse {

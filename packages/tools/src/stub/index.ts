@@ -28,6 +28,7 @@ import type {
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
 import { Sandbox } from "../sandboxes/index.js";
+import type { DeployResult, PreviewResult } from "../sandboxes/index.js";
 import type {
   UploadResponse,
   DownloadUrlResponse,
@@ -50,11 +51,7 @@ import type {
   VerifyEmailResult,
   DomainSearchResult,
 } from "../search/index.js";
-import type {
-  AppendResult,
-  RecallResponse,
-  Memory,
-} from "../memory/index.js";
+import type { AppendResult, RecallResponse, Memory } from "../memory/index.js";
 import type { Database } from "../database/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
@@ -324,7 +321,41 @@ const SANDBOX_METHOD_DEFAULTS: Record<string, (args: unknown[]) => unknown> = {
   readFile: () => "",
   writeFile: () => undefined,
   destroy: () => undefined,
+  deploy: (args) => stubDeployResult(args[0]),
+  createPreview: (args) => stubPreviewResult(args[0]),
 };
+
+/** Default `deploy` result for the stub — a running app with a synthetic preview URL. */
+function stubDeployResult(input: unknown): DeployResult {
+  const name = (input as { name?: string } | undefined)?.name ?? "stub-sandbox";
+  return {
+    name,
+    status: "running",
+    url: `https://${name}.compute.stub.local`,
+    source: "sandbox",
+    tier: "s",
+    createdAt: "2099-01-01T00:00:00Z",
+  };
+}
+
+/** Default `createPreview` result for the stub — a synthetic public preview URL. */
+function stubPreviewResult(input: unknown): PreviewResult {
+  const i = (input ?? {}) as {
+    name?: string;
+    port?: number;
+    previewName?: string;
+    public?: boolean;
+  };
+  const host = i.name ?? "stub-sandbox";
+  const port = i.port ?? 3000;
+  return {
+    name: i.previewName ?? "stub-preview",
+    url: `https://${host}-${port}.preview.stub.local`,
+    port,
+    status: "deployed",
+    public: i.public ?? true,
+  };
+}
 
 function stubRepository(
   data: { slug: string; cloneUrl: string; status?: string },
@@ -444,6 +475,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         asSandbox(
           r("sandboxes.attach", [name, attachOpts], () => ({ name })),
           overrides,
+        ),
+      deploy: (input) =>
+        Promise.resolve(
+          r("sandboxes.deploy", [input], () =>
+            stubDeployResult(input),
+          ) as DeployResult,
+        ),
+      createPreview: (input) =>
+        Promise.resolve(
+          r("sandboxes.createPreview", [input], () =>
+            stubPreviewResult(input),
+          ) as PreviewResult,
         ),
     },
     repositories: {

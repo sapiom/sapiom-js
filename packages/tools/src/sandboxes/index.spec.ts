@@ -9,7 +9,8 @@
  * All tests inject a routed fake fetch — no real network.
  */
 import { Transport } from "../_client/index.js";
-import { Sandbox } from "./index.js";
+import { createClient } from "../index.js";
+import { Sandbox, deploy, createPreview } from "./index.js";
 
 interface FakeResponse {
   ok: boolean;
@@ -161,5 +162,301 @@ describe("Sandbox.uploadFile — multipart lifecycle", () => {
     // Abort is best-effort/fire-and-forget; let the microtask flush.
     await new Promise((r) => setTimeout(r, 0));
     expect(calls).toContain("abort");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deploy() / createPreview() — exact URL/method/body/header assertions via a
+// real Transport plus a scripted fetch (so we also verify tenant-credential
+// injection and the preview-URL normalization).
+// ---------------------------------------------------------------------------
+
+interface FetchCall {
+  url: string;
+  init: RequestInit;
+}
+
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
+
+function makeTransport(
+  handlers: Array<
+    (call: FetchCall) => Response | Promise<Response> | null | undefined
+  >,
+  apiKey: string | undefined = "test-key",
+): { transport: Transport; calls: FetchCall[] } {
+  const calls: FetchCall[] = [];
+  const fetchMock = (async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init: RequestInit = {},
+  ): Promise<Response> => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : (input as Request).url;
+    calls.push({ url, init });
+    for (const handler of handlers) {
+      const response = await handler({ url, init });
+      if (response) return response;
+    }
+    throw new Error(`Unmatched mock fetch: ${init.method ?? "GET"} ${url}`);
+  }) as typeof globalThis.fetch;
+  return { transport: new Transport({ apiKey, fetch: fetchMock }), calls };
+}
+
+const BASE = "https://api.test";
+const headerOf = (c: FetchCall, k: string) =>
+  (c.init.headers as Record<string, string>)[k];
+
+const deployResponse = (overrides: Record<string, unknown> = {}) => ({
+  name: "my-api",
+  status: "running",
+  source: "sandbox",
+  tier: "s",
+  url: "https://my-api.compute.example.com",
+  createdAt: "2026-06-27T12:00:00.000Z",
+  ...overrides,
+});
+
+describe("deploy()", () => {
+  it("POSTs /v1/sandboxes/:name/deploy with files body + credential, returns the record", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(deployResponse()),
+    ]);
+
+    const result = await deploy(
+      {
+        name: "my-api",
+        files: { "index.js": "console.log('hi')" },
+        entrypoint: "node index.js",
+        runtime: "node",
+      },
+      transport,
+      BASE,
+    );
+
+    expect(calls[0]!.url).toBe(`${BASE}/v1/sandboxes/my-api/deploy`);
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      files: { "index.js": "console.log('hi')" },
+      entrypoint: "node index.js",
+      runtime: "node",
+    });
+
+    expect(result).toEqual(deployResponse());
+  });
+
+  it("omits undefined optional fields from the body", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(deployResponse()),
+    ]);
+
+    await deploy({ name: "my-api", files: { "a.js": "1" } }, transport, BASE);
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body).toEqual({ files: { "a.js": "1" } });
+    expect(body).not.toHaveProperty("entrypoint");
+    expect(body).not.toHaveProperty("runtime");
+  });
+
+  it("URL-encodes the sandbox name path segment", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(deployResponse()),
+    ]);
+
+    await deploy(
+      { name: "weird name/x", files: { "a.js": "1" } },
+      transport,
+      BASE,
+    );
+    expect(calls[0]!.url).toBe(`${BASE}/v1/sandboxes/weird%20name%2Fx/deploy`);
+  });
+
+  it("surfaces a null url when previews are disabled gateway-side", async () => {
+    const { transport } = makeTransport([
+      () => jsonResponse(deployResponse({ url: null })),
+    ]);
+
+    const result = await deploy(
+      { name: "my-api", files: { "a.js": "1" } },
+      transport,
+      BASE,
+    );
+    expect(result.url).toBeNull();
+  });
+
+  it("throws SandboxHttpError (with status) on a non-2xx", async () => {
+    const { transport } = makeTransport([
+      () => new Response("not deployable", { status: 409 }),
+    ]);
+
+    await expect(
+      deploy({ name: "my-api", files: { "a.js": "1" } }, transport, BASE),
+    ).rejects.toMatchObject({ name: "SandboxHttpError", status: 409 });
+  });
+
+  it("Sandbox.deploy delegates to the module fn with the handle's name", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(deployResponse()),
+    ]);
+    const box = Sandbox.attach("my-api", { baseUrl: BASE }, transport);
+
+    await box.deploy({ files: { "a.js": "1" }, entrypoint: "node a.js" });
+
+    expect(calls[0]!.url).toBe(`${BASE}/v1/sandboxes/my-api/deploy`);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      files: { "a.js": "1" },
+      entrypoint: "node a.js",
+    });
+  });
+});
+
+describe("createPreview()", () => {
+  it("POSTs /v1/sandboxes/:name/previews wrapping spec, and normalizes the URL", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          metadata: { name: "my-preview" },
+          spec: {
+            url: "https://abc.preview.bl.run",
+            port: 3000,
+            status: "deployed",
+            public: true,
+          },
+        }),
+    ]);
+
+    const result = await createPreview(
+      { name: "my-api", port: 3000, previewName: "my-preview", public: true },
+      transport,
+      BASE,
+    );
+
+    expect(calls[0]!.url).toBe(`${BASE}/v1/sandboxes/my-api/previews`);
+    expect(calls[0]!.init.method).toBe("POST");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      spec: { port: 3000, public: true },
+      metadata: { name: "my-preview" },
+    });
+
+    // Nested spec/metadata shape is flattened.
+    expect(result).toEqual({
+      name: "my-preview",
+      url: "https://abc.preview.bl.run",
+      port: 3000,
+      status: "deployed",
+      public: true,
+      prefixUrl: undefined,
+      customDomain: undefined,
+      label: undefined,
+    });
+  });
+
+  it("normalizes a flat (non-nested) preview response", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          name: "p",
+          url: "https://flat.preview",
+          port: 8080,
+          status: "ok",
+        }),
+    ]);
+
+    const result = await createPreview(
+      { name: "my-api", port: 8080 },
+      transport,
+      BASE,
+    );
+    expect(result.url).toBe("https://flat.preview");
+    expect(result.name).toBe("p");
+    expect(result.port).toBe(8080);
+  });
+
+  it("forwards prefixUrl/customDomain/label into spec and omits the metadata when no previewName", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ spec: { url: "https://my-app.polsia.app" } }),
+    ]);
+
+    await createPreview(
+      {
+        name: "my-api",
+        port: 3000,
+        prefixUrl: "my-app",
+        customDomain: "polsia.app",
+        label: "prod",
+      },
+      transport,
+      BASE,
+    );
+
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body).toEqual({
+      spec: {
+        port: 3000,
+        prefixUrl: "my-app",
+        customDomain: "polsia.app",
+        label: "prod",
+      },
+    });
+    expect(body).not.toHaveProperty("metadata");
+  });
+
+  it("throws SandboxHttpError on a non-2xx", async () => {
+    const { transport } = makeTransport([
+      () => new Response("nope", { status: 402 }),
+    ]);
+
+    await expect(
+      createPreview({ name: "my-api", port: 3000 }, transport, BASE),
+    ).rejects.toMatchObject({ name: "SandboxHttpError", status: 402 });
+  });
+
+  it("Sandbox.createPreview delegates to the module fn with the handle's name", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ spec: { url: "https://x.preview", port: 3000 } }),
+    ]);
+    const box = Sandbox.attach("my-api", { baseUrl: BASE }, transport);
+
+    const result = await box.createPreview({ port: 3000 });
+    expect(calls[0]!.url).toBe(`${BASE}/v1/sandboxes/my-api/previews`);
+    expect(result.url).toBe("https://x.preview");
+  });
+});
+
+describe("sandboxes — client wiring + credential", () => {
+  it("createClient().sandboxes.deploy / .createPreview route with the credential", async () => {
+    const calls: FetchCall[] = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : (input as URL).toString();
+      calls.push({ url, init });
+      if (url.endsWith("/deploy")) return jsonResponse(deployResponse());
+      return jsonResponse({ spec: { url: "https://p.preview", port: 3000 } });
+    }) as typeof globalThis.fetch;
+
+    const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
+    await sapiom.sandboxes.deploy({ name: "my-api", files: { "a.js": "1" } });
+    await sapiom.sandboxes.createPreview({ name: "my-api", port: 3000 });
+
+    expect(calls).toHaveLength(2);
+    for (const c of calls) {
+      expect(headerOf(c, "x-sapiom-api-key")).toBe("my-key");
+    }
+    expect(calls[0]!.url).toBe(
+      "https://blaxel.services.sapiom.ai/v1/sandboxes/my-api/deploy",
+    );
   });
 });
