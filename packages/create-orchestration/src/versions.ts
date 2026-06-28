@@ -45,7 +45,7 @@ function registryFor(pkg: string): string {
 async function latestVersion(pkg: string): Promise<string | null> {
   try {
     const res = await fetch(
-      `${registryFor(pkg)}/${pkg.replace("/", "%2F")}/latest`,
+      `${registryFor(pkg)}/${pkg.replace(/\//g, "%2F")}/latest`,
       {
         signal: AbortSignal.timeout(5000),
       },
