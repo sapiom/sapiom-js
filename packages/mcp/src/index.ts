@@ -18,8 +18,14 @@ async function main(): Promise<void> {
   }
 
   const server = new McpServer({
-    // The local dev surface — distinct from the remote Sapiom capabilities MCP.
+    // The local workflow-authoring surface — distinct from the remote Sapiom
+    // capabilities MCP. The `name` is the stable wire identifier; `title` and
+    // `description` are what MCP clients show, so they spell out which Sapiom
+    // this is to keep it from reading as a duplicate of the capability server.
     name: "sapiom-dev",
+    title: "Sapiom Dev — workflow authoring",
+    description:
+      "Local tools to scaffold, test, deploy, and inspect Sapiom orchestrations. Not the remote Sapiom capability MCP — exposes no capability tools.",
     version: "0.1.0",
   });
 

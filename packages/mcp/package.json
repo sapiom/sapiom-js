@@ -1,7 +1,7 @@
 {
   "name": "@sapiom/mcp",
   "version": "0.7.1",
-  "description": "Sapiom MCP server for Claude Code — browser-based authentication and API tools",
+  "description": "Local Sapiom workflow-authoring MCP server (sapiom-dev) — scaffold, test, deploy, and inspect orchestrations. Not the remote Sapiom capability MCP.",
   "mcpName": "io.github.sapiom/mcp",
   "keywords": [
     "sapiom",

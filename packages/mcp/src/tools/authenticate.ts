@@ -9,7 +9,7 @@ import { performBrowserAuth } from "../auth.js";
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   server.tool(
     "sapiom_authenticate",
-    "Authenticate with Sapiom by opening a browser login flow. Run this when other Sapiom tools report that authentication is required.",
+    "Authenticate this local Sapiom workflow-authoring MCP (sapiom-dev) by opening a browser login flow. Run this when a networked orchestration tool (link/deploy/run/inspect/signal) reports that authentication is required.",
     {},
     async () => {
       // Check if already authenticated
