@@ -587,9 +587,10 @@ export class Sandbox {
   }
 
   /**
-   * Create a public preview URL for a port on this sandbox. The URL is reachable
-   * only when the gateway has previews enabled (`COMPUTE_PREVIEWS_ENABLED`). See
-   * the module-level {@link createPreview}.
+   * Expose a port on this sandbox as a public HTTPS URL (a Blaxel preview that
+   * tunnels to the port). Independent of `deploy` — use it to reach any process
+   * listening on a port, with optional token / public / custom-domain control.
+   * See the module-level {@link createPreview}.
    */
   async createPreview(
     input: Omit<PreviewInput, "name">,
@@ -706,10 +707,12 @@ export async function deploy(
 }
 
 /**
- * Create a public preview URL for a port on an existing sandbox. Resolves with
- * the normalized preview, including its `url`. The URL is reachable only when the
- * gateway has previews enabled (`COMPUTE_PREVIEWS_ENABLED`). Non-2xx responses
- * throw {@link SandboxHttpError}.
+ * Expose a port on an existing sandbox as a public HTTPS URL. This is a Blaxel
+ * preview: the platform mints a URL that proxies to the given port inside the
+ * sandbox. It is independent of {@link deploy} (and of `COMPUTE_PREVIEWS_ENABLED`)
+ * — use it to reach any process listening on a port, optionally token-gated,
+ * publicly reachable, or on a custom domain. Resolves with the normalized
+ * preview, including its `url`. Non-2xx responses throw {@link SandboxHttpError}.
  */
 export async function createPreview(
   input: PreviewInput,

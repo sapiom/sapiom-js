@@ -27,7 +27,9 @@ await box.destroy();
 
 ## Deploying an app
 
-`deploy` uploads a file map to an existing sandbox, installs dependencies, and starts the entrypoint — it resolves once the app is running. `createPreview` exposes a port as a public HTTPS URL.
+`deploy` uploads a file map to an existing sandbox, installs dependencies, and starts the entrypoint — it resolves once the app is running, and its `url` is the app's address on the Sapiom compute domain (`https://<name>.compute.<domain>`).
+
+`createPreview` is a separate, lower-level surface: it asks the platform to mint a public HTTPS URL that proxies to a **specific port** inside the sandbox — independent of `deploy`. Reach for it to expose an arbitrary port, control public-vs-token access, pin a stable preview name, or front it with a custom domain.
 
 ```ts
 import { sandboxes } from "@sapiom/tools";
@@ -41,9 +43,9 @@ const { url, status } = await box.deploy({
   },
   entrypoint: "node index.js",
 });
-// url → the public app URL (when previews are enabled); status → "running"
+// url → the compute-domain app URL (set when COMPUTE_PREVIEWS_ENABLED); status → "running"
 
-// Or expose a specific port explicitly:
+// Or mint a public URL for a specific port (Blaxel preview, independent of deploy):
 const preview = await box.createPreview({ port: 3000 });
 preview.url; // https://…
 ```
@@ -82,7 +84,7 @@ export const release = defineStep(
 );
 ```
 
-> **PREVIEW-grade.** Deploys are sandbox-TTL-bound (the app lives only as long as the sandbox — ~4h by default), node-only, and the public `url` is non-null only when the gateway has previews enabled (`COMPUTE_PREVIEWS_ENABLED`). Durable, auto-scaling hosting that outlives a sandbox is a separate capability. Note that a deployed app keeps the sandbox **running and billed** — don't `destroy()` it while you still need the URL.
+> **PREVIEW-grade.** Both surfaces are sandbox-TTL-bound — the app/preview lives only as long as the sandbox (~4h by default) — and `deploy` is node-only. `deploy`'s `url` is non-null only when the gateway has `COMPUTE_PREVIEWS_ENABLED` (otherwise the app is reachable only from inside the platform); `createPreview` mints its URL through the platform's preview feature and is not bound to that flag. Durable, auto-scaling hosting that outlives a sandbox is a separate capability. A deployed app keeps the sandbox **running and billed** — don't `destroy()` it while you still need the URL.
 
 ## Reference
 
