@@ -21,7 +21,7 @@ import {
   type Attribution,
 } from "./_client/index.js";
 import { Sandbox } from "./sandboxes/index.js";
-import type { SandboxCreateOptions } from "./sandboxes/index.js";
+import type { SandboxCreateOptions, SandboxInfo } from "./sandboxes/index.js";
 import { Repository } from "./repositories/index.js";
 import { run as codingRun, launch as codingLaunch } from "./agent/index.js";
 import type {
@@ -84,6 +84,10 @@ export interface Sapiom {
       name: string,
       opts?: { workspaceRoot?: string; baseUrl?: string },
     ): Sandbox;
+    /** Fetch a sandbox's metadata + status by name (read-only; `attach` to operate). */
+    get(name: string, opts?: { baseUrl?: string }): Promise<SandboxInfo>;
+    /** List the caller's sandboxes as read-only metadata. */
+    list(opts?: { baseUrl?: string }): Promise<SandboxInfo[]>;
   };
   readonly repositories: {
     create(slug: string): Promise<Repository>;
@@ -181,6 +185,8 @@ function bind(transport: Transport): Sapiom {
     sandboxes: {
       create: (opts) => Sandbox.create(opts, transport),
       attach: (name, opts) => Sandbox.attach(name, opts, transport),
+      get: (name, opts) => Sandbox.get(name, opts, transport),
+      list: (opts) => Sandbox.list(opts, transport),
     },
     repositories: {
       create: (slug) => Repository.create(slug, transport),

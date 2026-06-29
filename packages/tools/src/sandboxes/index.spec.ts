@@ -163,3 +163,67 @@ describe("Sandbox.uploadFile — multipart lifecycle", () => {
     expect(calls).toContain("abort");
   });
 });
+
+describe("Sandbox.get / Sandbox.list — read-only metadata", () => {
+  function transportRouting(
+    route: (url: string, init: RequestInit) => FakeResponse,
+  ): Transport {
+    const fetchFn = (async (url: string, init: RequestInit = {}) =>
+      route(
+        url,
+        init,
+      ) as unknown as Response) as unknown as typeof globalThis.fetch;
+    return new Transport({ apiKey: "k", fetch: fetchFn });
+  }
+
+  const info = {
+    name: "box-1",
+    source: "user",
+    status: "running",
+    tier: "s",
+    url: "https://box-1.preview",
+    workspaceRoot: "/workspace",
+    expiresAt: null,
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+  };
+
+  it("get() fetches a single sandbox's metadata by name", async () => {
+    let seen = "";
+    const t = transportRouting((url) => {
+      seen = url;
+      return ok(info);
+    });
+    const result = await Sandbox.get("box-1", { baseUrl: "https://sbx" }, t);
+    expect(seen).toBe("https://sbx/v1/sandboxes/box-1");
+    expect(result).toEqual(info);
+  });
+
+  it("get() URL-encodes the name", async () => {
+    let seen = "";
+    const t = transportRouting((url) => {
+      seen = url;
+      return ok(info);
+    });
+    await Sandbox.get("a/b", { baseUrl: "https://sbx" }, t);
+    expect(seen).toBe("https://sbx/v1/sandboxes/a%2Fb");
+  });
+
+  it("get() throws when the sandbox does not exist", async () => {
+    const t = transportRouting(() => err(404, "not found"));
+    await expect(
+      Sandbox.get("missing", { baseUrl: "https://sbx" }, t),
+    ).rejects.toThrow();
+  });
+
+  it("list() unwraps and returns the sandboxes array", async () => {
+    let seen = "";
+    const t = transportRouting((url) => {
+      seen = url;
+      return ok({ sandboxes: [info, { ...info, name: "box-2" }] });
+    });
+    const result = await Sandbox.list({ baseUrl: "https://sbx" }, t);
+    expect(seen).toBe("https://sbx/v1/sandboxes");
+    expect(result.map((s) => s.name)).toEqual(["box-1", "box-2"]);
+  });
+});

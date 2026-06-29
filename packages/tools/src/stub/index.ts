@@ -28,6 +28,7 @@ import type {
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
 import { Sandbox } from "../sandboxes/index.js";
+import type { SandboxInfo } from "../sandboxes/index.js";
 import type {
   UploadResponse,
   DownloadUrlResponse,
@@ -223,6 +224,21 @@ function asSandbox(data: unknown, overrides: StubOverrides): Sandbox {
     { name: d.name ?? "stub-sandbox", workspaceRoot: d.workspaceRoot },
     overrides,
   );
+}
+
+/** Default read-model for the `sandboxes.get` / `sandboxes.list` stubs. */
+function stubSandboxInfo(name: string): SandboxInfo {
+  return {
+    name,
+    source: "stub",
+    status: "running",
+    tier: "s",
+    url: null,
+    workspaceRoot: "/workspace",
+    expiresAt: null,
+    createdAt: "1970-01-01T00:00:00.000Z",
+    updatedAt: "1970-01-01T00:00:00.000Z",
+  };
 }
 
 /** Coerce a `repositories.list` override (or default) into Repository handles,
@@ -439,6 +455,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         asSandbox(
           r("sandboxes.attach", [name, attachOpts], () => ({ name })),
           overrides,
+        ),
+      get: (name, getOpts) =>
+        Promise.resolve(
+          r("sandboxes.get", [name, getOpts], () =>
+            stubSandboxInfo(name),
+          ) as SandboxInfo,
+        ),
+      list: (listOpts) =>
+        Promise.resolve(
+          r("sandboxes.list", [listOpts], () => [
+            stubSandboxInfo("stub-sandbox"),
+          ]) as SandboxInfo[],
         ),
     },
     repositories: {
