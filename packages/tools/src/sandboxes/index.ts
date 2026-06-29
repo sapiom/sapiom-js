@@ -37,6 +37,7 @@ import type {
   ProcessCreateResponse,
   ProcessStatus,
   SandboxCreateOptions,
+  SandboxInfo,
   StreamingExecResult,
   UploadFileOptions,
 } from "./types.js";
@@ -54,6 +55,7 @@ export type {
   PortSpec,
   ProcessStatus,
   SandboxCreateOptions,
+  SandboxInfo,
   SandboxTier,
   StreamingExecResult,
   UploadFileOptions,
@@ -194,6 +196,34 @@ export class Sandbox {
       transport,
       opts.baseUrl ?? DEFAULT_BASE_URL,
     );
+  }
+
+  /**
+   * Fetch a sandbox's metadata + current status by name. Read-only — returns a
+   * {@link SandboxInfo}, not a live handle; use {@link attach} to operate on it.
+   * Throws if the sandbox does not exist.
+   */
+  static get(
+    name: string,
+    opts: { baseUrl?: string } = {},
+    transport: Transport = defaultTransport(),
+  ): Promise<SandboxInfo> {
+    const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
+    return transport.request<SandboxInfo>(
+      `${baseUrl}/v1/sandboxes/${encodeURIComponent(name)}`,
+    );
+  }
+
+  /** List the caller's sandboxes as read-only {@link SandboxInfo} metadata. */
+  static async list(
+    opts: { baseUrl?: string } = {},
+    transport: Transport = defaultTransport(),
+  ): Promise<SandboxInfo[]> {
+    const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
+    const data = await transport.request<{ sandboxes: SandboxInfo[] }>(
+      `${baseUrl}/v1/sandboxes`,
+    );
+    return data.sandboxes;
   }
 
   private fileUrl(path: string): string {
@@ -631,4 +661,17 @@ export function attach(
   opts?: { workspaceRoot?: string; baseUrl?: string },
 ): Sandbox {
   return Sandbox.attach(name, opts);
+}
+
+/** Fetch a sandbox's metadata + status by name (ambient transport). */
+export function get(
+  name: string,
+  opts?: { baseUrl?: string },
+): Promise<SandboxInfo> {
+  return Sandbox.get(name, opts);
+}
+
+/** List the caller's sandboxes as read-only metadata (ambient transport). */
+export function list(opts?: { baseUrl?: string }): Promise<SandboxInfo[]> {
+  return Sandbox.list(opts);
 }
