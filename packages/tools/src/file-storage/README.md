@@ -12,10 +12,15 @@ const { fileId, uploadUrl, requiredHeaders } = await sapiom.fileStorage.upload({
   contentType: "image/png",
   fileName: "photo.png",
   visibility: "private", // or "public"
+  fileSize: bytes.byteLength, // required — size in bytes
 });
 
 // 2. PUT the bytes to the upload URL yourself.
-await fetch(uploadUrl, { method: "PUT", headers: requiredHeaders, body: bytes });
+await fetch(uploadUrl, {
+  method: "PUT",
+  headers: requiredHeaders,
+  body: bytes,
+});
 
 // 3. Later: a presigned download URL, list, visibility, delete.
 const { downloadUrl } = await sapiom.fileStorage.getDownloadUrl(fileId);
@@ -36,8 +41,8 @@ returns `requiredHeaders` you **must** include on the `PUT` (notably `Content-Ty
 ## Lifecycle
 
 After you `PUT` the bytes, the file's `status` moves from `pending_upload` →
-`uploaded` (usually within seconds) and `actualFileSize` is recorded. Until then,
-`getDownloadUrl()` on a still-pending file is rejected.
+`uploaded` (usually within seconds) and `fileSize` is updated to the measured size.
+Until then, `getDownloadUrl()` on a still-pending file is rejected.
 
 ## Visibility
 
@@ -49,9 +54,9 @@ files; another tenant cannot read your private files.
 
 ## Gotchas
 
-- **Sizes are strings.** `expectedFileSize` / `actualFileSize` on returned metadata
-  are `string | null` to avoid JS `Number` precision loss on large files.
-  (`expectedFileSize` on the `upload()` *input* is a regular `number`.)
+- **`fileSize` is a string on metadata.** `fileSize` on returned metadata is a
+  `string` to avoid JS `Number` precision loss on large files. (`fileSize` on the
+  `upload()` _input_ is a regular `number`, and is **required**.)
 - **`delete` is idempotent** — deleting an already-deleted file resolves without
   error.
 - **Failed requests throw `FileStorageHttpError`** (carries `status` + parsed
