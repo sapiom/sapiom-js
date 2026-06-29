@@ -18,8 +18,18 @@
  * replaces that capability's default; a function `(…args) => value` computes it
  * from the call arguments.
  */
-import { CODING_RESULT_SIGNAL, toResumePayload } from "../agent/index.js";
-import type { CodingRunResult, RunHandle, RunStatus } from "../agent/index.js";
+import {
+  AGENT_RUN_RESULT_SIGNAL,
+  CODING_RESULT_SIGNAL,
+  toResumePayload,
+} from "../agent/index.js";
+import type {
+  AgentRunHandle,
+  AgentRunResult,
+  CodingRunResult,
+  RunHandle,
+  RunStatus,
+} from "../agent/index.js";
 import { ORCHESTRATIONS_RESULT_SIGNAL } from "../orchestrations/index.js";
 import type {
   OrchestrationRunResult,
@@ -412,6 +422,50 @@ function stubRunHandle(
   ) as RunHandle;
 }
 
+function stubAgentResult(): AgentRunResult {
+  return {
+    runId: "stub-run",
+    status: "completed",
+    output: "(stub) agent run completed locally",
+    result: {
+      success: true,
+      stopReason: "end_turn",
+      turns: 1,
+      modelUsed: "stub-model",
+      durationMs: 0,
+      costUsd: 0,
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+        thinkingTokens: 0,
+      },
+    },
+    error: null,
+  };
+}
+
+function stubAgentRunHandle(
+  overrides: StubOverrides,
+  correlationId: string,
+  result: AgentRunResult,
+): AgentRunHandle {
+  const handle = {
+    runId: correlationId,
+    dispatch: { correlationId, resultSignal: AGENT_RUN_RESULT_SIGNAL },
+    status: () => Promise.resolve(result.status),
+    wait: () => Promise.resolve(result),
+  };
+  return makeHandle(
+    "runHandle",
+    RUN_HANDLE_METHODS,
+    handle as unknown as Record<string, unknown>,
+    overrides,
+    {},
+  ) as AgentRunHandle;
+}
+
 /**
  * Create a stub `Sapiom` client. Runs every capability against built-in defaults;
  * pass `overrides` to control the results a step branches on.
@@ -439,6 +493,14 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     ) as CodingRunResult;
     return { ...res, sandbox: asSandbox(res.sandbox, overrides) };
   };
+
+  // Default (instant) agent result — no sandbox to re-wrap, so it's the resolved
+  // value as-is. `keys` lets `launch()` accept `agent.launch` and `agent.run`.
+  const resolveAgentResult = (
+    spec: unknown,
+    keys: string | string[],
+  ): AgentRunResult =>
+    r(keys, [spec], () => stubAgentResult()) as AgentRunResult;
 
   const client: Sapiom = {
     sandboxes: {
@@ -506,6 +568,21 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         ),
     },
     agent: {
+      run: (spec) => Promise.resolve(resolveAgentResult(spec, "agent.run")),
+      launch: (spec) => {
+        const correlationId = `stub-run-${++launchSeq}`;
+        // `launch()` honors `agent.launch` first, then the shared `agent.run`.
+        const result = {
+          ...resolveAgentResult(spec, dispatchedKeys("agent")),
+          runId: correlationId,
+        };
+        // The resume payload IS the result (no live handles to strip).
+        return dispatchable(
+          stubAgentRunHandle(overrides, correlationId, result),
+          opts.signals,
+          () => result,
+        );
+      },
       coding: {
         run: (spec) =>
           Promise.resolve(resolveCodingResult(spec, "agent.coding.run")),

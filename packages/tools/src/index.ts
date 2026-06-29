@@ -42,6 +42,21 @@ export {
   toResumePayload,
   EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX,
 } from "./agent/index.js";
+// Default (instant, in-server) agent — `agent.run` / `agent.launch`. Signal const
+// for a step's static `pause: { signal }` decl; the result payload shape + schema
+// for a step resumed from `pauseUntilSignal(agentHandle, …)`.
+export { AGENT_RUN_RESULT_SIGNAL } from "./agent/index.js";
+export type {
+  AgentRunSpec,
+  AgentRunResult,
+  AgentRunOutcome,
+  AgentRunError,
+  AgentRunStatus,
+  AgentRunHandle,
+  AgentRunResultPayload,
+  AgentMcp,
+} from "./agent/index.js";
+export { agentRunResultSchema, AgentRunResultSchemaError } from "./agent/index.js";
 
 export * as orchestrations from "./orchestrations/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.

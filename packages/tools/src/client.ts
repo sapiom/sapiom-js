@@ -23,11 +23,19 @@ import {
 import { Sandbox } from "./sandboxes/index.js";
 import type { SandboxCreateOptions, SandboxInfo } from "./sandboxes/index.js";
 import { Repository } from "./repositories/index.js";
-import { run as codingRun, launch as codingLaunch } from "./agent/index.js";
+import {
+  codingRun,
+  codingLaunch,
+  run as agentRun,
+  launch as agentLaunch,
+} from "./agent/index.js";
 import type {
   CodingRunSpec,
   CodingRunResult,
   RunHandle,
+  AgentRunSpec,
+  AgentRunResult,
+  AgentRunHandle,
 } from "./agent/index.js";
 import {
   run as orchestrationsRun,
@@ -97,6 +105,10 @@ export interface Sapiom {
     attach(slug: string, cloneUrl: string): Repository;
   };
   readonly agent: {
+    /** Instant in-server agent: prompt (+ optional remote MCP tools) → text. No sandbox. */
+    run(spec: AgentRunSpec): Promise<AgentRunResult>;
+    /** Launch an instant run; pass the handle to `pauseUntilSignal` to suspend on it. */
+    launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
     coding: {
       run(spec: CodingRunSpec): Promise<CodingRunResult>;
       launch(spec: CodingRunSpec): Promise<RunHandle>;
@@ -196,6 +208,8 @@ function bind(transport: Transport): Sapiom {
       attach: (slug, cloneUrl) => Repository.attach(slug, cloneUrl, transport),
     },
     agent: {
+      run: (spec) => agentRun(spec, transport),
+      launch: (spec) => agentLaunch(spec, transport),
       coding: {
         run: (spec) => codingRun(spec, transport),
         launch: (spec) => codingLaunch(spec, transport),
