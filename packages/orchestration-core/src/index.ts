@@ -50,6 +50,10 @@ export type {
 export { check } from "./check.js";
 export type { CheckOptions, CheckResult } from "./check.js";
 
+// bundle-for-deploy (local, no network) — inline local/shared code, externalize npm deps
+export { bundleForDeploy } from "./bundle.js";
+export type { DeployBundle } from "./bundle.js";
+
 // link (networked)
 export { link } from "./link.js";
 export type { LinkOptions, LinkResult, DefinitionSummary } from "./link.js";
