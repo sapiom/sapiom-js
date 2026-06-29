@@ -1,0 +1,24 @@
+{
+  "name": "@sapiom/example-eval-gate",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sapiom workflow example: the eval-gate — score an output against YOUR rubric with one LLM-gateway judge call, then branch publish/revise on a threshold. A deployable orchestration that runs offline (faked judge), live (real gateway), and on the Sapiom engine.",
+  "scripts": {
+    "start": "npx tsx run-local.ts",
+    "start:live": "npx tsx run-local.ts --mode live",
+    "check": "npx tsx run-local.ts --mode offline",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sapiom/orchestration": "^0.4.2",
+    "@sapiom/orchestration-core": "^0.3.6",
+    "@sapiom/tools": "^0.8.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2"
+  }
+}
