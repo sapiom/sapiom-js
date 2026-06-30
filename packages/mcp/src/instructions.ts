@@ -31,8 +31,9 @@ step's \`run(input, ctx)\` does work and returns a directive. All from the termi
   \`pauseUntilSignal(handle, …)\` requires \`pause: { signal, resumeStep }\`; every \`goto\` target
   must be listed in \`next[]\`. TypeScript enforces all of these.
 - Cross-step state: \`ctx.shared\` — the entry input reaches only the entry step.
-- Capabilities run via \`ctx.sapiom.*\` (sandboxes, repositories, agent.coding, fileStorage,
-  contentGeneration.images) — a typed subset of the gateway catalog; use autocomplete/typecheck.
+- Capabilities run via \`ctx.sapiom.*\` (sandboxes, repositories, agent(+coding), orchestrations,
+  fileStorage, contentGeneration.{images,video}, search, database) — a typed subset of the gateway
+  catalog; use autocomplete/typecheck.
 
 Full reference: https://docs.sapiom.ai/workflows (authoring · capabilities · reference · examples)
 and the \`AGENTS.md\` inside your scaffolded project.`;
