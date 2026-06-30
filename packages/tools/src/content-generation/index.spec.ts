@@ -65,33 +65,36 @@ const headerOf = (c: FetchCall, k: string) =>
 // ---------------------------------------------------------------------------
 
 describe("contentGeneration.images.create()", () => {
-  it("POSTs the default model with just the prompt + credential and maps the wire result to camelCase", async () => {
+  it("POSTs to /v1/capabilities/content.generation.images with x-api-key and the prompt", async () => {
     const { transport, calls } = makeTransport([
       () =>
         jsonResponse({
-          images: [{ url: "https://media/x.png", content_type: "image/png" }],
-          seed: 7,
+          images: [{ url: "https://media/x.png", contentType: "image/png" }],
         }),
     ]);
 
     const out = await createImage({ prompt: "a red bike" }, transport, BASE);
 
-    // wire snake (content_type) → camelCase surface (contentType); top-level extras pass through.
+    // The router returns the normalized camelCase DTO (servedBy stripped at the boundary).
     expect(out).toEqual({
       images: [{ url: "https://media/x.png", contentType: "image/png" }],
-      seed: 7,
     });
-    // model defaults internally — the caller named no provider.
-    expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/flux/schnell`);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/v1/capabilities/content.generation.images`,
+    );
     expect(calls[0]!.init.method).toBe("POST");
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    // Routed verbs authenticate via x-api-key (the /v1 guard's header), NOT the
+    // gateway-direct x-sapiom-api-key — wrong header = silent 401.
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
     expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
+    // model omitted → the router's adapter defaults it; no /run/<model> URL building here.
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "a red bike",
     });
   });
 
-  it("maps numImages → num_images, forwards `params` verbatim, honors an explicit model (slashes preserved)", async () => {
+  it("forwards numImages (camelCase), `params` as a nested field, and an explicit model verbatim", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ images: [] }),
     ]);
@@ -101,24 +104,25 @@ describe("contentGeneration.images.create()", () => {
         prompt: "x",
         numImages: 3,
         params: { image_size: "square", seed: 42 },
-        model: "/some/other/model/",
+        model: "fal-ai/flux/dev",
       },
       transport,
       BASE,
     );
 
-    expect(calls[0]!.url).toBe(`${BASE}/run/some/other/model`);
+    // model rides in the body (the adapter turns it into the provider path), and
+    // params is nested — not spread — so the adapter forwards it verbatim.
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "x",
-      image_size: "square",
-      seed: 42,
-      num_images: 3,
+      numImages: 3,
+      params: { image_size: "square", seed: 42 },
+      model: "fal-ai/flux/dev",
     });
   });
 
   it("merges the optional `storage` param; the mapped image carries fileId", async () => {
     const { transport, calls } = makeTransport([
-      () => jsonResponse({ images: [{ url: "u", file_id: "f1" }] }),
+      () => jsonResponse({ images: [{ url: "u", fileId: "f1" }] }),
     ]);
 
     const out = await createImage(
@@ -167,9 +171,9 @@ describe("contentGeneration.images.create()", () => {
       () =>
         jsonResponse({
           images: [
-            { url: "a", file_id: "f-a" },
-            { url: "b", file_id: "f-b" },
-            { url: "c", storage_error: "exceeded max upload size" },
+            { url: "a", fileId: "f-a" },
+            { url: "b", fileId: "f-b" },
+            { url: "c", storageError: "exceeded max upload size" },
           ],
         }),
     ]);
@@ -211,7 +215,9 @@ describe("contentGeneration.images.create()", () => {
     ]);
 
     await images.create({ prompt: "x" }, transport, BASE);
-    expect(calls[0]!.url).toBe(`${BASE}/run/fal-ai/flux/schnell`);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/v1/capabilities/content.generation.images`,
+    );
   });
 });
 
@@ -220,14 +226,14 @@ describe("contentGeneration.images.create()", () => {
 // ---------------------------------------------------------------------------
 
 describe("createClient().contentGeneration.images.create", () => {
-  it("binds to the client's credential + default generation host, merging storage, mapping the result", async () => {
+  it("binds to the client's credential + the Core base URL, sending x-api-key, mapping the result", async () => {
     const calls: FetchCall[] = [];
     const fetchMock = (async (
       input: Parameters<typeof globalThis.fetch>[0],
       init: RequestInit = {},
     ): Promise<Response> => {
       calls.push({ url: String(input), init });
-      return jsonResponse({ images: [{ url: "u", file_id: "f" }] });
+      return jsonResponse({ images: [{ url: "u", fileId: "f" }] });
     }) as typeof globalThis.fetch;
 
     const sapiom = createClient({ apiKey: "client-key", fetch: fetchMock });
@@ -238,9 +244,10 @@ describe("createClient().contentGeneration.images.create", () => {
 
     expect(out.images?.[0]?.fileId).toBe("f");
     expect(calls[0]!.url).toBe(
-      "https://fal.services.sapiom.ai/run/fal-ai/flux/schnell",
+      "https://api.sapiom.ai/v1/capabilities/content.generation.images",
     );
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("client-key");
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("client-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "x",
       storage: { visibility: "private" },

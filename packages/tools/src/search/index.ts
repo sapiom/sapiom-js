@@ -18,24 +18,26 @@
  *
  * Or via an explicit client: `createClient({ apiKey }).search.webSearch(...)`.
  *
- * Failed requests throw {@link SearchHttpError} (carries `status` + parsed `body`).
+ * Every operation here is **routed**: it goes through the shared
+ * {@link capabilityCall} seam to `POST /v1/capabilities/<id>` on the single Core
+ * base URL (SAP-1116). The dotted capability id (`web.scrape`, `web.search`,
+ * `email.find` / `email.verify` / `email.domain.search`) appears only on the wire —
+ * the public verb names and shapes below are unchanged. Failed requests throw
+ * {@link SearchHttpError} (carries `status` + parsed `body`).
  */
-import { Transport, defaultTransport } from "../_client/index.js";
-import { resolveServiceUrl } from "../_client/service-url.js";
-import { SearchHttpError, ensureOk } from "./errors.js";
+import {
+  Transport,
+  capabilityCall,
+  defaultTransport,
+  resolveCoreBaseUrl,
+} from "../_client/index.js";
+import { SearchHttpError } from "./errors.js";
 
 export { SearchHttpError };
 
-const DEFAULT_BASE_URL = resolveServiceUrl(
-  "firecrawl",
-  process.env.SAPIOM_SCRAPE_URL,
-);
-
-const DEFAULT_WEB_SEARCH_BASE_URL =
-  process.env.SAPIOM_SEARCH_URL || "https://api.sapiom.ai";
-
-const DEFAULT_EMAIL_SEARCH_BASE_URL =
-  process.env.SAPIOM_EMAIL_SEARCH_URL || "https://hunter.services.sapiom.ai";
+/** Build the capability-specific error the routed call throws on a non-2xx. */
+const searchError = (message: string, status: number, body: unknown): Error =>
+  new SearchHttpError(message, status, body);
 
 // ----- Types -----
 
@@ -88,7 +90,7 @@ export interface ScrapeResult {
   metadata: ScrapeMetadata;
 }
 
-// ----- Internal request/response shapes -----
+// ----- Internal response shapes (the router's normalized scrape DTO) -----
 
 interface RawMetadata {
   // May arrive as an array on some pages; normalized to a single string.
@@ -100,19 +102,22 @@ interface RawMetadata {
   [key: string]: unknown;
 }
 
-interface RawScrapeData {
+/**
+ * The router's normalized `web.scrape` response. The `{ success, data }` Firecrawl
+ * envelope is gone — the router's adapter unwraps it and returns the flat shape
+ * below (with `servedBy` stripped at the public boundary). `metadata` is the raw
+ * provider metadata, so {@link mapMetadata} still normalizes its key shapes.
+ */
+interface RawScrapeResponse {
+  url?: string;
   markdown?: string;
   html?: string;
   rawHtml?: string;
   screenshot?: string;
+  // The router doesn't surface page links today; mapped defensively if it ever does.
   links?: string[];
   metadata?: RawMetadata;
   [key: string]: unknown;
-}
-
-interface RawScrapeResponse {
-  success?: boolean;
-  data?: RawScrapeData;
 }
 
 /** Collapse a field that may be a single value or an array down to one value. */
@@ -136,17 +141,16 @@ function mapMetadata(raw: RawMetadata | undefined): ScrapeMetadata {
 }
 
 function mapScrape(url: string, raw: RawScrapeResponse): ScrapeResult {
-  const data = raw.data ?? {};
   // Unrequested formats come back null; treat null as absent (`!=`) so each
   // format field is present only when it was actually returned.
   return {
-    url,
-    ...(data.markdown != null && { markdown: data.markdown }),
-    ...(data.html != null && { html: data.html }),
-    ...(data.rawHtml != null && { rawHtml: data.rawHtml }),
-    ...(data.screenshot != null && { screenshot: data.screenshot }),
-    ...(data.links != null && { links: data.links }),
-    metadata: mapMetadata(data.metadata),
+    url: raw.url ?? url,
+    ...(raw.markdown != null && { markdown: raw.markdown }),
+    ...(raw.html != null && { html: raw.html }),
+    ...(raw.rawHtml != null && { rawHtml: raw.rawHtml }),
+    ...(raw.screenshot != null && { screenshot: raw.screenshot }),
+    ...(raw.links != null && { links: raw.links }),
+    metadata: mapMetadata(raw.metadata),
   };
 }
 
@@ -162,7 +166,7 @@ function mapScrape(url: string, raw: RawScrapeResponse): ScrapeResult {
 export async function scrape(
   input: ScrapeInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<ScrapeResult> {
   // `!= null` so an optional explicitly passed as null (a JS caller bypassing the
   // types) is treated as absent rather than forwarded as a null field.
@@ -172,15 +176,13 @@ export async function scrape(
     body.onlyMainContent = input.onlyMainContent;
   if (input.waitFor != null) body.waitFor = input.waitFor;
 
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v2/scrape`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to scrape",
-  );
-  return mapScrape(input.url, (await res.json()) as RawScrapeResponse);
+  const raw = await capabilityCall<RawScrapeResponse>("web.scrape", body, {
+    transport,
+    baseUrl,
+    makeError: searchError,
+    errorPrefix: "Failed to scrape",
+  });
+  return mapScrape(input.url, raw);
 }
 
 // ----- search.webSearch -----
@@ -264,7 +266,7 @@ function mapWebSearch(
 export async function webSearch(
   input: WebSearchInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_WEB_SEARCH_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<WebSearchResponse> {
   // `!= null` so an optional explicitly passed as null (a JS caller bypassing the
   // types) is treated as absent rather than forwarded as a null field.
@@ -274,61 +276,23 @@ export async function webSearch(
   };
   if (input.depth != null) body.depth = input.depth;
 
-  const res = await ensureOk(
-    await transport.fetch(
-      `${baseUrl}/v1/capabilities/web.search`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      },
-      { authHeader: "x-api-key" },
-    ),
-    "Failed to search the web",
-  );
-  return mapWebSearch(input.query, (await res.json()) as RawWebSearchResponse);
+  const raw = await capabilityCall<RawWebSearchResponse>("web.search", body, {
+    transport,
+    baseUrl,
+    makeError: searchError,
+    errorPrefix: "Failed to search the web",
+  });
+  return mapWebSearch(input.query, raw);
 }
 
 // ----- search.emailSearch -----
 //
 // Three operations for working with professional email addresses: find an email
 // for a known person, verify an address is deliverable, and discover the emails
-// published at a company domain.
-
-// ----- Shared request/response helpers -----
-
-/**
- * Build a query string from a set of params. Skips any value that is null or
- * undefined (so a JS caller passing an optional as `null` doesn't put `null` on
- * the wire), and stringifies everything else.
- */
-function toQuery(params: Record<string, unknown>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value != null) search.set(key, String(value));
-  }
-  const qs = search.toString();
-  return qs ? `?${qs}` : "";
-}
-
-/** Responses arrive wrapped in a `{ data }` envelope; the payload is `data`. */
-interface RawEnvelope<T> {
-  data?: T;
-  [key: string]: unknown;
-}
-
-async function getEnvelope<T>(
-  transport: Transport,
-  url: string,
-  errorPrefix: string,
-): Promise<T | undefined> {
-  const res = await ensureOk(
-    await transport.fetch(url, { method: "GET" }),
-    errorPrefix,
-  );
-  const body = (await res.json()) as RawEnvelope<T>;
-  return body.data;
-}
+// published at a company domain. Each routes to its own dotted capability id
+// (`email.find` / `email.verify` / `email.domain.search`); the router's normalized
+// response is already the SDK's camelCase result shape, so the mappers below are a
+// defensive null-normalizing pass, not a snake→camel translation.
 
 // ----- emailSearch.findEmail -----
 
@@ -367,11 +331,11 @@ export interface FindEmailResult {
 interface RawFindEmail {
   email?: string | null;
   score?: number;
-  first_name?: string | null;
-  last_name?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
   position?: string | null;
   company?: string | null;
-  linkedin_url?: string | null;
+  linkedinUrl?: string | null;
   verification?: { status?: string; date?: string };
   [key: string]: unknown;
 }
@@ -383,11 +347,11 @@ function mapFindEmail(raw: RawFindEmail | undefined): FindEmailResult {
   return {
     email: d.email != null ? d.email : null,
     ...(d.score != null && { score: d.score }),
-    ...(d.first_name != null && { firstName: d.first_name }),
-    ...(d.last_name != null && { lastName: d.last_name }),
+    ...(d.firstName != null && { firstName: d.firstName }),
+    ...(d.lastName != null && { lastName: d.lastName }),
     ...(d.position != null && { position: d.position }),
     ...(d.company != null && { company: d.company }),
-    ...(d.linkedin_url != null && { linkedinUrl: d.linkedin_url }),
+    ...(d.linkedinUrl != null && { linkedinUrl: d.linkedinUrl }),
     ...(d.verification != null && { verification: d.verification }),
   };
 }
@@ -406,11 +370,13 @@ function mapFindEmail(raw: RawFindEmail | undefined): FindEmailResult {
 export async function findEmail(
   input: FindEmailInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_EMAIL_SEARCH_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<FindEmailResult> {
   // Guard the required combination client-side so an under-specified lookup fails
   // fast and clearly, never as a confusing network round-trip. `!= null` plus a
-  // truthiness check rejects null/undefined/empty-string for JS callers.
+  // truthiness check rejects null/undefined/empty-string for JS callers. (The
+  // router validates the same combination, but the client guard keeps the
+  // no-network-on-invalid contract the SDK has always offered.)
   const hasOrg = Boolean(input.domain) || Boolean(input.company);
   const hasPerson =
     Boolean(input.fullName) ||
@@ -423,19 +389,22 @@ export async function findEmail(
     );
   }
 
-  const query = toQuery({
-    domain: input.domain,
-    company: input.company,
-    first_name: input.firstName,
-    last_name: input.lastName,
-    full_name: input.fullName,
-  });
-  const data = await getEnvelope<RawFindEmail>(
+  // Forward only the provided fields (camelCase router DTO). `!= null` keeps a
+  // JS-caller's explicit null off the wire.
+  const body: Record<string, unknown> = {};
+  if (input.domain != null) body.domain = input.domain;
+  if (input.company != null) body.company = input.company;
+  if (input.firstName != null) body.firstName = input.firstName;
+  if (input.lastName != null) body.lastName = input.lastName;
+  if (input.fullName != null) body.fullName = input.fullName;
+
+  const raw = await capabilityCall<RawFindEmail>("email.find", body, {
     transport,
-    `${baseUrl}/v2/email-finder${query}`,
-    "Failed to find email",
-  );
-  return mapFindEmail(data);
+    baseUrl,
+    makeError: searchError,
+    errorPrefix: "Failed to find email",
+  });
+  return mapFindEmail(raw);
 }
 
 // ----- emailSearch.verifyEmail -----
@@ -469,8 +438,8 @@ interface RawVerifyEmail {
   status?: string;
   result?: string;
   score?: number;
-  smtp_check?: boolean;
-  accept_all?: boolean;
+  smtpCheck?: boolean;
+  acceptAll?: boolean;
   disposable?: boolean;
   webmail?: boolean;
   [key: string]: unknown;
@@ -486,8 +455,8 @@ function mapVerifyEmail(
     ...(d.status != null && { status: d.status }),
     ...(d.result != null && { result: d.result }),
     ...(d.score != null && { score: d.score }),
-    ...(d.smtp_check != null && { smtpCheck: d.smtp_check }),
-    ...(d.accept_all != null && { acceptAll: d.accept_all }),
+    ...(d.smtpCheck != null && { smtpCheck: d.smtpCheck }),
+    ...(d.acceptAll != null && { acceptAll: d.acceptAll }),
     ...(d.disposable != null && { disposable: d.disposable }),
     ...(d.webmail != null && { webmail: d.webmail }),
   };
@@ -503,18 +472,22 @@ function mapVerifyEmail(
 export async function verifyEmail(
   input: VerifyEmailInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_EMAIL_SEARCH_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<VerifyEmailResult> {
   if (!input.email) {
     throw new SearchHttpError("verifyEmail requires an email", 400, undefined);
   }
-  const query = toQuery({ email: input.email });
-  const data = await getEnvelope<RawVerifyEmail>(
-    transport,
-    `${baseUrl}/v2/email-verifier${query}`,
-    "Failed to verify email",
+  const raw = await capabilityCall<RawVerifyEmail>(
+    "email.verify",
+    { email: input.email },
+    {
+      transport,
+      baseUrl,
+      makeError: searchError,
+      errorPrefix: "Failed to verify email",
+    },
   );
-  return mapVerifyEmail(input.email, data);
+  return mapVerifyEmail(input.email, raw);
 }
 
 // ----- emailSearch.domainSearch -----
@@ -565,11 +538,11 @@ export interface DomainSearchResult {
 }
 
 interface RawDomainEmail {
-  value?: string;
+  email?: string;
   type?: string;
   confidence?: number;
-  first_name?: string | null;
-  last_name?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
   position?: string | null;
   department?: string | null;
   seniority?: string | null;
@@ -580,18 +553,18 @@ interface RawDomainSearch {
   domain?: string;
   organization?: string;
   pattern?: string;
-  accept_all?: boolean;
+  acceptAll?: boolean;
   emails?: RawDomainEmail[];
   [key: string]: unknown;
 }
 
 function mapDomainEmail(raw: RawDomainEmail): DomainEmail {
   return {
-    email: raw.value ?? "",
+    email: raw.email ?? "",
     ...(raw.type != null && { type: raw.type }),
     ...(raw.confidence != null && { confidence: raw.confidence }),
-    ...(raw.first_name != null && { firstName: raw.first_name }),
-    ...(raw.last_name != null && { lastName: raw.last_name }),
+    ...(raw.firstName != null && { firstName: raw.firstName }),
+    ...(raw.lastName != null && { lastName: raw.lastName }),
     ...(raw.position != null && { position: raw.position }),
     ...(raw.department != null && { department: raw.department }),
     ...(raw.seniority != null && { seniority: raw.seniority }),
@@ -608,7 +581,7 @@ function mapDomainSearch(
     domain: d.domain ?? domain,
     ...(d.organization != null && { organization: d.organization }),
     ...(d.pattern != null && { pattern: d.pattern }),
-    ...(d.accept_all != null && { acceptAll: d.accept_all }),
+    ...(d.acceptAll != null && { acceptAll: d.acceptAll }),
     emails,
   };
 }
@@ -623,30 +596,30 @@ function mapDomainSearch(
 export async function domainSearch(
   input: DomainSearchInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_EMAIL_SEARCH_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<DomainSearchResult> {
   if (!input.domain) {
     throw new SearchHttpError("domainSearch requires a domain", 400, undefined);
   }
-  // Array filters travel as comma-separated values; an empty array becomes
-  // nothing on the wire (filtered by `toQuery`).
-  const query = toQuery({
-    domain: input.domain,
-    limit: input.limit,
-    type: input.type,
-    seniority:
-      input.seniority != null && input.seniority.length > 0
-        ? input.seniority.join(",")
-        : undefined,
-    department:
-      input.department != null && input.department.length > 0
-        ? input.department.join(",")
-        : undefined,
-  });
-  const data = await getEnvelope<RawDomainSearch>(
-    transport,
-    `${baseUrl}/v2/domain-search${query}`,
-    "Failed to search domain",
+  // Forward only the provided fields. Array filters travel as arrays in the router
+  // DTO; an empty array is omitted entirely (no filter), and absent scalars are left off.
+  const body: Record<string, unknown> = { domain: input.domain };
+  if (input.limit != null) body.limit = input.limit;
+  if (input.type != null) body.type = input.type;
+  if (input.seniority != null && input.seniority.length > 0)
+    body.seniority = input.seniority;
+  if (input.department != null && input.department.length > 0)
+    body.department = input.department;
+
+  const raw = await capabilityCall<RawDomainSearch>(
+    "email.domain.search",
+    body,
+    {
+      transport,
+      baseUrl,
+      makeError: searchError,
+      errorPrefix: "Failed to search domain",
+    },
   );
-  return mapDomainSearch(input.domain, data);
+  return mapDomainSearch(input.domain, raw);
 }

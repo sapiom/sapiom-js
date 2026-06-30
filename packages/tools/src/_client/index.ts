@@ -200,3 +200,9 @@ let _default: Transport | undefined;
 export function defaultTransport(): Transport {
   return (_default ??= new Transport({ attribution: attributionFromEnv() }));
 }
+
+export {
+  capabilityCall,
+  resolveCoreBaseUrl,
+  type CapabilityCallOptions,
+} from "./capability-call.js";

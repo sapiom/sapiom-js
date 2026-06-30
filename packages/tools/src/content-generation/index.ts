@@ -19,13 +19,23 @@
  * inline to block until done — same as `video.create` but with the ability to
  * pause a running workflow.
  */
-import { Transport, defaultTransport } from "../_client/index.js";
+import {
+  Transport,
+  capabilityCall,
+  defaultTransport,
+  resolveCoreBaseUrl,
+} from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, ContentGenerationHttpError } from "./errors.js";
 import type { DispatchHandle } from "../dispatch.js";
 
 export { ContentGenerationHttpError };
 
+/**
+ * Base URL for the still-provider-direct video ops (deferred — async/poll, SAP-1117).
+ * The routed `images.create` verb does NOT use this; it resolves the single Core
+ * base URL at call time via {@link resolveCoreBaseUrl} (SAP-1116).
+ */
 const DEFAULT_BASE_URL = resolveServiceUrl(
   "fal",
   process.env.SAPIOM_CONTENT_GENERATION_URL,
@@ -38,9 +48,6 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
  * value carried in the handle's `dispatch.resultSignal`.
  */
 export const VIDEO_RESULT_SIGNAL = "contentGeneration.video.result";
-
-/** Default image model when the caller doesn't pick one — a fast, low-cost model. */
-const DEFAULT_IMAGE_MODEL = "fal-ai/flux/schnell";
 
 // ----- Types -----
 
@@ -102,15 +109,20 @@ export interface ImageGenerationResult {
   [key: string]: unknown;
 }
 
-// ----- Internal request/response shapes -----
+// ----- Internal response shapes (the router's normalized image DTO) -----
+//
+// The router returns the camelCase normalized shape (the fal adapter maps fal's
+// snake_case wire fields away), with `servedBy` stripped at the public boundary —
+// so this mirrors the public `GeneratedImage` and the mapper is a defensive pass,
+// not a snake→camel translation.
 
 interface RawImage {
   url: string;
-  content_type?: string;
+  contentType?: string;
   width?: number;
   height?: number;
-  file_id?: string;
-  storage_error?: string;
+  fileId?: string;
+  storageError?: string;
 }
 
 interface RawImageResult {
@@ -121,11 +133,11 @@ interface RawImageResult {
 function mapImage(raw: RawImage): GeneratedImage {
   return {
     url: raw.url,
-    ...(raw.content_type !== undefined && { contentType: raw.content_type }),
+    ...(raw.contentType !== undefined && { contentType: raw.contentType }),
     ...(raw.width !== undefined && { width: raw.width }),
     ...(raw.height !== undefined && { height: raw.height }),
-    ...(raw.file_id !== undefined && { fileId: raw.file_id }),
-    ...(raw.storage_error !== undefined && { storageError: raw.storage_error }),
+    ...(raw.fileId !== undefined && { fileId: raw.fileId }),
+    ...(raw.storageError !== undefined && { storageError: raw.storageError }),
   };
 }
 
@@ -176,33 +188,42 @@ function workflowResumeHeaders(
  * Generate one or more images from a prompt. Pass `storage` to persist each output
  * (the returned images then carry `fileId`). Failed requests throw
  * {@link ContentGenerationHttpError}.
+ *
+ * Routed (SAP-1116): goes through the shared {@link capabilityCall} seam to
+ * `POST /v1/capabilities/content.generation.images` on the single Core base URL.
+ * `model` is now a request-body field the router's adapter turns into the provider
+ * path (and defaults when omitted) — the SDK no longer builds the `/run/<model>`
+ * URL itself.
  */
 export async function createImage(
   input: ImageCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<ImageGenerationResult> {
   assertPrompt(input.prompt);
-  const path = modelToPath(input.model || DEFAULT_IMAGE_MODEL);
 
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    ...input.params,
-  };
-  if (input.numImages !== undefined) body.num_images = input.numImages;
-  // Truthy check (not `!== undefined`) so a caller passing `storage: null` is
-  // treated as "no storage" rather than sending a null field.
+  // Map to the router's camelCase `ImageCreateRequest`. `params` rides as a nested
+  // field (not spread) so the adapter forwards it verbatim. `!= null` keeps a JS
+  // caller's explicit null off the wire; `storage` uses a truthy check so
+  // `storage: null` is "no storage" rather than a null field.
+  const body: Record<string, unknown> = { prompt: input.prompt };
+  if (input.model != null) body.model = input.model;
+  if (input.numImages !== undefined) body.numImages = input.numImages;
   if (input.storage) body.storage = input.storage;
+  if (input.params != null) body.params = input.params;
 
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/run/${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to generate image",
+  const raw = await capabilityCall<RawImageResult>(
+    "content.generation.images",
+    body,
+    {
+      transport,
+      baseUrl,
+      makeError: (message, status, errorBody) =>
+        new ContentGenerationHttpError(message, status, errorBody),
+      errorPrefix: "Failed to generate image",
+    },
   );
-  return mapResult((await res.json()) as RawImageResult);
+  return mapResult(raw);
 }
 
 /**
