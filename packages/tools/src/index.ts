@@ -61,6 +61,9 @@ export { agentRunResultSchema, AgentRunResultSchemaError } from "./agent/index.j
 export * as orchestrations from "./orchestrations/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { ORCHESTRATIONS_RESULT_SIGNAL } from "./orchestrations/index.js";
+
+// schedules — create/manage cron + one-off triggers for a deployed orchestration.
+export * as schedules from "./schedules/index.js";
 // The shape a step resumed from `pauseUntilSignal(orchestrationHandle, …)` receives
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { OrchestrationRunResultPayload } from "./orchestrations/index.js";

@@ -14,17 +14,22 @@ import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  cancelSchedule,
   check,
   createClient,
+  createSchedule,
   deploy,
   GatewayClient,
+  getSchedule,
   inspect,
   inspectBuild,
   isExecutionTerminal,
   link,
   listExecutions,
+  listSchedules,
   OrchestrationError,
   parseStubFile,
+  previewCron,
   requireConfig,
   run,
   runLocalFromDir,
@@ -32,6 +37,8 @@ import {
   signal,
   waitForExecution,
   writeConfig,
+  type ScheduleDetail,
+  type SchedulePolicy,
   type StubFile,
 } from "@sapiom/orchestration-core";
 import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
@@ -145,6 +152,26 @@ const NOT_AUTHED = fail(
     hint: "Use the sapiom_authenticate tool first.",
   }),
 );
+
+/**
+ * Agent-facing one-liner about a schedule's health: surfaces recent fire failures (with the
+ * executionId to inspect) or the next fire time, so the agent knows the next action without
+ * re-deriving it from the raw fire ledger. `recentFires` is newest-first.
+ */
+function scheduleHint(schedule: ScheduleDetail): string | undefined {
+  const failed = schedule.recentFires.filter((f) => f.state === "failed");
+  if (failed.length > 0) {
+    const latest = failed[0];
+    const where = latest.executionId
+      ? ` — inspect execution ${latest.executionId} with sapiom_dev_orchestrations_inspect`
+      : "";
+    return `${failed.length} of the last ${schedule.recentFires.length} fires failed${where}.`;
+  }
+  if (schedule.status === "active" && schedule.nextFireAt) return `Active — next fire at ${schedule.nextFireAt}.`;
+  if (schedule.status === "completed") return "Completed — no further fires.";
+  if (schedule.status === "disabled") return "Cancelled — no further fires.";
+  return undefined;
+}
 
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   // ── Local tools (no network) ──────────────────────────────────────────────
@@ -476,6 +503,138 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         return ok(
           await signal({ executionId, name, correlationId, payload }, client),
         );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // ── Schedules (triggers) ──────────────────────────────────────────────────
+
+  server.tool(
+    "sapiom_dev_orchestrations_schedule",
+    "Create a schedule for a deployed orchestration: a recurring cron schedule (kind 'schedule_cron' + cron + timezone) or a one-off delayed run (kind 'schedule_once' + at). Returns the schedule with its next fire time. Tip: validate a cron with sapiom_dev_orchestrations_cron_preview first.",
+    {
+      definition: z
+        .string()
+        .describe("The orchestration's tenant-unique slug (the handle it was deployed under)."),
+      kind: z
+        .enum(["schedule_cron", "schedule_once"])
+        .describe("'schedule_cron' = recurring; 'schedule_once' = a single delayed run."),
+      cron: z
+        .string()
+        .optional()
+        .describe("Cron expression — required for 'schedule_cron'. E.g. '0 9 * * 1-5' = 9am on weekdays."),
+      timezone: z
+        .string()
+        .optional()
+        .describe("IANA timezone the cron runs in (e.g. 'America/New_York'). Defaults to UTC."),
+      at: z
+        .string()
+        .optional()
+        .describe("ISO 8601 fire time — required for 'schedule_once'. E.g. '2026-07-01T17:00:00Z'."),
+      input: z.unknown().optional().describe("Execution input passed to each run (any JSON value)."),
+      startAt: z.string().optional().describe("Cron only: ISO time before which no occurrence fires."),
+      endAt: z.string().optional().describe("Cron only: ISO time after which the schedule completes."),
+      policy: z
+        .unknown()
+        .optional()
+        .describe("Cron only: { catchupPolicy?: 'skip'|'all', overlapPolicy?: 'allow', jitterMs?: number }."),
+    },
+    async ({ definition, kind, cron, timezone, at, input, startAt, endAt, policy }) => {
+      const client = await gatewayClient(env);
+      if (!client) return NOT_AUTHED;
+      try {
+        const schedule = await createSchedule(
+          {
+            definition,
+            kind,
+            cron,
+            timezone,
+            at,
+            input: coerceJson(input),
+            startAt,
+            endAt,
+            policy: coerceJson(policy) as SchedulePolicy | undefined,
+          },
+          client,
+        );
+        const hint = scheduleHint(schedule);
+        return ok({ schedule, ...(hint ? { hint } : {}) });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    "sapiom_dev_orchestrations_schedule_inspect",
+    "Inspect schedules. With scheduleId: returns one schedule's config, next fire time, and recent fire history (each with the run's executionId) — use this to debug a misbehaving schedule, then inspect a failed run's executionId with sapiom_dev_orchestrations_inspect. With definition (slug) and no scheduleId: lists that orchestration's schedules.",
+    {
+      scheduleId: z.string().optional().describe("Inspect one schedule (detail + recent fires + a health hint)."),
+      definition: z
+        .string()
+        .optional()
+        .describe("List schedules for this orchestration slug (used when scheduleId is omitted)."),
+      status: z
+        .enum(["active", "paused", "completed", "disabled"])
+        .optional()
+        .describe("Filter the list by status."),
+    },
+    async ({ scheduleId, definition, status }) => {
+      const client = await gatewayClient(env);
+      if (!client) return NOT_AUTHED;
+      try {
+        if (scheduleId) {
+          const schedule = await getSchedule(scheduleId, client);
+          const hint = scheduleHint(schedule);
+          return ok({ schedule, ...(hint ? { hint } : {}) });
+        }
+        if (definition) {
+          return ok(await listSchedules({ definition, status }, client));
+        }
+        return fail(
+          new OrchestrationError({
+            code: "BAD_INPUT",
+            message: "Provide scheduleId (to inspect one) or definition (to list an orchestration's schedules).",
+          }),
+        );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    "sapiom_dev_orchestrations_schedule_cancel",
+    "Cancel a schedule by id. Stops all future fires (a recurring schedule won't re-arm; a pending one-off won't run). Irreversible — recreate to reschedule.",
+    {
+      scheduleId: z.string().describe("The schedule to cancel."),
+    },
+    async ({ scheduleId }) => {
+      const client = await gatewayClient(env);
+      if (!client) return NOT_AUTHED;
+      try {
+        return ok(await cancelSchedule(scheduleId, client));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    "sapiom_dev_orchestrations_cron_preview",
+    "Validate a cron expression and preview its next occurrences, creating nothing. Use before sapiom_dev_orchestrations_schedule to confirm a cron + timezone fire when you expect (cron syntax is easy to get subtly wrong).",
+    {
+      cron: z.string().describe("Cron expression to validate, e.g. '0 9 * * 1-5'."),
+      timezone: z.string().optional().describe("IANA timezone (default UTC)."),
+      count: z.number().optional().describe("How many upcoming occurrences to return (default 5)."),
+    },
+    async ({ cron, timezone, count }) => {
+      const client = await gatewayClient(env);
+      if (!client) return NOT_AUTHED;
+      try {
+        return ok(await previewCron({ cron, timezone, count }, client));
       } catch (err) {
         return fail(err);
       }
