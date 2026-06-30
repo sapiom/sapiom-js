@@ -72,7 +72,7 @@ const DOTFILE_NAMES = new Set(["_gitignore", "_npmrc"]);
 
 // ── Version resolution ────────────────────────────────────────────────────────
 
-const REGISTRY = "https://registry.npmjs.org";
+const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
 /** Offline fallbacks — bump alongside notable releases. */
 const VERSION_FALLBACK = {
@@ -89,11 +89,32 @@ export interface ResolvedVersions {
   zod: string;
 }
 
+/**
+ * The npm registry to resolve `latest` from, honoring the same config a plain
+ * `npm install` would: a scoped `@<scope>:registry` wins over the global
+ * `npm_config_registry`, which wins over the public default. Without this the
+ * scaffold always pinned public-npm latest — so the local SDK dev loop (a
+ * Verdaccio on :4873) could never scaffold a project onto a locally-published
+ * patch, even with `npm_config_registry` set. See the workflows authoring guide §4.
+ */
+export function registryFor(pkg: string): string {
+  const scope = pkg.startsWith("@") ? pkg.slice(0, pkg.indexOf("/")) : null;
+  const scoped = scope
+    ? process.env[`npm_config_${scope}:registry`]
+    : undefined;
+  const registry =
+    scoped || process.env.npm_config_registry || DEFAULT_REGISTRY;
+  return registry.replace(/\/+$/, "");
+}
+
 async function latestNpmVersion(pkg: string): Promise<string | null> {
   try {
-    const res = await fetch(`${REGISTRY}/${encodeURIComponent(pkg)}/latest`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    const res = await fetch(
+      `${registryFor(pkg)}/${encodeURIComponent(pkg)}/latest`,
+      {
+        signal: AbortSignal.timeout(5000),
+      },
+    );
     if (!res.ok) return null;
     const json = (await res.json()) as { version?: string };
     return typeof json.version === "string" ? json.version : null;
@@ -287,6 +308,22 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     __TOOLS_VERSION__: versions.tools,
     __ZOD_VERSION__: versions.zod,
   });
+
+  // When versions were resolved from a non-default registry (a local Verdaccio
+  // dev loop), the pinned @sapiom/* versions exist ONLY there — so point the
+  // project's installs at the same registry, else `npm install` 404s against
+  // public npm. Skipped for the default registry so a real customer's project
+  // stays clean. Only meaningful when scaffold itself resolved the versions;
+  // an explicit `opts.versions` caller manages its own registry.
+  if (!opts.versions) {
+    const sapiomRegistry = registryFor("@sapiom/tools");
+    if (sapiomRegistry !== DEFAULT_REGISTRY) {
+      writeFileSync(
+        path.join(targetDir, ".npmrc"),
+        `@sapiom:registry=${sapiomRegistry}\n`,
+      );
+    }
+  }
 
   // Seed the committed stub file for the local-run loop. Created here (not
   // shipped in the template) so it doesn't depend on how the registry treats
