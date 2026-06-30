@@ -92,6 +92,21 @@ export type {
 export { signal, parseSignalPayload } from "./signal.js";
 export type { SignalOptions, SignalResult } from "./signal.js";
 
+// schedules / triggers (networked)
+export { createSchedule, listSchedules, getSchedule, cancelSchedule, previewCron } from "./schedule.js";
+export type {
+  ScheduleKind,
+  ScheduleStatus,
+  SchedulePolicy,
+  CreateScheduleOptions,
+  ListSchedulesOptions,
+  CronPreviewOptions,
+  CronPreview,
+  ScheduleSummary,
+  ScheduleDetail,
+  ScheduleFireRecord,
+} from "./schedule.js";
+
 // git helpers (used by deploy; exported for consumers that need them directly)
 export { assertDeployable, pushHead } from "./git.js";
 
