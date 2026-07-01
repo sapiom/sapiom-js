@@ -8,7 +8,7 @@ import {
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   server.tool(
     "sapiom_status",
-    "Check authentication status for this local Sapiom workflow-authoring MCP (sapiom-dev). Returns whether you're authenticated and which organization.",
+    "Check authentication status for this local Sapiom developer MCP (sapiom-dev). Returns whether you're authenticated and which organization.",
     {},
     async () => {
       const creds = await readCredentials(env.name);

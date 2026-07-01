@@ -1,12 +1,15 @@
 # @sapiom/mcp
 
-The **local workflow-authoring** MCP server for Sapiom. It runs on your machine
-over stdio under the server name `sapiom-dev` and gives a coding agent the tools
-to scaffold, test, deploy, and inspect Sapiom orchestrations.
+The **local developer** MCP server for Sapiom. It runs on your machine over
+stdio under the server name `sapiom-dev` — the unmetered `sapiom_dev_*` surface
+for building and operating on Sapiom. Today it gives a coding agent the tools to
+scaffold, test, deploy, and inspect Sapiom orchestrations; the namespace leaves
+room for other non-capability developer tooling later.
 
 > **Not the capability surface.** This is *not* the remote "Sapiom" MCP (the
 > hosted connector with `sapiom_sandbox_*`, scrape, search, … capability tools).
-> `sapiom-dev` authors workflows; it does not expose capability tools. See
+> `sapiom-dev` is the local developer surface; it makes no paid capability calls
+> and exposes no capability tools. See
 > [the two Sapiom MCP servers](../../docs/mcp-servers.md) for which to use when.
 
 ## Install
