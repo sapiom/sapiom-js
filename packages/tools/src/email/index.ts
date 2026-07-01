@@ -369,6 +369,8 @@ export interface DomainListItem {
   updatedAt: string;
 }
 
+// Domain lists are returned in full — not paginated — so there is no page cursor
+// (unlike inbox / message / thread lists).
 export interface DomainList {
   /** Number of domains. */
   count: number;

@@ -259,6 +259,16 @@ describe("email.inboxes", () => {
     expect(calls[0]!.init.method).toBe("DELETE");
   });
 
+  it("delete() throws a clean EmailHttpError (400) on a nullish id before any request", async () => {
+    const { transport, calls } = makeTransport([
+      () => new Response(null, { status: 204 }),
+    ]);
+    await expect(
+      email.deleteInbox(undefined as unknown as string, transport, BASE),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(calls).toHaveLength(0);
+  });
+
   it("get() throws a clean EmailHttpError (400) on a nullish id — not a TypeError", async () => {
     const { transport, calls } = makeTransport([() => jsonResponse(RAW_INBOX)]);
     await expect(
@@ -602,6 +612,19 @@ describe("email.domains", () => {
     expect(calls[0]!.init.method).toBe("POST");
   });
 
+  it("verify() (a void/204 op) throws EmailHttpError with status + body on non-2xx", async () => {
+    const { transport } = makeTransport([
+      () =>
+        new Response(JSON.stringify({ message: "not found" }), { status: 404 }),
+    ]);
+    const err = await email
+      .verifyDomain("d-x", transport, BASE)
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(EmailHttpError);
+    expect(err.status).toBe(404);
+    expect(err.body).toEqual({ message: "not found" });
+  });
+
   it("get() GETs /v1/domains/:id", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse(RAW_DOMAIN),
@@ -641,6 +664,16 @@ describe("email.domains", () => {
     await email.deleteDomain("d-1", transport, BASE);
     expect(calls[0]!.url).toBe(`${BASE}/v1/domains/d-1`);
     expect(calls[0]!.init.method).toBe("DELETE");
+  });
+
+  it("delete() throws a clean EmailHttpError (400) on a nullish id before any request", async () => {
+    const { transport, calls } = makeTransport([
+      () => new Response(null, { status: 204 }),
+    ]);
+    await expect(
+      email.deleteDomain(undefined as unknown as string, transport, BASE),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(calls).toHaveLength(0);
   });
 });
 

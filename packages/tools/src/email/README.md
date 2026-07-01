@@ -2,8 +2,8 @@
 
 Programmatic transactional email. Create real, addressable inboxes, send and
 receive messages, manage custom sending domains, read conversation threads, and
-register webhooks for inbound events. The same email capability your agents call
-over MCP, callable directly from your code.
+register webhooks for inbound events. Call it directly from your code, or from
+within Sapiom workflow steps.
 
 ```typescript
 import { createClient } from "@sapiom/tools";
