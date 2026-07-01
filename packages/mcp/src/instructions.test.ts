@@ -36,5 +36,8 @@ describe("server instructions", () => {
     // Pointer to the full docs + the scaffold guide
     expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/workflows");
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");
+    // The two-MCP frame: agents learn the remote MCP exists for direct tool calls
+    expect(AUTHORING_INSTRUCTIONS).toContain("remote MCP");
+    expect(AUTHORING_INSTRUCTIONS).toContain("api.sapiom.ai/v1/mcp");
   });
 });

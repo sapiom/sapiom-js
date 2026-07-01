@@ -13,6 +13,15 @@ These tools let a coding agent build, test, and deploy a Sapiom workflow — a
 \`defineOrchestration({ name, entry, steps })\` (from \`@sapiom/orchestration\`) where each
 step's \`run(input, ctx)\` does work and returns a directive. All from the terminal; no dashboard.
 
+## Two ways to use Sapiom
+This server is the **authoring MCP** — it builds, tests, and deploys **workflows** (the
+\`sapiom_dev_orchestrations_*\` tools below). For a **one-off capability call** without authoring a
+workflow, use Sapiom's **remote MCP** at \`https://api.sapiom.ai/v1/mcp\`
+(\`claude mcp add sapiom --transport http https://api.sapiom.ai/v1/mcp\`) — it exposes every
+capability as a direct \`sapiom_*\` tool — or call the gateway from code with the SDK
+(\`@sapiom/fetch\`). Rule of thumb: author a workflow for anything multi-step, scheduled, or
+deployable; use the remote MCP or the SDK for a single action.
+
 ## Lifecycle (in order)
 1. \`sapiom_authenticate\` — browser login; caches an API key (makes you an API-key principal,
    required for deploy/run). Confirm with \`sapiom_status\`.

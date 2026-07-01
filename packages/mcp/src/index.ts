@@ -6,7 +6,7 @@ import { resolveEnvironment } from "./credentials.js";
 import { register as registerAuthenticate } from "./tools/authenticate.js";
 import { register as registerStatus } from "./tools/status.js";
 import { register as registerOrchestrations } from "./tools/orchestrations.js";
-import { AUTHORING_INSTRUCTIONS } from "./instructions.js";
+import { fetchInstructions } from "./instructions-fetch.js";
 
 async function main(): Promise<void> {
   // Resolve environment: SAPIOM_ENVIRONMENT env var > file > "production"
@@ -18,6 +18,10 @@ async function main(): Promise<void> {
     );
   }
 
+  // Pull the latest authoring instructions from the backend (falls back to the
+  // bundled copy offline / on error), so guidance can change without a release.
+  const instructions = await fetchInstructions(env);
+
   const server = new McpServer(
     {
       // The local dev surface — distinct from the remote Sapiom capabilities MCP.
@@ -27,8 +31,8 @@ async function main(): Promise<void> {
     {
       // Returned in the MCP `initialize` handshake; capable clients surface it to the
       // model on connect, so an agent that adds this server gets the authoring primer
-      // automatically. See ./instructions.ts.
-      instructions: AUTHORING_INSTRUCTIONS,
+      // automatically. Fetched from the backend; bundled fallback in ./instructions.ts.
+      instructions,
     },
   );
 
