@@ -30,8 +30,8 @@ export interface CreateScheduleOptions {
   startAt?: string;
   endAt?: string;
   policy?: SchedulePolicy;
-  /** One-off (`schedule_once`): the single fire time (ISO 8601; required for that kind). */
-  at?: string;
+  /** One-off (`schedule_once`): the single fire time. Accepts a `Date` or an ISO 8601 string. */
+  at?: string | Date;
 }
 
 export interface ScheduleFireRecord {

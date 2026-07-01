@@ -47,6 +47,15 @@ export interface OrchestrationRunSpec {
   input?: Record<string, unknown>;
   /** Optional idempotency key — a repeat with the same key returns the existing run. */
   idempotencyKey?: string;
+  /**
+   * Delayed dispatch (from inside a step): schedule the child to run at this time instead of now,
+   * and pause on the returned handle — the step resumes with the child's result once it fires and
+   * finishes. The handle is pause-only (`status`/`wait` throw), since the child doesn't exist until
+   * the scheduled time. Accepts a `Date` or an ISO 8601 string (a `Date` is sent as UTC ISO).
+   *
+   * For a plain fire-and-forget one-off (no pause/resume), use `schedules.create` instead.
+   */
+  at?: string | Date;
 }
 
 /** A live, awaited run (the standalone `run()`/`wait()` result). */
@@ -168,11 +177,43 @@ interface ExecutionDoc {
   error?: unknown;
 }
 
+/**
+ * Delayed dispatch: create a one-off schedule (carrying the parent resume token) instead of a run
+ * now. The child fires at `spec.at`; when it finishes it resumes the step paused on this handle.
+ * The correlation is derived from the created schedule's id (`trigger-<id>`) — the same value the
+ * engine stamps on the eventually-fired child, so the resume lands. Pause-only: there is no child
+ * to poll until the scheduled time, so `status`/`wait` throw.
+ */
+async function launchScheduled(spec: OrchestrationRunSpec, transport: Transport, baseUrl: string): Promise<RunHandle> {
+  const res = await transport.request<{ id: string }>(
+    `${baseUrl}/v1/workflows/${encodeURIComponent(spec.definition)}/triggers`,
+    {
+      method: "POST",
+      body: JSON.stringify({ kind: "schedule_once", at: spec.at, input: spec.input ?? {} }),
+      headers: workflowResumeHeaders(),
+    },
+  );
+  const notAvailable = (): never => {
+    throw new Error(
+      "status()/wait() are not available for a scheduled (delayed) dispatch — the child runs at the scheduled time. Use launch + pauseUntilSignal (not run).",
+    );
+  };
+  return {
+    executionId: "", // no child execution exists until the schedule fires
+    dispatch: { correlationId: `trigger-${res.id}`, resultSignal: ORCHESTRATIONS_RESULT_SIGNAL },
+    status: notAvailable,
+    wait: notAvailable,
+  };
+}
+
 export async function launch(
   spec: OrchestrationRunSpec,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<RunHandle> {
+  if (spec.at) {
+    return launchScheduled(spec, transport, baseUrl);
+  }
   const res = await transport.request<StartResponse>(
     `${baseUrl}/v1/workflows/${encodeURIComponent(spec.definition)}/executions`,
     {
