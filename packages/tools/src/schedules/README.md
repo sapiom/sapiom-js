@@ -32,7 +32,7 @@ await schedules.cancel(one.id);
 
 ## Things to know
 
-- **Two kinds.** `schedule_cron` takes a `cron` expression (+ optional `timezone`); `schedule_once` takes an `at` time (ISO 8601). A cron schedule fires on every matching tick until cancelled; a one-off fires exactly once.
+- **Two kinds.** `schedule_cron` takes a `cron` expression (+ optional `timezone`); `schedule_once` takes an `at` time (a `Date` or ISO 8601 string). A cron schedule fires on every matching tick until cancelled; a one-off fires exactly once.
 - **Timezone-aware cron.** `timezone` is an IANA name (e.g. `"America/New_York"`); the cron is evaluated in that zone, so daylight-saving shifts are handled for you. Defaults to UTC.
 - **Best-effort timing.** A schedule fires at or shortly after its scheduled time — fine for "around 9am", not for hard real-time deadlines.
 - **`get` shows health.** `get(id)` returns the next scheduled fire (`nextFireAt`) and a recent fire history — each with the `executionId` of the run it started — so you can confirm a schedule is firing or debug one that isn't.

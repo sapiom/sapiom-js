@@ -48,3 +48,5 @@ const useResult = defineStep({
 - **Addressed by slug.** `definition` is the deployed orchestration's slug — its stable handle. `input` is passed to its entry step.
 
 - **`idempotencyKey` deduplicates.** Repeating a launch with the same key returns the existing run instead of starting a new one.
+
+- **Delayed dispatch (`at`).** `launch({ definition, input, at })` schedules the child to run at a future time (`at` is a `Date` or ISO 8601 string) instead of now, and returns a **pause-only** handle: hand it to `pauseUntilSignal` and the step resumes with the child's result once the scheduled run finishes. `status`/`wait` aren't available on a delayed handle (there's no run until then), so use `launch` + `pauseUntilSignal`, not `run`. For a plain fire-and-forget one-off (no resume), use the `schedules` capability instead.
