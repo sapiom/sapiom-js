@@ -120,9 +120,12 @@ describe("contentGeneration.images.create()", () => {
     });
   });
 
-  it("merges the optional `storage` param; the mapped image carries fileId", async () => {
+  it("merges the optional `storage` param; the mapped image carries fileId + downloadUrl", async () => {
     const { transport, calls } = makeTransport([
-      () => jsonResponse({ images: [{ url: "u", fileId: "f1" }] }),
+      () =>
+        jsonResponse({
+          images: [{ url: "u", fileId: "f1", downloadUrl: "https://dl/f1" }],
+        }),
     ]);
 
     const out = await createImage(
@@ -136,6 +139,8 @@ describe("contentGeneration.images.create()", () => {
       storage: { visibility: "public" },
     });
     expect(out.images?.[0]?.fileId).toBe("f1");
+    // Core already normalized download_url → downloadUrl; the SDK passes the camelCase field through.
+    expect(out.images?.[0]?.downloadUrl).toBe("https://dl/f1");
   });
 
   it("omits `storage` when not provided", async () => {
@@ -311,7 +316,7 @@ describe("contentGeneration.video.create()", () => {
     ).toHaveLength(2);
   });
 
-  it("sends storage on submit and surfaces fileId on the polled result", async () => {
+  it("sends storage on submit and surfaces fileId + downloadUrl on the polled result", async () => {
     const { transport, calls } = makeTransport([
       (c) =>
         c.init.method === "POST"
@@ -327,6 +332,7 @@ describe("contentGeneration.video.create()", () => {
                 url: "https://media/v2.mp4",
                 content_type: "video/mp4",
                 file_id: "vid-file-1",
+                download_url: "https://dl/vid-1",
               },
             })
           : null,
@@ -342,6 +348,7 @@ describe("contentGeneration.video.create()", () => {
       url: "https://media/v2.mp4",
       contentType: "video/mp4",
       fileId: "vid-file-1",
+      downloadUrl: "https://dl/vid-1",
     });
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "x",
@@ -792,6 +799,15 @@ describe("toVideoResumePayload()", () => {
     });
     expect(payload).toEqual({
       outputs: [{ fileId: "f-2", storageError: "partial" }],
+    });
+  });
+
+  it("carries the convenience downloadUrl alongside fileId", () => {
+    const payload = toVideoResumePayload({
+      video: { url: "u", fileId: "f-3", downloadUrl: "https://dl/f-3" },
+    });
+    expect(payload).toEqual({
+      outputs: [{ fileId: "f-3", downloadUrl: "https://dl/f-3" }],
     });
   });
 });

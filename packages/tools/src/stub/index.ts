@@ -725,7 +725,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                   width: 512,
                   height: 512,
                   // mirror the real behavior: a fileId only when storage was requested.
-                  ...(input.storage ? { fileId: "stub-file" } : {}),
+                  ...(input.storage
+                    ? { fileId: "stub-file", downloadUrl: "https://content.local/stub-download" }
+                    : {}),
                 },
               ],
             })) as ImageGenerationResult,
@@ -739,7 +741,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 url: "https://content.local/stub-video.mp4",
                 contentType: "video/mp4",
                 // mirror the real behavior: a fileId only when storage was requested.
-                ...(input.storage ? { fileId: "stub-file" } : {}),
+                ...(input.storage
+                    ? { fileId: "stub-file", downloadUrl: "https://content.local/stub-download" }
+                    : {}),
               },
             })) as VideoGenerationResult,
           ),
@@ -752,7 +756,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               video: {
                 url: "https://content.local/stub-video.mp4",
                 contentType: "video/mp4",
-                ...(input.storage ? { fileId: "stub-file" } : {}),
+                ...(input.storage
+                    ? { fileId: "stub-file", downloadUrl: "https://content.local/stub-download" }
+                    : {}),
               },
             }),
           ) as VideoGenerationResult;

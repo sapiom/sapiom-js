@@ -84,17 +84,26 @@ export interface ImageCreateInput {
 }
 
 export interface GeneratedImage {
-  /** Hosted URL of the generated image. */
+  /**
+   * Provider-hosted URL of the generated image. May be short-lived and unauthenticated;
+   * when you requested `storage`, prefer `downloadUrl` (ready to use) or `fileId` (durable).
+   */
   url: string;
   /** MIME type, when reported. */
   contentType?: string;
   width?: number;
   height?: number;
   /**
-   * Present when `storage` was requested and this output was persisted — pass to
-   * `fileStorage.getDownloadUrl(fileId)` to retrieve it.
+   * Present when `storage` was requested and this output was persisted. The durable
+   * reference — re-fetch a fresh download URL any time via `fileStorage.getDownloadUrl(fileId)`.
    */
   fileId?: string;
+  /**
+   * Present when `storage` was requested and this output was persisted: a ready-to-use,
+   * short-lived signed download URL for the stored file. Convenience only — it expires, so
+   * for anything durable keep `fileId` and re-fetch via `fileStorage.getDownloadUrl(fileId)`.
+   */
+  downloadUrl?: string;
   /**
    * Present when `storage` was requested but persisting THIS output failed
    * (best-effort: other images in the same response may still carry `fileId`).
@@ -122,6 +131,7 @@ interface RawImage {
   width?: number;
   height?: number;
   fileId?: string;
+  downloadUrl?: string;
   storageError?: string;
 }
 
@@ -137,6 +147,7 @@ function mapImage(raw: RawImage): GeneratedImage {
     ...(raw.width !== undefined && { width: raw.width }),
     ...(raw.height !== undefined && { height: raw.height }),
     ...(raw.fileId !== undefined && { fileId: raw.fileId }),
+    ...(raw.downloadUrl !== undefined && { downloadUrl: raw.downloadUrl }),
     ...(raw.storageError !== undefined && { storageError: raw.storageError }),
   };
 }
@@ -263,15 +274,24 @@ export interface VideoCreateInput {
 }
 
 export interface GeneratedVideo {
-  /** Hosted URL of the generated video. */
+  /**
+   * Provider-hosted URL of the generated video. May be short-lived and unauthenticated;
+   * when you requested `storage`, prefer `downloadUrl` (ready to use) or `fileId` (durable).
+   */
   url: string;
   /** MIME type, when reported. */
   contentType?: string;
   /**
-   * Present when `storage` was requested and the output was persisted — pass to
-   * `fileStorage.getDownloadUrl(fileId)` to retrieve it.
+   * Present when `storage` was requested and the output was persisted. The durable
+   * reference — re-fetch a fresh download URL any time via `fileStorage.getDownloadUrl(fileId)`.
    */
   fileId?: string;
+  /**
+   * Present when `storage` was requested and the output was persisted: a ready-to-use,
+   * short-lived signed download URL for the stored file. Convenience only — it expires, so
+   * for anything durable keep `fileId` and re-fetch via `fileStorage.getDownloadUrl(fileId)`.
+   */
+  downloadUrl?: string;
   /** Present when `storage` was requested but persisting the output failed. */
   storageError?: string;
 }
@@ -289,6 +309,7 @@ interface RawMedia {
   url: string;
   content_type?: string;
   file_id?: string;
+  download_url?: string;
   storage_error?: string;
 }
 
@@ -309,6 +330,7 @@ function mapVideo(raw: RawMedia): GeneratedVideo {
     url: raw.url,
     ...(raw.content_type !== undefined && { contentType: raw.content_type }),
     ...(raw.file_id !== undefined && { fileId: raw.file_id }),
+    ...(raw.download_url !== undefined && { downloadUrl: raw.download_url }),
     ...(raw.storage_error !== undefined && { storageError: raw.storage_error }),
   };
 }
@@ -415,8 +437,14 @@ export interface VideoLaunchHandle extends DispatchHandle {
  */
 export interface VideoResultPayload {
   outputs: Array<{
-    /** Present when the output was persisted to file storage. */
+    /** Present when the output was persisted to file storage — the durable reference. */
     fileId?: string;
+    /**
+     * A ready-to-use, short-lived signed download URL for the persisted output, when
+     * available. Convenience only — it may have expired by the time a resumed step runs;
+     * re-fetch from `fileId` via `fileStorage.getDownloadUrl(fileId)` for a fresh one.
+     */
+    downloadUrl?: string;
     /** Present when storage was requested but persisting this output failed. */
     storageError?: string;
   }>;
@@ -435,6 +463,9 @@ export function toVideoResumePayload(
       {
         ...(result.video.fileId !== undefined && {
           fileId: result.video.fileId,
+        }),
+        ...(result.video.downloadUrl !== undefined && {
+          downloadUrl: result.video.downloadUrl,
         }),
         ...(result.video.storageError !== undefined && {
           storageError: result.video.storageError,
