@@ -18,7 +18,7 @@ This server is the **authoring MCP** — it builds, tests, and deploys **workflo
 \`sapiom_dev_orchestrations_*\` tools below). For a **one-off capability call** without authoring a
 workflow, use Sapiom's **remote MCP** at \`https://api.sapiom.ai/v1/mcp\`
 (\`claude mcp add sapiom --transport http https://api.sapiom.ai/v1/mcp\`) — it exposes every
-capability as a direct \`sapiom_*\` tool — or call the gateway from code with the SDK
+capability as a direct \`sapiom_*\` tool (e.g. \`sapiom_search\`; run \`tool_discover\` to find the right one) — or call the gateway from code with the SDK
 (\`@sapiom/fetch\`). Rule of thumb: author a workflow for anything multi-step, scheduled, or
 deployable; use the remote MCP or the SDK for a single action.
 
