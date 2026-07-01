@@ -7,15 +7,17 @@
  * points to the full documentation and the `AGENTS.md` generated into each scaffolded
  * project rather than restating them.
  */
-export const AUTHORING_INSTRUCTIONS = `# Sapiom Workflow Authoring
+export const AUTHORING_INSTRUCTIONS = `# Sapiom dev MCP (sapiom-dev)
 
-These tools let a coding agent build, test, and deploy a Sapiom workflow — a
-\`defineOrchestration({ name, entry, steps })\` (from \`@sapiom/orchestration\`) where each
-step's \`run(input, ctx)\` does work and returns a directive. All from the terminal; no dashboard.
+\`sapiom-dev\` is Sapiom's local developer MCP — the terminal surface for setting up and managing
+your Sapiom projects. Today it drives **workflow authoring** (more dev/management tools will land
+here over time): these tools build, test, and deploy a Sapiom workflow — a
+\`defineOrchestration({ name, entry, steps })\` (from \`@sapiom/orchestration\`) where each step's
+\`run(input, ctx)\` does work and returns a directive. All from the terminal; no dashboard.
 
 ## Two ways to use Sapiom
-This server is the **authoring MCP** — it builds, tests, and deploys **workflows** (the
-\`sapiom_dev_orchestrations_*\` tools below). For a **one-off capability call** without authoring a
+This server (\`sapiom-dev\`) is where you **author workflows** — the
+\`sapiom_dev_orchestrations_*\` tools build, test, and deploy them. For a **one-off capability call** without authoring a
 workflow, use Sapiom's **remote MCP** at \`https://api.sapiom.ai/v1/mcp\`
 (\`claude mcp add sapiom --transport http https://api.sapiom.ai/v1/mcp\`) — it exposes every
 capability as a direct \`sapiom_*\` tool (e.g. \`sapiom_search\`; run \`tool_discover\` to find the right one) — or call the gateway from code with the SDK
@@ -44,5 +46,5 @@ deployable; use the remote MCP or the SDK for a single action.
   fileStorage, contentGeneration.{images,video}, search, database) — a typed subset of the gateway
   catalog; use autocomplete/typecheck.
 
-Full reference: https://docs.sapiom.ai/workflows (authoring · capabilities · reference · examples)
+Full reference: https://docs.sapiom.ai/workflows/quick-start (authoring · capabilities · reference · examples)
 and the \`AGENTS.md\` inside your scaffolded project.`;
