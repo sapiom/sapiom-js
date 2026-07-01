@@ -106,6 +106,18 @@ import type {
   CreateWebhookInput,
   Webhook,
 } from "./email/index.js";
+import * as domains from "./domains/index.js";
+import type {
+  CheckInput,
+  DomainAvailability,
+  DomainNameInput,
+  Domain as OwnedDomain,
+  DomainTransfer,
+  CreateDnsRecordInput,
+  UpdateDnsRecordInput,
+  DnsRecordRef,
+  DnsRecord,
+} from "./domains/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -276,12 +288,43 @@ export interface Sapiom {
     };
   };
   /**
+   * Register domain names and manage their DNS. `register` and `renew` charge on
+   * success; everything else is free. The nested `dns` group manages DNS records
+   * on a domain you own.
+   */
+  readonly domains: {
+    /** Check availability + pricing for up to 50 names (free). */
+    check(input: CheckInput): Promise<DomainAvailability[]>;
+    /** Register (buy) a domain for one year. Charges apply on success. */
+    register(input: DomainNameInput): Promise<OwnedDomain>;
+    /** Renew a domain you own for one more year. Charges apply on success. */
+    renew(input: DomainNameInput): Promise<OwnedDomain>;
+    /** List the domains you own. */
+    list(): Promise<OwnedDomain[]>;
+    /** Get full details for a domain you own. */
+    get(input: DomainNameInput): Promise<OwnedDomain>;
+    /** Start transferring a domain out; returns an auth code for the new registrar. */
+    transferOut(input: DomainNameInput): Promise<DomainTransfer>;
+    /** Create / list / get / update / delete DNS records on a domain you own. */
+    dns: {
+      /** Create a DNS record. */
+      create(input: CreateDnsRecordInput): Promise<DnsRecord>;
+      /** List a domain's DNS records. */
+      list(input: DomainNameInput): Promise<DnsRecord[]>;
+      /** Get a single DNS record. */
+      get(input: DnsRecordRef): Promise<DnsRecord>;
+      /** Update a DNS record (partial — send only the fields to change). */
+      update(input: UpdateDnsRecordInput): Promise<DnsRecord>;
+      /** Delete a DNS record. */
+      delete(input: DnsRecordRef): Promise<void>;
+    };
+  };
+  /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
    * need this — attribution is set once when the client is constructed.
    */
   withAttribution(attribution: Attribution): Sapiom;
-  // domains, … land here as they're ported.
 }
 
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
@@ -377,6 +420,21 @@ function bind(transport: Transport): Sapiom {
       webhooks: {
         create: (input) => email.createWebhook(input, transport),
         delete: (id) => email.deleteWebhook(id, transport),
+      },
+    },
+    domains: {
+      check: (input) => domains.check(input, transport),
+      register: (input) => domains.register(input, transport),
+      renew: (input) => domains.renew(input, transport),
+      list: () => domains.list(transport),
+      get: (input) => domains.get(input, transport),
+      transferOut: (input) => domains.transferOut(input, transport),
+      dns: {
+        create: (input) => domains.createDnsRecord(input, transport),
+        list: (input) => domains.listDnsRecords(input, transport),
+        get: (input) => domains.getDnsRecord(input, transport),
+        update: (input) => domains.updateDnsRecord(input, transport),
+        delete: (input) => domains.deleteDnsRecord(input, transport),
       },
     },
     withAttribution: (attribution) =>

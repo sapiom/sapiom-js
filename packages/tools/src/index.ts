@@ -97,3 +97,6 @@ export { DatabaseHttpError } from "./database/index.js";
 
 export * as email from "./email/index.js";
 export { EmailHttpError } from "./email/index.js";
+
+export * as domains from "./domains/index.js";
+export { DomainsHttpError } from "./domains/index.js";
