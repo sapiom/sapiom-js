@@ -120,7 +120,14 @@ describe("contentGeneration.images.create()", () => {
     const { transport, calls } = makeTransport([
       () =>
         jsonResponse({
-          images: [{ url: "u", file_id: "f1", download_url: "https://dl/f1" }],
+          images: [
+            {
+              url: "u",
+              file_id: "f1",
+              download_url: "https://dl/f1",
+              download_url_expires_at: "2026-03-03T00:00:00Z",
+            },
+          ],
         }),
     ]);
 
@@ -135,8 +142,9 @@ describe("contentGeneration.images.create()", () => {
       storage: { visibility: "public" },
     });
     expect(out.images?.[0]?.fileId).toBe("f1");
-    // The gateway's snake_case download_url surfaces as a camelCase convenience field.
+    // The gateway's snake_case download_url / _expires_at surface as camelCase convenience fields.
     expect(out.images?.[0]?.downloadUrl).toBe("https://dl/f1");
+    expect(out.images?.[0]?.downloadUrlExpiresAt).toBe("2026-03-03T00:00:00Z");
   });
 
   it("omits `storage` when not provided", async () => {
@@ -326,6 +334,7 @@ describe("contentGeneration.video.create()", () => {
                 content_type: "video/mp4",
                 file_id: "vid-file-1",
                 download_url: "https://dl/vid-1",
+                download_url_expires_at: "2026-03-03T00:00:00Z",
               },
             })
           : null,
@@ -342,6 +351,7 @@ describe("contentGeneration.video.create()", () => {
       contentType: "video/mp4",
       fileId: "vid-file-1",
       downloadUrl: "https://dl/vid-1",
+      downloadUrlExpiresAt: "2026-03-03T00:00:00Z",
     });
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       prompt: "x",
@@ -795,12 +805,19 @@ describe("toVideoResumePayload()", () => {
     });
   });
 
-  it("carries the convenience downloadUrl alongside fileId", () => {
+  it("carries the convenience downloadUrl + its expiry alongside fileId", () => {
     const payload = toVideoResumePayload({
-      video: { url: "u", fileId: "f-3", downloadUrl: "https://dl/f-3" },
+      video: {
+        url: "u",
+        fileId: "f-3",
+        downloadUrl: "https://dl/f-3",
+        downloadUrlExpiresAt: "2026-03-03T00:00:00Z",
+      },
     });
     expect(payload).toEqual({
-      outputs: [{ fileId: "f-3", downloadUrl: "https://dl/f-3" }],
+      outputs: [
+        { fileId: "f-3", downloadUrl: "https://dl/f-3", downloadUrlExpiresAt: "2026-03-03T00:00:00Z" },
+      ],
     });
   });
 });

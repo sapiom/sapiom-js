@@ -97,6 +97,8 @@ export interface GeneratedImage {
    * for anything durable keep `fileId` and re-fetch via `fileStorage.getDownloadUrl(fileId)`.
    */
   downloadUrl?: string;
+  /** ISO timestamp when `downloadUrl` expires (~15 min out). Absent whenever `downloadUrl` is. */
+  downloadUrlExpiresAt?: string;
   /**
    * Present when `storage` was requested but persisting THIS output failed
    * (best-effort: other images in the same response may still carry `fileId`).
@@ -120,6 +122,7 @@ interface RawImage {
   height?: number;
   file_id?: string;
   download_url?: string;
+  download_url_expires_at?: string;
   storage_error?: string;
 }
 
@@ -136,6 +139,7 @@ function mapImage(raw: RawImage): GeneratedImage {
     ...(raw.height !== undefined && { height: raw.height }),
     ...(raw.file_id !== undefined && { fileId: raw.file_id }),
     ...(raw.download_url !== undefined && { downloadUrl: raw.download_url }),
+    ...(raw.download_url_expires_at !== undefined && { downloadUrlExpiresAt: raw.download_url_expires_at }),
     ...(raw.storage_error !== undefined && { storageError: raw.storage_error }),
   };
 }
@@ -271,6 +275,8 @@ export interface GeneratedVideo {
    * for anything durable keep `fileId` and re-fetch via `fileStorage.getDownloadUrl(fileId)`.
    */
   downloadUrl?: string;
+  /** ISO timestamp when `downloadUrl` expires (~15 min out). Absent whenever `downloadUrl` is. */
+  downloadUrlExpiresAt?: string;
   /** Present when `storage` was requested but persisting the output failed. */
   storageError?: string;
 }
@@ -289,6 +295,7 @@ interface RawMedia {
   content_type?: string;
   file_id?: string;
   download_url?: string;
+  download_url_expires_at?: string;
   storage_error?: string;
 }
 
@@ -310,6 +317,7 @@ function mapVideo(raw: RawMedia): GeneratedVideo {
     ...(raw.content_type !== undefined && { contentType: raw.content_type }),
     ...(raw.file_id !== undefined && { fileId: raw.file_id }),
     ...(raw.download_url !== undefined && { downloadUrl: raw.download_url }),
+    ...(raw.download_url_expires_at !== undefined && { downloadUrlExpiresAt: raw.download_url_expires_at }),
     ...(raw.storage_error !== undefined && { storageError: raw.storage_error }),
   };
 }
@@ -424,6 +432,8 @@ export interface VideoResultPayload {
      * re-fetch from `fileId` via `fileStorage.getDownloadUrl(fileId)` for a fresh one.
      */
     downloadUrl?: string;
+    /** ISO expiry of `downloadUrl`, when present — may already be past by the time a step resumes. */
+    downloadUrlExpiresAt?: string;
     /** Present when storage was requested but persisting this output failed. */
     storageError?: string;
   }>;
@@ -445,6 +455,9 @@ export function toVideoResumePayload(
         }),
         ...(result.video.downloadUrl !== undefined && {
           downloadUrl: result.video.downloadUrl,
+        }),
+        ...(result.video.downloadUrlExpiresAt !== undefined && {
+          downloadUrlExpiresAt: result.video.downloadUrlExpiresAt,
         }),
         ...(result.video.storageError !== undefined && {
           storageError: result.video.storageError,
