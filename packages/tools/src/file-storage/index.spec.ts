@@ -77,7 +77,7 @@ describe("fileStorage.upload()", () => {
         contentType: "image/png",
         fileName: "photo.png",
         visibility: "public",
-        expectedFileSize: 1024,
+        fileSize: 1024,
       },
       transport,
       BASE,
@@ -98,7 +98,7 @@ describe("fileStorage.upload()", () => {
       content_type: "image/png",
       file_name: "photo.png",
       visibility: "public",
-      expected_file_size: 1024,
+      file_size: 1024,
     });
   });
 
@@ -117,15 +117,14 @@ describe("fileStorage.upload()", () => {
     ]);
 
     await fileStorage.upload(
-      { contentType: "application/pdf" },
+      { contentType: "application/pdf", fileSize: 512 },
       transport,
       BASE,
     );
     const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body).toEqual({ content_type: "application/pdf" });
+    expect(body).toEqual({ content_type: "application/pdf", file_size: 512 });
     expect(body).not.toHaveProperty("file_name");
     expect(body).not.toHaveProperty("visibility");
-    expect(body).not.toHaveProperty("expected_file_size");
   });
 
   it("throws FileStorageHttpError on non-2xx", async () => {
@@ -137,7 +136,11 @@ describe("fileStorage.upload()", () => {
     ]);
 
     await expect(
-      fileStorage.upload({ contentType: "image/png" }, transport, BASE),
+      fileStorage.upload(
+        { contentType: "image/png", fileSize: 1 },
+        transport,
+        BASE,
+      ),
     ).rejects.toBeInstanceOf(FileStorageHttpError);
   });
 });
@@ -202,9 +205,8 @@ describe("fileStorage.list()", () => {
     content_type: "application/pdf",
     visibility: "private",
     status: "uploaded",
-    // gateway serializes int64 sizes as strings (verified live: e.g. "37")
-    expected_file_size: "2048",
-    actual_file_size: "2000",
+    // gateway serializes the int64 size as a string (verified live: e.g. "37")
+    file_size: "2048",
     created_at: "2026-06-01T00:00:00Z",
     uploaded_at: "2026-06-01T00:01:00Z",
     deleted_at: null,
@@ -232,8 +234,7 @@ describe("fileStorage.list()", () => {
       contentType: "application/pdf",
       visibility: "private",
       status: "uploaded",
-      expectedFileSize: "2048",
-      actualFileSize: "2000",
+      fileSize: "2048",
       downloadRequestCount: 3,
     });
     expect(calls[0]!.url).toBe(`${BASE}/files`);
@@ -326,6 +327,7 @@ describe("fileStorage.setVisibility()", () => {
     content_type: "application/pdf",
     visibility: "public",
     status: "uploaded",
+    file_size: "4096",
     created_at: "2026-06-01T00:00:00Z",
     download_request_count: 0,
   };
@@ -387,6 +389,7 @@ describe("fileStorage — client wiring + credential", () => {
           content_type: "text/plain",
           visibility: "private",
           status: "uploaded",
+          file_size: "0",
           created_at: "2026-06-01T00:00:00Z",
           download_request_count: 0,
         });
@@ -404,7 +407,7 @@ describe("fileStorage — client wiring + credential", () => {
     }) as typeof globalThis.fetch;
 
     const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
-    await sapiom.fileStorage.upload({ contentType: "text/plain" });
+    await sapiom.fileStorage.upload({ contentType: "text/plain", fileSize: 8 });
     await sapiom.fileStorage.getDownloadUrl("f");
     await sapiom.fileStorage.list();
     await sapiom.fileStorage.delete("f");

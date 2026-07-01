@@ -49,3 +49,17 @@ export function pushHead(dir: string, pushUrl: string, branch: string): void {
   // of truth for their definition; the remote is only a build source.
   git(['push', '--force', pushUrl, `HEAD:${branch}`], dir);
 }
+
+/**
+ * Initialize a throwaway git repo over a synthesized deploy tree and force-push
+ * it to the definition repo. `deploy` uses this to ship a self-contained build
+ * source (the bundled definition + a generated package.json) rather than the
+ * author's raw commit — so relative imports that escape the author's repo root
+ * (shared local utils) are already inlined and the remote build can resolve them.
+ */
+export function pushSynthesizedTree(treeDir: string, pushUrl: string, branch: string): void {
+  git(['init', '-q', '-b', branch], treeDir);
+  git(['add', '-A'], treeDir);
+  git(['-c', 'user.email=deploy@sapiom.ai', '-c', 'user.name=Sapiom Deploy', 'commit', '-q', '-m', 'deploy'], treeDir);
+  git(['push', '--force', pushUrl, `HEAD:${branch}`], treeDir);
+}

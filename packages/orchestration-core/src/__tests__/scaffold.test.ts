@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { OrchestrationError } from "../errors";
-import { scaffold } from "../scaffold";
+import { registryFor, scaffold } from "../scaffold";
 
 // Point template resolution at the bundled templates dir (two levels up from
 // src/), bypassing the dist/ path that TEMPLATES_DIR normally expects.
@@ -139,6 +139,87 @@ describe("scaffold", () => {
       });
       expect(existsSync(path.join(targetDir, ".gitignore"))).toBe(true);
       expect(existsSync(path.join(targetDir, "_gitignore"))).toBe(false);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("registryFor", () => {
+  const saved = {
+    registry: process.env.npm_config_registry,
+    scoped: process.env["npm_config_@sapiom:registry"],
+  };
+  afterEach(() => {
+    if (saved.registry === undefined) delete process.env.npm_config_registry;
+    else process.env.npm_config_registry = saved.registry;
+    if (saved.scoped === undefined)
+      delete process.env["npm_config_@sapiom:registry"];
+    else process.env["npm_config_@sapiom:registry"] = saved.scoped;
+  });
+
+  it("defaults to public npm when no override is set", () => {
+    delete process.env.npm_config_registry;
+    delete process.env["npm_config_@sapiom:registry"];
+    expect(registryFor("@sapiom/tools")).toBe("https://registry.npmjs.org");
+  });
+
+  it("honors the global npm_config_registry and strips a trailing slash", () => {
+    delete process.env["npm_config_@sapiom:registry"];
+    process.env.npm_config_registry = "http://localhost:4873/";
+    expect(registryFor("@sapiom/tools")).toBe("http://localhost:4873");
+  });
+
+  it("prefers a scoped @scope:registry over the global one", () => {
+    process.env.npm_config_registry = "http://localhost:4873";
+    process.env["npm_config_@sapiom:registry"] = "http://localhost:9999";
+    expect(registryFor("@sapiom/tools")).toBe("http://localhost:9999");
+    // A different scope ignores the @sapiom-scoped override.
+    expect(registryFor("@other/pkg")).toBe("http://localhost:4873");
+  });
+});
+
+describe("scaffold .npmrc (local registry)", () => {
+  const savedFetch = global.fetch;
+  const savedRegistry = process.env.npm_config_registry;
+  afterEach(() => {
+    global.fetch = savedFetch;
+    if (savedRegistry === undefined) delete process.env.npm_config_registry;
+    else process.env.npm_config_registry = savedRegistry;
+  });
+
+  it("writes an @sapiom:registry .npmrc when versions resolve from a non-default registry", async () => {
+    process.env.npm_config_registry = "http://localhost:4873";
+    global.fetch = (async () => ({
+      ok: true,
+      json: async () => ({ version: "9.9.9" }),
+    })) as unknown as typeof fetch;
+    const base = makeTmp();
+    const targetDir = path.join(base, "local-reg");
+    try {
+      await scaffold({ targetDir }); // no explicit versions → resolveVersions runs
+      const npmrc = readFileSync(path.join(targetDir, ".npmrc"), "utf8");
+      expect(npmrc).toContain("@sapiom:registry=http://localhost:4873");
+      const pkg = JSON.parse(
+        readFileSync(path.join(targetDir, "package.json"), "utf8"),
+      );
+      expect(pkg.dependencies["@sapiom/tools"]).toBe("9.9.9");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT write an .npmrc when resolving from the default registry", async () => {
+    delete process.env.npm_config_registry;
+    global.fetch = (async () => ({
+      ok: true,
+      json: async () => ({ version: "9.9.9" }),
+    })) as unknown as typeof fetch;
+    const base = makeTmp();
+    const targetDir = path.join(base, "default-reg");
+    try {
+      await scaffold({ targetDir });
+      expect(existsSync(path.join(targetDir, ".npmrc"))).toBe(false);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

@@ -5,9 +5,14 @@
  * Networked operation: requires a GatewayClient. All inputs passed explicitly;
  * no process.cwd() reads — the caller supplies the project directory and client.
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { bundleForDeploy } from './bundle.js';
 import { GatewayClient } from './client.js';
 import { OrchestrationError } from './errors.js';
-import { assertDeployable, pushHead } from './git.js';
+import { assertDeployable, pushSynthesizedTree } from './git.js';
 
 interface BuildRun {
   id?: string;
@@ -50,11 +55,30 @@ export async function deploy(opts: DeployOptions, client: GatewayClient): Promis
 
   assertDeployable(projectDir);
 
+  // Bundle the definition's LOCAL code (inlining relative/shared imports) into a
+  // self-contained `index.ts`, with npm packages left external + surfaced as a
+  // generated package.json (pinned to the author's installed versions). We push
+  // THIS synthesized tree — not the author's raw commit — so shared local utils
+  // (relative imports that escape the repo root) are already inlined, while the
+  // server build still installs the npm deps (bring-your-own-deps).
+  const { code, dependencies } = await bundleForDeploy(projectDir);
+
   const { pushUrl } = await client.post<{ pushUrl: string }>(
     `/definitions/${definitionId}/push-credentials`,
     {},
   );
-  pushHead(projectDir, pushUrl, branch);
+
+  const treeDir = mkdtempSync(path.join(tmpdir(), 'sapiom-deploy-'));
+  try {
+    writeFileSync(path.join(treeDir, 'index.ts'), code);
+    writeFileSync(
+      path.join(treeDir, 'package.json'),
+      JSON.stringify({ name: 'orchestration-definition', private: true, type: 'module', dependencies }, null, 2) + '\n',
+    );
+    pushSynthesizedTree(treeDir, pushUrl, branch);
+  } finally {
+    rmSync(treeDir, { recursive: true, force: true });
+  }
 
   const triggered = await client.post<BuildRun>(`/definitions/${definitionId}/builds`, {});
   const buildRunId = triggered.buildRunId ?? triggered.id;

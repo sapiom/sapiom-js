@@ -1,5 +1,85 @@
 # @sapiom/tools
 
+## 0.10.2
+
+### Patch Changes
+
+- b8f19b8: `orchestrations.launch({ at })`: from inside a step, schedule a child orchestration to run at a future time and pause on the returned handle — the step resumes with the child's result once the scheduled run finishes (delayed dispatch). Immediate `launch`/`run` are unchanged.
+
+## 0.10.1
+
+### Patch Changes
+
+- a85e665: Add schedules: run a deployed orchestration on a recurring cron schedule or once at a set time.
+
+  - `@sapiom/orchestration-core`: `createSchedule`, `listSchedules`, `getSchedule`, `cancelSchedule`, and `previewCron`.
+  - `@sapiom/tools`: a `schedules` namespace (`create`, `list`, `get`, `cancel`).
+  - `@sapiom/cli`: `sapiom orchestrations schedule create | list | inspect | cancel | preview`.
+  - `@sapiom/mcp`: schedule tools — create, inspect (list/detail + recent fires), cancel, and cron preview.
+
+## 0.10.0
+
+### Minor Changes
+
+- 6ebf569: **Breaking:** `fileStorage` now uses a single `fileSize` field, matching the service contract.
+
+  Previously `upload` 400'd and metadata sizes came back `undefined` because the SDK was on an older field shape.
+
+  - `UploadInput.expectedFileSize?: number` → `fileSize: number` (now **required** — the service rejects uploads without it).
+  - `FileMetadata.expectedFileSize` / `actualFileSize` → a single `fileSize: string`.
+
+  To migrate: pass `fileSize` on `upload(...)`, and read `fileSize` (a string) instead of `expectedFileSize` / `actualFileSize` on returned metadata.
+
+## 0.9.0
+
+### Minor Changes
+
+- 0361fa7: Add `SAPIOM_SERVICES_BASE` — one env var that re-homes every capability gateway at once.
+
+  Each capability resolved its base URL independently (`SAPIOM_<CAP>_URL || "https://<subdomain>.services.sapiom.ai"`). Pointing the whole SDK at a non-prod stack meant setting a separate variable for every capability, and any capability you forgot silently fell back to prod. Now all capabilities resolve through `resolveServiceUrl(subdomain, override)`:
+
+  1. an explicit per-capability `SAPIOM_<CAP>_URL` still wins (unchanged, back-compat);
+  2. else `SAPIOM_SERVICES_BASE` re-homes every capability by swapping the host suffix and preserving the subdomain (e.g. `SAPIOM_SERVICES_BASE=http://services.localhost:3100` → `http://fal.services.localhost:3100`, `http://git.services.localhost:3100`, …);
+  3. else the production default `https://<subdomain>.services.sapiom.ai` (unchanged).
+
+  Accepts a full origin or a bare `host[:port]` (assumed https). Production behavior is unchanged when `SAPIOM_SERVICES_BASE` is unset.
+
+### Patch Changes
+
+- 30bac1c: Add the general `agent` capability — an instant, in-server agent (prompt → text), optionally calling tools on remote MCP servers. No sandbox.
+
+  ```ts
+  import { agent } from "@sapiom/tools";
+
+  // run inline:
+  const res = await agent.run({ prompt: "Summarize this transcript: …" });
+  console.log(res.output);
+
+  // or dispatch from a workflow step and resume when it finishes:
+  const handle = await agent.launch({
+    prompt: "…",
+    mcps: [
+      {
+        /* … */
+      },
+    ],
+  });
+  return pauseUntilSignal(handle, { resumeStep: "use-result" });
+  ```
+
+  `run` resolves to an `AgentRunResult` (`output` carries the final text); `launch` returns a handle usable with `pauseUntilSignal`. Also exports `AGENT_RUN_RESULT_SIGNAL` for the static `pause` declaration on a step. This sits alongside the existing `agent.coding` capability.
+
+- 30bac1c: Add `sandboxes.get` and `sandboxes.list` — read-only access to a sandbox's metadata and current status.
+
+  ```ts
+  import { sandboxes } from "@sapiom/tools";
+
+  const info = await sandboxes.get("build-01"); // { status, url, tier, expiresAt, … }
+  const all = await sandboxes.list();
+  ```
+
+  Both return plain `SandboxInfo` metadata (status, URL, tier, TTL), not a live handle — use `attach(name)` to operate on a sandbox. Handy for checking readiness, or whether a sandbox already exists before creating one. `get` throws if the named sandbox does not exist.
+
 ## 0.8.1
 
 ### Patch Changes

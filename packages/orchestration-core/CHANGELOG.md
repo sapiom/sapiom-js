@@ -1,5 +1,59 @@
 # @sapiom/orchestration-core
 
+## 0.4.0
+
+### Minor Changes
+
+- ae1df3c: Scaffold honors `npm_config_registry` / `@scope:registry` when resolving the
+  `@sapiom/*` versions to pin
+
+  Version resolution previously hardcoded the public npm registry, so a scaffold
+  always pinned public-npm `latest` even when the environment pointed at a
+  different registry. It now resolves `latest` from the same registry a plain
+  `npm install` would (a scoped `@<scope>:registry` wins over the global
+  `npm_config_registry`, which wins over the public default). When that registry
+  is non-default, the scaffolded project also gets a matching `.npmrc` so its
+  pinned versions are installable. This makes a local registry dev loop work
+  end-to-end with no manual pin edits; default scaffolds are unchanged.
+
+### Patch Changes
+
+- a85e665: Add schedules: run a deployed orchestration on a recurring cron schedule or once at a set time.
+
+  - `@sapiom/orchestration-core`: `createSchedule`, `listSchedules`, `getSchedule`, `cancelSchedule`, and `previewCron`.
+  - `@sapiom/tools`: a `schedules` namespace (`create`, `list`, `get`, `cancel`).
+  - `@sapiom/cli`: `sapiom orchestrations schedule create | list | inspect | cancel | preview`.
+  - `@sapiom/mcp`: schedule tools — create, inspect (list/detail + recent fires), cancel, and cron preview.
+
+- Updated dependencies [a85e665]
+  - @sapiom/tools@0.10.1
+
+## 0.3.8
+
+### Patch Changes
+
+- Updated dependencies [6ebf569]
+  - @sapiom/tools@0.10.0
+  - @sapiom/orchestration@0.4.4
+
+## 0.3.7
+
+### Patch Changes
+
+- 30bac1c: Improve the initial git + deploy experience for workflow authoring. Adds `bundleForDeploy` — a local, no-network bundler that inlines local/shared source and externalizes npm dependencies — and smooths first-time git init / deploy so a fresh workflow project deploys cleanly.
+
+  ```ts
+  import { bundleForDeploy } from "@sapiom/orchestration-core";
+
+  const bundle = await bundleForDeploy(/* … */);
+  ```
+
+- Updated dependencies [30bac1c]
+- Updated dependencies [30bac1c]
+- Updated dependencies [0361fa7]
+  - @sapiom/tools@0.9.0
+  - @sapiom/orchestration@0.4.3
+
 ## 0.3.6
 
 ### Patch Changes

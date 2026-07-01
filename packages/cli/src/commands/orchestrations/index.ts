@@ -7,6 +7,13 @@ import { runInit } from './init.js';
 import { runLink } from './link.js';
 import { runLogs } from './logs.js';
 import { runRun } from './run.js';
+import {
+  runScheduleCancel,
+  runScheduleCreate,
+  runScheduleInspect,
+  runScheduleList,
+  runSchedulePreview,
+} from './schedule.js';
 import { runSignal } from './signal.js';
 
 /**
@@ -58,4 +65,37 @@ export function registerOrchestrationsCommands(program: Command): void {
     .requiredOption('--correlation-id <id>', 'the signal correlation id')
     .option('--payload <json>', 'signal payload as a JSON string')
     .action(action(runSignal));
+
+  // `sapiom orchestrations schedule …` — cron + one-off schedules for an orchestration (by slug).
+  const schedule = group
+    .command('schedule')
+    .description('Manage schedules (cron + one-off triggers) for an orchestration.');
+
+  withHostFlags(
+    json(schedule.command('create <definition>').description('Create a cron (--cron) or one-off (--at) schedule.')),
+  )
+    .option('--cron <expr>', 'cron expression (recurring schedule)')
+    .option('--timezone <tz>', 'IANA timezone for the cron (default UTC)')
+    .option('--at <iso>', 'one-off fire time (ISO 8601)')
+    .option('--input <json>', 'execution input as a JSON string')
+    .option('--start-at <iso>', 'cron: earliest occurrence (ISO)')
+    .option('--end-at <iso>', 'cron: latest occurrence (ISO)')
+    .action(action(runScheduleCreate));
+
+  withHostFlags(json(schedule.command('list <definition>').description("List an orchestration's schedules.")))
+    .option('--status <status>', 'filter by status (active|paused|completed|disabled)')
+    .action(action(runScheduleList));
+
+  withHostFlags(
+    json(schedule.command('inspect <scheduleId>').description('Show a schedule, its next fire, and recent fires.')),
+  ).action(action(runScheduleInspect));
+
+  withHostFlags(json(schedule.command('cancel <scheduleId>').description('Cancel a schedule.'))).action(
+    action(runScheduleCancel),
+  );
+
+  withHostFlags(json(schedule.command('preview <cron>').description('Preview a cron expression (next occurrences).')))
+    .option('--timezone <tz>', 'IANA timezone (default UTC)')
+    .option('--count <n>', 'number of occurrences to show (default 5)')
+    .action(action(runSchedulePreview));
 }

@@ -177,6 +177,35 @@ export interface UploadFileOptions {
   ) => void;
 }
 
+/**
+ * Read-model view of a sandbox returned by `get` / `list` — its metadata and
+ * current status, not a live handle. Use `attach(name)` to operate on it.
+ */
+export interface SandboxInfo {
+  /** Sandbox name — the identifier `attach(name)` takes. */
+  readonly name: string;
+  /** What created the sandbox. */
+  readonly source: string;
+  /** Lifecycle status — e.g. `"deploying"`, `"running"`, `"stopped"`, `"failed"`. */
+  readonly status: string;
+  /** Memory tier the sandbox was allocated with. */
+  readonly tier: string;
+  /** Public base URL when one is exposed, otherwise `null`. */
+  readonly url: string | null;
+  /** Container image, when reported. */
+  readonly image?: string;
+  /** Last error message, when the sandbox is in a failed state. */
+  readonly error?: string;
+  /** Absolute workspace root path inside the sandbox. */
+  readonly workspaceRoot: string;
+  /** ISO-8601 expiry (TTL) timestamp, or `null` when it does not expire. */
+  readonly expiresAt: string | null;
+  /** ISO-8601 creation timestamp. */
+  readonly createdAt: string;
+  /** ISO-8601 last-update timestamp. */
+  readonly updatedAt: string;
+}
+
 // --- internal wire shapes (not part of the public surface) ---
 
 /** @internal Raw create response. */

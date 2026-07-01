@@ -50,6 +50,10 @@ export type {
 export { check } from "./check.js";
 export type { CheckOptions, CheckResult } from "./check.js";
 
+// bundle-for-deploy (local, no network) — inline local/shared code, externalize npm deps
+export { bundleForDeploy } from "./bundle.js";
+export type { DeployBundle } from "./bundle.js";
+
 // link (networked)
 export { link } from "./link.js";
 export type { LinkOptions, LinkResult, DefinitionSummary } from "./link.js";
@@ -87,6 +91,21 @@ export type {
 // signal (networked)
 export { signal, parseSignalPayload } from "./signal.js";
 export type { SignalOptions, SignalResult } from "./signal.js";
+
+// schedules / triggers (networked)
+export { createSchedule, listSchedules, getSchedule, cancelSchedule, previewCron } from "./schedule.js";
+export type {
+  ScheduleKind,
+  ScheduleStatus,
+  SchedulePolicy,
+  CreateScheduleOptions,
+  ListSchedulesOptions,
+  CronPreviewOptions,
+  CronPreview,
+  ScheduleSummary,
+  ScheduleDetail,
+  ScheduleFireRecord,
+} from "./schedule.js";
 
 // git helpers (used by deploy; exported for consumers that need them directly)
 export { assertDeployable, pushHead } from "./git.js";

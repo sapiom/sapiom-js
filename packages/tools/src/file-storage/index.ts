@@ -15,8 +15,9 @@
  *
  * Or via an explicit client: `createClient({ apiKey }).fileStorage.upload(...)`.
  *
- * Byte-size fields (`expectedFileSize` / `actualFileSize` on returned metadata) are
- * returned as `string | null` to stay precise for large files.
+ * The `fileSize` on returned metadata is a `string` (bigint serialized as a string
+ * to stay precise for large files); the `fileSize` on the `upload()` input is a
+ * regular `number`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
@@ -42,8 +43,8 @@ export interface UploadInput {
    * - "public"  — download URL is unauthenticated.
    */
   visibility?: "private" | "public";
-  /** Expected file size in bytes. */
-  expectedFileSize?: number;
+  /** File size in bytes. Required — the service rejects uploads without it. */
+  fileSize: number;
 }
 
 export interface UploadResponse {
@@ -75,10 +76,12 @@ export interface FileMetadata {
   visibility: "private" | "public";
   /** Upload lifecycle status (e.g. "pending_upload", "uploaded", "deleted"). */
   status: string;
-  /** Expected (client-declared) size in bytes — a string, `null` when not declared. */
-  expectedFileSize?: string | null;
-  /** Actual size in bytes after upload (string; `null` until the upload is verified). */
-  actualFileSize?: string | null;
+  /**
+   * File size in bytes, as a string (serialized as a string to stay precise for
+   * large files). Reflects the size you declared at upload time, updated to the
+   * measured size once the upload completes.
+   */
+  fileSize: string;
   /** ISO-8601 timestamp when the record was created. */
   createdAt: string;
   /** ISO-8601 timestamp when the bytes were uploaded. */
@@ -127,9 +130,8 @@ interface RawFileMetadata {
   content_type: string;
   visibility: "private" | "public";
   status: string;
-  // Byte counts are strings (precise for large files); null when unset.
-  expected_file_size?: string | null;
-  actual_file_size?: string | null;
+  // Byte count is serialized as a string to stay precise for large files.
+  file_size: string;
   created_at: string;
   uploaded_at?: string;
   deleted_at?: string;
@@ -150,12 +152,7 @@ function mapFileMetadata(raw: RawFileMetadata): FileMetadata {
     contentType: raw.content_type,
     visibility: raw.visibility,
     status: raw.status,
-    ...(raw.expected_file_size !== undefined && {
-      expectedFileSize: raw.expected_file_size,
-    }),
-    ...(raw.actual_file_size !== undefined && {
-      actualFileSize: raw.actual_file_size,
-    }),
+    fileSize: raw.file_size,
     createdAt: raw.created_at,
     ...(raw.uploaded_at !== undefined && { uploadedAt: raw.uploaded_at }),
     ...(raw.deleted_at !== undefined && { deletedAt: raw.deleted_at }),
@@ -174,12 +171,13 @@ export async function upload(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<UploadResponse> {
-  const body: Record<string, unknown> = { content_type: input.contentType };
+  const body: Record<string, unknown> = {
+    content_type: input.contentType,
+    // The service requires `file_size` on upload.
+    file_size: input.fileSize,
+  };
   if (input.fileName !== undefined) body.file_name = input.fileName;
   if (input.visibility !== undefined) body.visibility = input.visibility;
-  if (input.expectedFileSize !== undefined) {
-    body.expected_file_size = input.expectedFileSize;
-  }
 
   const res = await ensureOk(
     await transport.fetch(`${baseUrl}/upload`, {

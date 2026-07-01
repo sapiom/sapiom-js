@@ -1,5 +1,26 @@
 # @sapiom/mcp
 
+## 0.8.0
+
+### Minor Changes
+
+- f0167c0: Deliver the workflow-authoring primer through the MCP server `instructions` field. Capable MCP clients surface it to the model on connect, so an agent that adds `@sapiom/mcp` gets the authoring lifecycle (authenticate → scaffold → check/run_local → deploy/run) and the canonical `@sapiom/orchestration` rules automatically. The primer is concise and points to the full documentation (docs.sapiom.ai/workflows) and the scaffold's `AGENTS.md`.
+
+## 0.7.2
+
+### Patch Changes
+
+- a85e665: Add schedules: run a deployed orchestration on a recurring cron schedule or once at a set time.
+
+  - `@sapiom/orchestration-core`: `createSchedule`, `listSchedules`, `getSchedule`, `cancelSchedule`, and `previewCron`.
+  - `@sapiom/tools`: a `schedules` namespace (`create`, `list`, `get`, `cancel`).
+  - `@sapiom/cli`: `sapiom orchestrations schedule create | list | inspect | cancel | preview`.
+  - `@sapiom/mcp`: schedule tools — create, inspect (list/detail + recent fires), cancel, and cron preview.
+
+- Updated dependencies [a85e665]
+- Updated dependencies [ae1df3c]
+  - @sapiom/orchestration-core@0.4.0
+
 ## 0.7.1
 
 ### Patch Changes

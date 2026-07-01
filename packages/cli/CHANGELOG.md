@@ -1,5 +1,20 @@
 # @sapiom/cli
 
+## 0.2.4
+
+### Patch Changes
+
+- a85e665: Add schedules: run a deployed orchestration on a recurring cron schedule or once at a set time.
+
+  - `@sapiom/orchestration-core`: `createSchedule`, `listSchedules`, `getSchedule`, `cancelSchedule`, and `previewCron`.
+  - `@sapiom/tools`: a `schedules` namespace (`create`, `list`, `get`, `cancel`).
+  - `@sapiom/cli`: `sapiom orchestrations schedule create | list | inspect | cancel | preview`.
+  - `@sapiom/mcp`: schedule tools — create, inspect (list/detail + recent fires), cancel, and cron preview.
+
+- Updated dependencies [a85e665]
+- Updated dependencies [ae1df3c]
+  - @sapiom/orchestration-core@0.4.0
+
 ## 0.2.3
 
 ### Patch Changes
