@@ -716,7 +716,7 @@ describe("domains.updateDnsRecord()", () => {
     expect(bodyOf(calls[0]!)).toEqual({ value: "198.51.100.7" });
   });
 
-  it("treats null optional fields as absent (no null sent upstream)", async () => {
+  it("treats null optional fields as absent (no null in the request body)", async () => {
     const { transport, calls } = makeTransport([
       () => jsonResponse({ ...rawDnsRecord }),
     ]);
