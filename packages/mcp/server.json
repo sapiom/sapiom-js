@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.sapiom/mcp",
-  "description": "Sapiom MCP server — authentication, verification, and API tools",
+  "description": "Local Sapiom developer MCP (server name 'sapiom-dev') — the unmetered sapiom_dev_* surface for building and operating on Sapiom; today it scaffolds, tests, deploys, and inspects orchestrations. Not the remote Sapiom capability MCP; makes no paid capability calls.",
   "version": "0.2.0",
   "repository": {
     "url": "https://github.com/sapiom/sapiom-js",
