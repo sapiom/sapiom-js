@@ -359,6 +359,38 @@ describe("buildManifest", () => {
     expect(parsed.steps.entry.inputSchema).not.toBeNull();
     expect(parsed.steps.exit.timeoutMs).toBe(5000);
   });
+
+  it('secret bindings survive the buildManifest round-trip', () => {
+    const def = defineOrchestration({
+      name: 'secret-wf',
+      entry: 'start',
+      steps: { start: makeStep('start') },
+      secrets: [
+        { ref: 'billing', keys: ['STRIPE_KEY'] },
+        { ref: 'analytics', keys: ['POSTHOG_KEY'] },
+      ],
+    });
+    const manifest = buildManifest(def, { sdkVersion: DUMMY_SDK_VERSION, artifact: DUMMY_ARTIFACT });
+    const expected = [
+      { ref: 'billing', keys: ['STRIPE_KEY'] },
+      { ref: 'analytics', keys: ['POSTHOG_KEY'] },
+    ];
+    expect(manifest.secrets).toEqual(expected);
+    expect(workflowManifestSchema.parse(manifest).secrets).toEqual(expected);
+  });
+
+  it('secrets defaults to [] when not declared', () => {
+    const def = defineOrchestration({
+      name: 'no-secrets-wf',
+      entry: 'start',
+      steps: { start: makeStep('start') },
+    });
+    const manifest = buildManifest(def, { sdkVersion: DUMMY_SDK_VERSION, artifact: DUMMY_ARTIFACT });
+    expect(manifest.secrets).toEqual([]);
+    // A manifest missing the field still parses (schema defaults to []).
+    const parsed = workflowManifestSchema.parse({ ...manifest, secrets: undefined });
+    expect(parsed.secrets).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
