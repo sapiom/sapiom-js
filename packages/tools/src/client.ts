@@ -84,6 +84,28 @@ import type {
 } from "./search/index.js";
 import * as database from "./database/index.js";
 import type { CreateDatabaseInput, Database } from "./database/index.js";
+import * as email from "./email/index.js";
+import type {
+  CreateInboxInput,
+  Inbox,
+  ListInboxesOptions,
+  InboxList,
+  SendMessageInput,
+  SendResult,
+  ListMessagesOptions,
+  MessageList,
+  Message,
+  ReplyInput,
+  ReplyAllInput,
+  ListThreadsOptions,
+  ThreadList,
+  Thread,
+  CreateDomainInput,
+  Domain,
+  DomainList,
+  CreateWebhookInput,
+  Webhook,
+} from "./email/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -183,6 +205,77 @@ export interface Sapiom {
     delete(idOrHandle: string): Promise<void>;
   };
   /**
+   * Programmatic transactional email — inboxes, messages, sending domains,
+   * threads, and inbound-event webhooks. An `inboxId` is the inbox's email address.
+   */
+  readonly email: {
+    /** Create / list / get / delete mailboxes. */
+    inboxes: {
+      /** Create a new inbox (a real, addressable mailbox). */
+      create(input?: CreateInboxInput): Promise<Inbox>;
+      /** List the caller's inboxes. */
+      list(opts?: ListInboxesOptions): Promise<InboxList>;
+      /** Fetch a single inbox by id (its email address). */
+      get(inboxId: string): Promise<Inbox>;
+      /** Delete an inbox by id. */
+      delete(inboxId: string): Promise<void>;
+    };
+    /** Send / list / get / reply / forward messages. */
+    messages: {
+      /** Send a new message from an inbox. */
+      send(inboxId: string, input: SendMessageInput): Promise<SendResult>;
+      /** List messages in an inbox (metadata only — use `get` for the body). */
+      list(inboxId: string, opts?: ListMessagesOptions): Promise<MessageList>;
+      /** Fetch a single full message (including body). */
+      get(inboxId: string, messageId: string): Promise<Message>;
+      /** Reply to a message. */
+      reply(
+        inboxId: string,
+        messageId: string,
+        input?: ReplyInput,
+      ): Promise<SendResult>;
+      /** Reply to everyone on a message. */
+      replyAll(
+        inboxId: string,
+        messageId: string,
+        input?: ReplyAllInput,
+      ): Promise<SendResult>;
+      /** Forward a message to new recipient(s). */
+      forward(
+        inboxId: string,
+        messageId: string,
+        input: SendMessageInput,
+      ): Promise<SendResult>;
+    };
+    /** Register / verify / read custom sending domains. */
+    domains: {
+      /** Register a custom sending domain. Returns the DNS records to publish. */
+      create(input: CreateDomainInput): Promise<Domain>;
+      /** Trigger DNS re-verification; re-fetch with `get` to read the updated status. */
+      verify(domainId: string): Promise<void>;
+      /** Fetch a domain's full status and DNS records by id. */
+      get(domainId: string): Promise<Domain>;
+      /** List registered domains (without per-domain status/records). */
+      list(): Promise<DomainList>;
+      /** Delete a registered domain by id. */
+      delete(domainId: string): Promise<void>;
+    };
+    /** List / get conversation threads. */
+    threads: {
+      /** List conversation threads in an inbox (without their messages). */
+      list(inboxId: string, opts?: ListThreadsOptions): Promise<ThreadList>;
+      /** Fetch a single full thread (including its messages). */
+      get(inboxId: string, threadId: string): Promise<Thread>;
+    };
+    /** Register / delete inbound-event webhooks. */
+    webhooks: {
+      /** Register a webhook for inbound events. The returned `secret` is shown only once. */
+      create(input: CreateWebhookInput): Promise<Webhook>;
+      /** Delete a webhook by id. */
+      delete(id: number): Promise<void>;
+    };
+  };
+  /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
    * need this — attribution is set once when the client is constructed.
@@ -249,6 +342,42 @@ function bind(transport: Transport): Sapiom {
       create: (input) => database.create(input, transport),
       get: (idOrHandle) => database.get(idOrHandle, transport),
       delete: (idOrHandle) => database.delete(idOrHandle, transport),
+    },
+    email: {
+      inboxes: {
+        create: (input) => email.createInbox(input, transport),
+        list: (opts) => email.listInboxes(opts, transport),
+        get: (inboxId) => email.getInbox(inboxId, transport),
+        delete: (inboxId) => email.deleteInbox(inboxId, transport),
+      },
+      messages: {
+        send: (inboxId, input) => email.sendMessage(inboxId, input, transport),
+        list: (inboxId, opts) => email.listMessages(inboxId, opts, transport),
+        get: (inboxId, messageId) =>
+          email.getMessage(inboxId, messageId, transport),
+        reply: (inboxId, messageId, input) =>
+          email.replyMessage(inboxId, messageId, input, transport),
+        replyAll: (inboxId, messageId, input) =>
+          email.replyAllMessage(inboxId, messageId, input, transport),
+        forward: (inboxId, messageId, input) =>
+          email.forwardMessage(inboxId, messageId, input, transport),
+      },
+      domains: {
+        create: (input) => email.createDomain(input, transport),
+        verify: (domainId) => email.verifyDomain(domainId, transport),
+        get: (domainId) => email.getDomain(domainId, transport),
+        list: () => email.listDomains(transport),
+        delete: (domainId) => email.deleteDomain(domainId, transport),
+      },
+      threads: {
+        list: (inboxId, opts) => email.listThreads(inboxId, opts, transport),
+        get: (inboxId, threadId) =>
+          email.getThread(inboxId, threadId, transport),
+      },
+      webhooks: {
+        create: (input) => email.createWebhook(input, transport),
+        delete: (id) => email.deleteWebhook(id, transport),
+      },
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
