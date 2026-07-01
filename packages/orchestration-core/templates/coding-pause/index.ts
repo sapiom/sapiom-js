@@ -31,8 +31,9 @@ import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
  *   - on **approve**, `decide` launches agent #2 to promote `proposed/…` onto
  *     `main`. This is the ONLY step that writes `main`, and it runs only after the
  *     approve signal.
- *   - on **reject** (or no explicit approval), the workflow terminates and `main`
- *     is left exactly as it was.
+ *   - on **reject** (a `review.decision` that isn't `approved`), the workflow
+ *     terminates and `main` is left exactly as it was; with no signal it stays
+ *     paused. Either way nothing lands on `main`.
  *
  * Pause/resume mechanics: a resumed step's `input` IS the signal payload. For a
  * coding run that's a `CodingResultPayload`; for the human decision it's whatever

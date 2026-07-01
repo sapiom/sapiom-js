@@ -22,10 +22,11 @@ of the one that touches `main`:
   **non-canonical** `proposed/<executionId>` branch — never `main`.
 - **review** is resumed with agent #1's `CodingResultPayload`; it then suspends on
   the `review.decision` signal (the human approval).
-- **decide** is resumed with the human decision. On **reject** (or no explicit
-  approval) it terminates and `main` is left exactly as it was. On **approve** it
-  launches agent #2 to promote `proposed/…` onto `main` — the **only** step that
-  writes the canonical branch, reached only after approval.
+- **decide** is resumed with the human decision. On **reject** (a `review.decision`
+  whose `decision` isn't `approved`) it terminates and `main` is left exactly as it
+  was; with no signal at all the run simply stays paused. On **approve** it launches
+  agent #2 to promote `proposed/…` onto `main` — the **only** step that writes the
+  canonical branch, reached only after approval.
 - **finalize** is resumed with agent #2's result once the promotion is done.
 
 Send the approval from your session with the dev tools' **signal** step (or the
