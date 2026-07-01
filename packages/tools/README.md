@@ -80,6 +80,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `database`          | On-demand Postgres databases, returned with direct connection credentials                             | [src/database](./src/database/README.md)                     |
 | `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks               | [src/email](./src/email/README.md)                           |
 | `domains`           | Register domain names and manage their DNS records                                                    | [src/domains](./src/domains/README.md)                       |
+| `memory`            | Tenant-scoped long-term memory (append-log; cosine recall, Neon keyword recall)                       | [src/memory](./src/memory/README.md)                         |
 
 ## Composing capabilities
 

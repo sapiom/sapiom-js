@@ -118,6 +118,17 @@ import type {
   DnsRecordRef,
   DnsRecord,
 } from "./domains/index.js";
+import * as memory from "./memory/index.js";
+import type {
+  AppendInput,
+  AppendResult,
+  RecallInput,
+  RecallResponse,
+  SweepInput,
+  MemorySweepResponse,
+  Memory,
+  MemoryCallOptions,
+} from "./memory/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -320,6 +331,19 @@ export interface Sapiom {
     };
   };
   /**
+   * Tenant-scoped long-term memory. `append` writes (or no-ops on a duplicate),
+   * `recall` searches by cosine vector similarity or Neon keyword strategy, `get`
+   * fetches one by id; prune with Neon `sweep` (LRU/oldest eviction) or `forget`
+   * (hard-delete a single id).
+   */
+  readonly memory: {
+    append(input: AppendInput): Promise<AppendResult>;
+    recall(input: RecallInput): Promise<RecallResponse>;
+    sweep(input?: SweepInput): Promise<MemorySweepResponse>;
+    get(id: string, options?: MemoryCallOptions): Promise<Memory>;
+    forget(id: string, options?: MemoryCallOptions): Promise<void>;
+  };
+  /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
    * need this — attribution is set once when the client is constructed.
@@ -436,6 +460,13 @@ function bind(transport: Transport): Sapiom {
         update: (input) => domains.updateDnsRecord(input, transport),
         delete: (input) => domains.deleteDnsRecord(input, transport),
       },
+    },
+    memory: {
+      append: (input) => memory.append(input, transport),
+      recall: (input) => memory.recall(input, transport),
+      sweep: (input) => memory.sweep(input, transport),
+      get: (id, options) => memory.get(id, transport, undefined, options),
+      forget: (id, options) => memory.forget(id, transport, undefined, options),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
