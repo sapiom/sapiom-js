@@ -14,9 +14,11 @@ import {
   repositories,
   agent,
   search,
+  memory,
   Sandbox,
   Repository,
   SearchHttpError,
+  MemoryHttpError,
 } from "./index.js";
 
 describe("@sapiom/tools public surface", () => {
@@ -47,6 +49,13 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.database.get).toBe("function");
     expect(typeof sapiom.database.delete).toBe("function");
 
+    expect(typeof sapiom.memory).toBe("object");
+    expect(typeof sapiom.memory.append).toBe("function");
+    expect(typeof sapiom.memory.recall).toBe("function");
+    expect(typeof sapiom.memory.sweep).toBe("function");
+    expect(typeof sapiom.memory.get).toBe("function");
+    expect(typeof sapiom.memory.forget).toBe("function");
+
     expect(typeof sapiom.withAttribution).toBe("function");
   });
 
@@ -62,7 +71,9 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof repositories).toBe("object");
     expect(typeof agent).toBe("object");
     expect(typeof search).toBe("object");
+    expect(typeof memory).toBe("object");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor
+    expect(typeof MemoryHttpError).toBe("function");
     expect(typeof Sandbox).toBe("function"); // class constructor
     expect(typeof Repository).toBe("function");
   });

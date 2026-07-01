@@ -100,3 +100,6 @@ export { EmailHttpError } from "./email/index.js";
 
 export * as domains from "./domains/index.js";
 export { DomainsHttpError } from "./domains/index.js";
+
+export * as memory from "./memory/index.js";
+export { MemoryHttpError } from "./memory/index.js";

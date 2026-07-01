@@ -80,6 +80,13 @@ import type {
   DomainTransfer,
   DnsRecord,
 } from "../domains/index.js";
+import type {
+  AppendResult,
+  RecallResponse,
+  MemorySweepResponse,
+  Memory,
+  MemoryCallOptions,
+} from "../memory/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -1182,6 +1189,53 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             r("domains.dns.delete", [input], () => undefined) as void,
           ),
       },
+    },
+    memory: {
+      append: (input) =>
+        Promise.resolve(
+          r("memory.append", [input], () => ({
+            id: "stub-memory",
+            content: input.content,
+            scope: input.scope ?? "default",
+            decision: "ADDED",
+            createdAt: "2099-01-01T00:00:00Z",
+            occurredAt: input.occurredAt ?? null,
+            metadata: input.metadata ?? {},
+          })) as AppendResult,
+        ),
+      recall: (input) =>
+        Promise.resolve(
+          r("memory.recall", [input], () => ({
+            results: [],
+            query: input.query,
+            topK: input.topK ?? 5,
+            count: 0,
+          })) as RecallResponse,
+        ),
+      sweep: (input) =>
+        Promise.resolve(
+          r("memory.sweep", [input], () =>
+            input?.dryRun === false
+              ? { evicted: 0 }
+              : { evicted: 0, candidates: [] },
+          ) as MemorySweepResponse,
+        ),
+      get: (id: string, options?: MemoryCallOptions) =>
+        Promise.resolve(
+          r("memory.get", [id, options], () => ({
+            id,
+            content: "(stub) memory content",
+            scope: "default",
+            createdAt: "2099-01-01T00:00:00Z",
+            occurredAt: null,
+            lastAccessedAt: null,
+            metadata: {},
+          })) as Memory,
+        ),
+      forget: (id: string, options?: MemoryCallOptions) =>
+        Promise.resolve(
+          r("memory.forget", [id, options], () => undefined) as void,
+        ),
     },
     withAttribution: () => client,
   };
