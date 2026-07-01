@@ -56,7 +56,10 @@ export type {
   AgentRunResultPayload,
   AgentMcp,
 } from "./agent/index.js";
-export { agentRunResultSchema, AgentRunResultSchemaError } from "./agent/index.js";
+export {
+  agentRunResultSchema,
+  AgentRunResultSchemaError,
+} from "./agent/index.js";
 
 export * as orchestrations from "./orchestrations/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
@@ -91,3 +94,6 @@ export { SearchHttpError } from "./search/index.js";
 
 export * as database from "./database/index.js";
 export { DatabaseHttpError } from "./database/index.js";
+
+export * as email from "./email/index.js";
+export { EmailHttpError } from "./email/index.js";

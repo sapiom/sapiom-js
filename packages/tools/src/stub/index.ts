@@ -62,6 +62,18 @@ import type {
   DomainSearchResult,
 } from "../search/index.js";
 import type { Database } from "../database/index.js";
+import type {
+  Inbox,
+  InboxList,
+  SendResult,
+  MessageList,
+  Message,
+  ThreadList,
+  Thread,
+  Domain,
+  DomainList,
+  Webhook,
+} from "../email/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -885,6 +897,179 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         Promise.resolve(
           r("database.delete", [idOrHandle], () => undefined) as void,
         ),
+    },
+    email: {
+      inboxes: {
+        create: (input) =>
+          Promise.resolve(
+            r("email.inboxes.create", [input], () => {
+              const username = input?.username ?? "inbox";
+              const domain = input?.domain ?? "example.com";
+              return {
+                inboxId: `${username}@${domain}`,
+                email: `${username}@${domain}`,
+                ...(input?.displayName && { displayName: input.displayName }),
+                ...(input?.clientId && { clientId: input.clientId }),
+                createdAt: "2099-01-01T00:00:00Z",
+                updatedAt: "2099-01-01T00:00:00Z",
+              };
+            }) as Inbox,
+          ),
+        list: (opts) =>
+          Promise.resolve(
+            r("email.inboxes.list", [opts], () => ({
+              count: 0,
+              inboxes: [],
+            })) as InboxList,
+          ),
+        get: (inboxId) =>
+          Promise.resolve(
+            r("email.inboxes.get", [inboxId], () => ({
+              inboxId,
+              email: inboxId,
+              createdAt: "2099-01-01T00:00:00Z",
+              updatedAt: "2099-01-01T00:00:00Z",
+            })) as Inbox,
+          ),
+        delete: (inboxId) =>
+          Promise.resolve(
+            r("email.inboxes.delete", [inboxId], () => undefined) as void,
+          ),
+      },
+      messages: {
+        send: (inboxId, input) =>
+          Promise.resolve(
+            r("email.messages.send", [inboxId, input], () => ({
+              messageId: `stub-msg-${++launchSeq}`,
+              threadId: `stub-thread-${launchSeq}`,
+            })) as SendResult,
+          ),
+        list: (inboxId, opts) =>
+          Promise.resolve(
+            r("email.messages.list", [inboxId, opts], () => ({
+              count: 0,
+              messages: [],
+            })) as MessageList,
+          ),
+        get: (inboxId, messageId) =>
+          Promise.resolve(
+            r("email.messages.get", [inboxId, messageId], () => ({
+              messageId,
+              threadId: "stub-thread",
+              inboxId,
+              from: "sender@example.com",
+              to: [inboxId],
+              labels: [],
+              timestamp: "2099-01-01T00:00:00Z",
+              size: 0,
+              createdAt: "2099-01-01T00:00:00Z",
+              updatedAt: "2099-01-01T00:00:00Z",
+            })) as Message,
+          ),
+        reply: (inboxId, messageId, input) =>
+          Promise.resolve(
+            r("email.messages.reply", [inboxId, messageId, input], () => ({
+              messageId: `stub-msg-${++launchSeq}`,
+              threadId: `stub-thread-${launchSeq}`,
+            })) as SendResult,
+          ),
+        replyAll: (inboxId, messageId, input) =>
+          Promise.resolve(
+            r("email.messages.replyAll", [inboxId, messageId, input], () => ({
+              messageId: `stub-msg-${++launchSeq}`,
+              threadId: `stub-thread-${launchSeq}`,
+            })) as SendResult,
+          ),
+        forward: (inboxId, messageId, input) =>
+          Promise.resolve(
+            r("email.messages.forward", [inboxId, messageId, input], () => ({
+              messageId: `stub-msg-${++launchSeq}`,
+              threadId: `stub-thread-${launchSeq}`,
+            })) as SendResult,
+          ),
+      },
+      domains: {
+        create: (input) =>
+          Promise.resolve(
+            r("email.domains.create", [input], () => ({
+              domainId: "stub-domain",
+              domain: input.domain,
+              status: "PENDING" as const,
+              feedbackEnabled: input.feedbackEnabled ?? false,
+              records: [],
+              createdAt: "2099-01-01T00:00:00Z",
+              updatedAt: "2099-01-01T00:00:00Z",
+            })) as Domain,
+          ),
+        verify: (domainId) =>
+          Promise.resolve(
+            r("email.domains.verify", [domainId], () => undefined) as void,
+          ),
+        get: (domainId) =>
+          Promise.resolve(
+            r("email.domains.get", [domainId], () => ({
+              domainId,
+              domain: "example.com",
+              status: "VERIFIED" as const,
+              feedbackEnabled: false,
+              records: [],
+              createdAt: "2099-01-01T00:00:00Z",
+              updatedAt: "2099-01-01T00:00:00Z",
+            })) as Domain,
+          ),
+        list: () =>
+          Promise.resolve(
+            r("email.domains.list", [], () => ({
+              count: 0,
+              domains: [],
+            })) as DomainList,
+          ),
+        delete: (domainId) =>
+          Promise.resolve(
+            r("email.domains.delete", [domainId], () => undefined) as void,
+          ),
+      },
+      threads: {
+        list: (inboxId, opts) =>
+          Promise.resolve(
+            r("email.threads.list", [inboxId, opts], () => ({
+              count: 0,
+              threads: [],
+            })) as ThreadList,
+          ),
+        get: (inboxId, threadId) =>
+          Promise.resolve(
+            r("email.threads.get", [inboxId, threadId], () => ({
+              threadId,
+              inboxId,
+              labels: [],
+              timestamp: "2099-01-01T00:00:00Z",
+              senders: [],
+              recipients: [],
+              lastMessageId: "stub-msg",
+              messageCount: 0,
+              size: 0,
+              createdAt: "2099-01-01T00:00:00Z",
+              updatedAt: "2099-01-01T00:00:00Z",
+              messages: [],
+            })) as Thread,
+          ),
+      },
+      webhooks: {
+        create: (input) =>
+          Promise.resolve(
+            r("email.webhooks.create", [input], () => ({
+              id: ++launchSeq,
+              url: input.url,
+              eventType: input.eventType,
+              secret: "stub-webhook-secret",
+            })) as Webhook,
+          ),
+        delete: (id) =>
+          Promise.resolve(
+            r("email.webhooks.delete", [id], () => undefined) as void,
+          ),
+      },
     },
     withAttribution: () => client,
   };

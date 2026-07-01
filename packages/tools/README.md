@@ -1,6 +1,6 @@
 # @sapiom/tools
 
-A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, file storage, content generation, search, orchestrations, and schedules — authenticated to your tenant.
+A typed TypeScript client for Sapiom capabilities — sandboxes, git repositories, coding agents, file storage, content generation, search, email, orchestrations, and schedules — authenticated to your tenant.
 
 These are the same capabilities your Sapiom agents call as tools; this package makes them callable directly from your own code.
 
@@ -78,6 +78,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result                        | [src/orchestrations](./src/orchestrations/README.md)         |
 | `schedules`         | Schedule a deployed orchestration to run on a cron, or once at a set time                              | [src/schedules](./src/schedules/README.md)                   |
 | `database`          | On-demand Postgres databases, returned with direct connection credentials                             | [src/database](./src/database/README.md)                     |
+| `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks                | [src/email](./src/email/README.md)                           |
 
 ## Composing capabilities
 
