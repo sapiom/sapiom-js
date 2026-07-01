@@ -1,5 +1,13 @@
 # @sapiom/orchestration-core
 
+## 0.4.4
+
+### Patch Changes
+
+- Updated dependencies [aaf633c]
+  - @sapiom/tools@0.14.0
+  - @sapiom/orchestration@0.4.8
+
 ## 0.4.3
 
 ### Patch Changes
