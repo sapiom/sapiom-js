@@ -58,6 +58,11 @@
       "import": "./dist/esm/email/index.js",
       "require": "./dist/cjs/email/index.js"
     },
+    "./domains": {
+      "types": "./dist/cjs/domains/index.d.ts",
+      "import": "./dist/esm/domains/index.js",
+      "require": "./dist/cjs/domains/index.js"
+    },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",
       "import": "./dist/esm/stub/index.js",

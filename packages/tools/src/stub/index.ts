@@ -74,6 +74,12 @@ import type {
   DomainList,
   Webhook,
 } from "../email/index.js";
+import type {
+  DomainAvailability,
+  Domain as OwnedDomain,
+  DomainTransfer,
+  DnsRecord,
+} from "../domains/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -1068,6 +1074,112 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         delete: (id) =>
           Promise.resolve(
             r("email.webhooks.delete", [id], () => undefined) as void,
+          ),
+      },
+    },
+    domains: {
+      check: (input) =>
+        Promise.resolve(
+          r("domains.check", [input], () =>
+            (input.domainNames ?? []).map((domainName) => ({
+              domainName,
+              available: true,
+              purchasePrice: "12.99",
+              renewalPrice: "12.99",
+              premium: false,
+            })),
+          ) as DomainAvailability[],
+        ),
+      register: (input) =>
+        Promise.resolve(
+          r("domains.register", [input], () => ({
+            domainName: input.domainName,
+            status: "active",
+            expiresAt: "2099-01-01T00:00:00Z",
+            registeredAt: "2099-01-01T00:00:00Z",
+            purchasePrice: "12.99",
+          })) as OwnedDomain,
+        ),
+      renew: (input) =>
+        Promise.resolve(
+          r("domains.renew", [input], () => ({
+            domainName: input.domainName,
+            expiresAt: "2099-01-01T00:00:00Z",
+            renewalPrice: "12.99",
+          })) as OwnedDomain,
+        ),
+      list: () =>
+        Promise.resolve(r("domains.list", [], () => []) as OwnedDomain[]),
+      get: (input) =>
+        Promise.resolve(
+          r("domains.get", [input], () => ({
+            domainName: input.domainName,
+            status: "active",
+            expiresAt: "2099-01-01T00:00:00Z",
+            registeredAt: "2099-01-01T00:00:00Z",
+            nameservers: ["ns1.example.com", "ns2.example.com"],
+            locked: true,
+            transferEligibleAt: null,
+          })) as OwnedDomain,
+        ),
+      transferOut: (input) =>
+        Promise.resolve(
+          r("domains.transferOut", [input], () => ({
+            domainName: input.domainName,
+            authCode: "stub-auth-code",
+            transferInstructions:
+              "(stub) provide this auth code to the new registrar.",
+          })) as DomainTransfer,
+        ),
+      dns: {
+        create: (input) =>
+          Promise.resolve(
+            r("domains.dns.create", [input], () => ({
+              recordId: `stub-record-${++launchSeq}`,
+              domainName: input.domainName,
+              type: input.type,
+              host: input.host,
+              fqdn: input.host
+                ? `${input.host}.${input.domainName}`
+                : input.domainName,
+              value: input.value,
+              ttl: input.ttl ?? 300,
+              ...(input.priority !== undefined && { priority: input.priority }),
+              createdAt: "2099-01-01T00:00:00Z",
+            })) as DnsRecord,
+          ),
+        list: (input) =>
+          Promise.resolve(
+            r("domains.dns.list", [input], () => []) as DnsRecord[],
+          ),
+        get: (input) =>
+          Promise.resolve(
+            r("domains.dns.get", [input], () => ({
+              recordId: input.recordId,
+              domainName: input.domainName,
+              type: "A" as const,
+              host: "",
+              fqdn: input.domainName,
+              value: "203.0.113.10",
+              ttl: 300,
+            })) as DnsRecord,
+          ),
+        update: (input) =>
+          Promise.resolve(
+            r("domains.dns.update", [input], () => ({
+              recordId: input.recordId,
+              domainName: input.domainName,
+              type: input.type ?? ("A" as const),
+              host: input.host ?? "",
+              fqdn: input.domainName,
+              value: input.value ?? "203.0.113.10",
+              ttl: input.ttl ?? 300,
+              ...(input.priority !== undefined && { priority: input.priority }),
+            })) as DnsRecord,
+          ),
+        delete: (input) =>
+          Promise.resolve(
+            r("domains.dns.delete", [input], () => undefined) as void,
           ),
       },
     },
