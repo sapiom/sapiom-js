@@ -826,6 +826,75 @@ describe("domains.deleteDnsRecord()", () => {
 });
 
 // ---------------------------------------------------------------------------
+// dns.* nested namespace on the barrel (import { domains } from "@sapiom/tools")
+// ---------------------------------------------------------------------------
+
+describe("domains.dns (barrel nested namespace)", () => {
+  it("exposes create/list/get/update/delete as functions", () => {
+    expect(typeof domains.dns.create).toBe("function");
+    expect(typeof domains.dns.list).toBe("function");
+    expect(typeof domains.dns.get).toBe("function");
+    expect(typeof domains.dns.update).toBe("function");
+    expect(typeof domains.dns.delete).toBe("function");
+  });
+
+  it("routes each dns.* call to the right URL + method with the credential", async () => {
+    const { transport, calls } = makeTransport([
+      ({ url, init }) => {
+        const method = init.method ?? "GET";
+        if (method === "DELETE") return jsonResponse({ deleted: true });
+        if (url.endsWith("/records"))
+          return method === "POST"
+            ? jsonResponse({ ...rawDnsRecord }, { status: 201 })
+            : jsonResponse([{ ...rawDnsRecord }]);
+        return jsonResponse({ ...rawDnsRecord });
+      },
+    ]);
+
+    await domains.dns.create(
+      { domainName: "my-app.dev", type: "A", host: "", value: "203.0.113.10" },
+      transport,
+      BASE,
+    );
+    await domains.dns.list({ domainName: "my-app.dev" }, transport, BASE);
+    await domains.dns.get(
+      { domainName: "my-app.dev", recordId: "rec-uuid-123" },
+      transport,
+      BASE,
+    );
+    await domains.dns.update(
+      { domainName: "my-app.dev", recordId: "rec-uuid-123", value: "1.2.3.4" },
+      transport,
+      BASE,
+    );
+    await domains.dns.delete(
+      { domainName: "my-app.dev", recordId: "rec-uuid-123" },
+      transport,
+      BASE,
+    );
+
+    expect(calls.map((c) => [c.init.method ?? "GET", c.url])).toEqual([
+      ["POST", `${BASE}/v1/domains/my-app.dev/records`],
+      ["GET", `${BASE}/v1/domains/my-app.dev/records`],
+      ["GET", `${BASE}/v1/domains/my-app.dev/records/rec-uuid-123`],
+      ["PUT", `${BASE}/v1/domains/my-app.dev/records/rec-uuid-123`],
+      ["DELETE", `${BASE}/v1/domains/my-app.dev/records/rec-uuid-123`],
+    ]);
+    for (const c of calls) {
+      expect(headerOf(c, "x-sapiom-api-key")).toBe("test-key");
+    }
+  });
+
+  it("dns.* are the same functions as the flat exports", () => {
+    expect(domains.dns.create).toBe(domains.createDnsRecord);
+    expect(domains.dns.list).toBe(domains.listDnsRecords);
+    expect(domains.dns.get).toBe(domains.getDnsRecord);
+    expect(domains.dns.update).toBe(domains.updateDnsRecord);
+    expect(domains.dns.delete).toBe(domains.deleteDnsRecord);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Client wiring + auth
 // ---------------------------------------------------------------------------
 

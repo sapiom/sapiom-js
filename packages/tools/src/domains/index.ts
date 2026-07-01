@@ -43,7 +43,14 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
 
 /** A DNS record type. */
 export type DnsRecordType =
-  "A" | "AAAA" | "ANAME" | "CNAME" | "MX" | "TXT" | "SRV" | "NS";
+  | "A"
+  | "AAAA"
+  | "ANAME"
+  | "CNAME"
+  | "MX"
+  | "TXT"
+  | "SRV"
+  | "NS";
 
 export interface CheckInput {
   /** Domain names to check (1–50), e.g. `["my-app.dev", "my-app.io"]`. */
@@ -645,3 +652,16 @@ async function deleteDnsRecord(
 }
 
 export { deleteDnsRecord };
+
+/**
+ * The `dns` sub-namespace, so `domains.dns.create(...)` (and `list` / `get` /
+ * `update` / `delete`) reads the same whether imported from the barrel or used on
+ * a client. `delete` maps to {@link deleteDnsRecord} (its own name is reserved).
+ */
+export const dns = {
+  create: createDnsRecord,
+  list: listDnsRecords,
+  get: getDnsRecord,
+  update: updateDnsRecord,
+  delete: deleteDnsRecord,
+};
