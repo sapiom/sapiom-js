@@ -64,7 +64,7 @@ out.video?.url; // provider-hosted URL (may be short-lived / unauthenticated)
 Video input takes `prompt`, plus optional `storage`, `model`, and `params` (as with
 images), and two async controls: `pollIntervalMs` (poll cadence, default 5s) and
 `timeoutMs` (give up and throw if it isn't ready in time, default 5 min). The
-returned `video` is `{ url, contentType?, fileId?, downloadUrl?, storageError? }`.
+returned `video` is `{ url, contentType?, fileId?, downloadUrl?, downloadUrlExpiresAt?, storageError? }`.
 
 ## Dispatchable video: `video.launch`
 
@@ -125,6 +125,7 @@ interface VideoResultPayload {
   outputs: Array<{
     fileId?: string; // durable ref — present when storage was requested and succeeded
     downloadUrl?: string; // ready-to-use short-lived URL (may have expired by resume)
+    downloadUrlExpiresAt?: string; // ISO expiry of downloadUrl, when present
     storageError?: string; // present when storage was requested but failed
   }>;
 }
@@ -144,8 +145,8 @@ to this shape when wiring local tests.
   `seed`, `guidance_scale`).
 
 Each returned image is `{ url, contentType?, width?, height?, fileId?,
-downloadUrl?, storageError? }`; any additional model-specific fields (e.g. `seed`)
-are returned on the result as-is.
+downloadUrl?, downloadUrlExpiresAt?, storageError? }`; any additional
+model-specific fields (e.g. `seed`) are returned on the result as-is.
 
 ## Gotchas
 
