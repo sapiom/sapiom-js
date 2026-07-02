@@ -14,6 +14,7 @@ export type { RetryConfig } from "./client/HttpClient.js";
 export { IdentityManager } from "./client/IdentityManager.js";
 export type { IdentityManagerOptions } from "./client/IdentityManager.js";
 export { ApiKeyAPI } from "./client/ApiKeyAPI.js";
+export { SecretsAPI } from "./client/SecretsAPI.js";
 export { TransactionAPI } from "./client/TransactionAPI.js";
 
 // Payment Error Detection
@@ -92,6 +93,13 @@ export type {
   CreateApiKeyResponse,
   ApiKeyResponse,
 } from "./types/api-key.js";
+
+// Secret types
+export type {
+  SecretInput,
+  SecretResponse,
+  SetManyRequest,
+} from "./types/secret.js";
 
 // HTTP Types (needed by HTTP integration packages)
 export type {
