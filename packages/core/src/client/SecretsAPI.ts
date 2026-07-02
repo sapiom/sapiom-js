@@ -86,7 +86,7 @@ export class SecretsAPI {
    *
    * @param ref - External ref for the secret set
    * @param key - Secret key to set
-   * @param input - Secret value and optional source metadata
+   * @param input - Secret value to store
    */
   async set(ref: string, key: string, input: SecretInput): Promise<void> {
     await this.httpClient.request<void>({
