@@ -1,4 +1,5 @@
 import { SapiomClient } from "./SapiomClient";
+import { HttpClient } from "./HttpClient";
 
 // Mock randomUUID for deterministic idempotency key tests
 const mockRandomUUID = jest.fn(() => "test-uuid-1234-5678-9abc-def012345678");
@@ -24,6 +25,7 @@ describe("SapiomClient", () => {
 
       expect(client).toBeDefined();
       expect(client.transactions).toBeDefined();
+      expect(client.vault).toBeDefined();
     });
 
     it("should throw error when API key is missing", () => {
@@ -51,6 +53,74 @@ describe("SapiomClient", () => {
       client.setApiKey("new-api-key");
       const httpClient = client.getHttpClient();
       expect(httpClient.defaults.headers["x-api-key"]).toBe("new-api-key");
+    });
+  });
+
+  describe("vault API", () => {
+    function mockJsonResponse(data: any) {
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue(data),
+        text: jest.fn().mockResolvedValue(JSON.stringify(data)),
+      };
+    }
+
+    it("should send vault requests to the default vault service with the vault API key header", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
+      });
+      mockFetch.mockResolvedValueOnce(mockJsonResponse({ KEY: "value" }));
+
+      await client.vault.getAll("demo");
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://vault.services.sapiom.ai/v2/secrets/demo",
+        expect.objectContaining({
+          method: "GET",
+          headers: expect.objectContaining({
+            "Content-Type": "application/json",
+            "x-sapiom-api-key": "test-api-key",
+          }),
+        }),
+      );
+      const headers = mockFetch.mock.calls[0][1].headers;
+      expect(headers["x-api-key"]).toBeUndefined();
+    });
+
+    it("should use a custom services domain for vault requests", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        servicesDomain: "services.test",
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
+      });
+      mockFetch.mockResolvedValueOnce(mockJsonResponse({ KEY: "value" }));
+
+      await client.vault.getAll("demo");
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://vault.services.test/v2/secrets/demo",
+        expect.any(Object),
+      );
+    });
+
+    it("should update the vault API key header", async () => {
+      const client = new SapiomClient({
+        apiKey: "test-api-key",
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
+      });
+      client.setApiKey("new-api-key");
+      mockFetch.mockResolvedValueOnce(mockJsonResponse({ KEY: "value" }));
+
+      await client.vault.getAll("demo");
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      expect(headers["x-sapiom-api-key"]).toBe("new-api-key");
     });
   });
 
@@ -391,6 +461,33 @@ describe("SapiomClient", () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://api.test.com/v1/transactions",
+        expect.any(Object),
+      );
+    });
+
+    it("should not prefix paths when versionPrefix is null", async () => {
+      const httpClient = new HttpClient({
+        baseURL: "https://vault.test",
+        timeout: 30000,
+        headers: {},
+        retry: { maxAttempts: 1, baseDelayMs: 0 },
+        versionPrefix: null,
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "content-type" ? "application/json" : null,
+        },
+        json: jest.fn().mockResolvedValue({ success: true }),
+        text: jest.fn().mockResolvedValue('{"success":true}'),
+      });
+
+      await httpClient.request({ url: "/v2/secrets/demo" });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://vault.test/v2/secrets/demo",
         expect.any(Object),
       );
     });

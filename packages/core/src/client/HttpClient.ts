@@ -32,6 +32,7 @@ export interface HttpClientConfig {
   timeout: number;
   headers: Record<string, string>;
   retry?: RetryConfig;
+  versionPrefix?: string | null;
 }
 
 /**
@@ -43,6 +44,7 @@ export class HttpClient {
   private readonly timeout: number;
   private headers: Record<string, string>;
   private readonly retry: RetryConfig;
+  private readonly versionPrefix: string | null;
 
   constructor(config: HttpClientConfig) {
     this.baseURL = config.baseURL;
@@ -53,6 +55,10 @@ export class HttpClient {
       throw new Error("retry.maxAttempts must be a finite number >= 1");
     }
     this.retry = retry;
+    this.versionPrefix =
+      config.versionPrefix === undefined
+        ? "/v1"
+        : this.normalizeVersionPrefix(config.versionPrefix);
   }
 
   /**
@@ -70,12 +76,14 @@ export class HttpClient {
     timeout: number;
     headers: Record<string, string>;
     retry: RetryConfig;
+    versionPrefix: string | null;
   } {
     return {
       baseURL: this.baseURL,
       timeout: this.timeout,
       headers: this.headers,
       retry: this.retry,
+      versionPrefix: this.versionPrefix,
     };
   }
 
@@ -257,8 +265,8 @@ export class HttpClient {
   }
 
   /**
-   * Build full URL with query parameters
-   * Automatically prefixes paths with /v1/ for API versioning
+   * Build full URL with query parameters.
+   * Automatically prefixes paths with the configured version prefix.
    */
   private buildUrl(path: string, params?: Record<string, any>): string {
     const base = this.baseURL.endsWith("/")
@@ -268,10 +276,7 @@ export class HttpClient {
     // Ensure path starts with /
     const pathname = path.startsWith("/") ? path : `/${path}`;
 
-    // Add /v1 prefix if not already present
-    const versionedPath = pathname.startsWith("/v1/")
-      ? pathname
-      : `/v1${pathname}`;
+    const versionedPath = this.withVersionPrefix(pathname);
 
     const url = `${base}${versionedPath}`;
 
@@ -288,5 +293,31 @@ export class HttpClient {
 
     const queryString = searchParams.toString();
     return queryString ? `${url}?${queryString}` : url;
+  }
+
+  private normalizeVersionPrefix(versionPrefix: string | null): string | null {
+    if (versionPrefix === null) {
+      return null;
+    }
+
+    const withLeadingSlash = versionPrefix.startsWith("/")
+      ? versionPrefix
+      : `/${versionPrefix}`;
+    return withLeadingSlash.replace(/\/+$/, "");
+  }
+
+  private withVersionPrefix(pathname: string): string {
+    if (!this.versionPrefix) {
+      return pathname;
+    }
+
+    if (
+      pathname === this.versionPrefix ||
+      pathname.startsWith(`${this.versionPrefix}/`)
+    ) {
+      return pathname;
+    }
+
+    return `${this.versionPrefix}${pathname}`;
   }
 }

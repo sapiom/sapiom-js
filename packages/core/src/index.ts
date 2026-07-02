@@ -15,6 +15,7 @@ export { IdentityManager } from "./client/IdentityManager.js";
 export type { IdentityManagerOptions } from "./client/IdentityManager.js";
 export { ApiKeyAPI } from "./client/ApiKeyAPI.js";
 export { TransactionAPI } from "./client/TransactionAPI.js";
+export { VaultAPI } from "./client/VaultAPI.js";
 
 // Payment Error Detection
 export {
@@ -92,6 +93,13 @@ export type {
   CreateApiKeyResponse,
   ApiKeyResponse,
 } from "./types/api-key.js";
+
+// Vault types
+export type {
+  SetVaultSecretsRequest,
+  VaultSecretInput,
+  VaultSecretResponse,
+} from "./types/vault.js";
 
 // HTTP Types (needed by HTTP integration packages)
 export type {
