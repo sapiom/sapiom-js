@@ -3,6 +3,9 @@ import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import type { RetryConfig } from "./HttpClient.js";
 import { IdentityManager } from "./IdentityManager.js";
 import { TransactionAPI } from "./TransactionAPI.js";
+import { VaultAPI } from "./VaultAPI.js";
+
+const DEFAULT_SERVICES_DOMAIN = "services.sapiom.ai";
 
 /**
  * Configuration options for initializing a SapiomClient
@@ -18,6 +21,13 @@ export interface SapiomClientConfig {
    * @default "https://api.sapiom.ai"
    */
   baseURL?: string;
+
+  /**
+   * Base domain for Sapiom gateway services.
+   * Used for service subdomains such as https://vault.services.sapiom.ai.
+   * @default "services.sapiom.ai"
+   */
+  servicesDomain?: string;
 
   /**
    * Request timeout in milliseconds
@@ -78,9 +88,11 @@ export interface SapiomClientConfig {
  */
 export class SapiomClient {
   private readonly httpClient: HttpClient;
+  private readonly vaultHttpClient: HttpClient;
   public readonly apiKeys: ApiKeyAPI;
   public readonly identity: IdentityManager;
   public readonly transactions: TransactionAPI;
+  public readonly vault: VaultAPI;
 
   constructor(config: SapiomClientConfig) {
     if (!config.apiKey) {
@@ -98,12 +110,25 @@ export class SapiomClient {
       retry: config.retry,
     });
 
+    this.vaultHttpClient = new HttpClient({
+      baseURL: this.resolveVaultBaseURL(config.servicesDomain),
+      timeout: config.timeout || 30000,
+      headers: {
+        "Content-Type": "application/json",
+        "x-sapiom-api-key": config.apiKey,
+        ...config.headers,
+      },
+      retry: config.retry,
+      versionPrefix: null,
+    });
+
     // Initialize API modules
     this.apiKeys = new ApiKeyAPI(this.httpClient);
     this.identity = new IdentityManager(this.httpClient, {
       backgroundRefresh: config.backgroundRefresh,
     });
     this.transactions = new TransactionAPI(this.httpClient);
+    this.vault = new VaultAPI(this.vaultHttpClient);
   }
 
   /**
@@ -111,6 +136,7 @@ export class SapiomClient {
    */
   setApiKey(apiKey: string): void {
     this.httpClient.setHeader("x-api-key", apiKey);
+    this.vaultHttpClient.setHeader("x-sapiom-api-key", apiKey);
   }
 
   /**
@@ -123,6 +149,7 @@ export class SapiomClient {
       timeout: number;
       headers: Record<string, string>;
       retry: RetryConfig;
+      versionPrefix: string | null;
     };
   } {
     return {
@@ -135,5 +162,16 @@ export class SapiomClient {
    */
   async request<T = any>(config: HttpRequestConfig): Promise<T> {
     return this.httpClient.request<T>(config);
+  }
+
+  private resolveVaultBaseURL(servicesDomain?: string): string {
+    const domain = servicesDomain || DEFAULT_SERVICES_DOMAIN;
+
+    if (domain.includes("://")) {
+      const url = new URL(domain);
+      return `${url.protocol}//vault.${url.host}`;
+    }
+
+    return `https://vault.${domain}`;
   }
 }

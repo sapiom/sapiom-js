@@ -45,6 +45,12 @@ export interface BaseSapiomIntegrationConfig {
   baseURL?: string;
 
   /**
+   * Sapiom services domain used for gateway subdomains such as Vault.
+   * @internal
+   */
+  servicesDomain?: string;
+
+  /**
    * Request timeout in milliseconds
    * @internal
    */
@@ -152,6 +158,8 @@ export function initializeSapiomClient(
       config?.baseURL ??
       process.env.SAPIOM_BASE_URL ??
       process.env.SAPIOM_API_URL,
+    servicesDomain:
+      config?.servicesDomain ?? process.env.SAPIOM_SERVICES_DOMAIN,
     timeout:
       config?.timeout ??
       (process.env.SAPIOM_TIMEOUT
