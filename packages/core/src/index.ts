@@ -14,8 +14,8 @@ export type { RetryConfig } from "./client/HttpClient.js";
 export { IdentityManager } from "./client/IdentityManager.js";
 export type { IdentityManagerOptions } from "./client/IdentityManager.js";
 export { ApiKeyAPI } from "./client/ApiKeyAPI.js";
-export { SecretsAPI } from "./client/SecretsAPI.js";
 export { TransactionAPI } from "./client/TransactionAPI.js";
+export { VaultAPI } from "./client/VaultAPI.js";
 
 // Payment Error Detection
 export {
@@ -94,12 +94,12 @@ export type {
   ApiKeyResponse,
 } from "./types/api-key.js";
 
-// Secret types
+// Vault types
 export type {
-  SecretInput,
-  SecretResponse,
-  SetManyRequest,
-} from "./types/secret.js";
+  SetVaultSecretsRequest,
+  VaultSecretInput,
+  VaultSecretResponse,
+} from "./types/vault.js";
 
 // HTTP Types (needed by HTTP integration packages)
 export type {

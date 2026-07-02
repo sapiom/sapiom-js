@@ -25,7 +25,7 @@ describe("SapiomClient", () => {
 
       expect(client).toBeDefined();
       expect(client.transactions).toBeDefined();
-      expect(client.secrets).toBeDefined();
+      expect(client.vault).toBeDefined();
     });
 
     it("should throw error when API key is missing", () => {
@@ -56,7 +56,7 @@ describe("SapiomClient", () => {
     });
   });
 
-  describe("secrets API", () => {
+  describe("vault API", () => {
     function mockJsonResponse(data: any) {
       return {
         ok: true,
@@ -77,7 +77,7 @@ describe("SapiomClient", () => {
       });
       mockFetch.mockResolvedValueOnce(mockJsonResponse({ KEY: "value" }));
 
-      await client.secrets.getAll("demo");
+      await client.vault.getAll("demo");
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://vault.services.sapiom.ai/v2/secrets/demo",
@@ -101,7 +101,7 @@ describe("SapiomClient", () => {
       });
       mockFetch.mockResolvedValueOnce(mockJsonResponse({ KEY: "value" }));
 
-      await client.secrets.getAll("demo");
+      await client.vault.getAll("demo");
 
       expect(mockFetch).toHaveBeenCalledWith(
         "https://vault.services.test/v2/secrets/demo",
@@ -117,7 +117,7 @@ describe("SapiomClient", () => {
       client.setApiKey("new-api-key");
       mockFetch.mockResolvedValueOnce(mockJsonResponse({ KEY: "value" }));
 
-      await client.secrets.getAll("demo");
+      await client.vault.getAll("demo");
 
       const headers = mockFetch.mock.calls[0][1].headers;
       expect(headers["x-sapiom-api-key"]).toBe("new-api-key");

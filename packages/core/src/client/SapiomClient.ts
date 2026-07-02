@@ -2,8 +2,8 @@ import { ApiKeyAPI } from "./ApiKeyAPI.js";
 import { HttpClient, HttpRequestConfig } from "./HttpClient.js";
 import type { RetryConfig } from "./HttpClient.js";
 import { IdentityManager } from "./IdentityManager.js";
-import { SecretsAPI } from "./SecretsAPI.js";
 import { TransactionAPI } from "./TransactionAPI.js";
+import { VaultAPI } from "./VaultAPI.js";
 
 const DEFAULT_SERVICES_DOMAIN = "services.sapiom.ai";
 
@@ -91,8 +91,8 @@ export class SapiomClient {
   private readonly vaultHttpClient: HttpClient;
   public readonly apiKeys: ApiKeyAPI;
   public readonly identity: IdentityManager;
-  public readonly secrets: SecretsAPI;
   public readonly transactions: TransactionAPI;
+  public readonly vault: VaultAPI;
 
   constructor(config: SapiomClientConfig) {
     if (!config.apiKey) {
@@ -127,8 +127,8 @@ export class SapiomClient {
     this.identity = new IdentityManager(this.httpClient, {
       backgroundRefresh: config.backgroundRefresh,
     });
-    this.secrets = new SecretsAPI(this.vaultHttpClient);
     this.transactions = new TransactionAPI(this.httpClient);
+    this.vault = new VaultAPI(this.vaultHttpClient);
   }
 
   /**

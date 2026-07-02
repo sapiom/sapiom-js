@@ -169,25 +169,25 @@ client.transactions.requiresPayment(transaction): boolean
 client.transactions.getPaymentDetails(transaction): PaymentDetails | null
 ```
 
-##### secrets
+##### vault
 
 ```typescript
 // Store one secret under an external ref
-await client.secrets.set('agent-123', 'OPENAI_API_KEY', {
+await client.vault.set('agent-123', 'OPENAI_API_KEY', {
   value: 'sk-...'
 });
 
 // Read one secret. Missing keys return null.
-const openaiKey = await client.secrets.get('agent-123', 'OPENAI_API_KEY');
+const openaiKey = await client.vault.get('agent-123', 'OPENAI_API_KEY');
 
 // Read a subset of secrets from the same ref
-const secrets = await client.secrets.getMany('agent-123', [
+const secrets = await client.vault.getMany('agent-123', [
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY'
 ]);
 
 // Remove one key
-await client.secrets.deleteKey('agent-123', 'OPENAI_API_KEY');
+await client.vault.deleteKey('agent-123', 'OPENAI_API_KEY');
 ```
 
 ## HTTP Integrations

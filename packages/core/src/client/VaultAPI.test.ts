@@ -1,13 +1,13 @@
-import { SecretsAPI } from "./SecretsAPI";
 import type { HttpClient } from "./HttpClient";
+import { VaultAPI } from "./VaultAPI";
 
-describe("SecretsAPI", () => {
+describe("VaultAPI", () => {
   let requestMock: jest.Mock;
-  let api: SecretsAPI;
+  let api: VaultAPI;
 
   beforeEach(() => {
     requestMock = jest.fn();
-    api = new SecretsAPI({ request: requestMock } as unknown as HttpClient);
+    api = new VaultAPI({ request: requestMock } as unknown as HttpClient);
   });
 
   it("gets all secrets for a ref", async () => {

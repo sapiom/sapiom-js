@@ -1,11 +1,11 @@
 import type {
-  SecretInput,
-  SecretResponse,
-  SetManyRequest,
-} from "../types/secret.js";
+  SetVaultSecretsRequest,
+  VaultSecretInput,
+  VaultSecretResponse,
+} from "../types/vault.js";
 import type { HttpClient } from "./HttpClient.js";
 
-export class SecretsAPI {
+export class VaultAPI {
   constructor(private readonly httpClient: HttpClient) {}
 
   /**
@@ -50,7 +50,7 @@ export class SecretsAPI {
    */
   async get(ref: string, key: string): Promise<string | null> {
     try {
-      const response = await this.httpClient.request<SecretResponse>({
+      const response = await this.httpClient.request<VaultSecretResponse>({
         method: "GET",
         url: `/v2/secrets/${encodeURIComponent(ref)}/${encodeURIComponent(key)}`,
       });
@@ -71,9 +71,9 @@ export class SecretsAPI {
    */
   async setMany(
     ref: string,
-    entries: Record<string, SecretInput>,
+    entries: Record<string, VaultSecretInput>,
   ): Promise<void> {
-    const body: SetManyRequest = { entries };
+    const body: SetVaultSecretsRequest = { entries };
     await this.httpClient.request<void>({
       method: "POST",
       url: `/v2/secrets/${encodeURIComponent(ref)}`,
@@ -88,7 +88,7 @@ export class SecretsAPI {
    * @param key - Secret key to set
    * @param input - Secret value to store
    */
-  async set(ref: string, key: string, input: SecretInput): Promise<void> {
+  async set(ref: string, key: string, input: VaultSecretInput): Promise<void> {
     await this.httpClient.request<void>({
       method: "PUT",
       url: `/v2/secrets/${encodeURIComponent(ref)}/${encodeURIComponent(key)}`,
