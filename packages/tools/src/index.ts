@@ -61,6 +61,27 @@ export {
   AgentRunResultSchemaError,
 } from "./agent/index.js";
 
+// llm — deferred-start routed LLM calls (the gateway's capacity-aware submit-job
+// seam): `llm.submit` returns a pausable handle, `llm.redeem` spends the granted
+// single-use link.
+export * as llm from "./llm/index.js";
+// Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
+export { LLM_ROUTE_RESULT_SIGNAL } from "./llm/index.js";
+// The shape a step resumed from `pauseUntilSignal(llmHandle, …)` receives as
+// input — annotate the resumed step with it instead of hand-rolling the shape.
+export type {
+  LlmSubmitSpec,
+  LlmRouteHandle,
+  LlmGrantLink,
+  LlmRouteStatus,
+  LlmRouteResultPayload,
+} from "./llm/index.js";
+// Validate an LlmRouteResultPayload at the resume boundary.
+export {
+  llmRouteResultSchema,
+  LlmRouteResultSchemaError,
+} from "./llm/index.js";
+
 export * as orchestrations from "./orchestrations/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { ORCHESTRATIONS_RESULT_SIGNAL } from "./orchestrations/index.js";

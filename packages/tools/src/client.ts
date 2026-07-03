@@ -37,6 +37,12 @@ import type {
   AgentRunResult,
   AgentRunHandle,
 } from "./agent/index.js";
+import { submit as llmSubmit, redeem as llmRedeem } from "./llm/index.js";
+import type {
+  LlmSubmitSpec,
+  LlmRouteHandle,
+  LlmGrantLink,
+} from "./llm/index.js";
 import {
   run as orchestrationsRun,
   launch as orchestrationsLaunch,
@@ -164,6 +170,21 @@ export interface Sapiom {
     run(spec: OrchestrationRunSpec): Promise<OrchestrationRunResult>;
     /** Launch a deployed orchestration; pass the handle to `pauseUntilSignal` to suspend on it. */
     launch(spec: OrchestrationRunSpec): Promise<OrchestrationRunHandle>;
+  };
+  /**
+   * Deferred-start routed LLM calls — the gateway's capacity-aware submit-job
+   * seam. `submit` asks for one LLM call and returns a pausable handle; the
+   * gateway grants a single-use link when a model has room (escalating toward
+   * run-now as the deadline nears); `redeem` spends the link.
+   */
+  readonly llm: {
+    /** Submit a routed call; pass the handle to `pauseUntilSignal` to suspend on it. */
+    submit(spec: LlmSubmitSpec): Promise<LlmRouteHandle>;
+    /** Spend a granted link: POST the (re-sent) request to /v1/messages with it. */
+    redeem<T = Record<string, unknown>>(
+      link: LlmGrantLink,
+      request: Record<string, unknown>,
+    ): Promise<T>;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -378,6 +399,10 @@ function bind(transport: Transport): Sapiom {
     orchestrations: {
       run: (spec) => orchestrationsRun(spec, transport),
       launch: (spec) => orchestrationsLaunch(spec, transport),
+    },
+    llm: {
+      submit: (spec) => llmSubmit(spec, transport),
+      redeem: (link, request) => llmRedeem(link, request),
     },
     fileStorage: {
       upload: (input) => fileStorage.upload(input, transport),
