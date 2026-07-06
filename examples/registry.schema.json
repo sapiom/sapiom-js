@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sapiom.ai/schemas/examples-registry.json",
+  "title": "Sapiom template gallery registry",
+  "description": "Thin gallery index for the onboarding template gallery (SAP-1263). The single edit point: add a template here and it appears in the UI gallery. The Sapiom backend reads this file at a pinned ref, validates it, computes estimated cost from `capabilities`, and expands `steps` into a definition graph for the inspect view.",
+  "type": "object",
+  "required": ["version", "templates"],
+  "additionalProperties": true,
+  "properties": {
+    "version": { "type": "integer", "description": "Registry schema version." },
+    "templates": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/template" }
+    }
+  },
+  "definitions": {
+    "template": {
+      "type": "object",
+      "required": ["id", "name", "description", "sourcePath"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Stable gallery id + the example directory name." },
+        "name": { "type": "string", "minLength": 1, "description": "Display name shown on the card." },
+        "description": { "type": "string", "description": "One-line card description." },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "Freeform browse tags." },
+        "sourcePath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path of the example inside this repo (e.g. `examples/<id>`), consumed by the fork + MCP clone handoff."
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Declared catalog capability ids (dotted, e.g. `web.search`). Drives the estimated per-run cost without a built definition."
+        },
+        "whatItDoes": { "type": "string", "description": "Prose shown on the inspect view." },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/step" },
+          "description": "Declared graph, rendered on the inspect view. Array order is execution order; the first step is the entry."
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Step name (graph node label)." },
+        "description": { "type": "string", "description": "What the step does." },
+        "capability": {
+          "type": ["string", "null"],
+          "description": "Catalog capability id this step calls, or null/omitted for an in-process step."
+        },
+        "next": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Names of steps this step continues to."
+        },
+        "terminal": { "type": "boolean", "description": "True when this step is a sink (ends the run)." }
+      }
+    }
+  }
+}

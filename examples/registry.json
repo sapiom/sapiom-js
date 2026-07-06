@@ -1,0 +1,44 @@
+{
+  "$schema": "./registry.schema.json",
+  "version": 1,
+  "templates": [
+    {
+      "id": "web-research-digest",
+      "name": "Web Research Digest",
+      "description": "Search the web for a topic and return a concise, sourced digest.",
+      "tags": ["research", "search"],
+      "sourcePath": "examples/web-research-digest",
+      "capabilities": ["web.search"],
+      "whatItDoes": "Takes a topic, runs a web search through the Sapiom search capability, then condenses the top results into a short digest with source links. A legible \"it did a thing\" flagship — one metered capability, an obvious output.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Query the web for the topic.",
+          "capability": "web.search",
+          "next": ["summarize"]
+        },
+        {
+          "name": "summarize",
+          "description": "Condense the results into a sourced digest.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "hello-workflow",
+      "name": "Hello Workflow",
+      "description": "The minimal single-step workflow — a smoke test for the build → deploy → run path.",
+      "tags": ["starter", "minimal"],
+      "sourcePath": "examples/hello-workflow",
+      "capabilities": [],
+      "whatItDoes": "Validates an input name and returns a greeting. The smallest valid definition — use it to confirm your MCP install and deploy path work end to end before reaching for a capability.",
+      "steps": [
+        {
+          "name": "greet",
+          "description": "Validate the input and return a greeting.",
+          "terminal": true
+        }
+      ]
+    }
+  ]
+}
