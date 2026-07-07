@@ -90,7 +90,10 @@ export function cloneRepo(opts: CloneRepoOptions): void {
   try {
     execFileSync(
       'git',
-      ['clone', '--depth', '1', '--single-branch', '--branch', branch, cloneUrl, targetDir],
+      // `--` terminates option parsing so a cloneUrl/targetDir that begins with
+      // `-` can never be read as a git flag (e.g. `--upload-pack=<cmd>`, which
+      // would run an arbitrary command) — second-order argv injection hardening.
+      ['clone', '--depth', '1', '--single-branch', '--branch', branch, '--', cloneUrl, targetDir],
       { cwd, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' },
     );
   } catch (err) {

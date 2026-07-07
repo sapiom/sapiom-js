@@ -165,6 +165,21 @@ describe('clone', () => {
     }
   });
 
+  it('rejects a non-https clone URL from the endpoint (never handed to git)', async () => {
+    mockFetch([{ status: 200, body: { ...TOKEN_BODY, cloneUrl: '--upload-pack=touch /tmp/pwned' } }]);
+    const base = makeTmp();
+    const target = path.join(base, 'project');
+    const rec = recordingClone();
+    try {
+      await expect(clone({ forkId: 'f', targetDir: target, cloneRepo: rec.fn }, client)).rejects.toMatchObject({
+        code: 'BAD_CLONE_URL',
+      });
+      expect(rec.calls).toHaveLength(0);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces a gateway error from the fork call', async () => {
     mockFetch([{ status: 404, body: { message: 'No such template' } }]);
     const base = makeTmp();

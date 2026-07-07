@@ -127,6 +127,17 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
     {},
   );
 
+  // Defense in depth: the clone URL is handed to `git clone` as a positional
+  // argument. `cloneRepo` already terminates option parsing with `--`, but also
+  // require an https:// URL here so a malformed/`-`-leading value from a
+  // misbehaving endpoint can never reach git as anything but a URL.
+  if (!token.cloneUrl.startsWith('https://')) {
+    throw new OrchestrationError({
+      code: 'BAD_CLONE_URL',
+      message: 'The clone token endpoint returned an unexpected clone URL.',
+    });
+  }
+
   // 3. Clone into the local checkout. The parent must exist for git's cwd.
   const parent = path.dirname(path.resolve(targetDir));
   mkdirSync(parent, { recursive: true });
