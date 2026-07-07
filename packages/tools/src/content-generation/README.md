@@ -2,7 +2,7 @@
 
 Generate media — images and video today (audio to come) — with an optional
 `storage` param that persists each output to Sapiom file storage, so you get a
-durable `fileId` back inline.
+durable `fileId` — plus a ready-to-use `downloadUrl` — back inline.
 
 ```typescript
 import { createClient } from "@sapiom/tools";
@@ -13,8 +13,9 @@ const out = await sapiom.contentGeneration.images.create({
   storage: { visibility: "private" }, // optional — persist outputs to file storage
 });
 
-out.images[0].url; // hosted URL of the generated image
-out.images[0].fileId; // present when `storage` was passed — use with `fileStorage`
+out.images[0].fileId; // durable reference (present when `storage` was passed)
+out.images[0].downloadUrl; // ready-to-use, short-lived signed URL for the stored file
+out.images[0].url; // provider-hosted URL (may be short-lived / unauthenticated)
 ```
 
 Ambient import works too: `import { contentGeneration } from "@sapiom/tools"`.
@@ -23,7 +24,7 @@ Ambient import works too: `import { contentGeneration } from "@sapiom/tools"`.
 
 Pass `storage` and each generated output is persisted to your tenant's file
 storage as it returns — no extra round-trip. Each item in `images` is then
-annotated with its own `fileId`:
+annotated inline with its own durable `fileId` and a ready-to-use `downloadUrl`:
 
 ```typescript
 const out = await sapiom.contentGeneration.images.create({
@@ -32,8 +33,10 @@ const out = await sapiom.contentGeneration.images.create({
   storage: { visibility: "public" },
 });
 for (const img of out.images ?? []) {
-  if (img.fileId) {
-    const { downloadUrl } = await sapiom.fileStorage.getDownloadUrl(img.fileId);
+  if (img.downloadUrl) {
+    // Ready to use immediately — but short-lived. `fileId` is the durable handle:
+    // re-mint a fresh URL any time with `sapiom.fileStorage.getDownloadUrl(img.fileId)`.
+    await fetch(img.downloadUrl);
   }
 }
 ```
@@ -53,14 +56,15 @@ const out = await sapiom.contentGeneration.video.create({
   storage: { visibility: "private" }, // optional — persist the output
 });
 
-out.video?.url; // hosted URL of the generated video
-out.video?.fileId; // present when `storage` was passed — use with `fileStorage`
+out.video?.fileId; // durable reference (present when `storage` was passed)
+out.video?.downloadUrl; // ready-to-use, short-lived signed URL for the stored file
+out.video?.url; // provider-hosted URL (may be short-lived / unauthenticated)
 ```
 
 Video input takes `prompt`, plus optional `storage`, `model`, and `params` (as with
 images), and two async controls: `pollIntervalMs` (poll cadence, default 5s) and
 `timeoutMs` (give up and throw if it isn't ready in time, default 5 min). The
-returned `video` is `{ url, contentType?, fileId?, storageError? }`.
+returned `video` is `{ url, contentType?, fileId?, downloadUrl?, downloadUrlExpiresAt?, storageError? }`.
 
 ## Dispatchable video: `video.launch`
 
@@ -79,7 +83,7 @@ const handle = await sapiom.contentGeneration.video.launch({
   storage: { visibility: "private" }, // optional — persist the output
 });
 const out = await handle.wait(); // polls until ready
-out.video?.fileId;
+out.video?.fileId; // + out.video?.downloadUrl for a ready-to-use URL
 
 // Option B — suspend a workflow step until the video is ready, then resume:
 // (Inside a Sapiom workflow step; the orchestration engine handles the rest.)
@@ -87,7 +91,7 @@ const handle = await sapiom.contentGeneration.video.launch({
   prompt: "a calm ocean wave at sunset",
 });
 return pauseUntilSignal(handle, { resumeStep: finalize });
-// `finalize` receives a VideoResultPayload: { outputs: [{ fileId?, storageError? }] }
+// `finalize` receives a VideoResultPayload: { outputs: [{ fileId?, downloadUrl?, storageError? }] }
 ```
 
 `handle.wait()` accepts the same `timeoutMs` and `pollMs` overrides as
@@ -119,7 +123,9 @@ The shape delivered to a step resumed from `pauseUntilSignal`:
 ```typescript
 interface VideoResultPayload {
   outputs: Array<{
-    fileId?: string; // present when storage was requested and succeeded
+    fileId?: string; // durable ref — present when storage was requested and succeeded
+    downloadUrl?: string; // ready-to-use short-lived URL (may have expired by resume)
+    downloadUrlExpiresAt?: string; // ISO expiry of downloadUrl, when present
     storageError?: string; // present when storage was requested but failed
   }>;
 }
@@ -139,8 +145,8 @@ to this shape when wiring local tests.
   `seed`, `guidance_scale`).
 
 Each returned image is `{ url, contentType?, width?, height?, fileId?,
-storageError? }`; any additional model-specific fields (e.g. `seed`) are returned
-on the result as-is.
+downloadUrl?, downloadUrlExpiresAt?, storageError? }`; any additional
+model-specific fields (e.g. `seed`) are returned on the result as-is.
 
 ## Gotchas
 
