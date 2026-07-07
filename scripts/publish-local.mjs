@@ -33,9 +33,9 @@ const PACKAGES = [
   "core",
   "fetch",
   "tools",
-  "orchestration",
-  "orchestration-runtime",
-  "orchestration-core",
+  "agent",
+  "agent-runtime",
+  "agent-core",
   "sandbox",
   "cli",
   "mcp",
@@ -103,6 +103,12 @@ try {
 
 const skipBuild = process.argv.includes("--skip-build");
 if (!skipBuild) {
+  // tsc leaves orphaned outputs after a source file/dir rename (e.g. tools/agent →
+  // tools/models), which then get published as dead files under the old name. Clean first.
+  // Remove dist AND *.tsbuildinfo — else tsc --incremental sees stale buildinfo, thinks
+  // outputs are current, and emits NOTHING (buildinfo can live at pkg root, not in dist).
+  console.log("• Cleaning stale dist + tsbuildinfo…");
+  run("pnpm", ["-r", "--filter=./packages/*", "exec", "sh", "-c", "rm -rf dist *.tsbuildinfo"]);
   console.log("• Building all packages…");
   run("pnpm", ["-r", "--filter=./packages/*", "build"]);
 }
