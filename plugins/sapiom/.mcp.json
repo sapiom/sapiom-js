@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sapiom-dev": {
+      "command": "npx",
+      "args": ["-y", "@sapiom/mcp"]
+    }
+  }
+}

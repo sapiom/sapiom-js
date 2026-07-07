@@ -1,0 +1,13 @@
+{
+  "name": "sapiom",
+  "displayName": "Sapiom",
+  "description": "Build, test, and deploy Sapiom agents — controlled, multi-step, deployable automations. Registers the sapiom-dev MCP server (npx -y @sapiom/mcp) and ships the sapiom-agent-authoring skill.",
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai"
+  },
+  "homepage": "https://docs.sapiom.ai",
+  "repository": "https://github.com/sapiom/sapiom-js",
+  "license": "MIT",
+  "keywords": ["sapiom", "agents", "automation", "mcp", "workflows"]
+}
