@@ -13,7 +13,7 @@ export interface StructuredError {
 }
 
 /** A typed, machine-readable failure from any core operation. */
-export class OrchestrationError extends Error {
+export class AgentOperationError extends Error {
   readonly code: string;
   readonly step?: string;
   readonly hint?: string;
@@ -21,7 +21,7 @@ export class OrchestrationError extends Error {
 
   constructor(err: StructuredError) {
     super(err.message);
-    this.name = 'OrchestrationError';
+    this.name = 'AgentOperationError';
     this.code = err.code;
     this.step = err.step;
     this.hint = err.hint;

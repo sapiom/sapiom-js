@@ -10,15 +10,15 @@
  */
 import {
   type NextStepDirective,
-  type OrchestrationExecutionContext,
-  type OrchestrationDefinition,
+  type AgentExecutionContext,
+  type AgentDefinition,
   InMemoryContextStore,
 } from "@sapiom/orchestration";
 import {
   type StepCompletionPayload,
   type StepDispatcher,
   type StepDispatchRequest,
-  type WorkflowRunnerCore,
+  type AgentRunnerCore,
   parseCorrelationId,
   STEP_COMPLETION_OUTCOME,
 } from "@sapiom/orchestration-runtime";
@@ -45,7 +45,7 @@ export interface LocalStepTrace {
 }
 
 export class LocalStubDispatcher implements StepDispatcher {
-  private core: WorkflowRunnerCore | null = null;
+  private core: AgentRunnerCore | null = null;
   private maxAttemptsPerStep: number | undefined;
   /** Run-scoped registry: launch correlationId → the result to resume a pause with. */
   private signals = new Map<string, unknown>();
@@ -62,11 +62,11 @@ export class LocalStubDispatcher implements StepDispatcher {
   readonly stubWarnings = new Set<string>();
 
   constructor(
-    private readonly definition: OrchestrationDefinition,
+    private readonly definition: AgentDefinition,
     private readonly stubs: StubFile,
   ) {}
 
-  setCore(core: WorkflowRunnerCore): void {
+  setCore(core: AgentRunnerCore): void {
     this.core = core;
   }
 
@@ -127,7 +127,7 @@ export class LocalStubDispatcher implements StepDispatcher {
       attempts: request.attempt,
       logger: makeLogger(logs),
       sapiom,
-    } as unknown as OrchestrationExecutionContext;
+    } as unknown as AgentExecutionContext;
 
     let directive: NextStepDirective;
     try {
@@ -181,7 +181,7 @@ export class LocalStubDispatcher implements StepDispatcher {
   }
 }
 
-function makeLogger(sink: LogEntry[]): OrchestrationExecutionContext["logger"] {
+function makeLogger(sink: LogEntry[]): AgentExecutionContext["logger"] {
   const at =
     (level: LogEntry["level"]) =>
     (msg: string, meta?: Record<string, unknown>) => {

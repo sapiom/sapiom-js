@@ -18,7 +18,7 @@ import { parseCorrelationId } from './dispatch.js';
 import { EXECUTION_STATUS, STEP_STATUS } from './execution-state.js';
 import type { ExecutionState, StepRow } from './execution-state.js';
 import { DEFAULT_MAX_ATTEMPTS_PER_STEP } from './runner-core.js';
-import type { WorkflowRunnerCore } from './runner-core.js';
+import type { AgentRunnerCore } from './runner-core.js';
 import type { ExecutionStore, StartExecutionArgs } from './stores.js';
 
 // ---------------------------------------------------------------------------
@@ -389,7 +389,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
  */
 export class SyncInProcessDispatcher implements StepDispatcher {
   private bodies = new Map<string, (input: unknown) => Promise<{ output: unknown; directive: NextStepDirective }>>();
-  private core: WorkflowRunnerCore | null = null;
+  private core: AgentRunnerCore | null = null;
   /**
    * The cap the simulated completion supplies to the runner. In the real engine
    * the completion (a separate request) carries its own max, independent of the
@@ -397,7 +397,7 @@ export class SyncInProcessDispatcher implements StepDispatcher {
    */
   private maxAttemptsPerStep = DEFAULT_MAX_ATTEMPTS_PER_STEP;
 
-  setCore(core: WorkflowRunnerCore): void {
+  setCore(core: AgentRunnerCore): void {
     this.core = core;
   }
 

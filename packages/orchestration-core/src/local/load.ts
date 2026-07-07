@@ -10,28 +10,28 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
-  type OrchestrationDefinition,
-  type WorkflowManifest,
+  type AgentDefinition,
+  type AgentManifest,
   buildManifest,
-  isOrchestrationDefinition,
-  workflowManifestSchema,
+  isAgentDefinition,
+  agentManifestSchema,
 } from '@sapiom/orchestration';
 import * as esbuild from 'esbuild';
 
-import { OrchestrationError } from '../errors.js';
+import { AgentOperationError } from '../errors.js';
 
 const LOCAL_SDK_VERSION = '0.0.0-local';
 
 export interface LoadedDefinition {
-  definition: OrchestrationDefinition;
-  manifest: WorkflowManifest;
+  definition: AgentDefinition;
+  manifest: AgentManifest;
 }
 
 /** Bundle + import + manifest a project directory's index.ts. */
 export async function loadDefinition(sourceDir: string): Promise<LoadedDefinition> {
   const entryFile = path.join(sourceDir, 'index.ts');
   if (!existsSync(entryFile)) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'NO_ENTRY',
       message: `No index.ts found in ${sourceDir}.`,
       hint: 'Run this from an orchestration project, or pass its directory.',
@@ -52,7 +52,7 @@ export async function loadDefinition(sourceDir: string): Promise<LoadedDefinitio
         logLevel: 'silent',
       });
     } catch (err) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'BUNDLE_FAILED',
         message: 'Failed to bundle the orchestration.',
         hint: err instanceof Error ? err.message : String(err),
@@ -60,27 +60,27 @@ export async function loadDefinition(sourceDir: string): Promise<LoadedDefinitio
     }
 
     const mod: Record<string, unknown> = await import(`file://${bundlePath}?t=${Date.now()}`);
-    const defs = Object.values(mod).filter(isOrchestrationDefinition);
+    const defs = Object.values(mod).filter(isAgentDefinition);
     if (defs.length === 0) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'NO_DEFINITION',
         message: 'No orchestration was exported from index.ts.',
-        hint: 'Export the result of defineOrchestration({ … }).',
+        hint: 'Export the result of defineAgent({ … }).',
       });
     }
     if (defs.length > 1) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'MULTIPLE_DEFINITIONS',
         message: 'index.ts exports more than one orchestration.',
-        hint: 'Export exactly one defineOrchestration({ … }) result.',
+        hint: 'Export exactly one defineAgent({ … }) result.',
       });
     }
 
     const definition = defs[0];
     const sha256 = createHash('sha256').update(readFileSync(bundlePath)).digest('hex');
-    const manifest = workflowManifestSchema.parse(
+    const manifest = agentManifestSchema.parse(
       buildManifest(definition, { sdkVersion: LOCAL_SDK_VERSION, artifact: { sha256, entryFile: 'definition.mjs' } }),
-    ) as WorkflowManifest;
+    ) as AgentManifest;
 
     return { definition, manifest };
   } finally {

@@ -12,7 +12,7 @@
  */
 
 // Errors
-export { OrchestrationError } from "./errors.js";
+export { AgentOperationError } from "./errors.js";
 export type { StructuredError } from "./errors.js";
 
 // HTTP client factory

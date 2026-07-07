@@ -1,5 +1,5 @@
 /**
- * Integration tests for WorkflowRunnerCore + InMemoryExecutionStore.
+ * Integration tests for AgentRunnerCore + InMemoryExecutionStore.
  *
  * Tests:
  *   (1) 2-step workflow runs to COMPLETED
@@ -7,7 +7,7 @@
  *   (3) Step pauses, then resumes via resetForResume → COMPLETED
  */
 
-import type { WorkflowManifest } from '@sapiom/orchestration';
+import type { AgentManifest } from '@sapiom/orchestration';
 import { DIRECTIVE_KIND } from '@sapiom/orchestration';
 
 import { ADVANCE_RESULT_KIND } from './advance-result.js';
@@ -15,13 +15,13 @@ import type { StepDispatcher } from './dispatch.js';
 import { EXECUTION_STATUS } from './execution-state.js';
 import { RetryLimitExceededError } from './errors.js';
 import { InMemoryExecutionStore, SyncInProcessDispatcher, resetIdCounter } from './in-memory-store.js';
-import { WorkflowRunnerCore, DEFAULT_MAX_ATTEMPTS_PER_STEP } from './runner-core.js';
+import { AgentRunnerCore, DEFAULT_MAX_ATTEMPTS_PER_STEP } from './runner-core.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeManifest(overrides: Partial<WorkflowManifest> & { steps: WorkflowManifest['steps'] }): WorkflowManifest {
+function makeManifest(overrides: Partial<AgentManifest> & { steps: AgentManifest['steps'] }): AgentManifest {
   return {
     protocol: 1,
     name: overrides.name ?? 'test-workflow',
@@ -29,17 +29,17 @@ function makeManifest(overrides: Partial<WorkflowManifest> & { steps: WorkflowMa
     sdkVersion: '0.0.0',
     artifact: { sha256: 'abc123', entryFile: 'workflow.mjs' },
     steps: overrides.steps,
-  } as WorkflowManifest;
+  } as AgentManifest;
 }
 
 function setupCore(store?: InMemoryExecutionStore): {
   store: InMemoryExecutionStore;
   dispatcher: SyncInProcessDispatcher;
-  core: WorkflowRunnerCore;
+  core: AgentRunnerCore;
 } {
   const s = store ?? new InMemoryExecutionStore();
   const dispatcher = new SyncInProcessDispatcher();
-  const core = new WorkflowRunnerCore({ store: s, dispatcher });
+  const core = new AgentRunnerCore({ store: s, dispatcher });
   dispatcher.setCore(core);
   return { store: s, dispatcher, core };
 }
@@ -52,7 +52,7 @@ beforeEach(() => {
   resetIdCounter();
 });
 
-describe('WorkflowRunnerCore', () => {
+describe('AgentRunnerCore', () => {
   // ── (1) 2-step workflow runs to COMPLETED ──────────────────────────────────
 
   describe('2-step workflow: COMPLETED', () => {
@@ -70,7 +70,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();
@@ -125,7 +125,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();
@@ -166,7 +166,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();
@@ -221,7 +221,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();
@@ -261,7 +261,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();
@@ -314,7 +314,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();
@@ -371,7 +371,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       // Use a custom dispatcher that resolves dispatch() immediately WITHOUT
@@ -382,7 +382,7 @@ describe('WorkflowRunnerCore', () => {
           /* hands off — never calls completeDispatchedStep */
         },
       };
-      const core = new WorkflowRunnerCore({ store, dispatcher: neverCompleteDispatcher });
+      const core = new AgentRunnerCore({ store, dispatcher: neverCompleteDispatcher });
 
       const executionId = await core.createExecution('test-workflow', 'step', {}, { manifest });
       // advance() dispatches step → store.dispatchedStepRowId is set → still RUNNING
@@ -417,7 +417,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();
@@ -451,7 +451,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'terminate' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, core } = setupCore();
@@ -477,7 +477,7 @@ describe('WorkflowRunnerCore', () => {
             inputSchema: null,
             transitions: [{ kind: 'fail' }],
           },
-        } as unknown as WorkflowManifest['steps'],
+        } as unknown as AgentManifest['steps'],
       });
 
       const { store, dispatcher, core } = setupCore();

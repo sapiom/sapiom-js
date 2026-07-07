@@ -21,7 +21,7 @@ import path from 'node:path';
 
 import * as esbuild from 'esbuild';
 
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 
 export interface DeployBundle {
   /** The bundled `index.ts` source (relative code inlined, npm imports external). */
@@ -33,12 +33,12 @@ export interface DeployBundle {
 /**
  * Bundle `<sourceDir>/index.ts`, inlining relative imports and externalizing npm
  * packages, then resolve each external package to the version installed in the
- * author's tree. Throws `OrchestrationError` (`NO_ENTRY` | `BUNDLE_FAILED`).
+ * author's tree. Throws `AgentOperationError` (`NO_ENTRY` | `BUNDLE_FAILED`).
  */
 export async function bundleForDeploy(sourceDir: string): Promise<DeployBundle> {
   const entryFile = path.join(sourceDir, 'index.ts');
   if (!existsSync(entryFile)) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'NO_ENTRY',
       message: `No index.ts found in ${sourceDir}.`,
       hint: 'Run this from an orchestration project, or pass its directory.',
@@ -64,7 +64,7 @@ export async function bundleForDeploy(sourceDir: string): Promise<DeployBundle> 
         logLevel: 'silent',
       });
     } catch (err) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'BUNDLE_FAILED',
         message: 'Failed to bundle the orchestration for deploy.',
         hint: err instanceof Error ? err.message : String(err),

@@ -1,27 +1,27 @@
 import {
   buildManifest,
-  defineOrchestration,
+  defineAgent,
   defineStep,
   fail,
   goto,
   pauseUntilSignal,
   terminate,
-  workflowManifestSchema,
-  type OrchestrationDefinition,
-  type WorkflowManifest,
+  agentManifestSchema,
+  type AgentDefinition,
+  type AgentManifest,
 } from "@sapiom/orchestration";
 import { CODING_RESULT_SIGNAL } from "@sapiom/tools";
 
 import { runLocal } from "./run-local.js";
 import type { StubFile } from "./stubs.js";
 
-function manifestFor(def: OrchestrationDefinition): WorkflowManifest {
-  return workflowManifestSchema.parse(
+function manifestFor(def: AgentDefinition): AgentManifest {
+  return agentManifestSchema.parse(
     buildManifest(def, {
       sdkVersion: "0.0.0-test",
       artifact: { sha256: "x", entryFile: "def.mjs" },
     }),
-  ) as WorkflowManifest;
+  ) as AgentManifest;
 }
 
 describe("runLocal", () => {
@@ -66,7 +66,7 @@ describe("runLocal", () => {
         return terminate({ pushed: input.pushed, sandbox: input.sandbox });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "repo-helper",
       entry: "prepare",
       steps: { prepare, work, done },
@@ -98,7 +98,7 @@ describe("runLocal", () => {
         return terminate({ cloneUrl: found?.cloneUrl ?? "(none)" });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "find",
       entry: "prepare",
       steps: { prepare },
@@ -145,7 +145,7 @@ describe("runLocal", () => {
           : fail("agent did not succeed");
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "gate",
       entry: "decide",
       steps: { decide },
@@ -202,7 +202,7 @@ describe("runLocal", () => {
         });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "coding-pause",
       entry: "launch",
       steps: { launch, review },
@@ -257,7 +257,7 @@ describe("runLocal", () => {
         });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "coding-resume",
       entry: "launch",
       steps: { launch, finish },
@@ -301,7 +301,7 @@ describe("runLocal", () => {
         return terminate({ pushed: push.pushed });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "attach-json",
       entry: "s",
       steps: { s: step },
@@ -351,7 +351,7 @@ describe("runLocal", () => {
         return terminate({});
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "unused",
       entry: "s",
       steps: { s, done },
@@ -396,7 +396,7 @@ describe("runLocal", () => {
         return terminate({ summary: input.summary });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "launch-key",
       entry: "launch",
       steps: { launch, review },
@@ -455,7 +455,7 @@ describe("runLocal", () => {
         return terminate({ ok: true });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "coding-fail",
       entry: "launch",
       steps: { launch, finalize },
@@ -497,7 +497,7 @@ describe("runLocal", () => {
         return terminate({ slugs: repos.map((r) => r.slug) });
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "list-shape",
       entry: "find",
       steps: { find },
@@ -552,7 +552,7 @@ describe("runLocal", () => {
         throw new Error("boom");
       },
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "unreliable",
       entry: "flaky",
       steps: { flaky },

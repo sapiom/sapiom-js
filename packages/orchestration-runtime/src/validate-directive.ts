@@ -2,7 +2,7 @@ import {
   DisallowedTransitionError,
   type NextStepDirective,
   UnknownStepError,
-  type WorkflowManifest,
+  type AgentManifest,
   isContinue,
   isFail,
   isPause,
@@ -21,7 +21,7 @@ import {
  * CONTINUE-target existence check so in-flight executions keep working.
  */
 export function validateDirective(
-  manifest: WorkflowManifest,
+  manifest: AgentManifest,
   stepName: string,
   directive: NextStepDirective,
 ): UnknownStepError | DisallowedTransitionError | null {

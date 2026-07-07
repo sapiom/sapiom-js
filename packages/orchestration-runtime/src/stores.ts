@@ -1,4 +1,4 @@
-import type { NextStepDirective, PauseUntilSignalDirective, WorkflowManifest } from '@sapiom/orchestration';
+import type { NextStepDirective, PauseUntilSignalDirective, AgentManifest } from '@sapiom/orchestration';
 
 import type { ExecutionState, StepRow } from './execution-state.js';
 
@@ -10,7 +10,7 @@ export interface StartExecutionArgs {
   readonly entryStep: string;
   readonly entryStepInput: unknown;
   readonly idempotencyKey?: string;
-  readonly manifest: WorkflowManifest;
+  readonly manifest: AgentManifest;
   readonly definitionId?: string | null;
   readonly buildRunId?: string | null;
   readonly scopedApiKeyId?: string | null;

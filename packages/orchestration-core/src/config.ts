@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 
 export const CONFIG_FILE = 'sapiom.json';
 
@@ -41,7 +41,7 @@ export function readConfig(dir: string): SapiomConfig | null {
   try {
     return JSON.parse(readFileSync(file, 'utf8')) as SapiomConfig;
   } catch {
-    throw new OrchestrationError({ code: 'BAD_CONFIG', message: `${CONFIG_FILE} is not valid JSON.` });
+    throw new AgentOperationError({ code: 'BAD_CONFIG', message: `${CONFIG_FILE} is not valid JSON.` });
   }
 }
 
@@ -51,7 +51,7 @@ export type LinkedSapiomConfig = SapiomConfig & { definitionId: string };
 export function requireConfig(dir: string): LinkedSapiomConfig {
   const cfg = readConfig(dir);
   if (!cfg?.definitionId) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'NOT_LINKED',
       message: 'This project is not linked to a Sapiom orchestration.',
       hint: 'Run: sapiom orchestrations link <name>',

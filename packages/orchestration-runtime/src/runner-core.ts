@@ -1,5 +1,5 @@
 /**
- * WorkflowRunnerCore — the host-agnostic stateful walker.
+ * AgentRunnerCore — the host-agnostic stateful walker.
  *
  * Owns the workflow's decision loop: it advances an execution one step at a
  * time, interprets the directive each step returns, and persists progress —
@@ -17,7 +17,7 @@ import {
   isRetry,
   isTerminate,
 } from '@sapiom/orchestration';
-import type { NextStepDirective, WorkflowManifest } from '@sapiom/orchestration';
+import type { NextStepDirective, AgentManifest } from '@sapiom/orchestration';
 
 import { ADVANCE_RESULT_KIND } from './advance-result.js';
 import type { AdvanceResult, CompleteDispatchOutcome, CreateExecutionOptions } from './advance-result.js';
@@ -33,7 +33,7 @@ import {
   PauseTimeoutError,
   RetryLimitExceededError,
   StaleDispatchCompletionError,
-  WorkflowFailedByStepError,
+  AgentFailedByStepError,
 } from './errors.js';
 import { validateManifestStepInput } from './manifest-validation.js';
 import { outcomeForFinishedRow } from './outcome.js';
@@ -81,7 +81,7 @@ export const DEFAULT_DISPATCH_TIMEOUT_MS = 15 * 60 * 1000;
  *
  * No chaining, no queue knowledge, no loop — those belong to the caller.
  */
-export class WorkflowRunnerCore {
+export class AgentRunnerCore {
   // Cast to ObserverWithSpine so the spine hooks are reachable via optional
   // chaining. The hooks are added to RuntimeObserver in stores.ts per NOTES.md;
   // until that patch lands, the cast is the compile-time bridge.
@@ -439,8 +439,8 @@ export class WorkflowRunnerCore {
    */
   private async dispatchOneStep(
     row: ExecutionState,
-    manifest: WorkflowManifest,
-    stepManifest: WorkflowManifest['steps'][string],
+    manifest: AgentManifest,
+    stepManifest: AgentManifest['steps'][string],
     maxAttemptsPerStep: number,
   ): Promise<AdvanceResult> {
     const executionId = row.id;
@@ -630,7 +630,7 @@ export class WorkflowRunnerCore {
 
     if (isFail(directive)) {
       const stepName = row.currentStep ?? '(unknown step)';
-      const err = new WorkflowFailedByStepError(stepName, directive.reason ?? null);
+      const err = new AgentFailedByStepError(stepName, directive.reason ?? null);
       const won = await this.deps.store.failExecution({
         executionId: row.id,
         expectedVersion: row.version,

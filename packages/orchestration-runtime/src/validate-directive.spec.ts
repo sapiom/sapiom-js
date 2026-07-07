@@ -1,10 +1,10 @@
-import { DisallowedTransitionError, UnknownStepError, type WorkflowManifest, goto, retry, terminate } from '@sapiom/orchestration';
+import { DisallowedTransitionError, UnknownStepError, type AgentManifest, goto, retry, terminate } from '@sapiom/orchestration';
 
 import { decideRetry, validateDirective } from './validate-directive.js';
 
-type Steps = WorkflowManifest['steps'];
+type Steps = AgentManifest['steps'];
 
-function manifest(steps: Steps): WorkflowManifest {
+function manifest(steps: Steps): AgentManifest {
   return {
     protocol: 1,
     name: 'w',
@@ -12,7 +12,7 @@ function manifest(steps: Steps): WorkflowManifest {
     sdkVersion: '0.0.0',
     artifact: { sha256: 'x', entryFile: 'w.mjs' },
     steps,
-  } as WorkflowManifest;
+  } as AgentManifest;
 }
 
 describe('validateDirective', () => {

@@ -5,14 +5,14 @@
  */
 import { execFileSync } from 'node:child_process';
 
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 
 function git(args: string[], cwd: string): string {
   try {
     return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   } catch (err) {
     const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'GIT',
       message: `git ${args[0]} failed.`,
       hint: stderr || (err instanceof Error ? err.message : String(err)),
@@ -25,7 +25,7 @@ export function assertDeployable(dir: string): void {
   try {
     execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: dir, stdio: 'ignore' });
   } catch {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'NOT_GIT',
       message: 'Not a git repository.',
       hint: 'Initialize one: git init && git add -A && git commit -m "init"',
@@ -34,7 +34,7 @@ export function assertDeployable(dir: string): void {
   try {
     execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, stdio: 'ignore' });
   } catch {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'NO_COMMITS',
       message: 'This repository has no commits yet.',
       hint: 'Commit your work: git add -A && git commit -m "…"',

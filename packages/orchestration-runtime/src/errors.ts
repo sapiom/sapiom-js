@@ -3,13 +3,13 @@
  * @sapiom/orchestration contract.
  *
  * Public errors (UnknownStepError, StepInputValidationError,
- * DisallowedTransitionError, WorkflowError) come from @sapiom/orchestration and
+ * DisallowedTransitionError, AgentError) come from @sapiom/orchestration and
  * are not repeated here.
  */
-import { WorkflowError } from '@sapiom/orchestration';
+import { AgentError } from '@sapiom/orchestration';
 
 /** A step asked to retry more times than `maxAttemptsPerStep`. */
-export class RetryLimitExceededError extends WorkflowError {
+export class RetryLimitExceededError extends AgentError {
   readonly stepName: string;
   readonly attempts: number;
   readonly maxAttempts: number;
@@ -26,12 +26,12 @@ export class RetryLimitExceededError extends WorkflowError {
  * A step explicitly failed the workflow via the FAIL directive (vs. the
  * cap-exceeded path that produces `RetryLimitExceededError`).
  */
-export class WorkflowFailedByStepError extends WorkflowError {
+export class AgentFailedByStepError extends AgentError {
   readonly stepName: string;
   readonly reason: string | null;
   constructor(stepName: string, reason: string | null) {
-    super(`Workflow failed by step '${stepName}' via FAIL directive${reason ? ` (reason: ${reason})` : ''}`);
-    this.name = 'WorkflowFailedByStepError';
+    super(`Agent failed by step '${stepName}' via FAIL directive${reason ? ` (reason: ${reason})` : ''}`);
+    this.name = 'AgentFailedByStepError';
     this.stepName = stepName;
     this.reason = reason;
   }
@@ -41,7 +41,7 @@ export class WorkflowFailedByStepError extends WorkflowError {
  * A step completion arrived for a dispatched step attempt the runner is no
  * longer waiting on.
  */
-export class StaleDispatchCompletionError extends WorkflowError {
+export class StaleDispatchCompletionError extends AgentError {
   readonly executionId: string;
   readonly correlationId: string;
   constructor(executionId: string, correlationId: string, detail: string) {
@@ -55,7 +55,7 @@ export class StaleDispatchCompletionError extends WorkflowError {
 /**
  * A dispatched step attempt produced no completion by its deadline.
  */
-export class DispatchDeadlineExceededError extends WorkflowError {
+export class DispatchDeadlineExceededError extends AgentError {
   readonly stepName: string;
   readonly deadlineAt: Date;
   constructor(stepName: string, deadlineAt: Date) {
@@ -69,7 +69,7 @@ export class DispatchDeadlineExceededError extends WorkflowError {
 /**
  * A paused execution's `paused_until` elapsed with no signal.
  */
-export class PauseTimeoutError extends WorkflowError {
+export class PauseTimeoutError extends AgentError {
   readonly signalName: string;
   readonly pausedUntil: Date;
   constructor(signalName: string, pausedUntil: Date) {
@@ -81,7 +81,7 @@ export class PauseTimeoutError extends WorkflowError {
 }
 
 /** Caller invoked resume on an execution that isn't in a resumable state. */
-export class NotResumableError extends WorkflowError {
+export class NotResumableError extends AgentError {
   readonly executionId: string;
   readonly status: string;
   constructor(executionId: string, status: string) {

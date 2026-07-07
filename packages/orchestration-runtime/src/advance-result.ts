@@ -1,4 +1,4 @@
-import type { PauseUntilSignalDirective, WorkflowManifest } from '@sapiom/orchestration';
+import type { PauseUntilSignalDirective, AgentManifest } from '@sapiom/orchestration';
 
 /**
  * The `kind` of an {@link AdvanceResult} — what the runner tells its caller
@@ -45,7 +45,7 @@ export interface CreateExecutionOptions {
   /** Unique key for exactly-once create semantics (optional). */
   readonly idempotencyKey?: string;
   /** Pinned manifest the execution runs against — REQUIRED. */
-  readonly manifest: WorkflowManifest;
+  readonly manifest: AgentManifest;
   readonly definitionId?: string | null;
   readonly buildRunId?: string | null;
   readonly scopedApiKeyId?: string | null;

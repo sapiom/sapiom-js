@@ -11,7 +11,7 @@ import path from 'node:path';
 
 import { bundleForDeploy } from './bundle.js';
 import { GatewayClient } from './client.js';
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 import { assertDeployable, pushSynthesizedTree } from './git.js';
 
 interface BuildRun {
@@ -48,7 +48,7 @@ export interface DeployResult {
  * Validates the git state, mints push credentials, pushes HEAD, triggers a
  * build, and polls until the build reaches a terminal status.
  *
- * Throws `OrchestrationError` on git, network, or build failures.
+ * Throws `AgentOperationError` on git, network, or build failures.
  */
 export async function deploy(opts: DeployOptions, client: GatewayClient): Promise<DeployResult> {
   const { projectDir, definitionId, branch = 'main' } = opts;
@@ -83,7 +83,7 @@ export async function deploy(opts: DeployOptions, client: GatewayClient): Promis
   const triggered = await client.post<BuildRun>(`/definitions/${definitionId}/builds`, {});
   const buildRunId = triggered.buildRunId ?? triggered.id;
   if (!buildRunId) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'BUILD_NO_ID',
       message: 'The build was triggered but no build id was returned.',
     });
@@ -91,7 +91,7 @@ export async function deploy(opts: DeployOptions, client: GatewayClient): Promis
 
   const final = await pollBuild(client, definitionId, buildRunId);
   if (final.status !== 'ready') {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'BUILD_FAILED',
       message: `Build ${final.status}.`,
       step: 'build',
@@ -112,7 +112,7 @@ async function pollBuild(client: GatewayClient, definitionId: string, buildRunId
     await sleep(delay);
     elapsed += delay;
   }
-  throw new OrchestrationError({
+  throw new AgentOperationError({
     code: 'BUILD_TIMEOUT',
     message: 'Build did not finish in time.',
     step: 'build',

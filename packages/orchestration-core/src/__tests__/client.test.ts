@@ -52,7 +52,7 @@ describe('createClient / GatewayClient', () => {
     expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk_test');
   });
 
-  it('throws OrchestrationError with HTTP_4xx code on error status', async () => {
+  it('throws AgentOperationError with HTTP_4xx code on error status', async () => {
     mockFetch([{ status: 401, body: { message: 'Unauthorized' } }]);
     const client = createClient({ host: 'https://example.com', apiKey: 'bad' });
     await expect(client.get('/foo')).rejects.toMatchObject({

@@ -12,17 +12,17 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import type {
-  OrchestrationDefinition,
-  WorkflowManifest,
+  AgentDefinition,
+  AgentManifest,
 } from "@sapiom/orchestration";
 import {
   DEFAULT_MAX_ATTEMPTS_PER_STEP,
   InMemoryExecutionStore,
   NOOP_OBSERVER,
-  WorkflowRunnerCore,
+  AgentRunnerCore,
 } from "@sapiom/orchestration-runtime";
 
-import { OrchestrationError } from "../errors.js";
+import { AgentOperationError } from "../errors.js";
 import { LocalStubDispatcher, type LocalStepTrace } from "./dispatcher.js";
 import { loadDefinition } from "./load.js";
 import { parseStubFile, type StubFile } from "./stubs.js";
@@ -38,7 +38,7 @@ function loadStubsFile(sourceDir: string): StubFile | undefined {
   try {
     raw = JSON.parse(readFileSync(file, "utf8"));
   } catch (err) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: "STUBS_INVALID",
       message: `${STUBS_FILE} is not valid JSON.`,
       hint: err instanceof Error ? err.message : String(err),
@@ -48,8 +48,8 @@ function loadStubsFile(sourceDir: string): StubFile | undefined {
 }
 
 export interface RunLocalOptions {
-  definition: OrchestrationDefinition;
-  manifest: WorkflowManifest;
+  definition: AgentDefinition;
+  manifest: AgentManifest;
   /** The workflow's entry-step input. */
   input?: unknown;
   /** Stub overrides (already parsed). Unmatched calls use built-in defaults. */
@@ -96,7 +96,7 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
   // result that should resume a pause on its signal.
   const signals = new Map<string, unknown>();
   dispatcher.setSignals(signals);
-  const core = new WorkflowRunnerCore({
+  const core = new AgentRunnerCore({
     store,
     dispatcher,
     observer: NOOP_OBSERVER,

@@ -1,7 +1,7 @@
 /**
  * @sapiom/orchestration-runtime — the host-agnostic orchestration runtime.
  *
- * Exports the walker (`WorkflowRunnerCore`), the decision logic it uses
+ * Exports the walker (`AgentRunnerCore`), the decision logic it uses
  * (directive validation, the retry/cap rule, terminal-outcome mapping), the
  * dispatch + completion contracts, and the host interfaces it runs against
  * (`ExecutionStore`, `StepDispatcher`, `RuntimeObserver`) — plus an in-memory

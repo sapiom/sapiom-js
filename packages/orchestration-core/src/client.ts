@@ -3,7 +3,7 @@
  * passed explicitly (base URL + API key) — no process.env reads, no global
  * state — so the client is usable from a CLI, an MCP tool, or a test harness.
  */
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 
 /**
  * Production host for the Sapiom backend tenant API.
@@ -47,7 +47,7 @@ export class GatewayClient {
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'NETWORK',
         message: `Could not reach ${this.base}.`,
         hint: err instanceof Error ? err.message : String(err),
@@ -57,7 +57,7 @@ export class GatewayClient {
     const text = await res.text();
     const data = text ? safeParse(text) : undefined;
     if (!res.ok) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: `HTTP_${res.status}`,
         message: messageFrom(data) ?? `Request failed (${res.status} ${res.statusText}).`,
         hint:

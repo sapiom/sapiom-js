@@ -8,7 +8,7 @@
  * id in the body alongside the execution input (not as a path segment).
  */
 import { GatewayClient } from './client.js';
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 
 export interface RunOptions {
   /** Server-side definition ID. */
@@ -29,7 +29,7 @@ export interface RunResult {
 /**
  * Start an execution of the named orchestration definition.
  *
- * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
+ * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */
 export async function run(opts: RunOptions, client: GatewayClient): Promise<RunResult> {
   const { definitionId, input = {} } = opts;
@@ -43,7 +43,7 @@ export async function run(opts: RunOptions, client: GatewayClient): Promise<RunR
   );
   const executionId = res.executionId ?? res.id;
   if (!executionId) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'RUN_NO_ID',
       message: 'The execution was started but no execution id was returned.',
     });
@@ -63,7 +63,7 @@ export function parseJsonInput(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'BAD_INPUT',
       message: 'Input is not valid JSON.',
       hint: 'Pass a valid JSON string, e.g. \'{"key":"value"}\'',

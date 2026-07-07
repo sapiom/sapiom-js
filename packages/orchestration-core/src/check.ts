@@ -10,10 +10,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { assertValidGraph, buildManifest, isOrchestrationDefinition, workflowManifestSchema } from '@sapiom/orchestration';
+import { assertValidGraph, buildManifest, isAgentDefinition, agentManifestSchema } from '@sapiom/orchestration';
 import * as esbuild from 'esbuild';
 
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 
 /**
  * Run the project's TypeScript compiler in no-emit mode. Returns a warning
@@ -31,7 +31,7 @@ function runTypecheck(sourceDir: string): string | null {
   } catch (err) {
     const e = err as { stdout?: Buffer; stderr?: Buffer };
     const output = (e.stdout?.toString() ?? '').trim() || (e.stderr?.toString() ?? '').trim();
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'TYPECHECK_FAILED',
       message: 'The orchestration has type errors.',
       hint: output || 'Run `tsc --noEmit` for details.',
@@ -60,7 +60,7 @@ export interface CheckResult {
  * Validate an orchestration locally: bundle index.ts with esbuild, load it,
  * derive and Zod-parse the manifest, and check the step graph.
  *
- * Throws `OrchestrationError` on any validation failure (codes:
+ * Throws `AgentOperationError` on any validation failure (codes:
  * `NO_ENTRY` | `TYPECHECK_FAILED` | `BUNDLE_FAILED` | `NO_DEFINITION` |
  * `MULTIPLE_DEFINITIONS` | `MANIFEST_INVALID` | `GRAPH_INVALID`).
  */
@@ -69,7 +69,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
   const entryFile = path.join(sourceDir, 'index.ts');
 
   if (!existsSync(entryFile)) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'NO_ENTRY',
       message: `No index.ts found in ${sourceDir}.`,
       hint: 'Run this from an orchestration project, or pass its directory.',
@@ -96,7 +96,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
         logLevel: 'silent',
       });
     } catch (err) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'BUNDLE_FAILED',
         message: 'Failed to bundle the orchestration.',
         hint: err instanceof Error ? err.message : String(err),
@@ -109,21 +109,21 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     const mod: Record<string, unknown> = await import(`file://${bundlePath}?t=${Date.now()}`);
     const defs: unknown[] = [];
     for (const value of Object.values(mod)) {
-      if (isOrchestrationDefinition(value) && !defs.includes(value)) defs.push(value);
+      if (isAgentDefinition(value) && !defs.includes(value)) defs.push(value);
     }
 
     if (defs.length === 0) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'NO_DEFINITION',
         message: 'No orchestration was exported from index.ts.',
-        hint: 'Export the result of defineOrchestration({ … }).',
+        hint: 'Export the result of defineAgent({ … }).',
       });
     }
     if (defs.length > 1) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'MULTIPLE_DEFINITIONS',
         message: 'index.ts exports more than one orchestration.',
-        hint: 'Export exactly one defineOrchestration({ … }) result.',
+        hint: 'Export exactly one defineAgent({ … }) result.',
       });
     }
 
@@ -132,11 +132,11 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
 
     let manifest: unknown;
     try {
-      manifest = workflowManifestSchema.parse(
+      manifest = agentManifestSchema.parse(
         buildManifest(def, { sdkVersion: LOCAL_SDK_VERSION, artifact: { sha256, entryFile: 'definition.mjs' } }),
       );
     } catch (err) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'MANIFEST_INVALID',
         message: 'The orchestration produced an invalid manifest.',
         hint: err instanceof Error ? err.message : String(err),
@@ -146,7 +146,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     try {
       warnings.push(...assertValidGraph(manifest as Parameters<typeof assertValidGraph>[0]));
     } catch (err) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'GRAPH_INVALID',
         message: 'The orchestration graph is invalid.',
         hint: err instanceof Error ? err.message : String(err),

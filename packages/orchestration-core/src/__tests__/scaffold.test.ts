@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { OrchestrationError } from "../errors";
+import { AgentOperationError } from "../errors";
 import { registryFor, scaffold } from "../scaffold";
 
 // Point template resolution at the bundled templates dir (two levels up from
@@ -226,9 +226,9 @@ describe("scaffold .npmrc (local registry)", () => {
   });
 });
 
-describe("OrchestrationError", () => {
+describe("AgentOperationError", () => {
   it("serialises to a StructuredError shape", () => {
-    const err = new OrchestrationError({
+    const err = new AgentOperationError({
       code: "TEST",
       message: "msg",
       hint: "fix it",
@@ -238,6 +238,6 @@ describe("OrchestrationError", () => {
       message: "msg",
       hint: "fix it",
     });
-    expect(err.name).toBe("OrchestrationError");
+    expect(err.name).toBe("AgentOperationError");
   });
 });

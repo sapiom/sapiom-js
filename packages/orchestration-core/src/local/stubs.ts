@@ -16,7 +16,7 @@
  * or handle methods (`repository.pushFromSandbox`, `sandbox.exec`). Scoped per
  * step so editing one step's overrides never affects another.
  */
-import { OrchestrationError } from '../errors.js';
+import { AgentOperationError } from '../errors.js';
 
 export const STUB_FILE_VERSION = 1;
 
@@ -34,7 +34,7 @@ export interface StubFile {
 
 /**
  * Validate an untrusted (file/agent-supplied) value into a {@link StubFile}.
- * Throws `OrchestrationError` (code `STUBS_INVALID`) with an actionable message
+ * Throws `AgentOperationError` (code `STUBS_INVALID`) with an actionable message
  * on any structural problem.
  */
 export function parseStubFile(raw: unknown): StubFile {
@@ -64,8 +64,8 @@ export function parseStubFile(raw: unknown): StubFile {
   return { version, steps };
 }
 
-function invalid(detail: string): OrchestrationError {
-  return new OrchestrationError({
+function invalid(detail: string): AgentOperationError {
+  return new AgentOperationError({
     code: 'STUBS_INVALID',
     message: `Invalid stub file: ${detail}`,
     hint: 'Expected { "version": 1, "steps": { "<step>": { "<capability.path>": <response> | [<response>] } } }.',

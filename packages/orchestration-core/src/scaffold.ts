@@ -23,7 +23,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { OrchestrationError } from "./errors.js";
+import { AgentOperationError } from "./errors.js";
 
 /**
  * Directory of this compiled module, resolved for BOTH build formats so the
@@ -155,7 +155,7 @@ export function resolveTemplate(name: string, templatesDir?: string): string {
   const dir = path.join(getTemplatesDir(templatesDir), name);
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     const available = listTemplates(templatesDir);
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: "UNKNOWN_TEMPLATE",
       message:
         `Unknown template '${name}'.` +
@@ -283,7 +283,7 @@ export interface ScaffoldResult {
 /**
  * Initialize a new orchestration project from a bundled template.
  *
- * Throws `OrchestrationError` (code `DIR_NOT_EMPTY` | `UNKNOWN_TEMPLATE`) on
+ * Throws `AgentOperationError` (code `DIR_NOT_EMPTY` | `UNKNOWN_TEMPLATE`) on
  * precondition failures; all other errors propagate as-is.
  */
 export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
@@ -292,7 +292,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
   const projectName = opts.projectName ?? path.basename(targetDir);
 
   if (existsSync(targetDir) && readdirSync(targetDir).length > 0) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: "DIR_NOT_EMPTY",
       message: `Target directory '${targetDir}' already exists and is not empty.`,
     });

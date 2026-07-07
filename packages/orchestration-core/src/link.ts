@@ -6,7 +6,7 @@
  * itself — that is the CLI command's responsibility, keeping I/O at the edges.
  */
 import { GatewayClient } from './client.js';
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 
 export interface DefinitionSummary {
   id: string;
@@ -29,7 +29,7 @@ export interface LinkResult {
 /**
  * Resolve (or create) a server-side orchestration definition by name.
  *
- * Throws `OrchestrationError` (code `NOT_FOUND` | `HTTP_*` | `NETWORK`) on
+ * Throws `AgentOperationError` (code `NOT_FOUND` | `HTTP_*` | `NETWORK`) on
  * failures.
  */
 export async function link(opts: LinkOptions, client: GatewayClient): Promise<LinkResult> {
@@ -38,7 +38,7 @@ export async function link(opts: LinkOptions, client: GatewayClient): Promise<Li
 
   if (!def) {
     if (!opts.create) {
-      throw new OrchestrationError({
+      throw new AgentOperationError({
         code: 'NOT_FOUND',
         message: `No orchestration named '${opts.name}'.`,
         hint: 'Create it with { create: true }, or pass the name of an existing one.',

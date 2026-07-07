@@ -1,4 +1,4 @@
-import type { WorkflowManifest } from '@sapiom/orchestration';
+import type { AgentManifest } from '@sapiom/orchestration';
 
 /**
  * Single source of truth for an execution's status values. (Mirrors the
@@ -36,7 +36,7 @@ export interface ExecutionState {
   readonly status: ExecutionStatus;
   /** Optimistic-lock token; every mutation is conditioned on it (CAS). */
   readonly version: number;
-  readonly manifest: WorkflowManifest;
+  readonly manifest: AgentManifest;
   /** The value the execution was started with (the entry step's input). */
   readonly input: unknown;
   /** The step the next advance will run; null once finished. */
