@@ -33,6 +33,11 @@
       "import": "./dist/esm/agent/index.js",
       "require": "./dist/cjs/agent/index.js"
     },
+    "./llm": {
+      "types": "./dist/cjs/llm/index.d.ts",
+      "import": "./dist/esm/llm/index.js",
+      "require": "./dist/cjs/llm/index.js"
+    },
     "./file-storage": {
       "types": "./dist/cjs/file-storage/index.d.ts",
       "import": "./dist/esm/file-storage/index.js",

@@ -30,6 +30,12 @@ import type {
   RunHandle,
   RunStatus,
 } from "../agent/index.js";
+import { LLM_ROUTE_RESULT_SIGNAL } from "../llm/index.js";
+import type {
+  LlmGrantLink,
+  LlmRouteHandle,
+  LlmRouteResultPayload,
+} from "../llm/index.js";
 import { ORCHESTRATIONS_RESULT_SIGNAL } from "../orchestrations/index.js";
 import type {
   OrchestrationRunResult,
@@ -670,6 +676,51 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           finishedAt: "2099-01-01T00:00:00.000Z",
         }));
       },
+    },
+    llm: {
+      submit: (spec) => {
+        const executionId = `stub-exec-${++launchSeq}`;
+        const stubLink: LlmGrantLink = {
+          anthropicBaseUrl: "https://llm.local",
+          apiKey: "sapiom-grant-stub",
+          model: spec.model ?? "smart",
+          expiresAtMs: 4102444800000,
+          usage: "single_request",
+        };
+        const payload = r("llm.submit", [spec], () => ({
+          executionId,
+          status: "granted" as const,
+          link: stubLink,
+          error: null,
+        })) as LlmRouteResultPayload;
+        const handle: LlmRouteHandle = {
+          executionId,
+          dispatch: {
+            correlationId: executionId,
+            resultSignal: LLM_ROUTE_RESULT_SIGNAL,
+          },
+          status: () =>
+            Promise.resolve(payload.status === "granted" ? "granted" : "failed"),
+          wait: () => Promise.resolve(payload),
+        };
+        // Register the resume payload so a local `pauseUntilSignal` on this handle
+        // resolves with an LlmRouteResultPayload.
+        return dispatchable(handle, opts.signals);
+      },
+      redeem: <T = Record<string, unknown>>(
+        link: LlmGrantLink,
+        request: Record<string, unknown>,
+      ) =>
+        Promise.resolve(
+          r("llm.redeem", [link, request], () => ({
+            id: "stub-msg",
+            type: "message",
+            role: "assistant",
+            model: link.model,
+            content: [{ type: "text", text: "(stub) llm reply" }],
+            stop_reason: "end_turn",
+          })) as T,
+        ),
     },
     fileStorage: {
       upload: (input) =>
