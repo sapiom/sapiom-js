@@ -39,7 +39,7 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
  */
 export const CODING_RESULT_SIGNAL = "agent.coding.result";
 
-/** Run lifecycle, mirrored from the gateway's `AgentsRunStatus`. */
+/** Run lifecycle, mirrored from the gateway's `ModelsRunStatus`. */
 export type RunStatus =
   | "pending"
   | "queued"
@@ -403,19 +403,19 @@ export const coding = { run: codingRun, launch: codingLaunch };
  * paused on an agent-run handle resumes on this; it's the handle's
  * `dispatch.resultSignal`.
  */
-export const AGENT_RUN_RESULT_SIGNAL = "agent.run.result";
+export const MODEL_RUN_RESULT_SIGNAL = "agent.run.result";
 
-/** Run lifecycle, mirrored from the gateway's `AgentRunStatus` (no `queued`). */
-export type AgentRunStatus = "pending" | "running" | "completed" | "failed";
-const AGENT_TERMINAL = new Set<AgentRunStatus>(["completed", "failed"]);
+/** Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`). */
+export type ModelRunStatus = "pending" | "running" | "completed" | "failed";
+const MODEL_TERMINAL = new Set<ModelRunStatus>(["completed", "failed"]);
 
 /** A remote MCP server (Streamable HTTP) the agent may call tools on. */
-export interface AgentMcp {
+export interface ModelMcp {
   url: string;
   headers?: Record<string, string>;
 }
 
-export interface AgentRunSpec {
+export interface ModelRunSpec {
   /** The prompt for the agent. */
   prompt: string;
   /** System prompt steering the agent. */
@@ -425,10 +425,10 @@ export interface AgentRunSpec {
   /** Max output tokens per turn. */
   maxTokens?: number;
   /** Remote MCP servers the agent may call tools on (network round-trip per call). */
-  mcps?: AgentMcp[];
+  mcps?: ModelMcp[];
 }
 
-export interface AgentRunOutcome {
+export interface ModelRunOutcome {
   success: boolean;
   stopReason: string;
   turns: number;
@@ -438,17 +438,17 @@ export interface AgentRunOutcome {
   usage: CodingRunUsage;
 }
 
-export interface AgentRunError {
+export interface ModelRunError {
   message: string;
 }
 
-export interface AgentRunResult {
+export interface ModelRunResult {
   runId: string;
-  status: AgentRunStatus;
+  status: ModelRunStatus;
   /** The agent's final text output (null while non-terminal). */
   output: string | null;
-  result: AgentRunOutcome | null;
-  error: AgentRunError | null;
+  result: ModelRunOutcome | null;
+  error: ModelRunError | null;
 }
 
 /**
@@ -456,44 +456,44 @@ export interface AgentRunResult {
  * can be handed to `pauseUntilSignal(handle, { resumeStep })` — or `wait()`-ed
  * inline. Unlike coding there is no `sandbox` (the loop runs in-server).
  */
-export interface AgentRunHandle extends DispatchHandle {
+export interface ModelRunHandle extends DispatchHandle {
   runId: string;
-  status(): Promise<AgentRunStatus>;
-  wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<AgentRunResult>;
+  status(): Promise<ModelRunStatus>;
+  wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<ModelRunResult>;
 }
 
 /**
  * The instant run's terminal result as it arrives at a step resumed from
  * `pauseUntilSignal(runHandle, { resumeStep })` — the signal payload delivered as
  * that step's `input`. No live handles cross the wire, so it equals
- * {@link AgentRunResult}. Annotate a resumed step's input with this.
+ * {@link ModelRunResult}. Annotate a resumed step's input with this.
  */
-export type AgentRunResultPayload = AgentRunResult;
+export type ModelRunResultPayload = ModelRunResult;
 
-/** Thrown by {@link agentRunResultSchema}.parse on a malformed resume payload. */
-export class AgentRunResultSchemaError extends Error {}
+/** Thrown by {@link modelRunResultSchema}.parse on a malformed resume payload. */
+export class ModelRunResultSchemaError extends Error {}
 
-/** Runtime validator for {@link AgentRunResultPayload}. */
-export const agentRunResultSchema = {
-  parse(value: unknown): AgentRunResultPayload {
+/** Runtime validator for {@link ModelRunResultPayload}. */
+export const modelRunResultSchema = {
+  parse(value: unknown): ModelRunResultPayload {
     const fail = (msg: string): never => {
-      throw new AgentRunResultSchemaError(`invalid agent run result payload: ${msg}`);
+      throw new ModelRunResultSchemaError(`invalid agent run result payload: ${msg}`);
     };
     if (!value || typeof value !== "object") fail("not an object");
     const v = value as Record<string, unknown>;
     if (typeof v.runId !== "string") fail("runId must be a string");
-    if (!(["pending", "running", "completed", "failed"] as AgentRunStatus[]).includes(v.status as AgentRunStatus))
-      fail("status must be a valid AgentRunStatus");
+    if (!(["pending", "running", "completed", "failed"] as ModelRunStatus[]).includes(v.status as ModelRunStatus))
+      fail("status must be a valid ModelRunStatus");
     if (v.output !== null && typeof v.output !== "string") fail("output must be a string or null");
     if (v.result !== null && (typeof v.result !== "object" || !v.result)) fail("result must be an object or null");
     if (v.error !== null && (typeof v.error !== "object" || !v.error)) fail("error must be an object or null");
-    return value as AgentRunResultPayload;
+    return value as ModelRunResultPayload;
   },
 };
 
 // --- wire shapes (snake_case, as served by the gateway serializer) ---
 
-interface AgentWireResult {
+interface ModelWireResult {
   success: boolean;
   stop_reason: string;
   turns: number;
@@ -509,19 +509,19 @@ interface AgentWireResult {
   };
 }
 
-interface AgentRunDoc {
+interface ModelRunDoc {
   data: {
     id: string;
     attributes: {
-      status: AgentRunStatus;
+      status: ModelRunStatus;
       output?: string | null;
-      result?: AgentWireResult | null;
+      result?: ModelWireResult | null;
       error?: { message: string } | null;
     };
   };
 }
 
-function mapAgentResult(r: AgentWireResult | null | undefined): AgentRunOutcome | null {
+function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome | null {
   if (!r) return null;
   return {
     success: r.success,
@@ -540,7 +540,7 @@ function mapAgentResult(r: AgentWireResult | null | undefined): AgentRunOutcome 
   };
 }
 
-function buildAgentBody(spec: AgentRunSpec): Record<string, unknown> {
+function buildModelBody(spec: ModelRunSpec): Record<string, unknown> {
   return {
     prompt: spec.prompt,
     system: spec.system,
@@ -551,24 +551,24 @@ function buildAgentBody(spec: AgentRunSpec): Record<string, unknown> {
 }
 
 export async function launch(
-  spec: AgentRunSpec,
+  spec: ModelRunSpec,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
-): Promise<AgentRunHandle> {
-  const doc = await transport.request<AgentRunDoc>(`${baseUrl}/v1/agent/runs`, {
+): Promise<ModelRunHandle> {
+  const doc = await transport.request<ModelRunDoc>(`${baseUrl}/v1/agent/runs`, {
     method: "POST",
-    body: JSON.stringify(buildAgentBody(spec)),
+    body: JSON.stringify(buildModelBody(spec)),
     headers: workflowResumeHeaders(transport.resumeToken),
   });
   const runId = doc.data.id;
 
   const fetchDoc = () =>
-    transport.request<AgentRunDoc>(`${baseUrl}/v1/agent/runs/${encodeURIComponent(runId)}`);
-  const toResult = (d: AgentRunDoc): AgentRunResult => ({
+    transport.request<ModelRunDoc>(`${baseUrl}/v1/agent/runs/${encodeURIComponent(runId)}`);
+  const toResult = (d: ModelRunDoc): ModelRunResult => ({
     runId,
     status: d.data.attributes.status,
     output: d.data.attributes.output ?? null,
-    result: mapAgentResult(d.data.attributes.result),
+    result: mapModelResult(d.data.attributes.result),
     error: d.data.attributes.error ?? null,
   });
 
@@ -576,7 +576,7 @@ export async function launch(
     runId,
     // Framework plumbing for `pauseUntilSignal` — correlationId is the run id (the
     // join key x402 echoes back when it forwards completion).
-    dispatch: { correlationId: runId, resultSignal: AGENT_RUN_RESULT_SIGNAL },
+    dispatch: { correlationId: runId, resultSignal: MODEL_RUN_RESULT_SIGNAL },
     async status() {
       return (await fetchDoc()).data.attributes.status;
     },
@@ -585,7 +585,7 @@ export async function launch(
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const d = await fetchDoc();
-        if (AGENT_TERMINAL.has(d.data.attributes.status)) return toResult(d);
+        if (MODEL_TERMINAL.has(d.data.attributes.status)) return toResult(d);
         if (Date.now() > deadline) {
           throw new Error(
             `agent run ${runId} timed out after ${timeoutMs}ms (last status: ${d.data.attributes.status})`,
@@ -598,10 +598,10 @@ export async function launch(
 }
 
 export async function run(
-  spec: AgentRunSpec,
+  spec: ModelRunSpec,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
-): Promise<AgentRunResult> {
+): Promise<ModelRunResult> {
   const handle = await launch(spec, transport, baseUrl);
   return handle.wait();
 }

@@ -13,28 +13,28 @@
  * real handle classes, so a call to a method that doesn't exist throws.
  *
  * Overrides are keyed by capability path — namespace methods by their dotted
- * path (`repositories.list`, `agent.coding.run`), handle methods by
+ * path (`repositories.list`, `models.coding.run`), handle methods by
  * `<handle>.<method>` (`repository.pushFromSandbox`, `sandbox.exec`). A value
  * replaces that capability's default; a function `(…args) => value` computes it
  * from the call arguments.
  */
 import {
-  AGENT_RUN_RESULT_SIGNAL,
+  MODEL_RUN_RESULT_SIGNAL,
   CODING_RESULT_SIGNAL,
   toResumePayload,
-} from "../agent/index.js";
+} from "../models/index.js";
 import type {
-  AgentRunHandle,
-  AgentRunResult,
+  ModelRunHandle,
+  ModelRunResult,
   CodingRunResult,
   RunHandle,
   RunStatus,
-} from "../agent/index.js";
-import { ORCHESTRATIONS_RESULT_SIGNAL } from "../orchestrations/index.js";
+} from "../models/index.js";
+import { AGENTS_RESULT_SIGNAL } from "../agents/index.js";
 import type {
-  OrchestrationRunResult,
-  RunHandle as OrchestrationRunHandle,
-} from "../orchestrations/index.js";
+  AgentRunResult,
+  RunHandle as AgentRunHandle,
+} from "../agents/index.js";
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
 import { Sandbox } from "../sandboxes/index.js";
@@ -203,8 +203,8 @@ function resolve(
  * The stub keys a dispatched capability accepts, in precedence order: the
  * method actually called (`<ns>.launch`) wins, then the shared blocking-result
  * key (`<ns>.run`) that produces the same payload. Lets an author stub the key
- * matching the call they wrote — `agent.coding.launch` — while the canonical
- * `agent.coding.run` keeps working for both `run()` and `launch()`. Uniform
+ * matching the call they wrote — `models.coding.launch` — while the canonical
+ * `models.coding.run` keeps working for both `run()` and `launch()`. Uniform
  * across the dispatchable/pause family (coding today; deep research,
  * sub-workflows, browser sessions later).
  */
@@ -447,7 +447,7 @@ function stubRunHandle(
   ) as RunHandle;
 }
 
-function stubAgentResult(): AgentRunResult {
+function stubAgentResult(): ModelRunResult {
   return {
     runId: "stub-run",
     status: "completed",
@@ -471,14 +471,14 @@ function stubAgentResult(): AgentRunResult {
   };
 }
 
-function stubAgentRunHandle(
+function stubModelRunHandle(
   overrides: StubOverrides,
   correlationId: string,
-  result: AgentRunResult,
-): AgentRunHandle {
+  result: ModelRunResult,
+): ModelRunHandle {
   const handle = {
     runId: correlationId,
-    dispatch: { correlationId, resultSignal: AGENT_RUN_RESULT_SIGNAL },
+    dispatch: { correlationId, resultSignal: MODEL_RUN_RESULT_SIGNAL },
     status: () => Promise.resolve(result.status),
     wait: () => Promise.resolve(result),
   };
@@ -488,7 +488,7 @@ function stubAgentRunHandle(
     handle as unknown as Record<string, unknown>,
     overrides,
     {},
-  ) as AgentRunHandle;
+  ) as ModelRunHandle;
 }
 
 /**
@@ -507,8 +507,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
 
   // Resolve a coding run result, then re-wrap its `sandbox` as a handle so the
   // blocking `run()` path keeps a method-capable Sandbox even when the result was
-  // overridden with plain JSON. `keys` lets `launch()` accept `agent.coding.launch`
-  // (the call the author wrote) as well as the shared `agent.coding.run`.
+  // overridden with plain JSON. `keys` lets `launch()` accept `models.coding.launch`
+  // (the call the author wrote) as well as the shared `models.coding.run`.
   const resolveCodingResult = (
     spec: unknown,
     keys: string | string[],
@@ -520,12 +520,12 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
   };
 
   // Default (instant) agent result — no sandbox to re-wrap, so it's the resolved
-  // value as-is. `keys` lets `launch()` accept `agent.launch` and `agent.run`.
-  const resolveAgentResult = (
+  // value as-is. `keys` lets `launch()` accept `models.launch` and `models.run`.
+  const resolveModelResult = (
     spec: unknown,
     keys: string | string[],
-  ): AgentRunResult =>
-    r(keys, [spec], () => stubAgentResult()) as AgentRunResult;
+  ): ModelRunResult =>
+    r(keys, [spec], () => stubAgentResult()) as ModelRunResult;
 
   const client: Sapiom = {
     sandboxes: {
@@ -592,32 +592,32 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           overrides,
         ),
     },
-    agent: {
-      run: (spec) => Promise.resolve(resolveAgentResult(spec, "agent.run")),
+    models: {
+      run: (spec) => Promise.resolve(resolveModelResult(spec, "models.run")),
       launch: (spec) => {
         const correlationId = `stub-run-${++launchSeq}`;
-        // `launch()` honors `agent.launch` first, then the shared `agent.run`.
+        // `launch()` honors `models.launch` first, then the shared `models.run`.
         const result = {
-          ...resolveAgentResult(spec, dispatchedKeys("agent")),
+          ...resolveModelResult(spec, dispatchedKeys("agent")),
           runId: correlationId,
         };
         // The resume payload IS the result (no live handles to strip).
         return dispatchable(
-          stubAgentRunHandle(overrides, correlationId, result),
+          stubModelRunHandle(overrides, correlationId, result),
           opts.signals,
           () => result,
         );
       },
       coding: {
         run: (spec) =>
-          Promise.resolve(resolveCodingResult(spec, "agent.coding.run")),
+          Promise.resolve(resolveCodingResult(spec, "models.coding.run")),
         launch: (spec) => {
           const correlationId = `stub-run-${++launchSeq}`;
           // `launch()` honors the key matching the call the author wrote
-          // (`agent.coding.launch`) first, then the shared `agent.coding.run`
+          // (`models.coding.launch`) first, then the shared `models.coding.run`
           // that controls both paths.
           const result = {
-            ...resolveCodingResult(spec, dispatchedKeys("agent.coding")),
+            ...resolveCodingResult(spec, dispatchedKeys("models.coding")),
             runId: correlationId,
           };
           // Register for pause-resume with the wire shape a resumed step receives:
@@ -631,35 +631,35 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         },
       },
     },
-    orchestrations: {
+    agents: {
       run: (spec) =>
         Promise.resolve(
-          r("orchestrations.run", [spec], () => ({
+          r("agents.run", [spec], () => ({
             executionId: `stub-exec-${++launchSeq}`,
             status: "completed" as const,
             output: {},
             error: null,
-          })) as OrchestrationRunResult,
+          })) as AgentRunResult,
         ),
       launch: (spec) => {
         const executionId = `stub-exec-${++launchSeq}`;
-        const result: OrchestrationRunResult = {
+        const result: AgentRunResult = {
           executionId,
           status: "completed",
           output: {},
           error: null,
         };
-        const handle: OrchestrationRunHandle = {
+        const handle: AgentRunHandle = {
           executionId,
           dispatch: {
             correlationId: executionId,
-            resultSignal: ORCHESTRATIONS_RESULT_SIGNAL,
+            resultSignal: AGENTS_RESULT_SIGNAL,
           },
           status: () => Promise.resolve("completed" as const),
           wait: () => Promise.resolve(result),
         };
         // Register the resume payload so a local `pauseUntilSignal` on this handle
-        // resolves with an OrchestrationRunResultPayload.
+        // resolves with an AgentRunResultPayload.
         return dispatchable(handle, opts.signals, () => ({
           status: "completed" as const,
           executionId,

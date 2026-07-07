@@ -6,7 +6,7 @@
  *   // dispatch another orchestration and pause this step on its result:
  *   const child = await orchestrations.launch({ definition: "enrich-lead", input });
  *   return pauseUntilSignal(child, { resumeStep: "use-result" });
- *   // the resumed step receives an OrchestrationRunResultPayload
+ *   // the resumed step receives an AgentRunResultPayload
  *
  * `launch` returns a handle to pass straight to `pauseUntilSignal` (the waiting
  * step resumes when the run finishes) or to `wait()` inline for standalone use.
@@ -29,7 +29,7 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
  * orchestration handle resumes on this; it is the value carried in the handle's
  * `dispatch.resultSignal`.
  */
-export const ORCHESTRATIONS_RESULT_SIGNAL = "orchestrations.result";
+export const AGENTS_RESULT_SIGNAL = "orchestrations.result";
 
 /** Run lifecycle status. */
 export type ExecutionStatus =
@@ -40,7 +40,7 @@ export type ExecutionStatus =
   | "cancelled";
 const TERMINAL = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
 
-export interface OrchestrationRunSpec {
+export interface AgentRunSpec {
   /** Slug of the deployed orchestration to run (its stable handle). */
   definition: string;
   /** Input passed to the orchestration's entry step. */
@@ -59,7 +59,7 @@ export interface OrchestrationRunSpec {
 }
 
 /** A live, awaited run (the standalone `run()`/`wait()` result). */
-export interface OrchestrationRunResult {
+export interface AgentRunResult {
   executionId: string;
   status: ExecutionStatus;
   output: unknown;
@@ -73,12 +73,12 @@ export interface OrchestrationRunResult {
  *
  *   const useResult = defineStep({
  *     name: "use-result",
- *     async run(result: OrchestrationRunResultPayload, ctx) {
+ *     async run(result: AgentRunResultPayload, ctx) {
  *       if (result.status === "failed") { … }
  *     },
  *   });
  */
-export type OrchestrationRunResultPayload<TOutput = unknown> =
+export type AgentRunResultPayload<TOutput = unknown> =
   | {
       status: "completed";
       executionId: string;
@@ -98,21 +98,21 @@ export type OrchestrationRunResultPayload<TOutput = unknown> =
       finishedAt: string;
     };
 
-/** Thrown by {@link orchestrationResultSchema}.parse on a malformed resume payload. */
-export class OrchestrationResultSchemaError extends Error {}
+/** Thrown by {@link agentResultSchema}.parse on a malformed resume payload. */
+export class AgentResultSchemaError extends Error {}
 
 /**
- * Runtime validator for {@link OrchestrationRunResultPayload}. `parse` returns the
- * value typed on success and throws an {@link OrchestrationResultSchemaError} on any
+ * Runtime validator for {@link AgentRunResultPayload}. `parse` returns the
+ * value typed on success and throws an {@link AgentResultSchemaError} on any
  * divergence. Generic in the caller's expected `output` type — the shape of
  * `output` itself is the child orchestration's contract, not validated here.
  */
-export const orchestrationResultSchema = {
+export const agentResultSchema = {
   parse<TOutput = unknown>(
     value: unknown,
-  ): OrchestrationRunResultPayload<TOutput> {
+  ): AgentRunResultPayload<TOutput> {
     const fail = (msg: string): never => {
-      throw new OrchestrationResultSchemaError(
+      throw new AgentResultSchemaError(
         `invalid orchestration result payload: ${msg}`,
       );
     };
@@ -131,7 +131,7 @@ export const orchestrationResultSchema = {
     if (v.status === "failed" && !("error" in v))
       fail("a failed result must carry `error`");
 
-    return value as OrchestrationRunResultPayload<TOutput>;
+    return value as AgentRunResultPayload<TOutput>;
   },
 };
 
@@ -148,7 +148,7 @@ export interface RunHandle extends DispatchHandle {
   wait(opts?: {
     timeoutMs?: number;
     pollMs?: number;
-  }): Promise<OrchestrationRunResult>;
+  }): Promise<AgentRunResult>;
 }
 
 /**
@@ -184,7 +184,7 @@ interface ExecutionDoc {
  * engine stamps on the eventually-fired child, so the resume lands. Pause-only: there is no child
  * to poll until the scheduled time, so `status`/`wait` throw.
  */
-async function launchScheduled(spec: OrchestrationRunSpec, transport: Transport, baseUrl: string): Promise<RunHandle> {
+async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl: string): Promise<RunHandle> {
   const res = await transport.request<{ id: string }>(
     `${baseUrl}/v1/workflows/${encodeURIComponent(spec.definition)}/triggers`,
     {
@@ -200,14 +200,14 @@ async function launchScheduled(spec: OrchestrationRunSpec, transport: Transport,
   };
   return {
     executionId: "", // no child execution exists until the schedule fires
-    dispatch: { correlationId: `trigger-${res.id}`, resultSignal: ORCHESTRATIONS_RESULT_SIGNAL },
+    dispatch: { correlationId: `trigger-${res.id}`, resultSignal: AGENTS_RESULT_SIGNAL },
     status: notAvailable,
     wait: notAvailable,
   };
 }
 
 export async function launch(
-  spec: OrchestrationRunSpec,
+  spec: AgentRunSpec,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<RunHandle> {
@@ -238,7 +238,7 @@ export async function launch(
     // is this run's id (the resume's correlation key).
     dispatch: {
       correlationId: executionId,
-      resultSignal: ORCHESTRATIONS_RESULT_SIGNAL,
+      resultSignal: AGENTS_RESULT_SIGNAL,
     },
     async status() {
       return (await fetchDoc()).status;
@@ -268,10 +268,10 @@ export async function launch(
 }
 
 export async function run(
-  spec: OrchestrationRunSpec,
+  spec: AgentRunSpec,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
-): Promise<OrchestrationRunResult> {
+): Promise<AgentRunResult> {
   const handle = await launch(spec, transport, baseUrl);
   return handle.wait();
 }

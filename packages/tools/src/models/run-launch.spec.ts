@@ -4,7 +4,7 @@
  * fake fetch (no real network).
  */
 import { createClient } from "../index.js";
-import { AGENT_RUN_RESULT_SIGNAL } from "./index.js";
+import { MODEL_RUN_RESULT_SIGNAL } from "./index.js";
 
 function fakeFetch(opts: {
   capture?: { headers?: Record<string, string>; url?: string };
@@ -44,22 +44,22 @@ function fakeFetch(opts: {
 describe("agent.launch — dispatch handle", () => {
   it("returns a handle that satisfies DispatchHandle", async () => {
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({}) });
-    const handle = await sapiom.agent.launch({ prompt: "say OK" });
+    const handle = await sapiom.models.launch({ prompt: "say OK" });
     expect(handle.runId).toBe("run-abc");
     expect(handle.dispatch).toEqual({
       correlationId: "run-abc",
-      resultSignal: AGENT_RUN_RESULT_SIGNAL,
+      resultSignal: MODEL_RUN_RESULT_SIGNAL,
     });
   });
 
-  it("AGENT_RUN_RESULT_SIGNAL is the capability-stable terminal signal", () => {
-    expect(AGENT_RUN_RESULT_SIGNAL).toBe("agent.run.result");
+  it("MODEL_RUN_RESULT_SIGNAL is the capability-stable terminal signal", () => {
+    expect(MODEL_RUN_RESULT_SIGNAL).toBe("agent.run.result");
   });
 
   it("posts to /v1/agent/runs", async () => {
     const capture: { url?: string } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
-    await sapiom.agent.launch({ prompt: "say OK" });
+    await sapiom.models.launch({ prompt: "say OK" });
     expect(capture.url).toContain("/v1/agent/runs");
   });
 });
@@ -67,7 +67,7 @@ describe("agent.launch — dispatch handle", () => {
 describe("agent.run — terminal result mapping", () => {
   it("maps the wire result (snake_case) to the SDK shape", async () => {
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({}) });
-    const result = await sapiom.agent.run({ prompt: "say OK" });
+    const result = await sapiom.models.run({ prompt: "say OK" });
     expect(result.status).toBe("completed");
     expect(result.output).toBe("OK");
     expect(result.result?.stopReason).toBe("end_turn");
@@ -86,14 +86,14 @@ describe("agent.launch — workflow resume token", () => {
     process.env[KEY] = "tok-xyz";
     const capture: { headers?: Record<string, string> } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
-    await sapiom.agent.launch({ prompt: "t" });
+    await sapiom.models.launch({ prompt: "t" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBe("tok-xyz");
   });
 
   it("omits the header outside a workflow (no env token)", async () => {
     const capture: { headers?: Record<string, string> } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
-    await sapiom.agent.launch({ prompt: "t" });
+    await sapiom.models.launch({ prompt: "t" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBeUndefined();
   });
 });

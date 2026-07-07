@@ -25,15 +25,15 @@ export { Sandbox } from "./sandboxes/index.js";
 export * as repositories from "./repositories/index.js";
 export { Repository } from "./repositories/index.js";
 
-export * as agent from "./agent/index.js";
-// Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
-export { CODING_RESULT_SIGNAL } from "./agent/index.js";
+export * as models from "./models/index.js";
+// Surfaced top-level for the static `pause: { signal }` decl on an agent step.
+export { CODING_RESULT_SIGNAL } from "./models/index.js";
 // The shape a step resumed from `pauseUntilSignal(codingHandle, …)` receives as
 // input — annotate the resumed step with it instead of hand-rolling the shape.
 export type {
   CodingResultPayload,
   ExecutionEnvironmentRef,
-} from "./agent/index.js";
+} from "./models/index.js";
 // Validate / build a `CodingResultPayload`, and the env `type` whose `id` is a
 // sandbox name for `sandboxes.attach(id)`.
 export {
@@ -41,40 +41,40 @@ export {
   CodingResultSchemaError,
   toResumePayload,
   EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX,
-} from "./agent/index.js";
-// Default (instant, in-server) agent — `agent.run` / `agent.launch`. Signal const
+} from "./models/index.js";
+// Default (instant, in-server) model — `models.run` / `models.launch`. Signal const
 // for a step's static `pause: { signal }` decl; the result payload shape + schema
-// for a step resumed from `pauseUntilSignal(agentHandle, …)`.
-export { AGENT_RUN_RESULT_SIGNAL } from "./agent/index.js";
+// for a step resumed from `pauseUntilSignal(modelHandle, …)`.
+export { MODEL_RUN_RESULT_SIGNAL } from "./models/index.js";
 export type {
-  AgentRunSpec,
-  AgentRunResult,
-  AgentRunOutcome,
-  AgentRunError,
-  AgentRunStatus,
-  AgentRunHandle,
-  AgentRunResultPayload,
-  AgentMcp,
-} from "./agent/index.js";
+  ModelRunSpec,
+  ModelRunResult,
+  ModelRunOutcome,
+  ModelRunError,
+  ModelRunStatus,
+  ModelRunHandle,
+  ModelRunResultPayload,
+  ModelMcp,
+} from "./models/index.js";
 export {
-  agentRunResultSchema,
-  AgentRunResultSchemaError,
-} from "./agent/index.js";
+  modelRunResultSchema,
+  ModelRunResultSchemaError,
+} from "./models/index.js";
 
-export * as orchestrations from "./orchestrations/index.js";
-// Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
-export { ORCHESTRATIONS_RESULT_SIGNAL } from "./orchestrations/index.js";
+export * as agents from "./agents/index.js";
+// Surfaced top-level for the static `pause: { signal }` decl on an agent step.
+export { AGENTS_RESULT_SIGNAL } from "./agents/index.js";
 
-// schedules — create/manage cron + one-off triggers for a deployed orchestration.
+// schedules — create/manage cron + one-off triggers for a deployed agent.
 export * as schedules from "./schedules/index.js";
-// The shape a step resumed from `pauseUntilSignal(orchestrationHandle, …)` receives
+// The shape a step resumed from `pauseUntilSignal(agentHandle, …)` receives
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
-export type { OrchestrationRunResultPayload } from "./orchestrations/index.js";
-// Validate an OrchestrationRunResultPayload at the resume boundary.
+export type { AgentRunResultPayload } from "./agents/index.js";
+// Validate an AgentRunResultPayload at the resume boundary.
 export {
-  orchestrationResultSchema,
-  OrchestrationResultSchemaError,
-} from "./orchestrations/index.js";
+  agentResultSchema,
+  AgentResultSchemaError,
+} from "./agents/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";

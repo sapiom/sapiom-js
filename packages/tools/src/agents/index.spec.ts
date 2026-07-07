@@ -4,9 +4,9 @@
  */
 import { createClient } from "../index.js";
 import {
-  ORCHESTRATIONS_RESULT_SIGNAL,
-  OrchestrationResultSchemaError,
-  orchestrationResultSchema,
+  AGENTS_RESULT_SIGNAL,
+  AgentResultSchemaError,
+  agentResultSchema,
 } from "./index.js";
 
 function fakeFetch(capture?: { headers?: Record<string, string>; url?: string }): typeof globalThis.fetch {
@@ -27,23 +27,23 @@ function fakeFetch(capture?: { headers?: Record<string, string>; url?: string })
 describe("orchestrations.launch — dispatch handle", () => {
   it("returns a handle satisfying DispatchHandle (correlationId = child execution id)", async () => {
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch() });
-    const handle = await sapiom.orchestrations.launch({ definition: "enrich-lead", input: { a: 1 } });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead", input: { a: 1 } });
     expect(handle.executionId).toBe("exec-9");
     expect(handle.dispatch).toEqual({
       correlationId: "exec-9",
-      resultSignal: ORCHESTRATIONS_RESULT_SIGNAL,
+      resultSignal: AGENTS_RESULT_SIGNAL,
     });
   });
 
   it("POSTs to /v1/workflows/:slug/executions (by slug)", async () => {
     const capture: { url?: string } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(capture) });
-    await sapiom.orchestrations.launch({ definition: "enrich-lead" });
+    await sapiom.agents.launch({ definition: "enrich-lead" });
     expect(capture.url).toContain("/v1/workflows/enrich-lead/executions");
   });
 
-  it("ORCHESTRATIONS_RESULT_SIGNAL is the capability-stable terminal signal", () => {
-    expect(ORCHESTRATIONS_RESULT_SIGNAL).toBe("orchestrations.result");
+  it("AGENTS_RESULT_SIGNAL is the capability-stable terminal signal", () => {
+    expect(AGENTS_RESULT_SIGNAL).toBe("orchestrations.result");
   });
 });
 
@@ -57,40 +57,40 @@ describe("orchestrations.launch — workflow resume token", () => {
     process.env[KEY] = "tok-abc";
     const capture: { headers?: Record<string, string> } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(capture) });
-    await sapiom.orchestrations.launch({ definition: "d" });
+    await sapiom.agents.launch({ definition: "d" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBe("tok-abc");
   });
 
   it("omits the header outside a workflow (no env token)", async () => {
     const capture: { headers?: Record<string, string> } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(capture) });
-    await sapiom.orchestrations.launch({ definition: "d" });
+    await sapiom.agents.launch({ definition: "d" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBeUndefined();
   });
 });
 
-describe("orchestrationResultSchema", () => {
+describe("agentResultSchema", () => {
   const base = { executionId: "e", definition: "d", version: "1", startedAt: "t0", finishedAt: "t1" };
 
   it("accepts a completed payload", () => {
     const p = { ...base, status: "completed", output: { ok: true } };
-    expect(orchestrationResultSchema.parse(p)).toBe(p);
+    expect(agentResultSchema.parse(p)).toBe(p);
   });
 
   it("accepts a failed payload", () => {
     const p = { ...base, status: "failed", error: { message: "x" } };
-    expect(orchestrationResultSchema.parse(p).status).toBe("failed");
+    expect(agentResultSchema.parse(p).status).toBe("failed");
   });
 
   it("rejects an unknown status", () => {
-    expect(() => orchestrationResultSchema.parse({ ...base, status: "weird" })).toThrow(
-      OrchestrationResultSchemaError,
+    expect(() => agentResultSchema.parse({ ...base, status: "weird" })).toThrow(
+      AgentResultSchemaError,
     );
   });
 
   it("rejects a completed payload missing output", () => {
-    expect(() => orchestrationResultSchema.parse({ ...base, status: "completed" })).toThrow(
-      OrchestrationResultSchemaError,
+    expect(() => agentResultSchema.parse({ ...base, status: "completed" })).toThrow(
+      AgentResultSchemaError,
     );
   });
 });

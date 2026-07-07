@@ -32,7 +32,7 @@ function fakeLaunchFetch(capture?: {
 describe("agent.coding.launch — dispatch handle", () => {
   it("returns a handle that satisfies DispatchHandle", async () => {
     const sapiom = createClient({ apiKey: "k", fetch: fakeLaunchFetch() });
-    const handle = await sapiom.agent.coding.launch({ task: "do a thing" });
+    const handle = await sapiom.models.coding.launch({ task: "do a thing" });
     expect(handle.runId).toBe("run-123");
     expect(handle.dispatch).toEqual({
       correlationId: "run-123",
@@ -58,7 +58,7 @@ describe("agent.coding.launch — workflow resume token", () => {
       apiKey: "k",
       fetch: fakeLaunchFetch(capture),
     });
-    await sapiom.agent.coding.launch({ task: "t" });
+    await sapiom.models.coding.launch({ task: "t" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBe("tok-abc");
   });
 
@@ -68,7 +68,7 @@ describe("agent.coding.launch — workflow resume token", () => {
       apiKey: "k",
       fetch: fakeLaunchFetch(capture),
     });
-    await sapiom.agent.coding.launch({ task: "t" });
+    await sapiom.models.coding.launch({ task: "t" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBeUndefined();
   });
 
@@ -79,7 +79,7 @@ describe("agent.coding.launch — workflow resume token", () => {
       resumeToken: "tok-explicit",
       fetch: fakeLaunchFetch(capture),
     });
-    await sapiom.agent.coding.launch({ task: "t" });
+    await sapiom.models.coding.launch({ task: "t" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBe("tok-explicit");
   });
 
@@ -91,7 +91,7 @@ describe("agent.coding.launch — workflow resume token", () => {
       resumeToken: "tok-explicit",
       fetch: fakeLaunchFetch(capture),
     });
-    await sapiom.agent.coding.launch({ task: "t" });
+    await sapiom.models.coding.launch({ task: "t" });
     expect(capture.headers?.["x-sapiom-workflow-token"]).toBe("tok-explicit");
   });
 });

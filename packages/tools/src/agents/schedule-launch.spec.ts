@@ -7,7 +7,7 @@
  * resumes the step on. status()/wait() throw (no child exists until the scheduled time).
  */
 import { createClient } from "../index.js";
-import { ORCHESTRATIONS_RESULT_SIGNAL } from "./index.js";
+import { AGENTS_RESULT_SIGNAL } from "./index.js";
 
 function fakeFetch(capture: { url?: string; init?: RequestInit }): typeof globalThis.fetch {
   return (async (url: string, init: RequestInit = {}) => {
@@ -32,7 +32,7 @@ describe("orchestrations.launch — delayed (scheduled) dispatch", () => {
     const cap: { url?: string; init?: RequestInit } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(cap) });
 
-    const handle = await sapiom.orchestrations.launch({
+    const handle = await sapiom.agents.launch({
       definition: "B",
       at: "2026-07-01T00:00:00.000Z",
       input: { a: 1 },
@@ -49,7 +49,7 @@ describe("orchestrations.launch — delayed (scheduled) dispatch", () => {
     // Pause-only handle: correlation derived from the created schedule id.
     expect(handle.dispatch).toEqual({
       correlationId: "trigger-trig-9",
-      resultSignal: ORCHESTRATIONS_RESULT_SIGNAL,
+      resultSignal: AGENTS_RESULT_SIGNAL,
     });
     expect(() => handle.wait()).toThrow(/scheduled/i);
     expect(() => handle.status()).toThrow(/scheduled/i);
@@ -59,7 +59,7 @@ describe("orchestrations.launch — delayed (scheduled) dispatch", () => {
     const cap: { url?: string; init?: RequestInit } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(cap) });
 
-    await sapiom.orchestrations.launch({ definition: "B", at: new Date("2026-07-01T00:00:00.000Z") });
+    await sapiom.agents.launch({ definition: "B", at: new Date("2026-07-01T00:00:00.000Z") });
 
     expect(JSON.parse(cap.init?.body as string).at).toBe("2026-07-01T00:00:00.000Z");
   });
@@ -69,7 +69,7 @@ describe("orchestrations.launch — delayed (scheduled) dispatch", () => {
     const cap: { url?: string; init?: RequestInit } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(cap) });
 
-    await sapiom.orchestrations.launch({ definition: "B", at: "2026-07-01T00:00:00.000Z" });
+    await sapiom.agents.launch({ definition: "B", at: "2026-07-01T00:00:00.000Z" });
 
     expect((cap.init?.headers as Record<string, string>)["x-sapiom-workflow-token"]).toBe("tok-abc");
   });

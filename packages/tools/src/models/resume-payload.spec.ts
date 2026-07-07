@@ -116,7 +116,7 @@ describe("stub client resume payload", () => {
     const signals = new Map<string, unknown>();
     const client = createStubClient({ signals });
 
-    const handle = await client.agent.coding.launch({ task: "do a thing" });
+    const handle = await client.models.coding.launch({ task: "do a thing" });
     const payload = signals.get(handle.dispatch.correlationId);
 
     // The stub must hand back exactly the wire shape — schema-valid, an
