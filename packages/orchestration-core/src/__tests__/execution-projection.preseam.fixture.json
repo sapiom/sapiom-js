@@ -1,0 +1,37 @@
+{
+  "id": "exec_legacy_0001",
+  "name": "old-run",
+  "organizationId": "org_0001",
+  "tenantId": "tenant_0001",
+  "status": "completed",
+  "currentStep": null,
+  "currentStepAttempt": 1,
+  "version": 1,
+  "definitionId": null,
+  "buildRunId": null,
+  "idempotencyKey": null,
+  "pausedSignalName": null,
+  "pausedSignalCorrelationId": null,
+  "pausedUntil": null,
+  "startedAt": "2025-06-01T00:00:00.000Z",
+  "finishedAt": "2025-06-01T00:00:20.000Z",
+  "input": {},
+  "sharedState": {},
+  "output": { "ok": true },
+  "error": null,
+  "steps": [
+    {
+      "stepName": "run",
+      "stepOrder": 0,
+      "attempt": 1,
+      "status": "completed",
+      "input": {},
+      "output": { "ok": true },
+      "error": null,
+      "nextDirective": { "kind": "complete" },
+      "sharedStateAfter": {},
+      "startedAt": "2025-06-01T00:00:00.000Z",
+      "finishedAt": "2025-06-01T00:00:20.000Z"
+    }
+  ]
+}

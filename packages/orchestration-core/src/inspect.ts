@@ -6,22 +6,8 @@
  * programmatic consumers; the CLI alias these as "logs" on its command surface.
  */
 import { GatewayClient } from "./client.js";
-
-export interface StepRecord {
-  stepName: string;
-  attempt: number;
-  status: string;
-  error?: { message?: string; stack?: string } | null;
-}
-
-export interface ExecutionDetail {
-  id: string;
-  status: string;
-  currentStep?: string | null;
-  pausedSignalName?: string | null;
-  error?: unknown;
-  steps?: StepRecord[];
-}
+import { decodeExecutionProjection, decodeExecutionRef } from "./decode.js";
+import type { ExecutionProjection, ExecutionRef } from "./types.js";
 
 export interface BuildDetail {
   id?: string;
@@ -35,23 +21,21 @@ export interface InspectOptions {
   executionId: string;
 }
 
-export interface InspectResult {
-  execution: ExecutionDetail;
-}
-
 /**
- * Fetch full detail for a single execution, including its step records.
+ * Fetch the full {@link ExecutionProjection} for a single execution — the same
+ * tree + per-node cost + trace refs the REST DTO returns (Module P / SAP-1138).
+ * The SDK is a thin passthrough of the REST shape; the body is only NORMALIZED
+ * (see {@link decodeExecutionProjection}) so pre-seam runs decode without error
+ * (degraded tree from lineage, flat cost fallback) — never reshaped or recosted.
  *
  * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */
 export async function inspect(
   opts: InspectOptions,
   client: GatewayClient,
-): Promise<InspectResult> {
-  const execution = await client.get<ExecutionDetail>(
-    `/executions/${opts.executionId}`,
-  );
-  return { execution };
+): Promise<ExecutionProjection> {
+  const raw = await client.get<unknown>(`/executions/${opts.executionId}`);
+  return decodeExecutionProjection(raw);
 }
 
 // ── Wait for an execution to settle ────────────────────────────────────────────
@@ -95,7 +79,7 @@ export interface WaitForExecutionOptions {
 }
 
 export interface WaitForExecutionResult {
-  execution: ExecutionDetail;
+  execution: ExecutionProjection;
   /** Why polling stopped. */
   reason: WaitStopReason;
   /** True only when the execution reached a terminal status. */
@@ -126,10 +110,7 @@ export async function waitForExecution(
   let interval = opts.pollMs ?? 1_000;
 
   for (;;) {
-    const { execution } = await inspect(
-      { executionId: opts.executionId },
-      client,
-    );
+    const execution = await inspect({ executionId: opts.executionId }, client);
 
     if (isExecutionTerminal(execution.status)) {
       return { execution, reason: "terminal", done: true };
@@ -152,19 +133,19 @@ export async function waitForExecution(
 
 // ── List recent executions ────────────────────────────────────────────────────
 
-export interface ListExecutionsResult {
-  executions: ExecutionDetail[];
-}
-
 /**
- * List recent executions (no filter — the gateway decides the page size and
- * ordering). Callers can pass a definitionId in opts if the gateway supports it.
+ * List recent executions as tree-aware {@link ExecutionRef}s (no filter — the
+ * gateway decides the page size and ordering). Each ref carries its `traceRoot`
+ * so callers can group runs into their dispatch trees without a second read;
+ * `traceRoot` degrades to the run's own id for pre-seam rows.
+ *
+ * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */
 export async function listExecutions(
   client: GatewayClient,
-): Promise<ListExecutionsResult> {
-  const executions = await client.get<ExecutionDetail[]>("/executions");
-  return { executions };
+): Promise<ExecutionRef[]> {
+  const raw = await client.get<unknown>("/executions");
+  return Array.isArray(raw) ? raw.map(decodeExecutionRef) : [];
 }
 
 // ── Inspect a build ───────────────────────────────────────────────────────────

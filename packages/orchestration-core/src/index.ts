@@ -66,6 +66,25 @@ export type { DeployOptions, DeployResult } from "./deploy.js";
 export { run, parseJsonInput } from "./run.js";
 export type { RunOptions, RunResult } from "./run.js";
 
+// projection types (canonical inspection contract — single owner, see interfaces.md)
+export type {
+  ExecutionProjection,
+  StepProjection,
+  CostNode,
+  SettleState,
+  ExecutionRef,
+  DispatchRef,
+  StepError,
+  StepErrorTrace,
+  StepErrorFrame,
+  StepEvent,
+} from "./types.js";
+
+// projection decode (tolerant normalization of the REST body) — the reusable
+// entry point consumers use to re-decode a body after an SSE refetch. The
+// finer-grained helpers stay module-internal to keep the published surface small.
+export { decodeExecutionProjection } from "./decode.js";
+
 // inspect / logs (networked)
 export {
   inspect,
@@ -76,12 +95,8 @@ export {
 } from "./inspect.js";
 export type {
   InspectOptions,
-  InspectResult,
-  ListExecutionsResult,
   InspectBuildOptions,
   InspectBuildResult,
-  ExecutionDetail,
-  StepRecord,
   BuildDetail,
   WaitForExecutionOptions,
   WaitForExecutionResult,

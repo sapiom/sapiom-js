@@ -28,19 +28,19 @@ export async function runLogs(
     const client = makeClient({ projectHost: cfg?.host, flagHost: opts.host, flagTarget: opts.target });
 
     if (!executionId) {
-      const { executions } = await listExecutions(client);
+      const executions = await listExecutions(client);
       if (isJsonMode()) ok({ executions });
-      else ok({}, executions.map((e) => `${e.id}  ${e.status}`));
+      else ok({}, executions.map((e) => `${e.executionId}  ${e.status}  ${e.name}`));
       return;
     }
 
-    const { execution: ex } = await inspect({ executionId }, client);
+    const ex = await inspect({ executionId }, client);
     if (isJsonMode()) {
       ok({ execution: ex });
       return;
     }
     const lines = [`execution ${ex.id}: ${ex.status}${ex.currentStep ? ` (at ${ex.currentStep})` : ''}`];
-    for (const step of ex.steps ?? []) {
+    for (const step of ex.steps) {
       lines.push(`  ${step.status === 'failed' ? '✗' : '·'} ${step.stepName} #${step.attempt} — ${step.status}`);
       if (step.error?.message) lines.push(`      ${step.error.message}`);
     }

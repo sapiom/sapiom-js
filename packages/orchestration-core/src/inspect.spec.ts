@@ -3,14 +3,11 @@
  * never hand-roll a sleep loop. Uses injected sleep/now for determinism.
  */
 import type { GatewayClient } from "./client.js";
-import {
-  isExecutionTerminal,
-  waitForExecution,
-  type ExecutionDetail,
-} from "./inspect.js";
+import { isExecutionTerminal, waitForExecution } from "./inspect.js";
+import type { ExecutionProjection } from "./types.js";
 
 /** A GatewayClient whose `get` returns the queued snapshots (last one repeats). */
-function fakeClient(snapshots: Partial<ExecutionDetail>[]): {
+function fakeClient(snapshots: Partial<ExecutionProjection>[]): {
   client: GatewayClient;
   calls: () => number;
 } {
@@ -19,7 +16,7 @@ function fakeClient(snapshots: Partial<ExecutionDetail>[]): {
     get: async () => {
       const snap = snapshots[Math.min(i, snapshots.length - 1)];
       i += 1;
-      return { id: "e1", status: "running", ...snap } as ExecutionDetail;
+      return { id: "e1", status: "running", ...snap };
     },
   } as unknown as GatewayClient;
   return { client, calls: () => i };
