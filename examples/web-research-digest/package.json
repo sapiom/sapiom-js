@@ -1,0 +1,20 @@
+{
+  "name": "@sapiom/example-web-research-digest",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sapiom workflow template: search the web for a topic and return a concise, sourced digest — one metered capability (web.search).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\""
+  },
+  "dependencies": {
+    "@sapiom/orchestration": "0.4.8",
+    "@sapiom/tools": "0.14.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.2"
+  }
+}
