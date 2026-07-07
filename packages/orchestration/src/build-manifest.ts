@@ -2,13 +2,13 @@ import { zodToJsonSchema } from "./introspection.js";
 import {
   MANIFEST_PROTOCOL,
   type ManifestTransition,
-  type WorkflowManifest,
+  type AgentManifest,
 } from "./manifest.js";
 import type { StepDefinition } from "./step.js";
-import type { OrchestrationDefinition } from "./workflow.js";
+import type { AgentDefinition } from "./agent.js";
 
 /**
- * Generate a WorkflowManifest from a workflow definition and build metadata.
+ * Generate a AgentManifest from a workflow definition and build metadata.
  *
  * - Walks def.steps; for each step:
  *   - timeoutMs: step.timeoutMs if declared, null otherwise.
@@ -23,12 +23,12 @@ import type { OrchestrationDefinition } from "./workflow.js";
  * - name/entry from def; protocol 1 (locked); sdkVersion/artifact from opts.
  */
 export function buildManifest(
-  def: OrchestrationDefinition,
+  def: AgentDefinition,
   opts: {
     sdkVersion: string;
     artifact: { sha256: string; entryFile: string };
   },
-): WorkflowManifest {
+): AgentManifest {
   const steps: Record<
     string,
     {
@@ -106,7 +106,7 @@ export interface GraphValidation {
  *   - steps that cannot reach any `terminate`/`fail` (possible unbounded loop
  *     or a missing terminal). A `pause` counts as a forward edge via resumeStep.
  */
-export function validateGraph(manifest: WorkflowManifest): GraphValidation {
+export function validateGraph(manifest: AgentManifest): GraphValidation {
   const errors: string[] = [];
   const names = new Set(Object.keys(manifest.steps));
 
@@ -134,7 +134,7 @@ export function validateGraph(manifest: WorkflowManifest): GraphValidation {
 }
 
 /** Throw if the graph has errors; return warnings. Used by the build phase. */
-export function assertValidGraph(manifest: WorkflowManifest): string[] {
+export function assertValidGraph(manifest: AgentManifest): string[] {
   const { errors, warnings } = validateGraph(manifest);
   if (errors.length > 0) {
     throw new Error(
@@ -150,7 +150,7 @@ export function assertValidGraph(manifest: WorkflowManifest): string[] {
  * step that declares no transitions at all.
  */
 function buildForwardEdges(
-  manifest: WorkflowManifest,
+  manifest: AgentManifest,
   names: Set<string>,
   errors: string[],
 ): Map<string, Set<string>> {
@@ -183,7 +183,7 @@ function buildForwardEdges(
  * unbounded loop or missing terminal) — computed by reverse BFS from the sinks.
  */
 function terminalReachabilityWarnings(
-  manifest: WorkflowManifest,
+  manifest: AgentManifest,
   names: Set<string>,
   forward: Map<string, Set<string>>,
 ): string[] {

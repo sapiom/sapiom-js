@@ -2,16 +2,16 @@ import { UnknownStepError } from './errors.js';
 import type { StepDefinition } from './step.js';
 
 /**
- * Brand symbol for OrchestrationDefinition objects produced by `defineOrchestration`.
+ * Brand symbol for AgentDefinition objects produced by `defineAgent`.
  *
  * Attached as a non-enumerable property so it survives bundling + dynamic
  * import without polluting the object's visible shape. The value is the
  * protocol version (1); bump if the definition contract changes.
  *
- * Use `isOrchestrationDefinition(val)` to check the brand — never duck-type on
+ * Use `isAgentDefinition(val)` to check the brand — never duck-type on
  * name/entry/steps because those keys are also valid plain data objects.
  */
-export const ORCHESTRATION_DEFINITION_BRAND = Symbol.for('sapiom.orchestration.definition');
+export const AGENT_DEFINITION_BRAND = Symbol.for('sapiom.agent.definition');
 
 /**
  * A workflow definition: a name, an entry step, and a name → step map.
@@ -20,14 +20,14 @@ export const ORCHESTRATION_DEFINITION_BRAND = Symbol.for('sapiom.orchestration.d
  *   - TInput:  the type of the value passed to the entry step on `runner.run(def, input, ...)`
  *   - TShared: the named-slots shape for cross-step values; ctx.shared is typed by this
  *
- * Workflow authors write:
+ * Agent authors write:
  *
  *   interface CycleShared {
  *     summary: SummaryOutput;
  *     monitoring: MonitoringSnapshot;
  *   }
  *
- *   export const cycleWorkflow = defineOrchestration<{ companyId: number }, CycleShared>({
+ *   export const cycleAgent = defineAgent<{ companyId: number }, CycleShared>({
  *     name: 'cycle',
  *     entry: 'gather',
  *     steps: { gather, summarize, ... },
@@ -40,7 +40,7 @@ export const ORCHESTRATION_DEFINITION_BRAND = Symbol.for('sapiom.orchestration.d
  * by convention; runtime mismatches surface as the step's own TS
  * narrowing at the top of run().
  */
-export interface OrchestrationDefinition<
+export interface AgentDefinition<
   TInput = unknown,
   TShared extends Record<string, unknown> = Record<string, unknown>,
 > {
@@ -57,17 +57,17 @@ export interface OrchestrationDefinition<
 }
 
 /**
- * Type guard that checks the `ORCHESTRATION_DEFINITION_BRAND` symbol set by
- * `defineOrchestration`. Use this (not duck-typing on name/entry/steps) to
+ * Type guard that checks the `AGENT_DEFINITION_BRAND` symbol set by
+ * `defineAgent`. Use this (not duck-typing on name/entry/steps) to
  * detect workflow definitions among module exports.
  *
  * Example:
  *   const mod = await import(bundleUrl);
- *   const defs = Object.values(mod).filter(isOrchestrationDefinition);
+ *   const defs = Object.values(mod).filter(isAgentDefinition);
  */
-export function isOrchestrationDefinition(val: unknown): val is OrchestrationDefinition {
+export function isAgentDefinition(val: unknown): val is AgentDefinition {
   if (val === null || typeof val !== 'object') return false;
-  return (val as Record<symbol, unknown>)[ORCHESTRATION_DEFINITION_BRAND] === 1;
+  return (val as Record<symbol, unknown>)[AGENT_DEFINITION_BRAND] === 1;
 }
 
 /**
@@ -76,39 +76,39 @@ export function isOrchestrationDefinition(val: unknown): val is OrchestrationDef
  *   2. `entry` exists in `steps`
  *   3. Every step in `steps` is non-null and the map key matches `step.name`
  *
- * Attaches a non-enumerable brand symbol (`ORCHESTRATION_DEFINITION_BRAND`) so
- * the object can be detected by `isOrchestrationDefinition` after bundling +
+ * Attaches a non-enumerable brand symbol (`AGENT_DEFINITION_BRAND`) so
+ * the object can be detected by `isAgentDefinition` after bundling +
  * dynamic import without relying on duck-typed property names.
  *
  * Static validation of every `continue` target is intentionally NOT
  * done — most are computed at runtime inside `run()`. PR review is the
  * gate for "did you reference a step that doesn't exist."
  */
-export function defineOrchestration<TInput = unknown, TShared extends Record<string, unknown> = Record<string, unknown>>(
-  def: OrchestrationDefinition<TInput, TShared>,
-): OrchestrationDefinition<TInput, TShared> {
+export function defineAgent<TInput = unknown, TShared extends Record<string, unknown> = Record<string, unknown>>(
+  def: AgentDefinition<TInput, TShared>,
+): AgentDefinition<TInput, TShared> {
   if (!def.name) {
-    throw new Error('Workflow definition must have a non-empty name');
+    throw new Error('Agent definition must have a non-empty name');
   }
   if (!def.entry) {
-    throw new Error(`Workflow '${def.name}' must declare an entry step`);
+    throw new Error(`Agent '${def.name}' must declare an entry step`);
   }
   if (!def.steps[def.entry]) {
     throw new UnknownStepError(def.entry);
   }
   for (const [key, step] of Object.entries(def.steps)) {
     if (!step) {
-      throw new Error(`Workflow '${def.name}' has null/undefined step at key '${key}'`);
+      throw new Error(`Agent '${def.name}' has null/undefined step at key '${key}'`);
     }
     if (step.name !== key) {
-      throw new Error(`Workflow '${def.name}' step name mismatch at key '${key}': step.name='${step.name}'`);
+      throw new Error(`Agent '${def.name}' step name mismatch at key '${key}': step.name='${step.name}'`);
     }
   }
   // Attach the brand as a non-enumerable property so it:
   //   - survives esbuild bundling (symbol properties pass through)
   //   - survives dynamic import (the imported object is the same reference)
   //   - doesn't pollute JSON.stringify or for...in iteration
-  Object.defineProperty(def, ORCHESTRATION_DEFINITION_BRAND, {
+  Object.defineProperty(def, AGENT_DEFINITION_BRAND, {
     value: 1,
     enumerable: false,
     writable: false,

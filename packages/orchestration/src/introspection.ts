@@ -3,7 +3,7 @@
 // external zod-4 authors can both consume this package.
 import { z } from 'zod/v4';
 
-import type { OrchestrationDefinition } from './workflow.js';
+import type { AgentDefinition } from './agent.js';
 
 /**
  * The input contract of a step, derived from its `inputSchema`. For the entry
@@ -31,7 +31,7 @@ export interface StepInputContract {
  * @deprecated Use {@link StepInputContract}. Retained as an alias because the
  * entry-step contract and a resume-step contract are the same shape.
  */
-export type WorkflowInputContract = StepInputContract;
+export type AgentInputContract = StepInputContract;
 
 /**
  * Convert a Zod schema to its JSON Schema representation.
@@ -47,7 +47,7 @@ export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
  * form falls back to a free editor).
  */
 export function stepInputContract(
-  def: OrchestrationDefinition<unknown, Record<string, unknown>>,
+  def: AgentDefinition<unknown, Record<string, unknown>>,
   stepName: string,
 ): StepInputContract | null {
   const schema = def.steps[stepName]?.inputSchema;
@@ -66,7 +66,7 @@ export function stepInputContract(
  * accepts opaque input; the form falls back to a free editor).
  */
 export function workflowInputContract(
-  def: OrchestrationDefinition<unknown, Record<string, unknown>>,
+  def: AgentDefinition<unknown, Record<string, unknown>>,
 ): StepInputContract | null {
   return stepInputContract(def, def.entry);
 }

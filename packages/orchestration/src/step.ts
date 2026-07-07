@@ -2,7 +2,7 @@
 // while the `zod` peer can resolve to v3 or v4. See introspection.ts.
 import type { ZodType } from 'zod/v4';
 
-import type { OrchestrationExecutionContext } from './context.js';
+import type { AgentExecutionContext } from './context.js';
 import type { Fail, Goto, NextStepDirective, Pause, Retry, Terminate } from './directives.js';
 
 /**
@@ -22,7 +22,7 @@ export interface Step<
   readonly name: string;
   readonly inputSchema?: ZodType<TIn>;
   readonly timeoutMs?: number;
-  run(input: TIn, ctx: OrchestrationExecutionContext<TShared>): Promise<StepResult<TOut>>;
+  run(input: TIn, ctx: AgentExecutionContext<TShared>): Promise<StepResult<TOut>>;
 }
 
 /**
@@ -81,7 +81,7 @@ export interface StepDefinition<TShared extends Record<string, unknown> = Record
   readonly pause?: { readonly signal: string; readonly resumeStep: string };
   readonly inputSchema?: ZodType<unknown>;
   readonly timeoutMs?: number;
-  run(input: unknown, ctx: OrchestrationExecutionContext<TShared>): Promise<NextStepDirective>;
+  run(input: unknown, ctx: AgentExecutionContext<TShared>): Promise<NextStepDirective>;
 }
 
 /**
@@ -91,7 +91,7 @@ export interface StepDefinition<TShared extends Record<string, unknown> = Record
  * properties for `buildManifest` to read.
  *
  * `TShared` is inferred from the `ctx` annotation in `run`
- * (`ctx: OrchestrationExecutionContext<MyShared>`); `TIn` from `inputSchema` or the
+ * (`ctx: AgentExecutionContext<MyShared>`); `TIn` from `inputSchema` or the
  * `input` annotation. `next`/`terminal`/`canFail`/`pause` are inferred as
  * literals (`const` type params), so no `as const` is needed.
  */
@@ -117,7 +117,7 @@ export function defineStep<
   // without tripping @typescript-eslint/unbound-method.
   run: (
     input: TIn,
-    ctx: OrchestrationExecutionContext<TShared>,
+    ctx: AgentExecutionContext<TShared>,
   ) => Promise<Allowed<Next, Term, CanFail, PauseDecl extends { resumeStep: infer R extends string } ? R : never>>;
 }): StepDefinition<TShared> {
   return {
@@ -128,6 +128,6 @@ export function defineStep<
     ...(def.pause ? { pause: def.pause } : {}),
     ...(def.inputSchema ? { inputSchema: def.inputSchema as ZodType<unknown> } : {}),
     ...(def.timeoutMs !== undefined ? { timeoutMs: def.timeoutMs } : {}),
-    run: def.run as unknown as (input: unknown, ctx: OrchestrationExecutionContext<TShared>) => Promise<NextStepDirective>,
+    run: def.run as unknown as (input: unknown, ctx: AgentExecutionContext<TShared>) => Promise<NextStepDirective>,
   };
 }

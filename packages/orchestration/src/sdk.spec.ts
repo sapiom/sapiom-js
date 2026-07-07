@@ -2,10 +2,10 @@
  * @sapiom/workflow-sdk — own-package tests.
  *
  * Proves:
- *   1. defineOrchestration validation (name, entry, step map checks)
+ *   1. defineAgent validation (name, entry, step map checks)
  *   2. Directive guard functions (isContinue, isRetry, isPause, isTerminate, isFail)
  *   3. InMemoryContextStore round-trip (get/set/has/snapshot)
- *   4. UnknownStepError is thrown by defineOrchestration for missing entry
+ *   4. UnknownStepError is thrown by defineAgent for missing entry
  *   5. StepLogger structural compatibility: a plain object matching the
  *      StepLogger interface is accepted (validates the structural design)
  */
@@ -15,16 +15,16 @@ import {
   InMemoryContextStore,
   StepInputValidationError,
   UnknownStepError,
-  ORCHESTRATION_DEFINITION_BRAND,
-  WorkflowError,
+  AGENT_DEFINITION_BRAND,
+  AgentError,
   defineStep,
-  defineOrchestration,
+  defineAgent,
   isContinue,
   isFail,
   isPause,
   isRetry,
   isTerminate,
-  isOrchestrationDefinition,
+  isAgentDefinition,
   terminate,
 } from './index.js';
 import type {
@@ -41,7 +41,7 @@ import type {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Minimal terminal step suitable for use in defineOrchestration test fixtures. */
+/** Minimal terminal step suitable for use in defineAgent test fixtures. */
 function makeStep(name: string) {
   return defineStep({
     name,
@@ -54,13 +54,13 @@ function makeStep(name: string) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. defineOrchestration validation
+// 1. defineAgent validation
 // ---------------------------------------------------------------------------
 
-describe('defineOrchestration', () => {
+describe('defineAgent', () => {
   it('returns the definition unchanged when valid', () => {
     const entry = makeStep('start');
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: 'my-workflow',
       entry: 'start',
       steps: { start: entry },
@@ -72,27 +72,27 @@ describe('defineOrchestration', () => {
 
   it('throws when name is empty', () => {
     expect(() =>
-      defineOrchestration({
+      defineAgent({
         name: '',
         entry: 'start',
         steps: { start: makeStep('start') },
       }),
-    ).toThrow('Workflow definition must have a non-empty name');
+    ).toThrow('Agent definition must have a non-empty name');
   });
 
   it('throws when entry is empty string', () => {
     expect(() =>
-      defineOrchestration({
+      defineAgent({
         name: 'wf',
         entry: '',
         steps: { start: makeStep('start') },
       }),
-    ).toThrow("Workflow 'wf' must declare an entry step");
+    ).toThrow("Agent 'wf' must declare an entry step");
   });
 
   it('throws UnknownStepError when entry is not in steps', () => {
     expect(() =>
-      defineOrchestration({
+      defineAgent({
         name: 'wf',
         entry: 'missing',
         steps: { start: makeStep('start') },
@@ -103,7 +103,7 @@ describe('defineOrchestration', () => {
   it('UnknownStepError carries the step name', () => {
     let thrown: unknown;
     try {
-      defineOrchestration({ name: 'wf', entry: 'missing', steps: { start: makeStep('start') } });
+      defineAgent({ name: 'wf', entry: 'missing', steps: { start: makeStep('start') } });
     } catch (e) {
       thrown = e;
     }
@@ -113,7 +113,7 @@ describe('defineOrchestration', () => {
 
   it('throws when a step key does not match step.name', () => {
     expect(() =>
-      defineOrchestration({
+      defineAgent({
         name: 'wf',
         entry: 'start',
         steps: { start: makeStep('wrong-name') },
@@ -122,7 +122,7 @@ describe('defineOrchestration', () => {
   });
 
   it('accepts multiple steps with correct names', () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: 'multi',
       entry: 'a',
       steps: { a: makeStep('a'), b: makeStep('b'), c: makeStep('c') },
@@ -130,82 +130,82 @@ describe('defineOrchestration', () => {
     expect(Object.keys(def.steps)).toHaveLength(3);
   });
 
-  it('attaches a non-enumerable ORCHESTRATION_DEFINITION_BRAND symbol to the returned object', () => {
-    const def = defineOrchestration({
+  it('attaches a non-enumerable AGENT_DEFINITION_BRAND symbol to the returned object', () => {
+    const def = defineAgent({
       name: 'branded',
       entry: 'start',
       steps: { start: makeStep('start') },
     });
     // The brand must be present with value 1.
-    const brand = (def as unknown as Record<symbol, unknown>)[ORCHESTRATION_DEFINITION_BRAND];
+    const brand = (def as unknown as Record<symbol, unknown>)[AGENT_DEFINITION_BRAND];
     expect(brand).toBe(1);
     // Non-enumerable: must not appear in Object.keys or for...in.
-    expect(Object.keys(def)).not.toContain(ORCHESTRATION_DEFINITION_BRAND.toString());
+    expect(Object.keys(def)).not.toContain(AGENT_DEFINITION_BRAND.toString());
     const enumKeys: string[] = [];
     for (const k in def) enumKeys.push(k);
-    expect(enumKeys).not.toContain(ORCHESTRATION_DEFINITION_BRAND.toString());
+    expect(enumKeys).not.toContain(AGENT_DEFINITION_BRAND.toString());
   });
 
   it('brand survives a JSON round-trip by being on the live object (not on a parsed copy)', () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: 'json-round-trip',
       entry: 'start',
       steps: { start: makeStep('start') },
     });
     // The brand is on the live definition object.
-    expect(isOrchestrationDefinition(def)).toBe(true);
+    expect(isAgentDefinition(def)).toBe(true);
     // A plain-JSON copy (simulating what JSON.stringify/parse produces) lacks the brand.
     const copy = JSON.parse(JSON.stringify({ name: def.name, entry: def.entry, steps: {} }));
-    expect(isOrchestrationDefinition(copy)).toBe(false);
+    expect(isAgentDefinition(copy)).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// isOrchestrationDefinition type guard
+// isAgentDefinition type guard
 // ---------------------------------------------------------------------------
 
-describe('isOrchestrationDefinition', () => {
-  it('returns true for a value produced by defineOrchestration', () => {
-    const def = defineOrchestration({
+describe('isAgentDefinition', () => {
+  it('returns true for a value produced by defineAgent', () => {
+    const def = defineAgent({
       name: 'wf',
       entry: 'start',
       steps: { start: makeStep('start') },
     });
-    expect(isOrchestrationDefinition(def)).toBe(true);
+    expect(isAgentDefinition(def)).toBe(true);
   });
 
   it('returns false for a plain object with name/entry/steps (duck-type trap)', () => {
     const plain = { name: 'wf', entry: 'start', steps: {} };
-    expect(isOrchestrationDefinition(plain)).toBe(false);
+    expect(isAgentDefinition(plain)).toBe(false);
   });
 
   it('returns false for null', () => {
-    expect(isOrchestrationDefinition(null)).toBe(false);
+    expect(isAgentDefinition(null)).toBe(false);
   });
 
   it('returns false for a string', () => {
-    expect(isOrchestrationDefinition('workflow')).toBe(false);
+    expect(isAgentDefinition('workflow')).toBe(false);
   });
 
   it('returns false for undefined', () => {
-    expect(isOrchestrationDefinition(undefined)).toBe(false);
+    expect(isAgentDefinition(undefined)).toBe(false);
   });
 
   it('returns false for an empty object', () => {
-    expect(isOrchestrationDefinition({})).toBe(false);
+    expect(isAgentDefinition({})).toBe(false);
   });
 
-  it('narrows the type: TypeScript accepts it as OrchestrationDefinition after guard', () => {
-    const val: unknown = defineOrchestration({
+  it('narrows the type: TypeScript accepts it as AgentDefinition after guard', () => {
+    const val: unknown = defineAgent({
       name: 'narrowed',
       entry: 's',
       steps: { s: makeStep('s') },
     });
-    if (isOrchestrationDefinition(val)) {
+    if (isAgentDefinition(val)) {
       // If this compiles, the type narrowing works.
       expect(val.name).toBe('narrowed');
     } else {
-      throw new Error('expected isOrchestrationDefinition to return true');
+      throw new Error('expected isAgentDefinition to return true');
     }
   });
 });
@@ -338,22 +338,22 @@ describe('InMemoryContextStore', () => {
 // ---------------------------------------------------------------------------
 
 describe('error hierarchy', () => {
-  it('UnknownStepError is a WorkflowError', () => {
+  it('UnknownStepError is a AgentError', () => {
     const e = new UnknownStepError('foo');
-    expect(e).toBeInstanceOf(WorkflowError);
+    expect(e).toBeInstanceOf(AgentError);
     expect(e).toBeInstanceOf(Error);
     expect(e.name).toBe('UnknownStepError');
     expect(e.stepName).toBe('foo');
     expect(e.message).toContain('foo');
   });
 
-  it('StepInputValidationError is a WorkflowError and carries issues', () => {
+  it('StepInputValidationError is a AgentError and carries issues', () => {
     // Use a minimal $ZodIssue-compatible object cast to the constructor's expected type
     const fakeIssues = [
       { path: ['name'], message: 'Required', code: 'invalid_type' },
     ] as unknown as ConstructorParameters<typeof StepInputValidationError>[1];
     const e = new StepInputValidationError('myStep', fakeIssues);
-    expect(e).toBeInstanceOf(WorkflowError);
+    expect(e).toBeInstanceOf(AgentError);
     expect(e.name).toBe('StepInputValidationError');
     expect(e.stepName).toBe('myStep');
     expect(e.issues).toBe(fakeIssues);

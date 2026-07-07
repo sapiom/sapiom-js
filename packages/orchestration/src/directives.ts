@@ -60,10 +60,10 @@ export interface RetryDirective {
 /**
  * Pause until an external signal arrives. The runner records the pause
  * (status='paused', signal name + correlationId stored on the execution row)
- * and the inline runner exits via WorkflowPausedError.
+ * and the inline runner exits via AgentPausedError.
  *
  * Signal-routed resume is implemented in `signals.service.ts`:
- * `WorkflowSignals.fireSignal(name, correlationId, payload)` looks up paused
+ * `AgentSignals.fireSignal(name, correlationId, payload)` looks up paused
  * executions by (signal.name, correlationId) and wakes each one with the
  * payload as the resume step's input. Operator-driven resume also works.
  */
@@ -104,7 +104,7 @@ export interface TerminateDirective {
  * errors removes the self-heal safety net. Pick the one whose semantics
  * match the failure mode you're handling.
  *
- * **Workflow-level cleanup pattern:** FAIL ends the execution immediately —
+ * **Agent-level cleanup pattern:** FAIL ends the execution immediately —
  * any cleanup steps the workflow wants to run (sandbox teardown, file
  * cleanup, etc.) must happen BEFORE the FAIL directive fires. The standard
  * shape is: an earlier step stashes a "this run failed" flag in `ctx.shared`,

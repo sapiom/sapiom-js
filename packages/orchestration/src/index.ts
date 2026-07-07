@@ -33,7 +33,7 @@ export type { Step, StepResult, StepDefinition, Allowed } from './step.js';
 
 // Execution context — what a step's `run` receives (metadata + shared store + logger)
 export type {
-  OrchestrationExecutionContext,
+  AgentExecutionContext,
   TypedContextStore,
   StepExecutionRecord,
   StepLogger,
@@ -41,21 +41,21 @@ export type {
 } from './context.js';
 export { InMemoryContextStore } from './context.js';
 
-// Workflow definition + defineOrchestration factory + brand guard
-export type { OrchestrationDefinition } from './workflow.js';
-export { defineOrchestration, isOrchestrationDefinition, ORCHESTRATION_DEFINITION_BRAND } from './workflow.js';
+// Agent definition + defineAgent factory + brand guard
+export type { AgentDefinition } from './agent.js';
+export { defineAgent, isAgentDefinition, AGENT_DEFINITION_BRAND } from './agent.js';
 
 // Errors that are part of the public contract surface
-export { WorkflowError, UnknownStepError, StepInputValidationError, DisallowedTransitionError } from './errors.js';
+export { AgentError, UnknownStepError, StepInputValidationError, DisallowedTransitionError } from './errors.js';
 
 // Introspection — zod→JSON-Schema conversion + step/workflow input contracts.
 // Shared by engine tooling and the build phase (runs outside the engine).
 export { zodToJsonSchema, exampleFromJsonSchema, stepInputContract, workflowInputContract } from './introspection.js';
-export type { StepInputContract, WorkflowInputContract } from './introspection.js';
+export type { StepInputContract, AgentInputContract } from './introspection.js';
 
 // Manifest types, Zod schema, and generator — the build→engine contract.
-export { MANIFEST_PROTOCOL, workflowManifestSchema } from './manifest.js';
-export type { WorkflowManifest, WorkflowStepManifest, ManifestTransition } from './manifest.js';
+export { MANIFEST_PROTOCOL, agentManifestSchema } from './manifest.js';
+export type { AgentManifest, AgentStepManifest, ManifestTransition } from './manifest.js';
 
 // Manifest generator + graph validation — called by the build phase.
 export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';

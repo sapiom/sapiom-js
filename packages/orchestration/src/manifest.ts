@@ -26,7 +26,7 @@ export type ManifestTransition =
  * The engine uses this to pre-validate inputs and enforce dispatch deadlines
  * without importing any customer definition code.
  */
-export interface WorkflowStepManifest {
+export interface AgentStepManifest {
   /**
    * Dispatch deadline for one attempt (ms).
    * null → engine applies its own default (DEFAULT_DISPATCH_TIMEOUT_MS).
@@ -54,12 +54,12 @@ export interface WorkflowStepManifest {
  * without importing customer code. Produced by the build phase (locally via
  * `build-definition`, in CI via the sandbox build-run). Protocol 1.
  */
-export interface WorkflowManifest {
+export interface AgentManifest {
   /** Schema version. Engine rejects unknown protocols. */
   readonly protocol: typeof MANIFEST_PROTOCOL;
-  /** Workflow name (matches OrchestrationDefinition.name). */
+  /** Agent name (matches AgentDefinition.name). */
   readonly name: string;
-  /** Entry step name (matches OrchestrationDefinition.entry). */
+  /** Entry step name (matches AgentDefinition.entry). */
   readonly entry: string;
   /** Version of @sapiom/workflow-sdk used to build the definition. */
   readonly sdkVersion: string;
@@ -69,7 +69,7 @@ export interface WorkflowManifest {
     readonly entryFile: string;
   };
   /** Per-step metadata map (keyed by step name). */
-  readonly steps: Readonly<Record<string, WorkflowStepManifest>>;
+  readonly steps: Readonly<Record<string, AgentStepManifest>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,10 +90,10 @@ const workflowStepManifestSchema = z.object({
 });
 
 /**
- * Zod schema that parses and validates a WorkflowManifest.
+ * Zod schema that parses and validates a AgentManifest.
  * The engine uses this when it receives a manifest from the build phase.
  */
-export const workflowManifestSchema = z.object({
+export const agentManifestSchema = z.object({
   protocol: z.literal(MANIFEST_PROTOCOL),
   name: z.string().min(1),
   entry: z.string().min(1),

@@ -2,8 +2,8 @@
  * Tests for manifest types, schema validation, and buildManifest generator.
  *
  * Proves:
- *   1. workflowManifestSchema validates a well-formed manifest
- *   2. workflowManifestSchema rejects invalid manifests (wrong protocol, missing fields)
+ *   1. agentManifestSchema validates a well-formed manifest
+ *   2. agentManifestSchema rejects invalid manifests (wrong protocol, missing fields)
  *   3. buildManifest emits the correct manifest shape from a definition
  *   4. buildManifest: step with inputSchema → JSON Schema; without → null
  *   5. buildManifest: step with timeoutMs → timeoutMs; without → null
@@ -15,11 +15,11 @@ import { buildManifest } from "./build-manifest.js";
 import { goto, pauseUntilSignal, terminate } from "./directives.js";
 import {
   MANIFEST_PROTOCOL,
-  type WorkflowManifest,
-  workflowManifestSchema,
+  type AgentManifest,
+  agentManifestSchema,
 } from "./manifest.js";
 import { defineStep } from "./step.js";
-import { defineOrchestration } from "./workflow.js";
+import { defineAgent } from "./agent.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,12 +46,12 @@ const DUMMY_ARTIFACT = { sha256: "abc123", entryFile: "dist/workflow.mjs" };
 const DUMMY_SDK_VERSION = "0.1.0";
 
 // ---------------------------------------------------------------------------
-// 1 + 2. workflowManifestSchema
+// 1 + 2. agentManifestSchema
 // ---------------------------------------------------------------------------
 
-describe("workflowManifestSchema", () => {
+describe("agentManifestSchema", () => {
   it("accepts a well-formed manifest", () => {
-    const manifest: WorkflowManifest = {
+    const manifest: AgentManifest = {
       protocol: MANIFEST_PROTOCOL,
       name: "my-workflow",
       entry: "step-a",
@@ -70,8 +70,8 @@ describe("workflowManifestSchema", () => {
         },
       },
     };
-    expect(() => workflowManifestSchema.parse(manifest)).not.toThrow();
-    const parsed = workflowManifestSchema.parse(manifest);
+    expect(() => agentManifestSchema.parse(manifest)).not.toThrow();
+    const parsed = agentManifestSchema.parse(manifest);
     expect(parsed.protocol).toBe(1);
     expect(parsed.steps["step-a"].timeoutMs).toBe(5000);
     expect(parsed.steps["step-b"].inputSchema).toBeNull();
@@ -89,7 +89,7 @@ describe("workflowManifestSchema", () => {
       artifact: { sha256: "x", entryFile: "f.mjs" },
       steps: {},
     };
-    expect(() => workflowManifestSchema.parse(bad)).toThrow();
+    expect(() => agentManifestSchema.parse(bad)).toThrow();
   });
 
   it("rejects a manifest missing required fields", () => {
@@ -98,7 +98,7 @@ describe("workflowManifestSchema", () => {
       name: "wf",
       // missing entry, sdkVersion, artifact, steps
     };
-    expect(() => workflowManifestSchema.parse(missing)).toThrow();
+    expect(() => agentManifestSchema.parse(missing)).toThrow();
   });
 
   it("rejects a manifest with empty name", () => {
@@ -110,7 +110,7 @@ describe("workflowManifestSchema", () => {
       artifact: { sha256: "x", entryFile: "f.mjs" },
       steps: {},
     };
-    expect(() => workflowManifestSchema.parse(empty)).toThrow();
+    expect(() => agentManifestSchema.parse(empty)).toThrow();
   });
 
   it("rejects a non-positive timeoutMs", () => {
@@ -122,7 +122,7 @@ describe("workflowManifestSchema", () => {
       artifact: { sha256: "x", entryFile: "f.mjs" },
       steps: { a: { timeoutMs: -100, inputSchema: null, transitions: [] } },
     };
-    expect(() => workflowManifestSchema.parse(bad)).toThrow();
+    expect(() => agentManifestSchema.parse(bad)).toThrow();
   });
 
   it("rejects a step with an unknown transition kind", () => {
@@ -140,7 +140,7 @@ describe("workflowManifestSchema", () => {
         },
       },
     };
-    expect(() => workflowManifestSchema.parse(bad)).toThrow();
+    expect(() => agentManifestSchema.parse(bad)).toThrow();
   });
 
   it("accepts null timeoutMs (engine default)", () => {
@@ -152,7 +152,7 @@ describe("workflowManifestSchema", () => {
       artifact: { sha256: "x", entryFile: "f.mjs" },
       steps: { a: { timeoutMs: null, inputSchema: null, transitions: [] } },
     };
-    expect(() => workflowManifestSchema.parse(good)).not.toThrow();
+    expect(() => agentManifestSchema.parse(good)).not.toThrow();
   });
 });
 
@@ -162,7 +162,7 @@ describe("workflowManifestSchema", () => {
 
 describe("buildManifest", () => {
   it("emits protocol=1 and passes through sdkVersion and artifact", () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "simple",
       entry: "start",
       steps: { start: makeStep("start") },
@@ -177,7 +177,7 @@ describe("buildManifest", () => {
   });
 
   it("carries name and entry from the definition", () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "my-wf",
       entry: "alpha",
       steps: { alpha: makeStep("alpha") },
@@ -191,7 +191,7 @@ describe("buildManifest", () => {
   });
 
   it("step without inputSchema → inputSchema: null in manifest", () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "wf",
       entry: "plain",
       steps: { plain: makeStep("plain") },
@@ -204,7 +204,7 @@ describe("buildManifest", () => {
   });
 
   it("step without timeoutMs → timeoutMs: null in manifest", () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "wf",
       entry: "plain",
       steps: { plain: makeStep("plain") },
@@ -218,7 +218,7 @@ describe("buildManifest", () => {
 
   it("step with inputSchema → schema converted to JSON Schema", () => {
     const schema = z.object({ userId: z.string(), count: z.number() });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "wf",
       entry: "validated",
       steps: { validated: makeStep("validated", { inputSchema: schema }) },
@@ -239,7 +239,7 @@ describe("buildManifest", () => {
   });
 
   it("step with timeoutMs → timeoutMs carried through", () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "wf",
       entry: "slow",
       steps: { slow: makeStep("slow", { timeoutMs: 30_000 }) },
@@ -253,7 +253,7 @@ describe("buildManifest", () => {
 
   it("multi-step definition: each step independently mapped", () => {
     const inputSchema = z.object({ topic: z.string() });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "multi",
       entry: "gather",
       steps: {
@@ -289,7 +289,7 @@ describe("buildManifest", () => {
       name: z.string(),
       count: z.number().default(0),
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "wf",
       entry: "step",
       steps: { step: makeStep("step", { inputSchema: schema }) },
@@ -315,7 +315,7 @@ describe("buildManifest", () => {
       runId: z.string(),
       result: z.object({ success: z.boolean() }).nullable(),
     });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "wf",
       entry: "review",
       steps: { review: makeStep("review", { inputSchema: schema }) },
@@ -338,9 +338,9 @@ describe("buildManifest", () => {
     expect(stepSchema.required).toContain("runId");
   });
 
-  it("manifest validates against workflowManifestSchema", () => {
+  it("manifest validates against agentManifestSchema", () => {
     const inputSchema = z.object({ input: z.string() });
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: "validated-wf",
       entry: "entry",
       steps: {
@@ -354,7 +354,7 @@ describe("buildManifest", () => {
     });
 
     // Parse with the zod schema — must not throw
-    const parsed = workflowManifestSchema.parse(manifest);
+    const parsed = agentManifestSchema.parse(manifest);
     expect(parsed.name).toBe("validated-wf");
     expect(parsed.steps.entry.inputSchema).not.toBeNull();
     expect(parsed.steps.exit.timeoutMs).toBe(5000);
@@ -368,7 +368,7 @@ describe("buildManifest", () => {
 describe("buildManifest transitions", () => {
   // A four-step graph exercising every transition kind:
   //   prep -> enrich -> approval (pause→finalize) -> finalize (terminate|fail)
-  const def = defineOrchestration({
+  const def = defineAgent({
     name: "graph",
     entry: "prep",
     steps: {
@@ -447,6 +447,6 @@ describe("buildManifest transitions", () => {
   });
 
   it("produces a manifest that validates against the schema", () => {
-    expect(() => workflowManifestSchema.parse(manifest)).not.toThrow();
+    expect(() => agentManifestSchema.parse(manifest)).not.toThrow();
   });
 });

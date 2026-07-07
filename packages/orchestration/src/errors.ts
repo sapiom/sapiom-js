@@ -3,10 +3,10 @@
 import type { $ZodIssue } from 'zod/v4/core';
 
 /** Base class for every error the primitive can throw. */
-export class WorkflowError extends Error {
+export class AgentError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'WorkflowError';
+    this.name = 'AgentError';
   }
 }
 
@@ -18,7 +18,7 @@ export class WorkflowError extends Error {
  * pure waste). Carries the raw Zod issues so callers (the admin tool)
  * can surface field-level detail.
  */
-export class StepInputValidationError extends WorkflowError {
+export class StepInputValidationError extends AgentError {
   readonly stepName: string;
   readonly issues: readonly $ZodIssue[];
   constructor(stepName: string, issues: readonly $ZodIssue[]) {
@@ -41,7 +41,7 @@ function formatIssues(issues: readonly $ZodIssue[]): string {
 }
 
 /** Definition references a step name that isn't in the steps map. */
-export class UnknownStepError extends WorkflowError {
+export class UnknownStepError extends AgentError {
   readonly stepName: string;
   constructor(stepName: string) {
     super(`Unknown step: ${stepName}`);
@@ -59,7 +59,7 @@ export class UnknownStepError extends WorkflowError {
  * terminally — untrusted code cannot route outside the declared graph. `retry`
  * is exempt (universal, capped by `maxAttemptsPerStep`).
  */
-export class DisallowedTransitionError extends WorkflowError {
+export class DisallowedTransitionError extends AgentError {
   readonly stepName: string;
   readonly directiveKind: string;
   readonly target?: string;

@@ -5,7 +5,7 @@
 import { assertValidGraph, buildManifest, validateGraph } from './build-manifest.js';
 import { goto, pauseUntilSignal, terminate } from './directives.js';
 import { defineStep } from './step.js';
-import { defineOrchestration } from './workflow.js';
+import { defineAgent } from './agent.js';
 
 const ARTIFACT = { sha256: 'x', entryFile: 'f.mjs' };
 const manifestOf = (def: Parameters<typeof buildManifest>[0]) =>
@@ -13,7 +13,7 @@ const manifestOf = (def: Parameters<typeof buildManifest>[0]) =>
 
 describe('validateGraph', () => {
   it('passes a well-formed linear graph', () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: 'ok',
       entry: 'a',
       steps: {
@@ -71,7 +71,7 @@ describe('validateGraph', () => {
   });
 
   it('warns on an unreachable step', () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: 'island',
       entry: 'a',
       steps: {
@@ -116,7 +116,7 @@ describe('validateGraph', () => {
   });
 
   it('accepts a pause self-loop reaching a terminal (the repo-lock barrier shape)', () => {
-    const def = defineOrchestration({
+    const def = defineAgent({
       name: 'barrier',
       entry: 'await_lock',
       steps: {

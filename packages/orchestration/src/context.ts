@@ -55,7 +55,7 @@ export type FinishedStepStatus = 'dispatched' | 'succeeded' | 'failed';
  * pass it through `output → input`. If something three steps downstream
  * needs it, put it in `shared`.
  */
-export interface OrchestrationExecutionContext<TShared extends Record<string, unknown> = Record<string, unknown>> {
+export interface AgentExecutionContext<TShared extends Record<string, unknown> = Record<string, unknown>> {
   /** Stable id; the workflow_executions row primary key. */
   readonly executionId: string;
   readonly workflowName: string;
