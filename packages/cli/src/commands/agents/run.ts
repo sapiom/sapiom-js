@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { AgentOperationError, parseJsonInput, run } from '@sapiom/orchestration-core';
+import { AgentOperationError, parseJsonInput, run } from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { requireConfig } from '../../lib/config.js';

@@ -1,4 +1,4 @@
-import { deploy, AgentOperationError } from '@sapiom/orchestration-core';
+import { deploy, AgentOperationError } from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { requireConfig } from '../../lib/config.js';

@@ -8,8 +8,8 @@ vi.mock("../credentials.js", () => ({
 
 // Keep the real module (createClient, AgentOperationError, ...) but stub the networked
 // schedule fns so the tools are tested without touching the backend.
-vi.mock("@sapiom/orchestration-core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@sapiom/orchestration-core")>();
+vi.mock("@sapiom/agent-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@sapiom/agent-core")>();
   return {
     ...actual,
     createSchedule: vi.fn(),
@@ -28,7 +28,7 @@ import {
   getSchedule,
   listSchedules,
   previewCron,
-} from "@sapiom/orchestration-core";
+} from "@sapiom/agent-core";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;

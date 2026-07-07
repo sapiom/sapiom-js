@@ -1,4 +1,4 @@
-import { AgentOperationError, parseSignalPayload, signal } from '@sapiom/orchestration-core';
+import { AgentOperationError, parseSignalPayload, signal } from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { readConfig } from '../../lib/config.js';

@@ -1,15 +1,15 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import { AgentOperationError, scaffold } from '@sapiom/orchestration-core';
+import { AgentOperationError, scaffold } from '@sapiom/agent-core';
 
 import { CliError, ok } from '../../lib/output.js';
 
 const nodeRequire = createRequire(import.meta.url);
 
-/** Locate @sapiom/orchestration-core's bundled templates dir (no __dirname in ESM). */
+/** Locate @sapiom/agent-core's bundled templates dir (no __dirname in ESM). */
 function coreTemplatesDir(): string {
-  const entry = nodeRequire.resolve('@sapiom/orchestration-core');
+  const entry = nodeRequire.resolve('@sapiom/agent-core');
   return path.resolve(path.dirname(entry), '..', '..', 'templates');
 }
 

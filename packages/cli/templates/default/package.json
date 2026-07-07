@@ -11,7 +11,7 @@
     "format:check": "prettier --check \"**/*.ts\""
   },
   "dependencies": {
-    "@sapiom/orchestration": "__ORCHESTRATION_VERSION__",
+    "@sapiom/agent": "__AGENT_VERSION__",
     "@sapiom/tools": "__TOOLS_VERSION__",
     "zod": "__ZOD_VERSION__"
   },

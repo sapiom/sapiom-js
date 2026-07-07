@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { check, AgentOperationError } from '@sapiom/orchestration-core';
+import { check, AgentOperationError } from '@sapiom/agent-core';
 
 import { CliError, isJsonMode, ok } from '../../lib/output.js';
 

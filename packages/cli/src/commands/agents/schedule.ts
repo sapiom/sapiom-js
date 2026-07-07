@@ -1,6 +1,6 @@
 /**
  * `sapiom agents schedule …` — manage schedules (cron + one-off triggers) for a
- * server-side orchestration, addressed by its slug. Thin wrappers over @sapiom/orchestration-core.
+ * server-side orchestration, addressed by its slug. Thin wrappers over @sapiom/agent-core.
  */
 import {
   cancelSchedule,
@@ -12,7 +12,7 @@ import {
   previewCron,
   type ScheduleKind,
   type ScheduleStatus,
-} from '@sapiom/orchestration-core';
+} from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { readConfig } from '../../lib/config.js';

@@ -1,6 +1,6 @@
 # __PROJECT_NAME__
 
-A Sapiom orchestration, authored as code against [`@sapiom/orchestration`](https://www.npmjs.com/package/@sapiom/orchestration).
+A Sapiom orchestration, authored as code against [`@sapiom/agent`](https://www.npmjs.com/package/@sapiom/agent).
 
 ## Getting started
 
@@ -8,7 +8,7 @@ A Sapiom orchestration, authored as code against [`@sapiom/orchestration`](https
 npm install
 ```
 
-Then open `index.ts`. The orchestration is defined with `defineOrchestration({ steps })`; each step is a `defineStep({ name, next, run })`. The `run` body is ordinary code — and inside it, the full Sapiom tool catalog is available, pre-auth'd and tenant-scoped, on `ctx.sapiom`:
+Then open `index.ts`. The orchestration is defined with `defineAgent({ steps })`; each step is a `defineStep({ name, next, run })`. The `run` body is ordinary code — and inside it, the full Sapiom tool catalog is available, pre-auth'd and tenant-scoped, on `ctx.sapiom`:
 
 ```ts
 const box = await ctx.sapiom.sandboxes.create({ name: 'demo' });

@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { link, AgentOperationError } from '@sapiom/orchestration-core';
+import { link, AgentOperationError } from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { writeConfig } from '../../lib/config.js';

@@ -16,7 +16,7 @@ From inside a step, dispatch another orchestration and suspend until it finishes
 
 ```ts
 import { orchestrations } from "@sapiom/tools";
-import { defineStep, pauseUntilSignal } from "@sapiom/orchestration";
+import { defineStep, pauseUntilSignal } from "@sapiom/agent";
 
 const enrich = defineStep({
   name: "enrich",

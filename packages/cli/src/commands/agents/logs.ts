@@ -1,4 +1,4 @@
-import { inspect, inspectBuild, listExecutions, AgentOperationError } from '@sapiom/orchestration-core';
+import { inspect, inspectBuild, listExecutions, AgentOperationError } from '@sapiom/agent-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { readConfig, requireConfig } from '../../lib/config.js';
