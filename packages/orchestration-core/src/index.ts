@@ -66,6 +66,25 @@ export type { DeployOptions, DeployResult } from "./deploy.js";
 export { run, parseJsonInput } from "./run.js";
 export type { RunOptions, RunResult } from "./run.js";
 
+// projection types (canonical inspection contract — single owner, see interfaces.md)
+export type {
+  ExecutionProjection,
+  StepProjection,
+  CostNode,
+  SettleState,
+  ExecutionRef,
+  DispatchRef,
+  StepError,
+  StepEvent,
+} from "./types.js";
+
+// projection decode helpers (tolerant normalization of the REST body)
+export {
+  decodeExecutionProjection,
+  decodeExecutionRef,
+  decodeCostNode,
+} from "./decode.js";
+
 // inspect / logs (networked)
 export {
   inspect,
@@ -76,12 +95,8 @@ export {
 } from "./inspect.js";
 export type {
   InspectOptions,
-  InspectResult,
-  ListExecutionsResult,
   InspectBuildOptions,
   InspectBuildResult,
-  ExecutionDetail,
-  StepRecord,
   BuildDetail,
   WaitForExecutionOptions,
   WaitForExecutionResult,

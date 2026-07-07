@@ -469,7 +469,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
               ...(hint ? { hint } : {}),
             });
           }
-          const { execution } = await inspect({ executionId }, client);
+          const execution = await inspect({ executionId }, client);
           // Self-correcting nudge: on a non-terminal snapshot, point at wait:true
           // so a caller reaches for the tool's loop instead of polling by hand.
           const hint = isExecutionTerminal(execution.status)

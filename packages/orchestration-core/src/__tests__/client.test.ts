@@ -175,18 +175,18 @@ describe('parseSignalPayload', () => {
 describe('inspect', () => {
   const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
 
-  it('fetches execution by id (CLI-style)', async () => {
+  it('returns the decoded ExecutionProjection directly', async () => {
     const ex = { id: 'exec-1', status: 'completed', steps: [] };
     mockFetch([{ status: 200, body: ex }]);
     const result = await inspect({ executionId: 'exec-1' }, client);
-    expect(result.execution.id).toBe('exec-1');
-    expect(result.execution.status).toBe('completed');
+    expect(result.id).toBe('exec-1');
+    expect(result.status).toBe('completed');
   });
 
-  it('returns execution detail for MCP-style caller', async () => {
+  it('carries the current step through', async () => {
     const ex = { id: 'exec-2', status: 'running', currentStep: 'process' };
     mockFetch([{ status: 200, body: ex }]);
-    const { execution } = await inspect({ executionId: 'exec-2' }, client);
+    const execution = await inspect({ executionId: 'exec-2' }, client);
     expect(execution.currentStep).toBe('process');
   });
 });
@@ -194,12 +194,13 @@ describe('inspect', () => {
 describe('listExecutions', () => {
   const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
 
-  it('fetches recent executions list', async () => {
+  it('returns tree-aware ExecutionRef[] directly', async () => {
     const list = [{ id: 'e1', status: 'completed' }, { id: 'e2', status: 'running' }];
     mockFetch([{ status: 200, body: list }]);
-    const { executions } = await listExecutions(client);
+    const executions = await listExecutions(client);
     expect(executions).toHaveLength(2);
-    expect(executions[0].id).toBe('e1');
+    expect(executions[0].executionId).toBe('e1');
+    expect(executions[0].traceRoot).toBe('e1');
   });
 });
 

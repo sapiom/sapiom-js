@@ -1,0 +1,106 @@
+{
+  "id": "exec_0001",
+  "name": "daily-digest",
+  "organizationId": "org_0001",
+  "tenantId": "tenant_0001",
+  "status": "completed",
+  "currentStep": null,
+  "currentStepAttempt": 1,
+  "version": 3,
+  "definitionId": "def_0001",
+  "buildRunId": "build_0001",
+  "idempotencyKey": null,
+  "pausedSignalName": null,
+  "pausedSignalCorrelationId": null,
+  "pausedUntil": null,
+  "startedAt": "2026-01-01T00:00:00.000Z",
+  "finishedAt": "2026-01-01T00:02:30.000Z",
+  "input": { "topic": "weekly-summary" },
+  "sharedState": { "count": 2 },
+  "output": { "url": "https://example.com/report/exec_0001" },
+  "error": null,
+  "pausedStepInputSchema": null,
+  "pausedStepInputExample": null,
+  "traceRoot": "exec_0001",
+  "rootExecutionId": "exec_0001",
+  "traceParent": null,
+  "parentExecutionId": null,
+  "traceId": "trace_0001",
+  "children": [
+    {
+      "executionId": "exec_0002",
+      "traceRoot": "exec_0001",
+      "name": "render-child",
+      "status": "completed"
+    }
+  ],
+  "cost": {
+    "authorizedUsd": "1.50",
+    "capturedUsd": "1.20",
+    "settleState": "settling"
+  },
+  "steps": [
+    {
+      "stepName": "gather",
+      "stepOrder": 0,
+      "attempt": 1,
+      "status": "completed",
+      "spanId": "span_0001",
+      "startedAt": "2026-01-01T00:00:00.000Z",
+      "finishedAt": "2026-01-01T00:00:45.000Z",
+      "input": { "topic": "weekly-summary" },
+      "output": { "items": 12 },
+      "sharedStateAfter": { "count": 1 },
+      "nextDirective": { "kind": "continue" },
+      "cost": {
+        "authorizedUsd": "0.50",
+        "capturedUsd": "0.50",
+        "settleState": "final"
+      },
+      "logs": "fetched 12 items",
+      "events": [
+        {
+          "sourceId": "run_0001",
+          "sequence": 1,
+          "kind": "tool_use",
+          "payload": { "tool": "web.search" },
+          "eventTs": "2026-01-01T00:00:10.000Z"
+        }
+      ],
+      "error": null,
+      "dispatch": null
+    },
+    {
+      "stepName": "render",
+      "stepOrder": 1,
+      "attempt": 2,
+      "status": "failed",
+      "spanId": "span_0002",
+      "startedAt": "2026-01-01T00:00:45.000Z",
+      "finishedAt": "2026-01-01T00:02:30.000Z",
+      "input": { "items": 12 },
+      "output": null,
+      "sharedStateAfter": { "count": 2 },
+      "nextDirective": null,
+      "cost": {
+        "authorizedUsd": "1.00",
+        "capturedUsd": "0.70",
+        "settleState": "settling"
+      },
+      "logs": null,
+      "events": [],
+      "error": {
+        "message": "template not found",
+        "trace": "Error: template not found\n    at render (src/steps/render.ts:12:11)",
+        "traceUnavailableReason": null
+      },
+      "dispatch": {
+        "dispatchId": "dispatch_0001",
+        "childExecutionId": "exec_0002",
+        "targetType": "orchestration",
+        "status": "resolved",
+        "correlationId": "exec_0002"
+      }
+    }
+  ]
+}

@@ -15,6 +15,6 @@
       "@sapiom/tools/stub": ["../tools/dist/cjs/stub/index.d.ts"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "src/**/*.json"],
   "exclude": ["node_modules", "dist"]
 }
