@@ -1,16 +1,22 @@
 /**
  * Tolerant decode of the REST execution read into the canonical
- * {@link ExecutionProjection}. The SDK is a thin passthrough of the REST shape
- * — this does NOT reshape or recompute cost, it only NORMALIZES a raw JSON body
- * into a fully-populated projection so consumers never branch on missing fields.
+ * {@link ExecutionProjection}. The SDK does NOT recompute cost — it normalizes a
+ * raw JSON body into a well-typed projection so consumers never branch on a
+ * missing field, and it degrades HONESTLY rather than fabricating data.
  *
  * Graceful degradation (mirrors how the REST DTO degrades on older executions):
  *   - Pre-seam runs with no `traceParent`/lineage → tree derived from the run's
  *     own id (`traceRoot = rootExecutionId = id`, `traceParent = null`).
- *   - Missing per-node cost → a zeroed {@link CostNode} (flat fallback), so
- *     every node still exposes `authorizedUsd`/`capturedUsd`/`settleState` and
- *     the two legs are never collapsed.
+ *   - Missing cost → `null` (honest absence), NEVER a fabricated `$0`. The
+ *     execution-detail endpoint is cost-agnostic; cost is served separately at
+ *     `/executions/:id/spend`. A caller sees `cost: null` and knows to look
+ *     there, instead of reading a misleading zero.
  *   - Missing step arrays/fields → empty arrays / nulls, never a throw.
+ *
+ * The `decode*` helpers below are intentionally NOT part of the package's public
+ * API (only {@link decodeExecutionProjection} is re-exported from `index.ts`, as
+ * the reusable entry point tickets 2/4 need to re-decode a body after an SSE
+ * refetch). The finer-grained helpers stay module-internal.
  */
 import type {
   CostNode,
@@ -19,6 +25,8 @@ import type {
   ExecutionRef,
   SettleState,
   StepError,
+  StepErrorFrame,
+  StepErrorTrace,
   StepEvent,
   StepProjection,
 } from "./types.js";
@@ -55,12 +63,6 @@ function recordOrNull(v: unknown): Record<string, unknown> | null {
 
 // ── node decoders ────────────────────────────────────────────────────────────
 
-const ZERO_COST: CostNode = {
-  authorizedUsd: "0",
-  capturedUsd: "0",
-  settleState: "final",
-};
-
 const SETTLE_STATES: readonly SettleState[] = ["pending", "settling", "final"];
 
 function settleState(v: unknown): SettleState {
@@ -70,12 +72,13 @@ function settleState(v: unknown): SettleState {
 }
 
 /**
- * Normalize a raw cost blob into a complete {@link CostNode}. A null/absent
- * cost (the common uncosted run) becomes a zeroed node rather than a fabricated
- * single number — authorized and captured stay distinct legs.
+ * Normalize a raw cost blob into a {@link CostNode}, or `null` when absent. A
+ * null/missing cost is honest absence — NOT a fabricated `$0` — so a caller
+ * distinguishes "no cost data on this read" from "genuinely zero". Authorized
+ * and captured stay distinct legs when present.
  */
-export function decodeCostNode(raw: unknown): CostNode {
-  if (!isRecord(raw)) return { ...ZERO_COST };
+export function decodeCostNode(raw: unknown): CostNode | null {
+  if (!isRecord(raw)) return null;
   return {
     authorizedUsd: str("0", raw.authorizedUsd),
     capturedUsd: str("0", raw.capturedUsd),
@@ -83,16 +86,45 @@ export function decodeCostNode(raw: unknown): CostNode {
   };
 }
 
+function decodeStepErrorFrame(raw: unknown): StepErrorFrame {
+  const r = rec(raw);
+  const frame: StepErrorFrame = {};
+  if (typeof r.function === "string") frame.function = r.function;
+  if (typeof r.file === "string") frame.file = r.file;
+  if (typeof r.line === "number") frame.line = r.line;
+  if (typeof r.column === "number") frame.column = r.column;
+  return frame;
+}
+
+/**
+ * Decode the structured stack trace. Accepts the wire's structured object
+ * (`{ frames, sourceMapped, raw }`), a bare stack string (→ `{ frames: [],
+ * sourceMapped: false, raw }`), or null. Preserves the source-mapped frames so
+ * the SDK doesn't drop the whole trace feature.
+ */
+function decodeStepErrorTrace(raw: unknown): StepErrorTrace | null {
+  if (typeof raw === "string") {
+    return { frames: [], sourceMapped: false, raw };
+  }
+  if (!isRecord(raw)) return null;
+  const trace: StepErrorTrace = {
+    frames: Array.isArray(raw.frames) ? raw.frames.map(decodeStepErrorFrame) : [],
+    sourceMapped: raw.sourceMapped === true,
+  };
+  if (typeof raw.raw === "string") trace.raw = raw.raw;
+  return trace;
+}
+
 function decodeStepError(raw: unknown): StepError | null {
   if (!isRecord(raw)) return null;
-  // A raw error may be a plain `{ message }`, a structured StepError, or a
-  // legacy `{ message, stack }` — take the message, source-mapped trace string
-  // when present, and record why a trace is missing when the field is set.
+  // A raw error may be a `{ message, trace, traceUnavailableReason }` (wire), or
+  // a legacy `{ message, stack }` — take the message, the structured trace, and
+  // the recorded reason a trace is missing.
   const message = strOrNull(raw.message);
   if (message === null) return null;
   return {
     message,
-    trace: strOrNull(raw.trace, raw.stack),
+    trace: decodeStepErrorTrace(raw.trace ?? raw.stack ?? null),
     traceUnavailableReason: strOrNull(raw.traceUnavailableReason),
   };
 }
@@ -111,20 +143,20 @@ function decodeStepEvent(raw: unknown): StepEvent {
 function decodeDispatchRef(raw: unknown): DispatchRef | null {
   if (!isRecord(raw)) return null;
   return {
-    // Accept the canonical `dispatchId`/`childExecutionId`, degrading to the
-    // engine's `id`/`targetId` ledger names so an older body still decodes.
-    dispatchId: str("", raw.dispatchId, raw.id),
+    // The wire dispatch edge keys the child by `target_id`; accept the canonical
+    // `childExecutionId` / a run-level `executionId` too, so any edge decodes.
     childExecutionId: str("", raw.childExecutionId, raw.targetId, raw.executionId),
     targetType: str("", raw.targetType),
-    status: str("", raw.status),
     correlationId: str("", raw.correlationId),
+    status: str("", raw.status),
   };
 }
 
 /**
  * Decode one execution reference (a `children` edge or a `listExecutions` row).
  * `traceRoot` falls back to the ref's own id when lineage is absent, and the id
- * degrades across the id field names different endpoints use.
+ * degrades across the id field names different endpoints use. `name` is `""`
+ * when the source (e.g. a child edge) omits it — see {@link ExecutionRef}.
  */
 export function decodeExecutionRef(raw: unknown): ExecutionRef {
   const r = rec(raw);
@@ -152,7 +184,7 @@ function decodeStep(raw: unknown): StepProjection {
     sharedStateAfter: recordOrNull(r.sharedStateAfter),
     nextDirective: r.nextDirective ?? null,
     cost: decodeCostNode(r.cost),
-    logs: strOrNull(r.logs),
+    logs: r.logs ?? null,
     events: Array.isArray(r.events) ? r.events.map(decodeStepEvent) : [],
     error: decodeStepError(r.error),
     dispatch: decodeDispatchRef(r.dispatch),
@@ -164,7 +196,9 @@ function decodeStep(raw: unknown): StepProjection {
 /**
  * Normalize a raw REST body into a complete {@link ExecutionProjection}. Never
  * throws on a well-formed-but-degraded body: pre-seam runs get a tree derived
- * from their own id and a flat (zeroed) cost fallback.
+ * from their own id, and an absent cost decodes to `null` (honest absence, not a
+ * fabricated `$0`). This is the reusable entry point tickets 2/4 use to re-decode
+ * a projection body after an SSE-triggered refetch.
  */
 export function decodeExecutionProjection(raw: unknown): ExecutionProjection {
   const r = rec(raw);

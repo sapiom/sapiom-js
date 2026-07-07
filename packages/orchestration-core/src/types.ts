@@ -9,6 +9,9 @@
  * Design rules baked into these shapes:
  *   - Cost is per-node and NEVER collapses authorized vs captured — every
  *     cost-bearing node carries both plus a `settleState` (txn → step → run).
+ *     Cost is nullable: the execution-detail read is cost-agnostic today (cost
+ *     lives at `/executions/:id/spend`), so an absent cost decodes to `null` —
+ *     honest absence, never a fabricated `$0`.
  *   - Identity is trace-keyed: `traceRoot`/`traceParent`/`traceId`/`spanId`,
  *     with engine lineage (`parentExecutionId`/`rootExecutionId`) as aliases.
  *   - Dispatch edges and step errors are TYPED (`DispatchRef` / `StepError`),
@@ -60,31 +63,65 @@ export interface StepEvent {
 }
 
 /**
- * Structured terminal error for a failed step. `trace` is source-mapped to the
- * authored TypeScript (not the compiled `.mjs`); when no stack was captured,
- * `trace` is null and `traceUnavailableReason` records WHY — a recorded reason
- * is a fact, never a blank panel.
+ * One frame of a step error's stack trace. `file`/`line`/`column` are authored-TS
+ * coordinates once resolved against the emitted source map (see
+ * {@link StepErrorTrace.sourceMapped}); compiled-JS coordinates otherwise. Any
+ * field may be absent for a synthetic or partially-parsed frame.
+ */
+export interface StepErrorFrame {
+  /** Function / symbol name for the frame, if known. */
+  function?: string;
+  /** Source file — authored TS when source-mapped, compiled JS otherwise. */
+  file?: string;
+  line?: number;
+  column?: number;
+}
+
+/**
+ * A step error's stack trace, top-of-stack first. `sourceMapped` is `true` once
+ * at least one compiled-JS frame was resolved back to authored TS; `false` when
+ * no map was available. `raw` carries the original unparsed stack text so nothing
+ * is lost when frames could not be parsed into structure.
+ */
+export interface StepErrorTrace {
+  frames: StepErrorFrame[];
+  sourceMapped: boolean;
+  /** The original, unparsed stack text (a fallback when `frames` is empty). */
+  raw?: string;
+}
+
+/**
+ * Structured terminal error for a failed step. `trace` is the structured stack
+ * (frames source-mapped to the authored TypeScript when the map resolves); when
+ * no stack was captured, `trace` is null and `traceUnavailableReason` records
+ * WHY — a recorded reason is a fact, never a blank panel.
  */
 export interface StepError {
   /** The error message. */
   message: string;
-  /** Source-mapped stack trace; null when none was captured (see `traceUnavailableReason`). */
-  trace: string | null;
+  /** Structured stack trace; null when none was captured (see `traceUnavailableReason`). */
+  trace: StepErrorTrace | null;
   /** Why no stack trace exists — non-null only when `trace` is null; never blank. */
   traceUnavailableReason: string | null;
 }
 
 /**
  * A lightweight reference to an execution in the dispatch tree — used both for
- * a run's `children` and as the `listExecutions()` element. Trace-keyed so a
- * node can be placed in its tree without a second read.
+ * a run's `children` and as the `listExecutions()` element.
+ *
+ * SERVER-SIDE GAP (tracked): today's endpoints don't carry every field for every
+ * use. List rows omit lineage, so `traceRoot` degrades to the row's own id; child
+ * edges omit a display name, so `name` degrades to `""`. Grouping runs into
+ * dispatch trees from the list, and rendering named children, need the engine to
+ * add `rootExecutionId` to list rows and `name` to child edges (S5 follow-ups).
+ * The SDK degrades honestly rather than throwing; it does not fabricate values.
  */
 export interface ExecutionRef {
   /** The referenced execution id. */
   executionId: string;
-  /** The root of the dispatch tree this execution belongs to. */
+  /** The dispatch-tree root; degrades to `executionId` when the source omits lineage. */
   traceRoot: string;
-  /** Display name of the execution. */
+  /** Display name; `""` when the source (e.g. a child edge) omits it. */
   name: string;
   /** Lifecycle status of the execution. */
   status: string;
@@ -93,19 +130,18 @@ export interface ExecutionRef {
 /**
  * A typed edge from a step to the child execution it dispatched — assembled
  * from the dispatch ledger, NOT string-sniffed from a signal correlation id.
- * Present on a step only when that step launched a child run.
+ * Present on a step only when that step launched a child run. Mirrors the
+ * engine's dispatch edge (the child execution id is the ledger's `target_id`).
  */
 export interface DispatchRef {
-  /** The dispatch ledger row id. */
-  dispatchId: string;
-  /** The dispatched child execution id. */
+  /** The dispatched child execution id (the ledger's `target_id` for an orchestration). */
   childExecutionId: string;
   /** Structured resource type of the target — `'orchestration'` today (later `'coding'`, …). */
   targetType: string;
-  /** Dispatch lifecycle: `'pending'` at launch, `'resolved'` when the result lands. */
-  status: string;
   /** The signal correlation id the parent resumes on. */
   correlationId: string;
+  /** Dispatch lifecycle: `'pending'` at launch, `'resolved'` when the result lands. */
+  status: string;
 }
 
 /**
@@ -132,10 +168,16 @@ export interface StepProjection {
   sharedStateAfter: Record<string, unknown> | null;
   /** Directive the step returned (continue / retry / pause / terminate / fail). Null on throw. */
   nextDirective: unknown;
-  /** Per-step capability cost — authorized vs captured, never collapsed. */
-  cost: CostNode;
-  /** Executor-side log buffer for dispatched attempts; null for in-process steps. */
-  logs: string | null;
+  /**
+   * Per-step capability cost — authorized vs captured, never collapsed. `null`
+   * when the read carries no cost for this step: the execution-detail endpoint
+   * is cost-agnostic today, so per-step cost is populated only from the
+   * cost-bearing projection (or a `/executions/:id/spend` `byStep` merge). Null
+   * is honest absence, NOT `$0` — see {@link ExecutionProjection.cost}.
+   */
+  cost: CostNode | null;
+  /** Executor-side log buffer for dispatched attempts (`[{ts,level,msg}]` array); null for in-process steps. */
+  logs: unknown;
   /** Events forwarded by capabilities this step dispatched; empty when none. */
   events: StepEvent[];
   /** Structured error if the step threw; null on success. */
@@ -201,7 +243,15 @@ export interface ExecutionProjection {
   children: ExecutionRef[];
 
   // ── cost (run-level rollup over the tree; never collapsed) ───────────────────
-  cost: CostNode;
+  /**
+   * Run-level capability cost — authorized vs captured, never collapsed. `null`
+   * when the read carries no cost: the execution-DETAIL endpoint
+   * (`GET /v1/workflows/executions/:id`) is cost-agnostic; the authoritative
+   * per-run + `byStep` cost lives at `GET /v1/workflows/executions/:id/spend`.
+   * `inspect()` surfaces cost only when the projection body carries it, and
+   * decodes a missing cost to `null` — honest absence, never a fabricated `$0`.
+   */
+  cost: CostNode | null;
 
   // ── steps ────────────────────────────────────────────────────────────────────
   steps: StepProjection[];

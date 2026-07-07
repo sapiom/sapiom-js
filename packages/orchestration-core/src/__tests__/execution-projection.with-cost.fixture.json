@@ -1,0 +1,60 @@
+{
+  "id": "exec_0001",
+  "name": "daily-digest",
+  "organizationId": "org_0001",
+  "tenantId": "tenant_0001",
+  "status": "completed",
+  "currentStep": null,
+  "currentStepAttempt": 1,
+  "version": 3,
+  "definitionId": "def_0001",
+  "buildRunId": "build_0001",
+  "idempotencyKey": null,
+  "pausedSignalName": null,
+  "pausedSignalCorrelationId": null,
+  "pausedUntil": null,
+  "startedAt": "2026-01-01T00:00:00.000Z",
+  "finishedAt": "2026-01-01T00:02:30.000Z",
+  "input": { "topic": "weekly-summary" },
+  "sharedState": { "count": 2 },
+  "output": { "url": "https://example.com/report/exec_0001" },
+  "error": null,
+  "pausedStepInputSchema": null,
+  "pausedStepInputExample": null,
+  "traceId": "trace_0001",
+  "traceRoot": "exec_0001",
+  "rootExecutionId": "exec_0001",
+  "traceParent": null,
+  "parentExecutionId": null,
+  "children": [],
+  "cost": {
+    "authorizedUsd": "1.50",
+    "capturedUsd": "1.20",
+    "settleState": "settling"
+  },
+  "steps": [
+    {
+      "id": "step_0001",
+      "stepName": "gather",
+      "stepOrder": 0,
+      "attempt": 1,
+      "status": "completed",
+      "input": { "topic": "weekly-summary" },
+      "output": { "items": 12 },
+      "error": null,
+      "nextDirective": { "kind": "continue" },
+      "sharedStateAfter": { "count": 1 },
+      "logs": null,
+      "events": [],
+      "spanId": "span_0001",
+      "dispatch": null,
+      "cost": {
+        "authorizedUsd": "0.50",
+        "capturedUsd": "0.50",
+        "settleState": "final"
+      },
+      "startedAt": "2026-01-01T00:00:00.000Z",
+      "finishedAt": "2026-01-01T00:00:45.000Z"
+    }
+  ]
+}

@@ -3,9 +3,9 @@
   "name": "daily-digest",
   "organizationId": "org_0001",
   "tenantId": "tenant_0001",
-  "status": "completed",
-  "currentStep": null,
-  "currentStepAttempt": 1,
+  "status": "failed",
+  "currentStep": "render",
+  "currentStepAttempt": 2,
   "version": 3,
   "definitionId": "def_0001",
   "buildRunId": "build_0001",
@@ -17,47 +17,38 @@
   "finishedAt": "2026-01-01T00:02:30.000Z",
   "input": { "topic": "weekly-summary" },
   "sharedState": { "count": 2 },
-  "output": { "url": "https://example.com/report/exec_0001" },
+  "output": null,
   "error": null,
   "pausedStepInputSchema": null,
   "pausedStepInputExample": null,
+  "repoFullName": "example-org/example-workflows",
+  "pinnedCommitSha": "0000000000000000000000000000000000000000",
+  "traceId": "trace_0001",
   "traceRoot": "exec_0001",
   "rootExecutionId": "exec_0001",
   "traceParent": null,
   "parentExecutionId": null,
-  "traceId": "trace_0001",
   "children": [
     {
       "executionId": "exec_0002",
-      "traceRoot": "exec_0001",
-      "name": "render-child",
-      "status": "completed"
+      "targetType": "orchestration",
+      "correlationId": "exec_0002",
+      "status": "resolved"
     }
   ],
-  "cost": {
-    "authorizedUsd": "1.50",
-    "capturedUsd": "1.20",
-    "settleState": "settling"
-  },
   "steps": [
     {
+      "id": "step_0001",
       "stepName": "gather",
       "stepOrder": 0,
       "attempt": 1,
       "status": "completed",
-      "spanId": "span_0001",
-      "startedAt": "2026-01-01T00:00:00.000Z",
-      "finishedAt": "2026-01-01T00:00:45.000Z",
       "input": { "topic": "weekly-summary" },
       "output": { "items": 12 },
-      "sharedStateAfter": { "count": 1 },
+      "error": null,
       "nextDirective": { "kind": "continue" },
-      "cost": {
-        "authorizedUsd": "0.50",
-        "capturedUsd": "0.50",
-        "settleState": "final"
-      },
-      "logs": "fetched 12 items",
+      "sharedStateAfter": { "count": 1 },
+      "logs": [{ "ts": "2026-01-01T00:00:05.000Z", "level": "info", "msg": "fetched 12 items" }],
       "events": [
         {
           "sourceId": "run_0001",
@@ -67,40 +58,44 @@
           "eventTs": "2026-01-01T00:00:10.000Z"
         }
       ],
-      "error": null,
-      "dispatch": null
+      "spanId": "span_0001",
+      "dispatch": null,
+      "startedAt": "2026-01-01T00:00:00.000Z",
+      "finishedAt": "2026-01-01T00:00:45.000Z"
     },
     {
+      "id": "step_0002",
       "stepName": "render",
       "stepOrder": 1,
       "attempt": 2,
       "status": "failed",
-      "spanId": "span_0002",
-      "startedAt": "2026-01-01T00:00:45.000Z",
-      "finishedAt": "2026-01-01T00:02:30.000Z",
       "input": { "items": 12 },
       "output": null,
-      "sharedStateAfter": { "count": 2 },
-      "nextDirective": null,
-      "cost": {
-        "authorizedUsd": "1.00",
-        "capturedUsd": "0.70",
-        "settleState": "settling"
-      },
-      "logs": null,
-      "events": [],
       "error": {
         "message": "template not found",
-        "trace": "Error: template not found\n    at render (src/steps/render.ts:12:11)",
+        "trace": {
+          "frames": [
+            { "function": "render", "file": "src/steps/render.ts", "line": 12, "column": 11 },
+            { "function": "run", "file": "src/engine/runner.ts", "line": 88, "column": 5 }
+          ],
+          "sourceMapped": true,
+          "raw": "Error: template not found\n    at render (dist/steps/render.mjs:8:9)"
+        },
         "traceUnavailableReason": null
       },
+      "nextDirective": null,
+      "sharedStateAfter": { "count": 2 },
+      "logs": null,
+      "events": [],
+      "spanId": "span_0002",
       "dispatch": {
-        "dispatchId": "dispatch_0001",
-        "childExecutionId": "exec_0002",
+        "targetId": "exec_0002",
         "targetType": "orchestration",
-        "status": "resolved",
-        "correlationId": "exec_0002"
-      }
+        "correlationId": "exec_0002",
+        "status": "resolved"
+      },
+      "startedAt": "2026-01-01T00:00:45.000Z",
+      "finishedAt": "2026-01-01T00:02:30.000Z"
     }
   ]
 }

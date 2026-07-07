@@ -75,15 +75,15 @@ export type {
   ExecutionRef,
   DispatchRef,
   StepError,
+  StepErrorTrace,
+  StepErrorFrame,
   StepEvent,
 } from "./types.js";
 
-// projection decode helpers (tolerant normalization of the REST body)
-export {
-  decodeExecutionProjection,
-  decodeExecutionRef,
-  decodeCostNode,
-} from "./decode.js";
+// projection decode (tolerant normalization of the REST body) — the reusable
+// entry point consumers use to re-decode a body after an SSE refetch. The
+// finer-grained helpers stay module-internal to keep the published surface small.
+export { decodeExecutionProjection } from "./decode.js";
 
 // inspect / logs (networked)
 export {
