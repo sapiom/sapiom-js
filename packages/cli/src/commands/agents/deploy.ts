@@ -1,11 +1,11 @@
-import { deploy, OrchestrationError } from '@sapiom/orchestration-core';
+import { deploy, AgentOperationError } from '@sapiom/orchestration-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { requireConfig } from '../../lib/config.js';
 import { CliError, isJsonMode, ok } from '../../lib/output.js';
 
 /**
- * `sapiom orchestrations deploy` — mint push credentials, push the current
+ * `sapiom agents deploy` — mint push credentials, push the current
  * commit, trigger a build, and wait for it to finish.
  *
  * Note: the backend tenant deploy routes (POST definitions, push-credentials,
@@ -26,7 +26,7 @@ export async function runDeploy(opts: { branch?: string; host?: string; target?:
       ok({}, [`✓ Deployed ${cfg.name} (build ${result.status})`]);
     }
   } catch (err) {
-    if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+    if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
     throw err;
   }
 }

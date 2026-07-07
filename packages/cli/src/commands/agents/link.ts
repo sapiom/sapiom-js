@@ -1,13 +1,13 @@
 import path from 'node:path';
 
-import { link, OrchestrationError } from '@sapiom/orchestration-core';
+import { link, AgentOperationError } from '@sapiom/orchestration-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { writeConfig } from '../../lib/config.js';
 import { CliError, ok } from '../../lib/output.js';
 
 /**
- * `sapiom orchestrations link [name]` — resolve a server-side orchestration by
+ * `sapiom agents link [name]` — resolve a server-side agent by
  * name (or create it with --create) and cache its id in sapiom.json.
  *
  * Note: the `--create` path (POST /definitions) depends on backend tenant
@@ -28,7 +28,7 @@ export async function runLink(
     writeConfig(dir, { definitionId: result.definitionId, name: result.name });
     ok({ definitionId: result.definitionId, name: result.name }, [`✓ Linked to ${result.name} (${result.definitionId})`]);
   } catch (err) {
-    if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+    if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
     throw err;
   }
 }

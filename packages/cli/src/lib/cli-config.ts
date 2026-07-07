@@ -2,7 +2,7 @@
  * Machine-level CLI configuration persisted at `~/.sapiom/config.json`. Stores
  * the active target (prod / staging / local) and any user-set host override.
  * Project identity (`sapiom.json` / `definitionId`) is kept separate from this —
- * the server stays the source of truth for what orchestrations exist.
+ * the server stays the source of truth for what agents exist.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
@@ -20,7 +20,7 @@ export interface CliConfig {
   target?: CliTarget;
   /**
    * Explicit host URL override. When present, takes precedence over `target`.
-   * Stored so `sapiom orchestrations run` remembers the host without requiring
+   * Stored so `sapiom agents run` remembers the host without requiring
    * `--host` on every invocation.
    */
   host?: string;

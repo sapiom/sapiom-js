@@ -6,7 +6,7 @@ vi.mock("../credentials.js", () => ({
   readCredentials: vi.fn(),
 }));
 
-// Keep the real module (createClient, OrchestrationError, ...) but stub the networked
+// Keep the real module (createClient, AgentOperationError, ...) but stub the networked
 // schedule fns so the tools are tested without touching the backend.
 vi.mock("@sapiom/orchestration-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@sapiom/orchestration-core")>();
@@ -20,7 +20,7 @@ vi.mock("@sapiom/orchestration-core", async (importOriginal) => {
   };
 });
 
-import { register } from "./orchestrations.js";
+import { register } from "./agents.js";
 import { readCredentials } from "../credentials.js";
 import {
   cancelSchedule,
@@ -55,7 +55,7 @@ const env: ResolvedEnvironment = {
 
 const parse = (res: { content: Array<{ text: string }> }) => JSON.parse(res.content[0].text);
 
-describe("orchestration schedule MCP tools", () => {
+describe("agent schedule MCP tools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(readCredentials).mockResolvedValue({
@@ -70,10 +70,10 @@ describe("orchestration schedule MCP tools", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
     for (const name of [
-      "sapiom_dev_orchestrations_schedule",
-      "sapiom_dev_orchestrations_schedule_inspect",
-      "sapiom_dev_orchestrations_schedule_cancel",
-      "sapiom_dev_orchestrations_cron_preview",
+      "sapiom_dev_agents_schedule",
+      "sapiom_dev_agents_schedule_inspect",
+      "sapiom_dev_agents_schedule_cancel",
+      "sapiom_dev_agents_cron_preview",
     ]) {
       expect(handlers.has(name)).toBe(true);
     }
@@ -98,7 +98,7 @@ describe("orchestration schedule MCP tools", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_schedule")!({
+    const res = await handlers.get("sapiom_dev_agents_schedule")!({
       definition: "enrich",
       kind: "schedule_cron",
       cron: "0 9 * * *",
@@ -133,7 +133,7 @@ describe("orchestration schedule MCP tools", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_schedule_inspect")!({ scheduleId: "trig-1" });
+    const res = await handlers.get("sapiom_dev_agents_schedule_inspect")!({ scheduleId: "trig-1" });
 
     expect(getSchedule).toHaveBeenCalledWith("trig-1", expect.anything());
     expect(parse(res).hint).toContain("exec-9");
@@ -144,7 +144,7 @@ describe("orchestration schedule MCP tools", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_schedule_inspect")!({
+    const res = await handlers.get("sapiom_dev_agents_schedule_inspect")!({
       definition: "enrich",
       status: "active",
     });
@@ -157,7 +157,7 @@ describe("orchestration schedule MCP tools", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_schedule_inspect")!({});
+    const res = await handlers.get("sapiom_dev_agents_schedule_inspect")!({});
 
     expect(res.isError).toBe(true);
     expect(getSchedule).not.toHaveBeenCalled();
@@ -169,7 +169,7 @@ describe("orchestration schedule MCP tools", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    await handlers.get("sapiom_dev_orchestrations_schedule_cancel")!({ scheduleId: "trig-1" });
+    await handlers.get("sapiom_dev_agents_schedule_cancel")!({ scheduleId: "trig-1" });
 
     expect(cancelSchedule).toHaveBeenCalledWith("trig-1", expect.anything());
   });
@@ -183,7 +183,7 @@ describe("orchestration schedule MCP tools", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_cron_preview")!({ cron: "0 9 * * *", count: 1 });
+    const res = await handlers.get("sapiom_dev_agents_cron_preview")!({ cron: "0 9 * * *", count: 1 });
 
     expect(previewCron).toHaveBeenCalledWith({ cron: "0 9 * * *", timezone: undefined, count: 1 }, expect.anything());
     expect(parse(res).occurrences).toHaveLength(1);

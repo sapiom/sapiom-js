@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import { OrchestrationError, scaffold } from '@sapiom/orchestration-core';
+import { AgentOperationError, scaffold } from '@sapiom/orchestration-core';
 
 import { CliError, ok } from '../../lib/output.js';
 
@@ -14,7 +14,7 @@ function coreTemplatesDir(): string {
 }
 
 /**
- * `sapiom orchestrations init [dir]` — scaffold a new orchestration project.
+ * `sapiom agents init [dir]` — scaffold a new agent project.
  * Non-interactive by design (agent-friendly): everything comes from argv.
  */
 export async function runInit(dir: string | undefined, opts: { template: string }): Promise<void> {
@@ -22,7 +22,7 @@ export async function runInit(dir: string | undefined, opts: { template: string 
     throw new CliError({
       code: 'MISSING_DIR',
       message: 'A target directory is required.',
-      hint: 'Usage: sapiom orchestrations init <dir>',
+      hint: 'Usage: sapiom agents init <dir>',
     });
   }
 
@@ -31,7 +31,7 @@ export async function runInit(dir: string | undefined, opts: { template: string 
   try {
     await scaffold({ targetDir, template: opts.template, templatesDir: coreTemplatesDir() });
   } catch (err) {
-    if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+    if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
     throw err;
   }
 
@@ -42,8 +42,8 @@ export async function runInit(dir: string | undefined, opts: { template: string 
     'Next steps:',
     `  cd ${dir}`,
     '  npm install',
-    '  sapiom orchestrations check      # validate your orchestration locally',
-    "  # edit index.ts — your orchestration is defined with defineOrchestration({ steps })",
+    '  sapiom agents check      # validate your agent locally',
+    "  # edit index.ts — your agent is defined with defineAgent({ steps })",
     "  # Sapiom capabilities are available pre-auth'd on ctx.sapiom inside any step",
     '',
   ]);

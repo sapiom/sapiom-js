@@ -1,11 +1,11 @@
-import { OrchestrationError, parseSignalPayload, signal } from '@sapiom/orchestration-core';
+import { AgentOperationError, parseSignalPayload, signal } from '@sapiom/orchestration-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { readConfig } from '../../lib/config.js';
 import { CliError, ok } from '../../lib/output.js';
 
 /**
- * `sapiom orchestrations signal <executionId>` — resume a paused execution by
+ * `sapiom agents signal <executionId>` — resume a paused execution by
  * delivering a named signal (matched by name + correlation id).
  */
 export async function runSignal(
@@ -21,7 +21,7 @@ export async function runSignal(
 
     ok({ matched: result.matched }, [`✓ Signal '${opts.name}' delivered (matched ${result.matched}).`]);
   } catch (err) {
-    if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+    if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
     throw err;
   }
 }

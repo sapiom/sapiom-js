@@ -1,5 +1,5 @@
 /**
- * `sapiom orchestrations schedule …` — manage schedules (cron + one-off triggers) for a
+ * `sapiom agents schedule …` — manage schedules (cron + one-off triggers) for a
  * server-side orchestration, addressed by its slug. Thin wrappers over @sapiom/orchestration-core.
  */
 import {
@@ -7,7 +7,7 @@ import {
   createSchedule,
   getSchedule,
   listSchedules,
-  OrchestrationError,
+  AgentOperationError,
   parseJsonInput,
   previewCron,
   type ScheduleKind,
@@ -29,7 +29,7 @@ function clientFor(opts: HostOpts) {
 }
 
 function rethrow(err: unknown): never {
-  if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+  if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
   throw err;
 }
 
@@ -62,7 +62,7 @@ export async function runScheduleCreate(
     );
     ok({ schedule }, [
       `✓ Created schedule ${schedule.id}${schedule.nextFireAt ? ` — next fire ${schedule.nextFireAt}` : ''}`,
-      `  inspect: sapiom orchestrations schedule inspect ${schedule.id}`,
+      `  inspect: sapiom agents schedule inspect ${schedule.id}`,
     ]);
   } catch (err) {
     rethrow(err);

@@ -26,30 +26,30 @@ function withHostFlags(cmd: Command): Command {
     .option('--target <target>', 'target environment: prod (default) or local');
 }
 
-/** Mount the `sapiom orchestrations …` command group. */
-export function registerOrchestrationsCommands(program: Command): void {
+/** Mount the `sapiom agents …` command group. */
+export function registerAgentsCommands(program: Command): void {
   const group = program
-    .command('orchestrations')
-    .alias('orch')
-    .description('Author, validate, and ship Sapiom orchestrations.');
+    .command('agents')
+    .alias('ag')
+    .description('Author, validate, and ship Sapiom agents.');
 
-  json(group.command('init [dir]').description('Scaffold a new orchestration project.'))
+  json(group.command('init [dir]').description('Scaffold a new agent project.'))
     .option('-t, --template <name>', 'template to scaffold from', 'default')
     .action(action(runInit));
 
-  json(group.command('check [dir]').description('Validate an orchestration locally (bundle, manifest, graph).')).action(
+  json(group.command('check [dir]').description('Validate an agent locally (bundle, manifest, graph).')).action(
     action(runCheck),
   );
 
-  withHostFlags(json(group.command('link [name]').description('Link this project to its server-side orchestration.')))
-    .option('--create', 'create the orchestration if it does not exist')
+  withHostFlags(json(group.command('link [name]').description('Link this project to its server-side agent.')))
+    .option('--create', 'create the agent if it does not exist')
     .action(action(runLink));
 
   withHostFlags(
     json(group.command('deploy').description('Push the current commit, build, and wait for it to finish.')),
   ).option('-b, --branch <branch>', 'branch to push to', 'main').action(action(runDeploy));
 
-  withHostFlags(json(group.command('run').description('Start an execution of the linked orchestration.')))
+  withHostFlags(json(group.command('run').description('Start an execution of the linked agent.')))
     .option('--input <json>', 'execution input as a JSON string')
     .option('--input-file <path>', 'read execution input from a JSON file')
     .action(action(runRun));
@@ -66,10 +66,10 @@ export function registerOrchestrationsCommands(program: Command): void {
     .option('--payload <json>', 'signal payload as a JSON string')
     .action(action(runSignal));
 
-  // `sapiom orchestrations schedule …` — cron + one-off schedules for an orchestration (by slug).
+  // `sapiom agents schedule …` — cron + one-off schedules for an agent (by slug).
   const schedule = group
     .command('schedule')
-    .description('Manage schedules (cron + one-off triggers) for an orchestration.');
+    .description('Manage schedules (cron + one-off triggers) for an agent.');
 
   withHostFlags(
     json(schedule.command('create <definition>').description('Create a cron (--cron) or one-off (--at) schedule.')),
@@ -82,7 +82,7 @@ export function registerOrchestrationsCommands(program: Command): void {
     .option('--end-at <iso>', 'cron: latest occurrence (ISO)')
     .action(action(runScheduleCreate));
 
-  withHostFlags(json(schedule.command('list <definition>').description("List an orchestration's schedules.")))
+  withHostFlags(json(schedule.command('list <definition>').description("List an agent's schedules.")))
     .option('--status <status>', 'filter by status (active|paused|completed|disabled)')
     .action(action(runScheduleList));
 

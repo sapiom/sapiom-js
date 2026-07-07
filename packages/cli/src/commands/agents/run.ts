@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 
-import { OrchestrationError, parseJsonInput, run } from '@sapiom/orchestration-core';
+import { AgentOperationError, parseJsonInput, run } from '@sapiom/orchestration-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { requireConfig } from '../../lib/config.js';
 import { CliError, ok } from '../../lib/output.js';
 
 /**
- * `sapiom orchestrations run` — start an execution of the linked orchestration.
+ * `sapiom agents run` — start an execution of the linked agent.
  */
 export async function runRun(opts: {
   input?: string;
@@ -25,10 +25,10 @@ export async function runRun(opts: {
 
     ok({ executionId: result.executionId, ...result.raw }, [
       `✓ Started execution ${result.executionId}`,
-      `  inspect: sapiom orchestrations logs ${result.executionId}`,
+      `  inspect: sapiom agents logs ${result.executionId}`,
     ]);
   } catch (err) {
-    if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+    if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
     throw err;
   }
 }

@@ -1,11 +1,11 @@
-import { inspect, inspectBuild, listExecutions, OrchestrationError } from '@sapiom/orchestration-core';
+import { inspect, inspectBuild, listExecutions, AgentOperationError } from '@sapiom/orchestration-core';
 
 import { type CliTarget, makeClient } from '../../lib/client.js';
 import { readConfig, requireConfig } from '../../lib/config.js';
 import { CliError, isJsonMode, ok } from '../../lib/output.js';
 
 /**
- * `sapiom orchestrations logs [executionId]` — inspect an execution (its steps
+ * `sapiom agents logs [executionId]` — inspect an execution (its steps
  * and errors), a build (`--build`), or recent executions (no argument).
  */
 export async function runLogs(
@@ -46,7 +46,7 @@ export async function runLogs(
     }
     ok({}, lines);
   } catch (err) {
-    if (err instanceof OrchestrationError) throw new CliError(err.toStructured());
+    if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
     throw err;
   }
 }

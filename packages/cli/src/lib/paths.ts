@@ -2,7 +2,7 @@
  * Where the CLI keeps per-machine session state. XDG-aware
  * (`$XDG_CONFIG_HOME/sapiom`), falling back to `~/.sapiom`. This is *session*
  * state (credentials, profiles) — never domain state; the server stays the
- * source of truth for what orchestrations exist.
+ * source of truth for what agents exist.
  */
 import { homedir } from 'node:os';
 import path from 'node:path';
