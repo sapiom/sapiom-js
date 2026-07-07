@@ -1,0 +1,35 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Search the web for a topic and return a concise, sourced digest — the onboarding flagship for one metered capability with an obvious output.\n\nThe `search` step calls the Sapiom `web.search` capability (`ctx.sapiom.search.webSearch`), which returns a synthesized answer plus ranked results. The `summarize` step then formats that answer and its source links into a markdown digest **in-process** — no LLM call — and returns `{ topic, digest, sources }`.\n\nOne metered call, a legible \"it did a thing\" result. A good first template to fork when you want to see a real capability run end to end.",
+  "useCases": [
+    "Get a quick, sourced briefing on an unfamiliar topic before a meeting.",
+    "Turn a research question into a shareable markdown digest with citations.",
+    "Learn how to wire a single metered capability into a workflow you can extend."
+  ],
+  "notes": "`run_local` stubs the `web.search` capability, so you can trace the full graph offline for free before deploying. A real `deploy` + `run` performs a billed web search.\n\nTo extend it, add a step after `summarize` — e.g. store the digest with `ctx.sapiom.memory.*`, or fan out one search per subtopic. `AGENTS.md` in this directory has the authoring loop.",
+  "examples": [
+    {
+      "title": "Research an unfamiliar term",
+      "input": { "topic": "what is an LLM agent?" },
+      "output": {
+        "topic": "what is an LLM agent?",
+        "digest": "# Research digest: what is an LLM agent?\n\nAn LLM agent is a system that uses a large language model to decide and take actions...\n\n## Sources\n1. [What are LLM agents?](https://example.com/llm-agents)\n2. [Agents overview](https://example.com/agents-overview)",
+        "sources": [
+          {
+            "title": "What are LLM agents?",
+            "url": "https://example.com/llm-agents"
+          },
+          {
+            "title": "Agents overview",
+            "url": "https://example.com/agents-overview"
+          }
+        ]
+      }
+    }
+  ]
+}
