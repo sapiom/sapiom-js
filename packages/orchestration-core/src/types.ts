@@ -106,6 +106,40 @@ export interface StepError {
 }
 
 /**
+ * The event kinds the live SSE spine delivers (Module A / SAP-1139). Mirrors the
+ * engine's `SSE_EVENT_TYPES` — kept in lock-step so an unknown kind is dropped by
+ * {@link SseEvent} consumers rather than silently trusted.
+ */
+export const SSE_EVENT_TYPES = [
+  "step.started",
+  "step.captured",
+  "cost.updated",
+  "run.paused",
+  "run.resumed",
+  "run.terminal",
+] as const;
+
+export type SseEventType = (typeof SSE_EVENT_TYPES)[number];
+
+/**
+ * One live notification from the run's SSE channel — **IDs only, no payload**.
+ * Mirrors the engine's browser-facing frame (Module A). An `SseEvent` says
+ * "something about this run changed — refetch"; consumers re-read the canonical
+ * {@link ExecutionProjection} via `inspect()`. Carrying no state is deliberate:
+ * SSE can therefore never drift from the REST source of truth.
+ */
+export interface SseEvent {
+  /** What changed. One of {@link SSE_EVENT_TYPES}. */
+  type: SseEventType;
+  /** The execution the change applies to. */
+  executionId: string;
+  /** Root trace id the run belongs to; null until a trace is stamped. */
+  traceRoot: string | null;
+  /** Step or child-run id the change applies to; the executionId for run-level events. */
+  nodeId: string | null;
+}
+
+/**
  * A lightweight reference to an execution in the dispatch tree — used both for
  * a run's `children` and as the `listExecutions()` element.
  *

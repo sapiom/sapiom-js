@@ -7,7 +7,8 @@
  */
 import { GatewayClient } from "./client.js";
 import { decodeExecutionProjection, decodeExecutionRef } from "./decode.js";
-import type { ExecutionProjection, ExecutionRef } from "./types.js";
+import type { ExecutionProjection, ExecutionRef, SseEvent } from "./types.js";
+import { watchExecution } from "./watch.js";
 
 export interface BuildDetail {
   id?: string;
@@ -67,15 +68,24 @@ export type WaitStopReason = "terminal" | "needs-signal" | "timeout";
 
 export interface WaitForExecutionOptions {
   executionId: string;
-  /** Max wall-clock to poll before returning the latest snapshot. Default 45_000. */
+  /** Max wall-clock to wait before returning the latest snapshot. Default 45_000. */
   maxWaitMs?: number;
-  /** First poll interval; backs off (×1.5, capped at 5s) between reads. Default 1_000. */
+  /** Poll-fallback interval; backs off (×1.5, capped at 5s) between reads. Default 1_000. */
   pollMs?: number;
   /** Paused signals that auto-resume — keep waiting through them rather than returning. */
   autoResumeSignals?: string[];
   /** Injectable for deterministic tests. */
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * The live event source. Defaults to {@link watchExecution}; injectable so
+   * tests can drive the SSE path deterministically. When it throws / ends
+   * without the run settling, the wait reverts to the poll loop below.
+   */
+  watch?: (
+    opts: { executionId: string; signal?: AbortSignal },
+    client: GatewayClient,
+  ) => AsyncIterable<SseEvent>;
 }
 
 export interface WaitForExecutionResult {
@@ -90,12 +100,42 @@ const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Poll an execution until it reaches a terminal status, settles on a pause that
- * needs an external signal, or the wait budget elapses — so callers (and the
- * tool that wraps this) never hand-roll a sleep loop and can't misjudge elapsed
- * time. Reads at least once; returns the latest snapshot and why it stopped.
+ * Whether an execution has settled into a state `waitForExecution` should return
+ * on. `null` means "still in flight — keep waiting". A paused run only settles
+ * when its signal is NOT one the engine auto-resumes.
+ */
+function settledResult(
+  execution: ExecutionProjection,
+  autoResume: string[],
+): { reason: WaitStopReason; done: boolean } | null {
+  if (isExecutionTerminal(execution.status)) {
+    return { reason: "terminal", done: true };
+  }
+  if (execution.status === "paused") {
+    const signal = execution.pausedSignalName ?? null;
+    if (!signal || !autoResume.includes(signal)) {
+      // Won't progress on its own — an external signal is required.
+      return { reason: "needs-signal", done: false };
+    }
+  }
+  return null;
+}
+
+/**
+ * Wait for an execution to reach a terminal status, settle on a pause that needs
+ * an external signal, or exhaust the wait budget — so callers (and the tool that
+ * wraps this) never hand-roll a wait loop and can't misjudge elapsed time. Reads
+ * at least once; returns the latest snapshot and why it stopped.
  *
- * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
+ * Live by default: it wakes on {@link watchExecution} SSE events and refetches
+ * `inspect()` on each, so it reflects live run state instead of polling on a
+ * timer. On ANY SSE failure or drop it reverts to the original poll loop (×1.5
+ * backoff, capped at 5s) for the remaining budget — no functional regression,
+ * matching Module A's fallback invariant. Heartbeats never wake it, so the wait
+ * is bounded by aborting the stream at the deadline.
+ *
+ * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors from
+ * the `inspect()` refetch (SSE handshake errors are swallowed into the fallback).
  */
 export async function waitForExecution(
   opts: WaitForExecutionOptions,
@@ -105,29 +145,58 @@ export async function waitForExecution(
   const autoResume = opts.autoResumeSignals ?? AUTO_RESUME_PAUSE_SIGNALS;
   const sleep = opts.sleep ?? defaultSleep;
   const now = opts.now ?? Date.now;
+  const watch = opts.watch ?? watchExecution;
 
   const deadline = now() + maxWaitMs;
+
+  const read = () => inspect({ executionId: opts.executionId }, client);
+
+  // Read at least once — an already-settled run resolves without waiting.
+  let execution = await read();
+  let settled = settledResult(execution, autoResume);
+  if (settled) return { execution, ...settled };
+  if (now() >= deadline) return { execution, reason: "timeout", done: false };
+
+  // Live path: wake on SSE, refetch, re-evaluate. Bounded by aborting the stream
+  // at the deadline (heartbeats are filtered, so nothing else would wake us). Any
+  // SSE failure/drop falls through to the poll loop below — no regression.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), Math.max(0, deadline - now()));
+  timer.unref?.();
+  const events = watch({ executionId: opts.executionId, signal: abort.signal }, client)[
+    Symbol.asyncIterator
+  ]();
+  try {
+    for (;;) {
+      const next = await events.next(); // resolves on each SSE event (heartbeats filtered)
+      if (next.done) break; // stream ended — drop to polling for any remaining budget
+      execution = await read();
+      settled = settledResult(execution, autoResume);
+      if (settled) return { execution, ...settled };
+      if (now() >= deadline) return { execution, reason: "timeout", done: false };
+    }
+    if (now() >= deadline) return { execution, reason: "timeout", done: false };
+  } catch {
+    // SSE unavailable / dropped — fall back to polling below.
+  } finally {
+    // Tear the stream down (aborts the underlying fetch) and stop the deadline
+    // timer, whether we settled, timed out, or are falling back to polling.
+    clearTimeout(timer);
+    await events.return?.(undefined);
+  }
+
+  // Poll fallback (the pre-SSE behavior) for the remaining budget.
   let interval = opts.pollMs ?? 1_000;
-
   for (;;) {
-    const execution = await inspect({ executionId: opts.executionId }, client);
-
-    if (isExecutionTerminal(execution.status)) {
-      return { execution, reason: "terminal", done: true };
-    }
-    if (execution.status === "paused") {
-      const signal = execution.pausedSignalName ?? null;
-      if (!signal || !autoResume.includes(signal)) {
-        // Won't progress on its own — an external signal is required.
-        return { execution, reason: "needs-signal", done: false };
-      }
-    }
-
     const remaining = deadline - now();
     if (remaining <= 0) return { execution, reason: "timeout", done: false };
 
     await sleep(Math.min(interval, remaining));
     interval = Math.min(interval * 1.5, 5_000);
+
+    execution = await read();
+    settled = settledResult(execution, autoResume);
+    if (settled) return { execution, ...settled };
   }
 }
 
