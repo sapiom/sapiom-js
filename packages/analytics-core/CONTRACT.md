@@ -60,6 +60,7 @@ The ONLY hard requirement is a parseable JSON body.
 
 | Situation | Behavior |
 |---|---|
+| `events` key absent or not an array | acknowledged with `{"accepted":0,"dropped":0}`; never rejected |
 | Missing `event_id` | server generates one |
 | Missing timestamps | server stamps `received_at`; `event_timestamp` defaults to it |
 | Missing identity fields | ingested anyway (`anonymous_id` null is legal, discouraged) |

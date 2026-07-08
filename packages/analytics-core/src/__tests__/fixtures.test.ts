@@ -229,8 +229,14 @@ describe("contract fixtures", () => {
     const builderFields = new Set(Object.keys(reference));
 
     for (const { fixture } of validFixtures) {
-      // This fixture intentionally carries keys outside the envelope.
-      if (fixture.name === "unknown-top-level-keys") continue;
+      // This fixture intentionally carries keys outside the envelope — and
+      // they must STAY outside it, or the exclusion would hide a regression.
+      if (fixture.name === "unknown-top-level-keys") {
+        for (const extra of ["org_id", "api_key_id", "favorite_color"]) {
+          expect(builderFields).not.toContain(extra);
+        }
+        continue;
+      }
       for (const event of eventsOf(fixture)) {
         for (const field of Object.keys(event)) {
           expect(builderFields).toContain(field);

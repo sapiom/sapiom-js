@@ -132,6 +132,19 @@ describe("fault injection", () => {
     expect(capture.calls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("treats an explicit empty-string endpoint as absent (ship-dark no-op)", async () => {
+    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
+    const capture = createCapturingFetch();
+    const analytics = tracker.register(
+      createAnalytics(baseConfig({ endpoint: "", fetchImpl: capture.fetchImpl })),
+    );
+
+    expect(analytics.enabled).toBe(false);
+    analytics.track("event", { n: 1 });
+    await analytics.flush();
+    expect(capture.calls).toHaveLength(0);
+  });
+
   it("ships dark: no endpoint configured → no-op, zero fetches, zero disk writes", async () => {
     delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
     const capture = createCapturingFetch();

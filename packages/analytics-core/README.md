@@ -54,9 +54,11 @@ Any of these disables analytics entirely (highest precedence first):
 2. `SAPIOM_TELEMETRY_DISABLED=1` in the environment.
 3. `DO_NOT_TRACK=1` in the environment (the ecosystem-wide convention).
 
-When opted out, nothing is sent, nothing is written to disk, and zero network
-calls are made. So that collection is never silent, the first-ever tracked
-event on a machine prints a one-line notice to stderr.
+When opted out, nothing is sent, nothing is written to disk, zero network
+calls are made — and no notice is printed.
+
+When analytics is active, the first-ever tracked event on a machine prints a
+one-line notice to stderr, so collection is never silent.
 
 ### What is stored locally
 
