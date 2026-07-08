@@ -26,7 +26,7 @@ import { enrichTurnCompleted } from "../src/core/collector/transcript.js";
 import { createEventStore } from "../src/core/collector/store.js";
 import { CollectorBatcher } from "../src/core/collector/batcher.js";
 import { createIngestRouter, type IngestSessionContext } from "../src/server/ingest.js";
-import { ENV } from "../src/shared/types.js";
+import { ENV, type CollectorContext } from "../src/shared/types.js";
 
 const INGEST_TOKEN = crypto.randomUUID();
 const HARNESS_SESSION_ID = "sim-session-1";
@@ -82,13 +82,28 @@ async function main(): Promise<void> {
   const sessions = new Map<string, IngestSessionContext>([
     [
       HARNESS_SESSION_ID,
-      { harness: "claude-code", userId: "sim-user", machineId: "sim-machine", agentSessionId: null },
+      {
+        harness: "claude-code",
+        userId: "sim-user",
+        tenantId: "sim-tenant",
+        machineId: "sim-machine",
+        agentSessionId: null,
+      },
     ],
   ]);
 
+  const collectorContext: CollectorContext = {
+    harnessVersion: "0.0.1",
+    os: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version,
+  };
+
+  // CollectorBatcher appends /v1/harness/events itself — pass the bare base URL.
   const collectorUrl = `http://127.0.0.1:${MOCK_COLLECTOR_PORT}`;
   const batcher = new CollectorBatcher({
     machineId: "sim-machine",
+    context: collectorContext,
     telemetryOptIn: true,
     collectorUrl,
     maxBatchSize: 50,
@@ -195,8 +210,11 @@ async function main(): Promise<void> {
     assert(events.length === 2, "exactly 2 events appended to events.ndjson");
     assert(events[0].type === "session.start", "first event is session.start");
     assert(events[0].agentSessionId === AGENT_SESSION_ID, "session.start captured the agent session id");
+    assert(events[0].tenantId === "sim-tenant", "session.start carries tenantId from server-side context");
+    assert(events[0].seq === 1, "session.start got seq 1");
     assert(events[1].type === "prompt.submitted", "second event is prompt.submitted");
     assert(events[1].payload.prompt === "build me a workflow", "prompt text made it through the pipeline");
+    assert(events[1].seq === 2, "prompt.submitted got seq 2 (monotonic per harnessSessionId)");
     assert(sessions.get(HARNESS_SESSION_ID)?.agentSessionId === AGENT_SESSION_ID, "session registry callback linked agentSessionId");
 
     // --- force a batch flush and assert the mock collector received it ---
@@ -213,6 +231,9 @@ async function main(): Promise<void> {
     });
     const batch = JSON.parse(receivedLines[receivedLines.length - 1]);
     assert(batch.machineId === "sim-machine", "mock-collector received the right machineId");
+    assert(batch.schemaVersion === 1, "mock-collector received schemaVersion 1");
+    assert(typeof batch.batchId === "string", "mock-collector received a batchId");
+    assert(batch.context?.harnessVersion === "0.0.1", "mock-collector received the CollectorContext");
     assert(batch.events.length === 2, "mock-collector received both events in one batch");
     assert(
       mockCollectorOutput.includes("session.start=1") || mockCollectorOutput.includes("prompt.submitted=1"),

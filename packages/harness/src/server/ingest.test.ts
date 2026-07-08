@@ -35,7 +35,13 @@ describe("createIngestRouter", () => {
     sessions = new Map([
       [
         "session-1",
-        { harness: "claude-code", userId: "user-1", machineId: "machine-1", agentSessionId: null },
+        {
+          harness: "claude-code",
+          userId: "user-1",
+          tenantId: "tenant-1",
+          machineId: "machine-1",
+          agentSessionId: null,
+        },
       ],
     ]);
 
@@ -92,7 +98,25 @@ describe("createIngestRouter", () => {
 
     await vi.waitFor(() => expect(stored).toHaveLength(1));
     expect(stored[0].type).toBe("prompt.submitted");
+    expect(stored[0].tenantId).toBe("tenant-1");
+    expect(stored[0].seq).toBe(1);
     expect(enqueued).toHaveLength(1);
+  });
+
+  it("assigns a monotonically increasing seq per harnessSessionId, server-side", async () => {
+    await postIngest(baseUrl, {
+      hookEvent: "UserPromptSubmit",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1", prompt: "first" },
+    });
+    await postIngest(baseUrl, {
+      hookEvent: "UserPromptSubmit",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1", prompt: "second" },
+    });
+
+    await vi.waitFor(() => expect(stored).toHaveLength(2));
+    expect(stored.map((e) => e.seq)).toEqual([1, 2]);
   });
 
   it("links agentSessionId via onAgentSessionResolved on session.start", async () => {

@@ -9,8 +9,10 @@ import { createEventStore } from "./store.js";
 
 const sampleEvent: AnalyticsEvent = {
   eventId: "evt-1",
+  seq: 1,
   ts: "2026-07-08T00:00:00.000Z",
   userId: null,
+  tenantId: null,
   machineId: "machine-1",
   harnessSessionId: "session-1",
   agentSessionId: null,

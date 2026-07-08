@@ -5,10 +5,12 @@ import type { NormalizeContext } from "./normalizer.js";
 
 const baseContext: NormalizeContext = {
   userId: "user-123",
+  tenantId: "tenant-123",
   machineId: "machine-abc",
   harnessSessionId: "harness-session-1",
   harness: "claude-code",
   agentSessionId: null,
+  seq: 1,
 };
 
 describe("normalizeHookEvent", () => {
@@ -24,11 +26,19 @@ describe("normalizeHookEvent", () => {
     expect(event?.agentSessionId).toBe("agent-uuid-1");
     expect(event?.harnessSessionId).toBe("harness-session-1");
     expect(event?.userId).toBe("user-123");
+    expect(event?.tenantId).toBe("tenant-123");
     expect(event?.machineId).toBe("machine-abc");
     expect(event?.harness).toBe("claude-code");
+    expect(event?.seq).toBe(1);
     expect(event?.payload).toEqual({ source: "startup", cwd: "/tmp/project" });
     expect(typeof event?.eventId).toBe("string");
     expect(typeof event?.ts).toBe("string");
+  });
+
+  it("passes the caller-assigned seq straight through", () => {
+    const context = { ...baseContext, seq: 42 };
+    const event = normalizeHookEvent("SessionEnd", { session_id: "agent-uuid-1" }, context);
+    expect(event?.seq).toBe(42);
   });
 
   it("normalizes UserPromptSubmit", () => {
@@ -55,7 +65,7 @@ describe("normalizeHookEvent", () => {
   });
 
   it("normalizes PostToolUse to tool.call and truncates large fields", () => {
-    const hugeOutput = "x".repeat(5000);
+    const hugeOutput = "x".repeat(20_000);
     const event = normalizeHookEvent(
       "PostToolUse",
       {
@@ -73,6 +83,15 @@ describe("normalizeHookEvent", () => {
     expect(typeof event?.payload.toolResponseSummary).toBe("string");
     expect((event?.payload.toolResponseSummary as string).length).toBeLessThan(hugeOutput.length);
     expect(event?.payload.toolResponseSummary).toContain("[truncated");
+  });
+
+  it("keeps toolResponseSummary under a shorter output intact (below the 16KB cap)", () => {
+    const event = normalizeHookEvent(
+      "PostToolUse",
+      { session_id: "agent-uuid-1", tool_name: "Bash", tool_response: "short output" },
+      baseContext,
+    );
+    expect(event?.payload.toolResponseSummary).toBe("short output");
   });
 
   it("normalizes Stop to turn.completed", () => {

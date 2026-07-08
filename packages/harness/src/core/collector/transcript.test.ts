@@ -53,7 +53,7 @@ describe("readLastAssistantTurn", () => {
     const turn = await readLastAssistantTurn(filePath);
     expect(turn).toEqual({
       model: "claude-opus-4-8",
-      lastAssistantText: "First reply.",
+      assistantText: "First reply.",
       usage: { inputTokens: 120, outputTokens: 45 },
     });
   });
@@ -78,7 +78,7 @@ describe("readLastAssistantTurn", () => {
 
     const turn = await readLastAssistantTurn(filePath);
     expect(turn?.model).toBe("m-new");
-    expect(turn?.lastAssistantText).toBe("newest reply");
+    expect(turn?.assistantText).toBe("newest reply");
   });
 
   it("only reads the tail when the file exceeds maxBytes", async () => {
@@ -112,8 +112,10 @@ describe("enrichTurnCompleted", () => {
   let tmpDir: string;
   const baseEvent: AnalyticsEvent = {
     eventId: "evt-1",
+    seq: 1,
     ts: "2026-07-08T00:00:00.000Z",
     userId: null,
+    tenantId: null,
     machineId: "machine-1",
     harnessSessionId: "session-1",
     agentSessionId: "agent-1",
@@ -150,7 +152,7 @@ describe("enrichTurnCompleted", () => {
     expect(enriched.payload).toMatchObject({
       stopHookActive: false,
       model: "claude-sonnet-5",
-      lastAssistantText: "done",
+      assistantText: "done",
       usage: { inputTokens: 10, outputTokens: 3 },
     });
   });

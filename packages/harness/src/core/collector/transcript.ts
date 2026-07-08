@@ -17,7 +17,7 @@ const DEFAULT_MAX_TAIL_BYTES = 2 * 1024 * 1024;
 
 export interface TranscriptTurn {
   model: string | null;
-  lastAssistantText: string | null;
+  assistantText: string | null;
   usage: {
     inputTokens: number | null;
     outputTokens: number | null;
@@ -101,7 +101,7 @@ export async function readLastAssistantTurn(
       if (parsed?.type === "assistant" && message) {
         return {
           model: typeof message.model === "string" ? message.model : null,
-          lastAssistantText: extractText(message.content),
+          assistantText: extractText(message.content),
           usage: extractUsage(message.usage),
         };
       }
@@ -133,7 +133,7 @@ export async function enrichTurnCompleted(
     payload: {
       ...event.payload,
       model: turn.model,
-      lastAssistantText: turn.lastAssistantText,
+      assistantText: turn.assistantText,
       usage: turn.usage,
     },
   };

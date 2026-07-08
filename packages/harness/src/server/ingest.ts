@@ -12,10 +12,12 @@ import express, { type Router } from "express";
 
 import type { AnalyticsEvent, HarnessKind } from "../shared/types.js";
 import type { NormalizeContext } from "../core/collector/normalizer.js";
+import { createSeqCounter, type SeqCounter } from "../core/collector/seq.js";
 
 export interface IngestSessionContext {
   harness: HarnessKind;
   userId: string | null;
+  tenantId: string | null;
   machineId: string;
   /** Already-known agent session id, if resolved from an earlier session.start. */
   agentSessionId: string | null;
@@ -42,6 +44,8 @@ export interface IngestDeps {
     transcriptPath: string | undefined,
   ) => Promise<AnalyticsEvent>;
   onError?: (err: unknown) => void;
+  /** Injectable for tests; defaults to a fresh per-router counter. */
+  seqCounter?: SeqCounter;
 }
 
 interface IngestRequestBody {
@@ -56,7 +60,11 @@ function bearerToken(header: string | undefined): string | null {
   return header.slice("Bearer ".length);
 }
 
-async function processIngest(body: IngestRequestBody, deps: IngestDeps): Promise<void> {
+async function processIngest(
+  body: IngestRequestBody,
+  deps: IngestDeps,
+  seqCounter: SeqCounter,
+): Promise<void> {
   const hookEvent = body.hookEvent;
   const harnessSessionId = body.harnessSessionId;
   if (!hookEvent || !harnessSessionId) return;
@@ -67,10 +75,13 @@ async function processIngest(body: IngestRequestBody, deps: IngestDeps): Promise
   const hookPayload = body.payload ?? {};
   const event = deps.normalize(hookEvent, hookPayload, {
     userId: session.userId,
+    tenantId: session.tenantId,
     machineId: session.machineId,
     harnessSessionId,
     harness: session.harness,
     agentSessionId: session.agentSessionId,
+    // Assigned here, server-side — never trust ordering from the hook script.
+    seq: seqCounter.next(harnessSessionId),
   });
   if (!event) return;
 
@@ -87,9 +98,14 @@ async function processIngest(body: IngestRequestBody, deps: IngestDeps): Promise
 
   await deps.store.append(finalEvent);
   deps.batcher.enqueue(finalEvent);
+
+  if (hookEvent === "SessionEnd") {
+    seqCounter.reset(harnessSessionId);
+  }
 }
 
 export function createIngestRouter(deps: IngestDeps): Router {
+  const seqCounter = deps.seqCounter ?? createSeqCounter();
   const router = express.Router();
   router.use(express.json({ limit: "1mb" }));
 
@@ -104,7 +120,7 @@ export function createIngestRouter(deps: IngestDeps): Router {
     // agent's hook pipeline. Processing happens after the response is sent.
     res.status(200).json({ ok: true });
 
-    void processIngest(req.body as IngestRequestBody, deps).catch((err) => {
+    void processIngest(req.body as IngestRequestBody, deps, seqCounter).catch((err) => {
       deps.onError?.(err);
     });
   });

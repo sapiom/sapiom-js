@@ -1,13 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AnalyticsEvent } from "../../shared/types.js";
+import type { AnalyticsEvent, CollectorContext } from "../../shared/types.js";
 import { CollectorBatcher } from "./batcher.js";
+
+const testContext: CollectorContext = {
+  harnessVersion: "0.0.1",
+  os: "darwin",
+  arch: "arm64",
+  nodeVersion: "v20.0.0",
+};
 
 function makeEvent(eventId: string): AnalyticsEvent {
   return {
     eventId,
+    seq: 1,
     ts: "2026-07-08T00:00:00.000Z",
     userId: null,
+    tenantId: null,
     machineId: "machine-1",
     harnessSessionId: "session-1",
     agentSessionId: null,
@@ -17,8 +26,8 @@ function makeEvent(eventId: string): AnalyticsEvent {
   };
 }
 
-function okResponse(): Response {
-  return { ok: true, status: 200 } as Response;
+function response(status: number): Response {
+  return { ok: status >= 200 && status < 300, status } as Response;
 }
 
 describe("CollectorBatcher", () => {
@@ -34,8 +43,9 @@ describe("CollectorBatcher", () => {
     const fetchImpl = vi.fn();
     batcher = new CollectorBatcher({
       machineId: "m1",
+      context: testContext,
       telemetryOptIn: false,
-      collectorUrl: "http://localhost:9999/batch",
+      collectorUrl: "http://localhost:9999",
       fetchImpl,
     });
 
@@ -49,6 +59,7 @@ describe("CollectorBatcher", () => {
     const onDebug = vi.fn();
     batcher = new CollectorBatcher({
       machineId: "m1",
+      context: testContext,
       telemetryOptIn: true,
       collectorUrl: undefined,
       fetchImpl,
@@ -61,12 +72,13 @@ describe("CollectorBatcher", () => {
     expect(onDebug).toHaveBeenCalledWith(expect.stringContaining("not set"));
   });
 
-  it("flushes immediately once maxBatchSize is reached", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse());
+  it("posts to <collectorUrl>/v1/harness/events with a full batch envelope", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(202));
     batcher = new CollectorBatcher({
       machineId: "m1",
+      context: testContext,
       telemetryOptIn: true,
-      collectorUrl: "http://localhost:9999/batch",
+      collectorUrl: "http://localhost:9999",
       maxBatchSize: 2,
       flushIntervalMs: 60_000,
       fetchImpl,
@@ -77,20 +89,86 @@ describe("CollectorBatcher", () => {
     batcher.enqueue(makeEvent("evt-2"));
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
-    const [, init] = fetchImpl.mock.calls[0];
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe("http://localhost:9999/v1/harness/events");
+
     const body = JSON.parse(init.body as string);
     expect(body.machineId).toBe("m1");
+    expect(body.schemaVersion).toBe(1);
+    expect(typeof body.batchId).toBe("string");
+    expect(body.context).toEqual(testContext);
     expect(body.events).toHaveLength(2);
+    expect((init.headers as Record<string, string>).authorization).toBeUndefined();
   });
 
-  it("retries with backoff and drops the batch after exhausting retries", async () => {
-    vi.useFakeTimers();
-    const fetchImpl = vi.fn().mockRejectedValue(new Error("network down"));
+  it("sends Authorization only once an apiKey is set (anonymous by default)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(202));
+    batcher = new CollectorBatcher({
+      machineId: "m1",
+      context: testContext,
+      telemetryOptIn: true,
+      collectorUrl: "http://localhost:9999",
+      maxBatchSize: 1,
+      flushIntervalMs: 60_000,
+      fetchImpl,
+    });
+
+    batcher.setApiKey("sk-test-key");
+    batcher.enqueue(makeEvent("evt-1"));
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    const init = fetchImpl.mock.calls[0][1];
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer sk-test-key");
+  });
+
+  it("strips a trailing slash from collectorUrl before appending the events path", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(202));
+    batcher = new CollectorBatcher({
+      machineId: "m1",
+      context: testContext,
+      telemetryOptIn: true,
+      collectorUrl: "http://localhost:9999/",
+      maxBatchSize: 1,
+      flushIntervalMs: 60_000,
+      fetchImpl,
+    });
+
+    batcher.enqueue(makeEvent("evt-1"));
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    expect(fetchImpl.mock.calls[0][0]).toBe("http://localhost:9999/v1/harness/events");
+  });
+
+  it("drops a batch on 4xx without retrying", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(400));
     const onDebug = vi.fn();
     batcher = new CollectorBatcher({
       machineId: "m1",
+      context: testContext,
       telemetryOptIn: true,
-      collectorUrl: "http://localhost:9999/batch",
+      collectorUrl: "http://localhost:9999",
+      maxBatchSize: 1,
+      flushIntervalMs: 60_000,
+      fetchImpl,
+      onDebug,
+    });
+
+    batcher.enqueue(makeEvent("evt-1"));
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    // give any (incorrect) retry a chance to fire before asserting it didn't
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(onDebug).toHaveBeenCalledWith(expect.stringContaining("rejected with 400"));
+  });
+
+  it("retries on 5xx with backoff and drops after exhausting retries", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn().mockResolvedValue(response(503));
+    const onDebug = vi.fn();
+    batcher = new CollectorBatcher({
+      machineId: "m1",
+      context: testContext,
+      telemetryOptIn: true,
+      collectorUrl: "http://localhost:9999",
       maxBatchSize: 1,
       flushIntervalMs: 60_000,
       fetchImpl,
@@ -108,12 +186,35 @@ describe("CollectorBatcher", () => {
     expect(onDebug).toHaveBeenCalledWith(expect.stringContaining("dropping batch"));
   });
 
-  it("flushes remaining events on close()", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse());
+  it("retries on a network error and succeeds if a later attempt goes through", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(response(202));
     batcher = new CollectorBatcher({
       machineId: "m1",
+      context: testContext,
       telemetryOptIn: true,
-      collectorUrl: "http://localhost:9999/batch",
+      collectorUrl: "http://localhost:9999",
+      maxBatchSize: 1,
+      flushIntervalMs: 60_000,
+      fetchImpl,
+    });
+
+    batcher.enqueue(makeEvent("evt-1"));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+  });
+
+  it("flushes remaining events on close()", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(202));
+    batcher = new CollectorBatcher({
+      machineId: "m1",
+      context: testContext,
+      telemetryOptIn: true,
+      collectorUrl: "http://localhost:9999",
       maxBatchSize: 50,
       flushIntervalMs: 60_000,
       fetchImpl,
@@ -128,11 +229,12 @@ describe("CollectorBatcher", () => {
   });
 
   it("drops the queue immediately when opting out mid-flight", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse());
+    const fetchImpl = vi.fn().mockResolvedValue(response(202));
     batcher = new CollectorBatcher({
       machineId: "m1",
+      context: testContext,
       telemetryOptIn: true,
-      collectorUrl: "http://localhost:9999/batch",
+      collectorUrl: "http://localhost:9999",
       maxBatchSize: 50,
       flushIntervalMs: 60_000,
       fetchImpl,

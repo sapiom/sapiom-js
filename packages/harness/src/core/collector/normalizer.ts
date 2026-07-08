@@ -25,11 +25,14 @@ export type RawHookPayload = Record<string, unknown>;
 
 export interface NormalizeContext {
   userId: string | null;
+  tenantId: string | null;
   machineId: string;
   harnessSessionId: string;
   harness: HarnessKind;
   /** Already-known agent session id, if the registry has resolved one yet. */
   agentSessionId: string | null;
+  /** Per-harnessSessionId monotonic counter, assigned by the caller (see core/collector/seq.ts). */
+  seq: number;
 }
 
 const HOOK_TO_TYPE: Partial<Record<ClaudeHookEvent, AnalyticsEventType>> = {
@@ -44,6 +47,8 @@ const HOOK_TO_TYPE: Partial<Record<ClaudeHookEvent, AnalyticsEventType>> = {
 };
 
 const MAX_FIELD_LENGTH = 4000;
+/** Tool output can be much larger than other fields; cap it separately. */
+const MAX_TOOL_RESPONSE_LENGTH = 16 * 1024;
 
 /** Stringify + truncate a value so a giant tool payload can't blow up storage. */
 export function truncateForPayload(value: unknown, maxLength = MAX_FIELD_LENGTH): string {
@@ -75,7 +80,7 @@ function buildEventPayload(
       return {
         toolName: stringField(hookPayload, "tool_name") ?? null,
         toolInput: truncateForPayload(hookPayload.tool_input),
-        toolResponseSummary: truncateForPayload(hookPayload.tool_response),
+        toolResponseSummary: truncateForPayload(hookPayload.tool_response, MAX_TOOL_RESPONSE_LENGTH),
       };
     case "Stop":
       return {
@@ -109,8 +114,10 @@ export function normalizeHookEvent(
 
   return {
     eventId: crypto.randomUUID(),
+    seq: context.seq,
     ts: new Date().toISOString(),
     userId: context.userId,
+    tenantId: context.tenantId,
     machineId: context.machineId,
     harnessSessionId: context.harnessSessionId,
     agentSessionId,
