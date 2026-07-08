@@ -48,7 +48,6 @@ remote MCP or the SDK for a single action.
 ## Canonical rules (types are the source of truth — run \`npm run typecheck\`)
 - Import \`defineAgent\`, \`defineStep\`, and the directives
   (\`goto\` / \`terminate\` / \`fail\` / \`retry\` / \`pauseUntilSignal\`) from \`@sapiom/agent\`.
-  NEVER \`defineWorkflow\`, \`defineOrchestration\`, or \`@sapiom/orchestration\` (stale names).
   Import Zod from \`zod/v4\`.
 - \`terminate()\` requires \`terminal: true\`; \`fail()\` requires \`canFail: true\`;
   \`pauseUntilSignal(handle, …)\` requires \`pause: { signal, resumeStep }\`; every \`goto\`

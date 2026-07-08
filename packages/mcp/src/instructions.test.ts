@@ -32,9 +32,9 @@ describe("server instructions", () => {
     // Canonical naming (and the stale names it must steer away from)
     expect(AUTHORING_INSTRUCTIONS).toContain("@sapiom/agent");
     expect(AUTHORING_INSTRUCTIONS).toContain("defineAgent");
-    // the stale names appear only inside the explicit "NEVER use" warning
-    expect(AUTHORING_INSTRUCTIONS).toContain("NEVER `defineWorkflow`");
-    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/orchestration` (stale names)");
+    // the old package names are gone entirely — new users never see them
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("defineOrchestration");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("@sapiom/orchestration");
     // Pointer to the full docs + the scaffold-shipped guidance (AGENTS.md + skill)
     expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/agents");
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");

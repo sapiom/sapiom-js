@@ -88,9 +88,7 @@ Then ship:
 | `AgentExecutionContext` | `@sapiom/agent` |
 | `CODING_RESULT_SIGNAL / CodingResultPayload` | `@sapiom/tools` |
 
-`@sapiom/agent` is the only authoring package — `defineOrchestration` / `@sapiom/orchestration`
-are its deprecated pre-launch names (still visible on npm and in older projects; never use or
-install them).
+`@sapiom/agent` is the only authoring package.
 
 ### `defineAgent` shape
 
