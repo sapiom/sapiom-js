@@ -1,7 +1,8 @@
 import type { CSSProperties, JSX } from "react";
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 
-import { MacroButtons } from "./MacroButtons";
+import { macroDisabledReason } from "../lib/macro-gating";
+import { Icon } from "./Icon";
 
 interface WorkflowActionStripProps {
   workflow: WorkflowInfo;
@@ -19,6 +20,12 @@ interface WorkflowActionStripProps {
  * moves (see useElementTopOffset) — the notch below erases the rail's
  * border for exactly the row's height so the row's highlight visually
  * flows into the strip, reading as one connected tab.
+ *
+ * Icon-only at rest; hovering it, OR focusing anything inside it (:focus-
+ * within, so tabbing in gets the same reveal a mouse hover gets), expands
+ * it into a floating icon+label panel over the terminal — full labels (and
+ * a gated item's disabled reason) without permanently costing the terminal
+ * any width.
  */
 export function WorkflowActionStrip({
   workflow,
@@ -35,7 +42,27 @@ export function WorkflowActionStrip({
     <>
       <div className="workflow-action-strip-notch" style={notchStyle} data-testid="workflow-action-strip-notch" />
       <div className="workflow-action-strip" style={stripStyle} data-testid="workflow-action-strip">
-        <MacroButtons macros={macros} workflow={workflow} activeSessionId={activeSessionId} onRun={onRunMacro} size={15} />
+        {macros.map((macro) => {
+          const disabledReason = macroDisabledReason(macro, workflow, activeSessionId);
+          return (
+            <button
+              key={macro.id}
+              className="strip-item"
+              data-testid={`macro-${macro.id}`}
+              aria-label={disabledReason ? `${macro.label}: ${disabledReason}` : macro.label}
+              disabled={Boolean(disabledReason)}
+              onClick={() => onRunMacro(macro)}
+            >
+              <span className="strip-item-icon">
+                <Icon name={macro.icon} size={15} />
+              </span>
+              <span className="strip-item-text">
+                <span className="strip-item-label">{macro.label}</span>
+                {disabledReason && <span className="strip-item-reason">{disabledReason}</span>}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </>
   );
