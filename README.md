@@ -202,4 +202,3 @@ MIT © [Sapiom](LICENSE)
 - [Documentation](https://docs.sapiom.ai)
 - [NPM Organization](https://www.npmjs.com/org/sapiom)
 - [GitHub Issues](https://github.com/sapiom/sapiom-js/issues)
-  </content>
