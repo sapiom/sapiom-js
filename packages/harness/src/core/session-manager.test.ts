@@ -194,6 +194,25 @@ describe("SessionManager", () => {
     expect(manager.kill("unknown-id")).toBe(false);
   });
 
+  it("killAll() signals every currently-live pty", async () => {
+    const { manager, spawns } = makeManager();
+    const a = await manager.create({ cwd: "/tmp/a", harness: "claude-code" });
+    const b = await manager.create({ cwd: "/tmp/b", harness: "claude-code" });
+    spawns[0]?.emitExit(0); // a exits on its own before killAll() runs
+
+    manager.killAll();
+
+    expect(spawns[0]?.pty.kill).not.toHaveBeenCalled(); // already gone — nothing to signal
+    expect(spawns[1]?.pty.kill).toHaveBeenCalled();
+    expect(manager.get(a.id)?.status).toBe("exited");
+    void b;
+  });
+
+  it("killAll() is a harmless no-op with no live sessions", () => {
+    const { manager } = makeManager();
+    expect(() => manager.killAll()).not.toThrow();
+  });
+
   it("resume() requires a known agentSessionId and respawns via adapter.resume", async () => {
     const { manager, adapter, spawns } = makeManager();
     const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });

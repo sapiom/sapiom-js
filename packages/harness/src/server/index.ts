@@ -338,6 +338,11 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       new Promise<void>((resolve, reject) => {
         clearInterval(workflowsCacheTimer);
         canvasWatcher.stopAll();
+        // Closing the HTTP/WS server doesn't touch unrelated child processes
+        // on its own — without this, every live claude/codex pty outlives
+        // the harness server itself (e.g. after Ctrl+C or in a script that
+        // expects the process to actually exit once close() resolves).
+        sessionManager.killAll();
         void batcher.close();
         terminalWss.close();
         eventsWss.close();
