@@ -1,9 +1,10 @@
 /**
- * Harness server (workstreams W1/W3/W5).
+ * Harness server — integration point for every workstream.
  *
- * Single process: serves the built SPA from dist/web, the REST surface, and
- * the two WebSocket endpoints (/ws/terminal, /ws/events). Binds 127.0.0.1
- * only. See src/shared/types.ts for the full protocol contract.
+ * Single process: serves the built SPA from dist/web, the REST surface, the
+ * webhook ingest endpoint, canvas file serving, and the two WebSocket
+ * endpoints (/ws/terminal, /ws/events). Binds 127.0.0.1 only. See
+ * src/shared/types.ts for the full protocol contract.
  */
 
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
@@ -12,17 +13,35 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { WebSocketServer } from "ws";
+import open from "open";
 
-import type { HarnessAdapter, HarnessKind } from "../shared/types.js";
+import type { HarnessAdapter, HarnessKind, WorkflowInfo } from "../shared/types.js";
 import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
+import { WorkflowRegistry, createWorkflowsRouter } from "../core/workflow-registry.js";
+import { DEFAULT_MACROS } from "../core/macros.js";
+import { createEventStore } from "../core/collector/store.js";
+import { CollectorBatcher } from "../core/collector/batcher.js";
+import { normalizeHookEvent } from "../core/collector/normalizer.js";
+import { enrichTurnCompleted } from "../core/collector/transcript.js";
+import { getOrCreateMachineId } from "../cli/machine-id.js";
+import type { HarnessIdentity } from "../cli/auth.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
 import { attachWebSocketRouters } from "./ws-router.js";
+import { createIngestRouter, type IngestSessionContext } from "./ingest.js";
+import { createCanvasRouter } from "./canvas.js";
+import { createMacrosRouter } from "./macros.js";
+
+/** Workflow list is refreshed off this interval for the (synchronous)
+ * macro-resolution lookup — connect/scan are infrequent user actions, so a
+ * few seconds of staleness there is an acceptable tradeoff for not having to
+ * thread an async registry lookup through the macro-runner's sync contract. */
+const WORKFLOWS_CACHE_REFRESH_MS = 3_000;
 
 export interface HarnessServerOptions {
   port: number;
@@ -31,11 +50,17 @@ export interface HarnessServerOptions {
   /** Per-boot secret; required on WS upgrades, /api (header) and hook scripts (bearer). */
   bootToken: string;
   telemetryOptIn: boolean;
+  /** Sapiom identity from CLI auth; omit/null when unauthenticated or --no-auth. */
+  identity?: HarnessIdentity | null;
+  /** Stable per-install id for analytics. Defaults to a freshly loaded/created one. */
+  machineId?: string;
   /** Override the adapter set (tests inject a stubbed claude-code binary). */
   adapters?: Partial<Record<HarnessKind, HarnessAdapter>>;
   sessionsPath?: string;
   buildLaunchOpts?: LaunchOptsBuilder;
   collectorUrl?: string;
+  workflowsRegistryPath?: string;
+  eventStorePath?: string;
   /** Directory the built SPA lives in. Defaults to dist/web next to this module. */
   webDir?: string;
 }
@@ -66,6 +91,8 @@ function readVersion(): string {
 
 export const startServer = async (options: HarnessServerOptions): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
+  const identity = options.identity ?? null;
+  const machineId = options.machineId ?? (await getOrCreateMachineId());
   const adapters: Partial<Record<HarnessKind, HarnessAdapter>> =
     options.adapters ??
     ({
@@ -83,17 +110,103 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   });
   await sessionManager.init();
 
+  const workflowRegistry = new WorkflowRegistry(options.workflowsRegistryPath);
+  let workflowsCache: WorkflowInfo[] = await workflowRegistry.list();
+  const workflowsCacheTimer = setInterval(() => {
+    void workflowRegistry.list().then((list) => {
+      workflowsCache = list;
+    });
+  }, WORKFLOWS_CACHE_REFRESH_MS);
+  workflowsCacheTimer.unref?.();
+
+  const eventStore = createEventStore(options.eventStorePath);
+  const batcher = new CollectorBatcher({
+    machineId,
+    telemetryOptIn: options.telemetryOptIn,
+    collectorUrl: options.collectorUrl,
+    apiKey: identity?.apiKey ?? null,
+    context: {
+      harnessVersion: readVersion(),
+      os: process.platform,
+      arch: process.arch,
+      nodeVersion: process.version,
+    },
+  });
+
+  const resolveIngestSession = (harnessSessionId: string): IngestSessionContext | undefined => {
+    const session = sessionManager.get(harnessSessionId);
+    if (!session) return undefined;
+    return {
+      harness: session.harness,
+      userId: identity?.userId ?? null,
+      tenantId: identity?.tenantId ?? null,
+      machineId,
+      agentSessionId: session.agentSessionId,
+    };
+  };
+
   const app: Express = express();
   app.disable("x-powered-by");
 
-  app.use("/api", createBootTokenMiddleware(options.bootToken), createRestRouter({
-    sessionManager,
-    adapters,
-    version: readVersion(),
-  }));
+  // Everything under /api requires the boot token; mounted as middleware
+  // (not a router) so it also gates the workflows/macros routers below,
+  // which declare their own absolute /api/* paths.
+  app.use("/api", createBootTokenMiddleware(options.bootToken), express.json());
+  app.use(
+    "/api",
+    createRestRouter({
+      sessionManager,
+      adapters,
+      version: readVersion(),
+      identity: identity ? { userId: identity.userId, organizationName: identity.organizationName } : null,
+      listWorkflows: () => workflowRegistry.list(),
+      listMacros: () => DEFAULT_MACROS,
+      onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
+    }),
+  );
+  app.use(
+    createWorkflowsRouter(workflowRegistry),
+    createMacrosRouter({
+      listMacros: () => DEFAULT_MACROS,
+      findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
+      getSessionCwd: (harnessSessionId) => sessionManager.get(harnessSessionId)?.cwd ?? null,
+      injectInput: async (harnessSessionId, text, submit) => {
+        sessionManager.write(harnessSessionId, submit ? `${text}\r` : text);
+      },
+      openUrl: async (url) => {
+        await open(url);
+      },
+    }),
+  );
 
-  // NOTE: mount additional routers here (e.g. /ingest, /canvas) — the
-  // static/SPA fallback below is a catch-all and must stay last.
+  // /ingest authenticates itself (bearer ingestToken, not X-Harness-Token) —
+  // it must not sit behind the /api boot-token middleware above.
+  app.use(
+    createIngestRouter({
+      ingestToken: options.bootToken,
+      normalize: normalizeHookEvent,
+      resolveSession: resolveIngestSession,
+      onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
+        sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
+      },
+      store: eventStore,
+      batcher,
+      enrichFromTranscript: enrichTurnCompleted,
+      onError: (err) => console.error("[harness] ingest processing error:", err),
+    }),
+  );
+
+  // Canvas is intentionally unauthenticated (see canvas.ts) — served straight
+  // off the session's cwd, no boot token required.
+  app.use(
+    createCanvasRouter((harnessSessionId) => {
+      const session = sessionManager.get(harnessSessionId);
+      return session ? { cwd: session.cwd } : undefined;
+    }),
+  );
+
+  // NOTE: mount additional routers above this line — the static/SPA fallback
+  // below is a catch-all and must stay last.
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
   app.use(createStaticRouter(webDir));
 
@@ -135,6 +248,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     sessionManager,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        clearInterval(workflowsCacheTimer);
+        void batcher.close();
         terminalWss.close();
         eventsWss.close();
         httpServer.close((err) => {

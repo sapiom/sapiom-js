@@ -12,10 +12,14 @@ import type {
   CreateSessionRequest,
   HarnessAdapter,
   HarnessKind,
+  HarnessSettings,
   InjectInputRequest,
+  MacroDef,
   SessionSummary,
+  WorkflowInfo,
 } from "../shared/types.js";
 import type { SessionManager } from "../core/session-manager.js";
+import { loadSettings, saveSettings } from "../cli/settings.js";
 
 const createSessionSchema = z.object({
   cwd: z.string().min(1),
@@ -28,31 +32,76 @@ const injectInputSchema = z.object({
   submit: z.boolean().optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
 
+const settingsPatchSchema = z.object({
+  telemetryOptIn: z.boolean().optional(),
+  recentDirs: z.array(z.string()).optional(),
+}) satisfies z.ZodType<Partial<HarnessSettings>>;
+
 export interface RestRouterOptions {
   sessionManager: SessionManager;
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
+  /** Sapiom identity from CLI auth; null when unauthenticated / --no-auth. */
+  identity: { userId: string; organizationName: string } | null;
+  listWorkflows: () => Promise<WorkflowInfo[]>;
+  listMacros: () => MacroDef[];
+  /** Called after a settings PATCH persists a changed telemetryOptIn, so the
+   * live collector batcher can be gated without a server restart. */
+  onTelemetryOptInChange?: (optIn: boolean) => void;
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
-  const { sessionManager, adapters, version } = options;
+  const { sessionManager, adapters, version, identity, listWorkflows, listMacros } = options;
   const router = Router();
   router.use(express.json());
 
-  router.get("/state", (_req, res) => {
-    // Non-W1 fields (auth, workflows, macros, telemetry) default until their
-    // owning workstreams mount alongside this router.
-    const state: AppState = {
-      version,
-      authenticated: false,
-      userId: null,
-      organizationName: null,
-      telemetryOptIn: false,
-      sessions: sessionManager.list(),
-      workflows: [],
-      macros: [],
-    };
-    res.json(state);
+  router.get("/state", async (_req, res, next) => {
+    try {
+      const settings = await loadSettings();
+      const state: AppState = {
+        version,
+        authenticated: identity !== null,
+        userId: identity?.userId ?? null,
+        organizationName: identity?.organizationName ?? null,
+        telemetryOptIn: settings.telemetryOptIn,
+        sessions: sessionManager.list(),
+        workflows: await listWorkflows(),
+        macros: listMacros(),
+      };
+      res.json(state);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get("/settings", async (_req, res, next) => {
+    try {
+      res.json(await loadSettings());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch("/settings", async (req, res, next) => {
+    const parsed = settingsPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+    try {
+      const current = await loadSettings();
+      const updated: HarnessSettings = { ...current, ...parsed.data };
+      await saveSettings(updated);
+      if (
+        parsed.data.telemetryOptIn !== undefined &&
+        parsed.data.telemetryOptIn !== current.telemetryOptIn
+      ) {
+        options.onTelemetryOptInChange?.(parsed.data.telemetryOptIn);
+      }
+      res.json(updated);
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.post("/sessions", async (req, res, next) => {
@@ -86,6 +135,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       for (const session of sessionManager.list()) {
         if (session.cwd !== cwd || !session.agentSessionId) continue;
         byAgentSessionId.set(session.agentSessionId, {
+          harnessSessionId: session.id,
           agentSessionId: session.agentSessionId,
           harness: session.harness,
           cwd: session.cwd,
