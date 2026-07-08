@@ -1,60 +1,94 @@
-import { describe, it, expect } from "vitest";
-import { detectPort, detectPortInPayload } from "./port-detector.js";
+import { describe, it, expect, vi } from "vitest";
+import { PortDetector } from "./port-detector.js";
 
-describe("detectPort", () => {
-  it("finds a localhost:<port> reference", () => {
-    expect(detectPort("Server running at http://localhost:3000")).toEqual({
-      port: 3000,
-      url: "http://localhost:3000",
-    });
+function makeDetector() {
+  const onPort = vi.fn();
+  const detector = new PortDetector({ onPort });
+  return { detector, onPort };
+}
+
+describe("PortDetector.feed", () => {
+  it("finds a localhost:<port> reference in a single chunk", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("Server running at http://localhost:3000\n", "sess-1");
+    expect(onPort).toHaveBeenCalledWith("sess-1", 3000, "http://localhost:3000");
   });
 
-  it("finds a port embedded in a longer log line", () => {
-    expect(detectPort("$ npm run dev\n> Local:   http://localhost:5173/\n")).toEqual({
-      port: 5173,
-      url: "http://localhost:5173",
-    });
+  it("finds a bare localhost:<port> without a scheme", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("$ npm run dev\n> Local:   localhost:5173/\n", "sess-1");
+    expect(onPort).toHaveBeenCalledWith("sess-1", 5173, "http://localhost:5173");
   });
 
-  it("returns null when there's no localhost reference", () => {
-    expect(detectPort("Compiled successfully.")).toBeNull();
+  it("does not fire when there's no localhost reference", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("Compiled successfully.\n", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
   });
 
-  it("returns null for a malformed port (too many digits)", () => {
-    expect(detectPort("localhost:123456")).toBeNull();
+  it("detects a port split across two chunks", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("ready - started server on http://local", "sess-1");
+    expect(onPort).not.toHaveBeenCalled(); // nothing to finalize yet
+    detector.feed("host:3001\n", "sess-1");
+    expect(onPort).toHaveBeenCalledWith("sess-1", 3001, "http://localhost:3001");
   });
 
-  it("returns null for a single-digit port (below the 2-5 digit window)", () => {
-    expect(detectPort("localhost:8")).toBeNull();
-  });
-});
-
-describe("detectPortInPayload", () => {
-  it("finds a port in the command field", () => {
-    expect(detectPortInPayload({ command: "vite --port 4321 & open http://localhost:4321" })).toEqual({
-      port: 4321,
-      url: "http://localhost:4321",
-    });
+  it("does not prematurely finalize a port mid-digit-stream, even split oddly", () => {
+    const { detector, onPort } = makeDetector();
+    // "3" then "000" — if the detector finalized eagerly on every chunk
+    // boundary it could report port 3 here.
+    detector.feed("http://localhost:3", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+    detector.feed("000 is up\n", "sess-1");
+    expect(onPort).toHaveBeenCalledTimes(1);
+    expect(onPort).toHaveBeenCalledWith("sess-1", 3000, "http://localhost:3000");
   });
 
-  it("finds a port in the output field when command has none", () => {
-    expect(
-      detectPortInPayload({
-        command: "npm run dev",
-        output: "ready - started server on http://localhost:3001",
-      }),
-    ).toEqual({ port: 3001, url: "http://localhost:3001" });
+  it("dedupes repeated appearances of the same (session, port)", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("localhost:4000 localhost:4000\n", "sess-1");
+    detector.feed("still on localhost:4000\n", "sess-1");
+    expect(onPort).toHaveBeenCalledTimes(1);
   });
 
-  it("returns null when no candidate field has a port", () => {
-    expect(detectPortInPayload({ command: "ls -la", output: "total 0" })).toBeNull();
+  it("tracks ports independently per session", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("localhost:4000\n", "sess-1");
+    detector.feed("localhost:4000\n", "sess-2");
+    expect(onPort).toHaveBeenCalledTimes(2);
+    expect(onPort).toHaveBeenNthCalledWith(1, "sess-1", 4000, "http://localhost:4000");
+    expect(onPort).toHaveBeenNthCalledWith(2, "sess-2", 4000, "http://localhost:4000");
   });
 
-  it("ignores non-string candidate fields", () => {
-    expect(detectPortInPayload({ command: 12345, output: null })).toBeNull();
+  it("fires again for a genuinely different port on the same session", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("localhost:4000\n", "sess-1");
+    detector.feed("localhost:5000\n", "sess-1");
+    expect(onPort).toHaveBeenCalledTimes(2);
   });
 
-  it("returns null for an empty payload", () => {
-    expect(detectPortInPayload({})).toBeNull();
+  it("ignores an out-of-range port number", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("localhost:99999\n", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+  });
+
+  it("reset() clears dedupe state so the same port fires again", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("localhost:4000\n", "sess-1");
+    expect(onPort).toHaveBeenCalledTimes(1);
+    detector.reset("sess-1");
+    detector.feed("localhost:4000\n", "sess-1");
+    expect(onPort).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not leak unbounded buffer growth from a flood of unrelated text", () => {
+    const { detector, onPort } = makeDetector();
+    for (let i = 0; i < 1000; i++) {
+      detector.feed("no ports here, just noise ".repeat(10), "sess-1");
+    }
+    detector.feed("localhost:6000\n", "sess-1");
+    expect(onPort).toHaveBeenCalledWith("sess-1", 6000, "http://localhost:6000");
   });
 });
