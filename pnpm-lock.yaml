@@ -263,27 +263,6 @@ importers:
         specifier: ^5.4.2
         version: 5.9.3
 
-  packages/create-agent:
-    devDependencies:
-      '@types/node':
-        specifier: ^20.11.30
-        version: 20.19.43
-      '@typescript-eslint/eslint-plugin':
-        specifier: ^7.3.1
-        version: 7.18.0(@typescript-eslint/parser@7.18.0(eslint@8.57.1)(typescript@5.9.3))(eslint@8.57.1)(typescript@5.9.3)
-      '@typescript-eslint/parser':
-        specifier: ^7.3.1
-        version: 7.18.0(eslint@8.57.1)(typescript@5.9.3)
-      eslint:
-        specifier: ^8.57.0
-        version: 8.57.1
-      prettier:
-        specifier: ^3.2.5
-        version: 3.8.4
-      typescript:
-        specifier: ^5.4.2
-        version: 5.9.3
-
   packages/fetch:
     dependencies:
       '@sapiom/core':
