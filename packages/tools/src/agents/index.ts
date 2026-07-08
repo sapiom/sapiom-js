@@ -151,12 +151,10 @@ export interface RunHandle extends DispatchHandle {
 }
 
 /**
- * Inside a Sapiom workflow a resume token is provided via the environment;
- * forwarding it (as a header, not a body field) lets the run resume the waiting
- * step when it finishes. Outside a workflow there's no token, so nothing is sent.
  */
-function workflowResumeHeaders(): Record<string, string> {
-  const token = process.env.SAPIOM_CAPABILITY_RESUME_TOKEN;
+function workflowResumeHeaders(
+  token: string | undefined,
+): Record<string, string> {
   return token ? { "x-sapiom-workflow-token": token } : {};
 }
 
@@ -189,7 +187,7 @@ async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl
     {
       method: "POST",
       body: JSON.stringify({ kind: "schedule_once", at: spec.at, input: spec.input ?? {} }),
-      headers: workflowResumeHeaders(),
+      headers: workflowResumeHeaders(transport.resumeToken),
     },
   );
   const notAvailable = (): never => {
@@ -221,7 +219,7 @@ export async function launch(
         input: spec.input ?? {},
         idempotencyKey: spec.idempotencyKey,
       }),
-      headers: workflowResumeHeaders(),
+      headers: workflowResumeHeaders(transport.resumeToken),
     },
   );
   const executionId = res.executionId;
