@@ -1,20 +1,22 @@
 /**
  * Default action-rail macros. Pure data — no execution wiring. The server
  * resolves `{{...}}` placeholders (see MacroDef in shared/types.ts) and
- * either injects the text into the session pty or opens the URL.
+ * either injects the text into the session pty or opens the URL. Matches the
+ * SPA's MOCK_MACROS fixture (web/src/lib/mock-data.ts) so mock and real mode
+ * present the same action rail.
  */
 import type { MacroDef } from "../shared/types.js";
 
 export const DEFAULT_MACROS: MacroDef[] = [
   {
-    id: "run-local",
+    id: "run_local",
     label: "Run local",
     icon: "Play",
     requiresWorkflow: true,
     action: {
       kind: "inject",
       submit: true,
-      text: "Run the agent at {{workflow.path}} locally against stub capabilities (the sapiom_dev_agents_run_local tool) and show me the per-step trace, including any unusedStubs or stubWarnings.",
+      text: "cd {{workflow.path}} && sapiom agents run --target local",
     },
   },
   {
@@ -25,37 +27,39 @@ export const DEFAULT_MACROS: MacroDef[] = [
     action: {
       kind: "inject",
       submit: true,
-      text: "Deploy the agent at {{workflow.path}} (link it if needed, then deploy) and report the build result.",
+      text: "cd {{workflow.path}} && sapiom agents deploy",
     },
   },
   {
-    id: "prod-run",
+    id: "prod_run",
     label: "Prod run",
     icon: "Zap",
     requiresWorkflow: true,
     action: {
       kind: "inject",
       submit: true,
-      text: "Start a real cloud execution of the deployed agent at {{workflow.path}} and give me the executionId so I can track it.",
+      text: "cd {{workflow.path}} && sapiom agents run --target prod",
     },
   },
   {
-    id: "open-prod",
+    id: "open_prod",
     label: "Open prod",
     icon: "ExternalLink",
+    requiresWorkflow: true,
     action: {
       kind: "open-url",
-      url: "https://app.sapiom.ai",
+      url: "https://app.sapiom.ai/agents/{{workflow.definitionId}}",
     },
   },
   {
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
+    requiresWorkflow: false,
     action: {
       kind: "inject",
       submit: true,
-      text: "Render {{subject}} as a self-contained static HTML page at {{canvas.path}} (inline any CSS/JS/data it needs) — I'll view it live in the canvas pane.",
+      text: "Write a live HTML visualization of {{subject}} to .sapiom/canvas/index.html and keep it updated as things change.",
     },
   },
 ];
