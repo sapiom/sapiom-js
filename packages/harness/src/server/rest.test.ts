@@ -112,6 +112,20 @@ describe("createRestRouter", () => {
       expect(body.availableHarnesses).toEqual(["codex"]);
     });
 
+    it("omits firstRun when the caller doesn't supply it", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/state`);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect("firstRun" in body).toBe(false);
+    });
+
+    it("reports firstRun verbatim when supplied — including an explicit false", async () => {
+      start({ firstRun: false });
+      const res = await fetch(`${baseUrl}/state`);
+      const body = (await res.json()) as { firstRun: boolean };
+      expect(body.firstRun).toBe(false);
+    });
+
     it("reflects identity, sessions, workflows, and macros from their sources", async () => {
       const session: HarnessSession = {
         id: "s1",
@@ -221,6 +235,31 @@ describe("createRestRouter", () => {
     const res = await fetch(`${baseUrl}/sessions`, { headers: TOKEN_HEADER });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
+  });
+
+  describe("POST /sample-project", () => {
+    it("501s when no seeder is wired up", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/sample-project`, { method: "POST", headers: TOKEN_HEADER });
+      expect(res.status).toBe(501);
+    });
+
+    it("returns the seeder's result", async () => {
+      const seeded = { root: "/tmp/sample", projectDir: "/tmp/sample/order-triage", created: true };
+      const seedSampleProject = vi.fn().mockResolvedValue(seeded);
+      start({ seedSampleProject });
+
+      const res = await fetch(`${baseUrl}/sample-project`, { method: "POST", headers: TOKEN_HEADER });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(seeded);
+      expect(seedSampleProject).toHaveBeenCalledOnce();
+    });
+
+    it("propagates a seeding failure as a server error, not a hang", async () => {
+      start({ seedSampleProject: vi.fn().mockRejectedValue(new Error("disk full")) });
+      const res = await fetch(`${baseUrl}/sample-project`, { method: "POST", headers: TOKEN_HEADER });
+      expect(res.status).toBe(500);
+    });
   });
 
   describe("POST /sessions", () => {

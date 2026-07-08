@@ -51,6 +51,21 @@ export interface CanvasRenderOutcome {
   extractionFailed: string[];
   /** Set only when writing the file itself failed (e.g. an unwritable cwd) — extraction success/failure above is unaffected. */
   writeError?: string;
+  /** True when `preserveExistingOnFailure` kept the existing canvas instead of writing error panels over it. */
+  preservedExisting?: boolean;
+}
+
+export interface RenderCanvasOptions {
+  /**
+   * For unprompted (auto) renders only — session create, boot. When every
+   * extraction failed AND a canvas index.html already exists, keep the
+   * existing file rather than replace possibly-good content (a seeded
+   * opening shot, an agent-authored view) with nothing but error panels.
+   * An explicit user-invoked render (the Visualize macro, POST
+   * /canvas/:id/render) should NOT set this: there the honest error page
+   * IS the answer the user asked for.
+   */
+  preserveExistingOnFailure?: boolean;
 }
 
 function badgesFor(workflow: RenderableWorkflow): string[] {
@@ -134,15 +149,18 @@ async function renderOverview(workflows: readonly RenderableWorkflow[]): Promise
 export async function renderCanvasForSession(
   session: RenderableSession,
   workflows: readonly RenderableWorkflow[],
+  options: RenderCanvasOptions = {},
 ): Promise<CanvasRenderOutcome> {
   let body: string;
   let outcome: CanvasRenderOutcome;
+  let renderedAnyGraph: boolean;
 
   const bound = session.boundWorkflowPath ? workflows.find((w) => w.path === session.boundWorkflowPath) : undefined;
 
   if (bound) {
     const { body: renderedBody, failed } = await renderSingle(bound);
     body = renderedBody;
+    renderedAnyGraph = !failed;
     outcome = { mode: "single", workflowPath: bound.path, extractionFailed: failed ? [bound.name] : [] };
   } else if (workflows.length === 0) {
     body = assembleCanvasBody({
@@ -150,14 +168,33 @@ export async function renderCanvasForSession(
       legend: "",
       note: "Nothing to visualize yet — connect a workflow to get started.",
     });
+    // The empty-workspace panel is real content, not a degraded render.
+    renderedAnyGraph = true;
     outcome = { mode: "empty", extractionFailed: [] };
   } else {
     const { body: renderedBody, failed } = await renderOverview(workflows);
     body = renderedBody;
+    renderedAnyGraph = failed.length < workflows.length;
     outcome = { mode: "overview", workflowCount: workflows.length, extractionFailed: failed };
   }
 
   const indexPath = path.join(session.cwd, CANVAS_INDEX);
+
+  // An unprompted render that produced ONLY error panels must not destroy an
+  // existing canvas (the seeded sample's opening shot, an agent-authored
+  // view): a project that merely hasn't run `npm install` yet would
+  // otherwise open to a wall of build errors it did nothing to deserve.
+  if (options.preserveExistingOnFailure && !renderedAnyGraph) {
+    const exists = await fs
+      .access(indexPath)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) {
+      outcome.preservedExisting = true;
+      return outcome;
+    }
+  }
+
   try {
     await fs.mkdir(path.dirname(indexPath), { recursive: true });
     await fs.writeFile(indexPath, renderCanvasDocument(body), "utf8");

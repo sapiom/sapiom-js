@@ -130,4 +130,69 @@ describe("renderCanvasForSession", () => {
     expect(outcome.mode).toBe("empty");
     expect(outcome.writeError).toBeTruthy();
   });
+
+  describe("preserveExistingOnFailure (unprompted auto-renders)", () => {
+    const SEEDED_CANVAS = "<!doctype html><!-- seeded opening shot -->";
+
+    async function seedCanvas(cwd: string): Promise<void> {
+      const indexPath = path.join(cwd, CANVAS_INDEX);
+      await fs.mkdir(path.dirname(indexPath), { recursive: true });
+      await fs.writeFile(indexPath, SEEDED_CANVAS, "utf8");
+    }
+
+    it("keeps an existing canvas when every extraction failed, instead of replacing it with error panels", async () => {
+      const cwd = await tmpCwd();
+      await seedCanvas(cwd);
+      const workflows: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+
+      const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: null }, workflows, {
+        preserveExistingOnFailure: true,
+      });
+
+      expect(outcome.extractionFailed).toEqual(["broken-flow"]);
+      expect(outcome.preservedExisting).toBe(true);
+      expect(await readIndex(cwd)).toBe(SEEDED_CANVAS);
+    });
+
+    it("still writes the honest error page when nothing exists to preserve", async () => {
+      const cwd = await tmpCwd();
+      const workflows: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+
+      const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: null }, workflows, {
+        preserveExistingOnFailure: true,
+      });
+
+      expect(outcome.preservedExisting).toBeUndefined();
+      expect(await readIndex(cwd)).toContain("render failed");
+    });
+
+    it("overwrites the existing canvas when at least one workflow rendered — a partial overview beats a stale shot", async () => {
+      const cwd = await tmpCwd();
+      await seedCanvas(cwd);
+      const workflows: RenderableWorkflow[] = [
+        { path: ORDER_TRIAGE, name: "order-triage", definitionId: null },
+        { path: NO_DEFINITION, name: "broken-flow", definitionId: null },
+      ];
+
+      const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: null }, workflows, {
+        preserveExistingOnFailure: true,
+      });
+
+      expect(outcome.preservedExisting).toBeUndefined();
+      const html = await readIndex(cwd);
+      expect(html).toContain(">intake<");
+      expect(html).not.toBe(SEEDED_CANVAS);
+    });
+
+    it("does not change explicit-render behavior: without the option, error panels replace the existing canvas", async () => {
+      const cwd = await tmpCwd();
+      await seedCanvas(cwd);
+      const workflows: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+
+      const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: null }, workflows);
+
+      expect(outcome.preservedExisting).toBeUndefined();
+      expect(await readIndex(cwd)).toContain("render failed");
+    });
+  });
 });

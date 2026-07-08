@@ -37,6 +37,9 @@ export interface HarnessStateHook {
   historyLoading: boolean;
   loadHistory: (cwd: string) => Promise<void>;
   createSession: (req: CreateSessionRequest) => Promise<HarnessSession>;
+  /** Welcome panel's "Run the sample project": seeds (or reuses) the bundled
+   *  example, then opens a normal session in it with the default harness. */
+  createSampleSession: () => Promise<HarnessSession>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
   /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
@@ -181,7 +184,16 @@ export function useHarnessState(): HarnessStateHook {
 
   const createSession = useCallback(async (req: CreateSessionRequest): Promise<HarnessSession> => {
     const session = await api.createSession(req);
-    setState((prev) => (prev ? { ...prev, sessions: [...prev.sessions, session] } : prev));
+    // The event bus can deliver this session's first `session.status` before
+    // the POST response resolves (the server broadcasts starting/running
+    // during create) — appending unconditionally then renders a duplicate
+    // tab. When it's already in the list, the bus copy is also the fresher
+    // one, so keep it rather than overwrite with this response's snapshot.
+    setState((prev) =>
+      prev && !prev.sessions.some((s) => s.id === session.id)
+        ? { ...prev, sessions: [...prev.sessions, session] }
+        : prev,
+    );
     setActiveSessionId(session.id);
 
     let optimisticRecentDirs: string[] = [];
@@ -201,6 +213,15 @@ export function useHarnessState(): HarnessStateHook {
     }
     return session;
   }, []);
+
+  const createSampleSession = useCallback(async (): Promise<HarnessSession> => {
+    const seeded = await api.seedSampleProject();
+    // Same default-harness choice the auto-created boot session uses:
+    // doctor()'s preference order, falling back to claude-code when the
+    // server didn't report availability (see AppState.availableHarnesses).
+    const harness = state?.availableHarnesses?.[0] ?? "claude-code";
+    return createSession({ cwd: seeded.root, harness });
+  }, [state?.availableHarnesses, createSession]);
 
   const resumeSession = useCallback(async (harnessSessionId: string): Promise<HarnessSession> => {
     const session = await api.resumeSession(harnessSessionId);
@@ -296,6 +317,7 @@ export function useHarnessState(): HarnessStateHook {
     historyLoading,
     loadHistory,
     createSession,
+    createSampleSession,
     resumeSession,
     resumeFromHistory,
     closeSession,

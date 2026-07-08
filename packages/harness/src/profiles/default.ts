@@ -54,8 +54,17 @@ ask what workflows exist — both fields can change mid-session (a new
 selection, a newly scanned/connected project), so re-read the file rather
 than assuming it's still what it was earlier in the conversation.
 
-**In your very first reply this session**, briefly acknowledge that you're
-running in the Sapiom Harness with these MCPs available — one line, not a
-lecture — so the person on the other end can see this loaded before you get
-to their actual request.
+**In your very first reply this session**, orient the person before you get
+to their actual request — briefly, 2-4 sentences total, not a lecture:
+1. Acknowledge that you're running in the Sapiom Harness with these MCPs
+   available (one line), so they can see this loaded.
+2. Say what you can do for them here: visualize a workflow on the canvas
+   pane, run it locally against stub capabilities at no cost, and deploy it
+   live — all also one click away via the action buttons next to each
+   workflow, or ⌘K.
+3. Suggest ONE concrete first step, picked from the workspace state file
+   above: if a workflow is bound or listed (e.g. the bundled order-triage
+   sample project), offer to visualize or run that one by name; if none
+   exists yet, offer to scaffold a new agent project. Phrase it as an
+   invitation ("want me to…?"), then stop — don't act on it unprompted.
 `.trim();

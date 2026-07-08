@@ -22,6 +22,9 @@ import type {
   HarnessSession,
   WorkflowInfo,
 } from "../shared/types.js";
+import { HARNESS_PATHS } from "../shared/types.js";
+import { expandHome } from "../core/paths.js";
+import { seedExampleProject } from "../core/example-seed.js";
 import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
@@ -128,6 +131,13 @@ export interface HarnessServerOptions {
    *  as-is in AppState for the SPA — see its doc comment. Omitted (not
    *  defaulted here) when the caller doesn't supply it. */
   availableHarnesses?: HarnessKind[];
+  /** "This boot found no prior harness use on this machine" — computed by
+   *  the CLI before it records the launch dir, surfaced verbatim in
+   *  AppState.firstRun (see its doc comment). Omitted → absent there too. */
+  firstRun?: boolean;
+  /** Where POST /api/sample-project seeds the bundled example. Defaults to
+   *  HARNESS_PATHS.sampleProject; tests point it at a temp dir. */
+  sampleProjectRoot?: string;
 }
 
 export interface HarnessServer {
@@ -355,8 +365,16 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // overview when unbound) via the deterministic pipeline — always against
   // the live workflowsCache, never an LLM. Never throws (see core/
   // canvas-render.ts); best-effort, like every other canvas write here.
+  // Explicit user-invoked renders (the Visualize macro, POST
+  // /canvas/:id/render) use this as-is; the UNPROMPTED call sites
+  // (session-create/boot auto-render) use autoRenderCanvas below, which
+  // won't replace an existing canvas (e.g. the sample project's seeded
+  // opening shot) with nothing but error panels when every extraction fails.
   const renderCanvas = async (session: HarnessSession): Promise<void> => {
     await renderCanvasForSession(session, workflowsCache);
+  };
+  const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
+    await renderCanvasForSession(session, workflowsCache, { preserveExistingOnFailure: true });
   };
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
@@ -419,7 +437,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
             // unrelated session's pane.
             if (found.length === 0) return;
             const session = sessionManager.get(harnessSessionId);
-            if (session) return renderCanvas(session);
+            if (session) return autoRenderCanvas(session);
           })
           .catch((err: unknown) => {
             console.error("[harness] workflow scan on session create failed:", err);
@@ -427,6 +445,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       },
       launchDir,
       availableHarnesses: options.availableHarnesses,
+      firstRun: options.firstRun,
+      seedSampleProject: async () => {
+        const { root, projectDir, created } = await seedExampleProject({
+          targetRoot: options.sampleProjectRoot ?? expandHome(HARNESS_PATHS.sampleProject),
+        });
+        return { root, projectDir, created };
+      },
     }),
   );
   app.use(
@@ -642,7 +667,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         // launchDir twice — only renders when it actually found something,
         // same "discoverable" gate as the REST onSessionCreated path.
         const found = await initialWorkflowScan;
-        if (found.length > 0) await renderCanvas(session);
+        if (found.length > 0) await autoRenderCanvas(session);
       })
       .catch((err: unknown) => {
         console.error("[harness] auto-create boot session failed:", err);

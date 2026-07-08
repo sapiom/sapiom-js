@@ -21,7 +21,7 @@ import {
 } from "./doctor.js";
 import { ensureAuthenticated, type HarnessIdentity } from "./auth.js";
 import { ensureConsent } from "./consent.js";
-import { recordRecentDir } from "./settings.js";
+import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
 import { startServer, type HarnessServer } from "../server/index.js";
 
@@ -155,6 +155,13 @@ const main = async (): Promise<void> => {
     console.log(`\nSigned in as ${identity.organizationName} (cached credential).`);
   }
   const telemetryOptIn = await ensureConsent({ noTelemetry: options.noTelemetry });
+  // First run = no recent directories recorded before this boot. Must be read
+  // BEFORE recordRecentDir below stamps the launch dir in — after that the
+  // signal is gone for good. Drives the SPA's welcome panel (AppState.firstRun)
+  // and suppresses the auto-created boot session, so a brand-new user lands on
+  // the welcome panel rather than a bare terminal in whatever directory they
+  // happened to launch from.
+  const firstRun = (await loadSettings()).recentDirs.length === 0;
   await recordRecentDir(options.dir);
 
   const bootToken = crypto.randomBytes(32).toString("hex");
@@ -168,9 +175,10 @@ const main = async (): Promise<void> => {
       identity,
       machineId,
       launchDir: options.dir,
-      autoCreateSession: !options.noSession,
+      autoCreateSession: !options.noSession && !firstRun,
       defaultHarnessKind,
       availableHarnesses: doctorReport.availableHarnesses,
+      firstRun,
     });
   } catch (err) {
     if (!options.dev) throw err;

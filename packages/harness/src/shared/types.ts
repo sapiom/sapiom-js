@@ -28,6 +28,10 @@ export const HARNESS_PATHS = {
   settings: `${HARNESS_HOME}/settings.json`,
   /** Generated per-session agent config (claude settings/mcp-config files). */
   generated: `${HARNESS_HOME}/generated`,
+  /** The bundled example project, seeded lazily by POST /api/sample-project
+   *  (the welcome panel's "Run the sample project") — stable so re-running
+   *  the sample reuses the same copy instead of scattering fresh ones. */
+  sampleProject: `${HARNESS_HOME}/sample-project`,
 } as const;
 
 /**
@@ -285,6 +289,7 @@ export interface CollectorBatch {
 // POST   /api/macros/:id/run            RunMacroRequest → { ok: true }
 // GET    /api/settings                  → HarnessSettings
 // PATCH  /api/settings                  Partial<HarnessSettings> → HarnessSettings
+// POST   /api/sample-project            → SampleProjectSeedResponse (seed/reuse the bundled example)
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
 
@@ -353,6 +358,24 @@ export interface AppState {
    *  without running doctor (tests, mocks); the SPA should treat a missing
    *  value as "assume claude-code is available" until it's wired up. */
   availableHarnesses?: HarnessKind[];
+  /** True when this boot found no prior harness use on this machine (no
+   *  recent directories recorded before this launch). Computed once by the
+   *  CLI *before* it records the launch dir / auto-creates the boot session,
+   *  and constant for the server's lifetime — the SPA combines it with "no
+   *  live sessions" to show the first-run welcome panel instead of a bare
+   *  terminal. Optional so AppState constructed without the CLI (tests,
+   *  mocks) reads as a returning user by default. */
+  firstRun?: boolean;
+}
+
+/** `POST /api/sample-project` response — the seeded (or reused) example. */
+export interface SampleProjectSeedResponse {
+  /** Directory to open a session in — contains the project + its canvas. */
+  root: string;
+  /** Absolute path of the scaffolded example project inside `root`. */
+  projectDir: string;
+  /** False when an already-seeded copy was reused as-is. */
+  created: boolean;
 }
 
 export interface HarnessSettings {
