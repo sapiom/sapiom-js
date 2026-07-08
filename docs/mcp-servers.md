@@ -10,9 +10,9 @@ to use when.
 | Server name | `sapiom` | `sapiom-dev` |
 | Package | — (hosted connector) | [`@sapiom/mcp`](../packages/mcp) (`npx -y @sapiom/mcp`) |
 | Transport | Remote / hosted | stdio (runs on your machine) |
-| Tools | ~30+ capability tools — `sapiom_sandbox_*`, scrape, web search, content generation, storage, … | `sapiom_authenticate`, `sapiom_status`, and `sapiom_dev_orchestrations_{scaffold,check,run_local,link,deploy,run,inspect,signal}` |
+| Tools | ~30+ capability tools — `sapiom_sandbox_*`, scrape, web search, content generation, storage, … | `sapiom_authenticate`, `sapiom_status`, and `sapiom_dev_agents_{scaffold,check,run_local,link,deploy,run,inspect,signal}` |
 | Cost | Paid — capability calls are gateway-routed and metered (x402) | Unmetered — the surface itself makes no paid capability calls. `run` / `deploy` trigger real cloud runs whose capability calls are metered |
-| Use it to… | **call** a capability directly from an agent or client | **build, test, and operate on** Sapiom (today: author & ship workflows that orchestrate capabilities) |
+| Use it to… | **call** a capability directly from an agent or client | **build, test, and operate on** Sapiom (today: author & ship agents that orchestrate capabilities) |
 
 ## Remote `sapiom` — the production capability surface
 
@@ -32,16 +32,16 @@ The local MCP is published as [`@sapiom/mcp`](../packages/mcp) and runs on your
 machine over stdio under the server name `sapiom-dev`. It is the local,
 unmetered developer surface for Sapiom — the `sapiom_dev_*` namespace for
 building and operating on Sapiom, as distinct from making paid capability calls.
-Today that means **authoring** orchestrations: scaffold a project, validate it,
+Today that means **authoring** agents: scaffold a project, validate it,
 run it locally against stubs (no cost), then link, deploy, run, and inspect it
 in the cloud. The `sapiom_dev_` prefix leaves room for other non-capability
 developer tooling later (e.g. governance, log inspection) without colliding with
 the capability namespace.
 
 It deliberately does **not** expose capability tools. There is no
-`sapiom_dev_scrape` or `sapiom_dev_sandbox_create`. Instead you write a workflow
+`sapiom_dev_scrape` or `sapiom_dev_sandbox_create`. Instead you write a agent
 whose step code calls capabilities through [`@sapiom/tools`](../packages/tools)
-(`ctx.sapiom.*`), and `sapiom_dev_orchestrations_run_local` resolves those calls
+(`ctx.sapiom.*`), and `sapiom_dev_agents_run_local` resolves those calls
 from stubs so you can iterate offline. When you `run` or `deploy`, the same step
 code executes in the cloud and its capability calls are metered just like the
 remote MCP's.
@@ -68,9 +68,9 @@ There is one rule that keeps the two surfaces from drifting into duplicates:
 > building and operating on Sapiom; it does not hand-roll per-capability tools.**
 
 A new capability is added to `@sapiom/tools` (and surfaced on the remote MCP).
-Workflows reach it through `ctx.sapiom.*`; the developer MCP never grows a
+Agents reach it through `ctx.sapiom.*`; the developer MCP never grows a
 matching `sapiom_dev_<capability>` tool. This is why `@sapiom/mcp` ships only
-`authenticate`/`status` and the `orchestrations_*` lifecycle tools — adding a
+`authenticate`/`status` and the `agents_*` lifecycle tools — adding a
 capability never changes its tool list. The `sapiom_dev_*` namespace is reserved
 for developer tooling (authoring today, potentially governance or log inspection
 later) — never for a paid capability call.

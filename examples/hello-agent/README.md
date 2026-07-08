@@ -1,6 +1,6 @@
-# Hello Workflow
+# Hello Agent
 
-The minimal single-step Sapiom orchestration — a smoke test for the
+The minimal single-step Sapiom agent — a smoke test for the
 `build → deploy → run` path. One terminal step, no capabilities.
 
 Use it to confirm your MCP install and deploy pipeline work end to end before
@@ -27,13 +27,13 @@ greet  (terminal)
    `sapiom_status`.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
-   `sapiom_dev_orchestrations_check` → `sapiom_dev_orchestrations_run_local` →
-   `sapiom_dev_orchestrations_link` → `sapiom_dev_orchestrations_deploy` →
-   `sapiom_dev_orchestrations_run`.
+   `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` →
+   `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
+   `sapiom_dev_agents_run`.
 
 ## Files
 
-- `index.ts` — the orchestration (edit this).
+- `index.ts` — the agent (edit this).
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
 
 Run `npm run typecheck` to confirm it compiles.

@@ -1,10 +1,10 @@
-# Working in this orchestration
+# Working in this agent
 
-This project defines exactly one Sapiom orchestration in `index.ts` — **Hello Workflow** — authored against `@sapiom/orchestration`. It's the minimal definition: one terminal `greet` step, no capabilities. `greet` validates an optional `name` input and returns `{ greeting: "Hello, <name>!" }`. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (this template doesn't use any yet).
+This project defines exactly one Sapiom agent in `index.ts` — **Hello Agent** — authored against `@sapiom/agent`. It's the minimal definition: one terminal `greet` step, no capabilities. `greet` validates an optional `name` input and returns `{ greeting: "Hello, <name>!" }`. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (this template doesn't use any yet).
 
 ## Authoring
 
-- An orchestration is `defineOrchestration({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineOrchestration(...)` export.
+- An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export.
 - **Capabilities come from the types.** When you reach for one, what's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck.
 - To grow this into something real, add a step and declare the transition in the current step's `next` (an undeclared transition is a compile error). The Web Research Digest template is the next step up — one metered capability, an obvious output.
 
@@ -17,7 +17,7 @@ When you've made a coherent change and want to validate it — the same point yo
 - **run_local** — runs your **real** step code end-to-end and returns a per-step trace. This template has no capabilities, so `run_local` and a real `run` behave identically.
 - **deploy**, then **run** — ship it, then run it for real.
 
-Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev tools (`sapiom_dev_orchestrations_*`). See `README.md` for the full lifecycle.
+Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev tools (`sapiom_dev_agents_*`). See `README.md` for the full lifecycle.
 
 ## Determinism
 

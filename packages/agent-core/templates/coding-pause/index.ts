@@ -102,7 +102,7 @@ const finalize = defineStep({
   },
 });
 
-export const orchestration = defineAgent<unknown, Shared>({
+export const agent = defineAgent<unknown, Shared>({
   name: "__PROJECT_NAME__",
   entry: "prepare",
   steps: { prepare, kickoff, finalize },

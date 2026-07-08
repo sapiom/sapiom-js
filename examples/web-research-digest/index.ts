@@ -1,10 +1,10 @@
 import {
-  defineOrchestration,
+  defineAgent,
   defineStep,
   goto,
   terminate,
-  type OrchestrationExecutionContext,
-} from "@sapiom/orchestration";
+  type AgentExecutionContext,
+} from "@sapiom/agent";
 import type { Sapiom } from "@sapiom/tools";
 
 /** The web-search response shape, derived from the capability client. */
@@ -27,7 +27,7 @@ const search = defineStep({
   next: ["summarize"],
   async run(
     input: { topic: string },
-    ctx: OrchestrationExecutionContext<Shared>,
+    ctx: AgentExecutionContext<Shared>,
   ) {
     const topic = input.topic?.trim();
     if (!topic) {
@@ -53,7 +53,7 @@ const summarize = defineStep({
   terminal: true,
   async run(
     response: WebSearchResponse,
-    ctx: OrchestrationExecutionContext<Shared>,
+    ctx: AgentExecutionContext<Shared>,
   ) {
     const topic = ctx.shared.get("topic") ?? response.query;
     const sources = response.results.map((r) => ({
@@ -76,7 +76,7 @@ const summarize = defineStep({
   },
 });
 
-export const orchestration = defineOrchestration<{ topic: string }, Shared>({
+export const agent = defineAgent<{ topic: string }, Shared>({
   name: "web-research-digest",
   entry: "search",
   steps: { search, summarize },

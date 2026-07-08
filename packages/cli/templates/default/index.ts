@@ -19,7 +19,7 @@ const finish = defineStep({
   },
 });
 
-export const orchestration = defineAgent({
+export const agent = defineAgent({
   name: '__PROJECT_NAME__',
   entry: 'start',
   steps: { start, finish },

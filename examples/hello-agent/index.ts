@@ -1,11 +1,11 @@
 import {
-  defineOrchestration,
+  defineAgent,
   defineStep,
   terminate,
-} from "@sapiom/orchestration";
+} from "@sapiom/agent";
 
 /**
- * Hello Workflow — the minimal single-step Sapiom orchestration.
+ * Hello Agent — the minimal single-step Sapiom agent.
  *
  * The smallest valid definition: one terminal step, no capabilities. Use it to
  * confirm your MCP install and the build → deploy → run path work end to end
@@ -29,8 +29,8 @@ const greet = defineStep({
   },
 });
 
-export const orchestration = defineOrchestration({
-  name: "hello-workflow",
+export const agent = defineAgent({
+  name: "hello-agent",
   entry: "greet",
   steps: { greet },
 });
