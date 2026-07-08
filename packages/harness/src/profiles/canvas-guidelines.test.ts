@@ -50,8 +50,9 @@ describe("CANVAS_STYLE_GUIDELINES injection sites", () => {
     expect(macro.action.kind).toBe("inject");
     if (macro.action.kind === "inject") {
       expect(macro.action.text).toContain(CANVAS_STYLE_GUIDELINES);
-      // Still templates {{subject}} correctly alongside the appended contract.
-      expect(macro.action.text).toContain("{{subject}}");
+      // One-click render of the bound workflow — no free-text subject.
+      expect(macro.action.text).toContain("{{workflow.path}}");
+      expect(macro.action.text).not.toContain("{{subject}}");
     }
   });
 });
