@@ -8,6 +8,7 @@ import type { JSX } from "react";
 import type { HarnessKind, MacroDef } from "@shared/types";
 
 import { ActionRail } from "./components/ActionRail";
+import { BrandHeader } from "./components/BrandHeader";
 import { CanvasPane } from "./components/CanvasPane";
 import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
@@ -61,46 +62,52 @@ export const App = (): JSX.Element => {
   };
 
   return (
-    <div className="app">
-      <WorkflowsRail
-        workflows={state.workflows}
-        selectedPath={harness.selectedWorkflowPath}
-        onSelect={harness.setSelectedWorkflowPath}
-        onConnect={async (path) => {
-          await harness.connectWorkflow(path);
-        }}
-      />
+    <div className="app-shell">
+      <BrandHeader authenticated={state.authenticated} organizationName={state.organizationName} />
 
-      <div className="center-pane">
-        <SessionBar
-          sessions={state.sessions}
-          activeSessionId={harness.activeSessionId}
-          onSelectSession={harness.setActiveSessionId}
-          onResumeHistory={(summary) => void harness.resumeFromHistory(summary)}
-          history={harness.history}
-          historyLoading={harness.historyLoading}
-          onOpenDropdown={(cwd) => void harness.loadHistory(cwd)}
-          recentDirs={harness.settings?.recentDirs ?? []}
-          onCreateSession={handleCreateSession}
-          authenticated={state.authenticated}
-          organizationName={state.organizationName}
-          telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
-          onToggleTelemetry={async (next) => {
-            await harness.updateSettings({ telemetryOptIn: next });
+      <div className="app">
+        <WorkflowsRail
+          workflows={state.workflows}
+          selectedPath={harness.selectedWorkflowPath}
+          onSelect={harness.setSelectedWorkflowPath}
+          onConnect={async (path) => {
+            await harness.connectWorkflow(path);
           }}
         />
-        <div className="terminal-slot">
-          {harness.activeSessionId ? (
-            <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
-          ) : (
-            <div className="terminal-empty">No active session — click “+ new” to start one.</div>
-          )}
+
+        <div className="center-pane">
+          <SessionBar
+            sessions={state.sessions}
+            activeSessionId={harness.activeSessionId}
+            onSelectSession={harness.setActiveSessionId}
+            onResumeHistory={(summary) => void harness.resumeFromHistory(summary)}
+            history={harness.history}
+            historyLoading={harness.historyLoading}
+            onOpenDropdown={(cwd) => void harness.loadHistory(cwd)}
+            recentDirs={harness.settings?.recentDirs ?? []}
+            launchDir={state.launchDir ?? null}
+            listDir={harness.listDir}
+            onCreateSession={handleCreateSession}
+            authenticated={state.authenticated}
+            organizationName={state.organizationName}
+            telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+            onToggleTelemetry={async (next) => {
+              await harness.updateSettings({ telemetryOptIn: next });
+            }}
+          />
+          <div className="terminal-slot">
+            {harness.activeSessionId ? (
+              <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+            ) : (
+              <div className="terminal-empty">No active session — click “+ new” to start one.</div>
+            )}
+          </div>
         </div>
+
+        <CanvasPane sessionId={harness.activeSessionId} lastMessage={harness.lastMessage} />
+
+        <ActionRail macros={state.macros} disabledReasonFor={disabledReasonFor} onRun={handleRunMacro} />
       </div>
-
-      <CanvasPane sessionId={harness.activeSessionId} lastMessage={harness.lastMessage} />
-
-      <ActionRail macros={state.macros} disabledReasonFor={disabledReasonFor} onRun={handleRunMacro} />
     </div>
   );
 };

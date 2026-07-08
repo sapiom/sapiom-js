@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
-  AppState,
   BusMessage,
   CreateSessionRequest,
   HarnessSession,
@@ -10,13 +9,13 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { createApi, getBootToken } from "./api";
+import { createApi, getBootToken, type AppStateEx, type FsListResponse } from "./api";
 import { subscribeEvents } from "./events";
 
 const api = createApi();
 
 export interface HarnessStateHook {
-  state: AppState | null;
+  state: AppStateEx | null;
   loading: boolean;
   error: string | null;
   settings: HarnessSettings | null;
@@ -34,12 +33,13 @@ export interface HarnessStateHook {
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
+  listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
 export function useHarnessState(): HarnessStateHook {
-  const [state, setState] = useState<AppState | null>(null);
+  const [state, setState] = useState<AppStateEx | null>(null);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -159,6 +159,8 @@ export function useHarnessState(): HarnessStateHook {
     await api.runMacro(id, req);
   }, []);
 
+  const listDir = useCallback((path?: string): Promise<FsListResponse> => api.listDir(path), []);
+
   return {
     state,
     loading,
@@ -178,6 +180,7 @@ export function useHarnessState(): HarnessStateHook {
     connectWorkflow,
     updateSettings,
     runMacro,
+    listDir,
     lastMessage,
   };
 }

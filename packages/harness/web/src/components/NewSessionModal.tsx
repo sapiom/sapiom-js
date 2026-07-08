@@ -2,8 +2,13 @@ import { useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind } from "@shared/types";
 
+import type { FsListResponse } from "../lib/api";
+import { DirectoryPicker } from "./DirectoryPicker";
+
 interface NewSessionModalProps {
   recentDirs: string[];
+  launchDir: string | null;
+  listDir: (path?: string) => Promise<FsListResponse>;
   onClose: () => void;
   onCreate: (cwd: string, harness: HarnessKind) => Promise<void>;
 }
@@ -13,8 +18,14 @@ const HARNESS_OPTIONS: { id: HarnessKind; label: string }[] = [
   { id: "codex", label: "Codex" },
 ];
 
-export function NewSessionModal({ recentDirs, onClose, onCreate }: NewSessionModalProps): JSX.Element {
-  const [cwd, setCwd] = useState(recentDirs[0] ?? "");
+export function NewSessionModal({
+  recentDirs,
+  launchDir,
+  listDir,
+  onClose,
+  onCreate,
+}: NewSessionModalProps): JSX.Element {
+  const [cwd, setCwd] = useState(launchDir ?? recentDirs[0] ?? "");
   const [harness, setHarness] = useState<HarnessKind>("claude-code");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,36 +47,19 @@ export function NewSessionModal({ recentDirs, onClose, onCreate }: NewSessionMod
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal-new-session" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">New session</div>
 
         <label className="modal-label" htmlFor="new-session-cwd">
           Directory
         </label>
-        <input
-          id="new-session-cwd"
-          autoFocus
-          className="modal-input"
-          list="recent-dirs"
+        <DirectoryPicker
           value={cwd}
-          placeholder="/path/to/project"
-          onChange={(e) => setCwd(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && void submit()}
+          onChange={setCwd}
+          onSubmit={() => void submit()}
+          recentDirs={recentDirs}
+          listDir={listDir}
         />
-        <datalist id="recent-dirs">
-          {recentDirs.map((dir) => (
-            <option key={dir} value={dir} />
-          ))}
-        </datalist>
-        {recentDirs.length > 0 && (
-          <div className="recent-dirs">
-            {recentDirs.map((dir) => (
-              <button key={dir} type="button" className="recent-dir-chip" onClick={() => setCwd(dir)}>
-                {dir}
-              </button>
-            ))}
-          </div>
-        )}
 
         <div className="modal-label">Harness</div>
         <div className="harness-picker">
