@@ -581,26 +581,17 @@ describe("BatchQueue (unit)", () => {
     await queue.shutdown();
   });
 
-  it("shutdown never rejects, even when internal state mutation throws", async () => {
+  it("shutdown never rejects, even when an inner step throws", async () => {
     const sender = senderOf(async () => "ok");
     const queue = makeQueue(sender, { maxBatchSize: 100 });
 
-    Object.defineProperty(queue, "stopped", {
-      configurable: true,
-      get: () => false,
-      set: () => {
-        throw new Error("hostile field");
-      },
+    // Force shutdown into its defensive catch via a PUBLIC surface (flush),
+    // so the test survives any rename of internal fields.
+    jest.spyOn(queue, "flush").mockImplementation(() => {
+      throw new Error("flush exploded");
     });
 
     await expect(queue.shutdown()).resolves.toBeUndefined();
     expect(debugMessages).toContain("shutdown failed");
-
-    // Restore a plain field so afterEach can shut the queue down for real.
-    Object.defineProperty(queue, "stopped", {
-      configurable: true,
-      writable: true,
-      value: false,
-    });
   });
 });
