@@ -10,7 +10,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { boundWorkflowPathOf, createApi, getBootToken, type FsListResponse } from "./api";
+import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse } from "./api";
 import { subscribeEvents } from "./events";
 
 const api = createApi();
@@ -40,6 +40,12 @@ export interface HarnessStateHook {
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
   listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
+  /** A user-facing message from the most recent failed action (e.g. a macro
+   *  run against a not-yet-ready session) — null when there's nothing to
+   *  show. `runMacro` never rejects on this kind of failure; it sets this
+   *  instead, since its only caller today fires it without awaiting. */
+  toast: string | null;
+  dismissToast: () => void;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -51,6 +57,7 @@ export function useHarnessState(): HarnessStateHook {
   const [selectedWorkflowPath, setSelectedWorkflowPath] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionSummary[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
 
@@ -191,8 +198,18 @@ export function useHarnessState(): HarnessStateHook {
   }, []);
 
   const runMacro = useCallback(async (id: string, req: RunMacroRequest): Promise<void> => {
-    await api.runMacro(id, req);
+    try {
+      await api.runMacro(id, req);
+    } catch (err) {
+      // App.tsx fires this without awaiting — surface failures as a toast
+      // instead of an invisible unhandled rejection (which is exactly how
+      // the trust-dialog race originally went unnoticed: the macro's input
+      // vanished and nothing told the user why).
+      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+    }
   }, []);
+
+  const dismissToast = useCallback(() => setToast(null), []);
 
   const listDir = useCallback((path?: string): Promise<FsListResponse> => api.listDir(path), []);
 
@@ -219,5 +236,7 @@ export function useHarnessState(): HarnessStateHook {
     runMacro,
     listDir,
     lastMessage,
+    toast,
+    dismissToast,
   };
 }

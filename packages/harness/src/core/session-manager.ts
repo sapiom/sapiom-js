@@ -94,6 +94,46 @@ const KILL_ESCALATION_MS = 2_000;
 /** See `kill()`: how long after escalating to give node-pty one last chance
  *  to report the exit itself before synthesizing it from an OS-level check. */
 const KILL_ESCALATION_CONFIRM_MS = 500;
+/**
+ * See `isReadyEnough()`: for a harness with `detectBlockingPrompt`, how long
+ * to give the pty to render its first real frame before trusting a clean
+ * scrollback (no known blocking prompt) as a genuine "no prompt showing"
+ * rather than just "hasn't drawn anything yet".
+ */
+const READY_SETTLE_MS = 700;
+/** See `isReadyEnough()`: how much of the tail of retained scrollback to
+ *  scan for a blocking prompt — recent output only, not the full history a
+ *  full-screen TUI never truly clears. Generous relative to one redraw
+ *  frame (confirmed against a real capture: a single Codex trust-prompt
+ *  frame is well under 2KB) without re-scanning unbounded history. */
+const BLOCKING_PROMPT_SCAN_BYTES = 4_096;
+/**
+ * See `submitInput()`: how long to wait for a not-yet-ready session to
+ * become ready before giving up and throwing `SessionNotReadyError`. Covers
+ * the ordinary "macro fired a beat before onboarding finished" case without
+ * making a genuinely stuck session (real trust prompt sitting unanswered)
+ * hang the caller for long before surfacing something actionable.
+ */
+const READY_GRACE_MS = 8_000;
+/** Poll interval while waiting out READY_GRACE_MS. */
+const READY_POLL_MS = 150;
+
+/**
+ * Thrown by `submitInput()` when a session's pty is alive but never became
+ * ready (see `HarnessSession.ready`) within `READY_GRACE_MS` — the trust-
+ * dialog race this whole readiness mechanism exists to catch. Callers
+ * (rest.ts, macros.ts) catch this specifically and surface it as a 409 with
+ * a UI-visible reason, rather than letting it fall into a generic 500 or
+ * (worse, the bug this fixes) silently writing into a non-interactive TUI.
+ */
+export class SessionNotReadyError extends Error {
+  constructor(id: string) {
+    super(
+      `Session "${id}" is not ready yet — check the terminal, it may be asking to trust the folder.`,
+    );
+    this.name = "SessionNotReadyError";
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -173,6 +213,8 @@ interface PtyHandle {
   pty: IPty;
   buffer: string;
   emitter: EventEmitter;
+  /** Epoch ms this pty was spawned — see `isReadyEnough`'s settle window. */
+  spawnedAt: number;
 }
 
 export class SessionManager {
@@ -273,6 +315,7 @@ export class SessionManager {
       lastActiveAt: this.now(),
       exitCode: null,
       boundWorkflowPath: null,
+      ready: false,
     };
     this.sessions.set(id, session);
     await this.persist();
@@ -312,6 +355,7 @@ export class SessionManager {
       lastActiveAt: input.lastActiveAt,
       exitCode: null,
       boundWorkflowPath: null,
+      ready: false,
     };
     this.sessions.set(id, session);
     void this.persist();
@@ -416,10 +460,29 @@ export class SessionManager {
    * passthrough for live keystrokes from the terminal WS and must never add
    * this delay/splitting behavior. See `SUBMIT_DELAY_MS` for why non-empty
    * submitted text can't just be written as `${text}\r` in one call.
+   *
+   * Gated on readiness (see `HarnessSession.ready` / `isReadyEnough`): a
+   * "running" pty can still be sitting on a blocking prompt that swallows
+   * whatever's written to it. Briefly waits out `READY_GRACE_MS` for the
+   * ordinary "fired a beat too early" case; throws `SessionNotReadyError`
+   * — never silently proceeds — if the session still isn't ready after
+   * that, so the caller (rest.ts, macros.ts) can surface a clear reason
+   * instead of the input just vanishing.
    */
   async submitInput(id: string, text: string, submit = true): Promise<boolean> {
     const handle = this.ptys.get(id);
     if (!handle) return false;
+
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    if (!this.isReadyEnough(session, handle)) {
+      const becameReady = await this.waitUntilReady(id, READY_GRACE_MS);
+      if (!becameReady) throw new SessionNotReadyError(id);
+      // waitUntilReady only confirms readiness, not that the same pty is
+      // still the live one — re-fetch in case it was killed/replaced (e.g.
+      // a resume) while we were waiting, same as the mid-write race below.
+      if (this.ptys.get(id) !== handle) return false;
+    }
 
     if (!submit) {
       handle.pty.write(text);
@@ -433,11 +496,8 @@ export class SessionManager {
       handle.pty.write("\r");
     }
 
-    const session = this.sessions.get(id);
-    if (session) {
-      session.lastActiveAt = this.now();
-      void this.persist();
-    }
+    session.lastActiveAt = this.now();
+    void this.persist();
     return true;
   }
 
@@ -474,6 +534,69 @@ export class SessionManager {
     session.agentSessionId = agentSessionId;
     void this.persist();
     this.emitStatus(session);
+  }
+
+  /**
+   * Marks a session's TUI as genuinely interactive — see `HarnessSession.ready`.
+   * Called from the ingest pipeline when a SessionStart(-equivalent) event
+   * is processed for this session (real hook for Claude Code, tailer-
+   * translated for Codex). Idempotent; a session that's exited or already
+   * ready is a silent no-op.
+   */
+  setReady(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session || session.ready) return;
+    session.ready = true;
+    void this.persist();
+    this.emitStatus(session);
+  }
+
+  /**
+   * Whether `id` should be treated as ready to receive programmatic input
+   * right now — `session.ready` (the real signal), OR, for a harness that
+   * declares `detectBlockingPrompt` (currently: Codex, whose rollout file —
+   * and therefore its SessionStart-equivalent — isn't written until the
+   * *first* turn is submitted, so the real signal can never arrive before
+   * the very first injection that needs it): the pty has had a moment to
+   * render its first real frame (`READY_SETTLE_MS`) and that frame doesn't
+   * show a known blocking prompt. A harness without `detectBlockingPrompt`
+   * (Claude Code) gets no such fallback — its SessionStart hook is reliable
+   * standalone, and a scrollback guess would just reopen the exact race
+   * this mechanism exists to close.
+   */
+  private isReadyEnough(session: HarnessSession, handle: PtyHandle): boolean {
+    if (session.ready) return true;
+    const adapter = this.adapters[session.harness];
+    if (!adapter?.detectBlockingPrompt) return false;
+    if (Date.now() - handle.spawnedAt < READY_SETTLE_MS) return false;
+    // Only the tail: `handle.buffer` is the full retained scrollback
+    // (up to SCROLLBACK_BYTES) and full-screen TUIs never truly "clear" it
+    // — a dismissed prompt's text sits in there forever. A full-screen
+    // redraw re-touches its whole visible frame on every update though
+    // (confirmed against a real capture), so recent output alone reflects
+    // what's actually on screen right now; checking the whole history would
+    // make a session that dismissed its trust prompt minutes ago look
+    // permanently stuck.
+    return !adapter.detectBlockingPrompt(handle.buffer.slice(-BLOCKING_PROMPT_SCAN_BYTES));
+  }
+
+  /**
+   * Polls `isReadyEnough` until it's true, the session's pty goes away
+   * (killed/exited — it's never going to become ready now), or `timeoutMs`
+   * elapses. Used by `submitInput()` only — `write()` (raw terminal
+   * keystrokes) must never wait on this, since a human answering the very
+   * prompt this is waiting out is exactly how a session becomes ready.
+   */
+  private async waitUntilReady(id: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const handle = this.ptys.get(id);
+      const session = this.sessions.get(id);
+      if (!handle || !session) return false;
+      if (this.isReadyEnough(session, handle)) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(Math.min(READY_POLL_MS, Math.max(0, deadline - Date.now())));
+    }
   }
 
   /** Waits for all in-flight registry writes to settle. Useful before process
@@ -537,10 +660,14 @@ export class SessionManager {
 
     const emitter = new EventEmitter();
     emitter.setMaxListeners(0);
-    const handle: PtyHandle = { pty, buffer: "", emitter };
+    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now() };
     this.ptys.set(session.id, handle);
 
     session.status = "running";
+    // A resumed session may carry `ready: true` from its previous life —
+    // this is a fresh pty that hasn't proven itself interactive yet either
+    // way (trust dialogs can reappear, e.g. under different sandbox flags).
+    session.ready = false;
     session.lastActiveAt = this.now();
     await this.persist();
     this.emitStatus(session);

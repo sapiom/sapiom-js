@@ -366,6 +366,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
       sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
     },
+    onSessionReady: (harnessSessionId) => {
+      sessionManager.setReady(harnessSessionId);
+    },
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,

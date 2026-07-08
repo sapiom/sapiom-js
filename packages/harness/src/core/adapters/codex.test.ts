@@ -100,6 +100,55 @@ describe("CodexAdapter", () => {
     });
   });
 
+  describe("detectBlockingPrompt", () => {
+    // Real capture from a locally installed codex-cli 0.134.0's trust-dialog
+    // screen: it positions each *word* with its own cursor-addressing escape
+    // sequence instead of emitting literal spaces between them, and other
+    // frames interleave OSC title-setting sequences using both BEL and ST
+    // terminators.
+    const REAL_TRUST_PROMPT_CAPTURE =
+      "\x1b[1;1H\x1b[J\x1b[1;3H\x1b[1mYou are in \x1b[22m/private/tmp/proj" +
+      "\x1b[3;3HDo\x1b[3;6Hyou\x1b[3;10Htrust\x1b[3;16Hthe\x1b[3;20Hcontents" +
+      "\x1b[3;29Hof\x1b[3;32Hthis\x1b[3;37Hdirectory?\x1b[3;48HWorking" +
+      "\x1b[3;56Hwith\x1b[3;61Huntrusted\x1b[4;3Hinjection." +
+      "\x1b[6;1H\x1b[38;5;6;49m› 1. Yes, continue\x1b[7;3H\x1b[39;49m2." +
+      "\x1b[7;6HNo,\x1b[7;10Hquit\x1b[9;3H\x1b[2mPress enter to continue";
+
+    it("detects the trust prompt in a real, unmodified pty capture", () => {
+      const adapter = new CodexAdapter();
+      expect(adapter.detectBlockingPrompt(REAL_TRUST_PROMPT_CAPTURE)).toBe(true);
+    });
+
+    it("does not false-positive on ordinary composer/output text", () => {
+      const adapter = new CodexAdapter();
+      const composer =
+        "\x1b]0;my-project\x07\x1b[1;1H\x1b[38;2;231;231;231;49m› Find and fix a bug in @filename" +
+        "\x1b[3;1Hgpt-5.5 xhigh · /private/tmp/proj";
+      expect(adapter.detectBlockingPrompt(composer)).toBe(false);
+    });
+
+    it("does not false-positive on an OSC sequence terminated by ST (ESC \\\\) rather than BEL", () => {
+      // Regression: a greedy (not lazy) OSC-stripping pattern doesn't
+      // exclude ST (`\x1b\\`) from what it can consume, so it backtracks to
+      // the LAST reachable terminator in the whole string instead of the
+      // next one — silently swallowing real content (including this exact
+      // trust-prompt text) in between. Confirmed against this real capture
+      // shape: two OSC 10/11 color queries (ST-terminated) followed later by
+      // an OSC 0 title (BEL-terminated), then the trust prompt.
+      const capture =
+        "\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]0;proj\x07" +
+        "\x1b[3;3HDo\x1b[3;6Hyou\x1b[3;10Htrust\x1b[3;16Hthe\x1b[3;20Hcontents" +
+        "\x1b[3;29Hof\x1b[3;32Hthis\x1b[3;37Hdirectory?";
+      const adapter = new CodexAdapter();
+      expect(adapter.detectBlockingPrompt(capture)).toBe(true);
+    });
+
+    it("returns false for plain text with no escape sequences at all", () => {
+      const adapter = new CodexAdapter();
+      expect(adapter.detectBlockingPrompt("just some ordinary agent output, nothing special")).toBe(false);
+    });
+  });
+
   describe("doctor", () => {
     it("reports ok:false when the binary isn't on PATH", async () => {
       const adapter = new CodexAdapter({ binary: "definitely-not-a-real-binary-xyz" });

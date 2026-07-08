@@ -168,6 +168,7 @@ describe("SessionManager", () => {
     it("splits non-empty submitted text into a text write, then a separate \\r after a delay", async () => {
       const { manager, spawns } = makeManager();
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
 
       const submitPromise = manager.submitInput(session.id, "hello world", true);
 
@@ -189,6 +190,7 @@ describe("SessionManager", () => {
     it("writes a bare \\r in a single call for submit:true with empty text (no splitting needed)", async () => {
       const { manager, spawns } = makeManager();
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
 
       const ok = await manager.submitInput(session.id, "", true);
 
@@ -200,6 +202,7 @@ describe("SessionManager", () => {
     it("writes only the text, with no \\r at all, when submit is false", async () => {
       const { manager, spawns } = makeManager();
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
 
       const ok = await manager.submitInput(session.id, "draft text", false);
 
@@ -216,6 +219,7 @@ describe("SessionManager", () => {
     it("does not write the trailing \\r if the session's pty is gone by the time the delay elapses", async () => {
       const { manager, spawns } = makeManager();
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setReady(session.id);
 
       const submitPromise = manager.submitInput(session.id, "hello", true);
       expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
@@ -227,6 +231,162 @@ describe("SessionManager", () => {
       expect(ok).toBe(false);
       // Still just the one write from before the pty exited — no trailing \r.
       expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("readiness gating (SessionNotReadyError / setReady / detectBlockingPrompt)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("a fresh session starts not-ready even though its pty is already \"running\"", async () => {
+      const { manager } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      expect(session.status).toBe("running");
+      expect(session.ready).toBe(false);
+    });
+
+    it("write() (raw keystrokes) is never gated on readiness — a human must be able to answer a blocking prompt themselves", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      expect(session.ready).toBe(false);
+
+      expect(manager.write(session.id, "1\r")).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("1\r");
+    });
+
+    it(
+      "THE RACE REPRO: submitInput() against a not-yet-ready session queues and succeeds once " +
+        "setReady() fires before the grace period elapses (macro fired a beat before onboarding finished)",
+      async () => {
+        const { manager, spawns } = makeManager();
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+        const submitPromise = manager.submitInput(session.id, "hello", true);
+        // Not ready yet — must NOT have written anything, this is exactly the
+        // bug: input landing on a TUI that isn't listening yet.
+        expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+
+        // The real SessionStart hook lands a moment later.
+        await vi.advanceTimersByTimeAsync(500);
+        manager.setReady(session.id);
+
+        // Generous, not tightly matched to SUBMIT_DELAY_MS: the readiness
+        // poll loop's own in-flight tick can eat into part of a
+        // precisely-sized advance before SUBMIT_DELAY_MS's sleep even
+        // starts, since setReady() above only flips a flag — the loop still
+        // has to wake up and notice it on its own schedule.
+        await vi.advanceTimersByTimeAsync(1_000);
+        const ok = await submitPromise;
+
+        expect(ok).toBe(true);
+        expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "hello");
+        expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+      },
+    );
+
+    it("throws SessionNotReadyError (never silently proceeds) when a session never becomes ready within the grace period", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const submitPromise = manager.submitInput(session.id, "hello", true);
+      const assertion = expect(submitPromise).rejects.toThrow(/not ready yet/i);
+      await vi.advanceTimersByTimeAsync(8_000);
+      await assertion;
+
+      // The whole point: nothing was ever written into the not-listening TUI.
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+    });
+
+    it("resuming resets ready back to false, even for a session that was ready before its pty exited", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setAgentSessionId(session.id, "agent-1");
+      manager.setReady(session.id);
+      expect(manager.get(session.id)?.ready).toBe(true);
+
+      spawns[0]?.emitExit(0);
+      expect(manager.get(session.id)?.status).toBe("exited");
+
+      await manager.resume(session.id);
+      expect(manager.get(session.id)?.status).toBe("running");
+      // Trust dialogs can reappear on resume (e.g. different sandbox flags)
+      // — a fresh pty hasn't proven itself interactive yet either way.
+      expect(manager.get(session.id)?.ready).toBe(false);
+    });
+
+    it("setReady is idempotent and a silent no-op for an unknown session id", () => {
+      const { manager } = makeManager();
+      expect(() => manager.setReady("unknown-id")).not.toThrow();
+    });
+
+    describe("harnesses with detectBlockingPrompt (Codex's lazy-rollout-file bridge)", () => {
+      it("is not ready before the settle window elapses, even with a clean scrollback", async () => {
+        const detectBlockingPrompt = vi.fn(() => false);
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+        const submitPromise = manager.submitInput(session.id, "hello", true);
+        expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+
+        // Generous, not tightly matched to READY_SETTLE_MS + SUBMIT_DELAY_MS:
+        // the settle window is checked once per READY_POLL_MS poll tick, not
+        // the instant it elapses, so the actual crossing (and the fresh
+        // SUBMIT_DELAY_MS sleep that only starts once it does) can land
+        // meaningfully later than the nominal 700ms.
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(await submitPromise).toBe(true);
+      });
+
+      it("becomes ready enough after the settle window when the scrollback shows no blocking prompt (the common already-trusted case)", async () => {
+        const detectBlockingPrompt = vi.fn(() => false);
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+        await vi.advanceTimersByTimeAsync(700);
+        const submitPromise = manager.submitInput(session.id, "hello", true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        const ok = await submitPromise;
+
+        expect(ok).toBe(true);
+        expect(spawns[0]?.pty.write).toHaveBeenCalledWith("hello");
+        // Only the tail of retained scrollback is scanned, not the full history.
+        expect(detectBlockingPrompt).toHaveBeenCalledWith(expect.any(String));
+      });
+
+      it("stays not-ready while the scrollback shows a blocking prompt, then proceeds once it clears", async () => {
+        let showingPrompt = true;
+        const detectBlockingPrompt = vi.fn(() => showingPrompt);
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+        const submitPromise = manager.submitInput(session.id, "hello", true);
+        await vi.advanceTimersByTimeAsync(700);
+        expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+
+        // Simulated: a human answers the prompt directly in the terminal.
+        showingPrompt = false;
+        await vi.advanceTimersByTimeAsync(150); // one READY_POLL_MS tick
+        await vi.advanceTimersByTimeAsync(300);
+        expect(await submitPromise).toBe(true);
+      });
+
+      it("throws SessionNotReadyError if the blocking prompt never clears within the grace period", async () => {
+        const detectBlockingPrompt = vi.fn(() => true);
+        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+        const submitPromise = manager.submitInput(session.id, "hello", true);
+        const assertion = expect(submitPromise).rejects.toThrow(/not ready yet/i);
+        await vi.advanceTimersByTimeAsync(8_000);
+        await assertion;
+
+        expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+      });
     });
   });
 
