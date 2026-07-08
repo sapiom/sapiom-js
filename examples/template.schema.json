@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sapiom.ai/schemas/examples-template.json",
+  "title": "Sapiom template manifest",
+  "description": "Rich per-template detail, co-located beside each example as `template.json`. The registry (`registry.json`) stays the thin gallery list (id/name/description/tags/sourcePath/capabilities/steps); this manifest is the detail layer the Sapiom backend merges into the template + fork detail view. Everything is optional except `manifestVersion` — a bare `{ \"manifestVersion\": 1 }` is valid.",
+  "type": "object",
+  "required": ["manifestVersion"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional editor hint pointing at this schema for autocomplete + validation."
+    },
+    "manifestVersion": {
+      "const": 1,
+      "description": "Manifest schema version. Only `1` is defined today."
+    },
+    "author": {
+      "type": "object",
+      "description": "Who authored the template.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Author display name." },
+        "url": { "type": "string", "description": "Optional link to the author (site, profile, or repo)." }
+      }
+    },
+    "longDescription": {
+      "type": "string",
+      "description": "Markdown prose describing what the template is and how it behaves. Shown on the detail view."
+    },
+    "useCases": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Short phrases describing concrete things you'd use this template for."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Markdown notes — how to use it, what else it ships with, gotchas."
+    },
+    "examples": {
+      "type": "array",
+      "description": "Sample runs: an input, and optionally the output it produces.",
+      "items": {
+        "type": "object",
+        "required": ["input"],
+        "additionalProperties": false,
+        "properties": {
+          "title": { "type": "string", "description": "Optional label for this example." },
+          "input": { "type": "object", "description": "The run input payload." },
+          "output": { "type": "object", "description": "Optional output the run returns." }
+        }
+      }
+    }
+  }
+}
