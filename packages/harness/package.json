@@ -51,6 +51,7 @@
     "e2e:live": "tsx scripts/e2e-live.ts"
   },
   "dependencies": {
+    "@sapiom/agent": "workspace:^",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/mcp": "workspace:^",
     "express": "^4.21.0",

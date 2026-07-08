@@ -365,13 +365,6 @@ input {
   letter-spacing: normal;
 }
 
-.action-panel-empty {
-  padding: 4px;
-  color: var(--text-faint);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
 .action-panel-item {
   display: flex;
   align-items: center;

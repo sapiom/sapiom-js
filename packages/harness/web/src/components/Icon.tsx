@@ -16,6 +16,7 @@ import {
   Settings,
   Sparkles,
   Sun,
+  Wand2,
   X,
   Zap,
 } from "lucide-react";
@@ -42,6 +43,7 @@ const ICONS: Record<string, LucideIcon> = {
   Settings,
   Sparkles,
   Sun,
+  Wand2,
   X,
   Zap,
 };

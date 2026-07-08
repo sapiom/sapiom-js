@@ -424,15 +424,34 @@ test.describe("persistent workflow actions panel", () => {
     await expect(panel.getByTestId("macro-deploy")).toBeVisible();
     await expect(panel.getByTestId("macro-prod_run")).toBeVisible();
     await expect(panel.getByTestId("macro-open_prod")).toBeVisible();
+    // "visualize" (deterministic render) and "ai-visualize" (the LLM-authored
+    // fallback) are both requiresWorkflow: false, but the panel still shows
+    // them here since a workflow is selected.
     await expect(panel.getByTestId("macro-visualize")).toBeVisible();
+    await expect(panel.getByTestId("macro-ai-visualize")).toBeVisible();
 
     // Labels are visible immediately — no hover/focus step reveals them.
     await expect(panel.getByText("Run local")).toBeVisible();
-    await expect(panel.getByText("Visualize")).toBeVisible();
+    // getByText("Visualize") would also match "AI Visualize" — target each
+    // by its own macro testid instead.
+    await expect(panel.getByTestId("macro-visualize").getByText("Visualize", { exact: true })).toBeVisible();
+    await expect(panel.getByTestId("macro-ai-visualize").getByText("AI Visualize")).toBeVisible();
     const restBox = await panel.boundingBox();
     expect(restBox?.width ?? 0).toBeGreaterThan(150);
 
     await page.screenshot({ path: "web/e2e/screenshots/app-shell-action-panel.png", fullPage: true });
+  });
+
+  test("visualize and ai-visualize stay enabled without a bound session's workflow requirement blocking them incorrectly, and gate only on session presence", async ({
+    page,
+  }) => {
+    // Both macros are requiresWorkflow: false post-deterministic-render — the
+    // shared macroDisabledReason only gates them on having an active session
+    // (any non-open-url action needs a real session to act against).
+    const visualize = page.getByTestId("macro-visualize");
+    const aiVisualize = page.getByTestId("macro-ai-visualize");
+    await expect(visualize).toBeEnabled();
+    await expect(aiVisualize).toBeEnabled();
   });
 
   test("a disabled action's reason is always visible, not just on hover or focus", async ({ page }) => {

@@ -43,6 +43,7 @@ import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import { writeHarnessContext, harnessContextFileExists } from "../core/workspace-context.js";
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
+import { renderCanvasForSession } from "../core/canvas-render.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -51,6 +52,7 @@ import { createEventsWebSocketHandler } from "./events-ws.js";
 import { attachWebSocketRouters } from "./ws-router.js";
 import { createIngestRouter, processIngest, type IngestDeps, type IngestRequestBody, type IngestSessionContext } from "./ingest.js";
 import { createCanvasRouter } from "./canvas.js";
+import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 
@@ -272,8 +274,12 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // workflow registry is shared across the whole harness instance, so a
   // scan/connect anywhere changes what every session's `workflows` list
   // should say, not just the session that triggered the scan.
-  const scanWorkflowsAndBroadcast = async (root: string): Promise<void> => {
-    await workflowRegistry.scan(root);
+  // Returns the workflows freshly discovered under `root` (not the whole
+  // merged registry) — callers use this to decide whether THIS scan turned
+  // up something new worth an unprompted canvas render, without conflating
+  // it with unrelated workflows some earlier scan already found elsewhere.
+  const scanWorkflowsAndBroadcast = async (root: string): Promise<WorkflowInfo[]> => {
+    const found = await workflowRegistry.scan(root);
     workflowsCache = await workflowRegistry.list();
     // Rewrite every open session's context file before broadcasting — a
     // listener reacting to workflows.changed (the SPA, or an agent that
@@ -281,10 +287,20 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     // notification before the file it describes is actually updated.
     await Promise.all(sessionManager.list().map((session) => writeSessionContext(session)));
     bus.publish({ type: "workflows.changed" });
+    return found;
   };
 
-  scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
+  // Renders a session's canvas (its bound workflow, or the whole-workspace
+  // overview when unbound) via the deterministic pipeline — always against
+  // the live workflowsCache, never an LLM. Never throws (see core/
+  // canvas-render.ts); best-effort, like every other canvas write here.
+  const renderCanvas = async (session: HarnessSession): Promise<void> => {
+    await renderCanvasForSession(session, workflowsCache);
+  };
+
+  const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
     console.error("[harness] initial workflow scan failed:", err);
+    return [] as WorkflowInfo[];
   });
 
   const eventStore = createEventStore(options.eventStorePath);
@@ -331,14 +347,32 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       writeWorkspaceContext: writeSessionContext,
+      renderCanvas,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
-      onSessionCreated: (cwd) => {
-        scanWorkflowsAndBroadcast(cwd).catch((err: unknown) => {
-          console.error("[harness] workflow scan on session create failed:", err);
-        });
+      onSessionCreated: (cwd, harnessSessionId) => {
+        scanWorkflowsAndBroadcast(cwd)
+          .then((found) => {
+            // Only auto-render when THIS session's own directory turned up a
+            // workflow — an unrelated project scanned earlier elsewhere in
+            // the registry shouldn't unprompt-render into a brand new,
+            // unrelated session's pane.
+            if (found.length === 0) return;
+            const session = sessionManager.get(harnessSessionId);
+            if (session) return renderCanvas(session);
+          })
+          .catch((err: unknown) => {
+            console.error("[harness] workflow scan on session create failed:", err);
+          });
       },
       launchDir,
       availableHarnesses: options.availableHarnesses,
+    }),
+  );
+  app.use(
+    "/api",
+    createCanvasRenderRouter({
+      getSession: (harnessSessionId) => sessionManager.get(harnessSessionId),
+      listWorkflows: () => workflowsCache,
     }),
   );
   app.use(
@@ -349,6 +383,10 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       getSessionCwd: (harnessSessionId) => sessionManager.get(harnessSessionId)?.cwd ?? null,
       getBoundWorkflowPath: (harnessSessionId) => sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
+      renderCanvas: async (harnessSessionId) => {
+        const session = sessionManager.get(harnessSessionId);
+        if (session) await renderCanvas(session);
+      },
       injectInput: async (harnessSessionId, text, submit) => {
         // Two-phase write: a combined text+\r lands in Claude Code as a
         // bracketed paste and never submits.
@@ -536,9 +574,18 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // resolving shouldn't wait on a real pty spawn.
   if (options.autoCreateSession ?? true) {
     const harness = options.defaultHarnessKind ?? "claude-code";
-    sessionManager.create({ cwd: launchDir, harness }).catch((err: unknown) => {
-      console.error("[harness] auto-create boot session failed:", err);
-    });
+    sessionManager
+      .create({ cwd: launchDir, harness })
+      .then(async (session) => {
+        // Reuses the scan already kicked off above rather than scanning
+        // launchDir twice — only renders when it actually found something,
+        // same "discoverable" gate as the REST onSessionCreated path.
+        const found = await initialWorkflowScan;
+        if (found.length > 0) await renderCanvas(session);
+      })
+      .catch((err: unknown) => {
+        console.error("[harness] auto-create boot session failed:", err);
+      });
   }
 
   const address = httpServer.address();
