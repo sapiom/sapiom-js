@@ -9,7 +9,7 @@
  * mocked unit-level test of the lifecycle glue itself.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -114,7 +114,11 @@ describe("codex session lifecycle (real files, no mocking)", () => {
     const rolloutDir = join(codexHomeDir, ".codex", "sessions", "2026", "01", "01");
     await mkdir(rolloutDir, { recursive: true });
     const rolloutPath = join(rolloutDir, `rollout-2026-01-01T00-00-00-${agentSessionId}.jsonl`);
-    await writeFile(rolloutPath, sessionMetaLine(agentSessionId, cwd, new Date().toISOString()));
+    // Real Codex records the OS-canonicalized cwd (symlinks resolved) — on
+    // this machine's tmpdir that differs from the raw path (e.g. macOS's
+    // /var -> /private/var), so mirror that here rather than the raw value,
+    // to actually exercise findRolloutFile's realpath-normalized matching.
+    await writeFile(rolloutPath, sessionMetaLine(agentSessionId, await realpath(cwd), new Date().toISOString()));
 
     // --- session.start, and the rollout id links into the registry ---
     await vi.waitFor(
