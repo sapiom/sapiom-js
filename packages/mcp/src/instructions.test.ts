@@ -27,18 +27,20 @@ describe("server instructions", () => {
     // Lifecycle tools an agent must drive
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_authenticate");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_scaffold");
-    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_clone");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_run_local");
-    // Canonical naming (and the stale name it must steer away from)
+    // Canonical naming (and the stale names it must steer away from)
     expect(AUTHORING_INSTRUCTIONS).toContain("@sapiom/agent");
     expect(AUTHORING_INSTRUCTIONS).toContain("defineAgent");
     // the stale names appear only inside the explicit "NEVER use" warning
     expect(AUTHORING_INSTRUCTIONS).toContain("NEVER `defineWorkflow`");
-    // Pointer to the full docs + the scaffold guide
-    expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/workflows");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/orchestration` (stale names)");
+    // Pointer to the full docs + the scaffold-shipped guidance (AGENTS.md + skill)
+    expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/agents");
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
     // The two-MCP frame: agents learn the remote MCP exists for direct tool calls
     expect(AUTHORING_INSTRUCTIONS).toContain("remote MCP");
     expect(AUTHORING_INSTRUCTIONS).toContain("api.sapiom.ai/v1/mcp");
+    expect(AUTHORING_INSTRUCTIONS).toContain("tool_discover");
   });
 });
