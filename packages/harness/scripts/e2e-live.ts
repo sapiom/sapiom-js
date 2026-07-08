@@ -55,12 +55,11 @@
  *      the analytics collector's port produces no port.detected frame at
  *      all — proving server/index.ts's exclusion wiring, not just
  *      PortDetector's own unit-tested filter in isolation.
- *  13. Canvas kit: both .sapiom/canvas/_template.html (pristine clone
- *      source) and index.html (live canvas, same initial content) are
- *      already on disk the moment a session is created — before any
- *      visualize run — and POST /api/macros/visualize/run succeeds both
- *      with no workflow bound (requiresWorkflow: false — workspace-overview
- *      mode) and after one is bound.
+ *  13. Canvas kit: the canvas template (core/canvas-template.ts) is already
+ *      on disk at .sapiom/canvas/index.html the moment a session is
+ *      created — before any visualize run — and POST /api/macros/
+ *      visualize/run succeeds both with no workflow bound (requiresWorkflow:
+ *      false — workspace-overview mode) and after one is bound.
  *
  * Run with: pnpm e2e:live
  */
@@ -76,7 +75,7 @@ import { startServer } from "../src/server/index.js";
 import { createClaudeCodeAdapter } from "../src/core/adapters/claude-code.js";
 import { createCodexAdapter } from "../src/core/adapters/codex.js";
 import { ensureSpawnHelperExecutable } from "../src/core/session-manager.js";
-import { CANVAS_TEMPLATE_FILE, TEMPLATE_HTML } from "../src/core/canvas-template.js";
+import { EMPTY_CANVAS_DATA, renderCanvasHtml } from "../src/core/canvas-template.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = path.join(SCRIPT_DIR, "fixtures", "fake-claude.mjs");
@@ -257,17 +256,11 @@ async function testCoreFlow(): Promise<void> {
     assert(initialContext.boundWorkflow === null, "harness-context.json is written on session create with boundWorkflow: null");
 
     // The canvas kit's template is also backfilled before the pty spawns —
-    // the canvas pane must never open to a bare empty iframe, and a pristine
-    // clone source must already exist for the visualize macro to clone from.
+    // the canvas pane must never open to a bare empty iframe.
     const initialCanvasHtml = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
     assert(
-      initialCanvasHtml === TEMPLATE_HTML,
+      initialCanvasHtml === renderCanvasHtml(EMPTY_CANVAS_DATA),
       "the canvas kit's empty-state template is already on disk when the session is created",
-    );
-    const initialTemplateHtml = await fs.readFile(path.join(projectDir, CANVAS_TEMPLATE_FILE), "utf8");
-    assert(
-      initialTemplateHtml === TEMPLATE_HTML,
-      "a pristine _template.html clone source is also already on disk when the session is created",
     );
 
     // --- 2. the fixture captured its own argv/env — proves the launch-opts wiring ---

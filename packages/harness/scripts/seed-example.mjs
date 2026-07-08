@@ -14,25 +14,22 @@
  *                               does (current npm latest, offline fallback) —
  *                               never hardcoded here, so this can't ship dead
  *                               pins that no longer exist on npm.
- *   <dir>/.sapiom/canvas/index.html + _template.html
- *                             — the canvas kit's own template shell (see
- *                               ../src/core/canvas-template.ts) wrapping
- *                               this project's real step-graph markup — the
- *                               canvas pane's opening shot, and a reference
- *                               for the shape of markup an agent should
- *                               produce for Visualize. Rendered via the
- *                               exact same renderCanvasDocument() shell the
- *                               real visualize macro's edits go through, so
- *                               the seed and the kit can never drift from
- *                               each other the way this file's old
- *                               hand-rolled HTML drifted from the style
- *                               contract.
+ *   <dir>/.sapiom/canvas/index.html
+ *                             — the canvas kit's own template (see
+ *                               ../src/core/canvas-template.ts), prefilled
+ *                               with this project's step-graph data — the
+ *                               canvas pane's opening shot. Rendered via the
+ *                               exact same renderCanvasHtml() the real
+ *                               visualize macro's edits go through, so the
+ *                               seed and the kit can never drift from each
+ *                               other the way this file's old hand-rolled
+ *                               HTML drifted from the style contract.
  *
  * Idempotent: re-running wipes and regenerates both from scratch.
  *
  * Requires the harness package itself to already be built (`pnpm build` or
- * `build:server`) — this imports renderCanvasDocument from dist/, the same
- * way it already needs @sapiom/agent-core's dist built.
+ * `build:server`) — this imports renderCanvasHtml from dist/, the same way
+ * it already needs @sapiom/agent-core's dist built.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -41,7 +38,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 
 import { resolveVersions, scaffold, writeConfig } from "@sapiom/agent-core";
-import { TEMPLATE_HTML, renderCanvasDocument } from "../dist/core/canvas-template.js";
+import { renderCanvasHtml } from "../dist/core/canvas-template.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
@@ -148,93 +145,45 @@ export const agent = defineAgent({
 `;
 
 /**
- * Prefilled canvas-kit BODY for order-triage — hand-authored markup using
- * the template's own classes/patterns (core/canvas-template.ts), exactly as
- * an agent following the visualize macro's prompt would produce. Mirrors
- * index.ts's real step graph (5 steps, 1 branch, 2 terminal outcomes).
- * Wrapped through the same `renderCanvasDocument()` shell the real
- * visualize macro's edits go through (see the module doc comment above).
+ * Prefilled canvas-kit data for order-triage — mirrors index.ts's real
+ * step graph exactly (5 steps, 1 branch, 2 terminal outcomes). Rendered
+ * through the same `renderCanvasHtml()` the real visualize macro's edits
+ * go through (see the module doc comment above).
  */
-const ORDER_TRIAGE_CANVAS_BODY = `
-<section class="canvas-panel">
-  <header class="canvas-header">
-    <div class="canvas-title-row">
-      <h1 class="canvas-title">order-triage</h1>
-      <span class="canvas-badge">standalone workflow</span>
-      <span class="canvas-badge">not deployed yet</span>
-    </div>
-    <p class="canvas-subtitle">Support-ticket triage: intake -&gt; classify -&gt; route, then auto-resolve or escalate to a human.</p>
-    <div class="canvas-stats">
-      <div class="canvas-stat"><span class="canvas-stat-value">5</span><span class="canvas-stat-label">steps</span></div>
-      <div class="canvas-stat"><span class="canvas-stat-value">2</span><span class="canvas-stat-label">terminal outcomes</span></div>
-      <div class="canvas-stat"><span class="canvas-stat-value">1</span><span class="canvas-stat-label">branch points</span></div>
-    </div>
-  </header>
-  <div class="canvas-diagram-panel">
-    <svg class="canvas-graph-svg" viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg">
-      <path class="canvas-edge" d="M480,96 L480,150" marker-end="url(#canvas-arrow)" />
-      <path class="canvas-edge" d="M480,206 L480,260" marker-end="url(#canvas-arrow)" />
-      <path class="canvas-edge canvas-edge--success" d="M480,316 C480,360 288,360 288,410" marker-end="url(#canvas-arrow-success)" />
-      <path class="canvas-edge canvas-edge--warn" d="M480,316 C480,360 688,360 688,410" marker-end="url(#canvas-arrow-warn)" />
-      <text class="canvas-edge-label" x="440" y="345" text-anchor="end">category != billing_dispute</text>
-      <text class="canvas-edge-label" x="520" y="345" text-anchor="start">billing_dispute</text>
-
-      <g class="canvas-node node--entry" filter="url(#canvas-glow)" transform="translate(392,40)">
-        <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-        <text class="canvas-node-title" x="88" y="24">intake</text>
-        <text class="canvas-node-sub" x="88" y="40">receive + log order</text>
-      </g>
-      <g class="canvas-node node--step" filter="url(#canvas-glow)" transform="translate(392,150)">
-        <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-        <text class="canvas-node-title" x="88" y="24">classify</text>
-        <text class="canvas-node-sub" x="88" y="40">tag order category</text>
-      </g>
-      <g class="canvas-node node--step" filter="url(#canvas-glow)" transform="translate(392,260)">
-        <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-        <text class="canvas-node-title" x="88" y="24">route</text>
-        <text class="canvas-node-sub" x="88" y="40">branch on category</text>
-      </g>
-      <g class="canvas-node node--terminal-success" filter="url(#canvas-glow)" transform="translate(200,410)">
-        <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-        <text class="canvas-node-title" x="88" y="24">auto_resolve</text>
-        <text class="canvas-node-sub" x="88" y="40">terminate({resolved:true})</text>
-      </g>
-      <g class="canvas-node node--terminal-warn" filter="url(#canvas-glow)" transform="translate(600,410)">
-        <rect class="canvas-node-rect" width="176" height="56" rx="14" />
-        <text class="canvas-node-title" x="88" y="24">escalate</text>
-        <text class="canvas-node-sub" x="88" y="40">terminate({escalated:true})</text>
-      </g>
-    </svg>
-  </div>
-</section>
-
-<section class="canvas-panel canvas-interconnections">
-  <h2 class="canvas-panel-title">Interconnections</h2>
-  <div class="canvas-interconnection-row">
-    <span class="canvas-legend-marker canvas-legend-marker--entry"></span>
-    <span class="canvas-interconnection-title">external -&gt; intake</span>
-    <span class="canvas-interconnection-tag">signal</span>
-    <p class="canvas-interconnection-desc">an order object enters here</p>
-  </div>
-  <div class="canvas-interconnection-row">
-    <span class="canvas-legend-marker canvas-legend-marker--terminal-warn"></span>
-    <span class="canvas-interconnection-title">escalate -&gt; external</span>
-    <span class="canvas-interconnection-tag">handoff</span>
-    <p class="canvas-interconnection-desc">routes to a human out-of-band, not to another workflow</p>
-  </div>
-</section>
-
-<footer class="canvas-footer">
-  <div class="canvas-legend">
-    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--entry"></span>entry / active step</span>
-    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--step"></span>step</span>
-    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-success"></span>terminal &middot; success</span>
-    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-warn"></span>terminal &middot; escalation</span>
-    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-workflow signal/handoff</span>
-  </div>
-  <p class="canvas-note">Static preview — ask your agent to regenerate this after you change the workflow.</p>
-</footer>
-`.trim();
+const ORDER_TRIAGE_CANVAS_DATA = {
+  version: 1,
+  graphs: [
+    {
+      id: "order-triage",
+      title: "order-triage",
+      subtitle: "Support-ticket triage: intake -> classify -> route, then auto-resolve or escalate to a human.",
+      badges: ["standalone workflow", "not deployed yet"],
+      stats: [
+        { label: "steps", value: 5 },
+        { label: "terminal outcomes", value: 2 },
+        { label: "branch points", value: 1 },
+      ],
+      nodes: [
+        { id: "intake", kind: "entry", label: "intake", sublabel: "receive + log order" },
+        { id: "classify", kind: "step", label: "classify", sublabel: "tag order category" },
+        { id: "route", kind: "step", label: "route", sublabel: "branch on category" },
+        { id: "auto_resolve", kind: "terminal-success", label: "auto_resolve", sublabel: "terminate({resolved:true})" },
+        { id: "escalate", kind: "terminal-warn", label: "escalate", sublabel: "terminate({escalated:true})" },
+      ],
+      edges: [
+        { from: "intake", to: "classify", kind: "sequential" },
+        { from: "classify", to: "route", kind: "sequential" },
+        { from: "route", to: "auto_resolve", kind: "branching", label: "category != billing_dispute" },
+        { from: "route", to: "escalate", kind: "branching", label: "billing_dispute" },
+      ],
+    },
+  ],
+  interconnections: [
+    { from: "external", to: "order-triage.intake", kind: "signal", label: "an order object enters here" },
+    { from: "order-triage.escalate", to: "external", kind: "handoff", label: "routes to a human out-of-band, not to another workflow" },
+  ],
+  note: "Static preview — ask your agent to regenerate the data after you change the workflow.",
+};
 
 function parseArgs(argv) {
   let dir;
@@ -261,7 +210,6 @@ async function main() {
   const projectDir = path.join(targetRoot, PROJECT_NAME);
   const canvasDir = path.join(targetRoot, ".sapiom", "canvas");
   const canvasFile = path.join(canvasDir, "index.html");
-  const canvasTemplateFile = path.join(canvasDir, "_template.html");
 
   // Idempotent: wipe a stale copy before rescaffolding.
   await fs.rm(projectDir, { recursive: true, force: true });
@@ -286,11 +234,7 @@ async function main() {
   commitCustomizations(projectDir);
 
   await fs.mkdir(canvasDir, { recursive: true });
-  // A pristine _template.html alongside the prefilled index.html — the same
-  // pairing SessionManager's ensureCanvasTemplate() maintains for every
-  // session, so re-visualizing this seeded project has a clean clone source.
-  await fs.writeFile(canvasTemplateFile, TEMPLATE_HTML, "utf8");
-  await fs.writeFile(canvasFile, renderCanvasDocument(ORDER_TRIAGE_CANVAS_BODY), "utf8");
+  await fs.writeFile(canvasFile, renderCanvasHtml(ORDER_TRIAGE_CANVAS_DATA), "utf8");
 
   if (install) npmInstall(projectDir);
 

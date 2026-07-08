@@ -193,10 +193,11 @@ describe("macros router", () => {
       body: JSON.stringify({ harnessSessionId: "sess-1" }), // no subject, no workflowPath, no binding
     });
     expect(res.status).toBe(200);
-    const [, text] = (deps.injectInput as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string, boolean];
-    expect(text).toContain("/Users/demo/acme-app/.sapiom/canvas/index.html"); // {{canvas.path}} substituted
-    expect(text).toContain("Clone .sapiom/canvas/_template.html to .sapiom/canvas/index.html");
-    expect(text).toContain("canvas-patterns");
+    expect(deps.injectInput).toHaveBeenCalledWith(
+      "sess-1",
+      "Open /Users/demo/acme-app/.sapiom/canvas/index.html and find the <script type=\"application/json\" id=\"canvas-data\"> block — the comment directly above it documents the schema. Update ONLY that JSON: read .sapiom/harness-context.json first — if it has a boundWorkflow, represent that workflow's steps, control flow, and terminal outcomes as one graph; if boundWorkflow is null, represent every workflow in its workflows list as its own graph, plus interconnections showing how they hand off or signal to each other. Leave every other byte of the file exactly as it is — the CSS and the renderer script are already correct; do not touch them.",
+      true,
+    );
   });
 
   it("also runs visualize when a workflow IS bound — same static prompt either way", async () => {
@@ -211,7 +212,7 @@ describe("macros router", () => {
     const [, text] = (deps.injectInput as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string, boolean];
     // Same text regardless of binding — the agent branches on
     // harness-context.json's boundWorkflow at run time, not on macro text.
-    expect(text).toContain("_template.html");
+    expect(text).toContain("canvas-data");
     expect(text).not.toContain(workflow.path); // no {{workflow.path}} substitution baked in
   });
 

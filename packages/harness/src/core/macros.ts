@@ -52,12 +52,11 @@ export const DEFAULT_MACROS: MacroDef[] = [
     },
   },
   {
-    // One-click render/re-render, unbound-friendly: the canvas kit
-    // (core/canvas-template.ts) has already dropped a prebuilt, pristine
-    // _template.html plus a live index.html into .sapiom/canvas/ — the
-    // agent clones the template and fills it in with real markup, using the
-    // classes/patterns the template documents, rather than hand-rolling CSS
-    // or a whole document from scratch. No free-text subject and no
+    // One-click render/re-render, unbound-friendly again: the canvas kit
+    // (core/canvas-template.ts) has already dropped a prebuilt template with
+    // correct CSS + a renderer into {{canvas.path}} — the only thing this
+    // macro ever asks an agent to write is the small JSON data block the
+    // renderer reads, never raw HTML. No free-text subject and no
     // {{workflow.path}} reference: whether there's a bound workflow is
     // something the agent reads out of harness-context.json at run time, so
     // the same static prompt works whether or not one is selected.
@@ -68,7 +67,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     action: {
       kind: "inject",
       submit: true,
-      text: `Clone .sapiom/canvas/_template.html to .sapiom/canvas/index.html (overwrite it — that's {{canvas.path}}), keeping the <style> block and every structural/pattern class untouched. Do not write new CSS. Then fill in the content: title, badges, subtitle, and stats values, and build the SVG graph using the template's node/edge markup patterns — see the <template id="canvas-patterns"> block in the cloned file for one example of each, and delete that block once you've copied what you need. Read .sapiom/harness-context.json first: if it has a boundWorkflow, draw that workflow's steps, control flow, and terminal outcomes; if boundWorkflow is null, draw one canvas-panel per workflow in its workflows list, plus an Interconnections panel showing how they hand off or signal to each other.`,
+      text: `Open {{canvas.path}} and find the <script type="application/json" id="canvas-data"> block — the comment directly above it documents the schema. Update ONLY that JSON: read .sapiom/harness-context.json first — if it has a boundWorkflow, represent that workflow's steps, control flow, and terminal outcomes as one graph; if boundWorkflow is null, represent every workflow in its workflows list as its own graph, plus interconnections showing how they hand off or signal to each other. Leave every other byte of the file exactly as it is — the CSS and the renderer script are already correct; do not touch them.`,
     },
   },
 ];

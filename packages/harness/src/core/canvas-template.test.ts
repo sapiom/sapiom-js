@@ -5,26 +5,49 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CANVAS_INDEX } from "../shared/types.js";
-import { CANVAS_TEMPLATE_FILE, TEMPLATE_HTML, ensureCanvasTemplate, renderCanvasDocument } from "./canvas-template.js";
+import { EMPTY_CANVAS_DATA, ensureCanvasTemplate, renderCanvasHtml, type CanvasData } from "./canvas-template.js";
 
-describe("renderCanvasDocument", () => {
+const SAMPLE: CanvasData = {
+  version: 1,
+  graphs: [
+    {
+      id: "wf",
+      title: "example",
+      nodes: [
+        { id: "a", kind: "entry", label: "a" },
+        { id: "b", kind: "terminal-success", label: "b" },
+      ],
+      edges: [{ from: "a", to: "b", kind: "sequential" }],
+    },
+  ],
+};
+
+describe("renderCanvasHtml", () => {
   it("produces a single self-contained document: no external stylesheets, scripts, or fetches", () => {
-    const html = renderCanvasDocument("<p>hi</p>");
+    const html = renderCanvasHtml(SAMPLE);
     expect(html).not.toMatch(/<link[^>]+href=["']https?:/i);
     expect(html).not.toMatch(/<script[^>]+src=["']https?:/i);
-    // The only <script> content is the theme switch — it must never itself
-    // issue a network fetch.
+    // The renderer's own inline script is the only <script> content — it must
+    // never itself issue a network fetch.
     expect(html).not.toMatch(/\bfetch\s*\(/);
   });
 
-  it("embeds the given body content verbatim inside #canvas-root", () => {
-    const html = renderCanvasDocument("<p>marker-content-xyz</p>");
-    expect(html).toContain('<div id="canvas-root">');
-    expect(html).toContain("marker-content-xyz");
+  it("embeds the data verbatim, pretty-printed, inside the canvas-data script tag", () => {
+    const html = renderCanvasHtml(SAMPLE);
+    expect(html).toContain('<script type="application/json" id="canvas-data">');
+    expect(html).toContain(JSON.stringify(SAMPLE, null, 2));
+  });
+
+  it("documents the data schema tersely as a comment, in-context with the data block", () => {
+    const html = renderCanvasHtml(SAMPLE);
+    expect(html).toMatch(/canvas-data schema/i);
+    // Schema comment must precede the data it documents (an LLM reading
+    // top-to-bottom should see the schema before the JSON it's about to edit).
+    expect(html.indexOf("canvas-data schema")).toBeLessThan(html.indexOf('id="canvas-data"'));
   });
 
   it("bakes in both light and dark palettes, keyed off data-canvas-theme / prefers-color-scheme", () => {
-    const html = renderCanvasDocument("");
+    const html = renderCanvasHtml(SAMPLE);
     expect(html).toContain('[data-canvas-theme="dark"]');
     expect(html).toContain("prefers-color-scheme: dark");
     // Exact dark-theme accent hex from web/src/styles.css — same palette the
@@ -35,54 +58,17 @@ describe("renderCanvasDocument", () => {
   });
 
   it("reads the theme from a ?theme= query param client-side, with no server-side dependency", () => {
-    const html = renderCanvasDocument("");
+    const html = renderCanvasHtml(SAMPLE);
     expect(html).toMatch(/URLSearchParams\(location\.search\)/);
     expect(html).toMatch(/params\.get\("theme"\)/);
   });
-
-  it("ships the SVG defs (glow filter, arrow markers) every node/edge pattern references", () => {
-    const html = renderCanvasDocument("");
-    expect(html).toContain('id="canvas-glow"');
-    expect(html).toContain('id="canvas-arrow"');
-    expect(html).toContain('id="canvas-arrow-success"');
-    expect(html).toContain('id="canvas-arrow-warn"');
-  });
-
-  it("has no JSON data block and no data-parsing renderer script — markup only", () => {
-    const html = renderCanvasDocument("");
-    expect(html).not.toMatch(/canvas-data/);
-    expect(html).not.toMatch(/JSON\.parse/);
-  });
 });
 
-describe("TEMPLATE_HTML", () => {
-  it("is a complete, self-contained document produced by renderCanvasDocument", () => {
-    expect(TEMPLATE_HTML).toContain("<!DOCTYPE html>");
-    expect(TEMPLATE_HTML).toContain('<div id="canvas-root">');
-  });
-
-  it("carries a friendly empty-state note, not a blank panel", () => {
-    expect(TEMPLATE_HTML).toMatch(/nothing visualized yet/i);
-  });
-
-  it("documents one example of every node kind and edge kind inside an inert <template>", () => {
-    expect(TEMPLATE_HTML).toContain('<template id="canvas-patterns">');
-    for (const nodeKind of ["node--entry", "node--step", "node--pause", "node--terminal-success", "node--terminal-warn"]) {
-      expect(TEMPLATE_HTML).toContain(nodeKind);
-    }
-    // sequential (base .canvas-edge), branching (--success/--warn), cross-workflow (--cross)
-    for (const edgeClass of ["canvas-edge--success", "canvas-edge--warn", "canvas-edge--cross"]) {
-      expect(TEMPLATE_HTML).toContain(edgeClass);
-    }
-  });
-
-  it("documents a legend entry and an interconnection row pattern", () => {
-    expect(TEMPLATE_HTML).toContain("canvas-legend-item");
-    expect(TEMPLATE_HTML).toContain("canvas-interconnection-row");
-  });
-
-  it("instructs the agent not to touch the CSS or structural classes", () => {
-    expect(TEMPLATE_HTML).toMatch(/keep the.*style.*untouched/is);
+describe("EMPTY_CANVAS_DATA", () => {
+  it("has no graphs and a friendly note, and still renders without graphs-array assumptions blowing up", () => {
+    expect(EMPTY_CANVAS_DATA.graphs).toEqual([]);
+    expect(EMPTY_CANVAS_DATA.note).toBeTruthy();
+    expect(() => renderCanvasHtml(EMPTY_CANVAS_DATA)).not.toThrow();
   });
 });
 
@@ -97,48 +83,29 @@ describe("ensureCanvasTemplate", () => {
     await fs.rm(cwd, { recursive: true, force: true });
   });
 
-  async function readIndex(): Promise<string> {
+  async function readCanvas(): Promise<string> {
     return fs.readFile(path.join(cwd, CANVAS_INDEX), "utf8");
   }
 
-  async function readTemplate(): Promise<string> {
-    return fs.readFile(path.join(cwd, CANVAS_TEMPLATE_FILE), "utf8");
-  }
-
-  it("writes both _template.html and index.html with the same empty-state content when nothing exists yet", async () => {
+  it("writes the empty-state template when nothing exists yet", async () => {
     await ensureCanvasTemplate(cwd);
-    expect(await readIndex()).toBe(TEMPLATE_HTML);
-    expect(await readTemplate()).toBe(TEMPLATE_HTML);
+    const html = await readCanvas();
+    expect(html).toBe(renderCanvasHtml(EMPTY_CANVAS_DATA));
   });
 
-  it("never clobbers an index.html that's already there — backfill only", async () => {
+  it("never clobbers a file that's already there — backfill only", async () => {
     await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), { recursive: true });
     await fs.writeFile(path.join(cwd, CANVAS_INDEX), "already customized by an earlier session", "utf8");
 
     await ensureCanvasTemplate(cwd);
 
-    expect(await readIndex()).toBe("already customized by an earlier session");
-    // _template.html still gets backfilled independently — an agent that
-    // customized index.html before the template existed still needs a
-    // pristine clone source for future re-visualizes.
-    expect(await readTemplate()).toBe(TEMPLATE_HTML);
-  });
-
-  it("never clobbers _template.html either, independent of index.html's state", async () => {
-    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_TEMPLATE_FILE)), { recursive: true });
-    await fs.writeFile(path.join(cwd, CANVAS_TEMPLATE_FILE), "a pristine copy from a previous session", "utf8");
-
-    await ensureCanvasTemplate(cwd);
-
-    expect(await readTemplate()).toBe("a pristine copy from a previous session");
-    expect(await readIndex()).toBe(TEMPLATE_HTML);
+    expect(await readCanvas()).toBe("already customized by an earlier session");
   });
 
   it("is idempotent: calling it twice on an empty cwd doesn't error or duplicate anything", async () => {
     await ensureCanvasTemplate(cwd);
     await ensureCanvasTemplate(cwd);
-    expect(await readIndex()).toBe(TEMPLATE_HTML);
-    expect(await readTemplate()).toBe(TEMPLATE_HTML);
+    expect(await readCanvas()).toBe(renderCanvasHtml(EMPTY_CANVAS_DATA));
   });
 
   it("does not throw when the cwd is unwritable (logs and returns)", async () => {
