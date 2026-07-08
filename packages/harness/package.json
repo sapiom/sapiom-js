@@ -27,7 +27,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
+    "build": "pnpm run build:cjs && pnpm run build:esm && pnpm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:esm": "tsc --project tsconfig.esm.json",
     "build:esm-pkg": "echo '{\"type\": \"module\"}' > dist/esm/package.json",

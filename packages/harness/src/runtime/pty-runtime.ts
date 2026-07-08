@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { IPty } from "node-pty";
 import { PtyUnavailableError, UnknownSessionError } from "./errors.js";
 import type {
@@ -38,18 +39,33 @@ async function loadNodePty(): Promise<NodePtyModule> {
  * spawn-helper at all). Runs per create(): it is two stat calls and
  * self-heals if the package is ever re-extracted.
  */
-function ensureSpawnHelperExecutable(): void {
+/**
+ * The path of this module file in both build flavors: `__filename` in the
+ * CJS build; `import.meta.url` in the ESM build. `import.meta` is ESM-only
+ * syntax that the CJS compilation would reject, so it is reached through an
+ * indirect eval — evaluated only at runtime, only in the ESM build.
+ */
+function moduleBaseFile(): string | null {
+  if (typeof __filename !== "undefined") return __filename;
+  try {
+    // eslint-disable-next-line no-eval
+    return fileURLToPath((0, eval)("import.meta.url") as string);
+  } catch {
+    return null;
+  }
+}
+
+/** Exported for unit tests only. @internal */
+export function ensureSpawnHelperExecutable(): void {
   if (process.platform === "win32") return;
 
   let helperPath: string;
   try {
-    // Resolve node-pty's install location from this file when possible
-    // (CJS build); fall back to the process cwd for the ESM build.
-    const req = createRequire(
-      typeof __filename !== "undefined"
-        ? __filename
-        : path.join(process.cwd(), "index.js"),
-    );
+    // Resolve node-pty's install location relative to this module so the
+    // repair works from both builds regardless of the caller's cwd.
+    const base = moduleBaseFile();
+    if (base === null) return; // location unknown — nothing to repair
+    const req = createRequire(base);
     const entry = req.resolve("node-pty"); // …/node-pty/lib/index.js
     helperPath = path.join(
       path.dirname(entry),
@@ -75,10 +91,17 @@ function ensureSpawnHelperExecutable(): void {
   }
 }
 
-/** Per-session bookkeeping. */
+/**
+ * Per-session bookkeeping. On exit the entry becomes a tiny tombstone —
+ * the pty (native handle) and data listeners are released, but the record
+ * stays so once-valid handles keep answering `isAlive() === false` instead
+ * of throwing {@link UnknownSessionError}.
+ */
 interface PtySessionState {
-  readonly pty: IPty;
+  pty: IPty | null;
   alive: boolean;
+  /** Set by the first kill() so concurrent kills don't re-signal. */
+  killing: boolean;
   /** Resolves once the process has actually exited. */
   readonly exited: Promise<void>;
   readonly dataListeners: Set<(chunk: Buffer) => void>;
@@ -136,6 +159,7 @@ export class PtyRuntime implements SessionRuntime {
     const state: PtySessionState = {
       pty,
       alive: true,
+      killing: false,
       exited,
       dataListeners: new Set(),
     };
@@ -150,6 +174,10 @@ export class PtyRuntime implements SessionRuntime {
 
     pty.onExit(() => {
       state.alive = false;
+      // Tombstone: release the native pty handle and listener closures so a
+      // long-lived runtime doesn't accumulate them across many sessions.
+      state.pty = null;
+      state.dataListeners.clear();
       markExited();
     });
 
@@ -162,7 +190,7 @@ export class PtyRuntime implements SessionRuntime {
     const state = this.getState(h);
     // Racing an exiting agent is normal (user hits Enter as it dies);
     // dropping the write mirrors what a real terminal would do.
-    if (!state.alive) return;
+    if (!state.alive || state.pty === null) return;
     state.pty.write(data);
   }
 
@@ -176,7 +204,7 @@ export class PtyRuntime implements SessionRuntime {
 
   resize(h: SessionHandle, cols: number, rows: number): void {
     const state = this.getState(h);
-    if (!state.alive) return;
+    if (!state.alive || state.pty === null) return;
     try {
       state.pty.resize(cols, rows);
     } catch (error) {
@@ -189,6 +217,12 @@ export class PtyRuntime implements SessionRuntime {
   async kill(h: SessionHandle): Promise<void> {
     const state = this.getState(h);
     if (!state.alive) return;
+    if (state.killing) {
+      // A concurrent kill() already owns the escalation; just wait with it.
+      await state.exited;
+      return;
+    }
+    state.killing = true;
 
     this.signal(state, "SIGTERM");
     const exitedInTime = await this.waitForExit(state, this.killTimeoutMs);
@@ -209,6 +243,7 @@ export class PtyRuntime implements SessionRuntime {
   }
 
   private signal(state: PtySessionState, signal: "SIGTERM" | "SIGKILL"): void {
+    if (state.pty === null) return; // already exited and tombstoned
     try {
       if (process.platform === "win32") {
         // Signals are not supported on Windows; kill() closes the pty.

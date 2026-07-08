@@ -134,16 +134,20 @@ describe("PtyRuntime × fake-agent (real pty)", () => {
     const cwd = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "fake-agent-")),
     );
-    const { output } = await spawnAgent("diagnostics", {
-      env: minimalEnv({ FAKE_AGENT_MARKER: "plumbing-ok" }),
-      cwd,
-      cols: 100,
-      rows: 40,
-    });
+    try {
+      const { output } = await spawnAgent("diagnostics", {
+        env: minimalEnv({ FAKE_AGENT_MARKER: "plumbing-ok" }),
+        cwd,
+        cols: 100,
+        rows: 40,
+      });
 
-    await output.waitFor("[size] 100x40");
-    await output.waitFor(`[cwd] ${cwd}`);
-    await output.waitFor("[env] FAKE_AGENT_MARKER=plumbing-ok");
+      await output.waitFor("[size] 100x40");
+      await output.waitFor(`[cwd] ${cwd}`);
+      await output.waitFor("[env] FAKE_AGENT_MARKER=plumbing-ok");
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("resize() does not crash and reaches the child", async () => {
