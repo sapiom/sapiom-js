@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import type {
   AppState,
+  BackgroundTask,
   BindWorkflowRequest,
   CreateSessionRequest,
   HarnessAdapter,
@@ -81,6 +82,11 @@ export interface RestRouterOptions {
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
+  /** Background tasks known to this boot (TaskManager.list) — surfaced in
+   *  AppState so a page load mid-run shows the canvas activity state without
+   *  waiting for the next task.status frame. Optional: omitted by callers
+   *  without a TaskManager (tests), leaving AppState.tasks absent. */
+  listTasks?: () => BackgroundTask[];
   /** Harness kinds confirmed available at CLI boot (doctor()), in
    * default-preference order. Omitted (rather than defaulted here) when the
    * caller doesn't supply it, so AppState.availableHarnesses stays absent in
@@ -116,6 +122,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
         macros: listMacros(),
         launchDir: options.launchDir,
         ...(options.availableHarnesses ? { availableHarnesses: options.availableHarnesses } : {}),
+        ...(options.listTasks ? { tasks: options.listTasks() } : {}),
         ...(options.firstRun !== undefined ? { firstRun: options.firstRun } : {}),
       };
       res.json(state);

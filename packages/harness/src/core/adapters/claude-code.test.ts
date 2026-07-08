@@ -57,6 +57,52 @@ describe("ClaudeCodeAdapter", () => {
     });
   });
 
+  describe("launchTask", () => {
+    it("builds a headless -p SpawnSpec with the same config flags plus acceptEdits and stream-json output", async () => {
+      const promptDir = await mkdtemp(join(tmpdir(), "harness-claude-test-"));
+      const promptFile = join(promptDir, "prompt.txt");
+      await writeFile(promptFile, "Be terse.", "utf8");
+
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launchTask({
+        harnessSessionId: "task-1",
+        cwd: "/tmp/proj",
+        prompt: "draw the canvas",
+        settingsFile: "/tmp/gen/settings.json",
+        mcpConfigFile: "/tmp/gen/mcp.json",
+        systemPromptFile: promptFile,
+      });
+
+      expect(spec.command).toBe("fake-claude");
+      expect(spec.cwd).toBe("/tmp/proj");
+      expect(spec.env).toEqual({ CLAUDECODE: null });
+      expect(spec.args).toEqual([
+        "-p",
+        "draw the canvas",
+        "--settings",
+        "/tmp/gen/settings.json",
+        "--mcp-config",
+        "/tmp/gen/mcp.json",
+        "--append-system-prompt",
+        "Be terse.",
+        "--permission-mode",
+        "acceptEdits",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+      ]);
+
+      await rm(promptDir, { recursive: true, force: true });
+    });
+
+    it("throws when no prompt is provided — a task with nothing to run is a caller bug", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      expect(() => adapter.launchTask({ harnessSessionId: "task-1", cwd: "/tmp/proj" })).toThrow(
+        /requires opts\.prompt/,
+      );
+    });
+  });
+
   describe("doctor", () => {
     it("reports ok:false when the binary isn't on PATH", async () => {
       const adapter = new ClaudeCodeAdapter({ binary: "definitely-not-a-real-binary-xyz" });

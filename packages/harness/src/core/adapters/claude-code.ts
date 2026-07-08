@@ -189,6 +189,34 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     };
   }
 
+  /**
+   * Headless one-shot run for TaskManager (see HarnessAdapter.launchTask).
+   * Verified against a real `claude` binary: `-p` carries the exact same
+   * --settings/--mcp-config/--append-system-prompt injection as launch()
+   * (all six hooks fire), skips the trust dialog entirely, and exits on its
+   * own when the turn completes. The extra flags:
+   * - --permission-mode acceptEdits: a headless task has no human to click
+   *   through a permission prompt — without it a tool call hangs forever.
+   * - --output-format stream-json --verbose: line-oriented JSON progress on
+   *   stdout (parsed by core/task-stream.ts) instead of a bare final answer.
+   */
+  launchTask(opts: LaunchOpts): SpawnSpec {
+    if (!opts.prompt) {
+      throw new Error("claude-code adapter: launchTask requires opts.prompt");
+    }
+    const args = ["-p", opts.prompt, ...buildConfigArgs(opts)];
+    if (opts.systemPromptFile) {
+      args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
+    }
+    args.push("--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose");
+    return {
+      command: this.binary,
+      args,
+      env: { CLAUDECODE: null },
+      cwd: opts.cwd,
+    };
+  }
+
   async listPastSessions(cwd: string): Promise<SessionSummary[]> {
     const projectDir = join(this.homeDir, ".claude", "projects", encodeProjectPath(cwd));
     let entries: string[];

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
-import type { BusMessage, MacroDef, WorkflowInfo } from "@shared/types";
+import type { BackgroundTask, BusMessage, MacroDef, WorkflowInfo } from "@shared/types";
 
 import { isMockMode } from "../lib/api";
 import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
@@ -8,12 +8,17 @@ import { getTheme, subscribeTheme } from "../lib/theme";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
+/** How many of a running task's trailing status lines the activity view shows. */
+const ACTIVITY_LINES_SHOWN = 8;
+
 interface CanvasPaneProps {
   sessionId: string | null;
   lastMessage: BusMessage | null;
   boundWorkflow: WorkflowInfo | null;
   activeSessionId: string | null;
   macros: MacroDef[];
+  /** All background tasks (any session) — filtered to `sessionId` here. */
+  tasks: BackgroundTask[];
   onRunMacro: (macro: MacroDef) => void;
 }
 
@@ -23,11 +28,15 @@ export function CanvasPane({
   boundWorkflow,
   activeSessionId,
   macros,
+  tasks,
   onRunMacro,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
+  // Failed-task panels the user has explicitly dismissed (client-side only —
+  // the task record itself stays in the server's list).
+  const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(new Set());
 
   // Passed through to the served canvas so a kit-based template can match the
   // app's current theme instead of always rendering dark. Legacy canvases
@@ -61,6 +70,20 @@ export function CanvasPane({
     ? macroDisabledReason(visualizeMacro, boundWorkflow, activeSessionId)
     : null;
 
+  // Background-task state for THIS session's pane: a running task shows the
+  // live activity view; otherwise the most recently finished task, if it
+  // failed and hasn't been dismissed, shows the failure view with a retry.
+  const sessionTasks = tasks.filter((task) => task.harnessSessionId === sessionId);
+  const runningTask = sessionTasks.find((task) => task.status === "running") ?? null;
+  const latestFinished = sessionTasks
+    .filter((task) => task.status !== "running")
+    .sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""))[0];
+  const failedTask =
+    !runningTask && latestFinished?.status === "failed" && !dismissedTaskIds.has(latestFinished.id)
+      ? latestFinished
+      : null;
+  const retryMacro = failedTask ? (macros.find((macro) => macro.id === failedTask.macroId) ?? null) : null;
+
   // The header's action IS Visualize now — one click re-fires the same macro
   // that generated what's already on screen; the pane itself swaps in the
   // new render once the agent's canvas.reload event arrives above.
@@ -81,6 +104,54 @@ export function CanvasPane({
 
       {!sessionId ? (
         <div className="canvas-empty">Start a session to see its canvas here.</div>
+      ) : runningTask ? (
+        <div className="canvas-task-activity" data-testid="canvas-task-activity">
+          <div className="canvas-task-title">
+            <span className="canvas-task-spinner" aria-hidden="true" />
+            <span>{runningTask.label} is running…</span>
+          </div>
+          {runningTask.statusLines.length > 0 && (
+            <ul className="canvas-task-lines" data-testid="canvas-task-lines">
+              {runningTask.statusLines.slice(-ACTIVITY_LINES_SHOWN).map((line, index) => (
+                <li key={`${index}-${line}`}>{line}</li>
+              ))}
+            </ul>
+          )}
+          <p className="canvas-empty-hint">
+            Running as a background task — your session stays free. The canvas reloads here when it finishes.
+          </p>
+        </div>
+      ) : failedTask ? (
+        <div className="canvas-task-failed" data-testid="canvas-task-failed">
+          <p className="canvas-task-title">
+            <Icon name="TriangleAlert" size={14} /> {failedTask.label} failed.
+          </p>
+          {failedTask.errorTail && <pre className="canvas-task-error">{failedTask.errorTail}</pre>}
+          <div className="canvas-task-actions">
+            {retryMacro && (
+              <button
+                className="btn-primary"
+                data-testid="canvas-task-retry"
+                onClick={() => onRunMacro(retryMacro)}
+              >
+                Retry
+              </button>
+            )}
+            <button
+              className="btn-ghost"
+              data-testid="canvas-task-dismiss"
+              onClick={() =>
+                setDismissedTaskIds((prev) => {
+                  const next = new Set(prev);
+                  next.add(failedTask.id);
+                  return next;
+                })
+              }
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
       ) : !hasGeneratedContent ? (
         <div className="canvas-empty">
           <p>Nothing generated yet.</p>

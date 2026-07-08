@@ -634,6 +634,99 @@ test("a canvas.reload bus message swaps the empty state for the generated iframe
   await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", /^\/canvas\/sess-boot\/\?theme=(light|dark)$/);
 });
 
+test.describe("background-task canvas states", () => {
+  const baseTask = {
+    id: "task-1",
+    macroId: "ai-visualize",
+    label: "AI Visualize",
+    harnessSessionId: "sess-boot",
+    cwd: "/Users/demo/acme-app",
+    startedAt: new Date().toISOString(),
+    endedAt: null as string | null,
+    exitCode: null as number | null,
+    statusLines: [] as string[],
+    errorTail: null as string | null,
+  };
+
+  const publish = (page: import("@playwright/test").Page, task: unknown): Promise<void> =>
+    page.evaluate((t) => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "task.status",
+        task: t,
+      });
+    }, task);
+
+  test("a running task shows the live activity state, streaming status lines as they arrive", async ({ page }) => {
+    await publish(page, { ...baseTask, status: "running" });
+
+    const activity = page.getByTestId("canvas-task-activity");
+    await expect(activity).toBeVisible();
+    await expect(activity).toContainText("AI Visualize is running");
+    await expect(activity.locator(".canvas-task-spinner")).toBeVisible();
+
+    await publish(page, {
+      ...baseTask,
+      status: "running",
+      statusLines: ["Agent started", "Read .sapiom/canvas/_template.html"],
+    });
+    await expect(page.getByTestId("canvas-task-lines")).toContainText("Read .sapiom/canvas/_template.html");
+
+    await page.screenshot({ path: "web/e2e/screenshots/canvas-task-activity.png" });
+
+    // Completion clears the activity state; a canvas.reload for the written
+    // index.html (the real server fires one via the canvas watcher) swaps in
+    // the generated iframe.
+    await publish(page, { ...baseTask, status: "completed", endedAt: new Date().toISOString(), exitCode: 0 });
+    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
+    await page.evaluate(() => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "canvas.reload",
+        harnessSessionId: "sess-boot",
+      });
+    });
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+  });
+
+  test("activity only shows on the pane of the session that triggered the task", async ({ page }) => {
+    await publish(page, { ...baseTask, harnessSessionId: "sess-bg", status: "running" });
+    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
+    // sess-boot's own pane still shows its ordinary empty state.
+    await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+  });
+
+  test("a failed task shows the error tail with retry and dismiss affordances", async ({ page }) => {
+    await publish(page, {
+      ...baseTask,
+      status: "failed",
+      endedAt: new Date().toISOString(),
+      exitCode: 1,
+      errorTail: "API connection lost",
+    });
+
+    const failed = page.getByTestId("canvas-task-failed");
+    await expect(failed).toBeVisible();
+    await expect(failed).toContainText("AI Visualize failed");
+    await expect(failed).toContainText("API connection lost");
+    await page.screenshot({ path: "web/e2e/screenshots/canvas-task-failed.png" });
+
+    // Retry re-fires the same macro (MockApi records it for us to read back).
+    await page.getByTestId("canvas-task-retry").click();
+    await page.waitForFunction(
+      () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
+    );
+    const lastRun = await page.evaluate(
+      () =>
+        (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string } } }).__HARNESS_TEST__.lastMacroRun,
+    );
+    expect(lastRun?.id).toBe("ai-visualize");
+
+    // Dismiss hides the failure panel and returns the pane to its usual state.
+    await page.getByTestId("canvas-task-dismiss").click();
+    await expect(page.getByTestId("canvas-task-failed")).toHaveCount(0);
+    await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+  });
+});
+
 test.describe("resizable panes", () => {
   test("dragging the rail handle resizes the rail and persists across reload", async ({ page }) => {
     const handle = page.getByTestId("resize-handle-rail");

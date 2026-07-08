@@ -182,16 +182,20 @@ export const MOCK_MACROS: MacroDef[] = [
     requiresWorkflow: false,
   },
   {
-    // The LLM-authored fallback for custom/narrative views.
+    // The LLM-authored fallback for custom/narrative views — runs as a
+    // headless background task, never in the user's own session. Matches the
+    // real DEFAULT_MACROS contract (src/core/macros.ts); the mock text is
+    // abbreviated, only the shape matters here.
     id: "ai-visualize",
     label: "AI Visualize",
     icon: "Wand2",
+    execution: "background",
     action: {
       kind: "inject",
-      text: "Render (or re-render, overwriting {{canvas.path}}) a visualization of the workflow at {{workflow.path}} — its steps, control flow, and how it interconnects with the other workflows in this workspace.",
+      text: "Recreate {{canvas.path}} from the canvas kit template (read both files first, then overwrite index.html).",
       submit: true,
     },
-    requiresWorkflow: true,
+    requiresWorkflow: false,
   },
 ];
 

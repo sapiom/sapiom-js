@@ -3,15 +3,18 @@
  * and `POST /api/macros/:id/run` from src/shared/types.ts. The SPA's action
  * rail already resolves and opens "open-url" macros client-side — it can't
  * carry the boot token through `window.open` anyway — so in practice this
- * only ever executes "inject" macros, but it handles both kinds per the
- * documented contract. The integrator mounts this (with express.json())
- * alongside the SessionManager and WorkflowRegistry.
+ * only ever executes "inject" macros (routed to the session's pty, or to a
+ * headless background task when the macro says `execution: "background"`)
+ * and "render-canvas", but it handles every kind per the documented
+ * contract. The integrator mounts this (with express.json()) alongside the
+ * SessionManager, TaskManager, and WorkflowRegistry.
  */
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 import { CANVAS_INDEX, type MacroDef, type RunMacroRequest, type WorkflowInfo } from "../shared/types.js";
 import { MacroValidationError, resolveMacro } from "../core/macro-runner.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
+import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
 
 export interface MacrosRouterDeps {
   listMacros(): MacroDef[];
@@ -25,6 +28,12 @@ export interface MacrosRouterDeps {
   getBoundWorkflowPath(harnessSessionId: string): string | null;
   /** Injects resolved text into the session's pty (the SessionManager). */
   injectInput(harnessSessionId: string, text: string, submit: boolean): Promise<void>;
+  /** Runs an "inject" macro marked `execution: "background"` as a headless
+   *  one-shot task (the TaskManager) instead of touching the session's pty.
+   *  May throw TaskNotSupportedError (session's harness has no headless
+   *  mode → 400) or TaskAlreadyRunningError (same macro already in flight
+   *  for this session → 409). */
+  runBackgroundTask(harnessSessionId: string, macro: MacroDef, prompt: string): Promise<void>;
   /** Opens a URL in the user's default browser (the `open` package). */
   openUrl(url: string): Promise<void>;
   /** Runs the deterministic canvas render for a session (the "visualize"
@@ -75,17 +84,19 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
         await deps.openUrl(resolved.url);
       } else if (resolved.kind === "render-canvas") {
         await deps.renderCanvas(body.harnessSessionId);
+      } else if (macro.execution === "background") {
+        await deps.runBackgroundTask(body.harnessSessionId, macro, resolved.text);
       } else {
         await deps.injectInput(body.harnessSessionId, resolved.text, resolved.submit);
       }
 
       res.json({ ok: true });
     } catch (err) {
-      if (err instanceof MacroValidationError) {
+      if (err instanceof MacroValidationError || err instanceof TaskNotSupportedError) {
         res.status(400).json({ error: err.message });
         return;
       }
-      if (err instanceof SessionNotReadyError) {
+      if (err instanceof SessionNotReadyError || err instanceof TaskAlreadyRunningError) {
         res.status(409).json({ error: err.message });
         return;
       }
