@@ -17,6 +17,7 @@ import type {
   HarnessSettings,
   InjectInputRequest,
   MacroDef,
+  SampleProjectSeedResponse,
   SessionSummary,
   WorkflowInfo,
 } from "../shared/types.js";
@@ -77,6 +78,15 @@ export interface RestRouterOptions {
    * caller doesn't supply it, so AppState.availableHarnesses stays absent in
    * that case too — see its doc comment for how consumers should treat that. */
   availableHarnesses?: HarnessKind[];
+  /** "This boot found no prior harness use" — computed by the CLI before it
+   * mutated any state, surfaced verbatim in AppState.firstRun. Omitted when
+   * the caller doesn't supply it (tests), leaving AppState.firstRun absent. */
+  firstRun?: boolean;
+  /** Seeds (or reuses) the bundled example project and returns where it
+   * landed — backs POST /api/sample-project (the welcome panel's "Run the
+   * sample project"). Optional so callers without the real seeder (tests)
+   * get a 501 from the route instead of having to stub one. */
+  seedSampleProject?: () => Promise<SampleProjectSeedResponse>;
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
@@ -98,6 +108,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
         macros: listMacros(),
         launchDir: options.launchDir,
         ...(options.availableHarnesses ? { availableHarnesses: options.availableHarnesses } : {}),
+        ...(options.firstRun !== undefined ? { firstRun: options.firstRun } : {}),
       };
       res.json(state);
     } catch (err) {
@@ -130,6 +141,22 @@ export function createRestRouter(options: RestRouterOptions): Router {
         options.onTelemetryOptInChange?.(parsed.data.telemetryOptIn);
       }
       res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Deliberately does NOT create a session itself — the SPA follows up with
+  // its normal POST /sessions against the returned root, so recent-dirs
+  // bookkeeping, workflow scanning, and tab state all flow through the one
+  // existing session-creation path.
+  router.post("/sample-project", async (_req, res, next) => {
+    if (!options.seedSampleProject) {
+      res.status(501).json({ error: "sample project seeding is not available on this server" });
+      return;
+    }
+    try {
+      res.json(await options.seedSampleProject());
     } catch (err) {
       next(err);
     }

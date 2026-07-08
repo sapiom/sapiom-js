@@ -22,6 +22,9 @@ import type {
   HarnessSession,
   WorkflowInfo,
 } from "../shared/types.js";
+import { HARNESS_PATHS } from "../shared/types.js";
+import { expandHome } from "../core/paths.js";
+import { seedExampleProject } from "../core/example-seed.js";
 import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
@@ -111,6 +114,13 @@ export interface HarnessServerOptions {
    *  as-is in AppState for the SPA — see its doc comment. Omitted (not
    *  defaulted here) when the caller doesn't supply it. */
   availableHarnesses?: HarnessKind[];
+  /** "This boot found no prior harness use on this machine" — computed by
+   *  the CLI before it records the launch dir, surfaced verbatim in
+   *  AppState.firstRun (see its doc comment). Omitted → absent there too. */
+  firstRun?: boolean;
+  /** Where POST /api/sample-project seeds the bundled example. Defaults to
+   *  HARNESS_PATHS.sampleProject; tests point it at a temp dir. */
+  sampleProjectRoot?: string;
 }
 
 export interface HarnessServer {
@@ -339,6 +349,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       },
       launchDir,
       availableHarnesses: options.availableHarnesses,
+      firstRun: options.firstRun,
+      seedSampleProject: async () => {
+        const { root, projectDir, created } = await seedExampleProject({
+          targetRoot: options.sampleProjectRoot ?? expandHome(HARNESS_PATHS.sampleProject),
+        });
+        return { root, projectDir, created };
+      },
     }),
   );
   app.use(
