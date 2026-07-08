@@ -8,11 +8,12 @@
  */
 
 import { useEffect, useRef, useState, type JSX } from "react";
-import { Terminal as XTerm } from "@xterm/xterm";
+import { Terminal as XTerm, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { buildTerminalWsUrl } from "../lib/terminal-ws.js";
+import { getTheme, subscribeTheme, type Theme } from "../lib/theme.js";
 
 export interface TerminalProps {
   sessionId: string;
@@ -27,48 +28,98 @@ const MAX_RECONNECT_DELAY_MS = 15_000;
 // both are permanent for this WS instance; retrying won't help.
 const PERMANENT_CLOSE_CODES = new Set([4001, 4004]);
 
-// Palette values below are copied (values only) from Sapiom's own dark-mode
-// design tokens, so the embedded terminal reads as part of the app rather
-// than a bare xterm.js default panel.
-const PANEL_BACKGROUND = "#0E0E0E";
-const TEXT_PRIMARY = "#FAFAFA";
-const TEXT_MUTED = "#A1A1AA";
-const BRAND_ACCENT = "#6BE195";
-const BORDER_SUBTLE = "#2E2E2E";
+// Status-pill colors are global constants in Sapiom's own design system (not
+// overridden per light/dark) — kept as plain constants rather than per-theme.
 const STATUS_SUCCESS = "#10B981";
 const STATUS_WAITING = "#F59E0B";
 const STATUS_ERROR = "#EF4444";
 const MONO_FONT_STACK =
   '"SF Mono", Menlo, Monaco, Inconsolata, "Source Code Pro", Consolas, "Liberation Mono", "Ubuntu Mono", "Courier Prime", "JetBrains Mono", "Courier New", monospace';
 
-const XTERM_THEME = {
-  background: PANEL_BACKGROUND,
-  foreground: TEXT_PRIMARY,
-  cursor: BRAND_ACCENT,
-  cursorAccent: PANEL_BACKGROUND,
-  selectionBackground: "rgba(107, 225, 149, 0.25)",
-  black: "#1A1A1A",
-  red: "#f87171",
-  green: BRAND_ACCENT,
-  yellow: "#f59e0b",
-  blue: "#3b82f6",
-  magenta: "#a78bfa",
-  cyan: "#22d3ee",
-  white: TEXT_PRIMARY,
-  brightBlack: "#404040",
-  brightRed: "#ff9b96",
-  brightGreen: "#8bd4a6",
-  brightYellow: "#ffd966",
-  brightBlue: "#60a5fa",
-  brightMagenta: "#c4b5fd",
-  brightCyan: "#67e8f9",
-  brightWhite: "#ffffff",
+interface PanelPalette {
+  panelBackground: string;
+  textMuted: string;
+  borderSubtle: string;
+  xterm: ITheme;
+}
+
+// Palette values below are copied (values only) from Sapiom's own design
+// tokens for each theme, so the embedded terminal reads as part of the app
+// rather than a bare xterm.js default panel.
+const DARK_PALETTE: PanelPalette = {
+  panelBackground: "#0E0E0E",
+  textMuted: "#A1A1AA",
+  borderSubtle: "#2E2E2E",
+  xterm: {
+    background: "#0E0E0E",
+    foreground: "#FAFAFA",
+    cursor: "#6BE195",
+    cursorAccent: "#0E0E0E",
+    selectionBackground: "rgba(107, 225, 149, 0.25)",
+    black: "#1A1A1A",
+    red: "#f87171",
+    green: "#6BE195",
+    yellow: "#f59e0b",
+    blue: "#3b82f6",
+    magenta: "#a78bfa",
+    cyan: "#22d3ee",
+    white: "#FAFAFA",
+    brightBlack: "#404040",
+    brightRed: "#ff9b96",
+    brightGreen: "#8bd4a6",
+    brightYellow: "#ffd966",
+    brightBlue: "#60a5fa",
+    brightMagenta: "#c4b5fd",
+    brightCyan: "#67e8f9",
+    brightWhite: "#ffffff",
+  },
 };
+
+const LIGHT_PALETTE: PanelPalette = {
+  panelBackground: "#FFFFFF",
+  textMuted: "#737373",
+  borderSubtle: "#E5E5E5",
+  xterm: {
+    background: "#FFFFFF",
+    foreground: "#1A1A1A",
+    cursor: "#05A9BC",
+    cursorAccent: "#FFFFFF",
+    selectionBackground: "rgba(5, 169, 188, 0.18)",
+    black: "#3A3A3A",
+    red: "#dc2626",
+    green: "#05A9BC",
+    yellow: "#b45309",
+    blue: "#2563eb",
+    magenta: "#7c3aed",
+    cyan: "#0891b2",
+    white: "#d4d4d8",
+    brightBlack: "#737373",
+    brightRed: "#ef4444",
+    brightGreen: "#06b6d4",
+    brightYellow: "#f59e0b",
+    brightBlue: "#3b82f6",
+    brightMagenta: "#a78bfa",
+    brightCyan: "#22d3ee",
+    brightWhite: "#ffffff",
+  },
+};
+
+const paletteFor = (theme: Theme): PanelPalette => (theme === "dark" ? DARK_PALETTE : LIGHT_PALETTE);
 
 export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<XTerm | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [theme, setTheme] = useState<Theme>(getTheme());
+
+  // Re-applies live on toggle — doesn't touch the pty connection, so this is
+  // a separate effect from the one that opens the terminal/socket below.
+  useEffect(() => subscribeTheme(setTheme), []);
+
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = paletteFor(theme).xterm;
+  }, [theme]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -83,10 +134,11 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
       cursorBlink: true,
       fontSize: 13,
       fontFamily: MONO_FONT_STACK,
-      theme: XTERM_THEME,
+      theme: paletteFor(getTheme()).xterm,
       scrollback: 10_000,
       allowProposedApi: true,
     });
+    termRef.current = term;
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
@@ -177,6 +229,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
       inputDisposable.dispose();
       ws?.close();
       term.dispose();
+      termRef.current = null;
     };
   }, [sessionId, token]);
 
@@ -184,6 +237,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     status === "connected" ? STATUS_SUCCESS : status === "error" ? STATUS_ERROR : STATUS_WAITING;
   const statusLabel =
     status === "connected" ? "Connected" : status === "error" ? (errorMessage ?? "Error") : "Connecting…";
+  const palette = paletteFor(theme);
 
   return (
     // Stable hook for the surrounding app shell to lay out/border this panel —
@@ -195,9 +249,9 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
         flexDirection: "column",
         height: "100%",
         width: "100%",
-        background: PANEL_BACKGROUND,
+        background: palette.panelBackground,
         borderRadius: 8,
-        border: `1px solid ${BORDER_SUBTLE}`,
+        border: `1px solid ${palette.borderSubtle}`,
         overflow: "hidden",
       }}
     >
@@ -209,7 +263,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
           gap: 6,
           flexShrink: 0,
           padding: "6px 10px",
-          borderBottom: `1px solid ${BORDER_SUBTLE}`,
+          borderBottom: `1px solid ${palette.borderSubtle}`,
           fontFamily: MONO_FONT_STACK,
           fontSize: 11,
         }}
@@ -225,7 +279,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
             flexShrink: 0,
           }}
         />
-        <span style={{ color: TEXT_MUTED }}>{statusLabel}</span>
+        <span style={{ color: palette.textMuted }}>{statusLabel}</span>
       </div>
       <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: 8 }} />
     </div>

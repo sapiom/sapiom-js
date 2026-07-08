@@ -6,11 +6,13 @@ import {
   Folder,
   HelpCircle,
   type LucideIcon,
+  Moon,
   Play,
   Plus,
   Radio,
   Settings,
   Sparkles,
+  Sun,
   Zap,
 } from "lucide-react";
 import type { JSX } from "react";
@@ -26,11 +28,13 @@ const ICONS: Record<string, LucideIcon> = {
   CornerLeftUp,
   ExternalLink,
   Folder,
+  Moon,
   Play,
   Plus,
   Radio,
   Settings,
   Sparkles,
+  Sun,
   Zap,
 };
 
