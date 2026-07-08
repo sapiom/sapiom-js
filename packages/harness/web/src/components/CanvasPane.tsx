@@ -1,30 +1,38 @@
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
-import type { BusMessage } from "@shared/types";
+import type { BusMessage, MacroDef, WorkflowInfo } from "@shared/types";
 
 import { isMockMode } from "../lib/api";
+import { needsSubject } from "../lib/macro-gating";
 import { Icon } from "./Icon";
-
-type CanvasMode = "generated" | "preview";
+import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
 interface CanvasPaneProps {
   sessionId: string | null;
   lastMessage: BusMessage | null;
+  boundWorkflow: WorkflowInfo | null;
+  activeSessionId: string | null;
+  macros: MacroDef[];
+  onRunMacro: (macro: MacroDef, subject?: string) => void;
 }
 
-export function CanvasPane({ sessionId, lastMessage }: CanvasPaneProps): JSX.Element {
-  const [mode, setMode] = useState<CanvasMode>("generated");
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [previewInput, setPreviewInput] = useState("");
+export function CanvasPane({
+  sessionId,
+  lastMessage,
+  boundWorkflow,
+  activeSessionId,
+  macros,
+  onRunMacro,
+}: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [portChip, setPortChip] = useState<{ port: number; url: string } | null>(null);
+  const [visualizing, setVisualizing] = useState(false);
+  const [visualizeSubject, setVisualizeSubject] = useState("");
 
   // Probe once per session for pre-existing content — the agent may have written
   // it in an earlier turn, before this pane was around to catch a reload event.
   useEffect(() => {
     setHasGeneratedContent(false);
-    setPortChip(null);
     if (!sessionId || isMockMode()) return;
     let cancelled = false;
     fetch(`/canvas/${sessionId}/`, { method: "HEAD" })
@@ -40,77 +48,71 @@ export function CanvasPane({ sessionId, lastMessage }: CanvasPaneProps): JSX.Ele
     if (lastMessage.type === "canvas.reload" && lastMessage.harnessSessionId === sessionId) {
       setHasGeneratedContent(true);
       setReloadKey((key) => key + 1);
-    } else if (lastMessage.type === "port.detected" && lastMessage.harnessSessionId === sessionId) {
-      setPortChip({ port: lastMessage.port, url: lastMessage.url });
     }
   }, [lastMessage, sessionId]);
 
-  const openPreviewChip = (): void => {
-    if (!portChip) return;
-    setPreviewUrl(portChip.url);
-    setPreviewInput(portChip.url);
-    setMode("preview");
+  const visualizeMacro = macros.find(needsSubject);
+  const submitVisualize = (): void => {
+    if (!visualizeMacro) return;
+    onRunMacro(visualizeMacro, visualizeSubject.trim() || undefined);
+    setVisualizing(false);
   };
-
-  const navigatePreview = (): void => setPreviewUrl(previewInput);
 
   return (
     <aside className="canvas-pane">
-      <div className="canvas-header">
-        <div className="canvas-mode-toggle">
-          <button
-            className={"canvas-mode-btn" + (mode === "generated" ? " is-active" : "")}
-            onClick={() => setMode("generated")}
-          >
-            Generated
-          </button>
-          <button
-            className={"canvas-mode-btn" + (mode === "preview" ? " is-active" : "")}
-            onClick={() => setMode("preview")}
-          >
-            Preview
-          </button>
-        </div>
-        {portChip && mode !== "preview" && (
-          <button className="preview-chip" onClick={openPreviewChip}>
-            <Icon name="Radio" size={12} /> Preview :{portChip.port}
-          </button>
-        )}
-      </div>
+      {boundWorkflow && (
+        <WorkflowActionsHeader
+          workflow={boundWorkflow}
+          activeSessionId={activeSessionId}
+          macros={macros}
+          onRunMacro={onRunMacro}
+        />
+      )}
 
-      {mode === "preview" ? (
-        <div className="canvas-preview">
-          <div className="canvas-urlbar">
-            <input
-              className="canvas-url-input"
-              value={previewInput}
-              placeholder="http://localhost:3000"
-              onChange={(e) => setPreviewInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && navigatePreview()}
-            />
-            <button className="btn-ghost" onClick={navigatePreview}>
-              Go
-            </button>
-          </div>
-          {previewUrl ? (
-            <iframe
-              key={previewUrl}
-              className="canvas-iframe"
-              src={previewUrl}
-              sandbox="allow-scripts allow-forms allow-same-origin"
-            />
-          ) : (
-            <div className="canvas-empty">Enter a localhost URL to preview a running dev server.</div>
-          )}
-        </div>
-      ) : !sessionId ? (
+      {!sessionId ? (
         <div className="canvas-empty">Start a session to see its canvas here.</div>
       ) : !hasGeneratedContent ? (
         <div className="canvas-empty">
-          <p>Nothing rendered yet.</p>
-          <p>
-            Ask your agent to write HTML to <code>.sapiom/canvas/index.html</code> — this pane hot-reloads whenever
-            it changes.
+          <p>Nothing generated yet.</p>
+          {visualizeMacro &&
+            (visualizing ? (
+              <div className="canvas-visualize-inline">
+                <input
+                  autoFocus
+                  className="modal-input"
+                  data-testid="canvas-visualize-subject"
+                  placeholder="What should the agent visualize?"
+                  value={visualizeSubject}
+                  onChange={(e) => setVisualizeSubject(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitVisualize();
+                    if (e.key === "Escape") setVisualizing(false);
+                  }}
+                />
+                <div className="modal-actions">
+                  <button className="btn-ghost" onClick={() => setVisualizing(false)}>
+                    Cancel
+                  </button>
+                  <button className="btn-primary" onClick={submitVisualize}>
+                    Run
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className="btn-primary canvas-visualize-cta"
+                data-testid="canvas-visualize-cta"
+                onClick={() => {
+                  setVisualizeSubject("");
+                  setVisualizing(true);
+                }}
+              >
+                <Icon name="Sparkles" size={14} /> Visualize
+              </button>
+            ))}
+          <p className="canvas-empty-hint">
+            Ask your agent to visualize, or write HTML directly to <code>.sapiom/canvas/index.html</code> — this pane
+            hot-reloads whenever it changes.
           </p>
         </div>
       ) : (

@@ -2,13 +2,14 @@
  * Harness SPA shell (workstream W2).
  *
  * Layout: workflows rail (left) | session dropdown + terminal (center)
- * | canvas/preview pane (right) | action icon rail (far right).
+ * | canvas/preview pane (right). Actions live on their workflow: inline
+ * row icons in the rail, and a header strip above the canvas for whichever
+ * workflow is bound to the active session.
  */
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
-import type { HarnessKind, MacroDef } from "@shared/types";
+import type { HarnessKind, MacroDef, WorkflowInfo } from "@shared/types";
 
-import { ActionRail } from "./components/ActionRail";
 import { BrandHeader } from "./components/BrandHeader";
 import { CanvasPane } from "./components/CanvasPane";
 import { CommandPalette } from "./components/CommandPalette";
@@ -17,6 +18,7 @@ import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
+import { resolveMacroUrl } from "./lib/macro-gating";
 import { useHarnessState } from "./lib/use-harness-state";
 
 export const App = (): JSX.Element => {
@@ -45,10 +47,9 @@ export const App = (): JSX.Element => {
   }
 
   const { state } = harness;
-  const selectedWorkflow = state.workflows.find((w) => w.path === harness.selectedWorkflowPath) ?? null;
   const activeSession = state.sessions.find((session) => session.id === harness.activeSessionId) ?? null;
   const boundWorkflowPath = boundWorkflowPathOf(activeSession);
-  const boundWorkflowName = state.workflows.find((w) => w.path === boundWorkflowPath)?.name ?? null;
+  const boundWorkflow = state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
 
   const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
     await harness.createSession({ cwd, harness: agentHarness });
@@ -61,31 +62,21 @@ export const App = (): JSX.Element => {
     if (harness.activeSessionId) void harness.bindWorkflow(harness.activeSessionId, path);
   };
 
-  const disabledReasonFor = (macro: MacroDef): string | null => {
-    if (macro.requiresWorkflow) {
-      if (!selectedWorkflow) return "Select a workflow first";
-      if (macro.action.kind === "open-url" && macro.action.url.includes("{{workflow.definitionId}}") &&
-        selectedWorkflow.definitionId == null) {
-        return "Not deployed yet";
-      }
-    }
-    if (macro.action.kind === "inject" && !harness.activeSessionId) return "Start a session first";
-    return null;
-  };
-
-  const handleRunMacro = (macro: MacroDef, subject?: string): void => {
+  // Shared by workflow-row hover actions, the bound-workflow header above the
+  // canvas, and the canvas empty-state's Visualize CTA. Running a macro against
+  // a workflow also (re-)binds it, so acting on a row that isn't the current
+  // binding switches "what I'm working on" too. `workflow` is nullable for
+  // macros that don't require one (Visualize) when nothing's bound yet.
+  const handleRunMacroForWorkflow = (workflow: WorkflowInfo | null, macro: MacroDef, subject?: string): void => {
+    if (workflow) handleSelectWorkflow(workflow.path);
     if (macro.action.kind === "open-url") {
-      const url = macro.action.url.replace(
-        "{{workflow.definitionId}}",
-        String(selectedWorkflow?.definitionId ?? ""),
-      );
-      window.open(url, "_blank", "noopener,noreferrer");
+      window.open(resolveMacroUrl(macro.action.url, workflow), "_blank", "noopener,noreferrer");
       return;
     }
     if (!harness.activeSessionId) return;
     void harness.runMacro(macro.id, {
       harnessSessionId: harness.activeSessionId,
-      workflowPath: harness.selectedWorkflowPath ?? undefined,
+      workflowPath: workflow?.path,
       subject,
     });
   };
@@ -104,7 +95,9 @@ export const App = (): JSX.Element => {
           sessions={state.sessions}
           activeSessionId={harness.activeSessionId}
           selectedPath={harness.selectedWorkflowPath}
+          macros={state.macros}
           onSelect={handleSelectWorkflow}
+          onRunMacro={handleRunMacroForWorkflow}
           onConnect={async (path) => {
             await harness.connectWorkflow(path);
           }}
@@ -123,7 +116,7 @@ export const App = (): JSX.Element => {
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
             onCreateSession={handleCreateSession}
-            boundWorkflowName={boundWorkflowName}
+            boundWorkflowName={boundWorkflow?.name ?? null}
             authenticated={state.authenticated}
             organizationName={state.organizationName}
             telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
@@ -146,9 +139,14 @@ export const App = (): JSX.Element => {
           </div>
         </div>
 
-        <CanvasPane sessionId={harness.activeSessionId} lastMessage={harness.lastMessage} />
-
-        <ActionRail macros={state.macros} disabledReasonFor={disabledReasonFor} onRun={handleRunMacro} />
+        <CanvasPane
+          sessionId={harness.activeSessionId}
+          lastMessage={harness.lastMessage}
+          boundWorkflow={boundWorkflow}
+          activeSessionId={harness.activeSessionId}
+          macros={state.macros}
+          onRunMacro={(macro, subject) => handleRunMacroForWorkflow(boundWorkflow, macro, subject)}
+        />
       </div>
 
       {paletteOpen && (

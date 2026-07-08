@@ -13,13 +13,16 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 
-test("renders all four panes plus the brand header", async ({ page }) => {
+test("renders the three panes plus the brand header, with no separate action rail", async ({ page }) => {
   await expect(page.locator(".brand-header")).toBeVisible();
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.locator(".center-pane")).toBeVisible();
   await expect(page.locator(".session-bar")).toBeVisible();
   await expect(page.locator(".canvas-pane")).toBeVisible();
-  await expect(page.locator(".rail-actions")).toBeVisible();
+
+  // The action rail is retired — actions live on workflows now (row icons,
+  // bound-workflow header), not in a standalone column.
+  await expect(page.locator(".rail-actions")).toHaveCount(0);
 
   await page.screenshot({ path: "web/e2e/screenshots/app-shell.png", fullPage: true });
 });
@@ -288,7 +291,8 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
 });
 
 test("canvas pane shows its empty state for the active session", async ({ page }) => {
-  await expect(page.locator(".canvas-empty")).toContainText("Nothing rendered yet");
+  await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+  await expect(page.locator(".canvas-empty")).toContainText(".sapiom/canvas/index.html");
 });
 
 test("settings popover: identity, telemetry toggle, and it persists across close/reopen", async ({ page }) => {
@@ -317,11 +321,96 @@ test("visualize macro prompts for a subject before running", async ({ page }) =>
   await expect(page.getByTestId("macro-visualize")).toBeEnabled();
 
   await page.getByTestId("macro-visualize").click();
-  await expect(page.getByText("Visualize")).toBeVisible();
+  await expect(page.locator(".modal-header")).toHaveText("Visualize");
   const subjectInput = page.getByPlaceholder("What should the agent visualize?");
   await expect(subjectInput).toBeVisible();
 
   await subjectInput.fill("the leasing pipeline");
   await page.getByRole("button", { name: "Run", exact: true }).click();
   await expect(subjectInput).toBeHidden();
+});
+
+test.describe("actions live on workflows, not a separate rail", () => {
+  test("workflow rows keep their action icons hidden until you hover or select the row", async ({ page }) => {
+    const row = page.getByTestId("workflow-rfq");
+    const actions = row.locator(".workflow-row-actions");
+
+    await expect(actions).toHaveCSS("opacity", "0");
+    await row.hover();
+    await expect(actions).toHaveCSS("opacity", "1");
+    await page.screenshot({ path: "web/e2e/screenshots/workflow-row-hover-actions.png" });
+
+    // Moving away hides them again — hover alone doesn't stick.
+    await page.mouse.move(0, 0);
+    await expect(actions).toHaveCSS("opacity", "0");
+
+    // Selecting the row keeps the actions visible without a hover.
+    await row.locator(".workflow-item-trigger").click();
+    await page.mouse.move(0, 0);
+    await expect(actions).toHaveCSS("opacity", "1");
+  });
+
+  test("the workflow bound to the active session gets an actions header above the canvas", async ({ page }) => {
+    const header = page.getByTestId("workflow-actions-header");
+    await expect(header).toBeVisible();
+    await expect(header).toContainText("leasing");
+
+    // The header carries the full macro set, including Visualize — the one
+    // macro that stays contextual to the bound workflow.
+    await expect(header.getByTestId("macro-run_local")).toBeVisible();
+    await expect(header.getByTestId("macro-deploy")).toBeVisible();
+    await expect(header.getByTestId("macro-prod_run")).toBeVisible();
+    await expect(header.getByTestId("macro-open_prod")).toBeVisible();
+    await expect(header.getByTestId("macro-visualize")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/workflow-actions-header.png" });
+  });
+});
+
+test("canvas empty state explains itself and offers a Visualize CTA", async ({ page }) => {
+  await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+
+  await page.screenshot({ path: "web/e2e/screenshots/canvas-empty-state.png" });
+
+  const cta = page.getByTestId("canvas-visualize-cta");
+  await expect(cta).toBeVisible();
+  await cta.click();
+
+  const subjectInput = page.getByTestId("canvas-visualize-subject");
+  await expect(subjectInput).toBeVisible();
+  await subjectInput.fill("the leasing pipeline");
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(subjectInput).toBeHidden();
+});
+
+test("the canvas is a single controlled surface — no separate preview tab or port suggestions", async ({ page }) => {
+  await expect(page.locator(".canvas-mode-toggle")).toHaveCount(0);
+  await expect(page.getByTestId("preview-chip")).toHaveCount(0);
+
+  // A detected-port bus message must render nothing in this surface — the
+  // canvas only ever shows the session's own generated content.
+  await page.evaluate(() => {
+    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+      type: "port.detected",
+      harnessSessionId: "sess-boot",
+      port: 4000,
+      url: "http://localhost:4000",
+    });
+  });
+  await expect(page.getByTestId("preview-chip")).toHaveCount(0);
+  await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+});
+
+test("a canvas.reload bus message swaps the empty state for the generated iframe", async ({ page }) => {
+  await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+
+  await page.evaluate(() => {
+    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+      type: "canvas.reload",
+      harnessSessionId: "sess-boot",
+    });
+  });
+
+  await expect(page.locator(".canvas-empty")).toHaveCount(0);
+  await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", "/canvas/sess-boot/");
 });
