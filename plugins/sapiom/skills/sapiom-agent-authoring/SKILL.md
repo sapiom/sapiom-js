@@ -191,7 +191,7 @@ input reaches only the entry step's argument; to use it in later steps, write it
 | Field | Type | Notes |
 |---|---|---|
 | `ctx.executionId` | `string` | Unique id for this execution |
-| `ctx.agentName` | `string` | The agent's `name` |
+| `ctx.workflowName` | `string` | The agent's `name` (field name predates the rename) |
 | `ctx.input` | `unknown` | The execution's entry input — same value the entry step's `run` arg receives. Use `ctx.shared` to carry it forward; don't rely on `ctx.input` downstream. |
 | `ctx.shared` | `TypedContextStore<TShared>` | Cross-step key/value store |
 | `ctx.history` | `readonly StepExecutionRecord[]` | Previous steps' records |
