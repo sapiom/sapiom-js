@@ -41,12 +41,43 @@ export interface EnsureConsentOptions {
 }
 
 /**
+ * Environment opt-out, same precedence and value-parsing as
+ * `@sapiom/analytics-core`'s `resolveConsent()`: `SAPIOM_TELEMETRY_DISABLED`
+ * (Sapiom-specific) before `DO_NOT_TRACK` (the ecosystem-wide convention),
+ * both accepting `1`/`true` case-insensitively. Checked ahead of any stored
+ * settings — an operator setting either at the OS/shell level always wins
+ * for that run, regardless of a previously persisted opt-in.
+ */
+function isEnvFlagSet(value: string | undefined): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true";
+}
+
+/** Which env var (if any) forces telemetry off this run, for the printed reason. */
+function envDisableReason(): string | null {
+  if (isEnvFlagSet(process.env.SAPIOM_TELEMETRY_DISABLED)) return "SAPIOM_TELEMETRY_DISABLED";
+  if (isEnvFlagSet(process.env.DO_NOT_TRACK)) return "DO_NOT_TRACK";
+  return null;
+}
+
+/**
  * Resolves the telemetry opt-in state. Prompts once on first run and persists
  * the answer; subsequent runs reuse the stored value silently. `--no-telemetry`
- * always wins and never prompts.
+ * always wins and never prompts. `SAPIOM_TELEMETRY_DISABLED`/`DO_NOT_TRACK`
+ * force telemetry off for this run — overriding a persisted opt-in and
+ * skipping the prompt entirely — without touching what's actually stored, so
+ * a later run without the env var set sees whatever the user answered (or
+ * will still be asked, if this env-vetoed run was their first).
  */
 export async function ensureConsent(options: EnsureConsentOptions): Promise<boolean> {
   if (options.noTelemetry) return false;
+
+  const envReason = envDisableReason();
+  if (envReason) {
+    console.log(`Telemetry disabled via ${envReason} — skipping the consent prompt.\n`);
+    return false;
+  }
 
   const isFirstRun = !(await hasStoredSettings());
   const settings = await loadSettings();
