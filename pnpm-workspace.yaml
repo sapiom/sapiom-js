@@ -8,3 +8,8 @@ packages:
   # so -r build/test/publish skip them — until their @langchain/* deps are realigned.
   - '!packages/langchain'
   - '!packages/langchain-classic'
+
+# pnpm 10 skips dependency build scripts unless allowlisted. node-pty
+# (@sapiom/harness) is a native addon that must compile at install time.
+onlyBuiltDependencies:
+  - node-pty
