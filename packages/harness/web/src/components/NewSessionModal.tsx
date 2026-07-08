@@ -1,8 +1,9 @@
-import { useState } from "react";
-import type { JSX } from "react";
+import { useRef, useState } from "react";
+import type { JSX, RefObject } from "react";
 import type { HarnessKind } from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
+import { useDismissable } from "../lib/use-dismissable";
 import { DirectoryPicker } from "./DirectoryPicker";
 
 interface NewSessionModalProps {
@@ -11,6 +12,8 @@ interface NewSessionModalProps {
   listDir: (path?: string) => Promise<FsListResponse>;
   onClose: () => void;
   onCreate: (cwd: string, harness: HarnessKind) => Promise<void>;
+  /** The button that opened the modal — Escape returns focus to it. */
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 const HARNESS_OPTIONS: { id: HarnessKind; label: string }[] = [
@@ -24,11 +27,15 @@ export function NewSessionModal({
   listDir,
   onClose,
   onCreate,
+  triggerRef,
 }: NewSessionModalProps): JSX.Element {
   const [cwd, setCwd] = useState(launchDir ?? recentDirs[0] ?? "");
   const [harness, setHarness] = useState<HarnessKind>("claude-code");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDismissable(true, { onDismiss: onClose, containerRef: panelRef, triggerRef });
 
   const submit = async (): Promise<void> => {
     const trimmed = cwd.trim();
@@ -46,8 +53,8 @@ export function NewSessionModal({
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-new-session" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop">
+      <div className="modal modal-new-session" ref={panelRef}>
         <div className="modal-header">New session</div>
 
         <label className="modal-label" htmlFor="new-session-cwd">

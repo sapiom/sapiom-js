@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind } from "@shared/types";
 
@@ -38,6 +38,7 @@ export function WelcomePanel({
   const [modalOpen, setModalOpen] = useState(false);
   const [sampleBusy, setSampleBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const startProjectRef = useRef<HTMLButtonElement>(null);
 
   const runSample = async (): Promise<void> => {
     setSampleBusy(true);
@@ -64,6 +65,7 @@ export function WelcomePanel({
 
         <div className="welcome-actions">
           <button
+            ref={startProjectRef}
             className="btn-primary welcome-action"
             data-testid="welcome-start-project"
             onClick={() => setModalOpen(true)}
@@ -113,6 +115,7 @@ export function WelcomePanel({
           listDir={listDir}
           onClose={() => setModalOpen(false)}
           onCreate={onCreateSession}
+          triggerRef={startProjectRef}
         />
       )}
     </div>
