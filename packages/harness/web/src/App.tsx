@@ -22,6 +22,7 @@ import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
 import { useElementTopOffset } from "./lib/use-element-top-offset";
 import { resolveMacroUrl } from "./lib/macro-gating";
+import { usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 
 export const App = (): JSX.Element => {
@@ -30,6 +31,7 @@ export const App = (): JSX.Element => {
   const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
+  const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // preventDefault so it doesn't fall through to the browser's print/search dialogs.
@@ -97,7 +99,10 @@ export const App = (): JSX.Element => {
         onOpenPalette={() => setPaletteOpen(true)}
       />
 
-      <div className="app">
+      <div
+        className="app"
+        style={{ gridTemplateColumns: `${widths.rail}px 32px minmax(360px, 1fr) ${widths.canvas}px` }}
+      >
         <WorkflowsRail
           workflows={state.workflows}
           sessions={state.sessions}
@@ -122,6 +127,17 @@ export const App = (): JSX.Element => {
             />
           )}
         </div>
+
+        <div
+          className="pane-resize-handle pane-resize-handle-rail"
+          style={{ left: widths.rail + 32 }}
+          onPointerDown={startRailDrag}
+          onDoubleClick={resetRail}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize workspace rail"
+          data-testid="resize-handle-rail"
+        />
 
         <div className="center-pane">
           <SessionBar
@@ -158,6 +174,17 @@ export const App = (): JSX.Element => {
             )}
           </div>
         </div>
+
+        <div
+          className="pane-resize-handle pane-resize-handle-canvas"
+          style={{ right: widths.canvas }}
+          onPointerDown={startCanvasDrag}
+          onDoubleClick={resetCanvas}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize canvas pane"
+          data-testid="resize-handle-canvas"
+        />
 
         <CanvasPane
           sessionId={harness.activeSessionId}

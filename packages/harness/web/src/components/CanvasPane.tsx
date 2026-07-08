@@ -4,6 +4,7 @@ import type { BusMessage, MacroDef, WorkflowInfo } from "@shared/types";
 
 import { isMockMode } from "../lib/api";
 import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
+import { getTheme, subscribeTheme } from "../lib/theme";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
@@ -26,6 +27,12 @@ export function CanvasPane({
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [theme, setTheme] = useState(getTheme());
+
+  // Passed through to the served canvas so a kit-based template can match the
+  // app's current theme instead of always rendering dark. Legacy canvases
+  // that don't read the param are unaffected.
+  useEffect(() => subscribeTheme(setTheme), []);
 
   // Probe once per session for pre-existing content — the agent may have written
   // it in an earlier turn, before this pane was around to catch a reload event.
@@ -91,7 +98,12 @@ export function CanvasPane({
           </p>
         </div>
       ) : (
-        <iframe key={reloadKey} className="canvas-iframe" src={`/canvas/${sessionId}/`} sandbox="allow-scripts" />
+        <iframe
+          key={reloadKey}
+          className="canvas-iframe"
+          src={`/canvas/${sessionId}/?theme=${theme}`}
+          sandbox="allow-scripts"
+        />
       )}
     </aside>
   );
