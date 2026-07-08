@@ -365,8 +365,16 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // overview when unbound) via the deterministic pipeline — always against
   // the live workflowsCache, never an LLM. Never throws (see core/
   // canvas-render.ts); best-effort, like every other canvas write here.
+  // Explicit user-invoked renders (the Visualize macro, POST
+  // /canvas/:id/render) use this as-is; the UNPROMPTED call sites
+  // (session-create/boot auto-render) use autoRenderCanvas below, which
+  // won't replace an existing canvas (e.g. the sample project's seeded
+  // opening shot) with nothing but error panels when every extraction fails.
   const renderCanvas = async (session: HarnessSession): Promise<void> => {
     await renderCanvasForSession(session, workflowsCache);
+  };
+  const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
+    await renderCanvasForSession(session, workflowsCache, { preserveExistingOnFailure: true });
   };
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
@@ -429,7 +437,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
             // unrelated session's pane.
             if (found.length === 0) return;
             const session = sessionManager.get(harnessSessionId);
-            if (session) return renderCanvas(session);
+            if (session) return autoRenderCanvas(session);
           })
           .catch((err: unknown) => {
             console.error("[harness] workflow scan on session create failed:", err);
@@ -659,7 +667,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         // launchDir twice — only renders when it actually found something,
         // same "discoverable" gate as the REST onSessionCreated path.
         const found = await initialWorkflowScan;
-        if (found.length > 0) await renderCanvas(session);
+        if (found.length > 0) await autoRenderCanvas(session);
       })
       .catch((err: unknown) => {
         console.error("[harness] auto-create boot session failed:", err);
