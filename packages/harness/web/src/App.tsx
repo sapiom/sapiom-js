@@ -66,8 +66,10 @@ export const App = (): JSX.Element => {
   // canvas, and the canvas empty-state's Visualize CTA. Running a macro against
   // a workflow also (re-)binds it, so acting on a row that isn't the current
   // binding switches "what I'm working on" too. `workflow` is nullable for
-  // macros that don't require one (Visualize) when nothing's bound yet.
-  const handleRunMacroForWorkflow = (workflow: WorkflowInfo | null, macro: MacroDef, subject?: string): void => {
+  // macros that don't require one (Visualize) when nothing's bound yet. Every
+  // macro is one click — there's no subject/free-text step on this side; the
+  // agent is the interface for anything more specific.
+  const handleRunMacroForWorkflow = (workflow: WorkflowInfo | null, macro: MacroDef): void => {
     if (workflow) handleSelectWorkflow(workflow.path);
     if (macro.action.kind === "open-url") {
       window.open(resolveMacroUrl(macro.action.url, workflow), "_blank", "noopener,noreferrer");
@@ -77,7 +79,6 @@ export const App = (): JSX.Element => {
     void harness.runMacro(macro.id, {
       harnessSessionId: harness.activeSessionId,
       workflowPath: workflow?.path,
-      subject,
     });
   };
 
@@ -145,7 +146,7 @@ export const App = (): JSX.Element => {
           boundWorkflow={boundWorkflow}
           activeSessionId={harness.activeSessionId}
           macros={state.macros}
-          onRunMacro={(macro, subject) => handleRunMacroForWorkflow(boundWorkflow, macro, subject)}
+          onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
         />
       </div>
 

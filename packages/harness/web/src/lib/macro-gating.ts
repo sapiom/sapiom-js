@@ -1,8 +1,17 @@
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 
-/** Macros carrying a `{{subject}}` placeholder prompt for free text before running (only Visualize today). */
-export function needsSubject(macro: MacroDef): boolean {
-  return macro.action.kind === "inject" && macro.action.text.includes("{{subject}}");
+/**
+ * The macro that renders the bound workflow onto the canvas — surfaced as
+ * its own CTA in the canvas empty state, and kept out of the per-row quick
+ * actions (see WorkflowsRail) since it needs the header's "bound" context,
+ * not just any row you happen to be hovering.
+ */
+export function findVisualizeMacro(macros: MacroDef[]): MacroDef | undefined {
+  return macros.find((macro) => macro.id === "visualize");
+}
+
+export function isVisualizeMacro(macro: MacroDef): boolean {
+  return macro.id === "visualize";
 }
 
 /** Shared gating logic for any surface that runs a macro against a specific workflow (row actions, the bound-workflow header). */

@@ -138,15 +138,17 @@ export const MOCK_MACROS: MacroDef[] = [
     requiresWorkflow: true,
   },
   {
+    // One-click render/re-render of the bound workflow — no free-text subject,
+    // matches the real DEFAULT_MACROS contract (src/core/macros.ts).
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
     action: {
       kind: "inject",
-      text: "Write a live HTML visualization of {{subject}} to .sapiom/canvas/index.html and keep it updated as things change.",
+      text: "Render (or re-render, overwriting {{canvas.path}}) a visualization of the workflow at {{workflow.path}} — its steps, control flow, and how it interconnects with the other workflows in this workspace.",
       submit: true,
     },
-    requiresWorkflow: false,
+    requiresWorkflow: true,
   },
 ];
 
