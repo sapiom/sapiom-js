@@ -24,6 +24,26 @@ test("renders all four panes plus the brand header", async ({ page }) => {
   await page.screenshot({ path: "web/e2e/screenshots/app-shell.png", fullPage: true });
 });
 
+test("viewport-locked shell: the page never scrolls even when terminal content overflows", async ({ page }) => {
+  // Simulate a terminal that's rendered far more than the pane can show —
+  // injected as a raw sibling in .terminal-slot (bypassing Terminal.tsx's own
+  // overflow:hidden wrapper) so this also exercises the grid/flex containment
+  // chain above it (.app, .center-pane), not just the terminal's own clipping.
+  await page.evaluate(() => {
+    const slot = document.querySelector(".terminal-slot");
+    const filler = document.createElement("div");
+    filler.setAttribute("data-testid", "scroll-stress-filler");
+    filler.style.height = "6000px";
+    slot?.appendChild(filler);
+  });
+
+  const root = await page.evaluate(() => {
+    const el = document.scrollingElement as HTMLElement;
+    return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+  });
+  expect(root.scrollHeight).toBe(root.clientHeight);
+});
+
 test("theme: defaults to light, toggles to dark, and the choice persists across reload", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.screenshot({ path: "web/e2e/screenshots/theme-light.png", fullPage: true });
