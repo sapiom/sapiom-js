@@ -8,3 +8,8 @@ packages:
   # so -r build/test/publish skip them — until their @langchain/* deps are realigned.
   - '!packages/langchain'
   - '!packages/langchain-classic'
+
+# node-pty needs its postinstall (chmods spawn-helper +x); pnpm skips build
+# scripts by default, which leaves it silently non-functional on fresh installs.
+onlyBuiltDependencies:
+  - node-pty
