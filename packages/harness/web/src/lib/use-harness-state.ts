@@ -125,11 +125,22 @@ export function useHarnessState(): HarnessStateHook {
     const session = await api.createSession(req);
     setState((prev) => (prev ? { ...prev, sessions: [...prev.sessions, session] } : prev));
     setActiveSessionId(session.id);
+
+    let optimisticRecentDirs: string[] = [];
     setSettings((prev) => {
-      const recentDirs = [req.cwd, ...(prev?.recentDirs ?? []).filter((dir) => dir !== req.cwd)].slice(0, 10);
-      void api.updateSettings({ recentDirs });
-      return prev ? { ...prev, recentDirs } : prev;
+      optimisticRecentDirs = [req.cwd, ...(prev?.recentDirs ?? []).filter((dir) => dir !== req.cwd)].slice(0, 8);
+      return prev ? { ...prev, recentDirs: optimisticRecentDirs } : prev;
     });
+    // The server is the source of truth for what actually qualifies as a
+    // recent dir (must resolve to a real, existing directory) — replace the
+    // optimistic guess with its sanitized response so invalid input (e.g.
+    // stray free text typed into the directory field) never lingers in the UI.
+    try {
+      const updated = await api.updateSettings({ recentDirs: optimisticRecentDirs });
+      setSettings((prev) => (prev ? { ...prev, recentDirs: updated.recentDirs } : prev));
+    } catch {
+      // Non-fatal — session creation itself already succeeded.
+    }
     return session;
   }, []);
 
