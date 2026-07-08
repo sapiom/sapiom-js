@@ -38,6 +38,7 @@ import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
+import { removeGeneratedSessionDir, sweepGeneratedDirs } from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
@@ -87,6 +88,12 @@ export interface HarnessServerOptions {
   adapters?: Partial<Record<HarnessKind, HarnessAdapter>>;
   sessionsPath?: string;
   buildLaunchOpts?: LaunchOptsBuilder;
+  /** Root directory per-session generated agent configs are written under —
+   *  and cleaned up from (exit-time delete + boot-time sweep, see
+   *  core/inject/retention.ts). Defaults to HARNESS_PATHS.generated
+   *  (`~/.sapiom/harness/generated`). Tests point this at a temp dir so they
+   *  never write to (or sweep) the real home directory. */
+  generatedRoot?: string;
   collectorUrl?: string;
   workflowsRegistryPath?: string;
   eventStorePath?: string;
@@ -149,12 +156,12 @@ function readVersion(): string {
  * so the remote `sapiom` MCP is actually authenticated — a factory rather
  * than a plain function since it's per-server-instance state.
  */
-function createDefaultBuildLaunchOpts(apiKey: string | null): LaunchOptsBuilder {
+function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: string): LaunchOptsBuilder {
   return async (harnessSessionId) => {
     const [settings, mcpConfigFile, systemPromptFile] = await Promise.all([
-      generateClaudeSettings({ harnessSessionId }),
-      generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey }),
-      generateSystemPromptFile(harnessSessionId),
+      generateClaudeSettings({ harnessSessionId, generatedRoot }),
+      generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey, generatedRoot }),
+      generateSystemPromptFile(harnessSessionId, { generatedRoot }),
     ]);
     return {
       settingsFile: settings.settingsPath,
@@ -233,13 +240,27 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     await writeHarnessContext(session, boundWorkflow, workflowsCache);
   };
 
+  // Exit-time deletion of generated/<id> (see the onStatusChange handler
+  // below) can race a fast resume(): resume regenerates the dir via
+  // buildLaunchOpts, and the rm scheduled at the previous exit could still
+  // be in flight. Serialize by awaiting any pending removal for this id
+  // before (re)generating its files.
+  const generatedRoot = options.generatedRoot;
+  const pendingGeneratedRemovals = new Map<string, Promise<void>>();
+  const innerBuildLaunchOpts =
+    options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot);
+  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
+    await pendingGeneratedRemovals.get(harnessSessionId);
+    return innerBuildLaunchOpts(harnessSessionId, req);
+  };
+
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
     ingestToken: options.bootToken,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath,
-    buildLaunchOpts: options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null),
+    buildLaunchOpts,
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
     writeWorkspaceContext: writeSessionContext,
@@ -248,6 +269,21 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   });
   await sessionManager.init();
 
+  // One boot-time sweep for generated dirs the exit-time cleanup below never
+  // reached (crashes, force-kills, accumulation from before retention
+  // existed). Age-gated (GENERATED_SWEEP_MAX_AGE_MS) and skips live
+  // sessions' dirs — fire-and-forget, boot must not wait on potentially
+  // thousands of removals.
+  void sweepGeneratedDirs({
+    generatedRoot,
+    isLiveSession: (harnessSessionId) => {
+      const session = sessionManager.get(harnessSessionId);
+      return session !== undefined && session.status !== "exited";
+    },
+  }).catch((err: unknown) => {
+    console.error("[harness] generated-dir sweep failed:", err);
+  });
+
   sessionManager.onStatusChange((session) => {
     bus.publish({ type: "session.status", session });
     if (session.status === "running") {
@@ -255,6 +291,20 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     } else if (session.status === "exited") {
       canvasWatcher.stop(session.id);
       portDetector.reset(session.id);
+      // The generated config dir is dead once the pty is: every file in it
+      // is regenerated by buildLaunchOpts on resume, and the agent's last
+      // emit.cjs execution (SessionEnd) happens before its process exits.
+      const removal = removeGeneratedSessionDir(session.id, { generatedRoot })
+        .then(() => undefined)
+        .catch((err: unknown) => {
+          console.error("[harness] generated-dir cleanup failed:", err);
+        })
+        .finally(() => {
+          if (pendingGeneratedRemovals.get(session.id) === removal) {
+            pendingGeneratedRemovals.delete(session.id);
+          }
+        });
+      pendingGeneratedRemovals.set(session.id, removal);
     }
   });
 
