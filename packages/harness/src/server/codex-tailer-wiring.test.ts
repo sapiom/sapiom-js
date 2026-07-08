@@ -22,6 +22,24 @@ import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 
 type FakeTailerHandle = { stop: ReturnType<typeof vi.fn>; emitSessionEnd: ReturnType<typeof vi.fn> };
 
+/**
+ * `vi.waitFor`'s own default (1000ms timeout / 50ms interval — tuned for
+ * in-process, microtask-scale assertions) is too tight for the real,
+ * OS-level pty-exit transition the waits below depend on. Root-caused via
+ * instrumented real-process runs (process pid, spawn/kill/exit timestamps,
+ * and an OS-level `process.kill(pid, 0)` liveness check at the point of
+ * failure): node-pty's own `onExit` callback can simply never fire for a
+ * pty killed within milliseconds of being spawned, even though the OS
+ * process is already confirmed gone by then — a missed-event bug in
+ * node-pty itself, not a slow or lost signal. `SessionManager.kill()` now
+ * self-heals that (see its own comment) by synthesizing the exit from an
+ * OS-level liveness check ~2.5s after the graceful signal if node-pty never
+ * reports it — this bounds the wait below at that plus real
+ * scheduling/persist overhead, comfortable margin rather than an
+ * arbitrary/unexamined number.
+ */
+const PTY_EXIT_WAIT_OPTIONS = { timeout: 5_000, interval: 200 };
+
 function fakeCodexAdapter(): HarnessAdapter {
   return {
     id: "codex",
@@ -117,8 +135,11 @@ describe("codex tailer lifecycle wiring", () => {
     server.sessionManager.kill(session.id);
     await vi.waitFor(() => {
       expect(server!.sessionManager.get(session.id)?.status).toBe("exited");
-    });
-  });
+    }, PTY_EXIT_WAIT_OPTIONS);
+    // vitest's default per-test timeout (5000ms) leaves no margin over
+    // PTY_EXIT_WAIT_OPTIONS' own 5s allowance above — without bumping this
+    // too, the outer test timeout could fire first and mask it entirely.
+  }, 15_000);
 
   it("resumes by exact agentSessionId rather than cwd+sinceMs when one is already known", async () => {
     const cwd = join(dir, "project");
@@ -154,8 +175,9 @@ describe("codex tailer lifecycle wiring", () => {
     server.sessionManager.kill(resumed.id);
     await vi.waitFor(() => {
       expect(server!.sessionManager.get(resumed.id)?.status).toBe("exited");
-    });
-  });
+    }, PTY_EXIT_WAIT_OPTIONS);
+    // See the first test's comment: the outer test timeout needs the same bump.
+  }, 15_000);
 
   it("stops the tailer and does not start a new one for a non-codex session", async () => {
     server = await startServer({
@@ -196,8 +218,9 @@ describe("codex tailer lifecycle wiring", () => {
     server.sessionManager.kill(session.id);
     await vi.waitFor(() => {
       expect(server!.sessionManager.get(session.id)?.status).toBe("exited");
-    });
-  });
+    }, PTY_EXIT_WAIT_OPTIONS);
+    // See the first test's comment: the outer test timeout needs the same bump.
+  }, 15_000);
 
   it("emits SessionEnd and removes the tailer when the session exits", async () => {
     const cwd = join(dir, "project");
@@ -217,8 +240,12 @@ describe("codex tailer lifecycle wiring", () => {
 
     server.sessionManager.kill(session.id);
 
+    // emitSessionEnd() only fires from the onStatusChange("exited") handler
+    // — it's downstream of the same real pty-exit transition as the other
+    // waits in this file, so it needs the same allowance.
     await vi.waitFor(() => {
       expect(fakeHandle.emitSessionEnd).toHaveBeenCalled();
-    });
-  });
+    }, PTY_EXIT_WAIT_OPTIONS);
+    // See the first test's comment: the outer test timeout needs the same bump.
+  }, 15_000);
 });
