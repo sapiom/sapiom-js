@@ -38,6 +38,24 @@ describe("CANVAS_STYLE_GUIDELINES", () => {
   it("carries a 'prefer clarity over decoration' note", () => {
     expect(CANVAS_STYLE_GUIDELINES).toMatch(/clarity over decoration/i);
   });
+
+  // Regression coverage for three ambiguities a live Visualize proof
+  // surfaced: two different runs resolved each one inconsistently because
+  // the wording left room to. See canvas-guidelines.ts's doc comment.
+  it("requires every node to get the glow, not just entry/terminal ones", () => {
+    expect(CANVAS_STYLE_GUIDELINES).toMatch(/every node/i);
+    expect(CANVAS_STYLE_GUIDELINES).toMatch(/never reserve the glow/i);
+  });
+
+  it("specifies straight edges for sequential steps and curved only for branches", () => {
+    expect(CANVAS_STYLE_GUIDELINES).toMatch(/straight lines/i);
+    expect(CANVAS_STYLE_GUIDELINES).toMatch(/branches into\s+multiple successors/i);
+  });
+
+  it("requires visually distinct legend markers per node kind, not just per color", () => {
+    expect(CANVAS_STYLE_GUIDELINES).toMatch(/visually distinct marker/i);
+    expect(CANVAS_STYLE_GUIDELINES).toMatch(/never reuse the identical marker/i);
+  });
 });
 
 describe("CANVAS_STYLE_GUIDELINES injection sites", () => {
