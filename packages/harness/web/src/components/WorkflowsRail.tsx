@@ -40,6 +40,7 @@ export function WorkflowsRail({ workflows, selectedPath, onSelect, onConnect }: 
           <button
             key={workflow.path}
             className={"workflow-item" + (workflow.path === selectedPath ? " is-selected" : "")}
+            data-testid={`workflow-${workflow.name}`}
             onClick={() => onSelect(workflow.path)}
             title={workflow.path}
           >

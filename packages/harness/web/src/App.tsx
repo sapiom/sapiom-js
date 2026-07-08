@@ -5,7 +5,7 @@
  * | canvas/preview pane (right) | action icon rail (far right).
  */
 import type { JSX } from "react";
-import type { HarnessKind, MacroDef, SessionSummary } from "@shared/types";
+import type { HarnessKind, MacroDef } from "@shared/types";
 
 import { ActionRail } from "./components/ActionRail";
 import { CanvasPane } from "./components/CanvasPane";
@@ -29,17 +29,6 @@ export const App = (): JSX.Element => {
 
   const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
     await harness.createSession({ cwd, harness: agentHarness });
-  };
-
-  const handleResumeHistory = async (summary: SessionSummary): Promise<void> => {
-    const existing = state.sessions.find((session) => session.agentSessionId === summary.agentSessionId);
-    if (existing) {
-      await harness.resumeSession(existing.id);
-      return;
-    }
-    // Agent-side history the harness never tracked as a session (e.g. transcript-sourced
-    // entries) — there's no registry row to resume, so start fresh in the same place.
-    await harness.createSession({ cwd: summary.cwd, harness: summary.harness });
   };
 
   const disabledReasonFor = (macro: MacroDef): string | null => {
@@ -87,7 +76,7 @@ export const App = (): JSX.Element => {
           sessions={state.sessions}
           activeSessionId={harness.activeSessionId}
           onSelectSession={harness.setActiveSessionId}
-          onResumeHistory={(summary) => void handleResumeHistory(summary)}
+          onResumeHistory={(summary) => void harness.resumeFromHistory(summary)}
           history={harness.history}
           historyLoading={harness.historyLoading}
           onOpenDropdown={(cwd) => void harness.loadHistory(cwd)}

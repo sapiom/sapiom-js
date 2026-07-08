@@ -15,13 +15,18 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     harness: "claude-code",
     cwd: "/Users/demo/acme-app",
     title: "Build the leasing pipeline",
-    status: "running",
+    // Exited, like sess-rfq below — a fresh harness launch starts with no running
+    // terminal; both fixtures are here to resume (session bar history) rather than
+    // to already be the active session. This also keeps the "no session" macro/canvas
+    // empty-states directly visible on load instead of requiring extra setup.
+    status: "exited",
     createdAt: minutesAgo(42),
     lastActiveAt: minutesAgo(1),
+    exitCode: 0,
   },
   {
     id: "sess-rfq",
-    agentSessionId: null,
+    agentSessionId: "9c1a2b3d-4e5f-4061-8a7b-6c5d4e3f2a10",
     harness: "codex",
     cwd: "/Users/demo/rfq-workflows",
     title: "rfq-workflows",
@@ -35,6 +40,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
 export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
   "/Users/demo/acme-app": [
     {
+      harnessSessionId: "sess-leasing",
       agentSessionId: "8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f",
       harness: "claude-code",
       cwd: "/Users/demo/acme-app",
@@ -53,6 +59,7 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
   ],
   "/Users/demo/rfq-workflows": [
     {
+      harnessSessionId: "sess-rfq",
       agentSessionId: "9c1a2b3d-4e5f-4061-8a7b-6c5d4e3f2a10",
       harness: "codex",
       cwd: "/Users/demo/rfq-workflows",

@@ -41,7 +41,9 @@ export function ActionRail({ macros, disabledReasonFor, onRun }: ActionRailProps
           <button
             key={macro.id}
             className="action-icon-btn"
-            title={disabledReason ?? macro.label}
+            aria-label={macro.label}
+            data-testid={`macro-${macro.id}`}
+            data-tooltip={disabledReason ?? macro.label}
             disabled={Boolean(disabledReason)}
             onClick={() => handleClick(macro)}
           >
