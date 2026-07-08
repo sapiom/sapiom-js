@@ -6,11 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessAdapter, HarnessSession, SpawnSpec } from "../shared/types.js";
 import { SessionManager, type PtySpawnFn, type SessionManagerOptions } from "./session-manager.js";
 
-/** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill. */
-function createFakePty() {
+/** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
+ *  `pid` is only set when a test passes one explicitly — sweep tests need a
+ *  numeric pid to probe (always paired with an injected isPidAlive so the
+ *  fake pid is never checked against real OS processes); everything else
+ *  leaves it undefined, which the sweep must treat as "can't tell, hands off". */
+function createFakePty(pid?: number) {
   const dataListeners: Array<(chunk: string) => void> = [];
   const exitListeners: Array<(e: { exitCode: number; signal?: number }) => void> = [];
   const pty = {
+    pid,
     onData: (cb: (chunk: string) => void) => {
       dataListeners.push(cb);
       return { dispose: () => {} };
@@ -83,6 +88,9 @@ describe("SessionManager", () => {
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       workspaceContextExists?: SessionManagerOptions["workspaceContextExists"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
+      isPidAlive?: SessionManagerOptions["isPidAlive"];
+      /** Pid given to every fake pty this manager spawns — see createFakePty(). */
+      fakePid?: number;
     } = {},
   ) {
     const adapter = opts.adapter ?? createFakeAdapter();
@@ -90,7 +98,7 @@ describe("SessionManager", () => {
     const spawnPty: PtySpawnFn =
       opts.spawnPty ??
       ((file, args) => {
-        const fake = createFakePty();
+        const fake = createFakePty(opts.fakePid);
         spawns.push(fake);
         void file;
         void args;
@@ -106,6 +114,7 @@ describe("SessionManager", () => {
       writeWorkspaceContext: opts.writeWorkspaceContext,
       workspaceContextExists: opts.workspaceContextExists,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
+      isPidAlive: opts.isPidAlive,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -621,13 +630,18 @@ describe("SessionManager", () => {
       expect(order).toEqual(["write", "spawn"]);
     });
 
-    it("create() still creates and spawns the session even if writeWorkspaceContext rejects", async () => {
+    it("create() surfaces a writeWorkspaceContext rejection and reconciles the record to exited", async () => {
       const writeWorkspaceContext = vi.fn(async () => {
         throw new Error("disk full");
       });
       const { manager } = makeManager({ writeWorkspaceContext });
 
       await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).rejects.toThrow("disk full");
+      // The record was persisted as "starting" before the failing write — it
+      // must not stay that way (a non-exited record with no pty behind it
+      // renders as a ghost tab forever).
+      expect(manager.list()).toHaveLength(1);
+      expect(manager.list()[0]?.status).toBe("exited");
     });
 
     it("resume() backfills the workspace context only when it's missing", async () => {
@@ -748,6 +762,143 @@ describe("SessionManager", () => {
     it("defaults to a no-op so tests with fake cwds never touch the real filesystem", async () => {
       const { manager } = makeManager();
       await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).resolves.toBeDefined();
+    });
+  });
+
+  describe("ghost-session reconciliation (non-exited records with no live pty)", () => {
+    it("create() reconciles the record to exited when ensureCanvasTemplate rejects", async () => {
+      const ensureCanvasTemplate = vi.fn(async () => {
+        throw new Error("read-only fs");
+      });
+      const { manager } = makeManager({ ensureCanvasTemplate });
+
+      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).rejects.toThrow("read-only fs");
+      expect(manager.list()[0]?.status).toBe("exited");
+    });
+
+    it("create() reconciles the record to exited when the pty spawn itself throws", async () => {
+      const spawnPty: PtySpawnFn = () => {
+        throw new Error("posix_spawnp failed");
+      };
+      const { manager } = makeManager({ spawnPty });
+      const statuses: string[] = [];
+      manager.onStatusChange((s) => statuses.push(s.status));
+
+      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).rejects.toThrow(
+        "posix_spawnp failed",
+      );
+      expect(manager.list()[0]?.status).toBe("exited");
+      expect(statuses).toContain("exited");
+
+      // The reconciliation must be durable, not just in-memory — a persisted
+      // "starting" record would still ghost after the SPA refetches state.
+      await manager.flush();
+      const raw = JSON.parse(await readFile(sessionsPath, "utf8")) as HarnessSession[];
+      expect(raw[0]?.status).toBe("exited");
+    });
+
+    it("resume() reconciles the record back to exited when a pre-spawn step rejects", async () => {
+      const ensureCanvasTemplate = vi.fn(async () => {
+        throw new Error("read-only fs");
+      });
+      const { manager } = makeManager({ ensureCanvasTemplate });
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-uuid-9",
+        harness: "claude-code",
+        cwd: "/tmp/proj",
+        title: "past session",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      await expect(manager.resume(session.id)).rejects.toThrow("read-only fs");
+      // resume() flipped it to "starting" and persisted before failing — it
+      // must land back on "exited", not stay stranded mid-transition.
+      expect(manager.get(session.id)?.status).toBe("exited");
+    });
+
+    it("kill() transitions a stale non-exited record with no pty to exited instead of failing", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      spawns[0]?.emitExit(0);
+      // Simulate the ghost state directly (the transitions that used to
+      // produce it are all reconciled now): a record stuck non-exited whose
+      // pty handle is long gone.
+      const record = manager.get(session.id)!;
+      record.status = "running";
+
+      const statuses: string[] = [];
+      manager.onStatusChange((s) => statuses.push(s.status));
+      expect(manager.kill(session.id)).toBe(true);
+      expect(manager.get(session.id)?.status).toBe("exited");
+      expect(statuses).toEqual(["exited"]);
+
+      // A genuinely exited record is still a no-op false, as before.
+      expect(manager.kill(session.id)).toBe(false);
+      expect(manager.kill("unknown-id")).toBe(false);
+    });
+
+    describe("sweepDeadSessions", () => {
+      it("synthesizes an exit for a running session whose process died without onExit ever firing", async () => {
+        // The node-pty missed-exit bug (see kill()'s fallback), but for a
+        // process that died on its own — no kill() call means no fallback
+        // was ever armed, which is exactly what the sweep exists to catch.
+        const { manager } = makeManager({ fakePid: 4242, isPidAlive: () => false });
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        expect(session.status).toBe("running");
+
+        const statuses: string[] = [];
+        manager.onStatusChange((s) => statuses.push(s.status));
+        manager.sweepDeadSessions();
+
+        expect(manager.get(session.id)?.status).toBe("exited");
+        expect(manager.get(session.id)?.exitCode).toBeNull();
+        expect(statuses).toEqual(["exited"]);
+        // The dead handle is fully released, same as a real onExit.
+        expect(manager.attach(session.id, () => {})).toBeUndefined();
+
+        await manager.flush();
+        const raw = JSON.parse(await readFile(sessionsPath, "utf8")) as HarnessSession[];
+        expect(raw[0]?.status).toBe("exited");
+      });
+
+      it("leaves sessions whose process is alive untouched", async () => {
+        const { manager } = makeManager({ fakePid: 4242, isPidAlive: () => true });
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+        manager.sweepDeadSessions();
+
+        expect(manager.get(session.id)?.status).toBe("running");
+      });
+
+      it("never probes a pty without a numeric pid, and never declares it dead", async () => {
+        const isPidAlive = vi.fn(() => false);
+        const { manager } = makeManager({ isPidAlive }); // fake pty with pid: undefined
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+        manager.sweepDeadSessions();
+
+        expect(isPidAlive).not.toHaveBeenCalled();
+        expect(manager.get(session.id)?.status).toBe("running");
+      });
+
+      it("reconciles a non-exited record with no pty only after it outlives the grace window", async () => {
+        const { manager, spawns } = makeManager();
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        spawns[0]?.emitExit(0);
+        const record = manager.get(session.id)!;
+        record.status = "starting"; // simulate the stale mid-transition ghost
+
+        // Fresh record (lastActiveAt just now): could be a create()/resume()
+        // still inside its legitimate pre-spawn window — hands off.
+        record.lastActiveAt = new Date().toISOString();
+        manager.sweepDeadSessions();
+        expect(manager.get(session.id)?.status).toBe("starting");
+
+        // Same record well past any plausible spawn window: dead, reconcile.
+        record.lastActiveAt = new Date(Date.now() - 60_000).toISOString();
+        manager.sweepDeadSessions();
+        expect(manager.get(session.id)?.status).toBe("exited");
+      });
     });
   });
 

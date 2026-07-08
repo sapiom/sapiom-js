@@ -122,6 +122,31 @@ const READY_POLL_MS = 150;
  *  second for a busy TUI), but the SPA's busy indicator only needs "this
  *  session produced output recently", not every individual chunk. */
 const ACTIVITY_BROADCAST_THROTTLE_MS = 2_000;
+/**
+ * See `sweepDeadSessions()`: how long a non-exited session record may sit
+ * with no pty handle at all before the sweep declares it dead. There is one
+ * legitimate window where that state exists — inside `create()`/`resume()`,
+ * between persisting the record and attaching the freshly-spawned pty (a few
+ * awaited config-file writes plus the spawn itself, normally well under a
+ * second) — so this just needs to comfortably exceed that window, not be
+ * fast: the sweep is a backstop, not the primary reconciliation.
+ */
+const NO_PTY_SWEEP_GRACE_MS = 30_000;
+
+/**
+ * OS-level "does this process exist" check — the same probe `kill()`'s
+ * missed-exit fallback has always used, factored out so the liveness sweep
+ * shares it. EPERM means the process exists but isn't ours to signal, i.e.
+ * alive; anything else (ESRCH) means it's gone.
+ */
+const defaultIsPidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
 
 /**
  * Thrown by `submitInput()` when a session's pty is alive but never became
@@ -214,6 +239,11 @@ export interface SessionManagerOptions {
    * touch the real filesystem unless they opt in.
    */
   ensureCanvasTemplate?: (cwd: string) => Promise<void>;
+  /**
+   * Injectable for tests (fake ptys carry fake pids that must never be
+   * probed against real OS processes). Defaults to `defaultIsPidAlive`.
+   */
+  isPidAlive?: (pid: number) => boolean;
 }
 
 interface PtyHandle {
@@ -237,6 +267,7 @@ export class SessionManager {
   private readonly writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
   private readonly workspaceContextExists: (cwd: string) => Promise<boolean>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
+  private readonly isPidAlive: (pid: number) => boolean;
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
@@ -261,6 +292,7 @@ export class SessionManager {
     this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
     this.workspaceContextExists = options.workspaceContextExists ?? (async () => true);
     this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
+    this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
     this.statusEmitter.setMaxListeners(0);
     this.activityEmitter.setMaxListeners(0);
@@ -330,15 +362,23 @@ export class SessionManager {
     };
     this.sessions.set(id, session);
     await this.persist();
-    // Before spawning, not fire-and-forget: the agent's very first read of
-    // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
-    // regardless of which entry point called create() (REST, autoCreateSession).
-    await this.writeWorkspaceContext(session);
-    // Same reasoning: the canvas pane opens immediately once the session is
-    // "running" — it must never show a bare empty iframe because nothing's
-    // been written to .sapiom/canvas/index.html yet.
-    await this.ensureCanvasTemplate(session.cwd);
-    await this.spawn(session, spec);
+    try {
+      // Before spawning, not fire-and-forget: the agent's very first read of
+      // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
+      // regardless of which entry point called create() (REST, autoCreateSession).
+      await this.writeWorkspaceContext(session);
+      // Same reasoning: the canvas pane opens immediately once the session is
+      // "running" — it must never show a bare empty iframe because nothing's
+      // been written to .sapiom/canvas/index.html yet.
+      await this.ensureCanvasTemplate(session.cwd);
+      await this.spawn(session, spec);
+    } catch (err) {
+      // The record was already persisted as "starting" above; a failure
+      // anywhere before the pty is live must reconcile it to "exited" or it
+      // lingers forever as a ghost tab (non-exited status, no pty behind it).
+      await this.transitionExited(session, null);
+      throw err;
+    }
     return session;
   }
 
@@ -394,24 +434,43 @@ export class SessionManager {
     session.lastActiveAt = this.now();
     await this.persist();
     this.emitStatus(session);
-    // Backfill only — never overwrite a file that could already reflect a
-    // real binding. The caller resolves session.boundWorkflowPath against
-    // the live registry, so unlike the old cwd-only signature this actually
-    // reconstructs the real binding on backfill, not just `null`.
-    if (!(await this.workspaceContextExists(session.cwd))) {
-      await this.writeWorkspaceContext(session);
+    try {
+      // Backfill only — never overwrite a file that could already reflect a
+      // real binding. The caller resolves session.boundWorkflowPath against
+      // the live registry, so unlike the old cwd-only signature this actually
+      // reconstructs the real binding on backfill, not just `null`.
+      if (!(await this.workspaceContextExists(session.cwd))) {
+        await this.writeWorkspaceContext(session);
+      }
+      // Also backfill-only (ensureCanvasTemplate does its own existence check)
+      // — a session from before the canvas kit existed, or one whose canvas
+      // file was somehow deleted, still gets a live pane on resume.
+      await this.ensureCanvasTemplate(session.cwd);
+      await this.spawn(session, spec);
+    } catch (err) {
+      // Same reconciliation as create(): the record just went back to
+      // "starting" and was persisted — a failure before the new pty is live
+      // must not leave it stranded there with nothing behind it.
+      await this.transitionExited(session, null);
+      throw err;
     }
-    // Also backfill-only (ensureCanvasTemplate does its own existence check)
-    // — a session from before the canvas kit existed, or one whose canvas
-    // file was somehow deleted, still gets a live pane on resume.
-    await this.ensureCanvasTemplate(session.cwd);
-    await this.spawn(session, spec);
     return session;
   }
 
   kill(id: string): boolean {
     const handle = this.ptys.get(id);
-    if (!handle) return false;
+    if (!handle) {
+      // A non-exited record with no pty behind it has nothing left to kill —
+      // it's a ghost (its pty died without the exit ever being recorded).
+      // Reconcile it here so closing the tab actually closes it, instead of
+      // returning false and leaving an unclosable non-exited record.
+      const session = this.sessions.get(id);
+      if (session && session.status !== "exited") {
+        void this.transitionExited(session, null);
+        return true;
+      }
+      return false;
+    }
     handle.pty.kill();
     // Root-caused via instrumented real-process runs: node-pty's `onExit`
     // can simply never fire for a pty killed within milliseconds of being
@@ -428,17 +487,9 @@ export class SessionManager {
     const escalate = setTimeout(() => {
       if (this.ptys.get(id) !== handle) return;
       const pid = handle.pty.pid;
-      const stillAlive = (): boolean => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      };
-      if (stillAlive()) handle.pty.kill("SIGKILL");
+      if (this.isPidAlive(pid)) handle.pty.kill("SIGKILL");
       setTimeout(() => {
-        if (this.ptys.get(id) === handle && !stillAlive()) this.markExited(id, handle, null);
+        if (this.ptys.get(id) === handle && !this.isPidAlive(pid)) this.markExited(id, handle, null);
       }, KILL_ESCALATION_CONFIRM_MS).unref?.();
     }, KILL_ESCALATION_MS);
     escalate.unref?.();
@@ -451,6 +502,39 @@ export class SessionManager {
    *  touch unrelated child processes on its own. */
   killAll(): void {
     for (const id of [...this.ptys.keys()]) this.kill(id);
+  }
+
+  /**
+   * Defensive liveness backstop, run periodically by the server: any
+   * non-exited session whose pty process is provably gone gets its exit
+   * synthesized. The specific transitions are already reconciled at their
+   * source (create/resume pre-pty failures, kill()'s missed-exit fallback),
+   * but node-pty has been observed to simply never fire `onExit` for a
+   * process that died moments after spawning (see `kill()`) — and a process
+   * that dies *on its own* that way has no kill()-style fallback watching
+   * it. This sweep is the catch-all for that and any transition not yet
+   * root-caused: a stale record shows as a ghost tab (non-exited status, no
+   * live pty) until something reconciles it.
+   */
+  sweepDeadSessions(): void {
+    for (const session of [...this.sessions.values()]) {
+      if (session.status === "exited") continue;
+      const handle = this.ptys.get(session.id);
+      if (handle) {
+        // Guard against non-numeric pids (test fakes) — never probe the OS
+        // with a garbage value, and never declare a session dead on one.
+        if (typeof handle.pty.pid === "number" && !this.isPidAlive(handle.pty.pid)) {
+          this.markExited(session.id, handle, null);
+        }
+        continue;
+      }
+      // No pty handle at all. Within create()/resume() there's a legitimate
+      // pre-spawn window where the persisted record briefly looks like this,
+      // so only sweep records older than the grace period (an unparseable
+      // lastActiveAt is garbage and sweeps immediately).
+      const ageMs = Date.now() - Date.parse(session.lastActiveAt);
+      if (!(ageMs < NO_PTY_SWEEP_GRACE_MS)) void this.transitionExited(session, null);
+    }
   }
 
   write(id: string, data: string): boolean {
@@ -680,22 +764,17 @@ export class SessionManager {
     env[ENV.sessionId] = session.id;
     if (this.collectorUrl) env[ENV.collectorUrl] = this.collectorUrl;
 
-    let pty: IPty;
-    try {
-      pty = spawnFn(spec.command, spec.args, {
-        name: "xterm-256color",
-        cols: DEFAULT_COLS,
-        rows: DEFAULT_ROWS,
-        cwd: spec.cwd,
-        env,
-      });
-    } catch (err) {
-      session.status = "exited";
-      session.exitCode = null;
-      await this.persist();
-      this.emitStatus(session);
-      throw err;
-    }
+    // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
+    // node-pty prebuild surfaces there, not at import time) — propagates to
+    // create()/resume(), which own reconciling the session record to
+    // "exited" for every pre-pty failure, not just this one.
+    const pty: IPty = spawnFn(spec.command, spec.args, {
+      name: "xterm-256color",
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
+      cwd: spec.cwd,
+      env,
+    });
 
     const emitter = new EventEmitter();
     emitter.setMaxListeners(0);
@@ -735,11 +814,24 @@ export class SessionManager {
     this.lastActivityBroadcast.delete(id);
     const session = this.sessions.get(id);
     if (!session) return;
+    void this.transitionExited(session, exitCode);
+  }
+
+  /**
+   * The single place a session record flips to "exited" — shared by
+   * `markExited()` (live-pty deaths), `create()`/`resume()`'s pre-pty
+   * failure reconciliation, `kill()`'s stale-record path, and
+   * `sweepDeadSessions()`. Returns the persist promise so callers that need
+   * the registry durably updated before rethrowing (create/resume) can
+   * await it; event-driven callers fire-and-forget it like any other write.
+   */
+  private transitionExited(session: HarnessSession, exitCode: number | null): Promise<void> {
     session.status = "exited";
     session.exitCode = exitCode;
     session.lastActiveAt = this.now();
-    void this.persist();
+    const persisted = this.persist();
     this.emitStatus(session);
+    return persisted;
   }
 
   private emitStatus(session: HarnessSession): void {
