@@ -30,6 +30,7 @@ export interface HarnessStateHook {
   loadHistory: (cwd: string) => Promise<void>;
   createSession: (req: CreateSessionRequest) => Promise<HarnessSession>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
+  resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
   lastMessage: BusMessage | null;
@@ -118,6 +119,24 @@ export function useHarnessState(): HarnessStateHook {
     return session;
   }, []);
 
+  /**
+   * Resumes a history entry. Prefers the registry's own harnessSessionId back-reference;
+   * falls back to matching agentSessionId against live sessions for older/partial data,
+   * and — for transcript-sourced entries the harness never tracked at all — starts a
+   * fresh session in the same directory rather than blocking on a resume path that
+   * doesn't exist for them.
+   */
+  const resumeFromHistory = useCallback(
+    async (summary: SessionSummary): Promise<HarnessSession> => {
+      const harnessSessionId =
+        summary.harnessSessionId ??
+        state?.sessions.find((session) => session.agentSessionId === summary.agentSessionId)?.id;
+      if (harnessSessionId) return resumeSession(harnessSessionId);
+      return createSession({ cwd: summary.cwd, harness: summary.harness });
+    },
+    [state, resumeSession, createSession],
+  );
+
   const connectWorkflow = useCallback(async (path: string): Promise<WorkflowInfo> => {
     const workflow = await api.connectWorkflow(path);
     setState((prev) =>
@@ -145,6 +164,7 @@ export function useHarnessState(): HarnessStateHook {
     loadHistory,
     createSession,
     resumeSession,
+    resumeFromHistory,
     connectWorkflow,
     runMacro,
     lastMessage,

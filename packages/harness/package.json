@@ -40,6 +40,7 @@
     "start": "node dist/cli/bin.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:ui": "playwright test --config web/e2e/playwright.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "pnpm build"
@@ -53,6 +54,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.30",
     "@types/react": "^19.0.0",

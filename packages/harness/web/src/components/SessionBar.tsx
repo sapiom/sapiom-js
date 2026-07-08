@@ -46,7 +46,7 @@ export function SessionBar({
   return (
     <div className="session-bar">
       <div className="session-dropdown-wrap">
-        <button className="session-dropdown-trigger" onClick={toggle}>
+        <button className="session-dropdown-trigger" data-testid="session-dropdown-trigger" onClick={toggle}>
           <span className="session-dot" data-status={activeSession?.status ?? "none"} />
           <span className="session-title">{activeSession ? activeSession.title : "No session"}</span>
           <Icon name="ChevronDown" size={14} />
@@ -81,6 +81,7 @@ export function SessionBar({
                 <button
                   key={summary.agentSessionId}
                   className="session-dropdown-item"
+                  data-testid={`history-${summary.agentSessionId}`}
                   onClick={() => {
                     onResumeHistory(summary);
                     setOpen(false);
@@ -96,7 +97,7 @@ export function SessionBar({
         )}
       </div>
 
-      <button className="new-session-btn" onClick={() => setModalOpen(true)}>
+      <button className="new-session-btn" data-testid="new-session-btn" onClick={() => setModalOpen(true)}>
         <Icon name="Plus" size={14} /> new
       </button>
 
