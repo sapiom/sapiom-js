@@ -56,9 +56,10 @@ export type FinishedStepStatus = 'dispatched' | 'succeeded' | 'failed';
  * needs it, put it in `shared`.
  */
 export interface AgentExecutionContext<TShared extends Record<string, unknown> = Record<string, unknown>> {
-  /** Stable id; the workflow_executions row primary key. */
+  /** Stable id for this execution. */
   readonly executionId: string;
-  readonly workflowName: string;
+  /** The name (slug) of the agent this execution belongs to. */
+  readonly agentName: string;
 
   /**
    * Tenant scope, stamped on the execution at creation and immutable for

@@ -118,7 +118,7 @@ export class LocalStubDispatcher implements StepDispatcher {
 
     const ctx = {
       executionId: request.executionId,
-      workflowName: request.workflowName,
+      agentName: request.workflowName,
       organizationId: request.organizationId,
       tenantId: request.tenantId,
       input: request.workflowInput,
