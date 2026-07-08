@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
+import { useDismissable } from "../lib/use-dismissable";
 import { Icon } from "./Icon";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
@@ -52,6 +53,25 @@ export function SessionBar({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const historyWrapRef = useRef<HTMLDivElement>(null);
+  const historyTriggerRef = useRef<HTMLButtonElement>(null);
+  const settingsWrapRef = useRef<HTMLDivElement>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const newSessionTriggerRef = useRef<HTMLButtonElement>(null);
+
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  useDismissable(historyOpen, {
+    onDismiss: closeHistory,
+    containerRef: historyWrapRef,
+    triggerRef: historyTriggerRef,
+  });
+  useDismissable(settingsOpen, {
+    onDismiss: closeSettings,
+    containerRef: settingsWrapRef,
+    triggerRef: settingsTriggerRef,
+  });
 
   // One tab per live session, oldest-first — a stable order Cmd+1..9 relies
   // on (App.tsx computes the same ordering for the keyboard shortcut) and
@@ -110,6 +130,7 @@ export function SessionBar({
         })}
 
         <button
+          ref={newSessionTriggerRef}
           className="session-tab-add"
           data-testid="new-session-btn"
           onClick={() => setModalOpen(true)}
@@ -120,8 +141,9 @@ export function SessionBar({
         </button>
       </div>
 
-      <div className="session-history-wrap">
+      <div className="session-history-wrap" ref={historyWrapRef}>
         <button
+          ref={historyTriggerRef}
           className="session-history-trigger"
           data-testid="history-trigger"
           onClick={toggleHistory}
@@ -182,8 +204,9 @@ export function SessionBar({
         )}
       </div>
 
-      <div className="settings-wrap">
+      <div className="settings-wrap" ref={settingsWrapRef}>
         <button
+          ref={settingsTriggerRef}
           className="gear-btn"
           aria-label="Settings"
           data-testid="settings-trigger"
@@ -209,6 +232,7 @@ export function SessionBar({
           listDir={listDir}
           onClose={() => setModalOpen(false)}
           onCreate={onCreateSession}
+          triggerRef={newSessionTriggerRef}
         />
       )}
     </div>
