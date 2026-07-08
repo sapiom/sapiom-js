@@ -126,17 +126,20 @@ test.describe("workspace binding", () => {
     await page.screenshot({ path: "web/e2e/screenshots/workspace-tree.png", fullPage: true });
   });
 
-  test("selecting a workflow binds it to the active session and shows a chip", async ({ page }) => {
-    await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
-
-    await page.getByTestId("workflow-leasing").click();
+  test("the boot session's default binding shows a chip on load", async ({ page }) => {
+    // Fixture: sess-boot is pre-bound to leasing, so the chip renders without
+    // any interaction — useful for anyone eyeballing mock mode, not just tests.
     const chip = page.getByTestId("session-workflow-chip");
     await expect(chip).toBeVisible();
     await expect(chip).toContainText("working on leasing");
   });
 
+  test("selecting a different workflow re-binds it and updates the chip", async ({ page }) => {
+    await page.getByTestId("workflow-rfq").click();
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
+  });
+
   test("the binding is per-session: switching sessions shows that session's own binding", async ({ page }) => {
-    await page.getByTestId("workflow-leasing").click();
     await expect(page.getByTestId("session-workflow-chip")).toContainText("leasing");
 
     // Switch to a session that's never had anything bound.
