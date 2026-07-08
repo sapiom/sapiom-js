@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/api/schema/stryker-core.json",
+  "_comment": "Mutation testing for the high-value delivery logic only: envelope builder, consent resolver, batch queue, data truncation, and http-sender retry classification. Types, the index barrel, the testing/ mock collector, and fixtures are deliberately not mutated — silent bugs there don't cause silent data loss.",
+  "testRunner": "jest",
+  "plugins": ["@stryker-mutator/jest-runner"],
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/envelope.ts",
+    "src/consent.ts",
+    "src/batch-queue.ts",
+    "src/data.ts",
+    "src/http-sender.ts"
+  ],
+  "jest": {
+    "configFile": "jest.config.js"
+  },
+  "thresholds": {
+    "high": 85,
+    "low": 70,
+    "break": 60
+  },
+  "reporters": ["html", "clear-text", "progress"],
+  "htmlReporter": {
+    "fileName": "reports/mutation/mutation.html"
+  },
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": true
+}

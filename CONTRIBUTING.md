@@ -13,17 +13,20 @@ Thank you for your interest in contributing to the Sapiom SDK! We welcome contri
 
 1. Fork the repository
 2. Clone your fork:
+
    ```bash
    git clone https://github.com/YOUR_USERNAME/sdk.git
    cd sdk
    ```
 
 3. Install dependencies:
+
    ```bash
    pnpm install
    ```
 
 4. Build all packages:
+
    ```bash
    pnpm build
    ```
@@ -38,6 +41,7 @@ Thank you for your interest in contributing to the Sapiom SDK! We welcome contri
 ### Project Structure
 
 This is a monorepo containing multiple packages:
+
 - `@sapiom/core` - Core SDK functionality
 - `@sapiom/axios` - Axios integration
 - `@sapiom/fetch` - Fetch API integration
@@ -66,6 +70,7 @@ pnpm format
 ### Making Changes
 
 1. Create a new branch for your changes:
+
    ```bash
    git checkout -b feature/your-feature-name
    ```
@@ -111,6 +116,7 @@ pnpm format
 ### Commit Messages
 
 We follow conventional commits:
+
 - `feat:` - New features
 - `fix:` - Bug fixes
 - `docs:` - Documentation changes
@@ -119,6 +125,7 @@ We follow conventional commits:
 - `chore:` - Maintenance tasks
 
 Example:
+
 ```
 feat(core): add transaction polling support
 
@@ -144,6 +151,7 @@ feat(core): add transaction polling support
 ### PR Requirements
 
 Before submitting:
+
 - [ ] Tests pass (`pnpm test`)
 - [ ] Build succeeds (`pnpm build`)
 - [ ] Types check (`pnpm typecheck`)
@@ -168,6 +176,20 @@ pnpm --filter @sapiom/core test
 pnpm --filter @sapiom/core test:watch
 ```
 
+### Mutation Testing
+
+`@sapiom/analytics-core` uses [StrykerJS](https://stryker-mutator.io/) to check that its tests actually catch bugs, not just execute lines. Stryker plants small bugs ("mutants") in the source — flipped comparisons, removed statements, changed constants — and re-runs the tests against each one. A mutant that no test fails on ("survived") is a gap where a real bug would slip through silently.
+
+It is scoped to the delivery-critical logic (envelope builder, consent resolver, batch queue, data truncation, HTTP sender) — see `packages/analytics-core/stryker.conf.json`.
+
+**When to run it:** it is not part of per-PR CI (it's slow). A nightly [Mutation Testing workflow](.github/workflows/mutation.yml) runs it on a schedule and uploads the HTML report as an artifact. Run it locally when you change any of the mutated modules or their tests:
+
+```bash
+pnpm --filter @sapiom/analytics-core test:mutation
+```
+
+**How to read the report:** the run prints a score table per file and writes an interactive HTML report to `packages/analytics-core/reports/mutation/mutation.html`. Open it in a browser, click into a file, and look at the surviving (❌) mutants — each one shows the exact code change no test noticed. Fix survivors by strengthening tests (assert on the behavior the mutant broke); don't chase 100%, some mutants are equivalent to the original code and unkillable. Thresholds live in `stryker.conf.json`: the run fails below 60 (break), 70+ is expected, 85+ is good.
+
 ## Building
 
 ```bash
@@ -191,6 +213,7 @@ pnpm clean
 ## Reporting Issues
 
 When reporting issues, please include:
+
 - SDK version
 - Node.js version
 - Operating system
