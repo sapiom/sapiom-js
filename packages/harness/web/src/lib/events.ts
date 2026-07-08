@@ -6,12 +6,18 @@
 import type { BusMessage } from "@shared/types";
 
 import { getBootToken, isMockMode } from "./api";
+import { MOCK_ACTIVITY_SESSION_ID } from "./mock-data";
 
 export type BusListener = (message: BusMessage) => void;
 
 const RECONNECT_DELAY_MS = 2000;
+/** Delay before the one-shot simulated `session.activity` fixture fires —
+ *  see `subscribeEvents`'s mock branch. Long enough that the tab strip has
+ *  already rendered idle before the pulse appears. */
+const MOCK_ACTIVITY_DELAY_MS = 1200;
 
 const mockListeners = new Set<BusListener>();
+let mockActivitySimulated = false;
 
 /**
  * Test-only escape hatch, mock mode only: lets Playwright simulate a bus
@@ -33,6 +39,23 @@ if (isMockMode() && typeof window !== "undefined") {
 export function subscribeEvents(onMessage: BusListener): () => void {
   if (isMockMode()) {
     mockListeners.add(onMessage);
+    if (!mockActivitySimulated) {
+      mockActivitySimulated = true;
+      // Fixture nicety, not test infrastructure: shows the tab strip's busy
+      // pulse without a real pty, once, shortly after load. Playwright drives
+      // its own deterministic activity via `__HARNESS_TEST__.publish` (same
+      // pattern as canvas.reload/port.detected in the harness's own specs)
+      // rather than depending on this timer's exact fire time.
+      setTimeout(() => {
+        mockListeners.forEach((listener) =>
+          listener({
+            type: "session.activity",
+            harnessSessionId: MOCK_ACTIVITY_SESSION_ID,
+            at: new Date().toISOString(),
+          }),
+        );
+      }, MOCK_ACTIVITY_DELAY_MS);
+    }
     return () => mockListeners.delete(onMessage);
   }
 

@@ -2,7 +2,7 @@
  * Harness SPA shell (workstream W2).
  *
  * Layout: workflows rail (left) | docked action strip (anchored to the
- * selected workflow's row) | session dropdown + terminal (center) |
+ * selected workflow's row) | session tab strip + terminal (center) |
  * canvas/preview pane (right). The strip carries the selected workflow's
  * full action set; the canvas gets a slim identity header for whichever
  * workflow is bound to the active session.
@@ -36,17 +36,32 @@ export const App = (): JSX.Element => {
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // preventDefault so it doesn't fall through to the browser's print/search dialogs.
+  // Cmd/Ctrl+1..9 switches directly to that tab — same ordering SessionBar
+  // renders its tabs in (oldest live session first), so "3" always means the
+  // third tab from the left, not an arbitrary session.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       const key = e.key.toLowerCase();
       if ((e.metaKey || e.ctrlKey) && (key === "k" || key === "p")) {
         e.preventDefault();
         setPaletteOpen(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+        const tabs = harness.state?.sessions
+          .filter((session) => session.status !== "exited")
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        const target = tabs?.[Number(e.key) - 1];
+        if (target) {
+          e.preventDefault();
+          harness.setActiveSessionId(target.id);
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [harness.state?.sessions]);
 
   if (harness.loading) {
     return <div className="app-status">Loading Sapiom Harness…</div>;
@@ -156,7 +171,7 @@ export const App = (): JSX.Element => {
             onResumeHistory={(summary) => void harness.resumeFromHistory(summary)}
             history={harness.history}
             historyLoading={harness.historyLoading}
-            onOpenDropdown={(cwd) => void harness.loadHistory(cwd)}
+            onOpenHistory={(cwd) => void harness.loadHistory(cwd)}
             recentDirs={harness.settings?.recentDirs ?? []}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
@@ -168,6 +183,7 @@ export const App = (): JSX.Element => {
             onToggleTelemetry={async (next) => {
               await harness.updateSettings({ telemetryOptIn: next });
             }}
+            busySessionIds={harness.busySessionIds}
           />
           <div className="terminal-slot">
             {activeSession?.status === "exited" ? (

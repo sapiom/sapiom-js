@@ -2,9 +2,11 @@
  * Mock-mode UI smoke test — runs against `vite dev` with VITE_MOCK=1 (see
  * playwright.config.ts), no harness server required. Fixtures live in
  * ../src/lib/mock-data.ts: 3 workflows (one deployed), a running "boot"
- * session (the server auto-creates one at launch) plus 2 exited sessions
- * kept around as resumable history, 5 macros, and a small fake filesystem
- * for the new-session directory picker.
+ * session (the server auto-creates one at launch), a second running
+ * background session ("scratch", not the active tab on load — demonstrates
+ * the tab strip and busy pulse), and 2 exited sessions kept around as
+ * resumable history, 5 macros, and a small fake filesystem for the
+ * new-session directory picker.
  */
 import { expect, test } from "@playwright/test";
 
@@ -83,8 +85,59 @@ test("auto-selects the running boot session on initial load", async ({ page }) =
   // The server auto-creates a session in launchDir at boot — the app should
   // never open to an empty terminal pane.
   await expect(page.locator(".terminal-empty")).toHaveCount(0);
-  await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("No session");
-  await expect(page.locator(".session-dot[data-status='running']")).toBeVisible();
+  const bootTab = page.getByTestId("session-tab-sess-boot");
+  await expect(bootTab).toHaveClass(/is-active/);
+  await expect(bootTab.locator(".session-dot")).toHaveAttribute("data-status", "running");
+});
+
+test("session tabs: one per non-exited session, switching is instant, and the '+' opens the new-session modal", async ({
+  page,
+}) => {
+  const tabs = page.getByTestId("session-tabs").getByRole("tab");
+  // Fixture has 2 non-exited sessions ("boot" and "scratch") — the 2 exited
+  // ones live in the history menu, not the strip.
+  await expect(tabs).toHaveCount(2);
+
+  const bootTab = page.getByTestId("session-tab-sess-boot");
+  const bgTab = page.getByTestId("session-tab-sess-bg");
+  await expect(bootTab).toHaveClass(/is-active/);
+  await expect(bgTab).not.toHaveClass(/is-active/);
+
+  await bgTab.click();
+  await expect(bgTab).toHaveClass(/is-active/);
+  await expect(bootTab).not.toHaveClass(/is-active/);
+
+  await page.screenshot({ path: "web/e2e/screenshots/session-tabs-idle.png" });
+
+  await page.getByTestId("new-session-btn").click();
+  await expect(page.getByText("New session")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+});
+
+test("session tabs: Cmd/Ctrl+1..9 switches directly to that tab", async ({ page }) => {
+  const bootTab = page.getByTestId("session-tab-sess-boot");
+  const bgTab = page.getByTestId("session-tab-sess-bg");
+  await expect(bootTab).toHaveClass(/is-active/);
+
+  // Tabs are ordered oldest-first: boot is 1, the background "scratch"
+  // session is 2 — Cmd+2 jumps straight to it, no dropdown/click needed.
+  await page.keyboard.press("Meta+2");
+  await expect(bgTab).toHaveClass(/is-active/);
+  await expect(bootTab).not.toHaveClass(/is-active/);
+
+  await page.keyboard.press("Meta+1");
+  await expect(bootTab).toHaveClass(/is-active/);
+});
+
+test("session tabs: a busy tab shows a pulse that clears once output goes quiet", async ({ page }) => {
+  // mock-data's MOCK_ACTIVITY_SESSION_ID ("sess-bg") gets one simulated
+  // session.activity ping shortly after load — see lib/events.ts.
+  const busyDot = page.getByTestId("session-tab-busy-sess-bg");
+  await expect(busyDot).toBeVisible({ timeout: 5_000 });
+  await page.screenshot({ path: "web/e2e/screenshots/session-tabs-busy.png" });
+
+  // The busy window (3s) clears once no further activity arrives.
+  await expect(busyDot).toHaveCount(0, { timeout: 6_000 });
 });
 
 test("workflows rail lists the fixtures and selecting one drives macro gating", async ({ page }) => {
@@ -147,7 +200,7 @@ test.describe("workspace binding", () => {
     await expect(page.getByTestId("session-workflow-chip")).toContainText("leasing");
 
     // Switch to a session that's never had anything bound.
-    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("history-trigger").click();
     await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
     await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
   });
@@ -190,17 +243,19 @@ test("new-session modal: directory picker navigates and validates", async ({ pag
   await expect(page.getByText("New session")).toBeHidden();
 });
 
-test("resuming a history entry switches the active session", async ({ page }) => {
-  await page.getByTestId("session-dropdown-trigger").click();
+test("resuming a history entry switches the active session, and it rejoins the tab strip", async ({ page }) => {
+  await page.getByTestId("history-trigger").click();
   await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
-  await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+  const tab = page.getByTestId("session-tab-sess-leasing");
+  await expect(tab).toHaveClass(/is-active/);
+  await expect(tab).toContainText("Build the leasing pipeline");
 });
 
 test.describe("dead sessions never trap the user", () => {
-  test("an exited session is reachable from the dropdown and shows a dead-session pane, not a stuck terminal", async ({
+  test("an exited session is reachable from the history menu and shows a dead-session pane, not a stuck terminal", async ({
     page,
   }) => {
-    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("history-trigger").click();
     await page.getByTestId("exited-session-sess-leasing").click();
 
     const pane = page.getByTestId("dead-session-pane");
@@ -212,25 +267,28 @@ test.describe("dead sessions never trap the user", () => {
     await page.screenshot({ path: "web/e2e/screenshots/dead-session-pane.png", fullPage: true });
   });
 
-  test("Resume on a dead session starts it running again", async ({ page }) => {
-    await page.getByTestId("session-dropdown-trigger").click();
+  test("Resume on a dead session starts it running again and it becomes a tab", async ({ page }) => {
+    await page.getByTestId("history-trigger").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-resume").click();
 
     await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+    const tab = page.getByTestId("session-tab-sess-leasing");
+    await expect(tab).toBeVisible();
+    await expect(tab).toContainText("Build the leasing pipeline");
   });
 
   test("Close on a dead session removes it and falls back to another running session", async ({ page }) => {
     // The boot session is running, so falling back to it is always possible here.
-    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("history-trigger").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-close").click();
 
     await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
-    await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("No session");
+    await expect(page.locator(".terminal-empty")).toHaveCount(0);
+    await expect(page.getByTestId("session-tab-sess-boot")).toHaveClass(/is-active/);
 
-    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("history-trigger").click();
     await expect(page.getByTestId("exited-session-sess-leasing")).toHaveCount(0);
   });
 });
@@ -263,19 +321,20 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
     await page.getByTestId("palette-trigger").click();
     await page.getByTestId("command-palette-input").fill("onboarding-flow");
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("onboarding-flow");
+    await expect(page.locator(".session-tab.is-active")).toContainText("onboarding-flow");
   });
 
   test("Enter on a session hit switches to it instead of starting a new one", async ({ page }) => {
     // Resume a different session first so switching back is observable.
-    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("history-trigger").click();
     await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+    const leasingTab = page.getByTestId("session-tab-sess-leasing");
+    await expect(leasingTab).toHaveClass(/is-active/);
 
     await page.getByTestId("palette-trigger").click();
     await page.getByTestId("command-palette-input").fill("acme-app");
     await page.getByTestId("command-palette-item-0").click();
-    await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("Build the leasing pipeline");
+    await expect(leasingTab).not.toHaveClass(/is-active/);
   });
 
   test("a path-shaped query uses live GET /api/fs/list completion instead of fuzzy matching", async ({ page }) => {
@@ -287,7 +346,7 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
     await expect(dirItem).toContainText("acme-app");
 
     await dirItem.click();
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("acme-app");
+    await expect(page.locator(".session-tab.is-active")).toContainText("acme-app");
   });
 });
 

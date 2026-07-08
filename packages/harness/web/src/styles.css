@@ -730,44 +730,186 @@ input {
   position: relative;
 }
 
-.session-dropdown-wrap {
-  position: relative;
+.session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: 1;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
-.session-dropdown-trigger {
+/* Matches Button variant="outline": persistent border + shadow-xs, with the
+   same light/dark hover asymmetry as .gear-btn/.btn-ghost — but a *border*
+   highlight rather than a solid accent fill on hover, since tabs sit
+   adjacent to each other permanently; a solid fill on hover would collide
+   with (and read as) the .is-active selection state right next to it. */
+.session-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  padding: 5px 8px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 5px 10px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xs);
-  color: var(--text);
-  transition: border-color var(--transition-fast);
+  color: var(--text-dim);
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.session-dropdown-trigger:hover {
+.session-tab:hover {
   border-color: var(--accent);
+  color: var(--text);
 }
 
-.session-dropdown-trigger:focus-visible {
+.session-tab:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
-.session-title {
-  flex: 1;
+/* Same accent-dim "selected" fill as .workflow-item.is-selected /
+   .harness-option.is-selected / .command-palette-item.is-selected — one
+   consistent visual language for "this is the current one" everywhere. */
+.session-tab.is-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.session-tab-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
   font-size: 12px;
+}
+
+/* Subtle pulse — a session with output in roughly the last 3s, whether or
+   not it's the tab you're currently looking at. */
+.session-tab-busy {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--accent);
+  animation: session-tab-busy-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes session-tab-busy-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+/* Matches Button variant="outline" size="icon" (see .gear-btn) — dashed
+   rather than solid to read as an "add" affordance, consistent with
+   .connect-trigger elsewhere in the rail. */
+.session-tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  color: var(--text-dim);
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+[data-theme="light"] .session-tab-add:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  border-style: solid;
+  color: var(--accent-foreground);
+}
+
+[data-theme="dark"] .session-tab-add:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.session-tab-add:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.session-history-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* Matches Button variant="outline" size="icon" (see .gear-btn). */
+.session-history-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 30px;
+  height: 30px;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  color: var(--text-dim);
+  position: relative;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+[data-theme="light"] .session-history-trigger:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+[data-theme="dark"] .session-history-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-history-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.session-history-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
 }
 
 /* Badge recipe (variant="active"): tinted fill + matching border + accent
@@ -811,8 +953,8 @@ input {
 .session-dropdown-menu {
   position: absolute;
   top: calc(100% + 4px);
-  left: 0;
   right: 0;
+  width: 320px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
@@ -879,33 +1021,6 @@ input {
 .session-dropdown-item:hover .session-item-meta,
 .session-dropdown-item.is-selected .session-item-meta {
   color: var(--accent-foreground);
-}
-
-/* Matches Button variant="accent" — a solid, always-teal primary action
-   (distinct from the outline treatment on Cancel/Close), since "+ new" is
-   this bar's one high-emphasis action. */
-.new-session-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
-  background: var(--accent);
-  color: var(--accent-foreground);
-  font-weight: 500;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  white-space: nowrap;
-  transition: background-color var(--transition-fast);
-}
-
-.new-session-btn:hover {
-  background: var(--accent-hover);
-}
-
-.new-session-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .settings-wrap {

@@ -5,6 +5,7 @@ import {
   ExternalLink,
   Folder,
   HelpCircle,
+  History,
   type LucideIcon,
   Moon,
   Play,
@@ -15,6 +16,7 @@ import {
   Settings,
   Sparkles,
   Sun,
+  X,
   Zap,
 } from "lucide-react";
 import type { JSX } from "react";
@@ -30,6 +32,7 @@ const ICONS: Record<string, LucideIcon> = {
   CornerLeftUp,
   ExternalLink,
   Folder,
+  History,
   Moon,
   Play,
   Plus,
@@ -39,6 +42,7 @@ const ICONS: Record<string, LucideIcon> = {
   Settings,
   Sparkles,
   Sun,
+  X,
   Zap,
 };
 
