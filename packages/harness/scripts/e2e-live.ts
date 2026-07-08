@@ -390,14 +390,55 @@ async function main(): Promise<void> {
 
     console.log("\nPASS — live integration proof succeeded\n");
   } finally {
+    // Runs on both success and failure — a failed assertion mid-run must not
+    // strand the fake-claude pty (or the mock collector) any more than a
+    // clean pass does. server.close() kills every live session's pty
+    // (SessionManager.killAll()).
     ws?.close();
     await server.close();
-    mockCollector.kill();
-    await fs.rm(tmpRoot, { recursive: true, force: true });
+    await killChildAndWait(mockCollector);
+
+    // A just-killed child process can still be releasing its open file
+    // handles under tmpRoot for a moment after we've resolved past killing
+    // it — rm's own maxRetries (ENOTEMPTY-safe, linear backoff) covers that
+    // race properly instead of a fixed sleep.
+    await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+/** Sends SIGTERM, escalates to SIGKILL if it's still alive shortly after,
+ *  and waits for the process to actually exit (or a hard timeout) before
+ *  returning — so callers can safely assume its file handles are released. */
+function killChildAndWait(child: ReturnType<typeof spawn>, timeoutMs = 3000): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(escalation);
+      clearTimeout(hardStop);
+      resolve();
+    };
+    child.once("exit", done);
+
+    child.kill();
+    const escalation = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }, 1000);
+    const hardStop = setTimeout(done, timeoutMs);
+  });
+}
+
+// Explicit exit as a backstop: teardown above should already release every
+// handle (server, sessions, WS client, mock-collector), but a CI runner
+// hanging on a stray one is a much worse failure mode than an explicit exit
+// here masking it — `process.exitCode` alone only takes effect once the
+// event loop drains on its own, which is exactly the thing we can't fully
+// guarantee.
+main()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
