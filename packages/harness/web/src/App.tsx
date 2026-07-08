@@ -16,6 +16,7 @@ import { DeadSessionPane } from "./components/DeadSessionPane";
 import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
+import { boundWorkflowPathOf } from "./lib/api";
 import { useHarnessState } from "./lib/use-harness-state";
 
 export const App = (): JSX.Element => {
@@ -46,9 +47,18 @@ export const App = (): JSX.Element => {
   const { state } = harness;
   const selectedWorkflow = state.workflows.find((w) => w.path === harness.selectedWorkflowPath) ?? null;
   const activeSession = state.sessions.find((session) => session.id === harness.activeSessionId) ?? null;
+  const boundWorkflowPath = boundWorkflowPathOf(activeSession);
+  const boundWorkflowName = state.workflows.find((w) => w.path === boundWorkflowPath)?.name ?? null;
 
   const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
     await harness.createSession({ cwd, harness: agentHarness });
+  };
+
+  const handleSelectWorkflow = (path: string): void => {
+    harness.setSelectedWorkflowPath(path);
+    // Selecting a workflow IS "what I'm working on" — bind it to whichever
+    // session is currently active so the chip and the agent's context stay in sync.
+    if (harness.activeSessionId) void harness.bindWorkflow(harness.activeSessionId, path);
   };
 
   const disabledReasonFor = (macro: MacroDef): string | null => {
@@ -91,8 +101,10 @@ export const App = (): JSX.Element => {
       <div className="app">
         <WorkflowsRail
           workflows={state.workflows}
+          sessions={state.sessions}
+          activeSessionId={harness.activeSessionId}
           selectedPath={harness.selectedWorkflowPath}
-          onSelect={harness.setSelectedWorkflowPath}
+          onSelect={handleSelectWorkflow}
           onConnect={async (path) => {
             await harness.connectWorkflow(path);
           }}
@@ -111,6 +123,7 @@ export const App = (): JSX.Element => {
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
             onCreateSession={handleCreateSession}
+            boundWorkflowName={boundWorkflowName}
             authenticated={state.authenticated}
             organizationName={state.organizationName}
             telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}

@@ -6,6 +6,7 @@
  */
 import type {
   AppState,
+  BindWorkflowRequest,
   CreateSessionRequest,
   FsDirEntry,
   FsListResponse,
@@ -24,6 +25,11 @@ export type { FsDirEntry, FsListResponse };
 
 export function isMockMode(): boolean {
   return import.meta.env.VITE_MOCK === "1";
+}
+
+/** `session.boundWorkflowPath` is nullable already, but keeps callers safe against a missing session. */
+export function boundWorkflowPathOf(session: HarnessSession | null | undefined): string | null {
+  return session?.boundWorkflowPath ?? null;
 }
 
 /** Read once at module load: `window.__HARNESS__ = {token}` (baked in by the server), falling back to `?token=`. */
@@ -49,6 +55,7 @@ export interface HarnessApi {
   getSettings(): Promise<HarnessSettings>;
   updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings>;
   listDir(path?: string): Promise<FsListResponse>;
+  bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession>;
 }
 
 class RealApi implements HarnessApi {
@@ -134,6 +141,14 @@ class RealApi implements HarnessApi {
   listDir(path?: string): Promise<FsListResponse> {
     const query = path ? `?path=${encodeURIComponent(path)}` : "";
     return this.request<FsListResponse>(`/api/fs/list${query}`);
+  }
+
+  bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession> {
+    const body: BindWorkflowRequest = { workflowPath };
+    return this.request<HarnessSession>(`/api/sessions/${encodeURIComponent(sessionId)}/workflow`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
   }
 }
 
@@ -271,6 +286,15 @@ class MockApi implements HarnessApi {
       parent,
       dirs: names.map((name) => ({ name, path: normalized === "/" ? `/${name}` : `${normalized}/${name}` })),
     };
+  }
+
+  async bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession> {
+    await delay(150);
+    const existing = this.sessions.find((session) => session.id === sessionId);
+    if (!existing) throw new Error(`mock: no session to bind for ${sessionId}`);
+    const bound: HarnessSession = { ...existing, boundWorkflowPath: workflowPath };
+    this.sessions = this.sessions.map((session) => (session.id === sessionId ? bound : session));
+    return bound;
   }
 }
 
