@@ -382,8 +382,8 @@ Write each step the way it should run in production — never weaken logic to sh
   `ctx.shared` in the entry step — don't thread it through every `goto` payload.
 - **One-off capability call, no automation to keep?** That's not an agent — use Sapiom's
   [remote MCP](https://docs.sapiom.ai/integration/mcp-servers/remote) (`https://api.sapiom.ai/v1/mcp`,
-  direct `sapiom_*` tools, `tool_discover` to find the right one) or the SDK
-  ([`@sapiom/fetch`](https://www.npmjs.com/package/@sapiom/fetch)) instead of scaffolding.
+  direct `sapiom_*` tools, `tool_discover` to find the right one) or the typed SDK client
+  ([`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools)) instead of scaffolding.
 
 ## Troubleshooting
 
