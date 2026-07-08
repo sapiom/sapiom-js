@@ -397,7 +397,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+// Explicit exit: the harness session's pty child (fake-claude) deliberately
+// stays alive and is not torn down by server.close(), so without this the
+// script hangs forever after PASS — which stalls any runner that awaits it.
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
