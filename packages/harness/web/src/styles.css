@@ -85,7 +85,6 @@ input {
   flex-direction: column;
   background: var(--bg-1);
   min-width: 0;
-  overflow: hidden;
 }
 
 .rail-workflows {
@@ -213,6 +212,7 @@ input {
 }
 
 .action-icon-btn {
+  position: relative;
   width: 32px;
   height: 32px;
   display: flex;
@@ -234,6 +234,33 @@ input {
   color: var(--text-faint);
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* Custom tooltip (not the native `title` bubble) — shows the macro label, or the
+   disabled reason when it has one, to the left of the rail. */
+.action-icon-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+}
+
+.action-icon-btn:hover::after,
+.action-icon-btn:focus-visible::after {
+  opacity: 1;
 }
 
 /* Session bar ------------------------------------------------------------ */
