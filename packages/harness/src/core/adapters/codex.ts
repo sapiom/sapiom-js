@@ -43,6 +43,44 @@ const execFileAsync = promisify(execFile);
 const ROLLOUT_HEAD_BYTES = 65_536;
 const MAX_SCAN_DEPTH = 4; // ~/.codex/sessions/YYYY/MM/DD/*.jsonl
 
+/**
+ * Matches Codex's directory-trust confirmation prompt ("Do you trust the
+ * contents of this directory? ... 1. Yes, continue  2. No, quit"), after
+ * `stripAnsi` — confirmed against a real capture: Codex's TUI positions
+ * each *word* with its own cursor-addressing escape sequence instead of
+ * emitting literal spaces between them (`trust\x1b[3;16Hthe\x1b[3;20H...`),
+ * so even a stripped buffer runs the words together with no separator at
+ * all; `\s*` between them tolerates that (and ordinary whitespace, in case
+ * a future TUI revision renders differently). See `detectBlockingPrompt`
+ * for why this exists at all (Codex's own structured readiness signal can't
+ * be relied on standalone, unlike Claude Code's).
+ */
+const TRUST_PROMPT_PATTERN = /trust\s*the\s*contents\s*of\s*this\s*directory/i;
+
+/** Strips ANSI/CSI/OSC control sequences a pty stream is otherwise full of,
+ *  so text pattern-matching (e.g. `TRUST_PROMPT_PATTERN`) sees the words a
+ *  human would actually read rather than raw terminal-control bytes. Not
+ *  exhaustive of every escape sequence a TUI could emit, but covers what
+ *  Codex's TUI is confirmed (via real captures) to use: CSI (cursor moves,
+ *  SGR color/style) and OSC (window title) sequences. */
+export function stripAnsi(text: string): string {
+  /* eslint-disable no-control-regex -- matching literal ESC (\x1b) / BEL
+   * (\x07) bytes is the entire point of an ANSI-sequence stripper; there's
+   * no non-control-character way to express "a real escape sequence". */
+  return text
+    // Lazy (`*?`), not greedy: a greedy `[^\x07]*` doesn't exclude `\x1b\\`
+    // (ST) from what it can consume, so it backtracks from the END of the
+    // whole string looking for the last reachable terminator instead of the
+    // next one — silently swallowing everything (including real prompt
+    // text) between an OSC sequence and some unrelated, much-later BEL/ST.
+    // Confirmed against a real capture: this exact bug made the trust-
+    // prompt regex below never match a full multi-KB scrollback buffer.
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "") // OSC ... BEL or ST
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "") // CSI sequences
+    .replace(/\x1b[()>=][A-Za-z0-9]?/g, ""); // charset/keypad-mode selection
+  /* eslint-enable no-control-regex */
+}
+
 export interface CodexAdapterOptions {
   /** Overridable for tests. */
   binary?: string;
@@ -191,6 +229,22 @@ export class CodexAdapter implements HarnessAdapter {
       env: {},
       cwd: opts.cwd,
     };
+  }
+
+  /**
+   * See `HarnessAdapter.detectBlockingPrompt`. Codex needs this (Claude Code
+   * doesn't) because its rollout file — and therefore the SessionStart-
+   * equivalent event `SessionManager` otherwise waits on — isn't written
+   * until the *first* turn is actually submitted, confirmed empirically
+   * against a real `codex-cli 0.134.0`: an idle, fully-interactive session
+   * (trust prompt already accepted, composer visibly ready) produces zero
+   * files under `~/.codex/sessions` for as long as nothing is submitted.
+   * That real signal therefore can't arrive before the very first
+   * injection that needs it — a scrollback check is the only thing that
+   * can stand in for it up to that point.
+   */
+  detectBlockingPrompt(scrollback: string): boolean {
+    return TRUST_PROMPT_PATTERN.test(stripAnsi(scrollback));
   }
 
   async listPastSessions(cwd: string): Promise<SessionSummary[]> {

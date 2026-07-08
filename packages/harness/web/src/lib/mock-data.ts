@@ -26,6 +26,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     status: "running",
     createdAt: minutesAgo(1),
     lastActiveAt: minutesAgo(1),
+    ready: true,
   },
   {
     id: "sess-leasing",
@@ -38,6 +39,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     createdAt: minutesAgo(42),
     lastActiveAt: minutesAgo(20),
     exitCode: 0,
+    ready: false,
   },
   {
     id: "sess-rfq",
@@ -50,6 +52,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     createdAt: daysAgo(2),
     lastActiveAt: daysAgo(1),
     exitCode: 0,
+    ready: false,
   },
 ];
 
