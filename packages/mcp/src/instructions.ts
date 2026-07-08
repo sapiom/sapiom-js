@@ -27,8 +27,10 @@ deployable; use the remote MCP or the SDK for a single action.
 ## Lifecycle (in order)
 1. \`sapiom_authenticate\` — browser login; caches an API key (makes you an API-key principal,
    required for deploy/run). Confirm with \`sapiom_status\`.
-2. \`sapiom_dev_orchestrations_scaffold\` — writes a project. READ its \`AGENTS.md\` first; it is
-   the full authoring guide, shipped inside every scaffold. Then \`npm install\`.
+2. Start a project — either \`sapiom_dev_orchestrations_scaffold\` (a fresh starter) or
+   \`sapiom_dev_orchestrations_clone\` (materialize a gallery template / an existing fork — the
+   "use this template" handoff; forks + git-clones the repo and writes \`sapiom.json\`). READ the
+   project's \`AGENTS.md\` first; it is the full authoring guide. Then \`npm install\`.
 3. Test for free: \`npm run typecheck\` → \`sapiom_dev_orchestrations_check\` (validates the step
    graph, offline) → \`sapiom_dev_orchestrations_run_local\` (capabilities are stubbed; zero spend).
 4. Ship: \`sapiom_dev_orchestrations_link\` → \`_deploy\` → \`_run\` (real, billed) → \`_inspect\`.

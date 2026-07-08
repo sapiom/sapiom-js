@@ -30,7 +30,7 @@ export {
   writeConfig,
   CONFIG_FILE,
 } from "./config.js";
-export type { SapiomConfig } from "./config.js";
+export type { SapiomConfig, LinkedSapiomConfig } from "./config.js";
 
 // scaffold (local, no network)
 export {
@@ -57,6 +57,10 @@ export type { DeployBundle } from "./bundle.js";
 // link (networked)
 export { link } from "./link.js";
 export type { LinkOptions, LinkResult, DefinitionSummary } from "./link.js";
+
+// clone — fork + materialize a template locally (networked; template handoff, SAP-1357)
+export { clone } from "./clone.js";
+export type { CloneOptions, CloneResult } from "./clone.js";
 
 // deploy (networked)
 export { deploy } from "./deploy.js";
@@ -122,8 +126,9 @@ export type {
   ScheduleFireRecord,
 } from "./schedule.js";
 
-// git helpers (used by deploy; exported for consumers that need them directly)
-export { assertDeployable, pushHead } from "./git.js";
+// git helpers (used by deploy/clone; exported for consumers that need them directly)
+export { assertDeployable, pushHead, cloneRepo, redactCredentials } from "./git.js";
+export type { CloneRepoOptions } from "./git.js";
 
 // local stub file model (per-step capability overrides for run_local)
 export { parseStubFile, STUB_FILE_VERSION } from "./local/stubs.js";

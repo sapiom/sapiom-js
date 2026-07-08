@@ -16,6 +16,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   cancelSchedule,
   check,
+  clone,
   createClient,
   createSchedule,
   deploy,
@@ -332,6 +333,51 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           name: result.name,
         });
         return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.tool(
+    "sapiom_dev_orchestrations_clone",
+    [
+      "Materialize a Sapiom workflow template as a local project — the 'use this template' handoff. Given a template id (from the gallery) it forks the template into a repo you own; given an existing fork id it re-clones that fork. Either way it mints a short-lived, repo-scoped clone credential, git-clones the repo into <dir>, and writes sapiom.json recording the fork.",
+      "After cloning: read the project's AGENTS.md, then run sapiom_dev_orchestrations_link (associate/create the tenant definition) → _deploy (creates the engine definition) → _run → _inspect. The clone appears under 'my workflows' in the dashboard immediately; the build shows once you deploy.",
+      "Pass exactly one of templateId or forkId. The clone credential is single-repo, read-only, and ~1h-lived — it is used for the clone and discarded (never stored in sapiom.json).",
+    ].join("\n"),
+    {
+      dir: z
+        .string()
+        .min(1)
+        .describe(
+          "Target directory to clone into (created if absent; must be empty).",
+        ),
+      templateId: z
+        .string()
+        .optional()
+        .describe(
+          "Registry template id to fork then clone (e.g. 'web-research-digest'). Mutually exclusive with forkId.",
+        ),
+      forkId: z
+        .string()
+        .optional()
+        .describe(
+          "Existing fork id to clone (skips the fork step). Mutually exclusive with templateId.",
+        ),
+    },
+    async ({ dir, templateId, forkId }) => {
+      const client = await gatewayClient(env);
+      if (!client) return NOT_AUTHED;
+      try {
+        const result = await clone(
+          { templateId, forkId, targetDir: dir },
+          client,
+        );
+        return ok({
+          ...result,
+          hint: `Cloned into ${result.targetDir}. Next: read its AGENTS.md, then sapiom_dev_orchestrations_link → _deploy → _run → _inspect.`,
+        });
       } catch (err) {
         return fail(err);
       }

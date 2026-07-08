@@ -27,6 +27,7 @@ describe("server instructions", () => {
     // Lifecycle tools an agent must drive
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_authenticate");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_orchestrations_scaffold");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_orchestrations_clone");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_orchestrations_run_local");
     // Canonical naming (and the stale name it must steer away from)
     expect(AUTHORING_INSTRUCTIONS).toContain("@sapiom/orchestration");
