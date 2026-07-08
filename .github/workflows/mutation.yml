@@ -1,0 +1,41 @@
+name: Mutation Testing
+
+# Informational only. Mutation testing is slow, so it runs nightly (or on
+# demand) and is intentionally NOT wired into per-PR CI. A failing run means
+# the mutation score dropped below the configured break threshold — treat it
+# as a prompt to strengthen tests, not as a merge gate.
+on:
+  schedule:
+    # Nightly at 04:23 UTC (off the top of the hour to avoid peak load).
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  mutation-analytics-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # pnpm version comes from package.json `packageManager` (pnpm 10+)
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run mutation tests (@sapiom/analytics-core)
+        run: pnpm --filter @sapiom/analytics-core test:mutation
+
+      - name: Upload HTML mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytics-core-mutation-report
+          path: packages/analytics-core/reports/mutation/
+          retention-days: 30
