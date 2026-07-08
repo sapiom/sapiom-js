@@ -41,8 +41,10 @@ let defaultSpawnError: Error | undefined;
  * — nothing to do with the harness's own code, but fatal to every session
  * launch. Best-effort self-heal before the first real spawn; silently a
  * no-op if the file's missing (wrong platform/arch) or already executable.
+ * Exported so scripts/e2e-live.ts's preflight check shares this exact fix
+ * instead of duplicating it.
  */
-async function ensureSpawnHelperExecutable(): Promise<void> {
+export async function ensureSpawnHelperExecutable(): Promise<void> {
   if (process.platform === "win32") return;
   try {
     const nodePtyPkgJson = createRequire(import.meta.url).resolve("node-pty/package.json");

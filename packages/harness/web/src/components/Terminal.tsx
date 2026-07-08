@@ -27,6 +27,44 @@ const MAX_RECONNECT_DELAY_MS = 15_000;
 // both are permanent for this WS instance; retrying won't help.
 const PERMANENT_CLOSE_CODES = new Set([4001, 4004]);
 
+// Palette values below are copied (values only) from Sapiom's own dark-mode
+// design tokens, so the embedded terminal reads as part of the app rather
+// than a bare xterm.js default panel.
+const PANEL_BACKGROUND = "#0E0E0E";
+const TEXT_PRIMARY = "#FAFAFA";
+const TEXT_MUTED = "#A1A1AA";
+const BRAND_ACCENT = "#6BE195";
+const BORDER_SUBTLE = "#2E2E2E";
+const STATUS_SUCCESS = "#10B981";
+const STATUS_WAITING = "#F59E0B";
+const STATUS_ERROR = "#EF4444";
+const MONO_FONT_STACK =
+  '"SF Mono", Menlo, Monaco, Inconsolata, "Source Code Pro", Consolas, "Liberation Mono", "Ubuntu Mono", "Courier Prime", "JetBrains Mono", "Courier New", monospace';
+
+const XTERM_THEME = {
+  background: PANEL_BACKGROUND,
+  foreground: TEXT_PRIMARY,
+  cursor: BRAND_ACCENT,
+  cursorAccent: PANEL_BACKGROUND,
+  selectionBackground: "rgba(107, 225, 149, 0.25)",
+  black: "#1A1A1A",
+  red: "#f87171",
+  green: BRAND_ACCENT,
+  yellow: "#f59e0b",
+  blue: "#3b82f6",
+  magenta: "#a78bfa",
+  cyan: "#22d3ee",
+  white: TEXT_PRIMARY,
+  brightBlack: "#404040",
+  brightRed: "#ff9b96",
+  brightGreen: "#8bd4a6",
+  brightYellow: "#ffd966",
+  brightBlue: "#60a5fa",
+  brightMagenta: "#c4b5fd",
+  brightCyan: "#67e8f9",
+  brightWhite: "#ffffff",
+};
+
 export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -44,14 +82,8 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     const term = new XTerm({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: '"SF Mono", Menlo, Monaco, "Courier New", monospace',
-      theme: {
-        background: "#0a0a0f",
-        foreground: "#d4d4d8",
-        cursor: "#5b7ef8",
-        cursorAccent: "#0a0a0f",
-        selectionBackground: "rgba(91, 126, 248, 0.3)",
-      },
+      fontFamily: MONO_FONT_STACK,
+      theme: XTERM_THEME,
       scrollback: 10_000,
       allowProposedApi: true,
     });
@@ -148,23 +180,54 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     };
   }, [sessionId, token]);
 
+  const statusColor =
+    status === "connected" ? STATUS_SUCCESS : status === "error" ? STATUS_ERROR : STATUS_WAITING;
   const statusLabel =
     status === "connected" ? "Connected" : status === "error" ? (errorMessage ?? "Error") : "Connecting…";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
+    // Stable hook for the surrounding app shell to lay out/border this panel —
+    // internal theming (colors, font, padding, status pill) lives here.
+    <div
+      className="harness-terminal"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        width: "100%",
+        background: PANEL_BACKGROUND,
+        borderRadius: 8,
+        border: `1px solid ${BORDER_SUBTLE}`,
+        overflow: "hidden",
+      }}
+    >
       <div
         data-status={status}
         style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flexShrink: 0,
+          padding: "6px 10px",
+          borderBottom: `1px solid ${BORDER_SUBTLE}`,
+          fontFamily: MONO_FONT_STACK,
           fontSize: 11,
-          fontFamily: "monospace",
-          padding: "2px 8px",
-          color: status === "error" ? "#ef4444" : status === "connected" ? "#22c55e" : "#f59e0b",
         }}
       >
-        {statusLabel}
+        <span
+          aria-hidden="true"
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            background: statusColor,
+            boxShadow: status === "connecting" ? `0 0 0 3px ${statusColor}33` : "none",
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ color: TEXT_MUTED }}>{statusLabel}</span>
       </div>
-      <div ref={containerRef} style={{ flex: 1, minHeight: 0, background: "#0a0a0f", padding: 4 }} />
+      <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: 8 }} />
     </div>
   );
 };

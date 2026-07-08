@@ -164,6 +164,7 @@ class MockApi implements HarnessApi {
     await delay();
     return {
       version: "0.0.1-mock",
+      launchDir: "/Users/demo/acme-app",
       authenticated: true,
       userId: "user_mock",
       organizationName: "Acme (mock)",

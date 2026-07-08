@@ -5,7 +5,8 @@
  * Flow: doctor → auth (reuse @sapiom/mcp browser OAuth) → consent (first run)
  * → generate boot token → startServer → open browser → print a startup banner.
  *
- * Flags: [dir] (default cwd), --port, --no-auth, --no-telemetry, --no-open, --dev.
+ * Flags: [dir] (default cwd), --port, --no-auth, --no-telemetry, --no-open,
+ * --no-session, --dev.
  */
 import * as path from "node:path";
 import * as crypto from "node:crypto";
@@ -24,6 +25,7 @@ interface CliOptions {
   noAuth: boolean;
   noTelemetry: boolean;
   noOpen: boolean;
+  noSession: boolean;
   dev: boolean;
 }
 
@@ -33,6 +35,7 @@ function parseArgs(argv: string[]): CliOptions {
   let noAuth = false;
   let noTelemetry = false;
   let noOpen = false;
+  let noSession = false;
   let dev = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -55,6 +58,9 @@ function parseArgs(argv: string[]): CliOptions {
       case "--no-open":
         noOpen = true;
         break;
+      case "--no-session":
+        noSession = true;
+        break;
       case "--dev":
         dev = true;
         break;
@@ -75,6 +81,7 @@ function parseArgs(argv: string[]): CliOptions {
     noAuth,
     noTelemetry,
     noOpen,
+    noSession,
     dev,
   };
 }
@@ -137,6 +144,7 @@ const main = async (): Promise<void> => {
       identity,
       machineId,
       launchDir: options.dir,
+      autoCreateSession: !options.noSession,
     });
   } catch (err) {
     if (!options.dev) throw err;

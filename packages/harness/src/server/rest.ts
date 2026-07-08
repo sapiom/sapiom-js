@@ -52,6 +52,9 @@ export interface RestRouterOptions {
    * the integrator scan that directory for workflows so opening a session in
    * a new project discovers them without a manual "+ Connect". */
   onSessionCreated?: (cwd: string) => void;
+  /** The directory the CLI was launched against — surfaced in AppState so the
+   * SPA can prefill the new-session modal with it. */
+  launchDir: string;
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
@@ -71,6 +74,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
         sessions: sessionManager.list(),
         workflows: await listWorkflows(),
         macros: listMacros(),
+        launchDir: options.launchDir,
       };
       res.json(state);
     } catch (err) {
