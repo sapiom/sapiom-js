@@ -17,10 +17,24 @@
       "types": "./dist/cjs/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/cjs/index.js"
+    },
+    "./testing": {
+      "types": "./dist/cjs/testing/index.d.ts",
+      "import": "./dist/esm/testing/index.js",
+      "require": "./dist/cjs/testing/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "testing": [
+        "./dist/cjs/testing/index.d.ts"
+      ]
     }
   },
   "files": [
     "dist",
+    "fixtures",
+    "CONTRACT.md",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

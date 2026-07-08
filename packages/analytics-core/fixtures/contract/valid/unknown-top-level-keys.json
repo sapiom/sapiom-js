@@ -1,0 +1,31 @@
+{
+  "name": "unknown-top-level-keys",
+  "rule": "Unknown top-level keys on an event → folded into data, never rejected",
+  "description": "Extra keys the envelope does not define are moved under data on ingest. This includes client-claimed org_id / api_key_id, which are never trusted from the body — organization identity comes only from a valid x-sapiom-api-key header.",
+  "request": {
+    "body": {
+      "events": [
+        {
+          "event_id": "6f7a8b9c-0d1e-4f2a-9b3c-5d6e7f8a9b0c",
+          "anonymous_id": "b7e2a3f1-4c5d-4a6b-8e9f-0a1b2c3d4e5f",
+          "session_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+          "event_timestamp": "2026-01-15T10:30:00.000Z",
+          "source": "cli",
+          "event_type": "cli_command",
+          "sdk_name": "@sapiom/cli",
+          "sdk_version": "1.4.0",
+          "schema_version": "1",
+          "data": { "command": "deploy" },
+          "org_id": "org_client_claimed",
+          "api_key_id": "key_client_claimed",
+          "favorite_color": "teal"
+        }
+      ]
+    }
+  },
+  "expected": {
+    "status": 202,
+    "response": { "accepted": 1, "dropped": 0 },
+    "notes": "org_id, api_key_id, and favorite_color are folded into the stored data payload; the event's own org_id/api_key_id columns stay empty."
+  }
+}

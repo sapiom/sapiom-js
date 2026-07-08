@@ -1,0 +1,11 @@
+{
+  "name": "not-json",
+  "rule": "400 when the body is not JSON",
+  "description": "The one hard requirement of the contract: the body must parse as JSON. Anything else is rejected with 400 and producers drop the batch without retrying.",
+  "request": {
+    "rawBody": "events: [this is not json"
+  },
+  "expected": {
+    "status": 400
+  }
+}

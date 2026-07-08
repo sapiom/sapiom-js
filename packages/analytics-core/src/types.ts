@@ -48,7 +48,13 @@ export interface AnalyticsConfig {
   sdkName: string;
   /** Emitting package version. */
   sdkVersion: string;
-  /** Collector URL. Defaults to the public Sapiom collector. */
+  /**
+   * Collector URL. There is no default: when neither this nor the
+   * `SAPIOM_ANALYTICS_ENDPOINT` environment variable is set, the emitter is
+   * a silent no-op (nothing is sent anywhere, nothing is written to disk).
+   * Pass the exported `SAPIOM_COLLECTOR_ENDPOINT` constant to deliver to the
+   * hosted Sapiom collector. An empty string is treated as absent.
+   */
   endpoint?: string;
   /** Optional API key, sent as `x-sapiom-api-key` for server-side enrichment. */
   apiKey?: string;
@@ -109,7 +115,13 @@ export interface SapiomAnalytics {
   flush(): Promise<void>;
   /** `flush()` + stop timers and exit hooks. Never rejects. */
   shutdown(): Promise<void>;
-  /** Resolved consent. */
+  /**
+   * `true` only when events can actually be emitted: consent resolved to
+   * enabled AND a collector endpoint is configured. The two `false` causes
+   * (consent denied vs no endpoint) are intentionally merged; callers that
+   * need to distinguish them should inspect `SAPIOM_TELEMETRY_DISABLED` /
+   * `DO_NOT_TRACK` themselves.
+   */
   readonly enabled: boolean;
   /** Persisted anonymous machine id, or `null` when disabled/unavailable. */
   readonly anonymousId: string | null;

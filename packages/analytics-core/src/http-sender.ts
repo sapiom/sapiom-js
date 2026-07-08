@@ -1,7 +1,16 @@
 import type { DebugHook, Envelope, FetchLike } from "./types.js";
 
-/** Public collector endpoint. */
-export const DEFAULT_ENDPOINT = "https://api.sapiom.ai/v1/analytics/collector";
+/**
+ * The hosted Sapiom collector URL (see CONTRACT.md).
+ *
+ * The emitter does NOT send here by default — it ships dark (see
+ * {@link resolveEndpoint}). Pass this constant as `endpoint` to deliver to
+ * the hosted collector:
+ *
+ *   createAnalytics({ ..., endpoint: SAPIOM_COLLECTOR_ENDPOINT })
+ */
+export const SAPIOM_COLLECTOR_ENDPOINT =
+  "https://api.sapiom.ai/v1/analytics/collector";
 
 /** Environment override of the endpoint (used by tests). */
 const ENDPOINT_ENV_VAR = "SAPIOM_ANALYTICS_ENDPOINT";
@@ -17,14 +26,22 @@ const REQUEST_TIMEOUT_MS = 5_000;
  */
 export type SendOutcome = "ok" | "retry" | "drop";
 
-/** Endpoint resolution: explicit config → environment override → default. */
-export function resolveEndpoint(configEndpoint?: string): string {
+/**
+ * Endpoint resolution: explicit config → environment override → dark.
+ *
+ * `null` means "no endpoint configured": the emitter becomes a silent no-op
+ * (zero fetches, zero retries, nothing written to disk).
+ */
+export function resolveEndpoint(configEndpoint?: string): string | null {
   if (typeof configEndpoint === "string" && configEndpoint.length > 0) {
     return configEndpoint;
   }
   const fromEnv = process.env[ENDPOINT_ENV_VAR];
   if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
-  return DEFAULT_ENDPOINT;
+  // SHIP-DARK DEFAULT: the hosted collector is not deployed yet, so an
+  // unconfigured emitter must send nothing. Once the collector is live,
+  // flip the next line to `return SAPIOM_COLLECTOR_ENDPOINT;`.
+  return null;
 }
 
 export interface HttpSenderOptions {

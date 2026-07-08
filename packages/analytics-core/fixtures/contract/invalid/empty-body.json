@@ -1,0 +1,11 @@
+{
+  "name": "empty-body",
+  "rule": "400 when the body is not JSON",
+  "description": "An empty request body does not parse as JSON, so it is rejected with 400. Producers drop the batch without retrying.",
+  "request": {
+    "rawBody": ""
+  },
+  "expected": {
+    "status": 400
+  }
+}
