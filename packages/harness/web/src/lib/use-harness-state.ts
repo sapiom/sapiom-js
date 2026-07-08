@@ -31,6 +31,8 @@ export interface HarnessStateHook {
   createSession: (req: CreateSessionRequest) => Promise<HarnessSession>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
+  /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
+  closeSession: (id: string) => Promise<void>;
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
@@ -139,6 +141,19 @@ export function useHarnessState(): HarnessStateHook {
     [state, resumeSession, createSession],
   );
 
+  const closeSession = useCallback(
+    async (id: string): Promise<void> => {
+      await api.killSession(id);
+      const remaining = (state?.sessions ?? []).filter((session) => session.id !== id);
+      setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
+      if (activeSessionId === id) {
+        const nextRunning = remaining.find((session) => session.status !== "exited");
+        setActiveSessionId(nextRunning ? nextRunning.id : null);
+      }
+    },
+    [state, activeSessionId],
+  );
+
   const connectWorkflow = useCallback(async (path: string): Promise<WorkflowInfo> => {
     const workflow = await api.connectWorkflow(path);
     setState((prev) =>
@@ -178,6 +193,7 @@ export function useHarnessState(): HarnessStateHook {
     createSession,
     resumeSession,
     resumeFromHistory,
+    closeSession,
     connectWorkflow,
     updateSettings,
     runMacro,
