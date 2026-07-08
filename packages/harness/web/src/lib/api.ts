@@ -16,7 +16,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { MOCK_HISTORY, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
+import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
 
 export function isMockMode(): boolean {
   return import.meta.env.VITE_MOCK === "1";
@@ -29,8 +29,27 @@ export function getBootToken(): string {
   return new URLSearchParams(window.location.search).get("token") ?? "";
 }
 
+/**
+ * AppState + `launchDir` (the directory the harness was launched from — the
+ * default seed for the new-session directory picker). Not yet in the shared
+ * contract (landing in parallel); typed locally here rather than editing it.
+ */
+export type AppStateEx = AppState & { launchDir?: string | null };
+
+/** GET /api/fs/list?path= response shape (directory autocomplete for the new-session picker). */
+export interface FsListEntry {
+  name: string;
+  path: string;
+}
+
+export interface FsListResponse {
+  path: string;
+  parent: string | null;
+  dirs: FsListEntry[];
+}
+
 export interface HarnessApi {
-  getState(): Promise<AppState>;
+  getState(): Promise<AppStateEx>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
   listSessions(): Promise<HarnessSession[]>;
   sessionHistory(cwd: string): Promise<SessionSummary[]>;
@@ -44,6 +63,7 @@ export interface HarnessApi {
   runMacro(id: string, req: RunMacroRequest): Promise<void>;
   getSettings(): Promise<HarnessSettings>;
   updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings>;
+  listDir(path?: string): Promise<FsListResponse>;
 }
 
 class RealApi implements HarnessApi {
@@ -64,8 +84,8 @@ class RealApi implements HarnessApi {
     return (await res.json()) as T;
   }
 
-  getState(): Promise<AppState> {
-    return this.request<AppState>("/api/state");
+  getState(): Promise<AppStateEx> {
+    return this.request<AppStateEx>("/api/state");
   }
 
   createSession(req: CreateSessionRequest): Promise<HarnessSession> {
@@ -125,6 +145,11 @@ class RealApi implements HarnessApi {
   updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings> {
     return this.request<HarnessSettings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
   }
+
+  listDir(path?: string): Promise<FsListResponse> {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    return this.request<FsListResponse>(`/api/fs/list${query}`);
+  }
 }
 
 const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -135,7 +160,7 @@ class MockApi implements HarnessApi {
   private workflows = MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
   private settings: HarnessSettings = { ...MOCK_SETTINGS, recentDirs: [...MOCK_SETTINGS.recentDirs] };
 
-  async getState(): Promise<AppState> {
+  async getState(): Promise<AppStateEx> {
     await delay();
     return {
       version: "0.0.1-mock",
@@ -147,6 +172,7 @@ class MockApi implements HarnessApi {
       sessions: this.sessions,
       workflows: this.workflows,
       macros: MOCK_MACROS,
+      launchDir: MOCK_LAUNCH_DIR,
     };
   }
 
@@ -236,6 +262,29 @@ class MockApi implements HarnessApi {
     await delay();
     this.settings = { ...this.settings, ...patch };
     return this.settings;
+  }
+
+  async listDir(path?: string): Promise<FsListResponse> {
+    await delay(120);
+    const requested = path && path.trim() ? path.trim() : MOCK_LAUNCH_DIR;
+    // Walk up to the nearest ancestor the fixture tree actually has — lets the
+    // caller distinguish "you're browsing X" from "you typed part of a name
+    // inside X" by comparing the response's `path` to what it asked for.
+    let normalized = requested;
+    while (!(normalized in MOCK_FS_TREE) && normalized !== "/") {
+      const segments = normalized.split("/").filter(Boolean);
+      normalized = segments.length <= 1 ? "/" : "/" + segments.slice(0, -1).join("/");
+    }
+    if (!(normalized in MOCK_FS_TREE)) normalized = MOCK_LAUNCH_DIR;
+
+    const names = MOCK_FS_TREE[normalized] ?? [];
+    const segments = normalized.split("/").filter(Boolean);
+    const parent = normalized === "/" ? null : segments.length <= 1 ? "/" : "/" + segments.slice(0, -1).join("/");
+    return {
+      path: normalized,
+      parent,
+      dirs: names.map((name) => ({ name, path: normalized === "/" ? `/${name}` : `${normalized}/${name}` })),
+    };
   }
 }
 

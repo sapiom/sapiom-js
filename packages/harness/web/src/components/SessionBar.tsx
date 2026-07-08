@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types";
 
+import type { FsListResponse } from "../lib/api";
 import { Icon } from "./Icon";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
@@ -15,6 +16,8 @@ interface SessionBarProps {
   historyLoading: boolean;
   onOpenDropdown: (cwd: string) => void;
   recentDirs: string[];
+  launchDir: string | null;
+  listDir: (path?: string) => Promise<FsListResponse>;
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
   authenticated: boolean;
   organizationName: string | null;
@@ -31,6 +34,8 @@ export function SessionBar({
   historyLoading,
   onOpenDropdown,
   recentDirs,
+  launchDir,
+  listDir,
   onCreateSession,
   authenticated,
   organizationName,
@@ -134,6 +139,8 @@ export function SessionBar({
       {modalOpen && (
         <NewSessionModal
           recentDirs={recentDirs}
+          launchDir={launchDir}
+          listDir={listDir}
           onClose={() => setModalOpen(false)}
           onCreate={onCreateSession}
         />

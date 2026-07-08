@@ -1,22 +1,26 @@
 :root {
-  --bg-0: #0a0c11;
-  --bg-1: #12151c;
-  --bg-2: #171b24;
-  --bg-3: #1e232e;
-  --bg-hover: #232936;
-  --border: #262c38;
-  --border-strong: #333c4c;
-  --text: #d7dbe3;
-  --text-dim: #8891a0;
-  --text-faint: #5b6474;
-  --accent: #5b8cff;
-  --accent-dim: #24365e;
-  --green: #3ecf8e;
-  --amber: #e0a13c;
-  --red: #e2555a;
+  /* Sapiom brand palette — values ported from our design system's dark theme
+     (product name intentionally omitted from color names; these are just hex). */
+  --bg-0: #0f0f0f;
+  --bg-1: #1a1a1a;
+  --bg-2: #1a1a1a;
+  --bg-3: #262626;
+  --bg-hover: #262626;
+  --border: #2e2e2e;
+  --border-strong: #3a3a3a;
+  --text: #fafafa;
+  --text-dim: #a1a1aa;
+  --text-faint: #71717a;
+  --accent: #6be195;
+  --accent-hover: #8bd4a6;
+  --accent-dim: rgba(107, 225, 149, 0.16);
+  --accent-foreground: #000000;
+  --green: #6be195;
+  --amber: #f59e0b;
+  --red: #f87171;
   --radius: 6px;
   --font-sans:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -63,10 +67,77 @@ input {
 
 /* Layout ------------------------------------------------------------- */
 
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.brand-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 12px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-mark {
+  width: 18px;
+  height: 18px;
+}
+
+.brand-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.brand-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-strong);
+}
+
+.brand-product {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.brand-identity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.identity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.identity-dot[data-authenticated="true"] {
+  background: var(--green);
+}
+
 .app {
   display: grid;
   grid-template-columns: 220px 1fr minmax(280px, 40%) 48px;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -400,7 +471,8 @@ input {
 }
 
 .new-session-btn:hover {
-  background: var(--accent);
+  background: var(--accent-hover);
+  color: var(--accent-foreground);
 }
 
 .settings-wrap {
@@ -664,7 +736,8 @@ input {
 .btn-primary {
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-foreground);
+  font-weight: 500;
   border-radius: var(--radius);
   padding: 5px 10px;
   font-size: 12px;
@@ -793,4 +866,87 @@ input {
   border-color: var(--accent);
   color: var(--text);
   background: var(--accent-dim);
+}
+
+.modal-new-session {
+  width: 420px;
+}
+
+/* Directory picker (new-session combobox) ------------------------------- */
+
+.dir-picker-inputrow {
+  display: flex;
+  gap: 6px;
+}
+
+.dir-picker-up {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+}
+
+.dir-picker-up:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.dir-picker-up:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dir-picker-input {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.dir-picker-listing {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-3);
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.dir-picker-path {
+  position: sticky;
+  top: 0;
+  padding: 5px 9px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.dir-picker-empty {
+  padding: 8px 9px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.dir-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: left;
+}
+
+.dir-picker-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }

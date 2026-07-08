@@ -8,20 +8,31 @@ const now = Date.now();
 const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
 const daysAgo = (n: number): string => new Date(now - n * 24 * 60 * 60_000).toISOString();
 
+/** The directory the harness itself was launched from (`npx @sapiom/harness [dir]`). */
+export const MOCK_LAUNCH_DIR = "/Users/demo/acme-app";
+
 export const MOCK_SESSIONS: HarnessSession[] = [
+  {
+    id: "sess-boot",
+    agentSessionId: null,
+    harness: "claude-code",
+    cwd: MOCK_LAUNCH_DIR,
+    // The server auto-creates and starts one session in launchDir at boot, so
+    // the app never opens to an empty terminal pane.
+    title: "acme-app",
+    status: "running",
+    createdAt: minutesAgo(1),
+    lastActiveAt: minutesAgo(1),
+  },
   {
     id: "sess-leasing",
     agentSessionId: "8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f",
     harness: "claude-code",
     cwd: "/Users/demo/acme-app",
     title: "Build the leasing pipeline",
-    // Exited, like sess-rfq below — a fresh harness launch starts with no running
-    // terminal; both fixtures are here to resume (session bar history) rather than
-    // to already be the active session. This also keeps the "no session" macro/canvas
-    // empty-states directly visible on load instead of requiring extra setup.
     status: "exited",
     createdAt: minutesAgo(42),
-    lastActiveAt: minutesAgo(1),
+    lastActiveAt: minutesAgo(20),
     exitCode: 0,
   },
   {
@@ -36,6 +47,22 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     exitCode: 0,
   },
 ];
+
+/** Fake filesystem for the new-session directory picker (GET /api/fs/list). Keys are absolute paths. */
+export const MOCK_FS_TREE: Record<string, string[]> = {
+  "/": ["Users"],
+  "/Users": ["demo"],
+  "/Users/demo": ["acme-app", "rfq-workflows", "onboarding-flow", "scratch"],
+  "/Users/demo/acme-app": ["leasing", "src", "docs"],
+  "/Users/demo/acme-app/leasing": [],
+  "/Users/demo/acme-app/src": [],
+  "/Users/demo/acme-app/docs": [],
+  "/Users/demo/rfq-workflows": ["src", "tests"],
+  "/Users/demo/rfq-workflows/src": [],
+  "/Users/demo/rfq-workflows/tests": [],
+  "/Users/demo/onboarding-flow": [],
+  "/Users/demo/scratch": [],
+};
 
 export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
   "/Users/demo/acme-app": [

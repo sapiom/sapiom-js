@@ -1,7 +1,9 @@
 import {
   ChevronDown,
   Cloud,
+  CornerLeftUp,
   ExternalLink,
+  Folder,
   HelpCircle,
   type LucideIcon,
   Play,
@@ -21,7 +23,9 @@ import type { JSX } from "react";
 const ICONS: Record<string, LucideIcon> = {
   ChevronDown,
   Cloud,
+  CornerLeftUp,
   ExternalLink,
+  Folder,
   Play,
   Plus,
   Radio,
