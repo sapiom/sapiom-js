@@ -13,6 +13,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     label: "Run local",
     icon: "Play",
     requiresWorkflow: true,
+    execution: "inject",
     action: {
       kind: "inject",
       submit: true,
@@ -24,6 +25,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     label: "Deploy",
     icon: "Cloud",
     requiresWorkflow: true,
+    execution: "inject",
     action: {
       kind: "inject",
       submit: true,
@@ -35,6 +37,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     label: "Prod run",
     icon: "Zap",
     requiresWorkflow: true,
+    execution: "inject",
     action: {
       kind: "inject",
       submit: true,
@@ -46,6 +49,10 @@ export const DEFAULT_MACROS: MacroDef[] = [
     label: "Open prod",
     icon: "ExternalLink",
     requiresWorkflow: true,
+    // Not "inject"/"background" (that axis is about where an "inject"
+    // macro's text runs) — open-url has no session-side execution at all,
+    // this is just the required field's least-wrong value for it.
+    execution: "inject",
     action: {
       kind: "open-url",
       url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}",

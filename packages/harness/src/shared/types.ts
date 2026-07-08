@@ -143,6 +143,9 @@ export interface LaunchOpts {
   mcpConfigFile?: string;
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
+  /** Only consulted by `launchTask` — the one-shot prompt a headless
+   *  background task runs, then exits. Unused by `launch`/`resume`. */
+  prompt?: string;
 }
 
 /**
@@ -170,6 +173,17 @@ export interface HarnessAdapter {
    * scrollback heuristic it doesn't need.
    */
   detectBlockingPrompt?(scrollback: string): boolean;
+  /**
+   * Builds a one-shot, headless invocation for `SessionManager.runTask()`:
+   * runs `opts.prompt` non-interactively and exits on its own when done
+   * (no pty write needed to submit it, no trust dialog to wait out — see
+   * ClaudeCodeAdapter's implementation, empirically verified against a real
+   * `claude` binary: `-p` mode both fires the same hooks a real session
+   * does and skips the trust prompt entirely). Optional: a harness with no
+   * non-interactive mode simply doesn't support background tasks yet —
+   * `runTask()` throws a clear error rather than silently misusing `launch`.
+   */
+  launchTask?(opts: LaunchOpts): SpawnSpec;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +210,10 @@ export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
   | { type: "canvas.reload"; harnessSessionId: string }
   | { type: "port.detected"; harnessSessionId: string; port: number; url: string }
-  | { type: "workflows.changed" };
+  | { type: "workflows.changed" }
+  | { type: "task.started"; taskId: string; purpose: string; cwd: string }
+  | { type: "task.completed"; taskId: string; purpose: string; cwd: string }
+  | { type: "task.failed"; taskId: string; purpose: string; cwd: string; reason: string };
 
 // ---------------------------------------------------------------------------
 // Analytics events
@@ -410,6 +427,16 @@ export interface MacroDef {
     | { kind: "open-url"; url: string };
   /** Macro requires a selected workflow to be enabled. */
   requiresWorkflow?: boolean;
+  /**
+   * Where an `"inject"` macro's resolved text runs — irrelevant for
+   * `"open-url"` macros. `"inject"`: written into the *user's own* active
+   * session, same as today (visible in their terminal, occupies their
+   * thread). `"background"`: run headless in its own one-shot task session
+   * via `SessionManager.runTask()` — the user's session is never touched,
+   * so long-running macros (Visualize) don't eat their thread. Required
+   * (not optional) so every macro is explicit about which it is.
+   */
+  execution: "inject" | "background";
 }
 
 export interface RunMacroRequest {
