@@ -450,7 +450,9 @@ test.describe("docked workflow action strip", () => {
     }).toPass({ timeout: 1000 });
     await expect(page.locator(".strip-item-label").first()).toBeVisible();
     await expect(strip.getByText("Run local")).toBeVisible();
-    await expect(strip.getByText("Visualize")).toBeVisible();
+    // getByText("Visualize") would also match "AI Visualize" — use the
+    // macro's own test id to target the deterministic-render macro exactly.
+    await expect(strip.getByTestId("macro-visualize")).toBeVisible();
 
     await page.screenshot({ path: "web/e2e/screenshots/strip-hover-expanded.png", fullPage: true });
   });

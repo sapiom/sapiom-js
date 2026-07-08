@@ -62,13 +62,21 @@ export interface RestRouterOptions {
    *  successful bind/unbind. Never throws — a write failure is logged by the
    *  implementation, not surfaced as a request error. */
   writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
+  /** Re-renders the session's canvas (its bound workflow, or the workspace
+   *  overview when unbound) via the deterministic pipeline — called after a
+   *  successful bind/unbind so the pane reflects the new selection without
+   *  waiting on the agent to run the Visualize macro itself. Never throws
+   *  (core/canvas-render.ts's contract); defaults to a no-op for tests that
+   *  don't care about canvas output. */
+  renderCanvas?: (session: HarnessSession) => Promise<void>;
   /** Called after a settings PATCH persists a changed telemetryOptIn, so the
    * live collector batcher can be gated without a server restart. */
   onTelemetryOptInChange?: (optIn: boolean) => void;
-  /** Called (fire-and-forget) after a session is created, with its cwd — lets
-   * the integrator scan that directory for workflows so opening a session in
-   * a new project discovers them without a manual "+ Connect". */
-  onSessionCreated?: (cwd: string) => void;
+  /** Called (fire-and-forget) after a session is created, with its cwd and id
+   * — lets the integrator scan that directory for workflows (so opening a
+   * session in a new project discovers them without a manual "+ Connect")
+   * and, when the scan discovers one, render the new session's canvas. */
+  onSessionCreated?: (cwd: string, harnessSessionId: string) => void;
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
@@ -147,7 +155,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // this REST route — see SessionManager.create().
       const session = await sessionManager.create(parsed.data);
       res.status(201).json(session);
-      options.onSessionCreated?.(parsed.data.cwd);
+      options.onSessionCreated?.(parsed.data.cwd, session.id);
     } catch (err) {
       next(err);
     }
@@ -179,6 +187,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // `session` here already reflects the new boundWorkflowPath — the
       // callee resolves it against the live registry itself.
       await options.writeWorkspaceContext(session);
+      await (options.renderCanvas ?? (async () => {}))(session);
       res.json(sessionManager.get(req.params.id));
     } catch (err) {
       next(err);
