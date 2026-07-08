@@ -1,0 +1,80 @@
+/**
+ * Macro execution endpoint (workstream W5's backend slice): `GET /api/macros`
+ * and `POST /api/macros/:id/run` from src/shared/types.ts. The SPA's action
+ * rail already resolves and opens "open-url" macros client-side — it can't
+ * carry the boot token through `window.open` anyway — so in practice this
+ * only ever executes "inject" macros, but it handles both kinds per the
+ * documented contract. The integrator mounts this (with express.json())
+ * alongside the SessionManager and WorkflowRegistry.
+ */
+import * as path from "node:path";
+import { Router, type Router as ExpressRouter } from "express";
+import { CANVAS_INDEX, type MacroDef, type RunMacroRequest, type WorkflowInfo } from "../shared/types.js";
+import { MacroValidationError, resolveMacro } from "../core/macro-runner.js";
+
+export interface MacrosRouterDeps {
+  listMacros(): MacroDef[];
+  /** Look up a registered workflow by its path; null when not found. */
+  findWorkflow(workflowPath: string): WorkflowInfo | null;
+  /** The session's project directory, or null when the session is unknown. */
+  getSessionCwd(harnessSessionId: string): string | null;
+  /** Injects resolved text into the session's pty (the SessionManager). */
+  injectInput(harnessSessionId: string, text: string, submit: boolean): Promise<void>;
+  /** Opens a URL in the user's default browser (the `open` package). */
+  openUrl(url: string): Promise<void>;
+}
+
+export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
+  const router = Router();
+
+  router.get("/api/macros", (_req, res) => {
+    res.json(deps.listMacros());
+  });
+
+  router.post("/api/macros/:id/run", async (req, res) => {
+    const macro = deps.listMacros().find((m) => m.id === req.params.id);
+    if (!macro) {
+      res.status(404).json({ error: `Unknown macro '${req.params.id}'` });
+      return;
+    }
+
+    const body = (req.body ?? {}) as Partial<RunMacroRequest>;
+    if (typeof body.harnessSessionId !== "string" || !body.harnessSessionId) {
+      res.status(400).json({ error: "harnessSessionId is required" });
+      return;
+    }
+
+    const cwd = deps.getSessionCwd(body.harnessSessionId);
+    if (!cwd) {
+      res.status(404).json({ error: `Unknown session '${body.harnessSessionId}'` });
+      return;
+    }
+
+    const workflow = typeof body.workflowPath === "string" ? deps.findWorkflow(body.workflowPath) : null;
+
+    try {
+      const resolved = resolveMacro(macro, {
+        workflow,
+        sessionCwd: cwd,
+        canvasPath: path.join(cwd, CANVAS_INDEX),
+        subject: body.subject,
+      });
+
+      if (resolved.kind === "open-url") {
+        await deps.openUrl(resolved.url);
+      } else {
+        await deps.injectInput(body.harnessSessionId, resolved.text, resolved.submit);
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof MacroValidationError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  return router;
+}
