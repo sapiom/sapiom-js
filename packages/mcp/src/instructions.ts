@@ -29,7 +29,7 @@ capability call** without an agent (a search, a scrape, one image), or from **ho
 that cannot run npx** (ChatGPT), use Sapiom's **remote MCP** at \`https://api.sapiom.ai/v1/mcp\`
 (\`claude mcp add sapiom --transport http https://api.sapiom.ai/v1/mcp\`) — it exposes every
 capability as a direct \`sapiom_*\` tool (run \`tool_discover\` to find the right one) plus cloud
-agent tools (\`sapiom_agent_*\`: create → deploy with a \`files\` map → execute → inspect/signal).
+workflow tools (\`sapiom_workflow_*\`: create → deploy with a \`files\` map → run → inspect/signal).
 Rule of thumb: author an agent for anything multi-step, scheduled, or deployable; use the
 remote MCP or the SDK for a single action.
 
