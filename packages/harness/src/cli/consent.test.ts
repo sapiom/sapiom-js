@@ -11,19 +11,24 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 let nextAnswer = "";
+let questionCallCount = 0;
 vi.mock("node:readline/promises", () => ({
   createInterface: () => ({
-    question: async () => nextAnswer,
+    question: async () => {
+      questionCallCount++;
+      return nextAnswer;
+    },
     close: () => {},
   }),
 }));
 
 import { ensureConsent } from "./consent.js";
-import { loadSettings } from "./settings.js";
+import { hasStoredSettings, loadSettings } from "./settings.js";
 
 describe("ensureConsent", () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-consent-"));
+    questionCallCount = 0;
   });
 
   afterEach(async () => {
@@ -108,5 +113,86 @@ describe("ensureConsent", () => {
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
     }
+  });
+
+  describe("environment opt-out (SAPIOM_TELEMETRY_DISABLED / DO_NOT_TRACK)", () => {
+    const ENV_KEYS = ["SAPIOM_TELEMETRY_DISABLED", "DO_NOT_TRACK"] as const;
+    const saved: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const key of ENV_KEYS) {
+        saved[key] = process.env[key];
+        delete process.env[key];
+      }
+    });
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    });
+
+    it.each([
+      ["SAPIOM_TELEMETRY_DISABLED", "1"],
+      ["SAPIOM_TELEMETRY_DISABLED", "true"],
+      ["SAPIOM_TELEMETRY_DISABLED", "TRUE"],
+      ["DO_NOT_TRACK", "1"],
+      ["DO_NOT_TRACK", "true"],
+    ])("%s=%s forces telemetry off without prompting, on a first run", async (envVar, value) => {
+      process.env[envVar] = value;
+
+      const optIn = await ensureConsent({ noTelemetry: false });
+
+      expect(optIn).toBe(false);
+      expect(questionCallCount).toBe(0);
+      // Nothing persisted: hasStoredSettings() must still say "no" so a
+      // later run without the env var gets a genuine first-run prompt,
+      // rather than silently inheriting a fabricated opt-out answer.
+      expect(await hasStoredSettings()).toBe(false);
+    });
+
+    it("overrides a previously persisted opt-in for this run, without rewriting it", async () => {
+      // Establish a stored opt-in from an earlier, env-free run.
+      const wasTTY = process.stdin.isTTY;
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+      try {
+        expect(await ensureConsent({ noTelemetry: false })).toBe(true);
+      } finally {
+        Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      }
+      expect((await loadSettings()).telemetryOptIn).toBe(true);
+
+      process.env.DO_NOT_TRACK = "1";
+      const optIn = await ensureConsent({ noTelemetry: false });
+
+      expect(optIn).toBe(false);
+      expect(questionCallCount).toBe(0);
+      // The stored preference is untouched — a run without DO_NOT_TRACK set
+      // still honors what the user actually answered.
+      expect((await loadSettings()).telemetryOptIn).toBe(true);
+    });
+
+    it.each([
+      ["SAPIOM_TELEMETRY_DISABLED", "0"],
+      ["SAPIOM_TELEMETRY_DISABLED", "no"],
+      ["DO_NOT_TRACK", "false"],
+      ["DO_NOT_TRACK", ""],
+    ])("%s=%s is not treated as an opt-out", async (envVar, value) => {
+      process.env[envVar] = value;
+      const wasTTY = process.stdin.isTTY;
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+
+      try {
+        expect(await ensureConsent({ noTelemetry: false })).toBe(true);
+      } finally {
+        Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      }
+    });
+
+    it("--no-telemetry still wins even without any env var set", async () => {
+      expect(await ensureConsent({ noTelemetry: true })).toBe(false);
+      expect(questionCallCount).toBe(0);
+    });
   });
 });
