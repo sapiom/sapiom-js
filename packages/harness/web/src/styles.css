@@ -213,10 +213,11 @@ input {
 .app {
   position: relative;
   display: grid;
-  grid-template-columns: 220px 32px minmax(360px, 1fr) 420px;
+  grid-template-columns: minmax(180px, 220px) 32px minmax(360px, 1fr) minmax(280px, 420px);
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* Resize handles --------------------------------------------------------- */

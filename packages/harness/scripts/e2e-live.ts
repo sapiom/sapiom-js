@@ -13,9 +13,11 @@
  *   1. POST /api/sessions launches with real, session-scoped generated
  *      --settings / --mcp-config / --append-system-prompt, and the pty env
  *      carries SAPIOM_HARNESS_INGEST_URL/_TOKEN/_SESSION_ID.
- *   2. POST /api/sessions/:id/input is accepted by a running session.
- *   3. A hook POST to /ingest lands in events.ndjson and reaches the mock
- *      collector as a batch.
+ *   2. A hook POST to /ingest lands in events.ndjson and reaches the mock
+ *      collector as a batch, and flips the session's `ready` flag —
+ *      "running" alone only means the pty exists, not that its TUI is
+ *      actually interactive (see SessionNotReadyError).
+ *   3. POST /api/sessions/:id/input is accepted by a ready session.
  *   4. A tool.call event's localhost:<port> reference produces a
  *      port.detected frame on /ws/events.
  *   5. Writing to the session's canvas dir produces a canvas.reload frame,
@@ -318,12 +320,14 @@ async function testCoreFlow(): Promise<void> {
     });
     console.log("session reported running");
 
-    // --- 4. simulate the SessionStart hook POST to /ingest — for claude-code (no
-    // detectBlockingPrompt fallback), this is what flips HarnessSession.ready, and
-    // submitInput() gates real input on that (SessionNotReadyError otherwise: the
-    // trust-dialog race this mechanism exists to catch). Must happen before any
-    // /api/sessions/:id/input call below, same as a real agent's own hook firing
-    // before the harness ever tries to type into it. ---
+    // --- 4. simulate the SessionStart hook POST to /ingest ---
+    // Fired here, before any input injection: "running" only means the pty
+    // exists — SessionManager.submitInput() (used by /input and macros) now
+    // gates on the session's `ready` flag, which only flips true once a real
+    // SessionStart(-equivalent) event lands, exactly like a real fake-claude
+    // wouldn't be interactive before its own hooks fire. Simulating that
+    // event before injecting input mirrors real production ordering, not
+    // just satisfying the script.
     const ingestHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${bootToken}` };
     const agentSessionId = "e2e-agent-session-1";
 
@@ -362,6 +366,25 @@ async function testCoreFlow(): Promise<void> {
       }),
     });
     assert(toolCallRes.status === 200, "POST /ingest (PostToolUse) returns 200");
+
+    // --- 4b. wait for the session to actually flip ready — /ingest responds
+    // 200 immediately and processes the hook payload after responding (so a
+    // dead/slow harness server never blocks the agent's own hook pipeline),
+    // so `ready` isn't guaranteed true the instant the POST above resolves. ---
+    await waitFor(async () => {
+      const res = await fetch(`${baseUrl}/api/sessions`, { headers });
+      const sessions = (await res.json()) as Array<{ id: string; ready: boolean }>;
+      return sessions.find((s) => s.id === sessionId)?.ready === true ? true : undefined;
+    });
+    console.log("session reported ready");
+
+    // --- 5. write to the pty via /api/sessions/:id/input ---
+    const inputRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/input`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: "echo hi", submit: true }),
+    });
+    assert(inputRes.status === 200, "POST /api/sessions/:id/input returns 200");
 
     // --- 6. assert both events landed in events.ndjson ---
     const eventLines = await waitFor(async () => {
