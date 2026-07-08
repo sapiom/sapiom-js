@@ -7,6 +7,7 @@ import {
   Play,
   Plus,
   Radio,
+  Settings,
   Sparkles,
   Zap,
 } from "lucide-react";
@@ -24,6 +25,7 @@ const ICONS: Record<string, LucideIcon> = {
   Play,
   Plus,
   Radio,
+  Settings,
   Sparkles,
   Zap,
 };

@@ -74,6 +74,28 @@ test("canvas pane shows its empty state when there's no active session", async (
   await expect(page.locator(".canvas-empty")).toContainText("Start a session to see its canvas here");
 });
 
+test("settings popover: identity, telemetry toggle, and it persists across close/reopen", async ({ page }) => {
+  const trigger = page.getByTestId("settings-trigger");
+  const toggle = page.getByTestId("telemetry-toggle");
+
+  await trigger.click();
+  const popover = page.getByTestId("settings-popover");
+  await expect(popover).toBeVisible();
+  await expect(popover).toContainText("Acme (mock)");
+  await expect(popover).toContainText("events.ndjson");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(popover).toBeHidden();
+
+  // Reopening should reflect the same (mutated) state, not reset to the fixture default.
+  await trigger.click();
+  await expect(page.getByTestId("telemetry-toggle")).toHaveAttribute("aria-checked", "true");
+});
+
 test("visualize macro prompts for a subject before running", async ({ page }) => {
   // Resume a history entry so the session-gated macro is enabled.
   await page.getByTestId("session-dropdown-trigger").click();

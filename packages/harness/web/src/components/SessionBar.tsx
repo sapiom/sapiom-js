@@ -4,6 +4,7 @@ import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types"
 
 import { Icon } from "./Icon";
 import { NewSessionModal } from "./NewSessionModal";
+import { SettingsPopover } from "./SettingsPopover";
 
 interface SessionBarProps {
   sessions: HarnessSession[];
@@ -15,6 +16,10 @@ interface SessionBarProps {
   onOpenDropdown: (cwd: string) => void;
   recentDirs: string[];
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
+  authenticated: boolean;
+  organizationName: string | null;
+  telemetryOptIn: boolean;
+  onToggleTelemetry: (next: boolean) => Promise<void>;
 }
 
 export function SessionBar({
@@ -27,9 +32,14 @@ export function SessionBar({
   onOpenDropdown,
   recentDirs,
   onCreateSession,
+  authenticated,
+  organizationName,
+  telemetryOptIn,
+  onToggleTelemetry,
 }: SessionBarProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
   const runningSessions = sessions.filter((session) => session.status !== "exited");
@@ -100,6 +110,26 @@ export function SessionBar({
       <button className="new-session-btn" data-testid="new-session-btn" onClick={() => setModalOpen(true)}>
         <Icon name="Plus" size={14} /> new
       </button>
+
+      <div className="settings-wrap">
+        <button
+          className="gear-btn"
+          aria-label="Settings"
+          data-testid="settings-trigger"
+          onClick={() => setSettingsOpen((prev) => !prev)}
+        >
+          <Icon name="Settings" size={16} />
+        </button>
+        {settingsOpen && (
+          <SettingsPopover
+            authenticated={authenticated}
+            organizationName={organizationName}
+            telemetryOptIn={telemetryOptIn}
+            onToggleTelemetry={onToggleTelemetry}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
+      </div>
 
       {modalOpen && (
         <NewSessionModal

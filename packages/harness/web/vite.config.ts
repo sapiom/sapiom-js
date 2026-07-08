@@ -6,6 +6,13 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [react()],
+  resolve: {
+    // Mirrors the "@shared/*" path in web/tsconfig.json — needed for actual value
+    // imports (not just types) from the shared contract to resolve at build time.
+    alias: {
+      "@shared": fileURLToPath(new URL("../src/shared", import.meta.url)),
+    },
+  },
   build: {
     outDir: fileURLToPath(new URL("../dist/web", import.meta.url)),
     emptyOutDir: true,
