@@ -1,0 +1,51 @@
+{
+  "name": "happy-path-batch",
+  "rule": "happy path",
+  "description": "A batch of three events from different producers sharing one machine identity. Batch-only endpoint: a single event is just a batch of one.",
+  "request": {
+    "body": {
+      "events": [
+        {
+          "event_id": "1a2b3c4d-5e6f-4a7b-9c8d-0e1f2a3b4c5d",
+          "anonymous_id": "b7e2a3f1-4c5d-4a6b-8e9f-0a1b2c3d4e5f",
+          "session_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+          "event_timestamp": "2026-01-15T10:30:00.000Z",
+          "source": "cli",
+          "event_type": "cli_command",
+          "sdk_name": "@sapiom/cli",
+          "sdk_version": "1.4.0",
+          "schema_version": "1",
+          "data": { "command": "dev" }
+        },
+        {
+          "event_id": "2b3c4d5e-6f7a-4b8c-ad9e-1f2a3b4c5d6e",
+          "anonymous_id": "b7e2a3f1-4c5d-4a6b-8e9f-0a1b2c3d4e5f",
+          "session_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+          "event_timestamp": "2026-01-15T10:30:01.250Z",
+          "source": "tools",
+          "event_type": "capability_call",
+          "sdk_name": "@sapiom/tools",
+          "sdk_version": "2.0.3",
+          "schema_version": "1",
+          "data": { "capability": "search", "duration_ms": 412, "status": "ok" }
+        },
+        {
+          "event_id": "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f",
+          "anonymous_id": "b7e2a3f1-4c5d-4a6b-8e9f-0a1b2c3d4e5f",
+          "session_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+          "event_timestamp": "2026-01-15T10:30:02.000Z",
+          "source": "mcp",
+          "event_type": "mcp_tool_call",
+          "sdk_name": "@sapiom/mcp",
+          "sdk_version": "0.9.1",
+          "schema_version": "1",
+          "data": { "tool": "web_search", "duration_ms": 1180, "status": "ok" }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "status": 202,
+    "response": { "accepted": 3, "dropped": 0 }
+  }
+}
