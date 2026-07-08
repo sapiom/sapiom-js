@@ -41,6 +41,10 @@
  *      as a session.status frame on /ws/events, and unbinding (workflowPath:
  *      null) writes `boundWorkflow: null` to the same file rather than
  *      deleting it.
+ *  12. A tool.call event that echoes the harness's own listening port and
+ *      the analytics collector's port produces no port.detected frame at
+ *      all — proving server/index.ts's exclusion wiring, not just
+ *      PortDetector's own unit-tested filter in isolation.
  *
  * Run with: pnpm e2e:live
  */
@@ -354,6 +358,33 @@ async function testCoreFlow(): Promise<void> {
     });
     assert(portMsg.port === 5544, "port.detected frame reports port 5544 from the tool.call output");
     assert(portMsg.url === "http://localhost:5544", "port.detected frame carries the right url");
+
+    // --- 8b. the harness's own port and the collector's port must never surface as "discovered" ---
+    const portDetectedCountBefore = wsMessages.filter((m) => m.type === "port.detected").length;
+    const selfPortToolCallRes = await fetch(`${baseUrl}/ingest`, {
+      method: "POST",
+      headers: ingestHeaders,
+      body: JSON.stringify({
+        hookEvent: "PostToolUse",
+        harnessSessionId: sessionId,
+        payload: {
+          session_id: agentSessionId,
+          tool_name: "Bash",
+          tool_input: "echo $SAPIOM_HARNESS_INGEST_URL",
+          tool_response: `harness at http://localhost:${server.port}, collector at http://localhost:${MOCK_COLLECTOR_PORT}`,
+        },
+      }),
+    });
+    assert(selfPortToolCallRes.status === 200, "POST /ingest (self-port echo) returns 200");
+    // ingest → portDetector.feed/flush → bus.publish → ws send all happen
+    // synchronously within the request above, so a short wait is enough to
+    // let an (incorrect) broadcast have time to arrive if the filter failed.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const portDetectedCountAfter = wsMessages.filter((m) => m.type === "port.detected").length;
+    assert(
+      portDetectedCountAfter === portDetectedCountBefore,
+      "the harness's own port and the collector's port are excluded from port.detected",
+    );
 
     // --- 9. write to the session's canvas dir, assert canvas.reload arrives, and the file is served ---
     const canvasDir = path.join(projectDir, ".sapiom", "canvas");

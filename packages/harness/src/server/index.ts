@@ -39,7 +39,7 @@ import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
-import { PortDetector } from "../core/port-detector.js";
+import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import { writeHarnessContext } from "../core/workspace-context.js";
 import { createBootTokenMiddleware } from "./auth.js";
@@ -177,8 +177,25 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const canvasWatcher = new CanvasWatcherManager({
     onChange: (harnessSessionId) => bus.publish({ type: "canvas.reload", harnessSessionId }),
   });
+  // The harness's own infrastructure shouldn't ever show up as a "discovered"
+  // dev server in the Preview pane — a mention of our own listening port (in
+  // an agent's own output, e.g. echoing SAPIOM_HARNESS_INGEST_URL) or the
+  // analytics collector's port is not something the user started. `options
+  // .port` covers the common case (bin.ts always passes a concrete port);
+  // the actual bound port is added below once listen() resolves, covering
+  // the ephemeral `port: 0` case tests use. (There's no separate "vite dev
+  // port" to exclude beyond this — in dev mode the harness's own listening
+  // port *is* what `web/vite.config.ts`'s proxy targets, so excluding it
+  // here already covers that pairing.)
+  const excludedPorts = new Set<number>();
+  if (options.port) excludedPorts.add(options.port);
+  if (options.collectorUrl) {
+    const collectorPort = portFromUrl(options.collectorUrl);
+    if (collectorPort !== null) excludedPorts.add(collectorPort);
+  }
   const portDetector = new PortDetector({
     onPort: (harnessSessionId, port, url) => bus.publish({ type: "port.detected", harnessSessionId, port, url }),
+    excludedPorts,
   });
 
   const sessionManager = new SessionManager({
@@ -478,6 +495,10 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
 
   const address = httpServer.address();
   const actualPort = typeof address === "object" && address ? address.port : options.port;
+  // Covers the ephemeral `port: 0` case (tests) where `options.port` above
+  // was 0 and therefore never a real port to exclude — the actual bound
+  // port is only known now.
+  portDetector.addExcludedPort(actualPort);
 
   return {
     port: actualPort,
