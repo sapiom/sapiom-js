@@ -22,8 +22,7 @@ import type {
   HarnessSession,
   WorkflowInfo,
 } from "../shared/types.js";
-import { HARNESS_PATHS } from "../shared/types.js";
-import { expandHome } from "../core/paths.js";
+import { resolveStatePaths } from "../core/paths.js";
 import { seedExampleProject } from "../core/example-seed.js";
 import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
 import { TaskManager } from "../core/task-manager.js";
@@ -38,6 +37,7 @@ import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { findRolloutFile, tailCodexRollout, type CodexTailerHandle } from "../core/collector/codex-tailer.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
+import { pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
@@ -98,16 +98,26 @@ export interface HarnessServerOptions {
   machineId?: string;
   /** Override the adapter set (tests inject a stubbed claude-code binary). */
   adapters?: Partial<Record<HarnessKind, HarnessAdapter>>;
+  /** Root directory ALL persistent harness state lives under: machine-id,
+   *  sessions.json, workflows.json, events.ndjson, settings.json, generated/
+   *  and sample-project/. Defaults to the real HARNESS_HOME
+   *  (`~/.sapiom/harness`) — unchanged for CLI users. Tests, e2e scripts and
+   *  live checks MUST pass a scratch directory here so a server boot never
+   *  registers its temp projects (or anything else) into the developer's
+   *  real state. The per-file options below still override individual
+   *  locations; each now defaults under this root. */
+  stateRoot?: string;
+  /** Session registry file. Defaults to `<stateRoot>/sessions.json`. */
   sessionsPath?: string;
   buildLaunchOpts?: LaunchOptsBuilder;
   /** Root directory per-session generated agent configs are written under —
    *  and cleaned up from (exit-time delete + boot-time sweep, see
-   *  core/inject/retention.ts). Defaults to HARNESS_PATHS.generated
-   *  (`~/.sapiom/harness/generated`). Tests point this at a temp dir so they
-   *  never write to (or sweep) the real home directory. */
+   *  core/inject/retention.ts). Defaults to `<stateRoot>/generated`. */
   generatedRoot?: string;
   collectorUrl?: string;
+  /** Workflow registry file. Defaults to `<stateRoot>/workflows.json`. */
   workflowsRegistryPath?: string;
+  /** Local analytics ndjson sink. Defaults to `<stateRoot>/events.ndjson`. */
   eventStorePath?: string;
   /** Overrides the home directory codex rollout discovery scans
    * (`<home>/.codex/sessions/...`). Defaults to the real OS home dir; tests
@@ -137,7 +147,7 @@ export interface HarnessServerOptions {
    *  AppState.firstRun (see its doc comment). Omitted → absent there too. */
   firstRun?: boolean;
   /** Where POST /api/sample-project seeds the bundled example. Defaults to
-   *  HARNESS_PATHS.sampleProject; tests point it at a temp dir. */
+   *  `<stateRoot>/sample-project`. */
   sampleProjectRoot?: string;
 }
 
@@ -193,7 +203,8 @@ function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: str
 export const startServer = async (options: HarnessServerOptions): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
   const identity = options.identity ?? null;
-  const machineId = options.machineId ?? (await getOrCreateMachineId());
+  const statePaths = resolveStatePaths(options.stateRoot);
+  const machineId = options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
   const launchDir = options.launchDir ?? process.cwd();
   const adapters: Partial<Record<HarnessKind, HarnessAdapter>> =
     options.adapters ??
@@ -234,7 +245,30 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // itself (to rewrite every open session's context file on a registry change) —
   // no circularity, since only writeSessionContext is threaded into SessionManager's
   // constructor, and it doesn't need sessionManager.
-  const workflowRegistry = new WorkflowRegistry(options.workflowsRegistryPath);
+  const workflowRegistry = new WorkflowRegistry(options.workflowsRegistryPath ?? statePaths.workflows);
+  // Boot-time hygiene, before the first list(): drop registry entries whose
+  // path no longer exists on disk (deleted projects, temp dirs a crashed run
+  // left registered) so the rail — and every harness-context.json written
+  // below — never resurrects a dead project. Deliberately awaited: nothing
+  // downstream should ever observe the pre-prune list.
+  try {
+    const prunedWorkflows = await workflowRegistry.prune();
+    for (const workflow of prunedWorkflows) {
+      console.error(`[harness] pruned workflow registry entry with missing path: ${workflow.path}`);
+    }
+  } catch (err) {
+    console.error("[harness] workflow registry prune failed:", err);
+  }
+  // Same hygiene for settings.json's recentDirs — dead entries are already
+  // filtered from every read, but pruning here persists their removal.
+  // Awaited so it can't race a settings PATCH once the server is listening.
+  try {
+    for (const dir of await pruneDeadRecentDirs(statePaths.settings)) {
+      console.error(`[harness] pruned recent dir with missing path: ${dir}`);
+    }
+  } catch (err) {
+    console.error("[harness] recent-dirs prune failed:", err);
+  }
   let workflowsCache: WorkflowInfo[] = await workflowRegistry.list();
   const workflowsCacheTimer = setInterval(() => {
     void workflowRegistry.list().then((list) => {
@@ -264,7 +298,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // buildLaunchOpts, and the rm scheduled at the previous exit could still
   // be in flight. Serialize by awaiting any pending removal for this id
   // before (re)generating its files.
-  const generatedRoot = options.generatedRoot;
+  const generatedRoot = options.generatedRoot ?? statePaths.generated;
   const pendingGeneratedRemovals = new Map<string, Promise<void>>();
   const innerBuildLaunchOpts =
     options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot);
@@ -278,7 +312,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     ingestUrl: `http://${host}:${options.port}`,
     ingestToken: options.bootToken,
     collectorUrl: options.collectorUrl,
-    sessionsPath: options.sessionsPath,
+    sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
@@ -405,7 +439,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     return [] as WorkflowInfo[];
   });
 
-  const eventStore = createEventStore(options.eventStorePath);
+  const eventStore = createEventStore(options.eventStorePath ?? statePaths.events);
   const batcher = new CollectorBatcher({
     machineId,
     telemetryOptIn: options.telemetryOptIn,
@@ -472,10 +506,11 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       firstRun: options.firstRun,
       seedSampleProject: async () => {
         const { root, projectDir, created } = await seedExampleProject({
-          targetRoot: options.sampleProjectRoot ?? expandHome(HARNESS_PATHS.sampleProject),
+          targetRoot: options.sampleProjectRoot ?? statePaths.sampleProject,
         });
         return { root, projectDir, created };
       },
+      settingsPath: statePaths.settings,
     }),
   );
   app.use(

@@ -95,10 +95,7 @@ describe("codex tailer lifecycle wiring", () => {
       telemetryOptIn: false,
       autoCreateSession: false,
       adapters: { codex: fakeCodexAdapter() },
-      sessionsPath: join(dir, "sessions.json"),
-      generatedRoot: join(dir, "generated"),
-      eventStorePath: join(dir, "events.ndjson"),
-      workflowsRegistryPath: join(dir, "workflows.json"),
+      stateRoot: dir,
     });
 
     const session = await server.sessionManager.create({ cwd, harness: "codex" });
@@ -150,10 +147,7 @@ describe("codex tailer lifecycle wiring", () => {
       telemetryOptIn: false,
       autoCreateSession: false,
       adapters: { codex: fakeCodexAdapter() },
-      sessionsPath: join(dir, "sessions.json"),
-      generatedRoot: join(dir, "generated"),
-      eventStorePath: join(dir, "events.ndjson"),
-      workflowsRegistryPath: join(dir, "workflows.json"),
+      stateRoot: dir,
     });
 
     const historical = server.sessionManager.registerHistorical({
@@ -202,10 +196,7 @@ describe("codex tailer lifecycle wiring", () => {
           listPastSessions: async () => [],
         },
       },
-      sessionsPath: join(dir, "sessions.json"),
-      generatedRoot: join(dir, "generated"),
-      eventStorePath: join(dir, "events.ndjson"),
-      workflowsRegistryPath: join(dir, "workflows.json"),
+      stateRoot: dir,
     });
 
     const session = await server.sessionManager.create({ cwd: join(dir, "project"), harness: "claude-code" });
@@ -233,10 +224,7 @@ describe("codex tailer lifecycle wiring", () => {
       telemetryOptIn: false,
       autoCreateSession: false,
       adapters: { codex: fakeCodexAdapter() },
-      sessionsPath: join(dir, "sessions.json"),
-      generatedRoot: join(dir, "generated"),
-      eventStorePath: join(dir, "events.ndjson"),
-      workflowsRegistryPath: join(dir, "workflows.json"),
+      stateRoot: dir,
     });
 
     const session = await server.sessionManager.create({ cwd, harness: "codex" });

@@ -66,6 +66,12 @@
  *      and writes real step names + SVG node markup to index.html, and the
  *      write fires a canvas.reload frame exactly like an agent's own edit
  *      would — the visualize macro's default path never touches the pty.
+ *  15. State isolation + registry hygiene: `stateRoot` alone (no per-file
+ *      overrides, no machineId) roots every piece of persistent state under
+ *      the scratch dir — machine-id included — and a pre-seeded registry
+ *      entry whose path doesn't exist on disk is pruned (and the prune
+ *      persisted) at boot. This whole script must leave the real
+ *      ~/.sapiom/harness untouched.
  *
  * Run with: pnpm e2e:live
  */
@@ -175,6 +181,16 @@ async function testCoreFlow(): Promise<void> {
   const captureFile = path.join(tmpRoot, "fake-claude-capture.json");
   const eventStorePath = path.join(tmpRoot, "events.ndjson");
 
+  // Pre-seed the (scratch) workflow registry with an entry whose path does
+  // not exist — a stand-in for a deleted project or a temp dir a crashed run
+  // left registered. Boot-time pruning (item 15) must drop it before the
+  // registry is ever served or mirrored into a harness-context.json.
+  const deadWorkflowPath = path.join(tmpRoot, "deleted-project");
+  await fs.writeFile(
+    path.join(tmpRoot, "workflows.json"),
+    JSON.stringify([{ name: "deleted-project", path: deadWorkflowPath, definitionId: 1, source: "scan" }]),
+  );
+
   // SessionManager builds each spawned process's env starting from this
   // script's own process.env — setting it here is how the fixture (running
   // as a totally separate process) learns where to write its capture file.
@@ -202,15 +218,15 @@ async function testCoreFlow(): Promise<void> {
     telemetryOptIn: true,
     collectorUrl: `http://127.0.0.1:${MOCK_COLLECTOR_PORT}`,
     identity: { userId: "e2e-user", tenantId: "e2e-tenant", organizationName: "E2E Org", apiKey: "e2e-key" },
-    machineId: "e2e-machine",
+    // No machineId and no per-file path overrides: stateRoot alone must be
+    // enough for a boot to leave the real ~/.sapiom/harness completely
+    // untouched — machine-id, sessions.json, workflows.json, events.ndjson,
+    // settings.json and generated/ all land under the scratch root.
     adapters: {
       "claude-code": createClaudeCodeAdapter({ binary: FAKE_CLAUDE }),
       codex: createCodexAdapter(),
     },
-    sessionsPath: path.join(tmpRoot, "sessions.json"),
-    generatedRoot: path.join(tmpRoot, "generated"),
-    eventStorePath,
-    workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
+    stateRoot: tmpRoot,
     launchDir: projectDir,
     // This phase explicitly creates its own session below (step 1) and
     // asserts on its exact id/argv — autoCreateSession would spawn a second,
@@ -240,6 +256,31 @@ async function testCoreFlow(): Promise<void> {
       ws!.once("error", reject);
     });
     console.log("connected to /ws/events");
+
+    // --- 15. state isolation + boot-time registry pruning: machine-id was
+    // created under the scratch stateRoot (nothing fell back to the real
+    // home dir), and the pre-seeded registry entry with a nonexistent path
+    // was pruned before the registry was ever served — persisted, not just
+    // filtered from the response. ---
+    const machineIdContent = (await fs.readFile(path.join(tmpRoot, "machine-id"), "utf8")).trim();
+    assert(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(machineIdContent),
+      "machine-id was created under the scratch stateRoot",
+    );
+    const workflowsAfterBoot = (await (
+      await fetch(`${baseUrl}/api/workflows`, { headers })
+    ).json()) as Array<{ path: string }>;
+    assert(
+      !workflowsAfterBoot.some((w) => w.path === deadWorkflowPath),
+      "boot pruned the registry entry whose path no longer exists on disk",
+    );
+    const persistedRegistry = JSON.parse(
+      await fs.readFile(path.join(tmpRoot, "workflows.json"), "utf8"),
+    ) as Array<{ path: string }>;
+    assert(
+      !persistedRegistry.some((w) => w.path === deadWorkflowPath),
+      "the prune was persisted back to workflows.json, not just filtered from the response",
+    );
 
     // --- 1. create a session; the claude-code adapter spawns FAKE_CLAUDE with the real injected flags ---
     const createRes = await fetch(`${baseUrl}/api/sessions`, {
@@ -715,10 +756,7 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
       "claude-code": createClaudeCodeAdapter({ binary: FAKE_CLAUDE }),
       codex: createCodexAdapter(),
     },
-    sessionsPath: path.join(tmpRoot, "sessions.json"),
-    generatedRoot: path.join(tmpRoot, "generated"),
-    eventStorePath: path.join(tmpRoot, "events.ndjson"),
-    workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
+    stateRoot: tmpRoot,
     launchDir: projectDir,
     // Left at its default (true) — this is exactly the behavior under test.
   });
@@ -843,10 +881,7 @@ async function testAutoSessionKindSelection(): Promise<void> {
     // for claude-code" and this phase would fail loudly rather than silently
     // passing for the wrong reason.
     adapters: { codex: createCodexAdapter({ binary: FAKE_CLAUDE }) },
-    sessionsPath: path.join(tmpRoot, "sessions.json"),
-    generatedRoot: path.join(tmpRoot, "generated"),
-    eventStorePath: path.join(tmpRoot, "events.ndjson"),
-    workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
+    stateRoot: tmpRoot,
     launchDir: projectDir,
     defaultHarnessKind: "codex",
     availableHarnesses: ["codex"],

@@ -18,10 +18,14 @@ const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * server boot over an analytics nicety. Kept as our own plain-text
  * `~/.sapiom/harness/machine-id` file for now; converging onto her
  * `~/.sapiom/analytics.json` identity is a separate, later conversation.
+ *
+ * @param filePath Where the id file lives. Defaults to the real
+ *   `HARNESS_PATHS.machineId`; tests and scripted checks pass a path under
+ *   their scratch state root so a boot never writes to the real home dir.
  */
-export async function getOrCreateMachineId(): Promise<string> {
-  const filePath = expandHome(HARNESS_PATHS.machineId);
-
+export async function getOrCreateMachineId(
+  filePath: string = expandHome(HARNESS_PATHS.machineId),
+): Promise<string> {
   try {
     const existing = await readMachineId(filePath);
     if (existing) {
