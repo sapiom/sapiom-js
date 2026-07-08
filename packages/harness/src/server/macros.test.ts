@@ -24,6 +24,7 @@ function makeDeps(overrides: Partial<MacrosRouterDeps> = {}): MacrosRouterDeps {
     getBoundWorkflowPath: () => null,
     injectInput: vi.fn().mockResolvedValue(undefined),
     openUrl: vi.fn().mockResolvedValue(undefined),
+    renderCanvas: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -184,7 +185,7 @@ describe("macros router", () => {
     expect(res.status).toBe(400);
   });
 
-  it("runs visualize with no workflow bound at all — the canvas kit's data-edit prompt needs none", async () => {
+  it("runs visualize with no workflow bound at all — renders server-side, never touches the pty", async () => {
     const deps = makeDeps(); // getBoundWorkflowPath defaults to () => null
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
@@ -193,13 +194,12 @@ describe("macros router", () => {
       body: JSON.stringify({ harnessSessionId: "sess-1" }), // no subject, no workflowPath, no binding
     });
     expect(res.status).toBe(200);
-    const [, text] = (deps.injectInput as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string, boolean];
-    expect(text).toContain("/Users/demo/acme-app/.sapiom/canvas/index.html"); // {{canvas.path}} substituted
-    expect(text).toContain("Clone .sapiom/canvas/_template.html to .sapiom/canvas/index.html");
-    expect(text).toContain("canvas-patterns");
+    expect(await res.json()).toEqual({ ok: true });
+    expect(deps.renderCanvas).toHaveBeenCalledWith("sess-1");
+    expect(deps.injectInput).not.toHaveBeenCalled();
   });
 
-  it("also runs visualize when a workflow IS bound — same static prompt either way", async () => {
+  it("also runs visualize when a workflow IS bound — same deterministic render either way", async () => {
     const deps = makeDeps({ getBoundWorkflowPath: (id) => (id === "sess-1" ? workflow.path : null) });
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
@@ -208,11 +208,24 @@ describe("macros router", () => {
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
     });
     expect(res.status).toBe(200);
+    expect(deps.renderCanvas).toHaveBeenCalledWith("sess-1");
+    expect(deps.injectInput).not.toHaveBeenCalled();
+  });
+
+  it("ai-visualize still injects the canvas-kit hand-authoring prompt (the pre-deterministic-render fallback)", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    const res = await fetch(`${baseUrl}/api/macros/ai-visualize/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+    });
+    expect(res.status).toBe(200);
     const [, text] = (deps.injectInput as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string, boolean];
-    // Same text regardless of binding — the agent branches on
-    // harness-context.json's boundWorkflow at run time, not on macro text.
-    expect(text).toContain("_template.html");
-    expect(text).not.toContain(workflow.path); // no {{workflow.path}} substitution baked in
+    expect(text).toContain("/Users/demo/acme-app/.sapiom/canvas/index.html"); // {{canvas.path}} substituted
+    expect(text).toContain("Clone .sapiom/canvas/_template.html to .sapiom/canvas/index.html");
+    expect(text).toContain("canvas-patterns");
+    expect(deps.renderCanvas).not.toHaveBeenCalled();
   });
 
   it("409s with a UI-visible reason when the session isn't ready yet (SessionNotReadyError) — never silently swallows the macro", async () => {

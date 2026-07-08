@@ -16,6 +16,9 @@ export interface McpConfigOptions {
    * then 401s, same as today.
    */
   apiKey?: string | null;
+  /** Root directory generated configs live under. Defaults to
+   *  HARNESS_PATHS.generated. Override in tests to avoid the real home dir. */
+  generatedRoot?: string;
 }
 
 /**
@@ -29,7 +32,7 @@ export async function generateMcpConfig(
   harnessSessionId: string,
   options: McpConfigOptions = {},
 ): Promise<string> {
-  const dir = path.join(expandHome(HARNESS_PATHS.generated), harnessSessionId);
+  const dir = path.join(expandHome(options.generatedRoot ?? HARNESS_PATHS.generated), harnessSessionId);
   await fs.mkdir(dir, { recursive: true });
 
   const sapiomEnvironment = options.environment ?? process.env.SAPIOM_ENVIRONMENT;
