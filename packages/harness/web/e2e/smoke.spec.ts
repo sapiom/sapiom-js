@@ -454,6 +454,13 @@ test.describe("docked workflow action strip", () => {
     // macro's own test id to target the deterministic-render macro exactly.
     await expect(strip.getByTestId("macro-visualize")).toBeVisible();
 
+    // Expanded, the panel floats directly over the terminal — its
+    // background must be fully opaque (`rgb(...)`, no alpha channel), not
+    // the translucent `--accent-dim` it used to render with, which let the
+    // terminal's own text bleed through and read as broken.
+    const backgroundColor = await strip.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(backgroundColor).toMatch(/^rgb\(/);
+
     await page.screenshot({ path: "web/e2e/screenshots/strip-hover-expanded.png", fullPage: true });
   });
 
