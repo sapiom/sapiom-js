@@ -96,6 +96,7 @@ describe("codex tailer lifecycle wiring", () => {
       autoCreateSession: false,
       adapters: { codex: fakeCodexAdapter() },
       sessionsPath: join(dir, "sessions.json"),
+      generatedRoot: join(dir, "generated"),
       eventStorePath: join(dir, "events.ndjson"),
       workflowsRegistryPath: join(dir, "workflows.json"),
     });
@@ -150,6 +151,7 @@ describe("codex tailer lifecycle wiring", () => {
       autoCreateSession: false,
       adapters: { codex: fakeCodexAdapter() },
       sessionsPath: join(dir, "sessions.json"),
+      generatedRoot: join(dir, "generated"),
       eventStorePath: join(dir, "events.ndjson"),
       workflowsRegistryPath: join(dir, "workflows.json"),
     });
@@ -201,6 +203,7 @@ describe("codex tailer lifecycle wiring", () => {
         },
       },
       sessionsPath: join(dir, "sessions.json"),
+      generatedRoot: join(dir, "generated"),
       eventStorePath: join(dir, "events.ndjson"),
       workflowsRegistryPath: join(dir, "workflows.json"),
     });
@@ -231,6 +234,7 @@ describe("codex tailer lifecycle wiring", () => {
       autoCreateSession: false,
       adapters: { codex: fakeCodexAdapter() },
       sessionsPath: join(dir, "sessions.json"),
+      generatedRoot: join(dir, "generated"),
       eventStorePath: join(dir, "events.ndjson"),
       workflowsRegistryPath: join(dir, "workflows.json"),
     });

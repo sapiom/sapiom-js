@@ -198,6 +198,7 @@ async function testCoreFlow(): Promise<void> {
       codex: createCodexAdapter(),
     },
     sessionsPath: path.join(tmpRoot, "sessions.json"),
+    generatedRoot: path.join(tmpRoot, "generated"),
     eventStorePath,
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
     launchDir: projectDir,
@@ -635,6 +636,7 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
       codex: createCodexAdapter(),
     },
     sessionsPath: path.join(tmpRoot, "sessions.json"),
+    generatedRoot: path.join(tmpRoot, "generated"),
     eventStorePath: path.join(tmpRoot, "events.ndjson"),
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
     launchDir: projectDir,
@@ -762,6 +764,7 @@ async function testAutoSessionKindSelection(): Promise<void> {
     // passing for the wrong reason.
     adapters: { codex: createCodexAdapter({ binary: FAKE_CLAUDE }) },
     sessionsPath: path.join(tmpRoot, "sessions.json"),
+    generatedRoot: path.join(tmpRoot, "generated"),
     eventStorePath: path.join(tmpRoot, "events.ndjson"),
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
     launchDir: projectDir,
