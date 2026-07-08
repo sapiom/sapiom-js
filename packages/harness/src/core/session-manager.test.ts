@@ -150,6 +150,80 @@ describe("SessionManager", () => {
     expect(manager.resize("unknown-id", 1, 1)).toBe(false);
   });
 
+  describe("submitInput", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("splits non-empty submitted text into a text write, then a separate \\r after a delay", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const submitPromise = manager.submitInput(session.id, "hello world", true);
+
+      // Text lands immediately; the trailing Enter must NOT be part of the
+      // same write (that's exactly the bracketed-paste bug this fixes).
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("hello world");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+
+      await vi.advanceTimersByTimeAsync(300);
+      const ok = await submitPromise;
+
+      expect(ok).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(2);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "hello world");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+    });
+
+    it("writes a bare \\r in a single call for submit:true with empty text (no splitting needed)", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const ok = await manager.submitInput(session.id, "", true);
+
+      expect(ok).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("\r");
+    });
+
+    it("writes only the text, with no \\r at all, when submit is false", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const ok = await manager.submitInput(session.id, "draft text", false);
+
+      expect(ok).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("draft text");
+    });
+
+    it("returns false for an unknown session without ever touching a pty", async () => {
+      const { manager } = makeManager();
+      expect(await manager.submitInput("unknown-id", "hello", true)).toBe(false);
+    });
+
+    it("does not write the trailing \\r if the session's pty is gone by the time the delay elapses", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const submitPromise = manager.submitInput(session.id, "hello", true);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+
+      spawns[0]?.emitExit(0);
+      await vi.advanceTimersByTimeAsync(300);
+      const ok = await submitPromise;
+
+      expect(ok).toBe(false);
+      // Still just the one write from before the pty exited — no trailing \r.
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("replays the scrollback buffer to new attach()ers and streams live data", async () => {
     const { manager, spawns } = makeManager();
     const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
