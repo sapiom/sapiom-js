@@ -11,9 +11,25 @@ export type BusListener = (message: BusMessage) => void;
 
 const RECONNECT_DELAY_MS = 2000;
 
+const mockListeners = new Set<BusListener>();
+
+/**
+ * Test-only escape hatch, mock mode only: lets Playwright simulate a bus
+ * message (e.g. canvas.reload) without a real server. Never exists outside
+ * VITE_MOCK=1.
+ */
+if (isMockMode() && typeof window !== "undefined") {
+  (window as unknown as { __HARNESS_TEST__: { publish: BusListener } }).__HARNESS_TEST__ = {
+    publish: (message) => mockListeners.forEach((listener) => listener(message)),
+  };
+}
+
 /** Subscribes and returns an unsubscribe function. */
 export function subscribeEvents(onMessage: BusListener): () => void {
-  if (isMockMode()) return () => {};
+  if (isMockMode()) {
+    mockListeners.add(onMessage);
+    return () => mockListeners.delete(onMessage);
+  }
 
   const url = new URL("/ws/events", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
