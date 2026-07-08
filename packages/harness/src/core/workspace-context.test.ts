@@ -118,6 +118,61 @@ describe("writeHarnessContext", () => {
     const context = (await readContext()) as { session: { id: string; cwd: string; harness: string } };
     expect(context.session).toEqual({ id: "sess-1", cwd, harness: "claude-code" });
   });
+
+  it("creates .sapiom/ from scratch for a cwd that has never had any file written to it", async () => {
+    await expect(fs.access(path.join(cwd, ".sapiom"))).rejects.toThrow();
+    await writeHarnessContext(session, null, []);
+    await expect(fs.access(path.join(cwd, ".sapiom", "harness-context.json"))).resolves.toBeUndefined();
+  });
+
+  it("handles a burst of concurrent writes to the same destination: no rejections, valid JSON, no leftover tmp files, last call wins", async () => {
+    // Regression for a real production ENOENT: concurrent writers to one
+    // destination (a workflow scan's rewrite-all-open-sessions step racing
+    // a bind, for instance) could previously compute the same Date.now()-based
+    // tmp filename within the same millisecond and steal each other's tmp
+    // file out from under a pending rename.
+    const writes = Array.from({ length: 10 }, (_, i) =>
+      writeHarnessContext(session, { ...workflow, definitionId: i }, [workflow]),
+    );
+
+    const results = await Promise.allSettled(writes);
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+
+    const context = (await readContext()) as { boundWorkflow: { definitionId: number } };
+    // Serialized in call order, not completion order: the last call
+    // enqueued must be the one that's actually on disk at the end,
+    // regardless of which write's disk I/O happened to finish first.
+    expect(context.boundWorkflow.definitionId).toBe(9);
+
+    const entries = await fs.readdir(path.join(cwd, ".sapiom"));
+    expect(entries).toEqual(["harness-context.json"]);
+  });
+
+  it("interleaves concurrent writes to two different destinations independently", async () => {
+    const otherCwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-context-test-other-"));
+    const otherSession: WorkspaceContextSession = { id: "sess-2", cwd: otherCwd, harness: "codex" };
+
+    try {
+      await Promise.all([
+        ...Array.from({ length: 5 }, (_, i) => writeHarnessContext(session, { ...workflow, definitionId: i }, [])),
+        ...Array.from({ length: 5 }, (_, i) =>
+          writeHarnessContext(otherSession, { ...otherWorkflow, definitionId: i + 100 }, []),
+        ),
+      ]);
+
+      const mine = (await readContext()) as { boundWorkflow: { definitionId: number }; session: { id: string } };
+      const theirs = JSON.parse(
+        await fs.readFile(path.join(otherCwd, ".sapiom", "harness-context.json"), "utf8"),
+      ) as { boundWorkflow: { definitionId: number }; session: { id: string } };
+
+      expect(mine.session.id).toBe("sess-1");
+      expect(mine.boundWorkflow.definitionId).toBe(4);
+      expect(theirs.session.id).toBe("sess-2");
+      expect(theirs.boundWorkflow.definitionId).toBe(104);
+    } finally {
+      await fs.rm(otherCwd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("harnessContextFileExists", () => {
