@@ -2,9 +2,9 @@
  * `POST /api/canvas/:sessionId/render` — the deterministic, zero-LLM render
  * trigger. Mounted under the same `/api` boot-token middleware as the rest of
  * the REST surface (see server/index.ts). Renders the session's bound
- * workflow, or the whole-workspace overview when unbound; writing the file is
- * enough to hot-reload an already-open canvas pane (CanvasWatcherManager
- * picks up the change on its own).
+ * workflow to its per-workflow render file (a cheap no-op when unbound);
+ * writing the file is enough to hot-reload an already-open canvas pane
+ * (CanvasWatcherManager picks up the change on its own).
  */
 import { Router, type Router as ExpressRouter } from "express";
 import { renderCanvasForSession, type RenderableSession, type RenderableWorkflow } from "../core/canvas-render.js";

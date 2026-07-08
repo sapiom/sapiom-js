@@ -51,7 +51,10 @@ function reasonFor(err) {
 
 const sourceDir = process.env.SAPIOM_CANVAS_CHECK_SOURCE_DIR;
 try {
-  const result = await check({ sourceDir });
+  // typecheck: false — a diagram only needs the manifest/graph, and the
+  // project's own tsc --noEmit is the dominant multi-second per-render cost;
+  // esbuild still surfaces real breakage (bad imports, syntax errors).
+  const result = await check({ sourceDir, typecheck: false });
   process.stdout.write(JSON.stringify({ ok: true, manifest: result.manifest, warnings: result.warnings }));
 } catch (err) {
   process.stdout.write(JSON.stringify({ ok: false, reason: reasonFor(err) }));

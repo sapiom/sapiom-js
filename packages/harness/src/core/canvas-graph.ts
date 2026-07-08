@@ -11,9 +11,10 @@
  */
 import type { AgentManifest, AgentStepManifest } from "@sapiom/agent";
 import { runManifestCheck } from "./canvas-manifest-check.js";
+import { detectWorkflowLaunches, type DetectedLaunch } from "./canvas-interconnections.js";
 
-export type CanvasNodeKind = "entry" | "step" | "pause" | "terminal-success" | "terminal-warn";
-export type CanvasEdgeKind = "sequential" | "branching" | "cross";
+export type CanvasNodeKind = "entry" | "step" | "pause" | "terminal-success" | "terminal-warn" | "launched-workflow";
+export type CanvasEdgeKind = "sequential" | "branching" | "cross" | "launch";
 
 export interface CanvasNode {
   id: string;
@@ -116,8 +117,40 @@ export function graphFromManifest(manifest: AgentManifest, warnings: string[]): 
 }
 
 /**
- * Extracts a workflow's step graph from its project directory. Never throws:
- * any failure (no node_modules, a bundle/type error, an invalid graph, a
+ * Merges heuristically detected cross-workflow launches into the workflow's
+ * own graph: one dashed `launched-workflow` node per distinct slug, with a
+ * `launch`-kind edge from the step the call was attributed to (falling back
+ * to the entry step — the launch definitely happens somewhere downstream of
+ * it). Self-launches (a workflow re-launching itself) are skipped: the graph
+ * already shows those steps. Pure — returns a new graph.
+ */
+export function mergeLaunchesIntoGraph(graph: CanvasGraph, launches: readonly DetectedLaunch[]): CanvasGraph {
+  const stepIds = new Set(graph.nodes.map((n) => n.id));
+  const nodes = [...graph.nodes];
+  const edges = [...graph.edges];
+  const seenEdges = new Set<string>();
+
+  for (const launch of launches) {
+    if (launch.slug === graph.manifestName) continue;
+    // Prefixed id so a launched workflow can never collide with a step that
+    // happens to share its name.
+    const nodeId = `launch:${launch.slug}`;
+    if (!nodes.some((n) => n.id === nodeId)) {
+      nodes.push({ id: nodeId, kind: "launched-workflow", label: launch.slug });
+    }
+    const from = launch.fromStepId && stepIds.has(launch.fromStepId) ? launch.fromStepId : graph.entry;
+    const edgeKey = `${from}->${nodeId}`;
+    if (seenEdges.has(edgeKey)) continue;
+    seenEdges.add(edgeKey);
+    edges.push({ from, to: nodeId, kind: "launch", label: "launch()" });
+  }
+  return { ...graph, nodes, edges };
+}
+
+/**
+ * Extracts a workflow's step graph from its project directory, with detected
+ * cross-workflow launches merged in as dashed nodes. Never throws: any
+ * failure (no node_modules, a bundle/type error, an invalid graph, a
  * check-process crash or timeout) comes back as `{ ok: false, reason }` for
  * the caller to render as a degraded panel — this is the only place
  * extraction failure is allowed to happen silently instead of crashing the
@@ -127,5 +160,6 @@ export async function extractWorkflowGraph(sourceDir: string): Promise<Extractio
   const result = await runManifestCheck(sourceDir);
   if (!result.ok) return { ok: false, reason: result.reason };
   const graph = graphFromManifest(result.manifest as AgentManifest, result.warnings);
-  return { ok: true, graph };
+  const launches = await detectWorkflowLaunches(sourceDir, new Set(graph.nodes.map((n) => n.id)));
+  return { ok: true, graph: mergeLaunchesIntoGraph(graph, launches) };
 }

@@ -1409,11 +1409,38 @@ input {
   border-radius: 0;
 }
 
+.canvas-frame-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .canvas-iframe {
   flex: 1;
   width: 100%;
   border: none;
   background: #fff;
+}
+
+/* Skeleton shown while the probe or an iframe (re)load is in flight — the
+   pane must never sit blank while something is pending. The overlay variant
+   sits on top of the (still-loading) iframe in the app's own theme colors. */
+.canvas-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-faint);
+}
+
+.canvas-loading--overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg-1);
 }
 
 .canvas-empty {

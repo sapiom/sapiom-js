@@ -43,6 +43,16 @@ export const CANVAS_DIR = ".sapiom/canvas";
 export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
 
 /**
+ * Deterministic per-workflow renders live here (one `<slug>.html` per
+ * workflow, slugged by `slugForWorkflowPath` in core/canvas-render.ts),
+ * relative to the session cwd. `GET /canvas/:sessionId/` serves the bound
+ * workflow's render from this directory; `index.html` above stays the
+ * agent-authored/custom canvas and is never rewritten by the deterministic
+ * pipeline.
+ */
+export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
+
+/**
  * Workspace-state convention: the harness mirrors this session's binding,
  * the full workflow registry, and its own identity here, relative to the
  * session cwd, so the agent has an always-current, agent-legible answer to

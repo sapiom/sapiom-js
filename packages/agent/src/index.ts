@@ -41,9 +41,15 @@ export type {
 } from './context.js';
 export { InMemoryContextStore } from './context.js';
 
-// Agent definition + defineAgent factory + brand guard
+// Agent definition + defineAgent factory + brand guards (current + pre-rename legacy)
 export type { AgentDefinition } from './agent.js';
-export { defineAgent, isAgentDefinition, AGENT_DEFINITION_BRAND } from './agent.js';
+export {
+  defineAgent,
+  isAgentDefinition,
+  AGENT_DEFINITION_BRAND,
+  isLegacyOrchestrationDefinition,
+  LEGACY_ORCHESTRATION_DEFINITION_BRAND,
+} from './agent.js';
 
 // Errors that are part of the public contract surface
 export { AgentError, UnknownStepError, StepInputValidationError, DisallowedTransitionError } from './errors.js';

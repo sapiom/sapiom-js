@@ -34,6 +34,13 @@ export function CanvasPane({
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
+  // True while the initial HEAD probe for this session is still in flight —
+  // the pane shows a loading state instead of flashing "Nothing generated
+  // yet" at content that's about to appear.
+  const [probing, setProbing] = useState(false);
+  // True while the iframe is (re)loading its document — a skeleton overlays
+  // it so a load/render in progress never reads as a blank pane.
+  const [frameLoading, setFrameLoading] = useState(true);
   // Failed-task panels the user has explicitly dismissed (client-side only —
   // the task record itself stays in the server's list).
   const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(new Set());
@@ -47,11 +54,14 @@ export function CanvasPane({
   // it in an earlier turn, before this pane was around to catch a reload event.
   useEffect(() => {
     setHasGeneratedContent(false);
+    setFrameLoading(true);
     if (!sessionId || isMockMode()) return;
     let cancelled = false;
+    setProbing(true);
     fetch(`/canvas/${sessionId}/`, { method: "HEAD" })
       .then((res) => !cancelled && setHasGeneratedContent(res.ok))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => !cancelled && setProbing(false));
     return () => {
       cancelled = true;
     };
@@ -61,9 +71,19 @@ export function CanvasPane({
     if (!lastMessage || !sessionId) return;
     if (lastMessage.type === "canvas.reload" && lastMessage.harnessSessionId === sessionId) {
       setHasGeneratedContent(true);
+      setFrameLoading(true);
       setReloadKey((key) => key + 1);
     }
   }, [lastMessage, sessionId]);
+
+  // The server resolves the canvas root by the session's CURRENT binding, so
+  // a bind/unbind changes what the same URL serves — refetch immediately
+  // instead of waiting for the render write's canvas.reload to arrive.
+  const boundWorkflowPath = boundWorkflow?.path ?? null;
+  useEffect(() => {
+    setFrameLoading(true);
+    setReloadKey((key) => key + 1);
+  }, [boundWorkflowPath]);
 
   const visualizeMacro = findVisualizeMacro(macros);
   const visualizeDisabledReason = visualizeMacro
@@ -152,6 +172,11 @@ export function CanvasPane({
             </button>
           </div>
         </div>
+      ) : probing ? (
+        <div className="canvas-loading" data-testid="canvas-loading">
+          <span className="canvas-task-spinner" aria-hidden="true" />
+          <p className="canvas-empty-hint">Loading canvas…</p>
+        </div>
       ) : !hasGeneratedContent ? (
         <div className="canvas-empty">
           <p>Nothing generated yet.</p>
@@ -172,12 +197,21 @@ export function CanvasPane({
           </p>
         </div>
       ) : (
-        <iframe
-          key={reloadKey}
-          className="canvas-iframe"
-          src={`/canvas/${sessionId}/?theme=${theme}`}
-          sandbox="allow-scripts"
-        />
+        <div className="canvas-frame-wrap">
+          {frameLoading && (
+            <div className="canvas-loading canvas-loading--overlay" data-testid="canvas-loading">
+              <span className="canvas-task-spinner" aria-hidden="true" />
+              <p className="canvas-empty-hint">Rendering diagram…</p>
+            </div>
+          )}
+          <iframe
+            key={`${sessionId}:${reloadKey}`}
+            className="canvas-iframe"
+            src={`/canvas/${sessionId}/?theme=${theme}`}
+            sandbox="allow-scripts"
+            onLoad={() => setFrameLoading(false)}
+          />
+        </div>
       )}
     </aside>
   );

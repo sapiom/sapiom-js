@@ -1,13 +1,13 @@
 /**
- * Assembles the `<div id="canvas-root">` body — one `<section
- * class="canvas-panel">` per workflow (header + stats + SVG diagram),
- * an optional Interconnections panel, and a shared legend footer — entirely
- * from the classes `core/canvas-template.ts`'s shell already defines. This is
- * the HTML half of the deterministic render; `core/canvas-render.ts` wraps
- * the result through `renderCanvasDocument()` and writes it to disk.
+ * Assembles the `<div id="canvas-root">` body — the bound workflow's
+ * `<section class="canvas-panel">` (header + stats + SVG diagram) and a
+ * legend footer — entirely from the classes `core/canvas-template.ts`'s shell
+ * already defines. This is the HTML half of the deterministic render;
+ * `core/canvas-render.ts` wraps the result through `renderCanvasDocument()`
+ * and writes it to the workflow's render file.
  */
 import type { CanvasEdgeKind, CanvasGraph, CanvasNodeKind } from "./canvas-graph.js";
-import { renderGraphSvg, usedKinds } from "./canvas-svg.js";
+import { renderGraphSvg } from "./canvas-svg.js";
 
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -61,28 +61,22 @@ export function buildErrorPanelHtml(title: string, reason: string): string {
 </section>`;
 }
 
-/** The unbound, zero-workflows-known state — a friendly explainer, not an error. */
-export function buildEmptyWorkspaceHtml(): string {
-  return `<section class="canvas-panel">
-  <header class="canvas-header">
-    <div class="canvas-title-row">
-      <h1 class="canvas-title">No workflows found</h1>
-    </div>
-  </header>
-  <div class="canvas-diagram-panel">
-    <p class="canvas-empty-note">No @sapiom/agent projects found in this workspace yet. Connect or scan a directory containing a sapiom.json, or ask your agent to create one — this pane updates automatically.</p>
-  </div>
-</section>`;
-}
-
 const NODE_KIND_LABEL: Record<CanvasNodeKind, string> = {
   entry: "entry / active step",
   step: "step",
   pause: "pause / waits for input",
   "terminal-success": "terminal · success",
   "terminal-warn": "terminal · escalation",
+  "launched-workflow": "launches another workflow",
 };
-const NODE_KIND_ORDER: CanvasNodeKind[] = ["entry", "step", "pause", "terminal-success", "terminal-warn"];
+const NODE_KIND_ORDER: CanvasNodeKind[] = [
+  "entry",
+  "step",
+  "pause",
+  "terminal-success",
+  "terminal-warn",
+  "launched-workflow",
+];
 
 /** Legend footer covering every node/edge kind actually used across every
  *  rendered panel (aggregate, not per-panel — matches the template's shape). */
@@ -99,57 +93,10 @@ export function buildLegendHtml(nodeKinds: Set<CanvasNodeKind>, edgeKinds: Set<C
   return `<div class="canvas-legend">${items.join("")}</div>`;
 }
 
-/** Aggregates used node/edge kinds across every rendered graph, for one shared legend. */
-export function aggregateUsedKinds(graphs: readonly CanvasGraph[]): {
-  nodeKinds: Set<CanvasNodeKind>;
-  edgeKinds: Set<CanvasEdgeKind>;
-} {
-  const nodeKinds = new Set<CanvasNodeKind>();
-  const edgeKinds = new Set<CanvasEdgeKind>();
-  for (const g of graphs) {
-    const used = usedKinds(g);
-    for (const k of used.nodeKinds) nodeKinds.add(k);
-    for (const k of used.edgeKinds) edgeKinds.add(k);
-  }
-  return { nodeKinds, edgeKinds };
-}
-
-export interface InterconnectionRow {
-  fromLabel: string;
-  toLabel: string;
-  tag: string;
-  label?: string;
-}
-
-/** Cross-workflow handoffs detected by the heuristic grep (core/canvas-interconnections.ts). */
-export function buildInterconnectionsPanelHtml(rows: readonly InterconnectionRow[]): string {
-  if (rows.length === 0) return "";
-  const rowsHtml = rows
-    .map(
-      (r) => `<div class="canvas-interconnection-row">
-    <span class="canvas-legend-marker canvas-legend-marker--cross"></span>
-    <span class="canvas-interconnection-title">${esc(r.fromLabel)} &rarr; ${esc(r.toLabel)}</span>
-    <span class="canvas-interconnection-tag">${esc(r.tag)}</span>
-    ${r.label ? `<p class="canvas-interconnection-desc">${esc(r.label)}</p>` : ""}
-  </div>`,
-    )
-    .join("\n");
-  return `<section class="canvas-panel canvas-interconnections">
-  <h2 class="canvas-panel-title">Interconnections</h2>
-${rowsHtml}
-</section>`;
-}
-
-/** Joins panels + optional interconnections + a footer (legend + note) into
- *  the final `#canvas-root` body — the string `renderCanvasDocument()` wraps. */
-export function assembleCanvasBody(input: {
-  panels: string[];
-  interconnections?: string;
-  legend: string;
-  note: string;
-}): string {
+/** Joins panels + a footer (legend + note) into the final `#canvas-root`
+ *  body — the string `renderCanvasDocument()` wraps. */
+export function assembleCanvasBody(input: { panels: string[]; legend: string; note: string }): string {
   const parts = [...input.panels];
-  if (input.interconnections) parts.push(input.interconnections);
   parts.push(`<footer class="canvas-footer">
 ${input.legend}
   <p class="canvas-note">${esc(input.note)}</p>

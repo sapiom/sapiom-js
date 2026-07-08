@@ -1,12 +1,16 @@
 /**
- * Heuristic cross-workflow interconnection detection for the workspace
- * overview render: greps every workflow project's TypeScript sources for
- * `orchestrations.launch({ definition: "<slug>" })` calls (see
- * @sapiom/tools's `orchestrations` capability) and matches the captured slug
- * against the other workflows' own manifest names. This is deliberately a
- * grep, not a type-aware analysis — a step can compute its `definition`
- * dynamically, in which case it's simply not detected; false negatives are
- * fine here, this panel is a bonus overview, not a source of truth.
+ * Heuristic cross-workflow launch detection: greps a workflow project's
+ * TypeScript sources for `orchestrations.launch({ definition: "<slug>" })`
+ * (the pre-rename SDK's capability) and `agents.launch({ definition: ... })`
+ * (the current SDK, e.g. `ctx.sapiom.agents.launch`) calls, and best-effort
+ * attributes each call to the step whose `defineStep({ name: ... })` block it
+ * sits in. The result is merged into the workflow's own rendered graph as
+ * dashed "launched workflow" nodes (see core/canvas-graph.ts).
+ *
+ * This is deliberately a grep, not a type-aware analysis — a step can compute
+ * its `definition` dynamically, in which case it's simply not detected; false
+ * negatives are fine here, the launch nodes are a bonus, not a source of
+ * truth.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -16,12 +20,25 @@ const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 const MAX_FILES_PER_WORKFLOW = 200;
 const MAX_FILE_BYTES = 512 * 1024;
 
-// Matches `orchestrations.launch({ ...definition: "slug"... })`, tolerating
+// Matches `orchestrations.launch({ ...definition: "slug"... })` (old SDK) and
+// `agents.launch({ ...definition: "slug"... })` (current SDK), tolerating
 // other fields before `definition` in the object literal (bounded lookahead
 // so an unrelated huge object literal can't make this pathological).
-const LAUNCH_CALL_PATTERN = /orchestrations\s*\.\s*launch\s*\(\s*\{[\s\S]{0,400}?definition\s*:\s*(['"`])([^'"`]+)\1/g;
+const LAUNCH_CALL_PATTERN =
+  /(?:orchestrations|agents)\s*\.\s*launch\s*\(\s*\{[\s\S]{0,400}?definition\s*:\s*(['"`])([^'"`]+)\1/g;
 
-async function listSourceFiles(root: string): Promise<string[]> {
+// A `name: "..."` property declaration — the step-name key `defineStep`
+// blocks always open with. The lookbehind rejects longer identifiers ending
+// in "name" (fromName, vendorName) without consuming the preceding char.
+const STEP_NAME_PATTERN = /(?<![\w$.])name\s*:\s*(['"`])([^'"`]+)\1/g;
+
+/**
+ * Lists the workflow's own `.ts`/`.tsx` sources (skipping node_modules and
+ * friends), bounded to MAX_FILES_PER_WORKFLOW. Shared with the extraction
+ * cache's source fingerprint (core/canvas-cache.ts) so "the files this grep
+ * reads" and "the files whose mtimes invalidate the cache" can't drift.
+ */
+export async function listSourceFiles(root: string): Promise<string[]> {
   const files: string[] = [];
   async function walk(dir: string): Promise<void> {
     if (files.length >= MAX_FILES_PER_WORKFLOW) return;
@@ -45,9 +62,27 @@ async function listSourceFiles(root: string): Promise<string[]> {
   return files;
 }
 
-/** Every `orchestrations.launch({ definition: "..." })` slug referenced anywhere in `root`. */
-async function launchedSlugs(root: string): Promise<string[]> {
-  const slugs: string[] = [];
+export interface DetectedLaunch {
+  /** The `definition` slug the launch call referenced. */
+  slug: string;
+  /** The step (by declared name) the call was attributed to — the nearest
+   *  preceding `name: "<known step>"` declaration in the same file — or null
+   *  when no known step precedes it (e.g. a launch in a shared helper). */
+  fromStepId: string | null;
+}
+
+/**
+ * Every `*.launch({ definition: "..." })` call in `root`'s sources, each
+ * best-effort attributed to the step whose `defineStep` block it sits in
+ * (`knownStepIds` = the workflow's real step names, so an unrelated `name:`
+ * property can never be mistaken for a step). Never throws: unreadable
+ * files/directories simply contribute no launches.
+ */
+export async function detectWorkflowLaunches(
+  root: string,
+  knownStepIds: ReadonlySet<string>,
+): Promise<DetectedLaunch[]> {
+  const launches: DetectedLaunch[] = [];
   for (const file of await listSourceFiles(root)) {
     let content: string;
     try {
@@ -57,42 +92,16 @@ async function launchedSlugs(root: string): Promise<string[]> {
     } catch {
       continue;
     }
+
+    const stepDeclarations: Array<{ index: number; stepId: string }> = [];
+    for (const match of content.matchAll(STEP_NAME_PATTERN)) {
+      if (knownStepIds.has(match[2]!)) stepDeclarations.push({ index: match.index, stepId: match[2]! });
+    }
+
     for (const match of content.matchAll(LAUNCH_CALL_PATTERN)) {
-      slugs.push(match[2]);
+      const preceding = stepDeclarations.filter((d) => d.index < match.index).at(-1);
+      launches.push({ slug: match[2]!, fromStepId: preceding?.stepId ?? null });
     }
   }
-  return slugs;
-}
-
-export interface InterconnectionEdge {
-  fromManifestName: string;
-  /** The other workflow's manifest name, or null when the slug doesn't match any known workflow. */
-  toManifestName: string | null;
-  /** The raw slug the source referenced — shown when `toManifestName` is null. */
-  toSlug: string;
-}
-
-/**
- * Scans every workflow's sources for `orchestrations.launch` calls and
- * resolves each target slug against the other workflows in `workflows`
- * (matched by manifest name — the value `defineAgent({ name })` sets, not
- * the directory/package.json name `WorkflowInfo.name` carries). Best-effort:
- * a workflow whose sources can't be read simply contributes no edges.
- */
-export async function detectInterconnections(
-  workflows: readonly { path: string; manifestName: string }[],
-): Promise<InterconnectionEdge[]> {
-  const byName = new Map(workflows.map((w) => [w.manifestName, w.manifestName]));
-  const edges: InterconnectionEdge[] = [];
-  for (const workflow of workflows) {
-    const slugs = await launchedSlugs(workflow.path);
-    for (const slug of slugs) {
-      edges.push({
-        fromManifestName: workflow.manifestName,
-        toManifestName: byName.get(slug) ?? null,
-        toSlug: slug,
-      });
-    }
-  }
-  return edges;
+  return launches;
 }
