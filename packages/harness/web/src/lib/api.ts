@@ -7,6 +7,8 @@
 import type {
   AppState,
   CreateSessionRequest,
+  FsDirEntry,
+  FsListResponse,
   HarnessSession,
   HarnessSettings,
   InjectInputRequest,
@@ -18,6 +20,8 @@ import type {
 
 import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
 
+export type { FsDirEntry, FsListResponse };
+
 export function isMockMode(): boolean {
   return import.meta.env.VITE_MOCK === "1";
 }
@@ -27,25 +31,6 @@ export function getBootToken(): string {
   const injected = (window as unknown as { __HARNESS__?: { token?: string } }).__HARNESS__;
   if (injected?.token) return injected.token;
   return new URLSearchParams(window.location.search).get("token") ?? "";
-}
-
-/**
- * GET /api/fs/list?path= response shape (directory autocomplete for the
- * new-session picker). Mirrors src/server/fs.ts's own local types — not yet
- * folded into the shared contract, so duplicated here rather than importing
- * across the client/server boundary. `parent` is always a real path, never
- * null: at the filesystem root it equals `path` itself (matches
- * `path.dirname("/") === "/"`), so "no further up" is `parent === path`.
- */
-export interface FsDirEntry {
-  name: string;
-  path: string;
-}
-
-export interface FsListResponse {
-  path: string;
-  parent: string;
-  dirs: FsDirEntry[];
 }
 
 export interface HarnessApi {

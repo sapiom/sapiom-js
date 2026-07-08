@@ -9,19 +9,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
+import type { FsDirEntry, FsListResponse } from "../shared/types.js";
+
+export type { FsDirEntry, FsListResponse } from "../shared/types.js";
 
 const MAX_RESULTS = 200;
-
-export interface FsDirEntry {
-  name: string;
-  path: string;
-}
-
-export interface FsListResponse {
-  path: string;
-  parent: string;
-  dirs: FsDirEntry[];
-}
 
 function expandHome(input: string): string {
   if (input === "~") return os.homedir();
