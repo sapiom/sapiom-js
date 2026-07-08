@@ -110,6 +110,42 @@ test("inject macros are enabled once the boot session and a deployed workflow ar
   await expect(page.getByTestId("macro-deploy")).toBeEnabled();
 });
 
+test.describe("workspace binding", () => {
+  test("the rail groups workflows into a tree: active session's directory first, others below", async ({ page }) => {
+    // Boot session's cwd is /Users/demo/acme-app, which owns "leasing".
+    const activeGroup = page.getByTestId("workspace-group-acme-app");
+    await expect(activeGroup).toBeVisible();
+    await expect(page.locator(".workspace-group.is-active")).toContainText("acme-app");
+
+    // "rfq" lives under /Users/demo/rfq-workflows, a different known session's directory.
+    await expect(page.getByTestId("workspace-group-rfq-workflows")).toBeVisible();
+
+    // "onboarding-flow" isn't under any known session's directory.
+    await expect(page.getByText("Other")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/workspace-tree.png", fullPage: true });
+  });
+
+  test("selecting a workflow binds it to the active session and shows a chip", async ({ page }) => {
+    await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
+
+    await page.getByTestId("workflow-leasing").click();
+    const chip = page.getByTestId("session-workflow-chip");
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText("working on leasing");
+  });
+
+  test("the binding is per-session: switching sessions shows that session's own binding", async ({ page }) => {
+    await page.getByTestId("workflow-leasing").click();
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("leasing");
+
+    // Switch to a session that's never had anything bound.
+    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
+    await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
+  });
+});
+
 test("new-session modal: directory picker navigates and validates", async ({ page }) => {
   await page.getByTestId("new-session-btn").click();
   await expect(page.getByText("New session")).toBeVisible();

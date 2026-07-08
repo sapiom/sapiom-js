@@ -10,7 +10,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { createApi, getBootToken, type FsListResponse } from "./api";
+import { boundWorkflowPathOf, createApi, getBootToken, type FsListResponse } from "./api";
 import { subscribeEvents } from "./events";
 
 const api = createApi();
@@ -34,6 +34,8 @@ export interface HarnessStateHook {
   /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
   closeSession: (id: string) => Promise<void>;
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
+  /** Binds a workflow to a session ("what am I working on") — null unbinds. */
+  bindWorkflow: (sessionId: string, workflowPath: string | null) => Promise<void>;
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
   listDir: (path?: string) => Promise<FsListResponse>;
@@ -69,6 +71,16 @@ export function useHarnessState(): HarnessStateHook {
       cancelled = true;
     };
   }, []);
+
+  // Switching sessions follows that session's own binding (if any) rather than
+  // leaving the rail highlighted on whatever the previous session had selected.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const session = state?.sessions.find((s) => s.id === activeSessionId);
+    const bound = boundWorkflowPathOf(session);
+    if (bound) setSelectedWorkflowPath(bound);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
 
   const refreshWorkflows = useCallback(async () => {
     const workflows = await api.listWorkflows();
@@ -162,6 +174,13 @@ export function useHarnessState(): HarnessStateHook {
     return workflow;
   }, []);
 
+  const bindWorkflow = useCallback(async (sessionId: string, workflowPath: string | null): Promise<void> => {
+    const session = await api.bindWorkflow(sessionId, workflowPath);
+    setState((prev) =>
+      prev ? { ...prev, sessions: prev.sessions.map((s) => (s.id === session.id ? session : s)) } : prev,
+    );
+  }, []);
+
   const updateSettings = useCallback(async (patch: Partial<HarnessSettings>): Promise<HarnessSettings> => {
     const updated = await api.updateSettings(patch);
     setSettings(updated);
@@ -195,6 +214,7 @@ export function useHarnessState(): HarnessStateHook {
     resumeFromHistory,
     closeSession,
     connectWorkflow,
+    bindWorkflow,
     updateSettings,
     runMacro,
     listDir,

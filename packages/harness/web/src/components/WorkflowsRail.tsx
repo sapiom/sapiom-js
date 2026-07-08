@@ -1,15 +1,50 @@
 import { useState } from "react";
 import type { JSX } from "react";
-import type { WorkflowInfo } from "@shared/types";
+import type { HarnessSession, WorkflowInfo } from "@shared/types";
+
+import { Icon } from "./Icon";
+import { buildWorkspaceTree } from "../lib/workspace-tree";
 
 interface WorkflowsRailProps {
   workflows: WorkflowInfo[];
+  sessions: HarnessSession[];
+  activeSessionId: string | null;
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onConnect: (path: string) => Promise<void>;
 }
 
-export function WorkflowsRail({ workflows, selectedPath, onSelect, onConnect }: WorkflowsRailProps): JSX.Element {
+function WorkflowRow({
+  workflow,
+  isSelected,
+  onSelect,
+}: {
+  workflow: WorkflowInfo;
+  isSelected: boolean;
+  onSelect: (path: string) => void;
+}): JSX.Element {
+  return (
+    <button
+      className={"workflow-item" + (isSelected ? " is-selected" : "")}
+      data-testid={`workflow-${workflow.name}`}
+      onClick={() => onSelect(workflow.path)}
+      title={workflow.path}
+    >
+      <span className="workflow-caret">▸</span>
+      <span className="workflow-name">{workflow.name}</span>
+      {workflow.definitionId != null && <span className="workflow-dot" title="Deployed" />}
+    </button>
+  );
+}
+
+export function WorkflowsRail({
+  workflows,
+  sessions,
+  activeSessionId,
+  selectedPath,
+  onSelect,
+  onConnect,
+}: WorkflowsRailProps): JSX.Element {
   const [connecting, setConnecting] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,24 +66,45 @@ export function WorkflowsRail({ workflows, selectedPath, onSelect, onConnect }: 
     }
   };
 
+  const { groups, ungrouped } = buildWorkspaceTree(workflows, sessions, activeSessionId);
+
   return (
     <aside className="rail rail-workflows">
-      <div className="rail-header">Workflows</div>
+      <div className="rail-header">Workspace</div>
       <div className="rail-list">
-        {workflows.length === 0 && <div className="rail-empty">No workflows yet</div>}
-        {workflows.map((workflow) => (
-          <button
-            key={workflow.path}
-            className={"workflow-item" + (workflow.path === selectedPath ? " is-selected" : "")}
-            data-testid={`workflow-${workflow.name}`}
-            onClick={() => onSelect(workflow.path)}
-            title={workflow.path}
-          >
-            <span className="workflow-caret">▸</span>
-            <span className="workflow-name">{workflow.name}</span>
-            {workflow.definitionId != null && <span className="workflow-dot" title="Deployed" />}
-          </button>
+        {groups.length === 0 && ungrouped.length === 0 && <div className="rail-empty">No workflows yet</div>}
+
+        {groups.map((group) => (
+          <div key={group.cwd} className={"workspace-group" + (group.isActive ? " is-active" : "")}>
+            <div className="workspace-group-header" data-testid={`workspace-group-${group.label}`}>
+              <Icon name={group.isActive ? "Radio" : "Folder"} size={11} />
+              {group.label}
+            </div>
+            {group.workflows.length === 0 && <div className="workspace-group-empty">No workflows here yet</div>}
+            {group.workflows.map((workflow) => (
+              <WorkflowRow
+                key={workflow.path}
+                workflow={workflow}
+                isSelected={workflow.path === selectedPath}
+                onSelect={onSelect}
+              />
+            ))}
+          </div>
         ))}
+
+        {ungrouped.length > 0 && (
+          <div className="workspace-group">
+            <div className="workspace-group-header">Other</div>
+            {ungrouped.map((workflow) => (
+              <WorkflowRow
+                key={workflow.path}
+                workflow={workflow}
+                isSelected={workflow.path === selectedPath}
+                onSelect={onSelect}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {connecting ? (

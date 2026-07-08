@@ -19,6 +19,8 @@ interface SessionBarProps {
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
+  /** The active session's bound workflow name ("working on X" chip), if any. */
+  boundWorkflowName: string | null;
   authenticated: boolean;
   organizationName: string | null;
   telemetryOptIn: boolean;
@@ -37,6 +39,7 @@ export function SessionBar({
   launchDir,
   listDir,
   onCreateSession,
+  boundWorkflowName,
   authenticated,
   organizationName,
   telemetryOptIn,
@@ -67,6 +70,11 @@ export function SessionBar({
         <button className="session-dropdown-trigger" data-testid="session-dropdown-trigger" onClick={toggle}>
           <span className="session-dot" data-status={activeSession?.status ?? "none"} />
           <span className="session-title">{activeSession ? activeSession.title : "No session"}</span>
+          {boundWorkflowName && (
+            <span className="session-workflow-chip" data-testid="session-workflow-chip">
+              ▸ working on {boundWorkflowName}
+            </span>
+          )}
           <Icon name="ChevronDown" size={14} />
         </button>
 
