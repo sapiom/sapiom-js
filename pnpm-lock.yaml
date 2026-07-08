@@ -305,6 +305,9 @@ importers:
 
   packages/harness:
     dependencies:
+      '@sapiom/agent-core':
+        specifier: workspace:^
+        version: link:../agent-core
       '@sapiom/mcp':
         specifier: workspace:^
         version: link:../mcp

@@ -45,9 +45,11 @@
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "pnpm build",
     "mock-collector": "node scripts/mock-collector.mjs",
-    "sim:e2e": "tsx scripts/e2e-sim.ts"
+    "sim:e2e": "tsx scripts/e2e-sim.ts",
+    "seed-example": "node scripts/seed-example.mjs"
   },
   "dependencies": {
+    "@sapiom/agent-core": "workspace:^",
     "@sapiom/mcp": "workspace:^",
     "express": "^4.21.0",
     "node-pty": "^1.1.0",
