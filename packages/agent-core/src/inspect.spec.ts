@@ -70,7 +70,7 @@ describe("waitForExecution", () => {
 
   it("keeps waiting through an auto-resuming (coding) pause", async () => {
     const { client } = fakeClient([
-      { status: "paused", pausedSignalName: "agent.coding.result" },
+      { status: "paused", pausedSignalName: "models.coding.result" },
       { status: "completed" },
     ]);
 

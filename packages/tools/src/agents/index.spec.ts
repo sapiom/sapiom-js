@@ -43,7 +43,7 @@ describe("orchestrations.launch — dispatch handle", () => {
   });
 
   it("AGENTS_RESULT_SIGNAL is the capability-stable terminal signal", () => {
-    expect(AGENTS_RESULT_SIGNAL).toBe("orchestrations.result");
+    expect(AGENTS_RESULT_SIGNAL).toBe("agents.result");
   });
 });
 

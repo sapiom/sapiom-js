@@ -58,13 +58,13 @@ describe('pauseUntilSignal', () => {
 });
 
 describe('pauseUntilSignal — dispatch handle overload', () => {
-  const handle: DispatchHandle = { dispatch: { correlationId: 'run-9', resultSignal: 'agent.coding.result' } };
+  const handle: DispatchHandle = { dispatch: { correlationId: 'run-9', resultSignal: 'models.coding.result' } };
 
   it('builds a Pause from a resolved handle, reading signal + correlationId off it', async () => {
     const d = await pauseUntilSignal(handle, { resumeStep: 'review' });
     expect(d).toEqual({
       kind: DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL,
-      signal: { name: 'agent.coding.result', correlationId: 'run-9' },
+      signal: { name: 'models.coding.result', correlationId: 'run-9' },
       resumeStep: 'review',
       timeoutMs: undefined,
       output: undefined,
@@ -73,7 +73,7 @@ describe('pauseUntilSignal — dispatch handle overload', () => {
 
   it('awaits a launch promise and builds the identical Pause directive', async () => {
     const d = await pauseUntilSignal(Promise.resolve(handle), { resumeStep: 'review', timeoutMs: 1000 });
-    expect(d.signal).toEqual({ name: 'agent.coding.result', correlationId: 'run-9' });
+    expect(d.signal).toEqual({ name: 'models.coding.result', correlationId: 'run-9' });
     expect(d.resumeStep).toBe('review');
     expect(d.timeoutMs).toBe(1000);
   });

@@ -28,7 +28,7 @@ const DEFAULT_BASE_URL =
  * orchestration handle resumes on this; it is the value carried in the handle's
  * `dispatch.resultSignal`.
  */
-export const AGENTS_RESULT_SIGNAL = "orchestrations.result";
+export const AGENTS_RESULT_SIGNAL = "agents.result";
 
 /** Run lifecycle status. */
 export type ExecutionStatus =

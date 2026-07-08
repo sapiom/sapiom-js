@@ -60,7 +60,7 @@ export function isExecutionTerminal(status: string): boolean {
  * Extend as more dispatched capabilities land.
  */
 const AUTO_RESUME_PAUSE_SIGNALS = [
-  "agent.coding.result",
+  "models.coding.result",
   "contentGeneration.video.result",
 ];
 

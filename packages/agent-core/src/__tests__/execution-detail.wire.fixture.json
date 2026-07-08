@@ -31,7 +31,7 @@
   "children": [
     {
       "executionId": "exec_0002",
-      "targetType": "orchestration",
+      "targetType": "agent",
       "correlationId": "exec_0002",
       "status": "resolved"
     }
@@ -90,7 +90,7 @@
       "spanId": "span_0002",
       "dispatch": {
         "targetId": "exec_0002",
-        "targetType": "orchestration",
+        "targetType": "agent",
         "correlationId": "exec_0002",
         "status": "resolved"
       },

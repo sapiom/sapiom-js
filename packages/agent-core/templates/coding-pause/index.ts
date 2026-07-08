@@ -11,7 +11,7 @@ import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
 /**
  * __PROJECT_NAME__ — a non-blocking coding-agent workflow.
  *
- *   prepare → kickoff ──pause(agent.coding.result)──▶ finalize
+ *   prepare → kickoff ──pause(models.coding.result)──▶ finalize
  *
  * `kickoff` *launches* the coding agent (fire-and-forget) and returns
  * `pauseUntilSignal(handle, …)`, suspending the workflow on the run's result

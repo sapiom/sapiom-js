@@ -90,7 +90,7 @@ describe("inspect() decodes the real execution-detail wire", () => {
 
     expect(result.steps[1]?.dispatch).toEqual({
       childExecutionId: "exec_0002",
-      targetType: "orchestration",
+      targetType: "agent",
       correlationId: "exec_0002",
       status: "resolved",
     });

@@ -53,7 +53,7 @@ describe("agent.launch — dispatch handle", () => {
   });
 
   it("MODEL_RUN_RESULT_SIGNAL is the capability-stable terminal signal", () => {
-    expect(MODEL_RUN_RESULT_SIGNAL).toBe("agent.run.result");
+    expect(MODEL_RUN_RESULT_SIGNAL).toBe("models.run.result");
   });
 
   it("posts to /models/v1/runs", async () => {

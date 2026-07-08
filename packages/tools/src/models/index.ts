@@ -36,7 +36,7 @@ const DEFAULT_BASE_URL =
  * branches). A workflow step paused on a coding-run handle resumes on this; it is
  * the value carried in the handle's `dispatch.resultSignal`.
  */
-export const CODING_RESULT_SIGNAL = "agent.coding.result";
+export const CODING_RESULT_SIGNAL = "models.coding.result";
 
 /** Run lifecycle, mirrored from the gateway's `ModelsRunStatus`. */
 export type RunStatus =
@@ -402,7 +402,7 @@ export const coding = { run: codingRun, launch: codingLaunch };
  * paused on an agent-run handle resumes on this; it's the handle's
  * `dispatch.resultSignal`.
  */
-export const MODEL_RUN_RESULT_SIGNAL = "agent.run.result";
+export const MODEL_RUN_RESULT_SIGNAL = "models.run.result";
 
 /** Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`). */
 export type ModelRunStatus = "pending" | "running" | "completed" | "failed";

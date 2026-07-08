@@ -6,7 +6,7 @@ resumes once the run finishes — authored as code against
 [`@sapiom/agent`](https://www.npmjs.com/package/@sapiom/agent).
 
 ```
-prepare → kickoff ──pause(agent.coding.result)──▶ finalize
+prepare → kickoff ──pause(models.coding.result)──▶ finalize
 ```
 
 - **kickoff** calls `agent.coding.launch(...)` (which returns a handle, *not* a

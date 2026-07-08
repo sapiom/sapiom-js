@@ -41,7 +41,7 @@ describe("agent.coding.launch — dispatch handle", () => {
   });
 
   it("CODING_RESULT_SIGNAL is the capability-stable terminal signal", () => {
-    expect(CODING_RESULT_SIGNAL).toBe("agent.coding.result");
+    expect(CODING_RESULT_SIGNAL).toBe("models.coding.result");
   });
 });
 
