@@ -59,15 +59,16 @@ describe("resolveMacro", () => {
     });
   });
 
-  it("substitutes missing workflow fields with empty strings when no workflow is selected", () => {
+  it("throws MacroValidationError listing every missing placeholder, rather than injecting a hole", () => {
     const macro: MacroDef = {
       id: "visualize",
       label: "Visualize",
       icon: "Sparkles",
       action: { kind: "inject", text: "path=[{{workflow.path}}] id=[{{workflow.definitionId}}]" },
     };
-    const resolved = resolveMacro(macro, { ...baseCtx, workflow: null });
-    expect(resolved).toEqual({ kind: "inject", text: "path=[] id=[]", submit: true });
+    expect(() => resolveMacro(macro, { ...baseCtx, workflow: null })).toThrow(
+      "Missing values for: {{workflow.path}}, {{workflow.definitionId}}",
+    );
   });
 
   it("throws MacroValidationError when requiresWorkflow and no workflow is selected", () => {
@@ -79,9 +80,12 @@ describe("resolveMacro", () => {
       action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents deploy" },
     };
     expect(() => resolveMacro(macro, { ...baseCtx, workflow: null })).toThrow(MacroValidationError);
+    expect(() => resolveMacro(macro, { ...baseCtx, workflow: null })).toThrow(
+      "requires a selected workflow",
+    );
   });
 
-  it("does not require a workflow when requiresWorkflow is falsy, even with a null workflow", () => {
+  it("does not require a workflow when requiresWorkflow is falsy and the template doesn't reference one", () => {
     const macro: MacroDef = {
       id: "visualize",
       label: "Visualize",
@@ -91,6 +95,32 @@ describe("resolveMacro", () => {
     expect(resolveMacro(macro, { ...baseCtx, workflow: null })).toEqual({
       kind: "inject",
       text: "visualize the leasing funnel",
+      submit: true,
+    });
+  });
+
+  it("throws MacroValidationError when subject is referenced but not provided", () => {
+    const macro: MacroDef = {
+      id: "visualize",
+      label: "Visualize",
+      icon: "Sparkles",
+      action: { kind: "inject", text: "visualize {{subject}}" },
+    };
+    expect(() => resolveMacro(macro, { ...baseCtx, subject: undefined })).toThrow(
+      "Missing values for: {{subject}}",
+    );
+  });
+
+  it("leaves an unrecognized {{...}}-shaped token verbatim", () => {
+    const macro: MacroDef = {
+      id: "custom",
+      label: "Custom",
+      icon: "Sparkles",
+      action: { kind: "inject", text: "note: {{not.a.real.placeholder}}" },
+    };
+    expect(resolveMacro(macro, baseCtx)).toEqual({
+      kind: "inject",
+      text: "note: {{not.a.real.placeholder}}",
       submit: true,
     });
   });

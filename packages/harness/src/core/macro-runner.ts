@@ -27,26 +27,53 @@ export class MacroValidationError extends Error {
   }
 }
 
-// Target lib is ES2020 (see the root tsconfig) — no String.prototype.replaceAll.
-function replaceAllLiteral(input: string, search: string, replacement: string): string {
-  return input.split(search).join(replacement);
+const PLACEHOLDER_PATTERN = /\{\{[a-zA-Z.]+\}\}/g;
+
+interface PlaceholderEntry {
+  /** False when the context has no real value for this token (e.g. no
+   *  workflow selected, or an empty subject) — substituting it anyway would
+   *  silently inject a broken prompt/URL. */
+  available: boolean;
+  value: string;
 }
 
-function substitute(template: string, ctx: MacroContext): string {
-  const replacements: Record<string, string> = {
-    "{{workflow.path}}": ctx.workflow?.path ?? "",
-    "{{workflow.name}}": ctx.workflow?.name ?? "",
-    "{{workflow.definitionId}}":
-      ctx.workflow?.definitionId != null ? String(ctx.workflow.definitionId) : "",
-    "{{session.cwd}}": ctx.sessionCwd,
-    "{{canvas.path}}": ctx.canvasPath,
-    "{{subject}}": ctx.subject ?? "",
+function placeholderTable(ctx: MacroContext): Record<string, PlaceholderEntry> {
+  return {
+    "{{workflow.path}}": { available: ctx.workflow != null, value: ctx.workflow?.path ?? "" },
+    "{{workflow.name}}": { available: ctx.workflow != null, value: ctx.workflow?.name ?? "" },
+    "{{workflow.definitionId}}": {
+      available: ctx.workflow?.definitionId != null,
+      value: ctx.workflow?.definitionId != null ? String(ctx.workflow.definitionId) : "",
+    },
+    "{{session.cwd}}": { available: true, value: ctx.sessionCwd },
+    "{{canvas.path}}": { available: true, value: ctx.canvasPath },
+    "{{subject}}": { available: Boolean(ctx.subject), value: ctx.subject ?? "" },
   };
+}
 
-  let result = template;
-  for (const [placeholder, value] of Object.entries(replacements)) {
-    result = replaceAllLiteral(result, placeholder, value);
+/**
+ * Substitutes every known `{{...}}` placeholder found in `template`. Throws
+ * `MacroValidationError` listing every placeholder that's present in the
+ * template but has no value in `ctx` — instead of silently injecting text
+ * with a hole in it (e.g. "visualize  to .sapiom/canvas/index.html" with no
+ * subject). An unrecognized `{{...}}`-shaped token is left verbatim; it's not
+ * a placeholder this engine knows about.
+ */
+function substitute(template: string, ctx: MacroContext): string {
+  const table = placeholderTable(ctx);
+  const missing: string[] = [];
+
+  const result = template.replace(PLACEHOLDER_PATTERN, (token) => {
+    const entry = table[token];
+    if (!entry) return token;
+    if (!entry.available) missing.push(token);
+    return entry.value;
+  });
+
+  if (missing.length > 0) {
+    throw new MacroValidationError(`Missing values for: ${missing.join(", ")}`);
   }
+
   return result;
 }
 
