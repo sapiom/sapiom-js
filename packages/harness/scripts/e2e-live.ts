@@ -21,6 +21,9 @@
  *   5. Writing to the session's canvas dir produces a canvas.reload frame,
  *      and GET /canvas/:id/ serves what was written.
  *   6. POST /api/macros/:id/run is accepted (injects into the pty).
+ *   7. The CLI's launch directory is scanned for workflows at boot, and a
+ *      new directory is scanned when a session opens in it — both fire a
+ *      workflows.changed frame on /ws/events.
  *
  * Run with: pnpm e2e:live
  */
@@ -63,10 +66,57 @@ interface FakeClaudeCapture {
   env: Record<string, string | null>;
 }
 
+/**
+ * node-pty ships prebuilt native binaries rather than compiling from source.
+ * Observed in the wild: a pnpm-managed install (even with
+ * onlyBuiltDependencies configured) can extract the darwin/linux
+ * `spawn-helper` without its executable bit set, which fails every single
+ * pty spawn with an opaque "posix_spawnp failed" — nothing to do with this
+ * script or the harness's own code. session-manager.ts's loadDefaultSpawn()
+ * self-heals this on first real use, but this script spawns real ptys as
+ * its whole point, so fail fast here with an actionable message rather than
+ * an obscure native stack trace three layers down.
+ */
+async function preflightNodePty(): Promise<void> {
+  try {
+    const nodePty = await import("node-pty");
+    const probe = nodePty.spawn(process.execPath, ["-e", "process.exit(0)"], {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd: process.cwd(),
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("node-pty preflight spawn timed out")), 3000);
+      probe.onExit(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  } catch (err) {
+    console.error(
+      "\nnode-pty preflight failed — every session spawn in this run would fail the same way.\n" +
+        "This usually means the platform's spawn-helper binary landed without its executable bit\n" +
+        "set (a known pnpm + node-pty interaction, even with onlyBuiltDependencies configured).\n" +
+        "Try: pnpm rebuild node-pty — or manually chmod +x the spawn-helper under\n" +
+        "node_modules/.pnpm/node-pty*/node_modules/node-pty/prebuilds/<platform>-<arch>/spawn-helper\n",
+    );
+    console.error(`Original error: ${err instanceof Error ? err.message : String(err)}\n`);
+    throw err;
+  }
+}
+
 async function main(): Promise<void> {
+  await preflightNodePty();
+  console.log("node-pty preflight ok");
+
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-live-"));
   const projectDir = path.join(tmpRoot, "project");
   await fs.mkdir(projectDir, { recursive: true });
+  // A sapiom.json marker here, in the CLI's launch directory, proves the
+  // boot-time workflow scan (item 7 below) — it must be in place before
+  // startServer() runs its one-shot scan of launchDir.
+  await fs.writeFile(path.join(projectDir, "sapiom.json"), JSON.stringify({ definitionId: 4821 }));
   const collectorCwd = path.join(tmpRoot, "collector");
   await fs.mkdir(collectorCwd, { recursive: true });
   console.log(`scratch dir: ${tmpRoot}`);
@@ -110,6 +160,7 @@ async function main(): Promise<void> {
     sessionsPath: path.join(tmpRoot, "sessions.json"),
     eventStorePath,
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
+    launchDir: projectDir,
   });
   console.log(`harness server listening on http://127.0.0.1:${server.port}`);
 
@@ -292,6 +343,51 @@ async function main(): Promise<void> {
     const macroBody = (await macroRes.json()) as { ok: boolean };
     assert(macroBody.ok === true, "macro run responds { ok: true }");
 
+    // --- 11. the launch directory's sapiom.json (written before startServer) was scanned at boot ---
+    // Note: WorkflowInfo.name comes from package.json (or the directory's own
+    // basename) — the sapiom.json marker itself only carries definitionId —
+    // so that's what distinguishes "found the real marker" from "found some
+    // other directory".
+    type WorkflowInfoLike = { name: string; path: string; definitionId: number | null };
+    const bootWorkflows = await waitFor(async () => {
+      const res = await fetch(`${baseUrl}/api/workflows`, { headers });
+      const workflows = (await res.json()) as WorkflowInfoLike[];
+      return workflows.some((w) => w.path === projectDir) ? workflows : undefined;
+    });
+    assert(
+      bootWorkflows.some((w) => w.path === projectDir && w.definitionId === 4821),
+      "boot-time scan of the CLI's launch directory discovered its sapiom.json (definitionId read from the marker)",
+    );
+
+    // --- 12. opening a session in a brand-new directory scans it too, and broadcasts workflows.changed ---
+    const secondProjectDir = path.join(tmpRoot, "second-project");
+    await fs.mkdir(secondProjectDir, { recursive: true });
+    await fs.writeFile(path.join(secondProjectDir, "sapiom.json"), JSON.stringify({ definitionId: 9001 }));
+
+    const workflowsChangedBefore = wsMessages.filter((m) => m.type === "workflows.changed").length;
+    const secondSessionRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ cwd: secondProjectDir, harness: "claude-code" }),
+    });
+    assert(secondSessionRes.status === 201, "POST /api/sessions (second directory) returns 201");
+
+    await waitFor(async () => {
+      const count = wsMessages.filter((m) => m.type === "workflows.changed").length;
+      return count > workflowsChangedBefore ? true : undefined;
+    });
+    console.log("workflows.changed frame received for the new session directory");
+
+    const afterSecondSession = await waitFor(async () => {
+      const res = await fetch(`${baseUrl}/api/workflows`, { headers });
+      const workflows = (await res.json()) as WorkflowInfoLike[];
+      return workflows.some((w) => w.path === secondProjectDir) ? workflows : undefined;
+    });
+    assert(
+      afterSecondSession.some((w) => w.path === secondProjectDir && w.definitionId === 9001),
+      "creating a session in a new directory scanned and discovered its sapiom.json",
+    );
+
     console.log("\nPASS — live integration proof succeeded\n");
   } finally {
     ws?.close();
@@ -301,7 +397,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+// Explicit exit: the harness session's pty child (fake-claude) deliberately
+// stays alive and is not torn down by server.close(), so without this the
+// script hangs forever after PASS — which stalls any runner that awaits it.
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

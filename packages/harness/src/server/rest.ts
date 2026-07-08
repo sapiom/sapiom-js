@@ -48,6 +48,10 @@ export interface RestRouterOptions {
   /** Called after a settings PATCH persists a changed telemetryOptIn, so the
    * live collector batcher can be gated without a server restart. */
   onTelemetryOptInChange?: (optIn: boolean) => void;
+  /** Called (fire-and-forget) after a session is created, with its cwd — lets
+   * the integrator scan that directory for workflows so opening a session in
+   * a new project discovers them without a manual "+ Connect". */
+  onSessionCreated?: (cwd: string) => void;
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
@@ -113,6 +117,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     try {
       const session = await sessionManager.create(parsed.data);
       res.status(201).json(session);
+      options.onSessionCreated?.(parsed.data.cwd);
     } catch (err) {
       next(err);
     }
