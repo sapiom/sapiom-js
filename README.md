@@ -6,176 +6,145 @@
 > ⚠️ **Beta Status:** Currently in v0.x (beta). API may change before v1.0.0.
 > Production-ready and actively maintained.
 
-TypeScript SDK for building AI agents and applications with the Sapiom API. Provides seamless payment handling, authorization flows, and framework integrations.
+TypeScript SDK for **building, running, and operating AI agents on Sapiom**.
+Author agents as typed step graphs, call Sapiom paid tools (sandboxes, git
+repos, coding models, search, file storage, …) directly from your code, and ship
+them to the Sapiom engine from the CLI or your coding agent's MCP.
 
 ## 📦 Packages
 
-This is a monorepo containing multiple focused packages. Install only what you need:
+This is a monorepo of focused packages. Install only what you need.
 
-### Core Package
+### Build & run agents
 
-| Package | Version | Description |
-|---------|---------|-------------|
-| [@sapiom/core](./packages/core) | [v0.1.1](https://www.npmjs.com/package/@sapiom/core) | Core transaction client, handlers, and utilities |
+| Package                           | Version                                                                                           | Description                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [@sapiom/agent](./packages/agent) | [![npm](https://img.shields.io/npm/v/@sapiom/agent)](https://www.npmjs.com/package/@sapiom/agent) | The authoring contract: `defineAgent`, `defineStep`, directives (`goto`/`terminate`), and types |
+| [@sapiom/tools](./packages/tools) | [![npm](https://img.shields.io/npm/v/@sapiom/tools)](https://www.npmjs.com/package/@sapiom/tools) | Typed client for Sapiom capabilities — the same tools your agents call, callable from your code |
+| [@sapiom/cli](./packages/cli)     | [![npm](https://img.shields.io/npm/v/@sapiom/cli)](https://www.npmjs.com/package/@sapiom/cli)     | Command line: scaffold, validate, deploy, and schedule agents                                   |
+| [@sapiom/mcp](./packages/mcp)     | [![npm](https://img.shields.io/npm/v/@sapiom/mcp)](https://www.npmjs.com/package/@sapiom/mcp)     | Local developer MCP server (`sapiom-dev`) — build & operate agents from your coding agent       |
 
-### HTTP Client Integrations
+### Runtime internals
 
-| Package | Version | Description |
-|---------|---------|-------------|
-| [@sapiom/axios](./packages/axios) | [v0.1.1](https://www.npmjs.com/package/@sapiom/axios) | Axios HTTP client integration |
-| [@sapiom/fetch](./packages/fetch) | [v0.1.1](https://www.npmjs.com/package/@sapiom/fetch) | Native Fetch API integration |
-| [@sapiom/node-http](./packages/node-http) | [v0.1.2](https://www.npmjs.com/package/@sapiom/node-http) | Node.js HTTP/HTTPS integration |
+Lower-level packages that power the stack above. Most users never import these
+directly, but they're published for advanced/host integrations.
 
-### Framework Integrations
-
-| Package | Version | LangChain | Description |
-|---------|---------|-----------|-------------|
-| [@sapiom/langchain](./packages/langchain) | [v0.1.1](https://www.npmjs.com/package/@sapiom/langchain) | v1.x | LangChain v1.x integration (recommended) |
-| [@sapiom/langchain-classic](./packages/langchain-classic) | [v0.1.1](https://www.npmjs.com/package/@sapiom/langchain-classic) | v0.3+ | LangChain v0.x integration (legacy) |
-
-### Coming Soon
-
-- `@sapiom/mastra` - Mastra framework integration
-- `@sapiom/langgraph` - LangGraph integration  
-- `@sapiom/openai` - OpenAI SDK integration
+| Package                                           | Version                                                                                                           | Description                                                                                             |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| [@sapiom/agent-core](./packages/agent-core)       | [![npm](https://img.shields.io/npm/v/@sapiom/agent-core)](https://www.npmjs.com/package/@sapiom/agent-core)       | Pure, stateless functions for scaffolding, validating, and operating agents — shared by the CLI and MCP |
+| [@sapiom/agent-runtime](./packages/agent-runtime) | [![npm](https://img.shields.io/npm/v/@sapiom/agent-runtime)](https://www.npmjs.com/package/@sapiom/agent-runtime) | Host-agnostic graph-walker runtime — one runtime, two hosts (server engine + local runner)              |
 
 ## 🚀 Quick Start
 
-**New to Sapiom?** Check out the [examples folder](./examples) for complete setup instructions and working demos.
+**New to Sapiom?** The fastest path is the CLI or the developer MCP — both
+scaffold a working agent for you. See the [examples folder](./examples) for
+complete, runnable projects.
 
-### For Axios Users
-
-```bash
-npm install @sapiom/axios axios
-```
-
-```typescript
-import axios from 'axios';
-import { createSapiomClient } from '@sapiom/axios';
-
-const client = createSapiomClient(axios.create({
-  baseURL: 'https://api.example.com'
-}));
-
-const response = await client.get('/premium-endpoint');
-```
-
-### For Fetch Users
+### Scaffold an agent with the CLI
 
 ```bash
-npm install @sapiom/fetch
+npx @sapiom/cli agents init my-app   # scaffold a project
+cd my-app
+npx @sapiom/cli agents check         # validate locally (bundle, manifest, graph)
+npx @sapiom/cli agents deploy        # build and ship
 ```
+
+### Author an agent
+
+An agent is a typed graph of steps. Each step does work and returns a directive
+telling the runtime where to go next.
 
 ```typescript
-import { createSapiomFetch } from '@sapiom/fetch';
+import { defineAgent, defineStep, goto, terminate } from "@sapiom/agent";
 
-const fetch = createSapiomFetch();
-const response = await fetch('https://api.example.com/data');
-```
-
-### For LangChain v1.x Users
-
-```bash
-npm install @sapiom/langchain langchain
-```
-
-```typescript
-import { createAgent } from "langchain";
-import { createSapiomMiddleware } from "@sapiom/langchain";
-
-const agent = createAgent({
-  model: "gpt-4",
-  tools: [getWeather, sendEmail],
-  middleware: [
-    createSapiomMiddleware({
-      apiKey: process.env.SAPIOM_API_KEY,
-    }),
-  ],
+const start = defineStep({
+  name: "start",
+  next: ["finish"],
+  async run(input, ctx) {
+    return goto("finish", { greeting: `hello ${input.name}` });
+  },
 });
 
-const result = await agent.invoke({
-  messages: [{ role: "user", content: "What's the weather?" }],
+const finish = defineStep({
+  name: "finish",
+  next: [],
+  terminal: true,
+  async run(input) {
+    return terminate({ done: true, ...input });
+  },
+});
+
+export const hello = defineAgent({
+  name: "hello",
+  entry: "start",
+  steps: { start, finish },
 });
 ```
 
-### For LangChain v0.x Users (Legacy)
+### Call Sapiom capabilities from your code
 
-```bash
-npm install @sapiom/langchain-classic
-```
-
-```typescript
-import { createSapiomReactAgent } from '@sapiom/langchain-classic';
-
-const agent = await createSapiomReactAgent(
-  { llm: new ChatOpenAI({ model: "gpt-4" }), tools: [...] },
-  { apiKey: process.env.SAPIOM_API_KEY }
-);
-
-const response = await agent.invoke({ messages: [...] });
-```
-
-### For Direct API Access
-
-If you only need the transaction client without HTTP integrations:
-
-```bash
-npm install @sapiom/core
-```
+`@sapiom/tools` exposes the same capabilities your agents call as tools, typed
+and authenticated to your tenant.
 
 ```typescript
-import { SapiomClient } from '@sapiom/core';
+import { createClient } from "@sapiom/tools";
 
-const client = new SapiomClient({
-  apiKey: process.env.SAPIOM_API_KEY
+const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
+
+// Create a repo, have a coding model build into it, then publish.
+const repo = await sapiom.repositories.create("landing-page");
+const run = await sapiom.models.coding.run({
+  task: "Build a one-page marketing site in index.html.",
+  gitRepository: repo,
 });
 
-const transaction = await client.transactions.create({
-  service: 'api',
-  action: 'call',
-  resource: 'completion'
-});
+if (run.result?.success) {
+  const { sha } = await repo.pushFromSandbox(run.sandbox, {
+    message: "build: landing",
+  });
+  console.log("published", sha);
+}
 ```
+
+### Build agents from your coding agent (MCP)
+
+Add the local developer MCP so your coding agent can scaffold, test, deploy, and
+inspect Sapiom agents. In Claude Code:
+
+```sh
+claude mcp add sapiom-dev -- npx -y @sapiom/mcp
+```
+
+> `@sapiom/mcp` is the **local developer** surface (`sapiom_dev_*`). It is
+> distinct from the remote Sapiom capability MCP that services paid tool calls —
+> see [docs/mcp-servers.md](./docs/mcp-servers.md) for which to use when.
 
 ## 📚 Documentation
 
-- **[Examples](./examples/README.md)** - Getting started with working examples
-- **[@sapiom/core](./packages/core/README.md)** - Core SDK documentation
-- **[@sapiom/axios](./packages/axios/README.md)** - Axios integration guide
-- **[@sapiom/fetch](./packages/fetch/README.md)** - Fetch integration guide
-- **[@sapiom/node-http](./packages/node-http/README.md)** - Node.js HTTP integration guide
-- **[@sapiom/langchain](./packages/langchain/README.md)** - LangChain integration guide
+- **[Examples](./examples/README.md)** — runnable example projects
+- **[The two Sapiom MCP servers](./docs/mcp-servers.md)** — local dev vs. remote capabilities
+- **[@sapiom/agent](./packages/agent/README.md)** — authoring contract
+- **[@sapiom/tools](./packages/tools/README.md)** — capability client
+- **[@sapiom/cli](./packages/cli/README.md)** — command line
+- **[@sapiom/mcp](./packages/mcp/README.md)** — developer MCP
 
 ## 🏗️ Package Architecture
 
 ```
-@sapiom/core              Core transaction API & utilities
+@sapiom/agent            Authoring contract (defineAgent, directives, types)
     ↑
-    ├── @sapiom/axios     Axios integration
-    ├── @sapiom/fetch     Fetch integration
-    ├── @sapiom/node-http Node HTTP integration
-    └── @sapiom/langchain LangChain integration
+    ├── @sapiom/agent-runtime   Host-agnostic graph-walker runtime
+    └── @sapiom/agent-core      Scaffold / validate / operate (pure functions)
+            ↑
+            ├── @sapiom/cli     Command line
+            └── @sapiom/mcp     Local developer MCP (sapiom-dev)
+
+@sapiom/tools            Typed capability client (sandboxes, repos, models, …)
 ```
-
-All integration packages depend on `@sapiom/core` but are independent of each other.
-
-## 🔧 Version Compatibility
-
-### LangChain Support
-
-| Package | LangChain Version | Status |
-|---------|-------------------|---------|
-| `@sapiom/langchain` | v1.x | ✅ Recommended |
-| `@sapiom/langchain-classic` | v0.3+ | ✅ Legacy Support |
-
-- **New projects**: Use `@sapiom/langchain` with LangChain v1.x
-- **Existing v0.x projects**: Use `@sapiom/langchain-classic` (no changes needed)
 
 ## 🛠️ Development
 
 This is a pnpm workspace monorepo.
-
-### Setup
 
 ```bash
 # Install dependencies
@@ -195,15 +164,12 @@ pnpm format
 ### Package Scripts
 
 ```bash
-# Build specific package
-pnpm --filter @sapiom/core build
-pnpm --filter @sapiom/axios build
+# Build / test a specific package
+pnpm --filter @sapiom/agent build
+pnpm --filter @sapiom/tools test
 
-# Test specific package
-pnpm --filter @sapiom/langchain test
-
-# Run in watch mode
-pnpm --filter @sapiom/core dev
+# Watch mode
+pnpm --filter @sapiom/agent dev
 ```
 
 ### Publishing
@@ -211,14 +177,9 @@ pnpm --filter @sapiom/core dev
 We use [Changesets](https://github.com/changesets/changesets) for version management:
 
 ```bash
-# Create a changeset
-pnpm changeset
-
-# Version packages
-pnpm version-packages
-
-# Publish to npm
-pnpm release
+pnpm changeset          # create a changeset
+pnpm version-packages   # apply version bumps
+pnpm release            # build and publish to npm
 ```
 
 ## 🤝 Contributing
@@ -241,30 +202,4 @@ MIT © [Sapiom](LICENSE)
 - [Documentation](https://docs.sapiom.ai)
 - [NPM Organization](https://www.npmjs.com/org/sapiom)
 - [GitHub Issues](https://github.com/sapiom/sapiom-js/issues)
-
-## 🌟 Features
-
-- ✅ **Modular architecture** - Install only what you need
-- ✅ **Lightweight core** - Minimal dependencies and small footprint
-- ✅ **HTTP client agnostic** - Works with Axios, Fetch, Node HTTP
-- ✅ **Framework integrations** - LangChain, Mastra (coming soon)
-- ✅ **Automatic payment handling** - 402 Payment Required flows
-- ✅ **Pre-emptive authorization** - Protect endpoints before access
-- ✅ **TypeScript native** - Full type safety
-- ✅ **Tree-shakeable** - Optimal bundle sizes
-- ✅ **Node.js 18+** - Native fetch support
-
-## 🗺️ Roadmap
-
-- [x] Core transaction API
-- [x] Axios integration
-- [x] Fetch integration  
-- [x] Node.js HTTP integration
-- [x] LangChain v0.x integration
-- [x] LangChain v1.x integration (middleware-based)
-- [ ] GitHub Actions CI/CD
-- [ ] Mastra integration
-- [ ] LangGraph integration
-- [ ] OpenAI SDK integration
-- [ ] Browser support (via bundlers)
-- [ ] WebSocket support for streaming
+  </content>

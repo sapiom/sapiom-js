@@ -1,5 +1,13 @@
 # @sapiom/langchain
 
+> 🕗 **Deprecated.** Sapiom now settles paid capability calls server-side (the
+> "collapsed flow"), so client-side 402/authorization handling is no longer
+> needed. This package is not recommended for new projects and receives
+> maintenance fixes only. To build on Sapiom, use the agent stack —
+> [`@sapiom/agent`](https://www.npmjs.com/package/@sapiom/agent) +
+> [`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools). See the
+> [SDK README](https://github.com/sapiom/sapiom-js#readme).
+
 > **LangChain v1.x Integration:** For LangChain v0.3.x, use [`@sapiom/langchain-classic`](../langchain-classic/README.md) instead.
 
 LangChain v1.x integration for Sapiom SDK.
