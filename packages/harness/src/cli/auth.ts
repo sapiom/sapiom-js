@@ -10,6 +10,10 @@ export interface HarnessIdentity {
   tenantId: string;
   organizationName: string;
   apiKey: string;
+  /** "cached" when resolved from ~/.sapiom/credentials.json with no login
+   *  prompt this run; "fresh" right after a browser login just completed.
+   *  Lets the CLI make a silent cached-credential sign-in visible. */
+  source: "cached" | "fresh";
 }
 
 export interface EnsureAuthenticatedOptions {
@@ -41,6 +45,7 @@ export async function ensureAuthenticated(
       tenantId: existing.tenantId,
       organizationName: existing.organizationName,
       apiKey: existing.apiKey,
+      source: "cached",
     };
   }
 
@@ -59,5 +64,6 @@ export async function ensureAuthenticated(
     tenantId: result.tenantId,
     organizationName: result.organizationName,
     apiKey: result.apiKey,
+    source: "fresh",
   };
 }

@@ -28,6 +28,8 @@
  *      session in launchDir without any client ever calling POST
  *      /api/sessions, AppState.launchDir reports it, and the generated
  *      mcp-config for an authenticated identity carries the x-api-key header.
+ *   9. GET /api/fs/list (the path-picker's directory autocomplete) is
+ *      mounted and boot-token-gated like the rest of /api.
  *
  * Run with: pnpm e2e:live
  */
@@ -481,6 +483,18 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     assert(
       mcpConfigJson.mcpServers?.sapiom?.headers?.["x-api-key"] === apiKey,
       "generated mcp-config's remote sapiom entry carries the cached apiKey as x-api-key",
+    );
+
+    // --- fs.ts's directory-autocomplete router (path picker) is mounted behind the boot token ---
+    const fsUnauthedRes = await fetch(`${baseUrl}/api/fs/list?path=${encodeURIComponent(tmpRoot)}`);
+    assert(fsUnauthedRes.status === 401, "GET /api/fs/list requires the boot token, like the rest of /api");
+
+    const fsRes = await fetch(`${baseUrl}/api/fs/list?path=${encodeURIComponent(tmpRoot)}`, { headers });
+    assert(fsRes.status === 200, "GET /api/fs/list (with token) returns 200");
+    const fsBody = (await fsRes.json()) as { dirs: Array<{ name: string; path: string }> };
+    assert(
+      fsBody.dirs.some((d) => d.path === projectDir),
+      "GET /api/fs/list lists the boot project directory it was pointed at",
     );
   } finally {
     await server.close();

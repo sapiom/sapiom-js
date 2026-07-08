@@ -49,6 +49,7 @@ describe("ensureAuthenticated", () => {
       tenantId: "tenant-1",
       organizationName: "Acme",
       apiKey: "key-1",
+      source: "cached",
     });
     expect(performBrowserAuth).not.toHaveBeenCalled();
   });
@@ -83,6 +84,7 @@ describe("ensureAuthenticated", () => {
       tenantId: "tenant-2",
       organizationName: "Beta",
       apiKey: "key-2",
+      source: "fresh",
     });
   });
 
