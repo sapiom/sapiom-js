@@ -8,9 +8,13 @@ import { Icon } from "./Icon";
 interface BrandHeaderProps {
   authenticated: boolean;
   organizationName: string | null;
+  onOpenPalette: () => void;
 }
 
-export function BrandHeader({ authenticated, organizationName }: BrandHeaderProps): JSX.Element {
+const IS_MAC = typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
+const SHORTCUT_HINT = IS_MAC ? "⌘K" : "Ctrl+K";
+
+export function BrandHeader({ authenticated, organizationName, onOpenPalette }: BrandHeaderProps): JSX.Element {
   const [theme, setTheme] = useState(getTheme());
   useEffect(() => subscribeTheme(setTheme), []);
 
@@ -24,6 +28,17 @@ export function BrandHeader({ authenticated, organizationName }: BrandHeaderProp
       </div>
 
       <div className="brand-header-right">
+        <button
+          className="palette-trigger"
+          data-testid="palette-trigger"
+          aria-label="Jump to session, workflow, or path"
+          onClick={onOpenPalette}
+        >
+          <Icon name="Search" size={13} />
+          Jump
+          <span className="palette-trigger-hint">{SHORTCUT_HINT}</span>
+        </button>
+
         <button
           className="theme-toggle"
           data-testid="theme-toggle"

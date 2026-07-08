@@ -281,7 +281,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
         />
         <span style={{ color: palette.textMuted }}>{statusLabel}</span>
       </div>
-      <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: 8 }} />
+      <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: 8, overflow: "hidden" }} />
     </div>
   );
 };

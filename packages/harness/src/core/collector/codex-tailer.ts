@@ -38,6 +38,18 @@ export interface CodexTailerOptions {
   onEvent: CodexEventListener;
   onError?: (err: unknown) => void;
   pollIntervalMs?: number;
+  /**
+   * Tail from byte 0 regardless of the file's current size — for a fresh
+   * launch, where the caller discovered this rollout file *because* it
+   * already contains the session_meta line the caller cares about (a
+   * find-then-tail race: by the time a poll-based discovery step returns a
+   * path, Codex has necessarily already written to it). Without this, the
+   * default "start from current size" baseline (correct for a genuine
+   * resume, where prior content really is history to skip) would silently
+   * swallow that already-written SessionStart. Defaults to false (resume
+   * semantics: skip whatever's already there, only emit new activity).
+   */
+  startFromBeginning?: boolean;
 }
 
 export interface CodexTailerHandle {
@@ -78,23 +90,26 @@ export function tailCodexRollout(options: CodexTailerOptions): CodexTailerHandle
   const pendingCalls = new Map<string, PendingFunctionCall>();
 
   // Resolve the resume-vs-fresh baseline exactly once, immediately, before
-  // any poll reads content. If the file already exists right now, its
-  // current size becomes the "don't backfill past this" offset (resume —
-  // only new activity should be emitted, matching hook semantics). If it
+  // any poll reads content. `startFromBeginning` (see CodexTailerOptions)
+  // always wins when set. Otherwise: if the file already exists right now,
+  // its current size becomes the "don't backfill past this" offset (resume
+  // — only new activity should be emitted, matching hook semantics); if it
   // doesn't exist yet, the offset stays 0, so once Codex creates the file
-  // the very first bytes it writes (session_meta) are read as new — without
-  // this distinction, a poll-interval race between file creation and its
-  // first write would silently swallow SessionStart on every fresh launch.
+  // the very first bytes it writes are read as new.
   let baselineResolved = false;
-  void stat(options.rolloutPath).then(
-    (s) => {
-      offset = s.size;
-      baselineResolved = true;
-    },
-    () => {
-      baselineResolved = true;
-    },
-  );
+  if (options.startFromBeginning) {
+    baselineResolved = true;
+  } else {
+    void stat(options.rolloutPath).then(
+      (s) => {
+        offset = s.size;
+        baselineResolved = true;
+      },
+      () => {
+        baselineResolved = true;
+      },
+    );
+  }
 
   const timer = setInterval(() => {
     void poll();
@@ -213,13 +228,23 @@ export interface FindRolloutFileOptions {
   /** Match a rollout file whose session_meta.cwd equals this exactly. */
   cwd: string;
   /** Only consider sessions created at/after this time (ms epoch) —
-   * disambiguates a freshly-launched session from older ones sharing a cwd. */
+   * disambiguates a freshly-launched session from older ones sharing a cwd.
+   * Ignored when `agentSessionId` is given (an exact id match is a strictly
+   * stronger signal than a time-window heuristic). */
   sinceMs?: number;
+  /**
+   * Match a rollout file by its exact session_meta.id (the rollout/agent
+   * session id) instead of by recency — needed when resuming a session,
+   * where `sinceMs` can't disambiguate it from other sessions sharing the
+   * same cwd that happen to have been touched more recently.
+   */
+  agentSessionId?: string;
   /** Overridable for tests. */
   homeDir?: string;
 }
 
 interface RolloutSessionMeta {
+  id: string | null;
   cwd: string;
   timestampMs: number | null;
 }
@@ -253,8 +278,9 @@ async function readSessionMetaHead(filePath: string, maxBytes = 65_536): Promise
     if (parsed.type !== "session_meta") continue;
     const cwd = typeof parsed.payload?.cwd === "string" ? parsed.payload.cwd : undefined;
     if (!cwd) return null;
+    const id = typeof parsed.payload?.id === "string" ? parsed.payload.id : null;
     const timestamp = typeof parsed.payload?.timestamp === "string" ? Date.parse(parsed.payload.timestamp) : NaN;
-    return { cwd, timestampMs: Number.isNaN(timestamp) ? null : timestamp };
+    return { id, cwd, timestampMs: Number.isNaN(timestamp) ? null : timestamp };
   }
   return null;
 }
@@ -280,10 +306,12 @@ async function collectRolloutFiles(dir: string, depth = 0): Promise<string[]> {
 }
 
 /**
- * Finds the most-recently-modified rollout file matching `cwd` (and
- * `sinceMs`, if given). Intended to be polled by the integrator right after
- * spawning a fresh `codex` process — there's no way to know the exact
- * rollout path in advance (it's a timestamp+UUID Codex generates itself).
+ * Finds a rollout file matching `cwd`. With `agentSessionId`, matches that
+ * exact session (for resume — cwd alone is ambiguous when multiple sessions
+ * share a directory). Otherwise returns the most-recently-modified match,
+ * optionally bounded by `sinceMs`. Intended to be polled by the integrator
+ * right after spawning a fresh `codex` process — there's no way to know the
+ * exact rollout path in advance (it's a timestamp+UUID Codex generates itself).
  */
 export async function findRolloutFile(options: FindRolloutFileOptions): Promise<string | null> {
   const homeDir = options.homeDir ?? homedir();
@@ -294,6 +322,12 @@ export async function findRolloutFile(options: FindRolloutFileOptions): Promise<
   for (const filePath of files) {
     const meta = await readSessionMetaHead(filePath);
     if (!meta || meta.cwd !== options.cwd) continue;
+
+    if (options.agentSessionId !== undefined) {
+      if (meta.id !== options.agentSessionId) continue;
+      return filePath;
+    }
+
     if (options.sinceMs !== undefined && meta.timestampMs !== null && meta.timestampMs < options.sinceMs) continue;
 
     const fileStat = await stat(filePath).catch(() => null);

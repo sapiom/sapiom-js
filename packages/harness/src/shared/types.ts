@@ -297,6 +297,12 @@ export interface AppState {
   /** The directory the CLI was launched against — the SPA prefills the
    *  new-session modal with this instead of recentDirs[0]. */
   launchDir: string;
+  /** Harness kinds with a working binary on PATH at CLI boot (from doctor()),
+   *  in default-preference order — `[0]` is what the auto-created boot
+   *  session used. Optional: omitted by callers that construct AppState
+   *  without running doctor (tests, mocks); the SPA should treat a missing
+   *  value as "assume claude-code is available" until it's wired up. */
+  availableHarnesses?: HarnessKind[];
 }
 
 export interface HarnessSettings {

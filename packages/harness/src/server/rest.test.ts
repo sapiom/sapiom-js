@@ -96,6 +96,20 @@ describe("createRestRouter", () => {
       expect(body.launchDir).toBe("/Users/demo/acme-app");
     });
 
+    it("omits availableHarnesses when the caller doesn't supply it", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/state`);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect("availableHarnesses" in body).toBe(false);
+    });
+
+    it("reports availableHarnesses (in preference order) when supplied", async () => {
+      start({ availableHarnesses: ["codex"] });
+      const res = await fetch(`${baseUrl}/state`);
+      const body = (await res.json()) as { availableHarnesses: string[] };
+      expect(body.availableHarnesses).toEqual(["codex"]);
+    });
+
     it("reflects identity, sessions, workflows, and macros from their sources", async () => {
       const session: HarnessSession = {
         id: "s1",

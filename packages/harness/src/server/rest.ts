@@ -69,6 +69,11 @@ export interface RestRouterOptions {
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
+  /** Harness kinds confirmed available at CLI boot (doctor()), in
+   * default-preference order. Omitted (rather than defaulted here) when the
+   * caller doesn't supply it, so AppState.availableHarnesses stays absent in
+   * that case too — see its doc comment for how consumers should treat that. */
+  availableHarnesses?: HarnessKind[];
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
@@ -89,6 +94,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
         workflows: await listWorkflows(),
         macros: listMacros(),
         launchDir: options.launchDir,
+        ...(options.availableHarnesses ? { availableHarnesses: options.availableHarnesses } : {}),
       };
       res.json(state);
     } catch (err) {

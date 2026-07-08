@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { DoctorCheck } from "../shared/types.js";
+import type { DoctorCheck, HarnessKind } from "../shared/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,10 +46,23 @@ async function binaryCheck(
   return { name, ok: true, detail: v ?? found };
 }
 
-/** Hard requirements (node, claude) vs. optional ones (codex, git). */
+/** Exact remedies surfaced in doctor output and the fatal-exit message —
+ *  kept as named constants so bin.ts's messaging can't drift from what
+ *  doctor.ts itself tells the user to run. */
+export const CLAUDE_INSTALL_COMMAND = "npm i -g @anthropic-ai/claude-code";
+export const CODEX_INSTALL_COMMAND = "npm i -g @openai/codex";
+
+/**
+ * Node is a hard requirement. Neither coding agent is individually required —
+ * the harness runs with whichever of claude/codex is on PATH — but at least
+ * one of them must be, or there's nothing to launch.
+ */
 export interface DoctorReport {
   checks: DoctorCheck[];
   ok: boolean;
+  /** Harness kinds with a working binary on PATH, in default-preference order
+   *  (claude-code first). Empty only when `ok` is false. */
+  availableHarnesses: HarnessKind[];
 }
 
 export async function runDoctor(): Promise<DoctorReport> {
@@ -59,19 +72,28 @@ export async function runDoctor(): Promise<DoctorReport> {
       "claude",
       "claude",
       ["--version"],
-      "not found on PATH — install Claude Code: https://docs.claude.com/claude-code",
+      `not found on PATH — install: ${CLAUDE_INSTALL_COMMAND}`,
     ),
-    binaryCheck(
-      "codex",
-      "codex",
-      ["--version"],
-      "not found on PATH (optional — the Codex harness is unavailable)",
-    ),
+    binaryCheck("codex", "codex", ["--version"], `not found on PATH — install: ${CODEX_INSTALL_COMMAND}`),
     binaryCheck("git", "git", ["--version"], "not found on PATH"),
   ]);
 
+  const availableHarnesses: HarnessKind[] = [
+    ...(claude.ok ? (["claude-code"] as const) : []),
+    ...(codex.ok ? (["codex"] as const) : []),
+  ];
+
   const checks = [node, claude, codex, git];
-  return { checks, ok: node.ok && claude.ok };
+  return { checks, ok: node.ok && availableHarnesses.length > 0, availableHarnesses };
+}
+
+/** First available harness in preference order, for callers that need a
+ *  single default (e.g. the auto-created boot session). Only falls back to
+ *  "claude-code" when the report itself is empty — main() already refuses to
+ *  proceed past a report with no available harnesses, so real callers never
+ *  hit that fallback. */
+export function pickDefaultHarness(report: DoctorReport): HarnessKind {
+  return report.availableHarnesses[0] ?? "claude-code";
 }
 
 export function printDoctorReport(report: DoctorReport): void {
