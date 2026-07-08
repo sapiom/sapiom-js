@@ -236,6 +236,7 @@ export interface CollectorBatch {
 // POST   /api/macros/:id/run            RunMacroRequest → { ok: true }
 // GET    /api/settings                  → HarnessSettings
 // PATCH  /api/settings                  Partial<HarnessSettings> → HarnessSettings
+// GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
 
 export interface CreateSessionRequest {
@@ -276,6 +277,27 @@ export interface HarnessSettings {
   telemetryOptIn: boolean;
   /** Most-recently-used project directories, newest first. */
   recentDirs: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem browsing (new-session directory picker autocomplete)
+// ---------------------------------------------------------------------------
+
+export interface FsDirEntry {
+  name: string;
+  path: string;
+}
+
+/**
+ * GET /api/fs/list?path= response — directories only, one level deep.
+ * `parent` is always a real path, never null: at the filesystem root it
+ * equals `path` itself (matches `path.dirname("/") === "/"`), so "no
+ * further up" is `parent === path`.
+ */
+export interface FsListResponse {
+  path: string;
+  parent: string;
+  dirs: FsDirEntry[];
 }
 
 // ---------------------------------------------------------------------------
