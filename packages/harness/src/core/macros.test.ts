@@ -32,12 +32,14 @@ describe("DEFAULT_MACROS", () => {
     });
   });
 
-  it("visualize templates {{subject}} and needs no workflow", () => {
+  it("visualize is a one-click render of the bound workflow — no free-text subject", () => {
     const macro = DEFAULT_MACROS.find((m) => m.id === "visualize")!;
-    expect(macro.requiresWorkflow).toBeFalsy();
+    expect(macro.requiresWorkflow).toBe(true);
     expect(macro.action.kind).toBe("inject");
     if (macro.action.kind === "inject") {
-      expect(macro.action.text).toContain("{{subject}}");
+      expect(macro.action.text).toContain("{{workflow.path}}");
+      expect(macro.action.text).toContain("{{canvas.path}}");
+      expect(macro.action.text).not.toContain("{{subject}}");
     }
   });
 

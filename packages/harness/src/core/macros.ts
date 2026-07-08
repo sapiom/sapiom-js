@@ -6,6 +6,7 @@
  * present the same action rail.
  */
 import type { MacroDef } from "../shared/types.js";
+import { CANVAS_STYLE_GUIDELINES } from "../profiles/canvas-guidelines.js";
 
 export const DEFAULT_MACROS: MacroDef[] = [
   {
@@ -52,14 +53,18 @@ export const DEFAULT_MACROS: MacroDef[] = [
     },
   },
   {
+    // One-click render/re-render of the bound workflow — no free-text
+    // subject: the workflow, its path, and the rest of the workspace (for
+    // "how it interconnects") are all already known from context, so this
+    // is a fully self-sufficient prompt with nothing for the user to fill in.
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
-    requiresWorkflow: false,
+    requiresWorkflow: true,
     action: {
       kind: "inject",
       submit: true,
-      text: "Write a live HTML visualization of {{subject}} to .sapiom/canvas/index.html and keep it updated as things change.",
+      text: `Render (or re-render, overwriting {{canvas.path}}) a visualization of the workflow at {{workflow.path}} — its steps, control flow, and how it interconnects with the other workflows in this workspace (see .sapiom/harness-context.json for the full list). Follow these guidelines:\n\n${CANVAS_STYLE_GUIDELINES}`,
     },
   },
 ];

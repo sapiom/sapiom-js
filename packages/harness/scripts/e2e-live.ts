@@ -400,16 +400,6 @@ async function testCoreFlow(): Promise<void> {
     assert(canvasRes.status === 200, "GET /canvas/:id/ serves the written index.html");
     assert((await canvasRes.text()).includes("e2e"), "served canvas content matches what was written");
 
-    // --- 10. run the visualize macro (inject kind) — proves the macro engine reaches the pty ---
-    const macroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ harnessSessionId: sessionId, subject: "the e2e proof" }),
-    });
-    assert(macroRes.status === 200, "POST /api/macros/visualize/run returns 200");
-    const macroBody = (await macroRes.json()) as { ok: boolean };
-    assert(macroBody.ok === true, "macro run responds { ok: true }");
-
     // --- 11. the launch directory's sapiom.json (written before startServer) was scanned at boot ---
     // Note: WorkflowInfo.name comes from package.json (or the directory's own
     // basename) — the sapiom.json marker itself only carries definitionId —
@@ -454,6 +444,18 @@ async function testCoreFlow(): Promise<void> {
       boundContext.boundWorkflow?.path === projectDir && boundContext.boundWorkflow.definitionId === 4821,
       "harness-context.json reflects the bound workflow's {name, path, definitionId}",
     );
+
+    // --- 11a-2. run the visualize macro — one-click render of the now-bound workflow, no
+    // free-text subject; the REST layer falls back to the session's bound workflow when
+    // the request omits workflowPath, so this proves that path end to end. ---
+    const macroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ harnessSessionId: sessionId }),
+    });
+    assert(macroRes.status === 200, "POST /api/macros/visualize/run returns 200");
+    const macroBody = (await macroRes.json()) as { ok: boolean };
+    assert(macroBody.ok === true, "macro run responds { ok: true }");
 
     // --- 11b. unbind — the context file gets boundWorkflow: null, not deleted ---
     const unbindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
