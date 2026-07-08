@@ -20,8 +20,8 @@ test("renders the three panes plus the brand header, with no separate action rai
   await expect(page.locator(".session-bar")).toBeVisible();
   await expect(page.locator(".canvas-pane")).toBeVisible();
 
-  // The action rail is retired — actions live on workflows now (row icons,
-  // bound-workflow header), not in a standalone column.
+  // The action rail is retired — actions live on the docked workflow action
+  // strip now, anchored to the selected row, not in a standalone column.
   await expect(page.locator(".rail-actions")).toHaveCount(0);
 
   await page.screenshot({ path: "web/e2e/screenshots/app-shell.png", fullPage: true });
@@ -341,40 +341,64 @@ test("visualize macro is one click — no subject dialog", async ({ page }) => {
   expect(lastRun?.req.subject).toBeUndefined();
 });
 
-test.describe("actions live on workflows, not a separate rail", () => {
-  test("workflow rows keep their action icons hidden until you hover or select the row", async ({ page }) => {
-    const row = page.getByTestId("workflow-rfq");
-    const actions = row.locator(".workflow-row-actions");
+test.describe("docked workflow action strip", () => {
+  test("rows carry no inline icons and show their full untruncated name", async ({ page }) => {
+    await expect(page.locator(".workflow-row-actions")).toHaveCount(0);
 
-    await expect(actions).toHaveCSS("opacity", "0");
-    await row.hover();
-    await expect(actions).toHaveCSS("opacity", "1");
-    await page.screenshot({ path: "web/e2e/screenshots/workflow-row-hover-actions.png" });
-
-    // Moving away hides them again — hover alone doesn't stick.
-    await page.mouse.move(0, 0);
-    await expect(actions).toHaveCSS("opacity", "0");
-
-    // Selecting the row keeps the actions visible without a hover.
-    await row.locator(".workflow-item-trigger").click();
-    await page.mouse.move(0, 0);
-    await expect(actions).toHaveCSS("opacity", "1");
+    // "onboarding-flow" is the longest fixture name — it's the one that used
+    // to get squeezed into "onboarding-fl…" by the old inline row icons.
+    const name = page.getByTestId("workflow-onboarding-flow").locator(".workflow-name");
+    await expect(name).toHaveText("onboarding-flow");
+    const overflowing = await name.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+    expect(overflowing).toBe(false);
   });
 
-  test("the workflow bound to the active session gets an actions header above the canvas", async ({ page }) => {
-    const header = page.getByTestId("workflow-actions-header");
-    await expect(header).toBeVisible();
-    await expect(header).toContainText("leasing");
+  test("the strip renders anchored to the selected workflow's row and carries its full action set", async ({
+    page,
+  }) => {
+    const row = page.getByTestId("workflow-leasing");
+    const strip = page.getByTestId("workflow-action-strip");
+    await expect(strip).toBeVisible();
 
-    // The header carries the full macro set, including Visualize — the one
-    // macro that stays contextual to the bound workflow.
-    await expect(header.getByTestId("macro-run_local")).toBeVisible();
-    await expect(header.getByTestId("macro-deploy")).toBeVisible();
-    await expect(header.getByTestId("macro-prod_run")).toBeVisible();
-    await expect(header.getByTestId("macro-open_prod")).toBeVisible();
-    await expect(header.getByTestId("macro-visualize")).toBeVisible();
+    const rowBox = await row.boundingBox();
+    const stripBox = await strip.boundingBox();
+    expect(rowBox).not.toBeNull();
+    expect(stripBox).not.toBeNull();
+    // Top-aligned to the row, within a pixel or two of rounding.
+    expect(Math.abs((stripBox?.y ?? 0) - (rowBox?.y ?? 0))).toBeLessThan(3);
 
-    await page.screenshot({ path: "web/e2e/screenshots/workflow-actions-header.png" });
+    await expect(strip.getByTestId("macro-run_local")).toBeVisible();
+    await expect(strip.getByTestId("macro-deploy")).toBeVisible();
+    await expect(strip.getByTestId("macro-prod_run")).toBeVisible();
+    await expect(strip.getByTestId("macro-open_prod")).toBeVisible();
+    await expect(strip.getByTestId("macro-visualize")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/app-shell-docked-strip.png", fullPage: true });
+  });
+
+  test("the strip moves when selection changes, and the notch tracks the new row", async ({ page }) => {
+    const rfqRow = page.getByTestId("workflow-rfq");
+    await rfqRow.locator(".workflow-item-trigger").click();
+
+    const strip = page.getByTestId("workflow-action-strip");
+    const notch = page.getByTestId("workflow-action-strip-notch");
+    const rowBox = await rfqRow.boundingBox();
+
+    // The strip/notch slide to their new anchor over a short CSS transition —
+    // wait it out so the bounding box reflects the settled position, not a
+    // mid-animation frame.
+    await expect(async () => {
+      const stripBox = await strip.boundingBox();
+      expect(Math.abs((stripBox?.y ?? 0) - (rowBox?.y ?? 0))).toBeLessThan(3);
+    }).toPass({ timeout: 1000 });
+
+    const stripBox = await strip.boundingBox();
+    const notchBox = await notch.boundingBox();
+    expect(Math.abs((notchBox?.y ?? 0) - (rowBox?.y ?? 0))).toBeLessThan(3);
+    // The notch is sized to the row, not the whole multi-icon strip below it.
+    expect(notchBox?.height ?? 0).toBeLessThan(stripBox?.height ?? Infinity);
+
+    await page.screenshot({ path: "web/e2e/screenshots/workflow-action-strip-moved.png", fullPage: true });
   });
 
   test("the header's refresh affordance reloads the canvas without discarding it", async ({ page }) => {
