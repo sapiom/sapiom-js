@@ -24,6 +24,30 @@ test("renders all four panes plus the brand header", async ({ page }) => {
   await page.screenshot({ path: "web/e2e/screenshots/app-shell.png", fullPage: true });
 });
 
+test("theme: defaults to light, toggles to dark, and the choice persists across reload", async ({ page }) => {
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.screenshot({ path: "web/e2e/screenshots/theme-light.png", fullPage: true });
+
+  await page.getByTestId("theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.screenshot({ path: "web/e2e/screenshots/theme-dark.png", fullPage: true });
+
+  await page.reload();
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await page.getByTestId("theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
+test.describe("theme — system preference", () => {
+  test.use({ colorScheme: "dark" });
+
+  test("honors prefers-color-scheme when there's no stored preference yet", async ({ page }) => {
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  });
+});
+
 test("brand header shows the Sapiom wordmark and signed-in identity", async ({ page }) => {
   await expect(page.locator(".brand-name")).toHaveText("Sapiom");
   await expect(page.locator(".brand-product")).toHaveText("Harness");
