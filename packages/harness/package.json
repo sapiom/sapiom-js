@@ -41,6 +41,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "playwright test --config web/e2e/playwright.config.ts",
+    "test:canvas": "playwright test --config e2e/playwright.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "pnpm build",

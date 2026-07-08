@@ -42,6 +42,7 @@ import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import { writeHarnessContext, harnessContextFileExists } from "../core/workspace-context.js";
+import { ensureCanvasTemplate } from "../core/canvas-template.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -241,6 +242,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     // entry point (REST, autoCreateSession) — see SessionManager.create().
     writeWorkspaceContext: writeSessionContext,
     workspaceContextExists: (cwd) => harnessContextFileExists(cwd),
+    ensureCanvasTemplate,
   });
   await sessionManager.init();
 

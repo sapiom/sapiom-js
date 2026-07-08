@@ -6,7 +6,6 @@
  * present the same action rail.
  */
 import type { MacroDef } from "../shared/types.js";
-import { CANVAS_STYLE_GUIDELINES } from "../profiles/canvas-guidelines.js";
 
 export const DEFAULT_MACROS: MacroDef[] = [
   {
@@ -53,18 +52,23 @@ export const DEFAULT_MACROS: MacroDef[] = [
     },
   },
   {
-    // One-click render/re-render of the bound workflow — no free-text
-    // subject: the workflow, its path, and the rest of the workspace (for
-    // "how it interconnects") are all already known from context, so this
-    // is a fully self-sufficient prompt with nothing for the user to fill in.
+    // One-click render/re-render, unbound-friendly: the canvas kit
+    // (core/canvas-template.ts) has already dropped a prebuilt, pristine
+    // _template.html plus a live index.html into .sapiom/canvas/ — the
+    // agent clones the template and fills it in with real markup, using the
+    // classes/patterns the template documents, rather than hand-rolling CSS
+    // or a whole document from scratch. No free-text subject and no
+    // {{workflow.path}} reference: whether there's a bound workflow is
+    // something the agent reads out of harness-context.json at run time, so
+    // the same static prompt works whether or not one is selected.
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
-    requiresWorkflow: true,
+    requiresWorkflow: false,
     action: {
       kind: "inject",
       submit: true,
-      text: `Render (or re-render, overwriting {{canvas.path}}) a visualization of the workflow at {{workflow.path}} — its steps, control flow, and how it interconnects with the other workflows in this workspace (see .sapiom/harness-context.json for the full list). Follow these guidelines:\n\n${CANVAS_STYLE_GUIDELINES}`,
+      text: `Clone .sapiom/canvas/_template.html to .sapiom/canvas/index.html (overwrite it — that's {{canvas.path}}), keeping the <style> block and every structural/pattern class untouched. Do not write new CSS. Then fill in the content: title, badges, subtitle, and stats values, and build the SVG graph using the template's node/edge markup patterns — see the <template id="canvas-patterns"> block in the cloned file for one example of each, and delete that block once you've copied what you need. Read .sapiom/harness-context.json first: if it has a boundWorkflow, draw that workflow's steps, control flow, and terminal outcomes; if boundWorkflow is null, draw one canvas-panel per workflow in its workflows list, plus an Interconnections panel showing how they hand off or signal to each other.`,
     },
   },
 ];

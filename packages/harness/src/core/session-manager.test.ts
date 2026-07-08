@@ -82,6 +82,7 @@ describe("SessionManager", () => {
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       workspaceContextExists?: SessionManagerOptions["workspaceContextExists"];
+      ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
     } = {},
   ) {
     const adapter = opts.adapter ?? createFakeAdapter();
@@ -104,6 +105,7 @@ describe("SessionManager", () => {
       buildLaunchOpts: opts.buildLaunchOpts,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       workspaceContextExists: opts.workspaceContextExists,
+      ensureCanvasTemplate: opts.ensureCanvasTemplate,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -637,6 +639,62 @@ describe("SessionManager", () => {
         lastActiveAt: "2026-01-01T00:00:00.000Z",
       });
       await expect(manager.resume(historical.id)).resolves.toBeDefined();
+    });
+  });
+
+  describe("canvas template wiring", () => {
+    it("create() drops the canvas template for every session, regardless of caller", async () => {
+      const ensureCanvasTemplate = vi.fn(async () => {});
+      const { manager } = makeManager({ ensureCanvasTemplate });
+
+      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      expect(ensureCanvasTemplate).toHaveBeenCalledTimes(1);
+      expect(ensureCanvasTemplate).toHaveBeenCalledWith("/tmp/proj");
+    });
+
+    it("create() ensures the canvas template before the pty is actually spawned", async () => {
+      const order: string[] = [];
+      const ensureCanvasTemplate = vi.fn(async () => {
+        order.push("canvas");
+      });
+      const spawnPty: PtySpawnFn = (file, args) => {
+        order.push("spawn");
+        void file;
+        void args;
+        return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
+      };
+      const { manager } = makeManager({ ensureCanvasTemplate, spawnPty });
+
+      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      // Same reasoning as writeWorkspaceContext: the canvas pane can open the
+      // moment the session reports "running", so the template must already
+      // be on disk before the real process (the pty) ever starts.
+      expect(order).toEqual(["canvas", "spawn"]);
+    });
+
+    it("resume() also ensures the canvas template — the function itself is the backfill check", async () => {
+      const ensureCanvasTemplate = vi.fn(async () => {});
+      const { manager } = makeManager({ ensureCanvasTemplate });
+
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-uuid-9",
+        harness: "claude-code",
+        cwd: "/tmp/proj",
+        title: "past session",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+      ensureCanvasTemplate.mockClear(); // registerHistorical() doesn't call it; isolate resume()'s call
+
+      await manager.resume(session.id);
+
+      expect(ensureCanvasTemplate).toHaveBeenCalledWith("/tmp/proj");
+    });
+
+    it("defaults to a no-op so tests with fake cwds never touch the real filesystem", async () => {
+      const { manager } = makeManager();
+      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).resolves.toBeDefined();
     });
   });
 
