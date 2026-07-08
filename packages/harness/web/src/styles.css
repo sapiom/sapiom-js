@@ -5,6 +5,29 @@
     "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
+  /* Border-radius scale — mirrors the product's own (base --radius: 6px,
+     with sm/md/lg/xl derived from it): buttons/inputs/badges/popovers use
+     md, dialogs use lg, cards would use xl. Kept as separate steps (rather
+     than every surface sharing one --radius) since that's what makes small
+     controls read as "the same design system" instead of merely reusing one
+     rounded corner everywhere. */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 10px;
+  --radius-full: 9999px;
+
+  /* Elevation — the same fixed (theme-independent) black-alpha shadows the
+     product's dialog/popover/dropdown primitives use. */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -2px rgb(0 0 0 / 0.1);
+
+  /* Matches Tailwind's default transition-all duration/easing, used
+     everywhere the product animates hover/focus/disabled state. */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+
   /* Sapiom brand palette, LIGHT — values ported from our design system.
      This is the default: it's what the authenticated product itself renders
      (the dashboard forces light), so it's the correct fallback if the
@@ -23,7 +46,15 @@
   --accent: #05a9bc;
   --accent-hover: #048a9a;
   --accent-dim: rgba(5, 169, 188, 0.14);
+  --accent-border: rgba(5, 169, 188, 0.3);
   --accent-foreground: #fafafa;
+  /* 3px focus-visible ring — accent at 50% alpha, matching the product's
+     `focus-visible:ring-accent/50` on inputs and `ring-ring/50` on buttons. */
+  --focus-ring: rgba(5, 169, 188, 0.5);
+  /* Switch thumb: light mode keeps the same background-colored thumb in
+     both states (per the product's Switch, which doesn't recolor it here). */
+  --toggle-knob-off: #ffffff;
+  --toggle-knob-on: #ffffff;
   --green: #05a9bc;
   --amber: #b45309;
   --red: #ef4444;
@@ -44,10 +75,32 @@
   --accent: #6be195;
   --accent-hover: #8bd4a6;
   --accent-dim: rgba(107, 225, 149, 0.16);
+  --accent-border: rgba(107, 225, 149, 0.3);
   --accent-foreground: #000000;
+  --focus-ring: rgba(107, 225, 149, 0.5);
+  /* Switch thumb: dark mode swaps thumb color with state — off is
+     near-white (foreground), on is black (matches --accent-foreground)
+     for contrast against the mint-green track. */
+  --toggle-knob-off: #fafafa;
+  --toggle-knob-on: #000000;
   --green: #6be195;
   --amber: #f59e0b;
   --red: #f87171;
+}
+
+/* Shared entrance animation for floating surfaces (dialogs, popovers,
+   dropdown menus) — mirrors the product's Radix `animate-in fade-in-0
+   zoom-in-95`, kept subtle (no opacity dip below 0.4) so it never reads as
+   the element being briefly hidden. */
+@keyframes pop-in {
+  from {
+    opacity: 0.4;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 * {
@@ -157,14 +210,25 @@ input {
   padding: 4px 8px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   color: var(--text-dim);
   font-size: 11.5px;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .palette-trigger:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+.palette-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .palette-trigger-hint {
@@ -173,6 +237,8 @@ input {
   font-size: 10px;
 }
 
+/* Icon-only "ghost" button: no border at rest — matches the product's
+   Button variant="ghost" (transparent, fills with the brand accent on hover). */
 .theme-toggle {
   width: 26px;
   height: 26px;
@@ -181,14 +247,26 @@ input {
   justify-content: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   color: var(--text-dim);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.theme-toggle:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+[data-theme="light"] .theme-toggle:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+[data-theme="dark"] .theme-toggle:hover {
+  background: var(--accent-dim);
   color: var(--text);
+}
+
+.theme-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .brand-identity {
@@ -549,15 +627,18 @@ input {
 .connect-input {
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   padding: 6px 8px;
   color: var(--text);
   font-size: 12px;
+  transition: border-color var(--transition-fast);
 }
 
-.connect-input:focus {
+.connect-input:focus-visible {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .connect-error {
@@ -581,14 +662,23 @@ input {
   flex: 0 0 auto;
   border: 1px solid transparent;
   background: transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   color: var(--text-dim);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .macro-icon-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--text);
+}
+
+.macro-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .macro-icon-btn:disabled {
@@ -654,12 +744,20 @@ input {
   padding: 5px 8px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   color: var(--text);
+  transition: border-color var(--transition-fast);
 }
 
 .session-dropdown-trigger:hover {
   border-color: var(--accent);
+}
+
+.session-dropdown-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .session-title {
@@ -672,6 +770,9 @@ input {
   font-size: 12px;
 }
 
+/* Badge recipe (variant="active"): tinted fill + matching border + accent
+   text, rounded-md rather than a pill — the product's status chips are
+   small rounded rectangles, not fully-rounded tags. */
 .session-workflow-chip {
   flex: 0 1 auto;
   min-width: 0;
@@ -679,8 +780,9 @@ input {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 2px 8px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
   color: var(--accent);
   font-size: 10.5px;
   font-weight: 500;
@@ -713,12 +815,13 @@ input {
   right: 0;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
   z-index: 20;
   max-height: 360px;
   overflow-y: auto;
   padding: 6px;
+  animation: pop-in var(--transition-fast) ease-out;
 }
 
 .session-dropdown-section {
@@ -745,13 +848,17 @@ input {
   padding: 6px 8px;
   border: none;
   background: transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   text-align: left;
+  transition: background-color var(--transition-fast);
 }
 
+/* DropdownMenuItem recipe: a solid accent fill on hover/selection, not a
+   neutral gray — the brand-accent hover is the product's signature for
+   list-style menu items (session switcher, command palette, dir picker). */
 .session-dropdown-item:hover,
 .session-dropdown-item.is-selected {
-  background: var(--bg-hover);
+  background: var(--accent);
 }
 
 .session-item-title {
@@ -765,28 +872,50 @@ input {
   color: var(--text-faint);
 }
 
+.session-dropdown-item:hover .session-item-title,
+.session-dropdown-item.is-selected .session-item-title,
+.session-dropdown-item:hover .session-item-cwd,
+.session-dropdown-item.is-selected .session-item-cwd,
+.session-dropdown-item:hover .session-item-meta,
+.session-dropdown-item.is-selected .session-item-meta {
+  color: var(--accent-foreground);
+}
+
+/* Matches Button variant="accent" — a solid, always-teal primary action
+   (distinct from the outline treatment on Cancel/Close), since "+ new" is
+   this bar's one high-emphasis action. */
 .new-session-btn {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 5px 10px;
-  background: var(--accent-dim);
-  color: var(--text);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 500;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   font-size: 12px;
   white-space: nowrap;
+  transition: background-color var(--transition-fast);
 }
 
 .new-session-btn:hover {
   background: var(--accent-hover);
-  color: var(--accent-foreground);
+}
+
+.new-session-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .settings-wrap {
   position: relative;
 }
 
+/* Matches Button variant="outline" size="icon": a persistent border,
+   subtle shadow, and — in light mode — a solid accent fill on hover (the
+   product's `hover:bg-accent`); dark mode keeps the more restrained neutral
+   hover the outline variant uses there. */
 .gear-btn {
   width: 30px;
   height: 30px;
@@ -795,13 +924,30 @@ input {
   justify-content: center;
   border: 1px solid var(--border-strong);
   background: var(--bg-2);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   color: var(--text-dim);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.gear-btn:hover {
+[data-theme="light"] .gear-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+[data-theme="dark"] .gear-btn:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+.gear-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .settings-popover {
@@ -811,10 +957,11 @@ input {
   width: 280px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  padding: 12px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 16px;
   z-index: 20;
+  animation: pop-in var(--transition-fast) ease-out;
 }
 
 .settings-identity {
@@ -839,16 +986,23 @@ input {
   flex: 0 0 auto;
   width: 34px;
   height: 20px;
-  border-radius: 20px;
+  border-radius: var(--radius-full);
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
   position: relative;
   padding: 0;
+  transition: background-color var(--transition-fast);
 }
 
 .toggle-switch.is-on {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.toggle-switch:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .toggle-switch:disabled {
@@ -863,11 +1017,12 @@ input {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--text);
-  transition: transform 0.12s ease;
+  background: var(--toggle-knob-off);
+  transition: transform var(--transition-fast);
 }
 
 .toggle-switch.is-on .toggle-knob {
+  background: var(--toggle-knob-on);
   transform: translateX(14px);
 }
 
@@ -1020,32 +1175,62 @@ input {
 
 /* Shared buttons ------------------------------------------------------- */
 
+/* Matches Button variant="outline": persistent border + shadow-xs; hover
+   fills solid accent in light mode (the product's `hover:bg-accent`) but
+   stays a neutral, more restrained hover in dark mode — same asymmetry the
+   real Button component has between its light/dark outline treatments. */
 .btn-ghost {
   background: transparent;
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   padding: 5px 10px;
   font-size: 12px;
+  font-weight: 500;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.btn-ghost:hover:not(:disabled) {
+[data-theme="light"] .btn-ghost:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+[data-theme="dark"] .btn-ghost:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--text-faint);
 }
 
+.btn-ghost:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Matches Button variant="default": solid accent fill, no border. */
 .btn-primary {
   background: var(--accent);
-  border: 1px solid var(--accent);
+  border: 1px solid transparent;
   color: var(--accent-foreground);
   font-weight: 500;
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   padding: 5px 10px;
   font-size: 12px;
+  transition: background-color var(--transition-fast);
 }
 
 .btn-primary:hover:not(:disabled) {
-  filter: brightness(1.1);
+  background: var(--accent-hover);
+}
+
+.btn-primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .btn-ghost:disabled,
@@ -1059,21 +1244,32 @@ input {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
+  animation: fade-in var(--transition-fast) ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .modal {
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: var(--radius-lg);
+  padding: 24px;
   width: 380px;
   max-width: calc(100vw - 32px);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in var(--transition-fast) ease-out;
 }
 
 .command-palette {
@@ -1090,10 +1286,12 @@ input {
   background: transparent;
   color: var(--text);
   font-size: 14px;
+  transition: border-color var(--transition-fast);
 }
 
 .command-palette-input:focus {
   outline: none;
+  border-bottom-color: var(--accent);
 }
 
 .command-palette-list {
@@ -1108,6 +1306,8 @@ input {
   font-size: 12px;
 }
 
+/* DropdownMenuItem recipe (same solid-accent hover/selection as the session
+   dropdown and directory listing — see the note on .session-dropdown-item). */
 .command-palette-item {
   display: flex;
   align-items: center;
@@ -1116,13 +1316,16 @@ input {
   padding: 7px 10px;
   border: none;
   background: transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   color: var(--text-dim);
   text-align: left;
+  transition: background-color var(--transition-fast);
 }
 
 .command-palette-item.is-selected {
-  background: var(--accent-dim);
+  background: var(--accent);
+  /* The icon has no color of its own — it inherits this via currentColor. */
+  color: var(--accent-foreground);
 }
 
 .command-palette-item-label {
@@ -1145,10 +1348,18 @@ input {
   flex: 1;
 }
 
+.command-palette-item.is-selected .command-palette-item-label,
+.command-palette-item.is-selected .command-palette-item-meta {
+  color: var(--accent-foreground);
+}
+
+/* DialogHeader recipe: a hairline separator under the title. */
 .modal-header {
   font-size: 13px;
   font-weight: 600;
+  padding-bottom: 16px;
   margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
 }
 
 .modal-label {
@@ -1164,15 +1375,18 @@ input {
   width: 100%;
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   padding: 7px 9px;
   color: var(--text);
   font-size: 12.5px;
+  transition: border-color var(--transition-fast);
 }
 
 .modal-input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .modal-error {
@@ -1181,11 +1395,14 @@ input {
   margin-top: 8px;
 }
 
+/* DialogFooter recipe: a hairline separator above the actions row. */
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 
 .recent-dirs {
@@ -1199,18 +1416,27 @@ input {
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   padding: 3px 9px;
   font-size: 10.5px;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
 .recent-dir-chip:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+.recent-dir-chip:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .harness-picker {
@@ -1223,15 +1449,25 @@ input {
   padding: 8px;
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   color: var(--text-dim);
   font-size: 12px;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .harness-option.is-selected {
   border-color: var(--accent);
   color: var(--text);
   background: var(--accent-dim);
+}
+
+.harness-option:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .modal-new-session {
@@ -1245,6 +1481,7 @@ input {
   gap: 6px;
 }
 
+/* Matches Button variant="outline" size="icon" — see .gear-btn. */
 .dir-picker-up {
   flex: 0 0 auto;
   width: 30px;
@@ -1254,13 +1491,30 @@ input {
   justify-content: center;
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
   color: var(--text-dim);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.dir-picker-up:hover:not(:disabled) {
+[data-theme="light"] .dir-picker-up:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+[data-theme="dark"] .dir-picker-up:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent);
+}
+
+.dir-picker-up:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .dir-picker-up:disabled {
@@ -1276,7 +1530,7 @@ input {
 .dir-picker-listing {
   margin-top: 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--bg-3);
   max-height: 150px;
   overflow-y: auto;
@@ -1299,6 +1553,7 @@ input {
   color: var(--text-faint);
 }
 
+/* Same DropdownMenuItem-style solid-accent hover as the other list surfaces. */
 .dir-picker-item {
   display: flex;
   align-items: center;
@@ -1307,14 +1562,16 @@ input {
   padding: 6px 9px;
   border: none;
   background: transparent;
+  border-radius: var(--radius-sm);
   color: var(--text-dim);
   font-size: 12px;
   text-align: left;
+  transition: background-color var(--transition-fast);
 }
 
 .dir-picker-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .toast {
@@ -1330,9 +1587,10 @@ input {
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-left: 3px solid var(--red);
-  border-radius: var(--radius);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
   z-index: 100;
+  animation: pop-in var(--transition-fast) ease-out;
 }
 
 .toast-message {
@@ -1349,8 +1607,40 @@ input {
   line-height: 1;
   cursor: pointer;
   padding: 0 2px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast);
 }
 
 .toast-dismiss:hover {
   color: var(--text);
+}
+
+.toast-dismiss:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Scrollbars — thin thumb-only styling, matching the product's own
+   (rgba(161, 161, 170, 0.75), 8px, no visible track) in both themes. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.75);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.9);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(161, 161, 170, 0.75) transparent;
 }
