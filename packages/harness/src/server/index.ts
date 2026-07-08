@@ -69,6 +69,9 @@ export interface HarnessServerOptions {
   eventStorePath?: string;
   /** Directory the built SPA lives in. Defaults to dist/web next to this module. */
   webDir?: string;
+  /** The directory the CLI was launched against — scanned for workflows at
+   *  boot so the rail isn't empty until a manual "+ Connect". */
+  launchDir?: string;
 }
 
 export interface HarnessServer {
@@ -163,6 +166,23 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   }, WORKFLOWS_CACHE_REFRESH_MS);
   workflowsCacheTimer.unref?.();
 
+  // Nothing else triggers a scan (the only other entry point is the SPA's
+  // manual "+ Connect"), so the rail would otherwise stay empty until a user
+  // does that by hand. Scan the CLI's launch directory once at boot, and
+  // again whenever a session opens in a (possibly different) directory —
+  // and let anyone already looking at the rail know it changed.
+  const scanWorkflowsAndBroadcast = async (root: string): Promise<void> => {
+    await workflowRegistry.scan(root);
+    workflowsCache = await workflowRegistry.list();
+    bus.publish({ type: "workflows.changed" });
+  };
+
+  if (options.launchDir) {
+    scanWorkflowsAndBroadcast(options.launchDir).catch((err: unknown) => {
+      console.error("[harness] initial workflow scan failed:", err);
+    });
+  }
+
   const eventStore = createEventStore(options.eventStorePath);
   const batcher = new CollectorBatcher({
     machineId,
@@ -206,6 +226,11 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       listWorkflows: () => workflowRegistry.list(),
       listMacros: () => DEFAULT_MACROS,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
+      onSessionCreated: (cwd) => {
+        scanWorkflowsAndBroadcast(cwd).catch((err: unknown) => {
+          console.error("[harness] workflow scan on session create failed:", err);
+        });
+      },
     }),
   );
   app.use(
