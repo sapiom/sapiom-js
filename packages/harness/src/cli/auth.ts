@@ -7,6 +7,7 @@ import {
 
 export interface HarnessIdentity {
   userId: string;
+  tenantId: string;
   organizationName: string;
   apiKey: string;
 }
@@ -37,6 +38,7 @@ export async function ensureAuthenticated(
   if (existing) {
     return {
       userId: existing.tenantId,
+      tenantId: existing.tenantId,
       organizationName: existing.organizationName,
       apiKey: existing.apiKey,
     };
@@ -54,6 +56,7 @@ export async function ensureAuthenticated(
 
   return {
     userId: result.tenantId,
+    tenantId: result.tenantId,
     organizationName: result.organizationName,
     apiKey: result.apiKey,
   };

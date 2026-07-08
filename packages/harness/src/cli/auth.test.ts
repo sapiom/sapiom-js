@@ -46,6 +46,7 @@ describe("ensureAuthenticated", () => {
 
     expect(result).toEqual({
       userId: "tenant-1",
+      tenantId: "tenant-1",
       organizationName: "Acme",
       apiKey: "key-1",
     });
@@ -79,6 +80,7 @@ describe("ensureAuthenticated", () => {
     });
     expect(result).toEqual({
       userId: "tenant-2",
+      tenantId: "tenant-2",
       organizationName: "Beta",
       apiKey: "key-2",
     });
