@@ -34,13 +34,17 @@ directory. The harness watches that file and renders it live in the app's
 canvas pane. Follow this style contract so every canvas looks Sapiom-native:
 ${CANVAS_STYLE_GUIDELINES}
 
-**Your current workspace selection:** the harness maintains which workflow
-the person is currently working on at \`.sapiom/harness-context.json\`,
-relative to your working directory (\`{"boundWorkflow": {name, path,
-definitionId} | null, "updatedAt": ...}\`). Read it when they say "this
-workflow" or ask what they're working on — it can change mid-session if
-they select a different one in the app, so re-read it rather than assuming
-it's still what it was earlier in the conversation.
+**Your current workspace state:** the harness mirrors what it knows about
+this workspace at \`.sapiom/harness-context.json\`, relative to your working
+directory (\`{"boundWorkflow": {name, path, definitionId} | null,
+"workflows": [{name, path, definitionId}, ...], "session": {id, cwd,
+harness}, "updatedAt": ...}\`). \`boundWorkflow\` is whichever workflow the
+person currently has selected in the app, or \`null\` if none;
+\`workflows\` is every workflow the app has discovered here, selected or
+not. Read it when they say "this workflow," ask what they're working on, or
+ask what workflows exist — both fields can change mid-session (a new
+selection, a newly scanned/connected project), so re-read the file rather
+than assuming it's still what it was earlier in the conversation.
 
 **In your very first reply this session**, briefly acknowledge that you're
 running in the Sapiom Harness with these MCPs available — one line, not a

@@ -1,35 +1,62 @@
 /**
  * Writes HARNESS_CONTEXT_FILE (`.sapiom/harness-context.json`) in a
- * session's cwd — the agent-legible mirror of that session's workflow
- * binding. Called unconditionally from `SessionManager.create()`
- * (`boundWorkflow: null`) so the file exists for every session regardless of
- * entry point (REST, `autoCreateSession`), as a best-effort backfill from
- * `SessionManager.resume()` when it's missing entirely, and on every
- * `PATCH /api/sessions/:id/workflow`. Unbinding writes `boundWorkflow: null`
- * rather than deleting the file, so a concurrent read from the agent never
- * races a momentary ENOENT.
+ * session's cwd — the agent-legible mirror of this workspace's UI state:
+ * which workflow (if any) the session is bound to, every workflow the
+ * registry currently knows about, and the session's own identity. Called
+ * unconditionally from `SessionManager.create()` so the file exists for
+ * every session regardless of entry point (REST, `autoCreateSession`), as a
+ * backfill from `SessionManager.resume()` when it's missing entirely, on
+ * every `PATCH /api/sessions/:id/workflow`, and whenever the workflow
+ * registry changes (scan/connect) — see server/index.ts's
+ * `writeSessionContext`/`scanWorkflowsAndBroadcast` for how those call
+ * sites are wired. Unbinding writes `boundWorkflow: null` rather than
+ * deleting the file, so a concurrent read from the agent never races a
+ * momentary ENOENT.
  */
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { HARNESS_CONTEXT_FILE, type HarnessWorkspaceContext, type WorkflowInfo } from "../shared/types.js";
+import {
+  HARNESS_CONTEXT_FILE,
+  type HarnessKind,
+  type HarnessWorkspaceContext,
+  type HarnessWorkspaceContextWorkflow,
+  type WorkflowInfo,
+} from "../shared/types.js";
 
-function toContextWorkflow(workflow: WorkflowInfo | null): HarnessWorkspaceContext["boundWorkflow"] {
-  if (!workflow) return null;
+function toContextWorkflowEntry(workflow: WorkflowInfo): HarnessWorkspaceContextWorkflow {
   return { name: workflow.name, path: workflow.path, definitionId: workflow.definitionId };
 }
 
+export interface WorkspaceContextSession {
+  id: string;
+  cwd: string;
+  harness: HarnessKind;
+}
+
 /**
- * Atomically writes `<cwd>/.sapiom/harness-context.json`. Best-effort: a
- * session's cwd could in principle be unwritable (permissions, deleted out
- * from under the session) — that must never fail the REST call that
- * triggered it, so errors are logged, not thrown.
+ * Atomically writes `<session.cwd>/.sapiom/harness-context.json`.
+ * Best-effort: a session's cwd could in principle be unwritable
+ * (permissions, deleted out from under the session) — that must never fail
+ * the caller that triggered it, so errors are logged, not thrown.
+ *
+ * `workflows` is sorted by path before writing (deterministic, independent
+ * of registry scan/insertion order) so an agent re-reading the file across
+ * turns can diff it cheaply instead of re-parsing a reordered blob every
+ * time.
  */
-export async function writeHarnessContext(cwd: string, boundWorkflow: WorkflowInfo | null): Promise<void> {
-  const filePath = path.join(cwd, HARNESS_CONTEXT_FILE);
+export async function writeHarnessContext(
+  session: WorkspaceContextSession,
+  boundWorkflow: WorkflowInfo | null,
+  workflows: WorkflowInfo[],
+): Promise<void> {
+  const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
+  const sortedWorkflows = [...workflows].sort((a, b) => a.path.localeCompare(b.path)).map(toContextWorkflowEntry);
   const context: HarnessWorkspaceContext = {
-    boundWorkflow: toContextWorkflow(boundWorkflow),
+    boundWorkflow: boundWorkflow ? toContextWorkflowEntry(boundWorkflow) : null,
+    workflows: sortedWorkflows,
+    session: { id: session.id, cwd: session.cwd, harness: session.harness },
     updatedAt: new Date().toISOString(),
   };
 
@@ -48,8 +75,7 @@ export async function writeHarnessContext(cwd: string, boundWorkflow: WorkflowIn
  * True if `<cwd>/.sapiom/harness-context.json` already exists. Used by
  * `SessionManager.resume()` to decide whether a backfill write is needed —
  * resume must never clobber a file that could already reflect a real
- * binding this layer has no way to reconstruct (it only knows a workflow
- * *path*, not the full `WorkflowInfo` `writeHarnessContext` needs).
+ * binding.
  */
 export async function harnessContextFileExists(cwd: string): Promise<boolean> {
   try {

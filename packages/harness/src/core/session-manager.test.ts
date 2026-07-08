@@ -382,7 +382,7 @@ describe("SessionManager", () => {
       const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
       expect(writeWorkspaceContext).toHaveBeenCalledTimes(1);
-      expect(writeWorkspaceContext).toHaveBeenCalledWith(session.cwd);
+      expect(writeWorkspaceContext).toHaveBeenCalledWith(session);
     });
 
     it("create() writes the workspace context before the pty is actually spawned", async () => {
@@ -433,7 +433,11 @@ describe("SessionManager", () => {
 
       expect(workspaceContextExists).toHaveBeenCalledWith("/tmp/proj");
       expect(writeWorkspaceContext).toHaveBeenCalledTimes(1);
-      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj");
+      // Same object reference resume() mutated in place (status, exitCode,
+      // lastActiveAt) before writing — the callee (server/index.ts's
+      // writeSessionContext) resolves boundWorkflowPath itself, so passing
+      // the whole session is all resume() needs to do here.
+      expect(writeWorkspaceContext).toHaveBeenCalledWith(manager.get(session.id));
     });
 
     it("resume() never overwrites an existing workspace context file", async () => {

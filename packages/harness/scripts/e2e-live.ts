@@ -23,7 +23,10 @@
  *   6. POST /api/macros/:id/run is accepted (injects into the pty).
  *   7. The CLI's launch directory is scanned for workflows at boot, and a
  *      new directory is scanned when a session opens in it — both fire a
- *      workflows.changed frame on /ws/events.
+ *      workflows.changed frame on /ws/events AND rewrite every open
+ *      session's HARNESS_CONTEXT_FILE with the newly discovered workflow in
+ *      its `workflows` array (not just GET /api/workflows), even before any
+ *      bind happens.
  *   8. (separate, isolated server instance) autoCreateSession creates a
  *      session in launchDir without any client ever calling POST
  *      /api/sessions, AppState.launchDir reports it, the generated
@@ -31,7 +34,8 @@
  *      and — the entry point that used to skip this file entirely, since the
  *      write used to live only in the POST /api/sessions REST handler —
  *      HARNESS_CONTEXT_FILE already exists in its cwd with
- *      boundWorkflow: null, before any PATCH has ever run.
+ *      boundWorkflow: null, before any PATCH has ever run, with its
+ *      `workflows` array already populated from the seeded launch dir.
  *   9. GET /api/fs/list (the path-picker's directory autocomplete) is
  *      mounted and boot-token-gated like the rest of /api.
  *  10. (third, isolated server instance) `defaultHarnessKind: "codex"`
@@ -41,10 +45,10 @@
  *      GET /api/state.
  *  11. PATCH /api/sessions/:id/workflow binds a session to a registered
  *      workflow, writes HARNESS_CONTEXT_FILE in the session's cwd with the
- *      bound workflow's {name, path, definitionId}, broadcasts the change
- *      as a session.status frame on /ws/events, and unbinding (workflowPath:
- *      null) writes `boundWorkflow: null` to the same file rather than
- *      deleting it.
+ *      bound workflow's {name, path, definitionId} plus the session's own
+ *      {id, cwd, harness}, broadcasts the change as a session.status frame
+ *      on /ws/events, and unbinding (workflowPath: null) writes
+ *      `boundWorkflow: null` to the same file rather than deleting it.
  *  12. A tool.call event that echoes the harness's own listening port and
  *      the analytics collector's port produces no port.detected frame at
  *      all — proving server/index.ts's exclusion wiring, not just
@@ -229,8 +233,11 @@ async function testCoreFlow(): Promise<void> {
     console.log(`created session ${sessionId}`);
     assert(session.boundWorkflowPath === null, "a freshly created session reports boundWorkflowPath: null");
 
+    type HarnessContextWorkflowLike = { name: string; path: string; definitionId: number | null };
     type HarnessContextLike = {
-      boundWorkflow: { name: string; path: string; definitionId: number | null } | null;
+      boundWorkflow: HarnessContextWorkflowLike | null;
+      workflows: HarnessContextWorkflowLike[];
+      session: { id: string; cwd: string; harness: string };
       updatedAt: string;
     };
     const readContext = async (): Promise<HarnessContextLike> =>
@@ -420,6 +427,24 @@ async function testCoreFlow(): Promise<void> {
       "boot-time scan of the CLI's launch directory discovered its sapiom.json (definitionId read from the marker)",
     );
 
+    // --- 11'. the scan also rewrites harness-context.json's own workflows array — not just
+    // GET /api/workflows — for every already-open session, before any bind happens ---
+    const scannedContext = await waitFor(async () => {
+      const context = await readContext();
+      return context.workflows.some((w) => w.path === projectDir) ? context : undefined;
+    });
+    assert(
+      scannedContext.workflows.some((w) => w.path === projectDir && w.definitionId === 4821) &&
+        scannedContext.boundWorkflow === null,
+      "workflows.changed rewrites harness-context.json's workflows array with the newly scanned project, still unbound",
+    );
+    assert(
+      scannedContext.session.id === sessionId &&
+        scannedContext.session.cwd === projectDir &&
+        scannedContext.session.harness === "claude-code",
+      "harness-context.json embeds the session's own {id, cwd, harness}",
+    );
+
     // --- 11a. bind the session to that discovered workflow ---
     const workflowStatusBefore = wsMessages.filter((m) => m.type === "session.status").length;
     const bindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
@@ -538,6 +563,10 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-live-boot-"));
   const projectDir = path.join(tmpRoot, "project");
   await fs.mkdir(projectDir, { recursive: true });
+  // Seeded before startServer(), same as testCoreFlow's launch-dir marker —
+  // proves the auto-created boot session's harness-context.json reflects the
+  // boot-time scan's `workflows` array, not just its own (unbound) session.
+  await fs.writeFile(path.join(projectDir, "sapiom.json"), JSON.stringify({ definitionId: 7331 }));
 
   const bootToken = crypto.randomUUID();
   const captureFile = path.join(tmpRoot, "fake-claude-capture.json");
@@ -586,15 +615,24 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     // Polled, not a single read: the session appears in GET /api/state as
     // soon as it's added to the in-memory registry, which happens before
     // create()'s own await on the context-file write completes.
+    type HarnessContextWorkflowLike = { name: string; path: string; definitionId: number | null };
     type HarnessContextLike = {
-      boundWorkflow: { name: string; path: string; definitionId: number | null } | null;
+      boundWorkflow: HarnessContextWorkflowLike | null;
+      workflows: HarnessContextWorkflowLike[];
+      session: { id: string; cwd: string; harness: string };
       updatedAt: string;
     };
+    // Polled on workflows, not just file existence: the initial write from
+    // SessionManager.create() can land before the boot-time scan of
+    // launchDir finishes populating the registry (both run concurrently at
+    // startup) — scanWorkflowsAndBroadcast's rewrite-all-open-sessions step
+    // is what backfills `workflows` once the scan completes.
     const autoSessionContext = await waitFor<HarnessContextLike>(async () => {
       try {
-        return JSON.parse(
+        const context = JSON.parse(
           await fs.readFile(path.join(projectDir, ".sapiom", "harness-context.json"), "utf8"),
         ) as HarnessContextLike;
+        return context.workflows.some((w) => w.path === projectDir) ? context : undefined;
       } catch {
         return undefined;
       }
@@ -602,6 +640,10 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     assert(
       autoSessionContext.boundWorkflow === null,
       "the auto-created boot session's harness-context.json exists with boundWorkflow: null, before any bind",
+    );
+    assert(
+      autoSessionContext.workflows.some((w) => w.path === projectDir && w.definitionId === 7331),
+      "the auto-created boot session's harness-context.json workflows array is populated from the seeded launch dir",
     );
 
     const capture = await waitFor<FakeClaudeCapture>(async () => {
