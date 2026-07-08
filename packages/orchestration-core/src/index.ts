@@ -82,7 +82,10 @@ export type {
   StepErrorTrace,
   StepErrorFrame,
   StepEvent,
+  SseEvent,
+  SseEventType,
 } from "./types.js";
+export { SSE_EVENT_TYPES } from "./types.js";
 
 // projection decode (tolerant normalization of the REST body) — the reusable
 // entry point consumers use to re-decode a body after an SSE refetch. The
@@ -106,6 +109,10 @@ export type {
   WaitForExecutionResult,
   WaitStopReason,
 } from "./inspect.js";
+
+// watch (networked) — live SSE async-iterator over a run's event channel
+export { watchExecution, parseSseFrame, parseSseEvent } from "./watch.js";
+export type { WatchExecutionOptions } from "./watch.js";
 
 // signal (networked)
 export { signal, parseSignalPayload } from "./signal.js";

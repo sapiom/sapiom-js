@@ -76,6 +76,62 @@ export class GatewayClient {
   post<T = unknown>(path: string, body?: unknown): Promise<T> {
     return this.request<T>('POST', path, body);
   }
+
+  /**
+   * Open a Server-Sent Events stream and return the raw {@link Response} so the
+   * caller can read `body` as it arrives (see `watchExecution`). Auth is the same
+   * `x-api-key` presented on every request — the engine sits behind the
+   * service-key proxy, so the SDK just presents its key. Handshake failures map
+   * to the same `OrchestrationError` shape as {@link request} (never a bare
+   * fetch rejection or a non-ok Response the caller has to re-inspect).
+   *
+   * The body is NOT consumed here: on success the live stream is handed back
+   * open. `signal` lets the caller abort the connection (iterator teardown);
+   * `lastEventId` is forwarded as the resume cursor (`Last-Event-ID`).
+   */
+  async openStream(
+    path: string,
+    opts: { signal?: AbortSignal; lastEventId?: string } = {},
+  ): Promise<Response> {
+    const headers: Record<string, string> = {
+      'x-api-key': this.apiKey,
+      accept: 'text/event-stream',
+    };
+    if (opts.lastEventId) {
+      headers['last-event-id'] = opts.lastEventId;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.base}${path}`, { method: 'GET', headers, signal: opts.signal });
+    } catch (err) {
+      throw new OrchestrationError({
+        code: 'NETWORK',
+        message: `Could not reach ${this.base}.`,
+        hint: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const data = text ? safeParse(text) : undefined;
+      throw new OrchestrationError({
+        code: `HTTP_${res.status}`,
+        message: messageFrom(data) ?? `Stream request failed (${res.status} ${res.statusText}).`,
+        hint:
+          res.status === 401 || res.status === 403
+            ? 'Check your API key (`sapiom login` or SAPIOM_API_KEY) and that it has access to this orchestration.'
+            : undefined,
+      });
+    }
+    if (!res.body) {
+      throw new OrchestrationError({
+        code: 'NETWORK',
+        message: `Stream at ${this.base}${path} returned no body.`,
+      });
+    }
+    return res;
+  }
 }
 
 /**
