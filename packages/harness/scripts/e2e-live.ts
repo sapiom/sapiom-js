@@ -30,6 +30,11 @@
  *      mcp-config for an authenticated identity carries the x-api-key header.
  *   9. GET /api/fs/list (the path-picker's directory autocomplete) is
  *      mounted and boot-token-gated like the rest of /api.
+ *  10. (third, isolated server instance) `defaultHarnessKind: "codex"`
+ *      (as the CLI resolves it from doctor() when claude isn't on PATH)
+ *      makes the auto-created boot session launch via the codex adapter, and
+ *      `availableHarnesses` passed to startServer() round-trips through
+ *      GET /api/state.
  *
  * Run with: pnpm e2e:live
  */
@@ -502,6 +507,82 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
   }
 }
 
+/**
+ * Phase 9: a third isolated server instance proving `defaultHarnessKind`
+ * actually drives which agent the auto-created boot session launches — the
+ * "codex when claude-code isn't available" fallback from doctor.ts's
+ * availableHarnesses, without needing a real `codex` binary. Reuses the same
+ * fake-claude fixture in the "codex" adapter slot: the fixture doesn't care
+ * what flags it's called with, so it stands in fine to prove dispatch, not
+ * codex-specific argv shape (that's covered by codex.test.ts).
+ */
+async function testAutoSessionKindSelection(): Promise<void> {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-live-kind-"));
+  const projectDir = path.join(tmpRoot, "project");
+  await fs.mkdir(projectDir, { recursive: true });
+
+  const bootToken = crypto.randomUUID();
+  const captureFile = path.join(tmpRoot, "fake-codex-capture.json");
+  process.env.FAKE_CLAUDE_CAPTURE = captureFile;
+
+  const server = await startServer({
+    port: 0,
+    bootToken,
+    telemetryOptIn: false,
+    identity: { userId: "kind-user", tenantId: "kind-tenant", organizationName: "Kind Org", apiKey: "e2e-key" },
+    machineId: "e2e-kind-machine",
+    // No claude-code adapter registered at all — if defaultHarnessKind were
+    // ignored and the auto-create fell back to its old hardcoded
+    // "claude-code", SessionManager.create() would reject with "no adapter
+    // for claude-code" and this phase would fail loudly rather than silently
+    // passing for the wrong reason.
+    adapters: { codex: createCodexAdapter({ binary: FAKE_CLAUDE }) },
+    sessionsPath: path.join(tmpRoot, "sessions.json"),
+    eventStorePath: path.join(tmpRoot, "events.ndjson"),
+    workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
+    launchDir: projectDir,
+    defaultHarnessKind: "codex",
+    availableHarnesses: ["codex"],
+  });
+  const baseUrl = `http://127.0.0.1:${server.port}`;
+  const headers = { "Content-Type": "application/json", "X-Harness-Token": bootToken };
+
+  try {
+    type StateLike = {
+      availableHarnesses?: string[];
+      sessions: Array<{ id: string; cwd: string; harness: string }>;
+    };
+    const state = await waitFor<StateLike>(async () => {
+      const res = await fetch(`${baseUrl}/api/state`, { headers });
+      const body = (await res.json()) as StateLike;
+      return body.sessions.some((s) => s.cwd === projectDir) ? body : undefined;
+    });
+    const bootSession = state.sessions.find((s) => s.cwd === projectDir);
+    assert(bootSession?.harness === "codex", "defaultHarnessKind: codex drives the auto-created session's harness");
+    assert(
+      state.availableHarnesses?.length === 1 && state.availableHarnesses[0] === "codex",
+      "GET /api/state reports availableHarnesses as supplied",
+    );
+
+    // The codex adapter was actually invoked (not silently no-op'd): its
+    // launch() always prepends this config-override flag (see codex.ts).
+    const capture = await waitFor<FakeClaudeCapture>(async () => {
+      try {
+        return JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
+      } catch {
+        return undefined;
+      }
+    });
+    assert(
+      capture.argv.includes("check_for_update_on_startup=false"),
+      "the auto-created session actually launched via the codex adapter, not claude-code",
+    );
+  } finally {
+    await server.close();
+    await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+}
+
 /** Sends SIGTERM, escalates to SIGKILL if it's still alive shortly after,
  *  and waits for the process to actually exit (or a hard timeout) before
  *  returning — so callers can safely assume its file handles are released. */
@@ -529,10 +610,13 @@ async function main(): Promise<void> {
   console.log("node-pty preflight ok");
 
   await testCoreFlow();
-  console.log("phase 1/2 ok (core session/ingest/canvas/macro/workflow-scan loop)\n");
+  console.log("phase 1/3 ok (core session/ingest/canvas/macro/workflow-scan loop)\n");
 
   await testAutoSessionAndMcpAuth();
-  console.log("phase 2/2 ok (autoCreateSession + mcp-config auth headers)\n");
+  console.log("phase 2/3 ok (autoCreateSession + mcp-config auth headers)\n");
+
+  await testAutoSessionKindSelection();
+  console.log("phase 3/3 ok (defaultHarnessKind drives auto-session + availableHarnesses in AppState)\n");
 
   console.log("PASS — live integration proof succeeded\n");
 }
