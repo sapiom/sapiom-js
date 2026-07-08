@@ -6,7 +6,6 @@
  * present the same action rail.
  */
 import type { MacroDef } from "../shared/types.js";
-import { CANVAS_STYLE_GUIDELINES } from "../profiles/canvas-guidelines.js";
 
 export const DEFAULT_MACROS: MacroDef[] = [
   {
@@ -53,18 +52,22 @@ export const DEFAULT_MACROS: MacroDef[] = [
     },
   },
   {
-    // One-click render/re-render of the bound workflow — no free-text
-    // subject: the workflow, its path, and the rest of the workspace (for
-    // "how it interconnects") are all already known from context, so this
-    // is a fully self-sufficient prompt with nothing for the user to fill in.
+    // One-click render/re-render, unbound-friendly again: the canvas kit
+    // (core/canvas-template.ts) has already dropped a prebuilt template with
+    // correct CSS + a renderer into {{canvas.path}} — the only thing this
+    // macro ever asks an agent to write is the small JSON data block the
+    // renderer reads, never raw HTML. No free-text subject and no
+    // {{workflow.path}} reference: whether there's a bound workflow is
+    // something the agent reads out of harness-context.json at run time, so
+    // the same static prompt works whether or not one is selected.
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
-    requiresWorkflow: true,
+    requiresWorkflow: false,
     action: {
       kind: "inject",
       submit: true,
-      text: `Render (or re-render, overwriting {{canvas.path}}) a visualization of the workflow at {{workflow.path}} — its steps, control flow, and how it interconnects with the other workflows in this workspace (see .sapiom/harness-context.json for the full list). Follow these guidelines:\n\n${CANVAS_STYLE_GUIDELINES}`,
+      text: `Open {{canvas.path}} and find the <script type="application/json" id="canvas-data"> block — the comment directly above it documents the schema. Update ONLY that JSON: read .sapiom/harness-context.json first — if it has a boundWorkflow, represent that workflow's steps, control flow, and terminal outcomes as one graph; if boundWorkflow is null, represent every workflow in its workflows list as its own graph, plus interconnections showing how they hand off or signal to each other. Leave every other byte of the file exactly as it is — the CSS and the renderer script are already correct; do not touch them.`,
     },
   },
 ];

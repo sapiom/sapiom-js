@@ -3,7 +3,6 @@ import express from "express";
 import type { Server } from "node:http";
 import { createMacrosRouter, type MacrosRouterDeps } from "./macros.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
-import { CANVAS_STYLE_GUIDELINES } from "../profiles/canvas-guidelines.js";
 import type { WorkflowInfo } from "../shared/types.js";
 
 let server: Server;
@@ -118,7 +117,7 @@ describe("macros router", () => {
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subject: "the leasing funnel" }),
+      body: JSON.stringify({}),
     });
     expect(res.status).toBe(400);
   });
@@ -128,7 +127,7 @@ describe("macros router", () => {
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ harnessSessionId: "no-such-session", subject: "x" }),
+      body: JSON.stringify({ harnessSessionId: "no-such-session" }),
     });
     expect(res.status).toBe(404);
   });
@@ -184,32 +183,35 @@ describe("macros router", () => {
     expect(res.status).toBe(400);
   });
 
-  it("runs visualize as a one-click render of the session's bound workflow, no subject needed", async () => {
-    const deps = makeDeps({ getBoundWorkflowPath: (id) => (id === "sess-1" ? workflow.path : null) });
+  it("runs visualize with no workflow bound at all — the canvas kit's data-edit prompt needs none", async () => {
+    const deps = makeDeps(); // getBoundWorkflowPath defaults to () => null
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ harnessSessionId: "sess-1" }), // no subject, no explicit workflowPath
+      body: JSON.stringify({ harnessSessionId: "sess-1" }), // no subject, no workflowPath, no binding
     });
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      `Render (or re-render, overwriting /Users/demo/acme-app/.sapiom/canvas/index.html) a visualization of the workflow at ${workflow.path} — its steps, control flow, and how it interconnects with the other workflows in this workspace (see .sapiom/harness-context.json for the full list). Follow these guidelines:\n\n${CANVAS_STYLE_GUIDELINES}`,
+      "Open /Users/demo/acme-app/.sapiom/canvas/index.html and find the <script type=\"application/json\" id=\"canvas-data\"> block — the comment directly above it documents the schema. Update ONLY that JSON: read .sapiom/harness-context.json first — if it has a boundWorkflow, represent that workflow's steps, control flow, and terminal outcomes as one graph; if boundWorkflow is null, represent every workflow in its workflows list as its own graph, plus interconnections showing how they hand off or signal to each other. Leave every other byte of the file exactly as it is — the CSS and the renderer script are already correct; do not touch them.",
       true,
     );
   });
 
-  it("400s visualize when neither the request nor the session binding has a workflow", async () => {
-    const deps = makeDeps();
+  it("also runs visualize when a workflow IS bound — same static prompt either way", async () => {
+    const deps = makeDeps({ getBoundWorkflowPath: (id) => (id === "sess-1" ? workflow.path : null) });
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
     });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("requires a selected workflow");
+    expect(res.status).toBe(200);
+    const [, text] = (deps.injectInput as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string, boolean];
+    // Same text regardless of binding — the agent branches on
+    // harness-context.json's boundWorkflow at run time, not on macro text.
+    expect(text).toContain("canvas-data");
+    expect(text).not.toContain(workflow.path); // no {{workflow.path}} substitution baked in
   });
 });

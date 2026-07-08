@@ -32,14 +32,21 @@ describe("DEFAULT_MACROS", () => {
     });
   });
 
-  it("visualize is a one-click render of the bound workflow — no free-text subject", () => {
+  it("visualize is a one-click, unbound-friendly data-only edit — no free-text subject, no workflow required", () => {
     const macro = DEFAULT_MACROS.find((m) => m.id === "visualize")!;
-    expect(macro.requiresWorkflow).toBe(true);
+    // Works whether or not a workflow is bound — the agent reads
+    // harness-context.json at run time to decide single-workflow vs.
+    // workspace-overview mode, so the static prompt can't reference
+    // {{workflow.path}} (it'd throw when unbound).
+    expect(macro.requiresWorkflow).toBeFalsy();
     expect(macro.action.kind).toBe("inject");
     if (macro.action.kind === "inject") {
-      expect(macro.action.text).toContain("{{workflow.path}}");
       expect(macro.action.text).toContain("{{canvas.path}}");
+      expect(macro.action.text).not.toContain("{{workflow.path}}");
       expect(macro.action.text).not.toContain("{{subject}}");
+      // Data-only edit, not "write HTML" — the whole point of the canvas kit.
+      expect(macro.action.text).toMatch(/canvas-data/);
+      expect(macro.action.text).toMatch(/harness-context\.json/);
     }
   });
 

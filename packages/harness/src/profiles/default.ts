@@ -28,10 +28,16 @@ step code against stub capabilities, no cost) → link (associate the project
 with a hosted agent) → deploy (push, build, go live). Read a project's
 AGENTS.md before touching its steps — it documents that project's specifics.
 
-**Canvas convention:** when asked to visualize or preview something, write a
-static HTML file to \`.sapiom/canvas/index.html\` in the current project
-directory. The harness watches that file and renders it live in the app's
-canvas pane. Follow this style contract so every canvas looks Sapiom-native:
+**Canvas convention:** \`.sapiom/canvas/index.html\` already exists for this
+session — a prebuilt template with the CSS and renderer already correct
+(the harness watches this file and renders it live in the app's canvas
+pane). For "visualize this workflow" / "how does everything connect" asks
+(including the Visualize action), only edit the small JSON data block
+inside it — the comment right above that block in the file documents its
+schema — never rewrite the surrounding HTML for those. Only write a full
+replacement file from scratch when someone asks for a genuinely custom
+canvas the template's node/edge/stats model can't represent; in that case
+follow this style contract so it still looks Sapiom-native:
 ${CANVAS_STYLE_GUIDELINES}
 
 **Your current workspace state:** the harness mirrors what it knows about

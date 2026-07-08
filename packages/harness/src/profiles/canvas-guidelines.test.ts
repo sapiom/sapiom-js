@@ -59,18 +59,15 @@ describe("CANVAS_STYLE_GUIDELINES", () => {
 });
 
 describe("CANVAS_STYLE_GUIDELINES injection sites", () => {
-  it("is embedded verbatim in the default system prompt's canvas paragraph", () => {
+  it("is embedded verbatim in the default system prompt's canvas paragraph — the freeform path", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain(CANVAS_STYLE_GUIDELINES);
   });
 
-  it("is embedded verbatim in the visualize macro's inject text", () => {
+  it("is NOT embedded in the visualize macro's inject text — the canvas kit's prebuilt template already carries the style, so the macro path only ever asks for a data edit", () => {
     const macro = DEFAULT_MACROS.find((m) => m.id === "visualize")!;
     expect(macro.action.kind).toBe("inject");
     if (macro.action.kind === "inject") {
-      expect(macro.action.text).toContain(CANVAS_STYLE_GUIDELINES);
-      // One-click render of the bound workflow — no free-text subject.
-      expect(macro.action.text).toContain("{{workflow.path}}");
-      expect(macro.action.text).not.toContain("{{subject}}");
+      expect(macro.action.text).not.toContain(CANVAS_STYLE_GUIDELINES);
     }
   });
 });

@@ -53,6 +53,11 @@
  *      the analytics collector's port produces no port.detected frame at
  *      all — proving server/index.ts's exclusion wiring, not just
  *      PortDetector's own unit-tested filter in isolation.
+ *  13. Canvas kit: the canvas template (core/canvas-template.ts) is already
+ *      on disk at .sapiom/canvas/index.html the moment a session is
+ *      created — before any visualize run — and POST /api/macros/
+ *      visualize/run succeeds both with no workflow bound (requiresWorkflow:
+ *      false — workspace-overview mode) and after one is bound.
  *
  * Run with: pnpm e2e:live
  */
@@ -68,6 +73,7 @@ import { startServer } from "../src/server/index.js";
 import { createClaudeCodeAdapter } from "../src/core/adapters/claude-code.js";
 import { createCodexAdapter } from "../src/core/adapters/codex.js";
 import { ensureSpawnHelperExecutable } from "../src/core/session-manager.js";
+import { EMPTY_CANVAS_DATA, renderCanvasHtml } from "../src/core/canvas-template.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = path.join(SCRIPT_DIR, "fixtures", "fake-claude.mjs");
@@ -246,6 +252,14 @@ async function testCoreFlow(): Promise<void> {
     // Written synchronously before POST /api/sessions responds — should already be there.
     const initialContext = await readContext();
     assert(initialContext.boundWorkflow === null, "harness-context.json is written on session create with boundWorkflow: null");
+
+    // The canvas kit's template is also backfilled before the pty spawns —
+    // the canvas pane must never open to a bare empty iframe.
+    const initialCanvasHtml = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
+    assert(
+      initialCanvasHtml === renderCanvasHtml(EMPTY_CANVAS_DATA),
+      "the canvas kit's empty-state template is already on disk when the session is created",
+    );
 
     // --- 2. the fixture captured its own argv/env — proves the launch-opts wiring ---
     const capture = await waitFor<FakeClaudeCapture>(async () => {
@@ -445,6 +459,15 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json embeds the session's own {id, cwd, harness}",
     );
 
+    // --- 10a. visualize with nothing bound yet — the canvas kit macro is unbound-friendly
+    // (requiresWorkflow: false), unlike every other action-rail macro. ---
+    const unboundMacroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ harnessSessionId: sessionId }),
+    });
+    assert(unboundMacroRes.status === 200, "POST /api/macros/visualize/run succeeds with no workflow bound");
+
     // --- 11a. bind the session to that discovered workflow ---
     const workflowStatusBefore = wsMessages.filter((m) => m.type === "session.status").length;
     const bindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
@@ -474,9 +497,9 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json reflects the bound workflow's {name, path, definitionId}",
     );
 
-    // --- 11a-2. run the visualize macro — one-click render of the now-bound workflow, no
-    // free-text subject; the REST layer falls back to the session's bound workflow when
-    // the request omits workflowPath, so this proves that path end to end. ---
+    // --- 11a-2. also run visualize now that a workflow IS bound — same static prompt
+    // either way (the agent branches on harness-context.json's boundWorkflow at run
+    // time), so this just proves the request still succeeds once bound. ---
     const macroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers,
