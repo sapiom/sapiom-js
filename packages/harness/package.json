@@ -42,7 +42,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "mock-collector": "node scripts/mock-collector.mjs",
+    "sim:e2e": "tsx scripts/e2e-sim.ts"
   },
   "dependencies": {
     "@sapiom/mcp": "workspace:^",
