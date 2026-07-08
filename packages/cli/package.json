@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "The Sapiom command-line interface — scaffold, validate, and ship Sapiom orchestrations.",
   "license": "MIT",
   "author": "Sapiom",

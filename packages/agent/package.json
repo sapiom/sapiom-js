@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/agent",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Versioned public contract for authoring Sapiom agents: types, directive constructors/guards, defineAgent, defineStep, InMemoryContextStore. Shared by customer agent definitions, the sandbox step-runner, and the engine.",
   "license": "MIT",
   "author": "Sapiom",
