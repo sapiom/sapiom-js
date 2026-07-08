@@ -15,7 +15,13 @@ import express, { type Express } from "express";
 import { WebSocketServer } from "ws";
 import open from "open";
 
-import type { AnalyticsEvent, HarnessAdapter, HarnessKind, WorkflowInfo } from "../shared/types.js";
+import type {
+  AnalyticsEvent,
+  HarnessAdapter,
+  HarnessKind,
+  HarnessSession,
+  WorkflowInfo,
+} from "../shared/types.js";
 import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
@@ -25,6 +31,8 @@ import { createEventStore } from "../core/collector/store.js";
 import { CollectorBatcher } from "../core/collector/batcher.js";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
+import { createSeqCounter } from "../core/collector/seq.js";
+import { findRolloutFile, tailCodexRollout, type CodexTailerHandle } from "../core/collector/codex-tailer.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
 import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
@@ -39,10 +47,20 @@ import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
 import { attachWebSocketRouters } from "./ws-router.js";
-import { createIngestRouter, type IngestSessionContext } from "./ingest.js";
+import { createIngestRouter, processIngest, type IngestDeps, type IngestRequestBody, type IngestSessionContext } from "./ingest.js";
 import { createCanvasRouter } from "./canvas.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
+
+/**
+ * Codex has no hook system — its rollout file is polled into existence
+ * (findRolloutFile) rather than announced, so discovery needs a bounded
+ * retry loop rather than a single lookup. 15s covers a slow process spawn
+ * with margin; if Codex still hasn't written a rollout file by then,
+ * something's wrong enough that surfacing an error beats waiting longer.
+ */
+const CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS = 15_000;
+const CODEX_ROLLOUT_DISCOVERY_POLL_MS = 300;
 
 /** Workflow list is refreshed off this interval for the (synchronous)
  * macro-resolution lookup — connect/scan are infrequent user actions, so a
@@ -68,6 +86,10 @@ export interface HarnessServerOptions {
   collectorUrl?: string;
   workflowsRegistryPath?: string;
   eventStorePath?: string;
+  /** Overrides the home directory codex rollout discovery scans
+   * (`<home>/.codex/sessions/...`). Defaults to the real OS home dir; tests
+   * point this at a fixture tree instead of touching `~/.codex` for real. */
+  codexHomeDir?: string;
   /** Directory the built SPA lives in. Defaults to dist/web next to this module. */
   webDir?: string;
   /** The directory the CLI was launched against — scanned for workflows at
@@ -262,41 +284,128 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     }),
   );
 
+  // Shared by both event sources feeding the analytics pipeline: real hook
+  // POSTs (via the /ingest router below) and the Codex transcript tailer
+  // (in-process, no HTTP round-trip — see startCodexTailerFor). One
+  // seqCounter so a given harnessSessionId gets one consistent seq space
+  // regardless of which source produced the event.
+  const seqCounter = createSeqCounter();
+  const ingestDeps: IngestDeps = {
+    ingestToken: options.bootToken,
+    normalize: normalizeHookEvent,
+    resolveSession: resolveIngestSession,
+    onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
+      sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
+    },
+    store: eventStore,
+    batcher,
+    enrichFromTranscript: enrichTurnCompleted,
+    onNormalizedEvent: (event: AnalyticsEvent) => {
+      if (event.type !== "tool.call") return;
+      const { toolInput, toolResponseSummary } = event.payload as {
+        toolInput?: unknown;
+        toolResponseSummary?: unknown;
+      };
+      // Each field is a discrete, already-complete string (not a live
+      // stream) — flush() immediately so a port landing at the very end
+      // of it (a common shape: "...started server on http://localhost:5544")
+      // isn't held back waiting for a "next chunk" that will never arrive.
+      if (typeof toolInput === "string") {
+        portDetector.feed(toolInput, event.harnessSessionId);
+        portDetector.flush(event.harnessSessionId);
+      }
+      if (typeof toolResponseSummary === "string") {
+        portDetector.feed(toolResponseSummary, event.harnessSessionId);
+        portDetector.flush(event.harnessSessionId);
+      }
+    },
+    onError: (err) => console.error("[harness] ingest processing error:", err),
+    seqCounter,
+  };
+
   // /ingest authenticates itself (bearer ingestToken, not X-Harness-Token) —
   // it must not sit behind the /api boot-token middleware above.
-  app.use(
-    createIngestRouter({
-      ingestToken: options.bootToken,
-      normalize: normalizeHookEvent,
-      resolveSession: resolveIngestSession,
-      onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
-        sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
+  app.use(createIngestRouter(ingestDeps));
+
+  // Codex has no hooks, so a live session's entire analytics eventSource is
+  // its rollout file (see core/collector/codex-tailer.ts). On "running", find
+  // that file and start tailing it, feeding each translated {hookEvent,
+  // payload} into the exact same processIngest() pipeline a hook POST would
+  // hit — same normalizer, same transcript enrichment, same store/batcher,
+  // same seqCounter. On "exited", synthesize the SessionEnd the rollout
+  // format has no line of its own for, and stop.
+  const codexTailers = new Map<string, CodexTailerHandle>();
+
+  async function discoverCodexRolloutPath(session: HarnessSession): Promise<string | null> {
+    const deadline = Date.now() + CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS;
+    const sinceMs = Date.parse(session.createdAt);
+    for (;;) {
+      const found = await findRolloutFile(
+        session.agentSessionId
+          ? { cwd: session.cwd, agentSessionId: session.agentSessionId, homeDir: options.codexHomeDir }
+          : {
+              cwd: session.cwd,
+              sinceMs: Number.isNaN(sinceMs) ? undefined : sinceMs,
+              homeDir: options.codexHomeDir,
+            },
+      );
+      if (found) return found;
+      if (Date.now() >= deadline) return null;
+      await new Promise((resolve) => setTimeout(resolve, CODEX_ROLLOUT_DISCOVERY_POLL_MS));
+    }
+  }
+
+  async function startCodexTailerFor(harnessSessionId: string): Promise<void> {
+    if (codexTailers.has(harnessSessionId)) return;
+    const session = sessionManager.get(harnessSessionId);
+    if (!session) return;
+
+    const rolloutPath = await discoverCodexRolloutPath(session);
+    if (!rolloutPath) {
+      console.error(
+        `[harness] codex tailer: no rollout file found for session ${harnessSessionId} (cwd=${session.cwd}) within ${CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS}ms`,
+      );
+      return;
+    }
+    // The session may have exited (or already started another tailer via a
+    // status-change re-entry) while discovery was polling.
+    if (codexTailers.has(harnessSessionId)) return;
+    if (sessionManager.get(harnessSessionId)?.status !== "running") return;
+
+    const tailer = tailCodexRollout({
+      rolloutPath,
+      // A fresh launch was found by cwd+sinceMs, not an exact agentSessionId
+      // match — which means it's necessarily the file THIS session just
+      // caused Codex to create, so its entire content (including the
+      // session_meta line discovery just proved exists) is new to us. A
+      // resume's agentSessionId match, by contrast, points at a file with
+      // real prior history that should stay unemitted.
+      startFromBeginning: !session.agentSessionId,
+      onEvent: (hookEvent, payload) => {
+        const body: IngestRequestBody = { hookEvent, harnessSessionId, payload };
+        void processIngest(body, ingestDeps, seqCounter).catch((err: unknown) => {
+          console.error("[harness] codex tailer ingest error:", err);
+        });
       },
-      store: eventStore,
-      batcher,
-      enrichFromTranscript: enrichTurnCompleted,
-      onNormalizedEvent: (event: AnalyticsEvent) => {
-        if (event.type !== "tool.call") return;
-        const { toolInput, toolResponseSummary } = event.payload as {
-          toolInput?: unknown;
-          toolResponseSummary?: unknown;
-        };
-        // Each field is a discrete, already-complete string (not a live
-        // stream) — flush() immediately so a port landing at the very end
-        // of it (a common shape: "...started server on http://localhost:5544")
-        // isn't held back waiting for a "next chunk" that will never arrive.
-        if (typeof toolInput === "string") {
-          portDetector.feed(toolInput, event.harnessSessionId);
-          portDetector.flush(event.harnessSessionId);
-        }
-        if (typeof toolResponseSummary === "string") {
-          portDetector.feed(toolResponseSummary, event.harnessSessionId);
-          portDetector.flush(event.harnessSessionId);
-        }
-      },
-      onError: (err) => console.error("[harness] ingest processing error:", err),
-    }),
-  );
+      onError: (err) => console.error("[harness] codex tailer parse error:", err),
+    });
+    codexTailers.set(harnessSessionId, tailer);
+  }
+
+  sessionManager.onStatusChange((session) => {
+    if (session.harness !== "codex") return;
+    if (session.status === "running") {
+      startCodexTailerFor(session.id).catch((err: unknown) => {
+        console.error("[harness] codex tailer startup failed:", err);
+      });
+    } else if (session.status === "exited") {
+      const tailer = codexTailers.get(session.id);
+      if (tailer) {
+        tailer.emitSessionEnd(session.exitCode != null ? `pty exited (code ${session.exitCode})` : undefined);
+        codexTailers.delete(session.id);
+      }
+    }
+  });
 
   // Canvas is intentionally unauthenticated (see canvas.ts) — served straight
   // off the session's cwd, no boot token required.
@@ -362,6 +471,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       new Promise<void>((resolve, reject) => {
         clearInterval(workflowsCacheTimer);
         canvasWatcher.stopAll();
+        for (const tailer of codexTailers.values()) tailer.stop();
+        codexTailers.clear();
         // Closing the HTTP/WS server doesn't touch unrelated child processes
         // on its own — without this, every live claude/codex pty outlives
         // the harness server itself (e.g. after Ctrl+C or in a script that

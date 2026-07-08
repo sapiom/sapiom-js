@@ -47,8 +47,8 @@ describe("tailCodexRollout", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function start(): CodexTailerHandle {
-    handle = tailCodexRollout({ rolloutPath, onEvent, onError, pollIntervalMs: POLL_MS });
+  function start(overrides: { startFromBeginning?: boolean } = {}): CodexTailerHandle {
+    handle = tailCodexRollout({ rolloutPath, onEvent, onError, pollIntervalMs: POLL_MS, ...overrides });
     return handle;
   }
 
@@ -156,6 +156,26 @@ describe("tailCodexRollout", () => {
 
     expect(onEvent).toHaveBeenCalledWith("UserPromptSubmit", { prompt: "new activity after resume" });
     expect(onEvent).not.toHaveBeenCalledWith("UserPromptSubmit", { prompt: "old history" });
+  });
+
+  it("with startFromBeginning, emits content that already existed when the tailer started", async () => {
+    // Simulates the find-then-tail race: a fresh launch's rollout file is
+    // only ever discovered once it already has content (session_meta at
+    // minimum) — startFromBeginning is what lets that be treated as new
+    // rather than swallowed as if it were resume history.
+    await writeFile(
+      rolloutPath,
+      sessionMetaLine("agent-1", "/tmp/proj", "2026-01-01T00:00:00.000Z") + userMessageLine("already there"),
+    );
+    start({ startFromBeginning: true });
+    await sleep(POLL_MS * 4);
+
+    expect(onEvent).toHaveBeenCalledWith("SessionStart", {
+      source: "codex",
+      cwd: "/tmp/proj",
+      session_id: "agent-1",
+    });
+    expect(onEvent).toHaveBeenCalledWith("UserPromptSubmit", { prompt: "already there" });
   });
 
   it("reports malformed JSON lines via onError instead of throwing, and keeps tailing", async () => {
@@ -280,5 +300,37 @@ describe("findRolloutFile", () => {
 
     const found = await findRolloutFile({ cwd: "/tmp/proj", homeDir });
     expect(found).toBe(join(dir, "rollout-later.jsonl"));
+  });
+
+  it("with agentSessionId, matches that exact session even when a newer one shares the same cwd", async () => {
+    const dir = rolloutDir();
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "rollout-target.jsonl"),
+      sessionMetaLine("agent-target", "/tmp/proj", "2026-01-01T00:00:00.000Z"),
+    );
+    await sleep(20);
+    // Written (and thus more recently modified) after the target — recency
+    // alone would pick this one, which is exactly the ambiguity agentSessionId
+    // exists to resolve (the resume case).
+    await writeFile(
+      join(dir, "rollout-newer.jsonl"),
+      sessionMetaLine("agent-newer", "/tmp/proj", "2026-01-01T00:05:00.000Z"),
+    );
+
+    const found = await findRolloutFile({ cwd: "/tmp/proj", homeDir, agentSessionId: "agent-target" });
+    expect(found).toBe(join(dir, "rollout-target.jsonl"));
+  });
+
+  it("with agentSessionId, returns null when no rollout file matches that id", async () => {
+    const dir = rolloutDir();
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "rollout-a.jsonl"),
+      sessionMetaLine("agent-a", "/tmp/proj", "2026-01-01T00:00:00.000Z"),
+    );
+
+    const found = await findRolloutFile({ cwd: "/tmp/proj", homeDir, agentSessionId: "agent-does-not-exist" });
+    expect(found).toBeNull();
   });
 });
