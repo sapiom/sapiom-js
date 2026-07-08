@@ -4,9 +4,9 @@ Run coding agents locally under a managed session runtime — real
 pseudo-terminals, harness adapters, a local server and a browser terminal
 UI.
 
-> **Status: early preview.** The session foundation is available; harness
-> adapters, the local server/UI, analytics and doctor land incrementally.
-> APIs may change while the package is pre-1.0.
+> **Status: early preview.** The session foundation and the harness
+> adapter registry are available; the local server/UI, analytics and
+> doctor land incrementally. APIs may change while the package is pre-1.0.
 
 ## Install
 
@@ -65,6 +65,68 @@ Behavior notes:
 - **Handles outlive processes** — after exit, `isAlive()` returns `false`
   and writes are dropped; methods called with a handle the runtime never
   issued throw `UnknownSessionError`.
+
+## Harness adapters
+
+A `HarnessAdapter` describes one coding agent the harness knows how to
+work with: how to launch it (when it can), how to detect it, and how to
+guide MCP setup for it. The registry maps ids to adapters:
+
+```ts
+import { getAdapter, listAdapters, PtyRuntime } from "@sapiom/harness";
+
+for (const adapter of listAdapters()) {
+  console.log(adapter.id, adapter.mode, await adapter.detectInstalled());
+}
+
+const claude = getAdapter("claude-code");
+if (claude.mode === "embedded") {
+  const launch = claude.launchCommand({
+    env: { PATH: process.env.PATH ?? "", TERM: "xterm-256color" },
+    appendSystemPrompt: "Prefer small, verifiable steps.", // literal content
+  });
+
+  const runtime = new PtyRuntime();
+  const session = await runtime.create({
+    ...launch,
+    cwd: process.cwd(),
+    cols: 120,
+    rows: 32,
+  });
+
+  // claude-code delivers prompts post-launch: write into the session.
+  runtime.write(session, "hello\r");
+}
+```
+
+Built-in adapters:
+
+| id            | mode     | prompt delivery | status                  |
+| ------------- | -------- | --------------- | ----------------------- |
+| `claude-code` | embedded | post-launch     | fully supported         |
+| `codex`       | embedded | inline          | experimental scaffold   |
+| `pi`          | embedded | inline          | experimental scaffold   |
+| `opencode`    | embedded | inline          | experimental scaffold   |
+| `conductor`   | external | —               | detection/guidance only |
+
+Behavior notes:
+
+- **No shell, ever** — sessions spawn without a shell, so launch args
+  (including `appendSystemPrompt`, which is literal prompt _content_, not
+  a file path) reach the harness verbatim; nothing is interpolated,
+  quoted, or word-split.
+- **External means no spawn path** — `external` adapters (Conductor runs
+  its own sessions) have no `launchCommand` at the type level; narrow on
+  `mode` before launching.
+- **Pure-Node detection** — `detectInstalled()` walks `PATH` (with
+  `PATHEXT` on Windows) using Node built-ins; nothing shells out to
+  `which`. The lookup is exported as `findExecutableOnPath()`.
+- **MCP guidance per harness** — `installMcpPrompt()` returns prompt text
+  for the agent explaining how to register the Sapiom MCP server
+  (`@sapiom/mcp`) for that specific harness.
+- **One file + one line** — adding a harness is one adapter file plus one
+  entry in the registry list; enumeration, lookup and the contract tests
+  pick it up from there.
 
 ## Development
 
