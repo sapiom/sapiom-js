@@ -133,6 +133,101 @@ test("resuming a history entry switches the active session", async ({ page }) =>
   await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
 });
 
+test.describe("dead sessions never trap the user", () => {
+  test("an exited session is reachable from the dropdown and shows a dead-session pane, not a stuck terminal", async ({
+    page,
+  }) => {
+    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("exited-session-sess-leasing").click();
+
+    const pane = page.getByTestId("dead-session-pane");
+    await expect(pane).toBeVisible();
+    await expect(pane).toContainText("Session exited");
+    await expect(pane).toContainText("exit code 0");
+    await expect(page.locator(".harness-terminal")).toHaveCount(0);
+
+    await page.screenshot({ path: "web/e2e/screenshots/dead-session-pane.png", fullPage: true });
+  });
+
+  test("Resume on a dead session starts it running again", async ({ page }) => {
+    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("exited-session-sess-leasing").click();
+    await page.getByTestId("dead-session-resume").click();
+
+    await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
+    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+  });
+
+  test("Close on a dead session removes it and falls back to another running session", async ({ page }) => {
+    // The boot session is running, so falling back to it is always possible here.
+    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("exited-session-sess-leasing").click();
+    await page.getByTestId("dead-session-close").click();
+
+    await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
+    await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("No session");
+
+    await page.getByTestId("session-dropdown-trigger").click();
+    await expect(page.getByTestId("exited-session-sess-leasing")).toHaveCount(0);
+  });
+});
+
+test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
+  test("opens via the header trigger and the keyboard shortcut, listing sessions/workflows/recents by default", async ({
+    page,
+  }) => {
+    await page.getByTestId("palette-trigger").click();
+    const list = page.getByTestId("command-palette-list");
+    await expect(list).toBeVisible();
+    await expect(page.getByTestId("command-palette-item-0")).toContainText("acme-app"); // the running boot session
+
+    await page.screenshot({ path: "web/e2e/screenshots/command-palette.png" });
+
+    await page.keyboard.press("Escape");
+    await expect(list).toBeHidden();
+
+    await page.keyboard.press("Meta+k");
+    await expect(page.getByTestId("command-palette-list")).toBeVisible();
+  });
+
+  test("fuzzy filters by the typed query", async ({ page }) => {
+    await page.getByTestId("palette-trigger").click();
+    await page.getByTestId("command-palette-input").fill("leasing");
+    await expect(page.getByTestId("command-palette-item-0")).toContainText("leasing");
+  });
+
+  test("Enter on a workflow hit starts a new session there", async ({ page }) => {
+    await page.getByTestId("palette-trigger").click();
+    await page.getByTestId("command-palette-input").fill("onboarding-flow");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("onboarding-flow");
+  });
+
+  test("Enter on a session hit switches to it instead of starting a new one", async ({ page }) => {
+    // Resume a different session first so switching back is observable.
+    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
+    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+
+    await page.getByTestId("palette-trigger").click();
+    await page.getByTestId("command-palette-input").fill("acme-app");
+    await page.getByTestId("command-palette-item-0").click();
+    await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("Build the leasing pipeline");
+  });
+
+  test("a path-shaped query uses live GET /api/fs/list completion instead of fuzzy matching", async ({ page }) => {
+    await page.getByTestId("palette-trigger").click();
+    await page.getByTestId("command-palette-input").fill("/Users/demo");
+
+    await expect(page.getByText("Open this path")).toBeVisible();
+    const dirItem = page.getByTestId("command-palette-item-1");
+    await expect(dirItem).toContainText("acme-app");
+
+    await dirItem.click();
+    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("acme-app");
+  });
+});
+
 test("canvas pane shows its empty state for the active session", async ({ page }) => {
   await expect(page.locator(".canvas-empty")).toContainText("Nothing rendered yet");
 });
