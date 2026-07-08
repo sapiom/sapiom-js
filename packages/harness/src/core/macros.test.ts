@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest";
 import { DEFAULT_MACROS } from "./macros.js";
 
 describe("DEFAULT_MACROS", () => {
-  it("defines exactly the 5 action-rail macros, matching the SPA's MOCK_MACROS ids", () => {
+  it("defines exactly the 6 action-rail macros, matching the SPA's MOCK_MACROS ids", () => {
     expect(DEFAULT_MACROS.map((m) => m.id)).toEqual([
       "run_local",
       "deploy",
       "prod_run",
       "open_prod",
       "visualize",
+      "ai-visualize",
     ]);
   });
 
@@ -32,12 +33,17 @@ describe("DEFAULT_MACROS", () => {
     });
   });
 
-  it("visualize is a one-click, unbound-friendly template clone — no free-text subject, no workflow required", () => {
+  it("visualize is a one-click, unbound-friendly deterministic render — no LLM, no pty involved", () => {
     const macro = DEFAULT_MACROS.find((m) => m.id === "visualize")!;
-    // Works whether or not a workflow is bound — the agent reads
-    // harness-context.json at run time to decide single-workflow vs.
-    // workspace-overview mode, so the static prompt can't reference
-    // {{workflow.path}} (it'd throw when unbound).
+    // Works whether or not a workflow is bound — the render pipeline reads
+    // the session's actual binding server-side, so there's no prompt text
+    // (and therefore no {{workflow.path}} to throw on when unbound).
+    expect(macro.requiresWorkflow).toBeFalsy();
+    expect(macro.action).toEqual({ kind: "render-canvas" });
+  });
+
+  it("ai-visualize is the LLM fallback — same unbound-friendly template-clone prompt visualize used to run", () => {
+    const macro = DEFAULT_MACROS.find((m) => m.id === "ai-visualize")!;
     expect(macro.requiresWorkflow).toBeFalsy();
     expect(macro.action.kind).toBe("inject");
     if (macro.action.kind === "inject") {

@@ -21,7 +21,9 @@ export function macroDisabledReason(
       return "Not deployed yet";
     }
   }
-  if (macro.action.kind === "inject" && !activeSessionId) return "Start a session first";
+  // Both "inject" (types into the pty) and "render-canvas" (the deterministic
+  // Visualize path) need a real session to act against — only "open-url" doesn't.
+  if (macro.action.kind !== "open-url" && !activeSessionId) return "Start a session first";
   return null;
 }
 
