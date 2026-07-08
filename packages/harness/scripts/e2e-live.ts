@@ -342,6 +342,17 @@ async function testCoreFlow(): Promise<void> {
     });
     assert(sessionStartRes.status === 200, "POST /ingest (SessionStart) returns 200");
 
+    // --- 4b. wait for the session to actually flip ready — /ingest responds
+    // 200 immediately and processes the hook payload after responding (so a
+    // dead/slow harness server never blocks the agent's own hook pipeline),
+    // so `ready` isn't guaranteed true the instant the POST above resolves. ---
+    await waitFor(async () => {
+      const res = await fetch(`${baseUrl}/api/sessions`, { headers });
+      const sessions = (await res.json()) as Array<{ id: string; ready: boolean }>;
+      return sessions.find((s) => s.id === sessionId)?.ready === true ? true : undefined;
+    });
+    console.log("session reported ready");
+
     // --- 5. now that the session is ready, write to the pty via /api/sessions/:id/input ---
     const inputRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/input`, {
       method: "POST",
@@ -366,25 +377,6 @@ async function testCoreFlow(): Promise<void> {
       }),
     });
     assert(toolCallRes.status === 200, "POST /ingest (PostToolUse) returns 200");
-
-    // --- 4b. wait for the session to actually flip ready — /ingest responds
-    // 200 immediately and processes the hook payload after responding (so a
-    // dead/slow harness server never blocks the agent's own hook pipeline),
-    // so `ready` isn't guaranteed true the instant the POST above resolves. ---
-    await waitFor(async () => {
-      const res = await fetch(`${baseUrl}/api/sessions`, { headers });
-      const sessions = (await res.json()) as Array<{ id: string; ready: boolean }>;
-      return sessions.find((s) => s.id === sessionId)?.ready === true ? true : undefined;
-    });
-    console.log("session reported ready");
-
-    // --- 5. write to the pty via /api/sessions/:id/input ---
-    const inputRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/input`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ text: "echo hi", submit: true }),
-    });
-    assert(inputRes.status === 200, "POST /api/sessions/:id/input returns 200");
 
     // --- 6. assert both events landed in events.ndjson ---
     const eventLines = await waitFor(async () => {
