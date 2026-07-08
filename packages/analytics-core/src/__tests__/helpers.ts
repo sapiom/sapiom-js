@@ -65,7 +65,20 @@ function readFileOrNull(filePath: string): string | null {
   }
 }
 
-/** Clear consent/endpoint env vars for the duration of a test; returns a restore fn. */
+/**
+ * Endpoint pinned by {@link cleanAnalyticsEnv}. Loopback so nothing could
+ * ever leave the machine even if a test forgot to inject a fetch; every
+ * suite still injects `fetchImpl`, so it is never actually dialed.
+ */
+export const TEST_ENDPOINT = "http://127.0.0.1:9/test-collector";
+
+/**
+ * Give the test a deterministic analytics environment: clear the consent
+ * opt-outs and pin `SAPIOM_ANALYTICS_ENDPOINT` to {@link TEST_ENDPOINT}.
+ * The emitter ships dark (no endpoint → no-op), so tests exercising delivery
+ * must configure an endpoint — the env override is how these suites do it.
+ * Returns a restore fn.
+ */
 export function cleanAnalyticsEnv(): () => void {
   const keys = [
     "SAPIOM_TELEMETRY_DISABLED",
@@ -77,6 +90,7 @@ export function cleanAnalyticsEnv(): () => void {
     saved[key] = process.env[key];
     delete process.env[key];
   }
+  process.env.SAPIOM_ANALYTICS_ENDPOINT = TEST_ENDPOINT;
   return () => {
     for (const key of keys) restoreEnvVar(key, saved[key]);
   };

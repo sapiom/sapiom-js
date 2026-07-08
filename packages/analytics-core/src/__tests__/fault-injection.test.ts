@@ -1,5 +1,7 @@
+import * as fs from "fs";
+
 import { createAnalytics } from "../analytics.js";
-import { DEFAULT_ENDPOINT } from "../http-sender.js";
+import { SAPIOM_COLLECTOR_ENDPOINT } from "../http-sender.js";
 import type { AnalyticsConfig } from "../types.js";
 import {
   cleanAnalyticsEnv,
@@ -130,15 +132,38 @@ describe("fault injection", () => {
     expect(capture.calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("uses the default public endpoint when nothing overrides it", async () => {
+  it("ships dark: no endpoint configured → no-op, zero fetches, zero disk writes", async () => {
+    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
     const capture = createCapturingFetch();
     const analytics = tracker.register(
       createAnalytics(baseConfig({ fetchImpl: capture.fetchImpl })),
     );
 
+    expect(analytics.enabled).toBe(false);
+    expect(() => analytics.track("event", { n: 1 })).not.toThrow();
+    await expect(analytics.flush()).resolves.toBeUndefined();
+    await expect(analytics.shutdown()).resolves.toBeUndefined();
+
+    expect(capture.calls).toHaveLength(0);
+    expect(fs.existsSync(home.identityPath)).toBe(false);
+  });
+
+  it("explicitly passing SAPIOM_COLLECTOR_ENDPOINT targets the hosted collector", async () => {
+    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
+    const capture = createCapturingFetch();
+    const analytics = tracker.register(
+      createAnalytics(
+        baseConfig({
+          endpoint: SAPIOM_COLLECTOR_ENDPOINT,
+          fetchImpl: capture.fetchImpl,
+        }),
+      ),
+    );
+
+    expect(analytics.enabled).toBe(true);
     analytics.track("event");
     await analytics.flush();
-    expect(capture.calls[0].url).toBe(DEFAULT_ENDPOINT);
+    expect(capture.calls[0].url).toBe(SAPIOM_COLLECTOR_ENDPOINT);
   });
 
   it("config endpoint beats the environment override", async () => {
@@ -158,7 +183,7 @@ describe("fault injection", () => {
     expect(capture.calls[0].url).toBe("http://127.0.0.1:9/config");
   });
 
-  it("environment override beats the default", async () => {
+  it("the environment override configures the endpoint", async () => {
     process.env.SAPIOM_ANALYTICS_ENDPOINT = "http://127.0.0.1:9/env";
     const capture = createCapturingFetch();
     const analytics = tracker.register(

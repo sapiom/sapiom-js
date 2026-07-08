@@ -31,7 +31,10 @@ function getProcessSessionId(): string {
  * Guarantees, regardless of configuration or environment:
  * - `createAnalytics` and `track` never throw
  * - `flush`/`shutdown` never reject
- * - nothing is written or sent unless consent resolves to enabled
+ * - nothing is written or sent unless consent resolves to enabled AND a
+ *   collector endpoint is explicitly configured (`endpoint` in the config or
+ *   the `SAPIOM_ANALYTICS_ENDPOINT` environment variable) — the default
+ *   build ships dark
  */
 export function createAnalytics(config: AnalyticsConfig): SapiomAnalytics {
   try {
@@ -58,9 +61,18 @@ function buildAnalytics(config: AnalyticsConfig): SapiomAnalytics {
   const sessionId = getProcessSessionId();
   if (!resolveConsent(config)) return createDisabledInstance(sessionId);
 
+  // Ship-dark: with no explicitly configured endpoint there is nowhere to
+  // send, so the instance is a full no-op — events are dropped at enqueue,
+  // nothing is written to disk, and no first-run notice is printed.
+  const endpoint = resolveEndpoint(config.endpoint);
+  if (endpoint === null) {
+    debug("no collector endpoint configured; analytics is a no-op");
+    return createDisabledInstance(sessionId);
+  }
+
   const identityStore = new IdentityStore(debug);
   const sender = new HttpSender({
-    endpoint: resolveEndpoint(config.endpoint),
+    endpoint,
     apiKey: config.apiKey,
     fetchImpl: config.fetchImpl,
     debug,
