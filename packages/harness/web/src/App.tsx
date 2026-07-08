@@ -82,6 +82,12 @@ export const App = (): JSX.Element => {
           onOpenDropdown={(cwd) => void harness.loadHistory(cwd)}
           recentDirs={harness.settings?.recentDirs ?? []}
           onCreateSession={handleCreateSession}
+          authenticated={state.authenticated}
+          organizationName={state.organizationName}
+          telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+          onToggleTelemetry={async (next) => {
+            await harness.updateSettings({ telemetryOptIn: next });
+          }}
         />
         <div className="terminal-slot">
           {harness.activeSessionId ? (
