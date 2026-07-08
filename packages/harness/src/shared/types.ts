@@ -261,6 +261,9 @@ export interface AppState {
   sessions: HarnessSession[];
   workflows: WorkflowInfo[];
   macros: MacroDef[];
+  /** The directory the CLI was launched against — the SPA prefills the
+   *  new-session modal with this instead of recentDirs[0]. */
+  launchDir: string;
 }
 
 export interface HarnessSettings {

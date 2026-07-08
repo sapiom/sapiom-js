@@ -57,4 +57,34 @@ describe("generateMcpConfig", () => {
     const b = await generateMcpConfig("session-b");
     expect(path.dirname(a)).not.toBe(path.dirname(b));
   });
+
+  it("adds an x-api-key header to the remote sapiom entry when an apiKey is given", async () => {
+    const filePath = await generateMcpConfig("session-auth", { apiKey: "sk_live_test123" });
+    const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+    expect(config.mcpServers.sapiom).toEqual({
+      type: "http",
+      url: "https://api.sapiom.ai/v1/mcp",
+      headers: { "x-api-key": "sk_live_test123" },
+    });
+    // sapiom-dev (the local stdio MCP) authenticates itself separately via
+    // its own sapiom_authenticate tool — it doesn't need the apiKey.
+    expect(config.mcpServers["sapiom-dev"].headers).toBeUndefined();
+  });
+
+  it("omits headers entirely when apiKey is null or absent", async () => {
+    const withoutOption = JSON.parse(await fs.readFile(await generateMcpConfig("session-1"), "utf-8"));
+    expect(withoutOption.mcpServers.sapiom.headers).toBeUndefined();
+
+    const withNull = JSON.parse(
+      await fs.readFile(await generateMcpConfig("session-2", { apiKey: null }), "utf-8"),
+    );
+    expect(withNull.mcpServers.sapiom.headers).toBeUndefined();
+  });
+
+  it("writes the config file with owner-only permissions (it can carry a live API key)", async () => {
+    const filePath = await generateMcpConfig("session-perm", { apiKey: "sk_live_test123" });
+    const stat = await fs.stat(filePath);
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
 });
