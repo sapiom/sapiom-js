@@ -240,7 +240,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       getSessionCwd: (harnessSessionId) => sessionManager.get(harnessSessionId)?.cwd ?? null,
       injectInput: async (harnessSessionId, text, submit) => {
-        sessionManager.write(harnessSessionId, submit ? `${text}\r` : text);
+        // Two-phase write: a combined text+\r lands in Claude Code as a
+        // bracketed paste and never submits.
+        await sessionManager.submitInput(harnessSessionId, text, submit);
       },
       openUrl: async (url) => {
         await open(url);
