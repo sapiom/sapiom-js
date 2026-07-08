@@ -11,6 +11,10 @@ const daysAgo = (n: number): string => new Date(now - n * 24 * 60 * 60_000).toIS
 /** The directory the harness itself was launched from (`npx @sapiom/harness [dir]`). */
 export const MOCK_LAUNCH_DIR = "/Users/demo/acme-app";
 
+/** Where MockApi.seedSampleProject pretends the example project landed —
+ *  mirrors the real HARNESS_PATHS.sampleProject location. */
+export const MOCK_SAMPLE_PROJECT_ROOT = "/Users/demo/.sapiom/harness/sample-project";
+
 export const MOCK_SESSIONS: HarnessSession[] = [
   {
     id: "sess-boot",
