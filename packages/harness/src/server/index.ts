@@ -96,10 +96,19 @@ export interface HarnessServerOptions {
    *  boot so the rail isn't empty until a manual "+ Connect", and (unless
    *  autoCreateSession is false) where the boot session is created. */
   launchDir?: string;
-  /** Auto-create a claude-code session in launchDir once the server is
-   *  listening, so the app doesn't open empty. Defaults to true; the CLI's
-   *  --no-session flag sets this to false. */
+  /** Auto-create a session in launchDir once the server is listening, so the
+   *  app doesn't open empty. Defaults to true; the CLI's --no-session flag
+   *  sets this to false. Uses `defaultHarnessKind` for which agent to launch. */
   autoCreateSession?: boolean;
+  /** Harness kind for the auto-created boot session. The CLI resolves this
+   *  from doctor() results (claude-code if present, else codex) before
+   *  calling startServer; defaults to "claude-code" for callers that don't
+   *  run doctor (tests, --dev flows without a real agent). */
+  defaultHarnessKind?: HarnessKind;
+  /** Harness kinds confirmed available at CLI boot (doctor()), surfaced
+   *  as-is in AppState for the SPA — see its doc comment. Omitted (not
+   *  defaulted here) when the caller doesn't supply it. */
+  availableHarnesses?: HarnessKind[];
 }
 
 export interface HarnessServer {
@@ -264,6 +273,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         });
       },
       launchDir,
+      availableHarnesses: options.availableHarnesses,
     }),
   );
   app.use(
@@ -456,7 +466,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // surfacing loudly, but also not awaited before returning: startServer()
   // resolving shouldn't wait on a real pty spawn.
   if (options.autoCreateSession ?? true) {
-    sessionManager.create({ cwd: launchDir, harness: "claude-code" }).catch((err: unknown) => {
+    const harness = options.defaultHarnessKind ?? "claude-code";
+    sessionManager.create({ cwd: launchDir, harness }).catch((err: unknown) => {
       console.error("[harness] auto-create boot session failed:", err);
     });
   }

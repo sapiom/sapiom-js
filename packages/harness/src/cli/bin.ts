@@ -12,7 +12,13 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import open from "open";
 import { DEFAULT_PORT } from "../shared/types.js";
-import { runDoctor, printDoctorReport } from "./doctor.js";
+import {
+  runDoctor,
+  printDoctorReport,
+  pickDefaultHarness,
+  CLAUDE_INSTALL_COMMAND,
+  CODEX_INSTALL_COMMAND,
+} from "./doctor.js";
 import { ensureAuthenticated, type HarnessIdentity } from "./auth.js";
 import { ensureConsent } from "./consent.js";
 import { recordRecentDir } from "./settings.js";
@@ -124,9 +130,19 @@ const main = async (): Promise<void> => {
   printDoctorReport(doctorReport);
   if (!doctorReport.ok) {
     console.error(
-      "\nsapiom-harness requires Node >= 20 and the `claude` CLI on PATH. Fix the checks above and try again.",
+      "\nsapiom-harness requires Node >= 20 and at least one coding agent on PATH:\n" +
+        `  Claude Code:  ${CLAUDE_INSTALL_COMMAND}\n` +
+        `  Codex:        ${CODEX_INSTALL_COMMAND}\n` +
+        "Fix the checks above and try again.",
     );
     process.exit(1);
+  }
+  const defaultHarnessKind = pickDefaultHarness(doctorReport);
+  if (!doctorReport.availableHarnesses.includes("claude-code")) {
+    console.log(
+      `\n⚠ Claude Code not found — install with: ${CLAUDE_INSTALL_COMMAND}\n` +
+        "  Continuing with the Codex harness.",
+    );
   }
 
   const machineId = await getOrCreateMachineId();
@@ -153,6 +169,8 @@ const main = async (): Promise<void> => {
       machineId,
       launchDir: options.dir,
       autoCreateSession: !options.noSession,
+      defaultHarnessKind,
+      availableHarnesses: doctorReport.availableHarnesses,
     });
   } catch (err) {
     if (!options.dev) throw err;
