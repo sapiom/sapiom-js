@@ -228,6 +228,7 @@ export class SessionManager {
       createdAt: this.now(),
       lastActiveAt: this.now(),
       exitCode: null,
+      boundWorkflowPath: null,
     };
     this.sessions.set(id, session);
     await this.persist();
@@ -258,6 +259,7 @@ export class SessionManager {
       createdAt: input.lastActiveAt,
       lastActiveAt: input.lastActiveAt,
       exitCode: null,
+      boundWorkflowPath: null,
     };
     this.sessions.set(id, session);
     void this.persist();
@@ -392,6 +394,19 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session || !title || session.title === title) return;
     session.title = title;
+    void this.persist();
+    this.emitStatus(session);
+  }
+
+  /** Binds (or, with `null`, unbinds) the session's current workflow
+   *  selection. The caller (rest.ts) owns validating `workflowPath` against
+   *  the workflow registry and mirroring the binding into
+   *  HARNESS_CONTEXT_FILE — this only updates the in-memory/persisted
+   *  registry entry and broadcasts the change like any other status update. */
+  setBoundWorkflowPath(id: string, workflowPath: string | null): void {
+    const session = this.sessions.get(id);
+    if (!session || session.boundWorkflowPath === workflowPath) return;
+    session.boundWorkflowPath = workflowPath;
     void this.persist();
     this.emitStatus(session);
   }

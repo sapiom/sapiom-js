@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import type {
   AppState,
+  BindWorkflowRequest,
   CreateSessionRequest,
   HarnessAdapter,
   HarnessKind,
@@ -32,6 +33,10 @@ const injectInputSchema = z.object({
   submit: z.boolean().optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
 
+const bindWorkflowSchema = z.object({
+  workflowPath: z.string().min(1).nullable(),
+}) satisfies z.ZodType<BindWorkflowRequest>;
+
 const settingsPatchSchema = z.object({
   telemetryOptIn: z.boolean().optional(),
   recentDirs: z.array(z.string()).optional(),
@@ -45,6 +50,15 @@ export interface RestRouterOptions {
   identity: { userId: string; organizationName: string } | null;
   listWorkflows: () => Promise<WorkflowInfo[]>;
   listMacros: () => MacroDef[];
+  /** Look up a registered workflow by its path; null when not found. Backs
+   *  PATCH /sessions/:id/workflow's validation (a bind target must already
+   *  be a known workflow — scan/connect it first). */
+  findWorkflow: (workflowPath: string) => WorkflowInfo | null;
+  /** Mirrors a session's workflow binding into HARNESS_CONTEXT_FILE in its
+   *  cwd. Called on session create (`null`) and on every successful bind/
+   *  unbind. Never throws — a write failure is logged by the implementation,
+   *  not surfaced as a request error. */
+  writeWorkspaceContext: (cwd: string, boundWorkflow: WorkflowInfo | null) => Promise<void>;
   /** Called after a settings PATCH persists a changed telemetryOptIn, so the
    * live collector batcher can be gated without a server restart. */
   onTelemetryOptInChange?: (optIn: boolean) => void;
@@ -120,8 +134,46 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
     try {
       const session = await sessionManager.create(parsed.data);
+      // Written before responding (not fire-and-forget, unlike the workflow
+      // scan below) — it's one small file write, and it means the agent's
+      // very first read of HARNESS_CONTEXT_FILE can never race session
+      // creation with an ENOENT.
+      await options.writeWorkspaceContext(session.cwd, null);
       res.status(201).json(session);
       options.onSessionCreated?.(parsed.data.cwd);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch("/sessions/:id/workflow", async (req, res, next) => {
+    const parsed = bindWorkflowSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+    const session = sessionManager.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "session not found" });
+      return;
+    }
+
+    const { workflowPath } = parsed.data;
+    let workflow: WorkflowInfo | null = null;
+    if (workflowPath !== null) {
+      workflow = options.findWorkflow(workflowPath);
+      if (!workflow) {
+        res.status(400).json({
+          error: `Unknown workflow path '${workflowPath}' — scan or connect it before binding a session to it`,
+        });
+        return;
+      }
+    }
+
+    try {
+      sessionManager.setBoundWorkflowPath(req.params.id, workflowPath);
+      await options.writeWorkspaceContext(session.cwd, workflow);
+      res.json(sessionManager.get(req.params.id));
     } catch (err) {
       next(err);
     }

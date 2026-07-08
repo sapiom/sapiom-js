@@ -26,6 +26,10 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     resume: vi.fn(),
     kill: vi.fn(() => true),
     write: vi.fn(() => true),
+    setBoundWorkflowPath: vi.fn((id: string, workflowPath: string | null) => {
+      const session = sessions.get(id);
+      if (session) session.boundWorkflowPath = workflowPath;
+    }),
   } as unknown as RestRouterOptions["sessionManager"];
 }
 
@@ -33,9 +37,11 @@ describe("createRestRouter", () => {
   let server: ReturnType<express.Express["listen"]>;
   let baseUrl: string;
   let onTelemetryOptInChange: ReturnType<typeof vi.fn>;
+  let writeWorkspaceContext: ReturnType<typeof vi.fn>;
 
   function start(overrides: Partial<RestRouterOptions> = {}) {
     onTelemetryOptInChange = vi.fn();
+    writeWorkspaceContext = vi.fn().mockResolvedValue(undefined);
     const options: RestRouterOptions = {
       sessionManager: fakeSessionManager(),
       adapters: {},
@@ -43,6 +49,8 @@ describe("createRestRouter", () => {
       identity: null,
       listWorkflows: async () => [],
       listMacros: () => [],
+      findWorkflow: () => null,
+      writeWorkspaceContext,
       onTelemetryOptInChange,
       launchDir: "/tmp/launch-dir",
       ...overrides,
@@ -99,6 +107,7 @@ describe("createRestRouter", () => {
         createdAt: "2026-01-01T00:00:00.000Z",
         lastActiveAt: "2026-01-01T00:00:00.000Z",
         exitCode: null,
+        boundWorkflowPath: null,
       };
       const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
       const macro: MacroDef = { id: "run_local", label: "Run local", icon: "Play", action: { kind: "inject", text: "x" } };
@@ -232,5 +241,113 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
       expect(onSessionCreated).not.toHaveBeenCalled();
     });
+
+    it("writes the workspace context file with boundWorkflow: null on create, before responding", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "sess-1",
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+        status: "starting",
+        boundWorkflowPath: null,
+      });
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj", null);
+    });
+  });
+
+  describe("PATCH /sessions/:id/workflow", () => {
+    const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
+    const baseSession: HarnessSession = {
+      id: "sess-1",
+      agentSessionId: null,
+      harness: "claude-code",
+      cwd: "/tmp/proj",
+      title: "proj",
+      status: "running",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: null,
+      boundWorkflowPath: null,
+    };
+
+    it("binds a known workflow: validates it, updates the session, and writes the context file", async () => {
+      const sessionManager = fakeSessionManager([baseSession]);
+      start({ sessionManager, findWorkflow: (p) => (p === workflow.path ? workflow : null) });
+
+      const res = await fetch(`${baseUrl}/sessions/${baseSession.id}/workflow`, {
+        method: "PATCH",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ workflowPath: workflow.path }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HarnessSession;
+      expect(body.boundWorkflowPath).toBe(workflow.path);
+      expect(sessionManager.setBoundWorkflowPath).toHaveBeenCalledWith(baseSession.id, workflow.path);
+      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj", workflow);
+    });
+
+    it("unbinds with workflowPath: null, writing boundWorkflow: null to the context file", async () => {
+      const bound: HarnessSession = { ...baseSession, boundWorkflowPath: workflow.path };
+      const sessionManager = fakeSessionManager([bound]);
+      start({ sessionManager, findWorkflow: (p) => (p === workflow.path ? workflow : null) });
+
+      const res = await fetch(`${baseUrl}/sessions/${bound.id}/workflow`, {
+        method: "PATCH",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ workflowPath: null }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as HarnessSession;
+      expect(body.boundWorkflowPath).toBeNull();
+      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj", null);
+    });
+
+    it("400s when workflowPath isn't a registered workflow", async () => {
+      const sessionManager = fakeSessionManager([baseSession]);
+      start({ sessionManager, findWorkflow: () => null });
+
+      const res = await fetch(`${baseUrl}/sessions/${baseSession.id}/workflow`, {
+        method: "PATCH",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ workflowPath: "/not/registered" }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(sessionManager.setBoundWorkflowPath).not.toHaveBeenCalled();
+      expect(writeWorkspaceContext).not.toHaveBeenCalled();
+    });
+
+    it("404s for an unknown session", async () => {
+      start({ findWorkflow: () => workflow });
+      const res = await fetch(`${baseUrl}/sessions/does-not-exist/workflow`, {
+        method: "PATCH",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ workflowPath: workflow.path }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("400s a malformed body (missing workflowPath)", async () => {
+      const sessionManager = fakeSessionManager([baseSession]);
+      start({ sessionManager });
+      const res = await fetch(`${baseUrl}/sessions/${baseSession.id}/workflow`, {
+        method: "PATCH",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+    });
+
   });
 });
