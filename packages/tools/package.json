@@ -28,10 +28,10 @@
       "import": "./dist/esm/repositories/index.js",
       "require": "./dist/cjs/repositories/index.js"
     },
-    "./agent": {
-      "types": "./dist/cjs/agent/index.d.ts",
-      "import": "./dist/esm/agent/index.js",
-      "require": "./dist/cjs/agent/index.js"
+    "./models": {
+      "types": "./dist/cjs/models/index.d.ts",
+      "import": "./dist/esm/models/index.js",
+      "require": "./dist/cjs/models/index.js"
     },
     "./file-storage": {
       "types": "./dist/cjs/file-storage/index.d.ts",

@@ -38,8 +38,8 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@sapiom/orchestration": "workspace:^",
-    "@sapiom/orchestration-core": "workspace:^",
+    "@sapiom/agent": "workspace:^",
+    "@sapiom/agent-core": "workspace:^",
     "commander": "^14.0.2",
     "zod": "^3.25.76"
   },

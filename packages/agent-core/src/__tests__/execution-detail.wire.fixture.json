@@ -1,0 +1,101 @@
+{
+  "id": "exec_0001",
+  "name": "daily-digest",
+  "organizationId": "org_0001",
+  "tenantId": "tenant_0001",
+  "status": "failed",
+  "currentStep": "render",
+  "currentStepAttempt": 2,
+  "version": 3,
+  "definitionId": "def_0001",
+  "buildRunId": "build_0001",
+  "idempotencyKey": null,
+  "pausedSignalName": null,
+  "pausedSignalCorrelationId": null,
+  "pausedUntil": null,
+  "startedAt": "2026-01-01T00:00:00.000Z",
+  "finishedAt": "2026-01-01T00:02:30.000Z",
+  "input": { "topic": "weekly-summary" },
+  "sharedState": { "count": 2 },
+  "output": null,
+  "error": null,
+  "pausedStepInputSchema": null,
+  "pausedStepInputExample": null,
+  "repoFullName": "example-org/example-workflows",
+  "pinnedCommitSha": "0000000000000000000000000000000000000000",
+  "traceId": "trace_0001",
+  "traceRoot": "exec_0001",
+  "rootExecutionId": "exec_0001",
+  "traceParent": null,
+  "parentExecutionId": null,
+  "children": [
+    {
+      "executionId": "exec_0002",
+      "targetType": "agent",
+      "correlationId": "exec_0002",
+      "status": "resolved"
+    }
+  ],
+  "steps": [
+    {
+      "id": "step_0001",
+      "stepName": "gather",
+      "stepOrder": 0,
+      "attempt": 1,
+      "status": "completed",
+      "input": { "topic": "weekly-summary" },
+      "output": { "items": 12 },
+      "error": null,
+      "nextDirective": { "kind": "continue" },
+      "sharedStateAfter": { "count": 1 },
+      "logs": [{ "ts": "2026-01-01T00:00:05.000Z", "level": "info", "msg": "fetched 12 items" }],
+      "events": [
+        {
+          "sourceId": "run_0001",
+          "sequence": 1,
+          "kind": "tool_use",
+          "payload": { "tool": "web.search" },
+          "eventTs": "2026-01-01T00:00:10.000Z"
+        }
+      ],
+      "spanId": "span_0001",
+      "dispatch": null,
+      "startedAt": "2026-01-01T00:00:00.000Z",
+      "finishedAt": "2026-01-01T00:00:45.000Z"
+    },
+    {
+      "id": "step_0002",
+      "stepName": "render",
+      "stepOrder": 1,
+      "attempt": 2,
+      "status": "failed",
+      "input": { "items": 12 },
+      "output": null,
+      "error": {
+        "message": "template not found",
+        "trace": {
+          "frames": [
+            { "function": "render", "file": "src/steps/render.ts", "line": 12, "column": 11 },
+            { "function": "run", "file": "src/engine/runner.ts", "line": 88, "column": 5 }
+          ],
+          "sourceMapped": true,
+          "raw": "Error: template not found\n    at render (dist/steps/render.mjs:8:9)"
+        },
+        "traceUnavailableReason": null
+      },
+      "nextDirective": null,
+      "sharedStateAfter": { "count": 2 },
+      "logs": null,
+      "events": [],
+      "spanId": "span_0002",
+      "dispatch": {
+        "targetId": "exec_0002",
+        "targetType": "agent",
+        "correlationId": "exec_0002",
+        "status": "resolved"
+      },
+      "startedAt": "2026-01-01T00:00:45.000Z",
+      "finishedAt": "2026-01-01T00:02:30.000Z"
+    }
+  ]
+}

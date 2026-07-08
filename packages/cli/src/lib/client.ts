@@ -1,12 +1,12 @@
 /**
  * CLI-level client factory. Resolves host and API key from the environment,
  * stored CLI config, and the optional project-level host — then delegates to
- * @sapiom/orchestration-core's GatewayClient.
+ * @sapiom/agent-core's GatewayClient.
  *
  * Auth resolution stays here (in the CLI) because it reads process.env and the
  * local session store — both are CLI concerns. The core client itself is stateless.
  */
-import { createClient, GatewayClient } from '@sapiom/orchestration-core';
+import { createClient, GatewayClient } from '@sapiom/agent-core';
 
 import { type CliTarget, resolveHost } from './cli-config.js';
 import { CliError } from './output.js';

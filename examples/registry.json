@@ -25,11 +25,11 @@
       ]
     },
     {
-      "id": "hello-workflow",
-      "name": "Hello Workflow",
-      "description": "The minimal single-step workflow — a smoke test for the build → deploy → run path.",
+      "id": "hello-agent",
+      "name": "Hello Agent",
+      "description": "The minimal single-step agent — a smoke test for the build → deploy → run path.",
       "tags": ["starter", "minimal"],
-      "sourcePath": "examples/hello-workflow",
+      "sourcePath": "examples/hello-agent",
       "capabilities": [],
       "whatItDoes": "Validates an input name and returns a greeting. The smallest valid definition — use it to confirm your MCP install and deploy path work end to end before reaching for a capability.",
       "steps": [

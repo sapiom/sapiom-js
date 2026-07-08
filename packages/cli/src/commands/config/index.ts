@@ -5,7 +5,7 @@ import { runSetTarget } from './set-target.js';
 
 /**
  * Mount the `sapiom config …` command group for machine-level CLI configuration.
- * Project identity (`sapiom.json`) is handled separately by `orchestrations link`.
+ * Project identity (`sapiom.json`) is handled separately by `agents link`.
  */
 export function registerConfigCommands(program: Command): void {
   const group = program

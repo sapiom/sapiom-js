@@ -26,26 +26,26 @@ import { Repository } from "./repositories/index.js";
 import {
   codingRun,
   codingLaunch,
-  run as agentRun,
-  launch as agentLaunch,
-} from "./agent/index.js";
+  run as modelRun,
+  launch as modelLaunch,
+} from "./models/index.js";
 import type {
   CodingRunSpec,
   CodingRunResult,
   RunHandle,
+  ModelRunSpec,
+  ModelRunResult,
+  ModelRunHandle,
+} from "./models/index.js";
+import {
+  run as agentsRun,
+  launch as agentsLaunch,
+} from "./agents/index.js";
+import type {
   AgentRunSpec,
   AgentRunResult,
-  AgentRunHandle,
-} from "./agent/index.js";
-import {
-  run as orchestrationsRun,
-  launch as orchestrationsLaunch,
-} from "./orchestrations/index.js";
-import type {
-  OrchestrationRunSpec,
-  OrchestrationRunResult,
-  RunHandle as OrchestrationRunHandle,
-} from "./orchestrations/index.js";
+  RunHandle as AgentRunHandle,
+} from "./agents/index.js";
 import * as fileStorage from "./file-storage/index.js";
 import type {
   UploadInput,
@@ -149,21 +149,21 @@ export interface Sapiom {
     delete(slug: string): Promise<void>;
     attach(slug: string, cloneUrl: string): Repository;
   };
-  readonly agent: {
-    /** Instant in-server agent: prompt (+ optional remote MCP tools) → text. No sandbox. */
-    run(spec: AgentRunSpec): Promise<AgentRunResult>;
+  readonly models: {
+    /** Instant in-server model: prompt (+ optional remote MCP tools) → text. No sandbox. */
+    run(spec: ModelRunSpec): Promise<ModelRunResult>;
     /** Launch an instant run; pass the handle to `pauseUntilSignal` to suspend on it. */
-    launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
+    launch(spec: ModelRunSpec): Promise<ModelRunHandle>;
     coding: {
       run(spec: CodingRunSpec): Promise<CodingRunResult>;
       launch(spec: CodingRunSpec): Promise<RunHandle>;
     };
   };
-  readonly orchestrations: {
-    /** Run a deployed orchestration by slug and await its terminal result. */
-    run(spec: OrchestrationRunSpec): Promise<OrchestrationRunResult>;
-    /** Launch a deployed orchestration; pass the handle to `pauseUntilSignal` to suspend on it. */
-    launch(spec: OrchestrationRunSpec): Promise<OrchestrationRunHandle>;
+  readonly agents: {
+    /** Run a deployed agent by slug and await its terminal result. */
+    run(spec: AgentRunSpec): Promise<AgentRunResult>;
+    /** Launch a deployed agent; pass the handle to `pauseUntilSignal` to suspend on it. */
+    launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -367,17 +367,17 @@ function bind(transport: Transport): Sapiom {
       delete: (slug) => Repository.delete(slug, transport),
       attach: (slug, cloneUrl) => Repository.attach(slug, cloneUrl, transport),
     },
-    agent: {
-      run: (spec) => agentRun(spec, transport),
-      launch: (spec) => agentLaunch(spec, transport),
+    models: {
+      run: (spec) => modelRun(spec, transport),
+      launch: (spec) => modelLaunch(spec, transport),
       coding: {
         run: (spec) => codingRun(spec, transport),
         launch: (spec) => codingLaunch(spec, transport),
       },
     },
-    orchestrations: {
-      run: (spec) => orchestrationsRun(spec, transport),
-      launch: (spec) => orchestrationsLaunch(spec, transport),
+    agents: {
+      run: (spec) => agentsRun(spec, transport),
+      launch: (spec) => agentsLaunch(spec, transport),
     },
     fileStorage: {
       upload: (input) => fileStorage.upload(input, transport),

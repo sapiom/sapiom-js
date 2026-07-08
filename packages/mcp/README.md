@@ -76,14 +76,14 @@ authentication — they run entirely offline.
 | `sapiom_authenticate` | browser | Log in and cache an API key for the current environment |
 | `sapiom_status` | — | Report authentication status |
 | `sapiom_logout` | — | Clear cached credentials |
-| `sapiom_dev_orchestrations_scaffold` | — | Create a new orchestration project |
-| `sapiom_dev_orchestrations_check` | — | Bundle + validate the step graph offline |
-| `sapiom_dev_orchestrations_run_local` | — | Run the workflow locally, resolving capability calls from stubs (no cost) |
-| `sapiom_dev_orchestrations_link` | ✓ | Resolve/create the hosted orchestration and cache its id |
-| `sapiom_dev_orchestrations_deploy` | ✓ | Push the current commit, build, and wait for it |
-| `sapiom_dev_orchestrations_run` | ✓ | Start a real cloud execution |
-| `sapiom_dev_orchestrations_inspect` | ✓ | Inspect an execution or build (optionally waiting for it) |
-| `sapiom_dev_orchestrations_signal` | ✓ | Resume a paused execution by delivering a signal |
+| `sapiom_dev_agents_scaffold` | — | Create a new orchestration project |
+| `sapiom_dev_agents_check` | — | Bundle + validate the step graph offline |
+| `sapiom_dev_agents_run_local` | — | Run the workflow locally, resolving capability calls from stubs (no cost) |
+| `sapiom_dev_agents_link` | ✓ | Resolve/create the hosted orchestration and cache its id |
+| `sapiom_dev_agents_deploy` | ✓ | Push the current commit, build, and wait for it |
+| `sapiom_dev_agents_run` | ✓ | Start a real cloud execution |
+| `sapiom_dev_agents_inspect` | ✓ | Inspect an execution or build (optionally waiting for it) |
+| `sapiom_dev_agents_signal` | ✓ | Resume a paused execution by delivering a signal |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.

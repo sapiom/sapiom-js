@@ -12,7 +12,7 @@ import {
   createClient,
   sandboxes,
   repositories,
-  agent,
+  models,
   search,
   memory,
   Sandbox,
@@ -38,8 +38,8 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.repositories.delete).toBe("function");
     expect(typeof sapiom.repositories.attach).toBe("function");
 
-    expect(typeof sapiom.agent.coding.run).toBe("function");
-    expect(typeof sapiom.agent.coding.launch).toBe("function");
+    expect(typeof sapiom.models.coding.run).toBe("function");
+    expect(typeof sapiom.models.coding.launch).toBe("function");
 
     expect(typeof sapiom.search).toBe("object");
     expect(typeof sapiom.search.scrape).toBe("function");
@@ -62,14 +62,14 @@ describe("@sapiom/tools public surface", () => {
   it("withAttribution derives a client of the same shape", () => {
     const derived = createClient({ apiKey: "test-key" }).withAttribution({});
     expect(typeof derived.sandboxes.create).toBe("function");
-    expect(typeof derived.agent.coding.run).toBe("function");
+    expect(typeof derived.models.coding.run).toBe("function");
     expect(typeof derived.withAttribution).toBe("function");
   });
 
   it("barrel re-exports the capability namespaces and resource classes", () => {
     expect(typeof sandboxes).toBe("object");
     expect(typeof repositories).toBe("object");
-    expect(typeof agent).toBe("object");
+    expect(typeof models).toBe("object");
     expect(typeof search).toBe("object");
     expect(typeof memory).toBe("object");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor

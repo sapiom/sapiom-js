@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sapiom workflow template: search the web for a topic and return a concise, sourced digest — one metered capability (web.search).",
+  "description": "Sapiom agent template: search the web for a topic and return a concise, sourced digest — one metered capability (web.search).",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
   },
   "dependencies": {
-    "@sapiom/orchestration": "0.4.8",
-    "@sapiom/tools": "0.14.1"
+    "@sapiom/agent": "^0.5.0",
+    "@sapiom/tools": "^0.16.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",

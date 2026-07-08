@@ -26,12 +26,12 @@ describe("server instructions", () => {
   it("primer covers the lifecycle, canonical rules, and points to the docs", () => {
     // Lifecycle tools an agent must drive
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_authenticate");
-    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_orchestrations_scaffold");
-    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_orchestrations_clone");
-    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_orchestrations_run_local");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_scaffold");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_clone");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_run_local");
     // Canonical naming (and the stale name it must steer away from)
-    expect(AUTHORING_INSTRUCTIONS).toContain("@sapiom/orchestration");
-    expect(AUTHORING_INSTRUCTIONS).toContain("defineOrchestration");
+    expect(AUTHORING_INSTRUCTIONS).toContain("@sapiom/agent");
+    expect(AUTHORING_INSTRUCTIONS).toContain("defineAgent");
     // the stale names appear only inside the explicit "NEVER use" warning
     expect(AUTHORING_INSTRUCTIONS).toContain("NEVER `defineWorkflow`");
     // Pointer to the full docs + the scaffold guide

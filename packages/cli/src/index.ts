@@ -2,7 +2,7 @@ import { Command } from 'commander';
 
 import { registerAuthCommands } from './commands/auth/index.js';
 import { registerConfigCommands } from './commands/config/index.js';
-import { registerOrchestrationsCommands } from './commands/orchestrations/index.js';
+import { registerAgentsCommands } from './commands/agents/index.js';
 
 /**
  * Build the root `sapiom` program. Account-level commands (login/logout) sit at
@@ -15,7 +15,7 @@ export function buildProgram(): Command {
 
   registerAuthCommands(program);
   registerConfigCommands(program);
-  registerOrchestrationsCommands(program);
+  registerAgentsCommands(program);
 
   return program;
 }

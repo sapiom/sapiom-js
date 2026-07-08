@@ -19,7 +19,7 @@ const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
 
 // Create a repo, have a coding agent build into it, then publish.
 const repo = await sapiom.repositories.create("landing-page");
-const run = await sapiom.agent.coding.run({
+const run = await sapiom.models.coding.run({
   task: "Build a one-page marketing site in index.html.",
   gitRepository: repo, // cloned into the run's sandbox at /workspace/landing-page
 });
