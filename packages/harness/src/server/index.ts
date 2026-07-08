@@ -41,6 +41,7 @@ import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { PortDetector } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
+import { writeHarnessContext } from "../core/workspace-context.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -266,6 +267,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       identity: identity ? { userId: identity.userId, organizationName: identity.organizationName } : null,
       listWorkflows: () => workflowRegistry.list(),
       listMacros: () => DEFAULT_MACROS,
+      findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
+      writeWorkspaceContext: (cwd, boundWorkflow) => writeHarnessContext(cwd, boundWorkflow),
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
       onSessionCreated: (cwd) => {
         scanWorkflowsAndBroadcast(cwd).catch((err: unknown) => {
@@ -283,6 +286,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       getSessionCwd: (harnessSessionId) => sessionManager.get(harnessSessionId)?.cwd ?? null,
+      getBoundWorkflowPath: (harnessSessionId) => sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
       injectInput: async (harnessSessionId, text, submit) => {
         // Two-phase write: a combined text+\r lands in Claude Code as a
         // bracketed paste and never submits.

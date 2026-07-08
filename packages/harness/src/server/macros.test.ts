@@ -20,6 +20,7 @@ function makeDeps(overrides: Partial<MacrosRouterDeps> = {}): MacrosRouterDeps {
     listMacros: () => DEFAULT_MACROS,
     findWorkflow: (p) => (p === workflow.path ? workflow : null),
     getSessionCwd: (id) => (id === "sess-1" ? "/Users/demo/acme-app" : null),
+    getBoundWorkflowPath: () => null,
     injectInput: vi.fn().mockResolvedValue(undefined),
     openUrl: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -129,6 +130,57 @@ describe("macros router", () => {
       body: JSON.stringify({ harnessSessionId: "no-such-session", subject: "x" }),
     });
     expect(res.status).toBe(404);
+  });
+
+  it("falls back to the session's bound workflow when the request omits workflowPath", async () => {
+    const deps = makeDeps({ getBoundWorkflowPath: (id) => (id === "sess-1" ? workflow.path : null) });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }), // no workflowPath
+    });
+
+    expect(res.status).toBe(200);
+    expect(deps.injectInput).toHaveBeenCalledWith(
+      "sess-1",
+      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      true,
+    );
+  });
+
+  it("prefers an explicit workflowPath on the request over the session's bound workflow", async () => {
+    const otherWorkflow: WorkflowInfo = { name: "rfq", path: "/Users/demo/acme-app/rfq", definitionId: 7, source: "scan" };
+    const deps = makeDeps({
+      findWorkflow: (p) => (p === workflow.path ? workflow : p === otherWorkflow.path ? otherWorkflow : null),
+      getBoundWorkflowPath: (id) => (id === "sess-1" ? otherWorkflow.path : null),
+    });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(deps.injectInput).toHaveBeenCalledWith(
+      "sess-1",
+      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      true,
+    );
+  });
+
+  it("400s a workflow-required macro when both the request and the session binding lack a workflow", async () => {
+    const deps = makeDeps({ getBoundWorkflowPath: () => null });
+    await start(deps);
+    const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("runs a workflow-optional macro (visualize) without a workflowPath", async () => {
