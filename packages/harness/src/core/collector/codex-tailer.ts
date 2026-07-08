@@ -15,7 +15,7 @@
  * contract (what to call, and when).
  */
 
-import { open, readdir, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -318,10 +318,20 @@ export async function findRolloutFile(options: FindRolloutFileOptions): Promise<
   const root = join(homeDir, ".codex", "sessions");
   const files = await collectRolloutFiles(root);
 
+  // Codex records session_meta.cwd as the OS-canonicalized path (symlinks
+  // resolved) — on macOS in particular, `/tmp` and `/var` are themselves
+  // symlinks into `/private`, so a cwd like `/var/folders/.../T/foo` (what
+  // `os.tmpdir()` and most callers hand us) never string-equals what Codex
+  // wrote (`/private/var/folders/.../T/foo`), even though it's the same
+  // directory. Resolve our side the same way before comparing. Falls back
+  // to the raw value if the directory is gone (a session that already
+  // exited, or a test double that never touches the real filesystem).
+  const resolvedCwd = await realpath(options.cwd).catch(() => options.cwd);
+
   let best: { path: string; mtimeMs: number } | null = null;
   for (const filePath of files) {
     const meta = await readSessionMetaHead(filePath);
-    if (!meta || meta.cwd !== options.cwd) continue;
+    if (!meta || meta.cwd !== resolvedCwd) continue;
 
     if (options.agentSessionId !== undefined) {
       if (meta.id !== options.agentSessionId) continue;

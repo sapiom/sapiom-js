@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -332,5 +332,35 @@ describe("findRolloutFile", () => {
 
     const found = await findRolloutFile({ cwd: "/tmp/proj", homeDir, agentSessionId: "agent-does-not-exist" });
     expect(found).toBeNull();
+  });
+
+  it("matches when the caller's cwd is a symlink to the directory Codex recorded (e.g. macOS /tmp -> /private/tmp)", async () => {
+    // Reproduces a real bug: Codex's own session_meta.cwd is the OS-resolved
+    // (symlink-free) path, but callers here generally hand us whatever a
+    // freshly-created session's cwd literally is — on macOS that's routinely
+    // a `/tmp/...` or `/var/folders/...` path, both of which are symlinks
+    // into `/private`. An exact string comparison never matches, even though
+    // it's the same directory, so the tailer never finds a real rollout file.
+    const realProjectDir = await mkdtemp(join(tmpdir(), "harness-codex-real-"));
+    const linkParent = await mkdtemp(join(tmpdir(), "harness-codex-link-"));
+    const symlinkedCwd = join(linkParent, "proj-link");
+    await symlink(realProjectDir, symlinkedCwd);
+    const resolvedCwd = await realpath(realProjectDir);
+
+    const dir = rolloutDir();
+    await mkdir(dir, { recursive: true });
+    // What Codex actually writes: the canonicalized path, not the symlink.
+    await writeFile(
+      join(dir, "rollout-a.jsonl"),
+      sessionMetaLine("agent-a", resolvedCwd, "2026-01-01T00:00:00.000Z"),
+    );
+
+    try {
+      const found = await findRolloutFile({ cwd: symlinkedCwd, homeDir });
+      expect(found).toBe(join(dir, "rollout-a.jsonl"));
+    } finally {
+      await rm(realProjectDir, { recursive: true, force: true });
+      await rm(linkParent, { recursive: true, force: true });
+    }
   });
 });
