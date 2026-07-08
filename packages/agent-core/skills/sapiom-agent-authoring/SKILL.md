@@ -88,8 +88,9 @@ Then ship:
 | `AgentExecutionContext` | `@sapiom/agent` |
 | `CODING_RESULT_SIGNAL / CodingResultPayload` | `@sapiom/tools` |
 
-**NEVER use `defineWorkflow`, `defineOrchestration`, `@sapiom/workflow-sdk`, or
-`@sapiom/orchestration`** — those are stale names. The correct package is `@sapiom/agent`.
+`@sapiom/agent` is the only authoring package — `defineOrchestration` / `@sapiom/orchestration`
+are its deprecated pre-launch names (still visible on npm and in older projects; never use or
+install them).
 
 ### `defineAgent` shape
 
@@ -382,8 +383,9 @@ Write each step the way it should run in production — never weaken logic to sh
 - **`ctx.shared` for fanout.** When three steps all need the entry input, write it into
   `ctx.shared` in the entry step — don't thread it through every `goto` payload.
 - **One-off capability call, no automation to keep?** That's not an agent — use Sapiom's
-  remote MCP (`https://api.sapiom.ai/v1/mcp`, direct `sapiom_*` tools, `tool_discover` to
-  find the right one) or the SDK instead of scaffolding.
+  [remote MCP](https://docs.sapiom.ai/integration/mcp-servers/remote) (`https://api.sapiom.ai/v1/mcp`,
+  direct `sapiom_*` tools, `tool_discover` to find the right one) or the SDK
+  ([`@sapiom/fetch`](https://www.npmjs.com/package/@sapiom/fetch)) instead of scaffolding.
 
 ## Troubleshooting
 
