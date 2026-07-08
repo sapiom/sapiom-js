@@ -2,12 +2,18 @@
 /**
  * Demo prep: seeds a directory the harness opens beautifully on first run.
  *
- *   pnpm --filter @sapiom/harness seed-example [dir]   (default ./harness-example)
+ *   pnpm --filter @sapiom/harness seed-example [dir] [--install]
+ *   (default dir: ./harness-example; --install runs `npm install` in the
+ *   scaffolded project afterward, to pre-warm node_modules ahead of a demo)
  *
  * Produces:
  *   <dir>/order-triage/       — a real scaffolded agent project (sapiom.json,
  *                               index.ts, git repo) so the workflows rail
- *                               discovers it immediately.
+ *                               discovers it immediately. Dependency versions
+ *                               are resolved the same way `sapiom agents init`
+ *                               does (current npm latest, offline fallback) —
+ *                               never hardcoded here, so this can't ship dead
+ *                               pins that no longer exist on npm.
  *   <dir>/.sapiom/canvas/index.html
  *                             — a static, self-contained visualization of
  *                               that project's step graph — the canvas pane's
@@ -16,24 +22,17 @@
  *
  * Idempotent: re-running wipes and regenerates both from scratch.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 
-import { scaffold, writeConfig } from "@sapiom/agent-core";
+import { resolveVersions, scaffold, writeConfig } from "@sapiom/agent-core";
 
 const nodeRequire = createRequire(import.meta.url);
 
 const PROJECT_NAME = "order-triage";
-
-/**
- * Pinned offline fallback versions (mirrors @sapiom/agent-core's own
- * fallback constants) — demo prep should never depend on network
- * reachability. Bump alongside notable @sapiom/agent / @sapiom/tools releases.
- */
-const SCAFFOLD_VERSIONS = { agent: "0.1.1", tools: "0.1.1", zod: "4.1.12" };
 
 /** Locate @sapiom/agent-core's bundled templates dir (no __dirname in ESM). */
 function agentCoreTemplatesDir() {
@@ -67,10 +66,15 @@ function commitCustomizations(projectDir) {
 }
 
 const ORDER_TRIAGE_INDEX_TS = `import { defineAgent, defineStep, goto, terminate } from '@sapiom/agent';
+import { z } from 'zod';
 
 // A small support-ticket triage flow: intake logs the order, classify tags
 // it, and route sends the easy cases down an auto-resolve path while billing
 // disputes go to a human.
+
+const OrderSchema = z.object({ category: z.string().optional() }).passthrough();
+const ClassifyInput = z.object({ order: OrderSchema, receivedAt: z.string() });
+const RouteInput = z.object({ order: OrderSchema, receivedAt: z.string(), category: z.string() });
 
 const intake = defineStep({
   name: 'intake',
@@ -84,8 +88,9 @@ const intake = defineStep({
 const classify = defineStep({
   name: 'classify',
   next: ['route'],
+  inputSchema: ClassifyInput,
   async run(input, ctx) {
-    const category = input.order?.category ?? 'general';
+    const category = input.order.category ?? 'general';
     ctx.logger.info('classified order', { category });
     return goto('route', { ...input, category });
   },
@@ -94,6 +99,7 @@ const classify = defineStep({
 const route = defineStep({
   name: 'route',
   next: ['auto_resolve', 'escalate'],
+  inputSchema: RouteInput,
   async run(input) {
     const needsHuman = input.category === 'billing_dispute';
     return goto(needsHuman ? 'escalate' : 'auto_resolve', input);
@@ -104,6 +110,7 @@ const auto_resolve = defineStep({
   name: 'auto_resolve',
   next: [],
   terminal: true,
+  inputSchema: RouteInput,
   async run(input) {
     return terminate({ resolved: true, category: input.category });
   },
@@ -113,6 +120,7 @@ const escalate = defineStep({
   name: 'escalate',
   next: [],
   terminal: true,
+  inputSchema: RouteInput,
   async run(input, ctx) {
     ctx.logger.info('escalating to human', { category: input.category });
     return terminate({ resolved: false, escalated: true });
@@ -328,8 +336,28 @@ const CANVAS_HTML = `<!DOCTYPE html>
 </html>
 `;
 
+function parseArgs(argv) {
+  let dir;
+  let install = false;
+  for (const arg of argv) {
+    if (arg === "--install") install = true;
+    else if (!arg.startsWith("--")) dir = arg;
+  }
+  return { dir: dir ?? "./harness-example", install };
+}
+
+/** Best-effort `npm install` in the scaffolded project — used by --install to pre-warm node_modules for demo prep. */
+function npmInstall(projectDir) {
+  console.log(`Running npm install in ${projectDir} …`);
+  const result = spawnSync("npm", ["install"], { cwd: projectDir, stdio: "inherit" });
+  if (result.status !== 0) {
+    throw new Error(`npm install failed (exit ${result.status}) in ${projectDir}`);
+  }
+}
+
 async function main() {
-  const targetRoot = path.resolve(process.argv[2] ?? "./harness-example");
+  const { dir, install } = parseArgs(process.argv.slice(2));
+  const targetRoot = path.resolve(dir);
   const projectDir = path.join(targetRoot, PROJECT_NAME);
   const canvasDir = path.join(targetRoot, ".sapiom", "canvas");
   const canvasFile = path.join(canvasDir, "index.html");
@@ -338,11 +366,18 @@ async function main() {
   await fs.rm(projectDir, { recursive: true, force: true });
   await fs.mkdir(targetRoot, { recursive: true });
 
+  // Resolve the @sapiom/* dependency versions to stamp into the scaffold the
+  // same way `sapiom agents init` does: current npm latest, with a 5s
+  // timeout and an offline fallback (see @sapiom/agent-core's scaffold.ts) —
+  // never a versions object hardcoded here, which is exactly how this
+  // script previously shipped dead pins that no longer exist on npm.
+  const versions = await resolveVersions();
+
   const result = await scaffold({
     targetDir: projectDir,
     projectName: PROJECT_NAME,
     templatesDir: agentCoreTemplatesDir(),
-    versions: SCAFFOLD_VERSIONS,
+    versions,
   });
 
   await fs.writeFile(path.join(projectDir, "index.ts"), ORDER_TRIAGE_INDEX_TS, "utf8");
@@ -352,16 +387,18 @@ async function main() {
   await fs.mkdir(canvasDir, { recursive: true });
   await fs.writeFile(canvasFile, CANVAS_HTML, "utf8");
 
+  if (install) npmInstall(projectDir);
+
   const relToRoot = (p) => path.relative(targetRoot, p);
   const cwdRelative = path.relative(process.cwd(), targetRoot);
   const displayRoot = cwdRelative && !cwdRelative.startsWith("..") ? cwdRelative : targetRoot;
 
-  console.log(`Seeded demo directory: ${targetRoot}\n`);
+  console.log(`\nSeeded demo directory: ${targetRoot}\n`);
   console.log(
     `  ${relToRoot(projectDir)}/` +
-      `  (sapiom.json + ${PROJECT_NAME} agent, git ${
+      `  (sapiom.json + ${PROJECT_NAME} agent @ @sapiom/agent@${versions.agent} + @sapiom/tools@${versions.tools}, git ${
         result.gitInitialized ? "initialized" : "NOT initialized — git unavailable"
-      })`,
+      }${install ? ", dependencies installed" : ""})`,
   );
   console.log(`  ${relToRoot(canvasFile)}  (opening canvas visualization)`);
   console.log("");
