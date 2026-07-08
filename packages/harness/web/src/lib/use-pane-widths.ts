@@ -15,6 +15,11 @@ export const CANVAS_MIN = 280;
 export const CANVAS_MAX = 720;
 export const CANVAS_DEFAULT = 420;
 
+// The persistent workflow actions panel — a fixed (non-draggable) grid
+// track right next to the rail, same role the icon-only strip's 32px track
+// used to play, just wide enough for icon + label side by side.
+export const ACTION_PANEL_WIDTH = 168;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -41,12 +46,12 @@ function persist(widths: PaneWidths): void {
 
 /**
  * Drives the two resize handles between the app's main columns (rail |
- * docked strip | terminal | canvas — the strip rides along at a fixed
- * width right next to the rail, so only rail and canvas are independently
- * draggable). Uses pointer capture on the handle itself rather than window-
- * level listeners, so the drag keeps tracking even if the cursor leaves the
- * thin handle mid-move. Widths persist to localStorage on release; a
- * double-click resets a handle to its default.
+ * action panel | terminal | canvas — the action panel rides along at a
+ * fixed width right next to the rail, so only rail and canvas are
+ * independently draggable). Uses pointer capture on the handle itself
+ * rather than window-level listeners, so the drag keeps tracking even if
+ * the cursor leaves the thin handle mid-move. Widths persist to
+ * localStorage on release; a double-click resets a handle to its default.
  */
 export function usePaneWidths(): {
   widths: PaneWidths;

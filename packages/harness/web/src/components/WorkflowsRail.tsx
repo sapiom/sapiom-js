@@ -11,7 +11,6 @@ interface WorkflowsRailProps {
   activeSessionId: string | null;
   selectedPath: string | null;
   onSelect: (path: string) => void;
-  onSelectedRowElement: (el: HTMLDivElement | null) => void;
   onConnect: (path: string) => Promise<void>;
 }
 
@@ -19,19 +18,13 @@ function WorkflowRow({
   workflow,
   isSelected,
   onSelect,
-  onSelectedRowElement,
 }: {
   workflow: WorkflowInfo;
   isSelected: boolean;
   onSelect: (path: string) => void;
-  onSelectedRowElement: (el: HTMLDivElement | null) => void;
 }): JSX.Element {
   return (
-    <div
-      ref={isSelected ? onSelectedRowElement : undefined}
-      className={"workflow-item" + (isSelected ? " is-selected" : "")}
-      data-testid={`workflow-${workflow.name}`}
-    >
+    <div className={"workflow-item" + (isSelected ? " is-selected" : "")} data-testid={`workflow-${workflow.name}`}>
       <button className="workflow-item-trigger" onClick={() => onSelect(workflow.path)} title={workflow.path}>
         <span className="workflow-caret">▸</span>
         <span className="workflow-name">{workflow.name}</span>
@@ -47,7 +40,6 @@ export function WorkflowsRail({
   activeSessionId,
   selectedPath,
   onSelect,
-  onSelectedRowElement,
   onConnect,
 }: WorkflowsRailProps): JSX.Element {
   const [connecting, setConnecting] = useState(false);
@@ -79,7 +71,6 @@ export function WorkflowsRail({
       workflow={workflow}
       isSelected={workflow.path === selectedPath}
       onSelect={onSelect}
-      onSelectedRowElement={onSelectedRowElement}
     />
   );
 

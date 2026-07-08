@@ -291,7 +291,7 @@ input {
 .app {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(180px, 220px) 32px minmax(360px, 1fr) minmax(280px, 420px);
+  grid-template-columns: minmax(180px, 220px) 168px minmax(360px, 1fr) minmax(280px, 420px);
   flex: 1;
   min-height: 0;
   overflow-x: auto;
@@ -327,80 +327,79 @@ input {
   transform: translateX(50%);
 }
 
-/* Docked workflow action strip ------------------------------------------ */
+/* Persistent workflow actions panel -------------------------------------- */
 
-.workflow-action-strip-col {
-  position: relative;
-  border-left: 1px solid var(--border);
-  background: var(--bg-1);
-}
-
-/* Erases the strip column's own border for exactly the selected row's
-   height — the row bleeds into this same space (see .workflow-item.is-
-   selected's negative margin) so the two reads as one continuous shape. */
-.workflow-action-strip-notch {
-  position: absolute;
-  left: -1px;
-  width: 5px;
-  background: var(--accent-dim);
-  transition: top 0.15s ease;
-  pointer-events: none;
-}
-
-/* Icon-only at rest; hovering it OR focusing anything inside it
-   (:focus-within — keyboard tabbing gets the same reveal a mouse hover
-   does) expands it into a floating icon+label panel over the terminal.
-   Full labels without permanently costing the terminal any width. */
-.workflow-action-strip {
-  position: absolute;
-  left: 3px;
-  width: 26px;
-  z-index: 5;
+/* A real grid column (see .app), not a floating overlay — it always takes
+   its own layout space, so it can never sit on top of or bleed into the
+   terminal next to it, at any window width. Icon + label are always
+   visible; there's no hover/focus reveal step. */
+.action-panel {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 4px 3px;
-  background: var(--accent-dim);
-  border: 1px solid var(--border-strong);
-  border-left: none;
-  border-radius: 0 8px 8px 8px;
-  transition:
-    top 0.15s ease,
-    width 0.15s ease;
+  padding: 8px 6px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-1);
+  overflow-y: auto;
 }
 
-.workflow-action-strip:hover,
-.workflow-action-strip:focus-within {
-  width: 200px;
+/* Stands in for the row-anchored notch the old hover strip used — the
+   panel's contents change with the selection, but the column itself is
+   fixed, so "which workflow this belongs to" is named here instead of
+   shown via position. */
+.action-panel-header {
+  padding: 2px 4px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.strip-item {
+.action-panel-header-workflow {
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.action-panel-empty {
+  padding: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.action-panel-item {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 5px 3px;
+  padding: 6px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--text-dim);
+  text-align: left;
 }
 
-.strip-item:hover:not(:disabled) {
+.action-panel-item:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
 }
 
-.strip-item:disabled {
+.action-panel-item:disabled {
   color: var(--text-faint);
   cursor: not-allowed;
 }
 
-.strip-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+.action-panel-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
-.strip-item-icon {
+.action-panel-item-icon {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -408,33 +407,19 @@ input {
   width: 20px;
 }
 
-/* Collapsed to zero width at rest so the icon stays centered in the 26px
-   rest-state strip — margin only appears once there's room to show it. */
-.strip-item-text {
+.action-panel-item-text {
   display: flex;
   flex-direction: column;
-  max-width: 0;
-  opacity: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  transition:
-    max-width 0.15s ease,
-    opacity 0.1s ease;
+  min-width: 0;
+  margin-left: 8px;
 }
 
-.workflow-action-strip:hover .strip-item-text,
-.workflow-action-strip:focus-within .strip-item-text {
-  max-width: 160px;
-  opacity: 1;
-  margin-left: 6px;
-}
-
-.strip-item-label {
+.action-panel-item-label {
   font-size: 12px;
   text-align: left;
 }
 
-.strip-item-reason {
+.action-panel-item-reason {
   font-size: 9.5px;
   color: var(--text-faint);
   white-space: normal;
@@ -525,15 +510,9 @@ input {
   color: var(--text);
 }
 
-/* Bleeds into rail-workflows' own right padding (8px) to reach the rail's
-   edge flush — meeting the action strip's notch with no gap, so the two
-   read as one connected shape (a browser-tab-style fusion). Flat on the
-   right since that's the edge doing the fusing; rounded everywhere else. */
 .workflow-item.is-selected {
   background: var(--accent-dim);
   color: var(--text);
-  margin-right: -8px;
-  border-radius: var(--radius) 0 0 var(--radius);
 }
 
 .workflow-item-trigger {

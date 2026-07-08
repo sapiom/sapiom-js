@@ -1,11 +1,10 @@
 /**
  * Harness SPA shell (workstream W2).
  *
- * Layout: workflows rail (left) | docked action strip (anchored to the
- * selected workflow's row) | session tab strip + terminal (center) |
- * canvas/preview pane (right). The strip carries the selected workflow's
- * full action set; the canvas gets a slim identity header for whichever
- * workflow is bound to the active session.
+ * Layout: workflows rail (left) | persistent action panel (fixed column,
+ * always showing the selected workflow's actions) | session tab strip +
+ * terminal (center) | canvas/preview pane (right). The canvas gets a slim
+ * identity header for whichever workflow is bound to the active session.
  */
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
@@ -18,20 +17,16 @@ import { DeadSessionPane } from "./components/DeadSessionPane";
 import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
-import { WorkflowActionStrip } from "./components/WorkflowActionStrip";
+import { WorkflowActionsPanel } from "./components/WorkflowActionsPanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
-import { useElementTopOffset } from "./lib/use-element-top-offset";
 import { resolveMacroUrl } from "./lib/macro-gating";
-import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
+import { ACTION_PANEL_WIDTH, CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
-  const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
-  const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
@@ -124,7 +119,7 @@ export const App = (): JSX.Element => {
           // letting these shrink to their own floors under space pressure
           // (with a horizontal scrollbar as the last resort — see .app in
           // styles.css) keeps the canvas header from vanishing off-screen.
-          gridTemplateColumns: `minmax(${RAIL_MIN}px, ${widths.rail}px) 32px minmax(360px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
+          gridTemplateColumns: `minmax(${RAIL_MIN}px, ${widths.rail}px) ${ACTION_PANEL_WIDTH}px minmax(360px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
         }}
       >
         <WorkflowsRail
@@ -133,28 +128,21 @@ export const App = (): JSX.Element => {
           activeSessionId={harness.activeSessionId}
           selectedPath={harness.selectedWorkflowPath}
           onSelect={handleSelectWorkflow}
-          onSelectedRowElement={setSelectedRowEl}
           onConnect={async (path) => {
             await harness.connectWorkflow(path);
           }}
         />
 
-        <div className="workflow-action-strip-col" ref={setStripColEl}>
-          {selectedWorkflow && rowAnchor && (
-            <WorkflowActionStrip
-              workflow={selectedWorkflow}
-              top={rowAnchor.top}
-              height={rowAnchor.height}
-              activeSessionId={harness.activeSessionId}
-              macros={state.macros}
-              onRunMacro={(macro) => handleRunMacroForWorkflow(selectedWorkflow, macro)}
-            />
-          )}
-        </div>
+        <WorkflowActionsPanel
+          workflow={selectedWorkflow}
+          activeSessionId={harness.activeSessionId}
+          macros={state.macros}
+          onRunMacro={(macro) => handleRunMacroForWorkflow(selectedWorkflow, macro)}
+        />
 
         <div
           className="pane-resize-handle pane-resize-handle-rail"
-          style={{ left: widths.rail + 32 }}
+          style={{ left: widths.rail + ACTION_PANEL_WIDTH }}
           onPointerDown={startRailDrag}
           onDoubleClick={resetRail}
           role="separator"

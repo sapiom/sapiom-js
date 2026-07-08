@@ -22,8 +22,8 @@ test("renders the three panes plus the brand header, with no separate action rai
   await expect(page.locator(".session-bar")).toBeVisible();
   await expect(page.locator(".canvas-pane")).toBeVisible();
 
-  // The action rail is retired — actions live on the docked workflow action
-  // strip now, anchored to the selected row, not in a standalone column.
+  // The action rail is retired — actions live on the persistent workflow
+  // actions panel now, a fixed column of its own next to the rail.
   await expect(page.locator(".rail-actions")).toHaveCount(0);
 
   await page.screenshot({ path: "web/e2e/screenshots/app-shell.png", fullPage: true });
@@ -156,9 +156,10 @@ test("workflows rail lists the fixtures and selecting one drives macro gating", 
   await expect(openProd).toBeDisabled();
   await expect(openProd).toHaveAttribute("aria-label", "Open prod: Not deployed yet");
 
-  await page.getByTestId("workflow-action-strip").hover();
-  await expect(page.locator(".strip-item-reason")).toHaveText("Not deployed yet");
-  await page.screenshot({ path: "web/e2e/screenshots/action-strip-expanded.png" });
+  // The disabled reason is always visible in the persistent panel — no
+  // hover needed to reveal it.
+  await expect(page.locator(".action-panel-item-reason")).toHaveText("Not deployed yet");
+  await page.screenshot({ path: "web/e2e/screenshots/action-panel-disabled-reason.png" });
 });
 
 test("inject macros are enabled once the boot session and a deployed workflow are active", async ({ page }) => {
@@ -401,7 +402,7 @@ test("visualize macro is one click — no subject dialog", async ({ page }) => {
   expect(lastRun?.req.subject).toBeUndefined();
 });
 
-test.describe("docked workflow action strip", () => {
+test.describe("persistent workflow actions panel", () => {
   test("rows carry no inline icons and show their full untruncated name", async ({ page }) => {
     await expect(page.locator(".workflow-row-actions")).toHaveCount(0);
 
@@ -413,98 +414,85 @@ test.describe("docked workflow action strip", () => {
     expect(overflowing).toBe(false);
   });
 
-  test("the strip renders anchored to the selected workflow's row and carries its full action set", async ({
+  test("the panel is visible at rest with icon+label for every action, no hover needed", async ({ page }) => {
+    const panel = page.getByTestId("workflow-actions-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText("Actions");
+    await expect(panel).toContainText("leasing");
+
+    await expect(panel.getByTestId("macro-run_local")).toBeVisible();
+    await expect(panel.getByTestId("macro-deploy")).toBeVisible();
+    await expect(panel.getByTestId("macro-prod_run")).toBeVisible();
+    await expect(panel.getByTestId("macro-open_prod")).toBeVisible();
+    await expect(panel.getByTestId("macro-visualize")).toBeVisible();
+
+    // Labels are visible immediately — no hover/focus step reveals them.
+    await expect(panel.getByText("Run local")).toBeVisible();
+    await expect(panel.getByText("Visualize")).toBeVisible();
+    const restBox = await panel.boundingBox();
+    expect(restBox?.width ?? 0).toBeGreaterThan(150);
+
+    await page.screenshot({ path: "web/e2e/screenshots/app-shell-action-panel.png", fullPage: true });
+  });
+
+  test("a disabled action's reason is always visible, not just on hover or focus", async ({ page }) => {
+    await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
+
+    const openProd = page.getByTestId("macro-open_prod");
+    await expect(openProd).toBeDisabled();
+    await expect(openProd.locator(".action-panel-item-reason")).toHaveText("Not deployed yet");
+
+    await page.screenshot({ path: "web/e2e/screenshots/action-panel-gated.png", fullPage: true });
+  });
+
+  test("the panel stays put and just relabels itself when selection changes — it never moves or resizes", async ({
     page,
   }) => {
-    const row = page.getByTestId("workflow-leasing");
-    const strip = page.getByTestId("workflow-action-strip");
-    await expect(strip).toBeVisible();
+    const panel = page.getByTestId("workflow-actions-panel");
+    const before = await panel.boundingBox();
 
-    const rowBox = await row.boundingBox();
-    const stripBox = await strip.boundingBox();
-    expect(rowBox).not.toBeNull();
-    expect(stripBox).not.toBeNull();
-    // Top-aligned to the row, within a pixel or two of rounding.
-    expect(Math.abs((stripBox?.y ?? 0) - (rowBox?.y ?? 0))).toBeLessThan(3);
+    await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
 
-    await expect(strip.getByTestId("macro-run_local")).toBeVisible();
-    await expect(strip.getByTestId("macro-deploy")).toBeVisible();
-    await expect(strip.getByTestId("macro-prod_run")).toBeVisible();
-    await expect(strip.getByTestId("macro-open_prod")).toBeVisible();
-    await expect(strip.getByTestId("macro-visualize")).toBeVisible();
+    await expect(panel).toContainText("rfq");
+    const after = await panel.boundingBox();
+    expect(after?.x).toBe(before?.x);
+    expect(after?.y).toBe(before?.y);
+    expect(after?.width).toBe(before?.width);
 
-    await page.screenshot({ path: "web/e2e/screenshots/app-shell-docked-strip.png", fullPage: true });
+    await page.screenshot({ path: "web/e2e/screenshots/action-panel-relabeled.png", fullPage: true });
   });
 
-  test("the strip is icon-only at rest and expands to icon+label on hover", async ({ page }) => {
-    const strip = page.getByTestId("workflow-action-strip");
+  test("the panel occupies its own column and never overlaps the terminal, even at a narrow window width", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 900, height: 640 });
+    await page.waitForTimeout(50);
 
-    const restBox = await strip.boundingBox();
-    expect(restBox?.width ?? 0).toBeLessThan(30);
-    await expect(page.locator(".strip-item-text").first()).toHaveCSS("opacity", "0");
+    const panel = page.getByTestId("workflow-actions-panel");
+    const terminal = page.locator(".terminal-slot");
+    const panelBox = await panel.boundingBox();
+    const terminalBox = await terminal.boundingBox();
+    expect(panelBox).not.toBeNull();
+    expect(terminalBox).not.toBeNull();
 
-    await strip.hover();
-    await expect(async () => {
-      const box = await strip.boundingBox();
-      expect(box?.width ?? 0).toBeGreaterThan(150);
-    }).toPass({ timeout: 1000 });
-    await expect(page.locator(".strip-item-label").first()).toBeVisible();
-    await expect(strip.getByText("Run local")).toBeVisible();
-    await expect(strip.getByText("Visualize")).toBeVisible();
+    // The panel's right edge sits at or before the terminal's left edge —
+    // no horizontal overlap, at any width, since it's a real grid column.
+    expect((panelBox?.x ?? 0) + (panelBox?.width ?? 0)).toBeLessThanOrEqual(terminalBox?.x ?? 0);
 
-    await page.screenshot({ path: "web/e2e/screenshots/strip-hover-expanded.png", fullPage: true });
-  });
-
-  test("the strip also expands on keyboard focus, not just mouse hover", async ({ page }) => {
-    const strip = page.getByTestId("workflow-action-strip");
-    const restBox = await strip.boundingBox();
-    expect(restBox?.width ?? 0).toBeLessThan(30);
-
-    // Tabbing to an item inside (no mouse involved) should reveal labels via
-    // :focus-within, same as a hover would.
-    await page.getByTestId("macro-run_local").focus();
-    await expect(async () => {
-      const box = await strip.boundingBox();
-      expect(box?.width ?? 0).toBeGreaterThan(150);
-    }).toPass({ timeout: 1000 });
-    await expect(page.getByTestId("macro-run_local")).toBeFocused();
-    await expect(strip.getByText("Run local")).toBeVisible();
-
-    await page.screenshot({ path: "web/e2e/screenshots/strip-keyboard-focus-expanded.png", fullPage: true });
-  });
-
-  test("the strip moves when selection changes, and the notch tracks the new row", async ({ page }) => {
-    const rfqRow = page.getByTestId("workflow-rfq");
-    await rfqRow.locator(".workflow-item-trigger").click();
-
-    const strip = page.getByTestId("workflow-action-strip");
-    const notch = page.getByTestId("workflow-action-strip-notch");
-    const rowBox = await rfqRow.boundingBox();
-
-    // The strip/notch slide to their new anchor over a short CSS transition —
-    // wait it out so the bounding box reflects the settled position, not a
-    // mid-animation frame.
-    await expect(async () => {
-      const stripBox = await strip.boundingBox();
-      expect(Math.abs((stripBox?.y ?? 0) - (rowBox?.y ?? 0))).toBeLessThan(3);
-    }).toPass({ timeout: 1000 });
-
-    const stripBox = await strip.boundingBox();
-    const notchBox = await notch.boundingBox();
-    expect(Math.abs((notchBox?.y ?? 0) - (rowBox?.y ?? 0))).toBeLessThan(3);
-    // The notch is sized to the row, not the whole multi-icon strip below it.
-    expect(notchBox?.height ?? 0).toBeLessThan(stripBox?.height ?? Infinity);
-
-    await page.screenshot({ path: "web/e2e/screenshots/workflow-action-strip-moved.png", fullPage: true });
+    await page.screenshot({ path: "web/e2e/screenshots/narrow-viewport-no-overlap.png", fullPage: true });
   });
 
   test("the canvas header stays fully on-screen even when the app is narrower than the default pane widths", async ({
     page,
   }) => {
-    // Rail (220) + strip (32) + terminal floor (360) + canvas (420) = 1032px
-    // of default/preferred widths — narrower than that used to overflow
-    // .app's right edge and get silently clipped by its old overflow:hidden.
-    await page.setViewportSize({ width: 900, height: 640 });
+    // Rail (220) + action panel (168, fixed) + terminal floor (360) + canvas
+    // (420) = 1168px of default/preferred widths — 1050px is narrower than
+    // that (forcing rail/canvas to shrink toward their floors) but still
+    // above the absolute floor (180 + 168 + 360 + 280 = 988px, below which
+    // .app's horizontal scrollbar legitimately kicks in). Narrower than
+    // 1168 used to overflow .app's right edge and get silently clipped by
+    // its old overflow:hidden.
+    await page.setViewportSize({ width: 1050, height: 640 });
     await page.waitForTimeout(50);
 
     const header = page.getByTestId("workflow-actions-header");
@@ -513,7 +501,7 @@ test.describe("docked workflow action strip", () => {
 
     const btnBox = await reVisualizeBtn.boundingBox();
     expect(btnBox).not.toBeNull();
-    expect((btnBox?.x ?? 0) + (btnBox?.width ?? 0)).toBeLessThanOrEqual(900);
+    expect((btnBox?.x ?? 0) + (btnBox?.width ?? 0)).toBeLessThanOrEqual(1050);
 
     await page.screenshot({ path: "web/e2e/screenshots/narrow-viewport-header.png", fullPage: true });
   });
