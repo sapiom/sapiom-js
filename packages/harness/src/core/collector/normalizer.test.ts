@@ -94,7 +94,7 @@ describe("normalizeHookEvent", () => {
     expect(event?.payload.toolResponseSummary).toBe("short output");
   });
 
-  it("normalizes Stop to turn.completed", () => {
+  it("normalizes Stop to turn.completed, with no assistantText when the hook omits it", () => {
     const event = normalizeHookEvent(
       "Stop",
       { session_id: "agent-uuid-1", stop_hook_active: true },
@@ -102,7 +102,20 @@ describe("normalizeHookEvent", () => {
     );
 
     expect(event?.type).toBe("turn.completed");
-    expect(event?.payload).toEqual({ stopHookActive: true });
+    expect(event?.payload).toEqual({ stopHookActive: true, assistantText: null });
+  });
+
+  it("normalizes Stop and captures last_assistant_message as assistantText directly off the hook payload", () => {
+    // Claude Code's real Stop payload carries this field itself — the
+    // transcript file may not exist on disk yet (or ever) when Stop fires,
+    // so this must not depend on any file read.
+    const event = normalizeHookEvent(
+      "Stop",
+      { session_id: "agent-uuid-1", stop_hook_active: false, last_assistant_message: "HARNESS OK" },
+      baseContext,
+    );
+
+    expect(event?.payload).toEqual({ stopHookActive: false, assistantText: "HARNESS OK" });
   });
 
   it("normalizes SessionEnd", () => {

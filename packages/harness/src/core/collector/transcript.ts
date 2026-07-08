@@ -1,12 +1,16 @@
 /**
- * Backfills `turn.completed` events with the full assistant turn (last
- * message text, model, token usage) by tail-reading the Claude Code
- * transcript JSONL named in the hook payload's `transcript_path`.
+ * Backfills `turn.completed` events with model + token usage by tail-reading
+ * the Claude Code transcript JSONL named in the hook payload's
+ * `transcript_path`. The assistant's message text itself comes straight off
+ * the Stop hook payload (`last_assistant_message`, see normalizer.ts) — it's
+ * available synchronously and doesn't depend on the transcript file, which
+ * may not exist on disk yet (or at all) at the moment Stop fires. This
+ * module only ever *supplements* that with model/usage, and falls back to
+ * its own transcript-derived text if the hook payload somehow didn't have
+ * one.
  *
- * Hooks only see edges (a prompt went in, a tool ran, the turn stopped) —
- * the transcript has the actual conversation. Transcripts can grow to
- * hundreds of MB over a long session, so this only ever reads the last
- * ~2MB from the end of the file.
+ * Transcripts can grow to hundreds of MB over a long session, so this only
+ * ever reads the last ~2MB from the end of the file.
  */
 
 import * as fs from "node:fs/promises";
@@ -115,8 +119,11 @@ export async function readLastAssistantTurn(
 }
 
 /**
- * Enrich a `turn.completed` event's payload with transcript data. No-op for
- * any other event type, or when no transcript path is available.
+ * Enrich a `turn.completed` event's payload with transcript data (model,
+ * usage, and a fallback assistantText). No-op for any other event type, or
+ * when no transcript path is available, or when the transcript can't be
+ * read (e.g. not written to disk yet) — none of that should ever clobber
+ * the assistantText the Stop hook payload already supplied.
  */
 export async function enrichTurnCompleted(
   event: AnalyticsEvent,
@@ -128,12 +135,15 @@ export async function enrichTurnCompleted(
   const turn = await readLastAssistantTurn(transcriptPath, maxBytes);
   if (!turn) return event;
 
+  const existingAssistantText =
+    typeof event.payload.assistantText === "string" ? event.payload.assistantText : null;
+
   return {
     ...event,
     payload: {
       ...event.payload,
       model: turn.model,
-      assistantText: turn.assistantText,
+      assistantText: existingAssistantText ?? turn.assistantText,
       usage: turn.usage,
     },
   };
