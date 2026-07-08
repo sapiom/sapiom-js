@@ -73,6 +73,14 @@ const CODEX_ROLLOUT_DISCOVERY_POLL_MS = 300;
  * thread an async registry lookup through the macro-runner's sync contract. */
 const WORKFLOWS_CACHE_REFRESH_MS = 3_000;
 
+/** How often SessionManager.sweepDeadSessions() runs — the backstop that
+ * reconciles any non-exited session record whose pty process is actually
+ * gone (node-pty's occasionally-missed onExit, or a transition nothing else
+ * reconciled), so a ghost tab self-heals within seconds instead of sitting
+ * in the tab strip until the server restarts. The sweep is a cheap in-memory
+ * walk plus a signal-0 probe per live pty. */
+const SESSION_LIVENESS_SWEEP_MS = 10_000;
+
 export interface HarnessServerOptions {
   port: number;
   /** Bind address. Defaults to 127.0.0.1 — the server must never listen on 0.0.0.0. */
@@ -268,6 +276,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     ensureCanvasTemplate,
   });
   await sessionManager.init();
+
+  const sessionSweepTimer = setInterval(() => sessionManager.sweepDeadSessions(), SESSION_LIVENESS_SWEEP_MS);
+  sessionSweepTimer.unref?.();
 
   // One boot-time sweep for generated dirs the exit-time cleanup below never
   // reached (crashes, force-kills, accumulation from before retention
@@ -651,6 +662,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     close: () =>
       new Promise<void>((resolve, reject) => {
         clearInterval(workflowsCacheTimer);
+        clearInterval(sessionSweepTimer);
         canvasWatcher.stopAll();
         for (const tailer of codexTailers.values()) tailer.stop();
         codexTailers.clear();
