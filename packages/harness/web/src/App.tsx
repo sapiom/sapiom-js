@@ -22,7 +22,7 @@ import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
 import { useElementTopOffset } from "./lib/use-element-top-offset";
 import { resolveMacroUrl } from "./lib/macro-gating";
-import { usePaneWidths } from "./lib/use-pane-widths";
+import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 
 export const App = (): JSX.Element => {
@@ -101,7 +101,15 @@ export const App = (): JSX.Element => {
 
       <div
         className="app"
-        style={{ gridTemplateColumns: `${widths.rail}px 32px minmax(360px, 1fr) ${widths.canvas}px` }}
+        style={{
+          // minmax (not a bare px) on the rail/canvas tracks too — a laptop-
+          // width browser with generously dragged panes was overflowing off
+          // the right edge and getting silently clipped by .app's overflow;
+          // letting these shrink to their own floors under space pressure
+          // (with a horizontal scrollbar as the last resort — see .app in
+          // styles.css) keeps the canvas header from vanishing off-screen.
+          gridTemplateColumns: `minmax(${RAIL_MIN}px, ${widths.rail}px) 32px minmax(360px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
+        }}
       >
         <WorkflowsRail
           workflows={state.workflows}
