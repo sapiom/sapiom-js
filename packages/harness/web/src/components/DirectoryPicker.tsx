@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
 
-import type { FsListEntry, FsListResponse } from "../lib/api";
+import type { FsDirEntry, FsListResponse } from "../lib/api";
 import { Icon } from "./Icon";
 
 interface DirectoryPickerProps {
@@ -21,8 +21,10 @@ interface DirectoryPickerProps {
  */
 export function DirectoryPicker({ value, onChange, onSubmit, recentDirs, listDir }: DirectoryPickerProps): JSX.Element {
   const [browsePath, setBrowsePath] = useState(value);
-  const [dirs, setDirs] = useState<FsListEntry[]>([]);
-  const [parent, setParent] = useState<string | null>(null);
+  const [dirs, setDirs] = useState<FsDirEntry[]>([]);
+  // Always a real path (root's parent is itself, per path.dirname("/") === "/") —
+  // "no further up" is `parent === browsePath`, not null.
+  const [parent, setParent] = useState(value);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -70,8 +72,8 @@ export function DirectoryPicker({ value, onChange, onSubmit, recentDirs, listDir
           type="button"
           className="dir-picker-up"
           data-testid="dir-picker-up"
-          disabled={!parent}
-          onClick={() => parent && navigate(parent)}
+          disabled={parent === browsePath}
+          onClick={() => navigate(parent)}
           title="Up to parent directory"
         >
           <Icon name="CornerLeftUp" size={14} />

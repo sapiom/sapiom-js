@@ -30,26 +30,26 @@ export function getBootToken(): string {
 }
 
 /**
- * AppState + `launchDir` (the directory the harness was launched from — the
- * default seed for the new-session directory picker). Not yet in the shared
- * contract (landing in parallel); typed locally here rather than editing it.
+ * GET /api/fs/list?path= response shape (directory autocomplete for the
+ * new-session picker). Mirrors src/server/fs.ts's own local types — not yet
+ * folded into the shared contract, so duplicated here rather than importing
+ * across the client/server boundary. `parent` is always a real path, never
+ * null: at the filesystem root it equals `path` itself (matches
+ * `path.dirname("/") === "/"`), so "no further up" is `parent === path`.
  */
-export type AppStateEx = AppState & { launchDir?: string | null };
-
-/** GET /api/fs/list?path= response shape (directory autocomplete for the new-session picker). */
-export interface FsListEntry {
+export interface FsDirEntry {
   name: string;
   path: string;
 }
 
 export interface FsListResponse {
   path: string;
-  parent: string | null;
-  dirs: FsListEntry[];
+  parent: string;
+  dirs: FsDirEntry[];
 }
 
 export interface HarnessApi {
-  getState(): Promise<AppStateEx>;
+  getState(): Promise<AppState>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
   listSessions(): Promise<HarnessSession[]>;
   sessionHistory(cwd: string): Promise<SessionSummary[]>;
@@ -84,8 +84,8 @@ class RealApi implements HarnessApi {
     return (await res.json()) as T;
   }
 
-  getState(): Promise<AppStateEx> {
-    return this.request<AppStateEx>("/api/state");
+  getState(): Promise<AppState> {
+    return this.request<AppState>("/api/state");
   }
 
   createSession(req: CreateSessionRequest): Promise<HarnessSession> {
@@ -160,7 +160,7 @@ class MockApi implements HarnessApi {
   private workflows = MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
   private settings: HarnessSettings = { ...MOCK_SETTINGS, recentDirs: [...MOCK_SETTINGS.recentDirs] };
 
-  async getState(): Promise<AppStateEx> {
+  async getState(): Promise<AppState> {
     await delay();
     return {
       version: "0.0.1-mock",
@@ -278,7 +278,8 @@ class MockApi implements HarnessApi {
 
     const names = MOCK_FS_TREE[normalized] ?? [];
     const segments = normalized.split("/").filter(Boolean);
-    const parent = normalized === "/" ? null : segments.length <= 1 ? "/" : "/" + segments.slice(0, -1).join("/");
+    // Matches path.dirname("/") === "/" — root's own parent is itself, never null.
+    const parent = normalized === "/" ? "/" : segments.length <= 1 ? "/" : "/" + segments.slice(0, -1).join("/");
     return {
       path: normalized,
       parent,

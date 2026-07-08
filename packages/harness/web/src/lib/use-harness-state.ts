@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
+  AppState,
   BusMessage,
   CreateSessionRequest,
   HarnessSession,
@@ -9,13 +10,13 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { createApi, getBootToken, type AppStateEx, type FsListResponse } from "./api";
+import { createApi, getBootToken, type FsListResponse } from "./api";
 import { subscribeEvents } from "./events";
 
 const api = createApi();
 
 export interface HarnessStateHook {
-  state: AppStateEx | null;
+  state: AppState | null;
   loading: boolean;
   error: string | null;
   settings: HarnessSettings | null;
@@ -39,7 +40,7 @@ export interface HarnessStateHook {
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
 export function useHarnessState(): HarnessStateHook {
-  const [state, setState] = useState<AppStateEx | null>(null);
+  const [state, setState] = useState<AppState | null>(null);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
