@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { JSX } from "react";
-import type { HarnessSession, WorkflowInfo } from "@shared/types";
+import type { HarnessSession, MacroDef, WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
+import { MacroButtons } from "./MacroButtons";
+import { needsSubject } from "../lib/macro-gating";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 
 interface WorkflowsRailProps {
@@ -10,30 +12,45 @@ interface WorkflowsRailProps {
   sessions: HarnessSession[];
   activeSessionId: string | null;
   selectedPath: string | null;
+  macros: MacroDef[];
   onSelect: (path: string) => void;
+  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef, subject?: string) => void;
   onConnect: (path: string) => Promise<void>;
 }
 
 function WorkflowRow({
   workflow,
   isSelected,
+  activeSessionId,
+  rowMacros,
   onSelect,
+  onRunMacro,
 }: {
   workflow: WorkflowInfo;
   isSelected: boolean;
+  activeSessionId: string | null;
+  rowMacros: MacroDef[];
   onSelect: (path: string) => void;
+  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef, subject?: string) => void;
 }): JSX.Element {
   return (
-    <button
-      className={"workflow-item" + (isSelected ? " is-selected" : "")}
-      data-testid={`workflow-${workflow.name}`}
-      onClick={() => onSelect(workflow.path)}
-      title={workflow.path}
-    >
-      <span className="workflow-caret">▸</span>
-      <span className="workflow-name">{workflow.name}</span>
-      {workflow.definitionId != null && <span className="workflow-dot" title="Deployed" />}
-    </button>
+    <div className={"workflow-item" + (isSelected ? " is-selected" : "")} data-testid={`workflow-${workflow.name}`}>
+      <button className="workflow-item-trigger" onClick={() => onSelect(workflow.path)} title={workflow.path}>
+        <span className="workflow-caret">▸</span>
+        <span className="workflow-name">{workflow.name}</span>
+        {workflow.definitionId != null && <span className="workflow-dot" title="Deployed" />}
+      </button>
+      <div className="workflow-row-actions">
+        <MacroButtons
+          macros={rowMacros}
+          workflow={workflow}
+          activeSessionId={activeSessionId}
+          onRun={(macro, subject) => onRunMacro(workflow, macro, subject)}
+          size={13}
+          testIdPrefix={`${workflow.name}-`}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -42,7 +59,9 @@ export function WorkflowsRail({
   sessions,
   activeSessionId,
   selectedPath,
+  macros,
   onSelect,
+  onRunMacro,
   onConnect,
 }: WorkflowsRailProps): JSX.Element {
   const [connecting, setConnecting] = useState(false);
@@ -66,7 +85,23 @@ export function WorkflowsRail({
     }
   };
 
+  // Row actions are compact quick-actions, not the full macro set — anything
+  // needing a subject (Visualize) stays reserved for the bound-workflow header.
+  const rowMacros = macros.filter((macro) => !needsSubject(macro));
+
   const { groups, ungrouped } = buildWorkspaceTree(workflows, sessions, activeSessionId);
+
+  const renderRow = (workflow: WorkflowInfo): JSX.Element => (
+    <WorkflowRow
+      key={workflow.path}
+      workflow={workflow}
+      isSelected={workflow.path === selectedPath}
+      activeSessionId={activeSessionId}
+      rowMacros={rowMacros}
+      onSelect={onSelect}
+      onRunMacro={onRunMacro}
+    />
+  );
 
   return (
     <aside className="rail rail-workflows">
@@ -81,28 +116,14 @@ export function WorkflowsRail({
               {group.label}
             </div>
             {group.workflows.length === 0 && <div className="workspace-group-empty">No workflows here yet</div>}
-            {group.workflows.map((workflow) => (
-              <WorkflowRow
-                key={workflow.path}
-                workflow={workflow}
-                isSelected={workflow.path === selectedPath}
-                onSelect={onSelect}
-              />
-            ))}
+            {group.workflows.map(renderRow)}
           </div>
         ))}
 
         {ungrouped.length > 0 && (
           <div className="workspace-group">
             <div className="workspace-group-header">Other</div>
-            {ungrouped.map((workflow) => (
-              <WorkflowRow
-                key={workflow.path}
-                workflow={workflow}
-                isSelected={workflow.path === selectedPath}
-                onSelect={onSelect}
-              />
-            ))}
+            {ungrouped.map(renderRow)}
           </div>
         )}
       </div>
