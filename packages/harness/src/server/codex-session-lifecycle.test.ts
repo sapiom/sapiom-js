@@ -81,8 +81,12 @@ describe("codex session lifecycle (real files, no mocking)", () => {
   });
 
   afterEach(async () => {
+    // server.close() resolves once the HTTP server stops listening —
+    // independent of whether killAll()'s asynchronous pty-exit events have
+    // finished their own persist() writes — so flush before AND after.
     await server?.sessionManager.flush();
     await server?.close();
+    await server?.sessionManager.flush();
     server = undefined;
     await rm(dir, { recursive: true, force: true });
   });

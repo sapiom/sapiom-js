@@ -4,20 +4,22 @@
  * core/collector/codex-tailer.ts for how its analytics eventSource works
  * instead); this file only covers process launch/resume/doctor/history.
  *
- * Verified against a locally installed `codex-cli 0.134.0` on the build
- * machine: `codex resume [SESSION_ID] [PROMPT]` (positional UUID or thread
- * name) and the generic `-c key=value` config-override mechanism are
- * confirmed via `codex --help` / `codex resume --help`. The specific config
- * keys used for system-prompt injection (`developer_instructions`,
- * `model_instructions_file`) are NOT independently confirmed against this
- * version — they're carried over from a known-working reference
- * implementation targeting an earlier Codex CLI, since `--help` documents
- * `-c` as a generic escape hatch and doesn't enumerate valid keys. Flagged
- * in the PR description; worth a manual smoke test before relying on it for
- * a live demo.
+ * Verified against a locally installed `codex-cli 0.134.0`: `codex resume
+ * [SESSION_ID] [PROMPT]` (positional UUID or thread name) via `codex resume
+ * --help`; the generic `-c key=value` config-override mechanism via `codex
+ * --help`; and, via real spawns with `--strict-config`, that both
+ * `developer_instructions` and `model_instructions_file` are real,
+ * recognized keys (an earlier version of this file used the latter and
+ * flagged both as unconfirmed — see buildConfigArgs below for why the
+ * adapter now uses `developer_instructions` instead: `model_instructions_file`
+ * makes codex's own startup depend on re-reading a file we already have the
+ * content of, and an unreadable path there kills the process instantly with
+ * no trust prompt, no TUI — precisely the "session has no live pty" a user
+ * sees with zero indication why).
  */
 
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -239,13 +241,38 @@ export class CodexAdapter implements HarnessAdapter {
  * (a persistent config.toml mutation, which the harness's "zero config
  * mutation" design deliberately avoids), so `opts.mcpConfigFile` /
  * `opts.settingsFile` are intentionally unused here. System-prompt injection
- * uses the generic `-c key=value` override mechanism instead (see the
- * module-level doc comment for the verification caveat on the exact keys).
+ * uses the generic `-c key=value` override mechanism instead.
+ *
+ * Confirmed against a locally installed codex-cli 0.134.0: `-c
+ * model_instructions_file=<path>` is a real, recognized key — but if that
+ * path is missing/unreadable at codex's own startup (a moment we don't
+ * control, in a separate process), codex exits immediately with a config
+ * error, no trust prompt, no TUI — which reads to a user as the session
+ * dying instantly. Since we already have the prompt's content in hand
+ * (we're the ones who generated the file), embedding it inline via
+ * `developer_instructions=<value>` instead removes that dependency
+ * entirely: nothing for codex to fail to (re)read. `-c` values parse as
+ * TOML, and TOML basic strings share JSON's escaping rules for control
+ * characters/quotes/backslashes, so `JSON.stringify` produces a valid TOML
+ * string literal here — confirmed with a real multiline prompt.
+ *
+ * If even this read fails (the file we just generated is somehow gone by
+ * the time we get here — a narrow race, but still no reason to crash the
+ * whole session over an optional prompt), fall back to launching without
+ * one rather than passing a broken reference that's guaranteed to kill the
+ * process on startup.
  */
 function buildConfigArgs(opts: LaunchOpts): string[] {
   const args = ["-c", "check_for_update_on_startup=false"];
   if (opts.systemPromptFile) {
-    args.push("-c", `model_instructions_file=${opts.systemPromptFile}`);
+    try {
+      const prompt = readFileSync(opts.systemPromptFile, "utf8");
+      args.push("-c", `developer_instructions=${JSON.stringify(prompt)}`);
+    } catch (err) {
+      console.error(
+        `[codex adapter] could not read systemPromptFile "${opts.systemPromptFile}" — launching without an injected system prompt: ${(err as Error).message}`,
+      );
+    }
   }
   return args;
 }

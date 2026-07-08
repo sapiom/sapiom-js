@@ -58,9 +58,13 @@ describe("codex tailer lifecycle wiring", () => {
   afterEach(async () => {
     // Status-change side effects (setAgentSessionId, spawn/exit) fire
     // persist() without awaiting it — flush before removing the temp dir so
-    // a lingering write can't race the cleanup.
+    // a lingering write can't race the cleanup. server.close() itself
+    // resolves once the HTTP server stops listening — independent of
+    // whether killAll()'s asynchronous pty-exit events have finished their
+    // own persist() writes — so flush a second time afterward too.
     await server?.sessionManager.flush();
     await server?.close();
+    await server?.sessionManager.flush();
     server = undefined;
     await rm(dir, { recursive: true, force: true });
   });
@@ -103,6 +107,17 @@ describe("codex tailer lifecycle wiring", () => {
     await vi.waitFor(() => {
       expect(server!.sessionManager.get(session.id)?.agentSessionId).toBe("agent-xyz");
     });
+
+    // kill() only sends the signal — it doesn't wait for the real bash
+    // process to actually terminate. Waiting for "exited" here (rather than
+    // leaving that to afterEach's close()) avoids a real race: close()
+    // resolves once the HTTP server stops listening, independent of whether
+    // this session's exit-triggered persist() has landed yet, which can
+    // still be mid-write when the test's temp dir gets removed.
+    server.sessionManager.kill(session.id);
+    await vi.waitFor(() => {
+      expect(server!.sessionManager.get(session.id)?.status).toBe("exited");
+    });
   });
 
   it("resumes by exact agentSessionId rather than cwd+sinceMs when one is already known", async () => {
@@ -126,12 +141,19 @@ describe("codex tailer lifecycle wiring", () => {
       lastActiveAt: new Date().toISOString(),
     });
 
-    await server.sessionManager.resume(historical.id);
+    const resumed = await server.sessionManager.resume(historical.id);
 
     await vi.waitFor(() => {
       expect(findRolloutFile).toHaveBeenCalledWith(
         expect.objectContaining({ cwd, agentSessionId: "agent-resumed" }),
       );
+    });
+
+    // See the first test's comment: wait for the real spawned process to
+    // actually exit rather than leaving that race to afterEach's close().
+    server.sessionManager.kill(resumed.id);
+    await vi.waitFor(() => {
+      expect(server!.sessionManager.get(resumed.id)?.status).toBe("exited");
     });
   });
 
@@ -168,6 +190,13 @@ describe("codex tailer lifecycle wiring", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(findRolloutFile).not.toHaveBeenCalled();
     expect(tailCodexRollout).not.toHaveBeenCalled();
+
+    // See the first test's comment: wait for the real spawned process to
+    // actually exit rather than leaving that race to afterEach's close().
+    server.sessionManager.kill(session.id);
+    await vi.waitFor(() => {
+      expect(server!.sessionManager.get(session.id)?.status).toBe("exited");
+    });
   });
 
   it("emits SessionEnd and removes the tailer when the session exits", async () => {
