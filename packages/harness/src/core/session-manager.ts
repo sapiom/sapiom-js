@@ -294,6 +294,14 @@ export class SessionManager {
     return true;
   }
 
+  /** Kills every currently-live pty. Call this on server shutdown — without
+   *  it, spawned agent processes (claude/codex) outlive the harness server
+   *  itself, e.g. after Ctrl+C, since closing the HTTP/WS server doesn't
+   *  touch unrelated child processes on its own. */
+  killAll(): void {
+    for (const id of [...this.ptys.keys()]) this.kill(id);
+  }
+
   write(id: string, data: string): boolean {
     const handle = this.ptys.get(id);
     if (!handle) return false;
