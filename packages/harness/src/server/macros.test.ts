@@ -85,7 +85,7 @@ describe("macros router", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(deps.openUrl).toHaveBeenCalledWith("https://app.sapiom.ai/agents/4821");
+    expect(deps.openUrl).toHaveBeenCalledWith("https://app.sapiom.ai/workflows/4821");
     expect(deps.injectInput).not.toHaveBeenCalled();
   });
 

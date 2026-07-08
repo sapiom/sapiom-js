@@ -129,7 +129,7 @@ export const MOCK_MACROS: MacroDef[] = [
     id: "open_prod",
     label: "Open prod",
     icon: "ExternalLink",
-    action: { kind: "open-url", url: "https://app.sapiom.ai/agents/{{workflow.definitionId}}" },
+    action: { kind: "open-url", url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}" },
     requiresWorkflow: true,
   },
   {

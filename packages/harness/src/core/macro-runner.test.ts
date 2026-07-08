@@ -51,11 +51,11 @@ describe("resolveMacro", () => {
       id: "open",
       label: "Open",
       icon: "ExternalLink",
-      action: { kind: "open-url", url: "https://app.sapiom.ai/agents/{{workflow.definitionId}}" },
+      action: { kind: "open-url", url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}" },
     };
     expect(resolveMacro(macro, baseCtx)).toEqual({
       kind: "open-url",
-      url: "https://app.sapiom.ai/agents/4821",
+      url: "https://app.sapiom.ai/workflows/4821",
     });
   });
 

@@ -48,7 +48,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     requiresWorkflow: true,
     action: {
       kind: "open-url",
-      url: "https://app.sapiom.ai/agents/{{workflow.definitionId}}",
+      url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}",
     },
   },
   {
