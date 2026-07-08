@@ -317,17 +317,28 @@ test("settings popover: identity, telemetry toggle, and it persists across close
   await expect(page.getByTestId("telemetry-toggle")).toHaveAttribute("aria-checked", "true");
 });
 
-test("visualize macro prompts for a subject before running", async ({ page }) => {
+test("visualize macro is one click — no subject dialog", async ({ page }) => {
   await expect(page.getByTestId("macro-visualize")).toBeEnabled();
 
   await page.getByTestId("macro-visualize").click();
-  await expect(page.locator(".modal-header")).toHaveText("Visualize");
-  const subjectInput = page.getByPlaceholder("What should the agent visualize?");
-  await expect(subjectInput).toBeVisible();
 
-  await subjectInput.fill("the leasing pipeline");
-  await page.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(subjectInput).toBeHidden();
+  // No modal, no free-text field — the click alone fires the macro.
+  await expect(page.locator(".modal-backdrop")).toHaveCount(0);
+  await expect(page.getByPlaceholder("What should the agent visualize?")).toHaveCount(0);
+
+  // MockApi.runMacro has no other observable effect (it's a no-op against real
+  // infra), so the test hook is what confirms the click actually fired — and
+  // fired with no subject, since that plumbing is gone.
+  await page.waitForFunction(
+    () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
+  );
+  const lastRun = await page.evaluate(
+    () =>
+      (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string; req: { subject?: string } } } })
+        .__HARNESS_TEST__.lastMacroRun,
+  );
+  expect(lastRun?.id).toBe("visualize");
+  expect(lastRun?.req.subject).toBeUndefined();
 });
 
 test.describe("actions live on workflows, not a separate rail", () => {
@@ -365,10 +376,27 @@ test.describe("actions live on workflows, not a separate rail", () => {
 
     await page.screenshot({ path: "web/e2e/screenshots/workflow-actions-header.png" });
   });
+
+  test("the header's refresh affordance reloads the canvas without discarding it", async ({ page }) => {
+    const refreshBtn = page.getByTestId("workflow-actions-header").getByTestId("canvas-refresh");
+    await expect(refreshBtn).toBeVisible();
+
+    await page.evaluate(() => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "canvas.reload",
+        harnessSessionId: "sess-boot",
+      });
+    });
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+
+    await refreshBtn.click();
+    await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", "/canvas/sess-boot/");
+  });
 });
 
-test("canvas empty state explains itself and offers a Visualize CTA", async ({ page }) => {
+test("canvas empty state explains itself and offers a one-click Visualize CTA", async ({ page }) => {
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+  await expect(page.locator(".canvas-empty")).toContainText(".sapiom/canvas/index.html");
 
   await page.screenshot({ path: "web/e2e/screenshots/canvas-empty-state.png" });
 
@@ -376,11 +404,18 @@ test("canvas empty state explains itself and offers a Visualize CTA", async ({ p
   await expect(cta).toBeVisible();
   await cta.click();
 
-  const subjectInput = page.getByTestId("canvas-visualize-subject");
-  await expect(subjectInput).toBeVisible();
-  await subjectInput.fill("the leasing pipeline");
-  await page.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(subjectInput).toBeHidden();
+  // One click and done — no dialog, no free-text field.
+  await expect(page.locator(".modal-backdrop")).toHaveCount(0);
+  await page.waitForFunction(
+    () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
+  );
+  const lastRun = await page.evaluate(
+    () =>
+      (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string; req: { subject?: string } } } })
+        .__HARNESS_TEST__.lastMacroRun,
+  );
+  expect(lastRun?.id).toBe("visualize");
+  expect(lastRun?.req.subject).toBeUndefined();
 });
 
 test("the canvas is a single controlled surface — no separate preview tab or port suggestions", async ({ page }) => {

@@ -4,7 +4,7 @@ import type { HarnessSession, MacroDef, WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
 import { MacroButtons } from "./MacroButtons";
-import { needsSubject } from "../lib/macro-gating";
+import { isVisualizeMacro } from "../lib/macro-gating";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 
 interface WorkflowsRailProps {
@@ -14,7 +14,7 @@ interface WorkflowsRailProps {
   selectedPath: string | null;
   macros: MacroDef[];
   onSelect: (path: string) => void;
-  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef, subject?: string) => void;
+  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef) => void;
   onConnect: (path: string) => Promise<void>;
 }
 
@@ -31,7 +31,7 @@ function WorkflowRow({
   activeSessionId: string | null;
   rowMacros: MacroDef[];
   onSelect: (path: string) => void;
-  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef, subject?: string) => void;
+  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef) => void;
 }): JSX.Element {
   return (
     <div className={"workflow-item" + (isSelected ? " is-selected" : "")} data-testid={`workflow-${workflow.name}`}>
@@ -45,7 +45,7 @@ function WorkflowRow({
           macros={rowMacros}
           workflow={workflow}
           activeSessionId={activeSessionId}
-          onRun={(macro, subject) => onRunMacro(workflow, macro, subject)}
+          onRun={(macro) => onRunMacro(workflow, macro)}
           size={13}
           testIdPrefix={`${workflow.name}-`}
         />
@@ -85,9 +85,10 @@ export function WorkflowsRail({
     }
   };
 
-  // Row actions are compact quick-actions, not the full macro set — anything
-  // needing a subject (Visualize) stays reserved for the bound-workflow header.
-  const rowMacros = macros.filter((macro) => !needsSubject(macro));
+  // Row actions are compact quick-actions — Visualize renders whatever's
+  // bound to the active session, so it stays reserved for the bound-workflow
+  // header rather than every row you hover.
+  const rowMacros = macros.filter((macro) => macro.requiresWorkflow && !isVisualizeMacro(macro));
 
   const { groups, ungrouped } = buildWorkspaceTree(workflows, sessions, activeSessionId);
 

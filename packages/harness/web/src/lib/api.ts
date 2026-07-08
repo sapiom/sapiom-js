@@ -249,8 +249,15 @@ class MockApi implements HarnessApi {
     return MOCK_MACROS;
   }
 
-  async runMacro(_id: string, _req: RunMacroRequest): Promise<void> {
+  async runMacro(id: string, req: RunMacroRequest): Promise<void> {
     await delay(200);
+    // Test-only escape hatch, mock mode only: MockApi has no other observable
+    // effect, so Playwright reads this back to assert what a click actually
+    // sent (e.g. that Visualize fires with no subject — it's one-click now).
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastMacroRun: { id, req } };
+    }
   }
 
   async getSettings(): Promise<HarnessSettings> {
