@@ -101,10 +101,11 @@ test("workflows rail lists the fixtures and selecting one drives macro gating", 
   await page.getByTestId("workflow-rfq").click();
   await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-selected/);
   await expect(openProd).toBeDisabled();
-  await expect(openProd).toHaveAttribute("data-tooltip", "Not deployed yet");
+  await expect(openProd).toHaveAttribute("aria-label", "Open prod: Not deployed yet");
 
-  await openProd.hover();
-  await page.screenshot({ path: "web/e2e/screenshots/action-rail-tooltip.png" });
+  await page.getByTestId("workflow-action-strip").hover();
+  await expect(page.locator(".strip-item-reason")).toHaveText("Not deployed yet");
+  await page.screenshot({ path: "web/e2e/screenshots/action-strip-expanded.png" });
 });
 
 test("inject macros are enabled once the boot session and a deployed workflow are active", async ({ page }) => {
@@ -376,6 +377,43 @@ test.describe("docked workflow action strip", () => {
     await page.screenshot({ path: "web/e2e/screenshots/app-shell-docked-strip.png", fullPage: true });
   });
 
+  test("the strip is icon-only at rest and expands to icon+label on hover", async ({ page }) => {
+    const strip = page.getByTestId("workflow-action-strip");
+
+    const restBox = await strip.boundingBox();
+    expect(restBox?.width ?? 0).toBeLessThan(30);
+    await expect(page.locator(".strip-item-text").first()).toHaveCSS("opacity", "0");
+
+    await strip.hover();
+    await expect(async () => {
+      const box = await strip.boundingBox();
+      expect(box?.width ?? 0).toBeGreaterThan(150);
+    }).toPass({ timeout: 1000 });
+    await expect(page.locator(".strip-item-label").first()).toBeVisible();
+    await expect(strip.getByText("Run local")).toBeVisible();
+    await expect(strip.getByText("Visualize")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/strip-hover-expanded.png", fullPage: true });
+  });
+
+  test("the strip also expands on keyboard focus, not just mouse hover", async ({ page }) => {
+    const strip = page.getByTestId("workflow-action-strip");
+    const restBox = await strip.boundingBox();
+    expect(restBox?.width ?? 0).toBeLessThan(30);
+
+    // Tabbing to an item inside (no mouse involved) should reveal labels via
+    // :focus-within, same as a hover would.
+    await page.getByTestId("macro-run_local").focus();
+    await expect(async () => {
+      const box = await strip.boundingBox();
+      expect(box?.width ?? 0).toBeGreaterThan(150);
+    }).toPass({ timeout: 1000 });
+    await expect(page.getByTestId("macro-run_local")).toBeFocused();
+    await expect(strip.getByText("Run local")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/strip-keyboard-focus-expanded.png", fullPage: true });
+  });
+
   test("the strip moves when selection changes, and the notch tracks the new row", async ({ page }) => {
     const rfqRow = page.getByTestId("workflow-rfq");
     await rfqRow.locator(".workflow-item-trigger").click();
@@ -419,6 +457,26 @@ test.describe("docked workflow action strip", () => {
     expect((btnBox?.x ?? 0) + (btnBox?.width ?? 0)).toBeLessThanOrEqual(900);
 
     await page.screenshot({ path: "web/e2e/screenshots/narrow-viewport-header.png", fullPage: true });
+  });
+
+  test("the header's deployed dot is pinned to a fixed slot regardless of name length", async ({ page }) => {
+    // "leasing" (short) and "onboarding-flow" (long) are both deployed in
+    // the fixtures specifically to exercise this — the dot used to trail
+    // right after the name, so it visibly jumped between the two.
+    const dot = page.locator(".workflow-actions-header .workflow-dot");
+    const leasingBox = await dot.boundingBox();
+    expect(leasingBox).not.toBeNull();
+
+    await page.getByTestId("workflow-onboarding-flow").locator(".workflow-item-trigger").click();
+    await expect(page.getByTestId("workflow-actions-header")).toContainText("onboarding-flow");
+    const onboardingBox = await dot.boundingBox();
+    expect(onboardingBox).not.toBeNull();
+
+    expect(onboardingBox?.x).toBeCloseTo(leasingBox?.x ?? 0, 0);
+
+    await dot.hover();
+    await expect(page.locator(".workflow-dot-pinned")).toHaveAttribute("data-tooltip", "Deployed to production");
+    await page.screenshot({ path: "web/e2e/screenshots/header-dot-pinned.png", fullPage: true });
   });
 
   test("the header's action is re-visualize, not a no-op iframe reload", async ({ page }) => {
