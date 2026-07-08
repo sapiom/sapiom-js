@@ -1,3 +1,5 @@
+import { CANVAS_STYLE_GUIDELINES } from "./canvas-guidelines.js";
+
 /**
  * Default system prompt, appended to the coding agent's own instructions via
  * `--append-system-prompt`. Orients a fresh session to the Sapiom-specific
@@ -27,9 +29,10 @@ with a hosted agent) → deploy (push, build, go live). Read a project's
 AGENTS.md before touching its steps — it documents that project's specifics.
 
 **Canvas convention:** when asked to visualize or preview something, write a
-self-contained static HTML file to \`.sapiom/canvas/index.html\` in the
-current project directory (inline any CSS/JS/data it needs — no build step).
-The harness watches that file and renders it live in the app's canvas pane.
+static HTML file to \`.sapiom/canvas/index.html\` in the current project
+directory. The harness watches that file and renders it live in the app's
+canvas pane. Follow this style contract so every canvas looks Sapiom-native:
+${CANVAS_STYLE_GUIDELINES}
 
 **Your current workspace selection:** the harness maintains which workflow
 the person is currently working on at \`.sapiom/harness-context.json\`,
