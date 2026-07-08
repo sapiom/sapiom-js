@@ -48,6 +48,9 @@ export function SessionBar({
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
   const runningSessions = sessions.filter((session) => session.status !== "exited");
+  // Reachable here even though they're not "running" — so a session that died stays
+  // selectable (to inspect/resume/close it) instead of only being escapable.
+  const exitedSessions = sessions.filter((session) => session.status === "exited");
 
   const toggle = (): void => {
     const next = !open;
@@ -85,6 +88,27 @@ export function SessionBar({
                 <span className="session-item-cwd">{session.cwd}</span>
               </button>
             ))}
+
+            {exitedSessions.length > 0 && (
+              <>
+                <div className="session-dropdown-section">Exited</div>
+                {exitedSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    data-testid={`exited-session-${session.id}`}
+                    className={"session-dropdown-item" + (session.id === activeSessionId ? " is-selected" : "")}
+                    onClick={() => {
+                      onSelectSession(session.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="session-dot" data-status={session.status} />
+                    <span className="session-item-title">{session.title}</span>
+                    <span className="session-item-cwd">{session.cwd}</span>
+                  </button>
+                ))}
+              </>
+            )}
 
             <div className="session-dropdown-section">History</div>
             {historyLoading && <div className="session-dropdown-empty">Loading…</div>}

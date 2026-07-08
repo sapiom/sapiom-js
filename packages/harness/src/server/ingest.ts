@@ -52,7 +52,17 @@ export interface IngestDeps {
   seqCounter?: SeqCounter;
 }
 
-interface IngestRequestBody {
+/**
+ * Exported so an in-process, non-HTTP event source (currently: the Codex
+ * transcript tailer, which has no hook script to POST here) can feed the
+ * exact same normalize -> transcript-enrich -> store -> batcher pipeline
+ * that a real hook POST goes through, without a needless HTTP round-trip
+ * back into this same server. Field names deliberately match the HTTP body
+ * shape (hookEvent/harnessSessionId/payload) so callers can construct one
+ * directly from whatever `{hookEvent, payload}` pair their event source
+ * already produces.
+ */
+export interface IngestRequestBody {
   hookEvent?: string;
   receivedAt?: string;
   harnessSessionId?: string;
@@ -64,7 +74,7 @@ function bearerToken(header: string | undefined): string | null {
   return header.slice("Bearer ".length);
 }
 
-async function processIngest(
+export async function processIngest(
   body: IngestRequestBody,
   deps: IngestDeps,
   seqCounter: SeqCounter,
