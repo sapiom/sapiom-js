@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import { createMacrosRouter, type MacrosRouterDeps } from "./macros.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
+import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
 import type { WorkflowInfo } from "../shared/types.js";
 
 let server: Server;
@@ -25,6 +26,7 @@ function makeDeps(overrides: Partial<MacrosRouterDeps> = {}): MacrosRouterDeps {
     injectInput: vi.fn().mockResolvedValue(undefined),
     openUrl: vi.fn().mockResolvedValue(undefined),
     renderCanvas: vi.fn().mockResolvedValue(undefined),
+    runBackgroundTask: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -212,7 +214,7 @@ describe("macros router", () => {
     expect(deps.injectInput).not.toHaveBeenCalled();
   });
 
-  it("ai-visualize still injects the canvas-kit hand-authoring prompt (the pre-deterministic-render fallback)", async () => {
+  it("ai-visualize runs as a background task with the canvas-kit prompt — never touches the session's pty", async () => {
     const deps = makeDeps();
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/ai-visualize/run`, {
@@ -221,11 +223,50 @@ describe("macros router", () => {
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
     });
     expect(res.status).toBe(200);
-    const [, text] = (deps.injectInput as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string, boolean];
-    expect(text).toContain("/Users/demo/acme-app/.sapiom/canvas/index.html"); // {{canvas.path}} substituted
-    expect(text).toContain("Clone .sapiom/canvas/_template.html to .sapiom/canvas/index.html");
-    expect(text).toContain("canvas-patterns");
+    const [sessionId, macro, prompt] = (deps.runBackgroundTask as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { id: string },
+      string,
+    ];
+    expect(sessionId).toBe("sess-1");
+    expect(macro.id).toBe("ai-visualize");
+    expect(prompt).toContain("/Users/demo/acme-app/.sapiom/canvas/index.html"); // {{canvas.path}} substituted
+    // The Write tool refuses blind overwrites of unread files — the prompt
+    // must tell the agent to read the existing index.html before writing it.
+    expect(prompt).toMatch(/read BOTH \.sapiom\/canvas\/_template\.html and the existing \.sapiom\/canvas\/index\.html/);
+    expect(prompt).toContain("canvas-patterns");
     expect(deps.renderCanvas).not.toHaveBeenCalled();
+    expect(deps.injectInput).not.toHaveBeenCalled();
+  });
+
+  it("400s a background macro on a harness with no headless mode (TaskNotSupportedError)", async () => {
+    const deps = makeDeps({
+      runBackgroundTask: vi.fn().mockRejectedValue(new TaskNotSupportedError("codex", "AI Visualize")),
+    });
+    await start(deps);
+    const res = await fetch(`${baseUrl}/api/macros/ai-visualize/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/don't support/i);
+  });
+
+  it("409s a background macro that's already running for the session (TaskAlreadyRunningError)", async () => {
+    const deps = makeDeps({
+      runBackgroundTask: vi.fn().mockRejectedValue(new TaskAlreadyRunningError("AI Visualize")),
+    });
+    await start(deps);
+    const res = await fetch(`${baseUrl}/api/macros/ai-visualize/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/already running/i);
   });
 
   it("409s with a UI-visible reason when the session isn't ready yet (SessionNotReadyError) — never silently swallows the macro", async () => {

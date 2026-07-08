@@ -217,6 +217,7 @@ export const App = (): JSX.Element => {
           boundWorkflow={boundWorkflow}
           activeSessionId={harness.activeSessionId}
           macros={state.macros}
+          tasks={harness.tasks}
           onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
         />
       </div>

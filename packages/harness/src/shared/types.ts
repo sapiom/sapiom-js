@@ -143,6 +143,9 @@ export interface LaunchOpts {
   mcpConfigFile?: string;
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
+  /** Only consulted by `launchTask` — the one-shot prompt a headless
+   *  background task runs, then exits. Unused by `launch`/`resume`. */
+  prompt?: string;
 }
 
 /**
@@ -170,6 +173,55 @@ export interface HarnessAdapter {
    * scrollback heuristic it doesn't need.
    */
   detectBlockingPrompt?(scrollback: string): boolean;
+  /**
+   * Builds a one-shot, headless invocation for `TaskManager.run()`: executes
+   * `opts.prompt` non-interactively and exits on its own when the turn
+   * completes — no pty write to submit it and no trust dialog to wait out
+   * (see ClaudeCodeAdapter's implementation, verified against a real
+   * `claude` binary: `-p` mode fires the same hooks a real session does and
+   * skips the trust prompt entirely). Stdout is expected to be line-oriented
+   * JSON progress events (see core/task-stream.ts). Optional: a harness with
+   * no non-interactive mode simply doesn't support background tasks yet —
+   * TaskManager throws a clear error rather than silently misusing `launch`.
+   */
+  launchTask?(opts: LaunchOpts): SpawnSpec;
+}
+
+// ---------------------------------------------------------------------------
+// Background tasks (headless one-shot agent runs — see core/task-manager.ts)
+// ---------------------------------------------------------------------------
+
+export type BackgroundTaskStatus = "running" | "completed" | "failed";
+
+/**
+ * One headless agent run, spawned by a macro marked `execution: "background"`
+ * (today: ai-visualize). Deliberately NOT a HarnessSession: tasks never
+ * appear in the session registry (so no tab, no resume, no ghost-record
+ * reconciliation to worry about) and live only in TaskManager's memory —
+ * the pty-less process exits on its own when its single turn completes.
+ */
+export interface BackgroundTask {
+  /** Our id (uuid). Also used as the task's SAPIOM_HARNESS_SESSION_ID and
+   *  its generated-config dir name (covered by the same retention sweep as
+   *  real sessions — see core/inject/retention.ts). */
+  id: string;
+  /** The macro that spawned it (retry re-runs this id). */
+  macroId: string;
+  /** Display label, e.g. "AI Visualize". */
+  label: string;
+  /** The interactive session the macro was triggered from — the canvas pane
+   *  showing that session renders this task's live status. */
+  harnessSessionId: string;
+  cwd: string;
+  status: BackgroundTaskStatus;
+  startedAt: string;
+  endedAt: string | null;
+  exitCode: number | null;
+  /** Rolling tail of compact human-readable progress lines derived from the
+   *  task's stream-json stdout (see core/task-stream.ts), oldest first. */
+  statusLines: string[];
+  /** On failure: the result error / stderr tail worth showing a user. */
+  errorTail: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +249,13 @@ export type BusMessage =
   | { type: "canvas.reload"; harnessSessionId: string }
   | { type: "port.detected"; harnessSessionId: string; port: number; url: string }
   | { type: "workflows.changed" }
+  /**
+   * Full snapshot of one background task, re-broadcast on every change
+   * (spawn, each new status line, completion/failure). Tasks are rare and
+   * their records small, so snapshot-per-change beats a separate delta
+   * protocol the SPA would have to stitch together after a mid-run mount.
+   */
+  | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled
    * server-side to at most once per session per ~2s (see SessionManager's
@@ -353,6 +412,11 @@ export interface AppState {
    *  without running doctor (tests, mocks); the SPA should treat a missing
    *  value as "assume claude-code is available" until it's wired up. */
   availableHarnesses?: HarnessKind[];
+  /** Background tasks known to this server boot (running + recent), so a
+   *  page load mid-run shows the canvas activity state immediately instead
+   *  of waiting for the next task.status frame. Optional: omitted by callers
+   *  without a TaskManager (tests, mocks). */
+  tasks?: BackgroundTask[];
 }
 
 export interface HarnessSettings {
@@ -424,6 +488,16 @@ export interface MacroDef {
     | { kind: "render-canvas" };
   /** Macro requires a selected workflow to be enabled. */
   requiresWorkflow?: boolean;
+  /**
+   * Where an `"inject"` macro's resolved text runs. Default (omitted /
+   * `"inject"`): written into the user's own active session pty, visible in
+   * their terminal and occupying their thread — same as always.
+   * `"background"`: run headless in a one-shot task process via
+   * TaskManager (the user's session is never touched), so a long-running
+   * macro like ai-visualize can't interrupt whatever the user was doing.
+   * Ignored for non-"inject" actions.
+   */
+  execution?: "inject" | "background";
 }
 
 export interface RunMacroRequest {

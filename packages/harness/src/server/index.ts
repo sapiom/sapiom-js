@@ -23,6 +23,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
+import { TaskManager } from "../core/task-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
 import { WorkflowRegistry, createWorkflowsRouter } from "../core/workflow-registry.js";
@@ -280,6 +281,28 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const sessionSweepTimer = setInterval(() => sessionManager.sweepDeadSessions(), SESSION_LIVENESS_SWEEP_MS);
   sessionSweepTimer.unref?.();
 
+  // Background tasks ("background" macros, ai-visualize today): headless
+  // one-shot agent runs that never touch a user's interactive session. They
+  // reuse the exact same per-id config generation as sessions — a task's
+  // generated/<taskId> dir gets the same exit-time removal below, and (via
+  // sweepGeneratedDirs above; a task id is never a live session id, so the
+  // liveness guard passes it through) the same age-gated crash sweep.
+  const taskManager = new TaskManager({
+    adapters,
+    ingestUrl: `http://${host}:${options.port}`,
+    ingestToken: options.bootToken,
+    collectorUrl: options.collectorUrl,
+    buildLaunchOpts,
+    onCleanup: (taskId) => {
+      void removeGeneratedSessionDir(taskId, { generatedRoot }).catch((err: unknown) => {
+        console.error("[harness] task generated-dir cleanup failed:", err);
+      });
+    },
+  });
+  taskManager.onStatusChange((task) => {
+    bus.publish({ type: "task.status", task });
+  });
+
   // One boot-time sweep for generated dirs the exit-time cleanup below never
   // reached (crashes, force-kills, accumulation from before retention
   // existed). Age-gated (GENERATED_SWEEP_MAX_AGE_MS) and skips live
@@ -427,6 +450,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       },
       launchDir,
       availableHarnesses: options.availableHarnesses,
+      listTasks: () => taskManager.list(),
     }),
   );
   app.use(
@@ -452,6 +476,21 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         // Two-phase write: a combined text+\r lands in Claude Code as a
         // bracketed paste and never submits.
         await sessionManager.submitInput(harnessSessionId, text, submit);
+      },
+      runBackgroundTask: async (harnessSessionId, macro, prompt) => {
+        // The router already 404'd on an unknown session (getSessionCwd),
+        // so the session is present here; its harness kind decides whether
+        // a headless run is even possible (TaskNotSupportedError → 400).
+        const session = sessionManager.get(harnessSessionId);
+        if (!session) throw new Error(`Unknown session '${harnessSessionId}'`);
+        await taskManager.run({
+          macroId: macro.id,
+          label: macro.label,
+          harnessSessionId,
+          harness: session.harness,
+          cwd: session.cwd,
+          prompt,
+        });
       },
       openUrl: async (url) => {
         await open(url);
@@ -671,6 +710,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         // the harness server itself (e.g. after Ctrl+C or in a script that
         // expects the process to actually exit once close() resolves).
         sessionManager.killAll();
+        taskManager.killAll();
         void batcher.close();
         terminalWss.close();
         eventsWss.close();

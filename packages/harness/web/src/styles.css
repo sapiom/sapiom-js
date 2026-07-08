@@ -1296,6 +1296,93 @@ input {
   margin: 4px 0;
 }
 
+/* Background-task states (see CanvasPane) ------------------------------- */
+
+.canvas-task-activity,
+.canvas-task-failed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 24px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.canvas-task-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Same accent dot as .session-tab-busy (and its keyframes) — one visual
+   language for "an agent is producing output right now". */
+.canvas-task-spinner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--accent);
+  animation: session-tab-busy-pulse 1.2s ease-in-out infinite;
+}
+
+.canvas-task-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: 340px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+  color: var(--text-faint);
+}
+
+.canvas-task-lines li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The newest line is what's happening right now — everything above is history. */
+.canvas-task-lines li:last-child {
+  color: var(--text-dim);
+}
+
+.canvas-task-error {
+  max-width: 340px;
+  max-height: 160px;
+  width: 100%;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-faint);
+  background: var(--bg-inset, rgba(128, 128, 128, 0.08));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.canvas-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* Shared buttons ------------------------------------------------------- */
 
 /* Matches Button variant="outline": persistent border + shadow-xs; hover

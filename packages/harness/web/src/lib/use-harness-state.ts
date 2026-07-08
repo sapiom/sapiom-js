@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AppState,
+  BackgroundTask,
   BusMessage,
   CreateSessionRequest,
   HarnessSession,
@@ -57,6 +58,10 @@ export interface HarnessStateHook {
   /** Session ids with terminal output in roughly the last `BUSY_WINDOW_MS` —
    *  drives each session tab's busy pulse (see `session.activity` BusMessage). */
   busySessionIds: Set<string>;
+  /** Background tasks (headless macro runs) — seeded from AppState.tasks,
+   *  then kept fresh by `task.status` frames. Drives the canvas pane's
+   *  activity/failure states. */
+  tasks: BackgroundTask[];
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -72,6 +77,7 @@ export function useHarnessState(): HarnessStateHook {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
+  const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Timers are keyed per-session and outlive individual renders — clear them
@@ -92,6 +98,7 @@ export function useHarnessState(): HarnessStateHook {
         if (cancelled) return;
         setState(appState);
         setSettings(harnessSettings);
+        if (appState.tasks) setTasks(appState.tasks);
         const running = appState.sessions.find((session) => session.status !== "exited");
         if (running) setActiveSessionId(running.id);
         if (appState.workflows[0]) setSelectedWorkflowPath(appState.workflows[0].path);
@@ -149,6 +156,14 @@ export function useHarnessState(): HarnessStateHook {
         }
       } else if (message.type === "workflows.changed") {
         void refreshWorkflows();
+      } else if (message.type === "task.status") {
+        // Each frame is a full snapshot of one task — upsert by id.
+        setTasks((prev) => {
+          const exists = prev.some((task) => task.id === message.task.id);
+          return exists
+            ? prev.map((task) => (task.id === message.task.id ? message.task : task))
+            : [...prev, message.task];
+        });
       } else if (message.type === "session.activity") {
         const id = message.harnessSessionId;
         setBusySessionIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -308,5 +323,6 @@ export function useHarnessState(): HarnessStateHook {
     toast,
     dismissToast,
     busySessionIds,
+    tasks,
   };
 }
