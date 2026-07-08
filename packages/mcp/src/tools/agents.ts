@@ -1,5 +1,5 @@
 /**
- * Orchestration authoring tools. Thin wrappers over @sapiom/orchestration-core.
+ * Agent authoring tools. Thin wrappers over @sapiom/agent-core.
  * Local tools (scaffold / check / run_local) need no network; networked tools
  * (link / deploy / run / inspect / signal) build a client from the cached
  * credential and the environment's API host.
@@ -28,7 +28,7 @@ import {
   link,
   listExecutions,
   listSchedules,
-  OrchestrationError,
+  AgentOperationError,
   parseStubFile,
   previewCron,
   requireConfig,
@@ -41,7 +41,7 @@ import {
   type ScheduleDetail,
   type SchedulePolicy,
   type StubFile,
-} from "@sapiom/orchestration-core";
+} from "@sapiom/agent-core";
 import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
 
 type ToolResult = {
@@ -95,7 +95,7 @@ function sanitize(value: unknown, seen = new WeakSet<object>()): unknown {
 
 function fail(err: unknown): ToolResult {
   const structured =
-    err instanceof OrchestrationError
+    err instanceof AgentOperationError
       ? err.toStructured()
       : {
           code: "UNEXPECTED",
@@ -129,12 +129,12 @@ function coerceJson(value: unknown): unknown {
 const nodeRequire = createRequire(import.meta.url);
 
 /**
- * Locate the bundled templates directory of @sapiom/orchestration-core. This
+ * Locate the bundled templates directory of @sapiom/agent-core. This
  * ESM server has no `__dirname`, so the templates dir is resolved from the
  * package's entry and passed to `scaffold` explicitly.
  */
 function coreTemplatesDir(): string {
-  const entry = nodeRequire.resolve("@sapiom/orchestration-core");
+  const entry = nodeRequire.resolve("@sapiom/agent-core");
   return path.resolve(path.dirname(entry), "..", "..", "templates");
 }
 
@@ -147,7 +147,7 @@ async function gatewayClient(
 }
 
 const NOT_AUTHED = fail(
-  new OrchestrationError({
+  new AgentOperationError({
     code: "NOT_AUTHENTICATED",
     message: "Not authenticated.",
     hint: "Use the sapiom_authenticate tool first.",
@@ -164,7 +164,7 @@ function scheduleHint(schedule: ScheduleDetail): string | undefined {
   if (failed.length > 0) {
     const latest = failed[0];
     const where = latest.executionId
-      ? ` — inspect execution ${latest.executionId} with sapiom_dev_orchestrations_inspect`
+      ? ` — inspect execution ${latest.executionId} with sapiom_dev_agents_inspect`
       : "";
     return `${failed.length} of the last ${schedule.recentFires.length} fires failed${where}.`;
   }
@@ -178,8 +178,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   // ── Local tools (no network) ──────────────────────────────────────────────
 
   server.tool(
-    "sapiom_dev_orchestrations_scaffold",
-    "Scaffold a new Sapiom orchestration project into <dir>. Produces an npm-install-ready TypeScript project with a starter orchestration in index.ts. After scaffolding, the author writes step definitions and uses sapiom_dev_orchestrations_run_local to test them.",
+    "sapiom_dev_agents_scaffold",
+    "Scaffold a new Sapiom agent project into <dir>. Produces an npm-install-ready TypeScript project with a starter agent in index.ts. After scaffolding, the author writes step definitions and uses sapiom_dev_agents_run_local to test them.",
     {
       dir: z
         .string()
@@ -210,8 +210,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_check",
-    "Validate an orchestration locally: bundle index.ts, derive the manifest, and check the step graph. Offline and instant. Returns the orchestration name, step count, the manifest (which contains the full step graph for visualization), and any graph warnings.",
+    "sapiom_dev_agents_check",
+    "Validate an agent locally: bundle index.ts, derive the manifest, and check the step graph. Offline and instant. Returns the agent name, step count, the manifest (which contains the full step graph for visualization), and any graph warnings.",
     {
       dir: z
         .string()
@@ -230,9 +230,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_run_local",
+    "sapiom_dev_agents_run_local",
     [
-      "Execute an orchestration entirely on the local machine, running the author's actual step code with every ctx.sapiom.* capability call resolved from stubs (no real capability calls, no cost, instant).",
+      "Execute an agent entirely on the local machine, running the author's actual step code with every ctx.sapiom.* capability call resolved from stubs (no real capability calls, no cost, instant).",
       "Returns { outcome, output, steps[], unusedStubs[], stubWarnings[] }. outcome is 'completed' | 'failed' | 'paused' | 'running'. A paused dispatch (e.g. agent.coding.launch) is auto-resumed locally with its stub result, so the happy path runs end-to-end.",
       "Returns `unusedStubs` (supplied stub keys that matched no call — a typo or wrong path form) and `stubWarnings` (a stub key matched but its value was the wrong shape for the capability). Check both: a green run with a non-empty unusedStubs/stubWarnings usually means your stub didn't take effect.",
       "Stub shape: { version: 1, steps: { <stepName>: { <methodPath>: <response> } } }. The response is the value that call returns verbatim — e.g. `repositories.list` takes the array list() should return ([{ slug, cloneUrl }]), not a wrapped/sequence form. For a dispatched run, stub `agent.coding.run` (or `agent.coding.launch`) in the step that launches it; that value becomes both the run result and the payload the paused step resumes with — set status:'failed' there to exercise the failure branch.",
@@ -282,8 +282,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   // ── Networked tools (require authentication) ───────────────────────────────
 
   server.tool(
-    "sapiom_dev_orchestrations_link",
-    "Resolve a hosted orchestration by name (or create it with create:true) and cache its id in the project's sapiom.json. Run this before deploy.",
+    "sapiom_dev_agents_link",
+    "Resolve a hosted agent by name (or create it with create:true) and cache its id in the project's sapiom.json. Run this before deploy.",
     {
       dir: z
         .string()
@@ -295,21 +295,21 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .string()
         .optional()
         .describe(
-          "Orchestration name (matches defineOrchestration({ name })). Defaults to the orchestration's name read from index.ts.",
+          "Agent name (matches defineAgent({ name })). Defaults to the agent's name read from index.ts.",
         ),
       create: z
         .boolean()
         .optional()
-        .describe("Create the orchestration if it does not exist."),
+        .describe("Create the agent if it does not exist."),
     },
     async ({ dir, name, create }) => {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
         const projectDir = dir ?? process.cwd();
-        // Default the link name to the orchestration's own name (from index.ts)
+        // Default the link name to the agent's own name (from index.ts)
         // so the link matches what deploy ships — the directory name can drift
-        // from defineOrchestration({ name }).
+        // from defineAgent({ name }).
         let linkName = name;
         if (!linkName) {
           try {
@@ -320,10 +320,10 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         }
         if (!linkName) {
           return fail(
-            new OrchestrationError({
+            new AgentOperationError({
               code: "NAME_REQUIRED",
-              message: "No orchestration name to link.",
-              hint: "Pass name, or ensure index.ts bundles (run check) so the name can be read from defineOrchestration({ name }).",
+              message: "No agent name to link.",
+              hint: "Pass name, or ensure index.ts bundles (run check) so the name can be read from defineAgent({ name }).",
             }),
           );
         }
@@ -340,10 +340,10 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_clone",
+    "sapiom_dev_agents_clone",
     [
       "Materialize a Sapiom workflow template as a local project — the 'use this template' handoff. Given a template id (from the gallery) it forks the template into a repo you own; given an existing fork id it re-clones that fork. Either way it mints a short-lived, repo-scoped clone credential, git-clones the repo into <dir>, and writes sapiom.json recording the fork.",
-      "After cloning: read the project's AGENTS.md, then run sapiom_dev_orchestrations_link (associate/create the tenant definition) → _deploy (creates the engine definition) → _run → _inspect. The clone appears under 'my workflows' in the dashboard immediately; the build shows once you deploy.",
+      "After cloning: read the project's AGENTS.md, then run sapiom_dev_agents_link (associate/create the tenant definition) → _deploy (creates the engine definition) → _run → _inspect. The clone appears under 'my workflows' in the dashboard immediately; the build shows once you deploy.",
       "Pass exactly one of templateId or forkId. The clone credential is single-repo, read-only, and ~1h-lived — it is used for the clone and discarded (never stored in sapiom.json).",
     ].join("\n"),
     {
@@ -376,7 +376,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         );
         return ok({
           ...result,
-          hint: `Cloned into ${result.targetDir}. Next: read its AGENTS.md, then sapiom_dev_orchestrations_link → _deploy → _run → _inspect.`,
+          hint: `Cloned into ${result.targetDir}. Next: read its AGENTS.md, then sapiom_dev_agents_link → _deploy → _run → _inspect.`,
         });
       } catch (err) {
         return fail(err);
@@ -385,8 +385,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_deploy",
-    "Deploy the linked orchestration: push the current git commit, trigger a build, and wait for it to finish. The project must be linked (sapiom.json) and a git repo with at least one commit.",
+    "sapiom_dev_agents_deploy",
+    "Deploy the linked agent: push the current git commit, trigger a build, and wait for it to finish. The project must be linked (sapiom.json) and a git repo with at least one commit.",
     {
       dir: z
         .string()
@@ -418,8 +418,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_run",
-    "Start a real (cloud) execution of the linked orchestration. Use sapiom_dev_orchestrations_inspect to follow it.",
+    "sapiom_dev_agents_run",
+    "Start a real (cloud) execution of the linked agent. Use sapiom_dev_agents_inspect to follow it.",
     {
       dir: z
         .string()
@@ -454,7 +454,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_inspect",
+    "sapiom_dev_agents_inspect",
     "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local.\n\nReads are a fresh point-in-time snapshot. To wait for a still-running execution to finish, set wait:true (the tool polls until it settles or the wait window elapses) — do NOT sleep-and-poll this tool yourself. If a wait returns waiting:true, just call inspect again with wait:true.",
     {
       dir: z
@@ -506,7 +506,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
               reason === "timeout"
                 ? "Still running after the wait window — call inspect again with wait:true to keep waiting."
                 : reason === "needs-signal"
-                  ? `Paused on signal '${execution.pausedSignalName ?? "?"}' — deliver it with sapiom_dev_orchestrations_signal to resume.`
+                  ? `Paused on signal '${execution.pausedSignalName ?? "?"}' — deliver it with sapiom_dev_agents_signal to resume.`
                   : undefined;
             return ok({
               execution,
@@ -531,7 +531,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_signal",
+    "sapiom_dev_agents_signal",
     "Resume a paused cloud execution by delivering a named signal (matched by name + correlationId).",
     {
       executionId: z.string().describe("The paused execution."),
@@ -558,12 +558,12 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   // ── Schedules (triggers) ──────────────────────────────────────────────────
 
   server.tool(
-    "sapiom_dev_orchestrations_schedule",
-    "Create a schedule for a deployed orchestration: a recurring cron schedule (kind 'schedule_cron' + cron + timezone) or a one-off delayed run (kind 'schedule_once' + at). Returns the schedule with its next fire time. Tip: validate a cron with sapiom_dev_orchestrations_cron_preview first.",
+    "sapiom_dev_agents_schedule",
+    "Create a schedule for a deployed agent: a recurring cron schedule (kind 'schedule_cron' + cron + timezone) or a one-off delayed run (kind 'schedule_once' + at). Returns the schedule with its next fire time. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
     {
       definition: z
         .string()
-        .describe("The orchestration's tenant-unique slug (the handle it was deployed under)."),
+        .describe("The agent's tenant-unique slug (the handle it was deployed under)."),
       kind: z
         .enum(["schedule_cron", "schedule_once"])
         .describe("'schedule_cron' = recurring; 'schedule_once' = a single delayed run."),
@@ -614,14 +614,14 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_schedule_inspect",
-    "Inspect schedules. With scheduleId: returns one schedule's config, next fire time, and recent fire history (each with the run's executionId) — use this to debug a misbehaving schedule, then inspect a failed run's executionId with sapiom_dev_orchestrations_inspect. With definition (slug) and no scheduleId: lists that orchestration's schedules.",
+    "sapiom_dev_agents_schedule_inspect",
+    "Inspect schedules. With scheduleId: returns one schedule's config, next fire time, and recent fire history (each with the run's executionId) — use this to debug a misbehaving schedule, then inspect a failed run's executionId with sapiom_dev_agents_inspect. With definition (slug) and no scheduleId: lists that agent's schedules.",
     {
       scheduleId: z.string().optional().describe("Inspect one schedule (detail + recent fires + a health hint)."),
       definition: z
         .string()
         .optional()
-        .describe("List schedules for this orchestration slug (used when scheduleId is omitted)."),
+        .describe("List schedules for this agent slug (used when scheduleId is omitted)."),
       status: z
         .enum(["active", "paused", "completed", "disabled"])
         .optional()
@@ -640,9 +640,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           return ok(await listSchedules({ definition, status }, client));
         }
         return fail(
-          new OrchestrationError({
+          new AgentOperationError({
             code: "BAD_INPUT",
-            message: "Provide scheduleId (to inspect one) or definition (to list an orchestration's schedules).",
+            message: "Provide scheduleId (to inspect one) or definition (to list an agent's schedules).",
           }),
         );
       } catch (err) {
@@ -652,7 +652,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_schedule_cancel",
+    "sapiom_dev_agents_schedule_cancel",
     "Cancel a schedule by id. Stops all future fires (a recurring schedule won't re-arm; a pending one-off won't run). Irreversible — recreate to reschedule.",
     {
       scheduleId: z.string().describe("The schedule to cancel."),
@@ -669,8 +669,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   );
 
   server.tool(
-    "sapiom_dev_orchestrations_cron_preview",
-    "Validate a cron expression and preview its next occurrences, creating nothing. Use before sapiom_dev_orchestrations_schedule to confirm a cron + timezone fire when you expect (cron syntax is easy to get subtly wrong).",
+    "sapiom_dev_agents_cron_preview",
+    "Validate a cron expression and preview its next occurrences, creating nothing. Use before sapiom_dev_agents_schedule to confirm a cron + timezone fire when you expect (cron syntax is easy to get subtly wrong).",
     {
       cron: z.string().describe("Cron expression to validate, e.g. '0 9 * * 1-5'."),
       timezone: z.string().optional().describe("IANA timezone (default UTC)."),

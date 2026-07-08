@@ -1,6 +1,6 @@
 /**
  * `sapiom.json` — committed, team-shared project identity (which server-side
- * orchestration this repo deploys to). The server is the source of truth; this
+ * agent this repo deploys to). The server is the source of truth; this
  * file is a re-resolvable cache that `link` can rewrite. The API key is never
  * stored here — it comes from the environment or the caller.
  */
@@ -18,11 +18,11 @@ export interface SapiomConfig {
    * `run` require it (see {@link requireConfig}).
    */
   definitionId?: string;
-  /** Orchestration name, cached by `link` (matches `defineOrchestration({ name })`). */
+  /** Agent name, cached by `link` (matches `defineAgent({ name })`). */
   name?: string;
   host?: string;
   /**
-   * Template-clone provenance (SAP-1357). Written by `sapiom_dev_orchestrations_clone`
+   * Template-clone provenance (SAP-1357). Written by `sapiom_dev_agents_clone`
    * when a fork is materialized locally so the project records where it came from
    * before it is linked/deployed. Never carries a credential.
    */
@@ -53,8 +53,8 @@ export function requireConfig(dir: string): LinkedSapiomConfig {
   if (!cfg?.definitionId) {
     throw new AgentOperationError({
       code: 'NOT_LINKED',
-      message: 'This project is not linked to a Sapiom orchestration.',
-      hint: 'Run: sapiom orchestrations link <name>',
+      message: 'This project is not linked to a Sapiom agent.',
+      hint: 'Run: sapiom agents link <name>',
     });
   }
   return cfg as LinkedSapiomConfig;

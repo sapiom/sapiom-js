@@ -132,7 +132,7 @@ describe("watchExecution", () => {
     expect(aborted).toBe(true);
   });
 
-  it("throws OrchestrationError on a failed handshake", async () => {
+  it("throws AgentOperationError on a failed handshake", async () => {
     mockSseFetch([], 404);
     await expect(
       collect(watchExecution({ executionId: "missing" }, client())),

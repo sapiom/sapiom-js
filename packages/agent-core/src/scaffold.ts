@@ -1,5 +1,5 @@
 /**
- * scaffold — initialize a new orchestration project from a bundled template.
+ * scaffold — initialize a new agent project from a bundled template.
  *
  * Pure local operation: no network, no process.env. All inputs are passed
  * explicitly; the caller is responsible for output rendering.
@@ -76,7 +76,7 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
 /** Offline fallbacks — bump alongside notable releases. */
 const VERSION_FALLBACK = {
-  orchestration: "0.1.1",
+  agent: "0.1.1",
   tools: "0.1.1",
 };
 
@@ -84,7 +84,7 @@ const VERSION_FALLBACK = {
 const ZOD_VERSION = "4.1.12";
 
 export interface ResolvedVersions {
-  orchestration: string;
+  agent: string;
   tools: string;
   zod: string;
 }
@@ -129,12 +129,12 @@ async function latestNpmVersion(pkg: string): Promise<string | null> {
  * constants if the registry is unreachable.
  */
 export async function resolveVersions(): Promise<ResolvedVersions> {
-  const [orchestration, tools] = await Promise.all([
+  const [agent, tools] = await Promise.all([
     latestNpmVersion("@sapiom/agent"),
     latestNpmVersion("@sapiom/tools"),
   ]);
   return {
-    orchestration: orchestration ?? VERSION_FALLBACK.orchestration,
+    agent: agent ?? VERSION_FALLBACK.agent,
     tools: tools ?? VERSION_FALLBACK.tools,
     zod: ZOD_VERSION,
   };
@@ -281,7 +281,7 @@ export interface ScaffoldResult {
 }
 
 /**
- * Initialize a new orchestration project from a bundled template.
+ * Initialize a new agent project from a bundled template.
  *
  * Throws `AgentOperationError` (code `DIR_NOT_EMPTY` | `UNKNOWN_TEMPLATE`) on
  * precondition failures; all other errors propagate as-is.
@@ -304,7 +304,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
   mkdirSync(targetDir, { recursive: true });
   copyTemplate(templateDir, targetDir, {
     __PROJECT_NAME__: projectName,
-    __AGENT_VERSION__: versions.orchestration,
+    __AGENT_VERSION__: versions.agent,
     __TOOLS_VERSION__: versions.tools,
     __ZOD_VERSION__: versions.zod,
   });

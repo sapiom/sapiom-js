@@ -1,5 +1,5 @@
 /**
- * runLocal — execute an orchestration entirely in-process, resolving every
+ * runLocal — execute an agent entirely in-process, resolving every
  * `ctx.sapiom.*` capability call from a stub file. Runs the author's actual
  * step bodies on the `@sapiom/agent-runtime` walker, so a local pass is
  * real evidence, offline and at zero cost.

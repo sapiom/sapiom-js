@@ -22,7 +22,7 @@ import path from 'node:path';
 
 import { GatewayClient } from './client.js';
 import { writeConfig } from './config.js';
-import { OrchestrationError } from './errors.js';
+import { AgentOperationError } from './errors.js';
 import { cloneRepo as defaultCloneRepo, type CloneRepoOptions } from './git.js';
 
 /** Response of `POST /v1/workflows/templates/:id/fork`. */
@@ -78,7 +78,7 @@ export interface CloneResult {
 /**
  * Materialize a template/fork locally. See the module docstring for the flow.
  *
- * Throws `OrchestrationError` on bad input (`BAD_INPUT`, `DIR_NOT_EMPTY`), gateway
+ * Throws `AgentOperationError` on bad input (`BAD_INPUT`, `DIR_NOT_EMPTY`), gateway
  * failures (`HTTP_*`, `NETWORK`), or git failures (`GIT_CLONE`).
  */
 export async function clone(opts: CloneOptions, client: GatewayClient): Promise<CloneResult> {
@@ -86,13 +86,13 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
   const runClone = opts.cloneRepo ?? defaultCloneRepo;
 
   if (!templateId && !forkId) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'BAD_INPUT',
       message: 'Provide a templateId (to fork then clone) or a forkId (to clone an existing fork).',
     });
   }
   if (templateId && forkId) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'BAD_INPUT',
       message: 'Provide only one of templateId or forkId, not both.',
       hint: 'Use templateId to start from a gallery template, or forkId to re-clone an existing fork.',
@@ -103,7 +103,7 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
   // clone would fail anyway, and this keeps the credential-minting side effect
   // from happening on a doomed run.
   if (existsSync(targetDir) && readdirSync(targetDir).length > 0) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'DIR_NOT_EMPTY',
       message: `Target directory '${targetDir}' already exists and is not empty.`,
     });
@@ -132,7 +132,7 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
   // require an https:// URL here so a malformed/`-`-leading value from a
   // misbehaving endpoint can never reach git as anything but a URL.
   if (!token.cloneUrl.startsWith('https://')) {
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'BAD_CLONE_URL',
       message: 'The clone token endpoint returned an unexpected clone URL.',
     });

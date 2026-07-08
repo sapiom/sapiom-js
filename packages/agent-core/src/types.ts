@@ -168,9 +168,9 @@ export interface ExecutionRef {
  * engine's dispatch edge (the child execution id is the ledger's `target_id`).
  */
 export interface DispatchRef {
-  /** The dispatched child execution id (the ledger's `target_id` for an orchestration). */
+  /** The dispatched child execution id (the ledger's `target_id` for an agent). */
   childExecutionId: string;
-  /** Structured resource type of the target — `'orchestration'` today (later `'coding'`, …). */
+  /** Structured resource type of the target — `'agent'` today (later `'coding'`, …). */
   targetType: string;
   /** The signal correlation id the parent resumes on. */
   correlationId: string;

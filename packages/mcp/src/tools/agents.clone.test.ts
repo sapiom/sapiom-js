@@ -8,15 +8,15 @@ vi.mock("../credentials.js", () => ({
 
 // Keep the real module but stub the networked `clone` so the tool is tested
 // without touching the backend or the filesystem.
-vi.mock("@sapiom/orchestration-core", async (importOriginal) => {
+vi.mock("@sapiom/agent-core", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@sapiom/orchestration-core")>();
+    await importOriginal<typeof import("@sapiom/agent-core")>();
   return { ...actual, clone: vi.fn() };
 });
 
-import { register } from "./orchestrations.js";
+import { register } from "./agents.js";
 import { readCredentials } from "../credentials.js";
-import { clone } from "@sapiom/orchestration-core";
+import { clone } from "@sapiom/agent-core";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
@@ -49,7 +49,7 @@ const env: ResolvedEnvironment = {
 const parse = (res: { content: Array<{ text: string }> }) =>
   JSON.parse(res.content[0].text);
 
-describe("sapiom_dev_orchestrations_clone tool", () => {
+describe("sapiom_dev_agents_clone tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(readCredentials).mockResolvedValue({
@@ -63,7 +63,7 @@ describe("sapiom_dev_orchestrations_clone tool", () => {
   it("is registered", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
-    expect(handlers.has("sapiom_dev_orchestrations_clone")).toBe(true);
+    expect(handlers.has("sapiom_dev_agents_clone")).toBe(true);
   });
 
   it("delegates to clone and returns the result with a next-steps hint", async () => {
@@ -78,7 +78,7 @@ describe("sapiom_dev_orchestrations_clone tool", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_clone")!({
+    const res = await handlers.get("sapiom_dev_agents_clone")!({
       dir: "/tmp/proj",
       templateId: "web-research-digest",
     });
@@ -93,7 +93,7 @@ describe("sapiom_dev_orchestrations_clone tool", () => {
     );
     const out = parse(res);
     expect(out.forkId).toBe("fork-1");
-    expect(out.hint).toContain("sapiom_dev_orchestrations_link");
+    expect(out.hint).toContain("sapiom_dev_agents_link");
     // The credential must never surface in the tool output.
     expect(res.content[0].text).not.toContain("x-access-token");
   });
@@ -103,7 +103,7 @@ describe("sapiom_dev_orchestrations_clone tool", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_clone")!({
+    const res = await handlers.get("sapiom_dev_agents_clone")!({
       dir: "/tmp/proj",
       forkId: "f",
     });
@@ -114,9 +114,9 @@ describe("sapiom_dev_orchestrations_clone tool", () => {
   });
 
   it("surfaces a core error (e.g. bad input) as a tool error", async () => {
-    const { OrchestrationError } = await import("@sapiom/orchestration-core");
+    const { AgentOperationError } = await import("@sapiom/agent-core");
     vi.mocked(clone).mockRejectedValue(
-      new OrchestrationError({
+      new AgentOperationError({
         code: "BAD_INPUT",
         message: "Provide only one of templateId or forkId, not both.",
       }),
@@ -124,7 +124,7 @@ describe("sapiom_dev_orchestrations_clone tool", () => {
     const { server, handlers } = createMockServer();
     register(server, env);
 
-    const res = await handlers.get("sapiom_dev_orchestrations_clone")!({
+    const res = await handlers.get("sapiom_dev_agents_clone")!({
       dir: "/tmp/proj",
       templateId: "t",
       forkId: "f",

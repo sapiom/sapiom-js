@@ -1,5 +1,5 @@
 /**
- * run — create an execution of a server-side orchestration definition.
+ * run — create an execution of a server-side agent definition.
  *
  * Networked operation: requires a GatewayClient. All inputs passed explicitly;
  * no file-system reads — the caller supplies the definition id and input.
@@ -15,7 +15,7 @@ export interface RunOptions {
   definitionId: string;
   /**
    * Execution input. Accepts any JSON-serializable value; defaults to an empty
-   * object so optional-input orchestrations work without extra boilerplate.
+   * object so optional-input agents work without extra boilerplate.
    */
   input?: unknown;
 }
@@ -27,7 +27,7 @@ export interface RunResult {
 }
 
 /**
- * Start an execution of the named orchestration definition.
+ * Start an execution of the named agent definition.
  *
  * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */

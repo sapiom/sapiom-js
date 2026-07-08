@@ -1,5 +1,5 @@
 /**
- * Load an orchestration definition for local execution: bundle index.ts, import
+ * Load an agent definition for local execution: bundle index.ts, import
  * it, find the single definition, and derive its manifest. Mirrors what `check`
  * does, but returns the live definition object (with runnable step bodies) so
  * the local dispatcher can execute steps in-process.
@@ -34,7 +34,7 @@ export async function loadDefinition(sourceDir: string): Promise<LoadedDefinitio
     throw new AgentOperationError({
       code: 'NO_ENTRY',
       message: `No index.ts found in ${sourceDir}.`,
-      hint: 'Run this from an orchestration project, or pass its directory.',
+      hint: 'Run this from an agent project, or pass its directory.',
     });
   }
 
@@ -54,7 +54,7 @@ export async function loadDefinition(sourceDir: string): Promise<LoadedDefinitio
     } catch (err) {
       throw new AgentOperationError({
         code: 'BUNDLE_FAILED',
-        message: 'Failed to bundle the orchestration.',
+        message: 'Failed to bundle the agent.',
         hint: err instanceof Error ? err.message : String(err),
       });
     }
@@ -64,14 +64,14 @@ export async function loadDefinition(sourceDir: string): Promise<LoadedDefinitio
     if (defs.length === 0) {
       throw new AgentOperationError({
         code: 'NO_DEFINITION',
-        message: 'No orchestration was exported from index.ts.',
+        message: 'No agent was exported from index.ts.',
         hint: 'Export the result of defineAgent({ … }).',
       });
     }
     if (defs.length > 1) {
       throw new AgentOperationError({
         code: 'MULTIPLE_DEFINITIONS',
-        message: 'index.ts exports more than one orchestration.',
+        message: 'index.ts exports more than one agent.',
         hint: 'Export exactly one defineAgent({ … }) result.',
       });
     }

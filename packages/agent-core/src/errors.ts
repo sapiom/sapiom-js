@@ -1,5 +1,5 @@
 /**
- * Structured error type shared across orchestration-core operations. Kept
+ * Structured error type shared across agent-core operations. Kept
  * separate from CLI rendering (no process.stderr, no process.exitCode) so it
  * can be caught and re-shaped by any consumer (CLI, MCP, programmatic).
  */

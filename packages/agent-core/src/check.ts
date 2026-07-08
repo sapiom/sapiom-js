@@ -33,7 +33,7 @@ function runTypecheck(sourceDir: string): string | null {
     const output = (e.stdout?.toString() ?? '').trim() || (e.stderr?.toString() ?? '').trim();
     throw new AgentOperationError({
       code: 'TYPECHECK_FAILED',
-      message: 'The orchestration has type errors.',
+      message: 'The agent has type errors.',
       hint: output || 'Run `tsc --noEmit` for details.',
     });
   }
@@ -44,7 +44,7 @@ function runTypecheck(sourceDir: string): string | null {
 const LOCAL_SDK_VERSION = '0.0.0-local';
 
 export interface CheckOptions {
-  /** Absolute path to the orchestration project directory containing index.ts. */
+  /** Absolute path to the agent project directory containing index.ts. */
   sourceDir: string;
 }
 
@@ -57,7 +57,7 @@ export interface CheckResult {
 }
 
 /**
- * Validate an orchestration locally: bundle index.ts with esbuild, load it,
+ * Validate an agent locally: bundle index.ts with esbuild, load it,
  * derive and Zod-parse the manifest, and check the step graph.
  *
  * Throws `AgentOperationError` on any validation failure (codes:
@@ -72,7 +72,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     throw new AgentOperationError({
       code: 'NO_ENTRY',
       message: `No index.ts found in ${sourceDir}.`,
-      hint: 'Run this from an orchestration project, or pass its directory.',
+      hint: 'Run this from an agent project, or pass its directory.',
     });
   }
 
@@ -98,7 +98,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     } catch (err) {
       throw new AgentOperationError({
         code: 'BUNDLE_FAILED',
-        message: 'Failed to bundle the orchestration.',
+        message: 'Failed to bundle the agent.',
         hint: err instanceof Error ? err.message : String(err),
       });
     }
@@ -115,14 +115,14 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     if (defs.length === 0) {
       throw new AgentOperationError({
         code: 'NO_DEFINITION',
-        message: 'No orchestration was exported from index.ts.',
+        message: 'No agent was exported from index.ts.',
         hint: 'Export the result of defineAgent({ … }).',
       });
     }
     if (defs.length > 1) {
       throw new AgentOperationError({
         code: 'MULTIPLE_DEFINITIONS',
-        message: 'index.ts exports more than one orchestration.',
+        message: 'index.ts exports more than one agent.',
         hint: 'Export exactly one defineAgent({ … }) result.',
       });
     }
@@ -138,7 +138,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     } catch (err) {
       throw new AgentOperationError({
         code: 'MANIFEST_INVALID',
-        message: 'The orchestration produced an invalid manifest.',
+        message: 'The agent produced an invalid manifest.',
         hint: err instanceof Error ? err.message : String(err),
       });
     }
@@ -148,14 +148,14 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     } catch (err) {
       throw new AgentOperationError({
         code: 'GRAPH_INVALID',
-        message: 'The orchestration graph is invalid.',
+        message: 'The agent graph is invalid.',
         hint: err instanceof Error ? err.message : String(err),
       });
     }
 
     const steps = (manifest as { steps?: unknown }).steps;
     const stepCount = Array.isArray(steps) ? steps.length : Object.keys(steps ?? {}).length;
-    const name = (manifest as { name?: string }).name ?? 'orchestration';
+    const name = (manifest as { name?: string }).name ?? 'agent';
 
     return { name, stepCount, warnings, manifest };
   } finally {

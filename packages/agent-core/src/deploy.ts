@@ -28,7 +28,7 @@ const POLL_BUDGET_MS = 300_000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface DeployOptions {
-  /** Absolute path to the orchestration project directory. */
+  /** Absolute path to the agent project directory. */
   projectDir: string;
   /** Server-side definition ID (from sapiom.json or resolved by the caller). */
   definitionId: string;
@@ -43,7 +43,7 @@ export interface DeployResult {
 }
 
 /**
- * Deploy the current commit of an orchestration project.
+ * Deploy the current commit of an agent project.
  *
  * Validates the git state, mints push credentials, pushes HEAD, triggers a
  * build, and polls until the build reaches a terminal status.
@@ -73,7 +73,7 @@ export async function deploy(opts: DeployOptions, client: GatewayClient): Promis
     writeFileSync(path.join(treeDir, 'index.ts'), code);
     writeFileSync(
       path.join(treeDir, 'package.json'),
-      JSON.stringify({ name: 'orchestration-definition', private: true, type: 'module', dependencies }, null, 2) + '\n',
+      JSON.stringify({ name: 'agent-definition', private: true, type: 'module', dependencies }, null, 2) + '\n',
     );
     pushSynthesizedTree(treeDir, pushUrl, branch);
   } finally {

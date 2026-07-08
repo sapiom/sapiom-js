@@ -33,7 +33,7 @@ export interface WatchExecutionOptions {
  * over `GET /v1/workflows/executions/:id/stream`. Heartbeat frames and malformed
  * frames are filtered — only well-formed run events are yielded.
  *
- * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) if the handshake fails.
+ * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) if the handshake fails.
  * A mid-stream transport drop surfaces as a thrown error from the iterator (the
  * caller — e.g. `waitForExecution` — reverts to polling).
  */

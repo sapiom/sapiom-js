@@ -29,7 +29,7 @@ export interface InspectOptions {
  * (see {@link decodeExecutionProjection}) so pre-seam runs decode without error
  * (degraded tree from lineage, flat cost fallback) — never reshaped or recosted.
  *
- * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
+ * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */
 export async function inspect(
   opts: InspectOptions,
@@ -134,7 +134,7 @@ function settledResult(
  * matching Module A's fallback invariant. Heartbeats never wake it, so the wait
  * is bounded by aborting the stream at the deadline.
  *
- * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors from
+ * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors from
  * the `inspect()` refetch (SSE handshake errors are swallowed into the fallback).
  */
 export async function waitForExecution(
@@ -208,7 +208,7 @@ export async function waitForExecution(
  * so callers can group runs into their dispatch trees without a second read;
  * `traceRoot` degrades to the run's own id for pre-seam rows.
  *
- * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
+ * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */
 export async function listExecutions(
   client: GatewayClient,
@@ -231,7 +231,7 @@ export interface InspectBuildResult {
 /**
  * Fetch build status for a specific build run.
  *
- * Throws `OrchestrationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
+ * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */
 export async function inspectBuild(
   opts: InspectBuildOptions,

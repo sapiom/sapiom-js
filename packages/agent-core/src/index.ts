@@ -1,6 +1,6 @@
 /**
  * @sapiom/agent-core — pure, stateless functions for scaffolding,
- * validating, and operating Sapiom orchestrations.
+ * validating, and operating Sapiom agents.
  *
  * Design contract:
  *   - No process.env reads (all config is passed explicitly)

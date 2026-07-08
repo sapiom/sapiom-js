@@ -1,5 +1,5 @@
 /**
- * bundle-for-deploy — collapse an orchestration's LOCAL/relative code into a
+ * bundle-for-deploy — collapse an agent's LOCAL/relative code into a
  * single self-contained `index.ts`, while leaving npm packages external.
  *
  * This is what lets a definition import shared local utils (relative imports,
@@ -41,7 +41,7 @@ export async function bundleForDeploy(sourceDir: string): Promise<DeployBundle> 
     throw new AgentOperationError({
       code: 'NO_ENTRY',
       message: `No index.ts found in ${sourceDir}.`,
-      hint: 'Run this from an orchestration project, or pass its directory.',
+      hint: 'Run this from an agent project, or pass its directory.',
     });
   }
 
@@ -66,7 +66,7 @@ export async function bundleForDeploy(sourceDir: string): Promise<DeployBundle> 
     } catch (err) {
       throw new AgentOperationError({
         code: 'BUNDLE_FAILED',
-        message: 'Failed to bundle the orchestration for deploy.',
+        message: 'Failed to bundle the agent for deploy.',
         hint: err instanceof Error ? err.message : String(err),
       });
     }

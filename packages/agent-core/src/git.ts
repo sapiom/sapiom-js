@@ -82,7 +82,7 @@ export interface CloneRepoOptions {
  * successful clone the origin remote is rewritten to the tokenless HTTPS URL so
  * the short-lived token never lands on disk.
  *
- * Throws `OrchestrationError` (code `GIT_CLONE`) on failure — with the credential
+ * Throws `AgentOperationError` (code `GIT_CLONE`) on failure — with the credential
  * scrubbed from the hint.
  */
 export function cloneRepo(opts: CloneRepoOptions): void {
@@ -99,7 +99,7 @@ export function cloneRepo(opts: CloneRepoOptions): void {
   } catch (err) {
     const stderr = (err as { stderr?: Buffer | string }).stderr?.toString();
     const raw = stderr?.trim() || (err instanceof Error ? err.message : String(err));
-    throw new OrchestrationError({
+    throw new AgentOperationError({
       code: 'GIT_CLONE',
       message: 'git clone failed.',
       hint: redactCredentials(raw),

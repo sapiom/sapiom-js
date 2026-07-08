@@ -1,5 +1,5 @@
 /**
- * link — resolve a server-side orchestration by name (or create it) and return
+ * link — resolve a server-side agent by name (or create it) and return
  * the definition id + name for the caller to cache in sapiom.json.
  *
  * Networked operation: requires a GatewayClient. Does NOT write sapiom.json
@@ -15,9 +15,9 @@ export interface DefinitionSummary {
 }
 
 export interface LinkOptions {
-  /** Name (or slug) of the orchestration to link to. */
+  /** Name (or slug) of the agent to link to. */
   name: string;
-  /** If true, create the orchestration when it is not found. */
+  /** If true, create the agent when it is not found. */
   create?: boolean;
 }
 
@@ -27,7 +27,7 @@ export interface LinkResult {
 }
 
 /**
- * Resolve (or create) a server-side orchestration definition by name.
+ * Resolve (or create) a server-side agent definition by name.
  *
  * Throws `AgentOperationError` (code `NOT_FOUND` | `HTTP_*` | `NETWORK`) on
  * failures.
@@ -40,7 +40,7 @@ export async function link(opts: LinkOptions, client: GatewayClient): Promise<Li
     if (!opts.create) {
       throw new AgentOperationError({
         code: 'NOT_FOUND',
-        message: `No orchestration named '${opts.name}'.`,
+        message: `No agent named '${opts.name}'.`,
         hint: 'Create it with { create: true }, or pass the name of an existing one.',
       });
     }

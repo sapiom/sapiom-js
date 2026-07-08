@@ -1,5 +1,5 @@
 /**
- * schedule — manage scheduled triggers for a server-side orchestration definition.
+ * schedule — manage scheduled triggers for a server-side agent definition.
  *
  * Networked operations: each takes a GatewayClient. The backend routes sit under the
  * `/v1/workflows` base the client already targets: create/list nest under the definition slug
@@ -18,7 +18,7 @@ export interface SchedulePolicy {
 }
 
 export interface CreateScheduleOptions {
-  /** Tenant-unique slug of the orchestration to schedule. */
+  /** Tenant-unique slug of the agent to schedule. */
   definition: string;
   kind: ScheduleKind;
   /** Execution input passed to each fire. */
@@ -81,13 +81,13 @@ export interface CronPreview {
   occurrences: string[];
 }
 
-/** Create a schedule (cron or one-off) for the orchestration. Returns the schedule detail. */
+/** Create a schedule (cron or one-off) for the agent. Returns the schedule detail. */
 export async function createSchedule(opts: CreateScheduleOptions, client: GatewayClient): Promise<ScheduleDetail> {
   const { definition, ...body } = opts;
   return client.post<ScheduleDetail>(`/${encodeURIComponent(definition)}/triggers`, body);
 }
 
-/** List an orchestration's schedules (newest first), optionally filtered by status. */
+/** List an agent's schedules (newest first), optionally filtered by status. */
 export async function listSchedules(opts: ListSchedulesOptions, client: GatewayClient): Promise<ScheduleSummary[]> {
   const { definition, ...filters } = opts;
   return client.get<ScheduleSummary[]>(`/${encodeURIComponent(definition)}/triggers${toQuery(filters)}`);
