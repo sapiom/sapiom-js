@@ -80,6 +80,8 @@ describe("SessionManager", () => {
       adapter?: HarnessAdapter;
       spawnPty?: PtySpawnFn;
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
+      writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
+      workspaceContextExists?: SessionManagerOptions["workspaceContextExists"];
     } = {},
   ) {
     const adapter = opts.adapter ?? createFakeAdapter();
@@ -100,6 +102,8 @@ describe("SessionManager", () => {
       sessionsPath,
       spawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
+      writeWorkspaceContext: opts.writeWorkspaceContext,
+      workspaceContextExists: opts.workspaceContextExists,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -364,6 +368,112 @@ describe("SessionManager", () => {
     const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
     expect(session.boundWorkflowPath).toBeNull();
     expect(manager.get(session.id)?.boundWorkflowPath).toBeNull();
+  });
+
+  describe("harness-context.json wiring", () => {
+    it("create() writes the initial workspace context for every session, regardless of caller", async () => {
+      const writeWorkspaceContext = vi.fn(async () => {});
+      const { manager } = makeManager({ writeWorkspaceContext });
+
+      // No REST layer involved at all here — this is exactly the
+      // autoCreateSession call shape (server/index.ts calling
+      // sessionManager.create() directly), the entry point that used to skip
+      // the write entirely because it lived in the REST handler instead.
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      expect(writeWorkspaceContext).toHaveBeenCalledTimes(1);
+      expect(writeWorkspaceContext).toHaveBeenCalledWith(session.cwd);
+    });
+
+    it("create() writes the workspace context before the pty is actually spawned", async () => {
+      const order: string[] = [];
+      const writeWorkspaceContext = vi.fn(async () => {
+        order.push("write");
+      });
+      const spawnPty: PtySpawnFn = (file, args) => {
+        order.push("spawn");
+        void file;
+        void args;
+        return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
+      };
+      const { manager } = makeManager({ writeWorkspaceContext, spawnPty });
+
+      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      // The agent's very first read of HARNESS_CONTEXT_FILE must never race
+      // session creation with an ENOENT — that only holds if the write is
+      // fully awaited before the real process (the pty) ever starts.
+      expect(order).toEqual(["write", "spawn"]);
+    });
+
+    it("create() still creates and spawns the session even if writeWorkspaceContext rejects", async () => {
+      const writeWorkspaceContext = vi.fn(async () => {
+        throw new Error("disk full");
+      });
+      const { manager } = makeManager({ writeWorkspaceContext });
+
+      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).rejects.toThrow("disk full");
+    });
+
+    it("resume() backfills the workspace context only when it's missing", async () => {
+      const writeWorkspaceContext = vi.fn(async () => {});
+      const workspaceContextExists = vi.fn(async () => false);
+      const { manager } = makeManager({ writeWorkspaceContext, workspaceContextExists });
+
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-uuid-9",
+        harness: "claude-code",
+        cwd: "/tmp/proj",
+        title: "past session",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+      writeWorkspaceContext.mockClear(); // registerHistorical() doesn't call it; isolate resume()'s call
+
+      await manager.resume(session.id);
+
+      expect(workspaceContextExists).toHaveBeenCalledWith("/tmp/proj");
+      expect(writeWorkspaceContext).toHaveBeenCalledTimes(1);
+      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj");
+    });
+
+    it("resume() never overwrites an existing workspace context file", async () => {
+      const writeWorkspaceContext = vi.fn(async () => {});
+      const workspaceContextExists = vi.fn(async () => true);
+      const { manager } = makeManager({ writeWorkspaceContext, workspaceContextExists });
+
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-uuid-9",
+        harness: "claude-code",
+        cwd: "/tmp/proj",
+        title: "past session",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      await manager.resume(session.id);
+
+      expect(workspaceContextExists).toHaveBeenCalledWith("/tmp/proj");
+      expect(writeWorkspaceContext).not.toHaveBeenCalled();
+    });
+
+    it("defaults to a no-op for both hooks so tests with fake cwds never touch the real filesystem", async () => {
+      // makeManager() with no overrides exercises the SessionManagerOptions
+      // defaults directly against a fake cwd ("/tmp/proj") that this test
+      // never creates on disk. If the defaults silently did real fs I/O
+      // instead of no-op'ing, this would either throw (ENOENT under a path
+      // that doesn't exist) or leave a real .sapiom dir behind on the test
+      // runner's machine — neither happens, proving both defaults are inert.
+      const { manager } = makeManager();
+      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).resolves.toBeDefined();
+
+      const historical = manager.registerHistorical({
+        agentSessionId: "agent-uuid-9",
+        harness: "claude-code",
+        cwd: "/tmp/proj",
+        title: "past session",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+      await expect(manager.resume(historical.id)).resolves.toBeDefined();
+    });
   });
 
   describe("setBoundWorkflowPath", () => {
