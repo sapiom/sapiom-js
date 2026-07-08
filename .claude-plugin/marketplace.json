@@ -1,0 +1,20 @@
+{
+  "name": "sapiom",
+  "owner": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai"
+  },
+  "metadata": {
+    "description": "Official Sapiom plugins — connect your coding agent to Sapiom",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "sapiom",
+      "source": "./plugins/sapiom",
+      "description": "Build, test, and deploy Sapiom agents: registers the sapiom-dev MCP server and ships the sapiom-agent-authoring skill so your agent knows when and how to use Sapiom.",
+      "category": "development",
+      "keywords": ["sapiom", "agents", "automation", "mcp"]
+    }
+  ]
+}
