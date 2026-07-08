@@ -1,0 +1,115 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { WorkflowRegistry } from "./workflow-registry.js";
+
+async function writeMarker(dir: string, definitionId: number | null): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "sapiom.json"), JSON.stringify({ definitionId }));
+}
+
+describe("WorkflowRegistry", () => {
+  let tmpRoot: string;
+  let registryPath: string;
+  let registry: WorkflowRegistry;
+
+  beforeEach(async () => {
+    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-workflow-registry-"));
+    registryPath = path.join(tmpRoot, "state", "workflows.json");
+    registry = new WorkflowRegistry(registryPath);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("starts empty when no registry file exists", async () => {
+    expect(await registry.list()).toEqual([]);
+  });
+
+  it("scans a tree for sapiom.json markers, honoring depth and skip rules", async () => {
+    // Depth 1: has package.json, deployed.
+    await writeMarker(path.join(tmpRoot, "proj-a"), 42);
+    await fs.writeFile(
+      path.join(tmpRoot, "proj-a", "package.json"),
+      JSON.stringify({ name: "@acme/proj-a" }),
+    );
+    // Depth 1: no package.json, undeployed.
+    await writeMarker(path.join(tmpRoot, "proj-b"), null);
+    // Depth 3: right at the boundary — should be found.
+    await writeMarker(path.join(tmpRoot, "a", "b", "c"), 7);
+    // Depth 4: past the boundary — should NOT be found.
+    await writeMarker(path.join(tmpRoot, "d", "e", "f", "g"), 9);
+    // Inside node_modules / .git — should never be scanned.
+    await writeMarker(path.join(tmpRoot, "node_modules", "some-pkg"), 1);
+    await writeMarker(path.join(tmpRoot, ".git", "worktrees", "x"), 1);
+
+    const found = await registry.scan(tmpRoot);
+    const byPath = new Map(found.map((workflow) => [workflow.path, workflow]));
+
+    expect(byPath.get(path.join(tmpRoot, "proj-a"))).toEqual({
+      name: "@acme/proj-a",
+      path: path.join(tmpRoot, "proj-a"),
+      definitionId: 42,
+      source: "scan",
+    });
+    expect(byPath.get(path.join(tmpRoot, "proj-b"))).toEqual({
+      name: "proj-b",
+      path: path.join(tmpRoot, "proj-b"),
+      definitionId: null,
+      source: "scan",
+    });
+    expect(byPath.has(path.join(tmpRoot, "a", "b", "c"))).toBe(true);
+    expect(byPath.has(path.join(tmpRoot, "d", "e", "f", "g"))).toBe(false);
+    expect(
+      found.some((workflow) => workflow.path.includes("node_modules")),
+    ).toBe(false);
+    expect(found.some((workflow) => workflow.path.includes(".git"))).toBe(false);
+  });
+
+  it("persists scan results and reloads them for a fresh registry instance", async () => {
+    await writeMarker(path.join(tmpRoot, "proj-a"), 1);
+    await registry.scan(tmpRoot);
+
+    const reloaded = new WorkflowRegistry(registryPath);
+    const list = await reloaded.list();
+    expect(list).toHaveLength(1);
+    expect(list[0].path).toBe(path.join(tmpRoot, "proj-a"));
+  });
+
+  it("connectPath registers a path even without a sapiom.json marker yet", async () => {
+    const projectDir = path.join(tmpRoot, "not-yet-linked");
+    await fs.mkdir(projectDir, { recursive: true });
+
+    const info = await registry.connectPath(projectDir);
+    expect(info).toEqual({
+      name: "not-yet-linked",
+      path: projectDir,
+      definitionId: null,
+      source: "connect",
+    });
+    expect(await registry.list()).toEqual([info]);
+  });
+
+  it("connectPath picks up an existing marker's definitionId", async () => {
+    const projectDir = path.join(tmpRoot, "linked");
+    await writeMarker(projectDir, 99);
+
+    const info = await registry.connectPath(projectDir);
+    expect(info.definitionId).toBe(99);
+  });
+
+  it("a scan does not overwrite a connect-sourced entry's source", async () => {
+    const projectDir = path.join(tmpRoot, "linked");
+    await writeMarker(projectDir, 1);
+    await registry.connectPath(projectDir);
+
+    await registry.scan(tmpRoot);
+
+    const list = await registry.list();
+    const entry = list.find((workflow) => workflow.path === projectDir);
+    expect(entry?.source).toBe("connect");
+  });
+});

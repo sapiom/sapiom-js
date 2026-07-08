@@ -77,6 +77,8 @@ export interface HarnessSession {
 
 /** A resumable past session discovered from agent transcripts or our registry. */
 export interface SessionSummary {
+  /** Back-reference to our session when the registry tracked it (source "registry"). */
+  harnessSessionId?: string;
   agentSessionId: string;
   harness: HarnessKind;
   cwd: string;

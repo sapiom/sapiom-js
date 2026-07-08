@@ -4,7 +4,108 @@
  * Layout: workflows rail (left) | session dropdown + terminal (center)
  * | canvas/preview pane (right) | action icon rail (far right).
  */
+import type { JSX } from "react";
+import type { HarnessKind, MacroDef, SessionSummary } from "@shared/types";
+
+import { ActionRail } from "./components/ActionRail";
+import { CanvasPane } from "./components/CanvasPane";
+import { SessionBar } from "./components/SessionBar";
+import { Terminal } from "./components/Terminal";
+import { WorkflowsRail } from "./components/WorkflowsRail";
+import { useHarnessState } from "./lib/use-harness-state";
 
 export const App = (): JSX.Element => {
-  return <div>Sapiom Harness — W2 builds this.</div>;
+  const harness = useHarnessState();
+
+  if (harness.loading) {
+    return <div className="app-status">Loading Sapiom Harness…</div>;
+  }
+  if (harness.error || !harness.state) {
+    return <div className="app-status app-status-error">Failed to load: {harness.error}</div>;
+  }
+
+  const { state } = harness;
+  const selectedWorkflow = state.workflows.find((w) => w.path === harness.selectedWorkflowPath) ?? null;
+
+  const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
+    await harness.createSession({ cwd, harness: agentHarness });
+  };
+
+  const handleResumeHistory = async (summary: SessionSummary): Promise<void> => {
+    const existing = state.sessions.find((session) => session.agentSessionId === summary.agentSessionId);
+    if (existing) {
+      await harness.resumeSession(existing.id);
+      return;
+    }
+    // Agent-side history the harness never tracked as a session (e.g. transcript-sourced
+    // entries) — there's no registry row to resume, so start fresh in the same place.
+    await harness.createSession({ cwd: summary.cwd, harness: summary.harness });
+  };
+
+  const disabledReasonFor = (macro: MacroDef): string | null => {
+    if (macro.requiresWorkflow) {
+      if (!selectedWorkflow) return "Select a workflow first";
+      if (macro.action.kind === "open-url" && macro.action.url.includes("{{workflow.definitionId}}") &&
+        selectedWorkflow.definitionId == null) {
+        return "Not deployed yet";
+      }
+    }
+    if (macro.action.kind === "inject" && !harness.activeSessionId) return "Start a session first";
+    return null;
+  };
+
+  const handleRunMacro = (macro: MacroDef, subject?: string): void => {
+    if (macro.action.kind === "open-url") {
+      const url = macro.action.url.replace(
+        "{{workflow.definitionId}}",
+        String(selectedWorkflow?.definitionId ?? ""),
+      );
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (!harness.activeSessionId) return;
+    void harness.runMacro(macro.id, {
+      harnessSessionId: harness.activeSessionId,
+      workflowPath: harness.selectedWorkflowPath ?? undefined,
+      subject,
+    });
+  };
+
+  return (
+    <div className="app">
+      <WorkflowsRail
+        workflows={state.workflows}
+        selectedPath={harness.selectedWorkflowPath}
+        onSelect={harness.setSelectedWorkflowPath}
+        onConnect={async (path) => {
+          await harness.connectWorkflow(path);
+        }}
+      />
+
+      <div className="center-pane">
+        <SessionBar
+          sessions={state.sessions}
+          activeSessionId={harness.activeSessionId}
+          onSelectSession={harness.setActiveSessionId}
+          onResumeHistory={(summary) => void handleResumeHistory(summary)}
+          history={harness.history}
+          historyLoading={harness.historyLoading}
+          onOpenDropdown={(cwd) => void harness.loadHistory(cwd)}
+          recentDirs={harness.settings?.recentDirs ?? []}
+          onCreateSession={handleCreateSession}
+        />
+        <div className="terminal-slot">
+          {harness.activeSessionId ? (
+            <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+          ) : (
+            <div className="terminal-empty">No active session — click “+ new” to start one.</div>
+          )}
+        </div>
+      </div>
+
+      <CanvasPane sessionId={harness.activeSessionId} lastMessage={harness.lastMessage} />
+
+      <ActionRail macros={state.macros} disabledReasonFor={disabledReasonFor} onRun={handleRunMacro} />
+    </div>
+  );
 };
