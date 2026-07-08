@@ -256,7 +256,13 @@ describe("createRestRouter", () => {
       expect(onSessionCreated).not.toHaveBeenCalled();
     });
 
-    it("writes the workspace context file with boundWorkflow: null on create, before responding", async () => {
+    it("does not itself write the workspace context file — that's sessionManager.create()'s job now", async () => {
+      // The initial write used to happen here, in this route, which meant
+      // any caller that reached the session-creation path without going
+      // through this exact handler (autoCreateSession, notably) silently
+      // skipped it. It now lives inside SessionManager.create() itself, so
+      // this route just has to not duplicate it. See session-manager.test.ts
+      // for the "create() writes the workspace context" coverage.
       const sessionManager = fakeSessionManager();
       (sessionManager.create as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: "sess-1",
@@ -274,7 +280,7 @@ describe("createRestRouter", () => {
       });
 
       expect(res.status).toBe(201);
-      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj", null);
+      expect(writeWorkspaceContext).not.toHaveBeenCalled();
     });
   });
 

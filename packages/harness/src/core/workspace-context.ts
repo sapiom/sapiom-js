@@ -1,11 +1,13 @@
 /**
  * Writes HARNESS_CONTEXT_FILE (`.sapiom/harness-context.json`) in a
  * session's cwd — the agent-legible mirror of that session's workflow
- * binding. Called on session create (`boundWorkflow: null`) and on every
- * `PATCH /api/sessions/:id/workflow`, so the file always exists once a
- * session has started; unbinding writes `boundWorkflow: null` rather than
- * deleting the file, so a concurrent read from the agent never race a
- * momentary ENOENT.
+ * binding. Called unconditionally from `SessionManager.create()`
+ * (`boundWorkflow: null`) so the file exists for every session regardless of
+ * entry point (REST, `autoCreateSession`), as a best-effort backfill from
+ * `SessionManager.resume()` when it's missing entirely, and on every
+ * `PATCH /api/sessions/:id/workflow`. Unbinding writes `boundWorkflow: null`
+ * rather than deleting the file, so a concurrent read from the agent never
+ * races a momentary ENOENT.
  */
 
 import * as fs from "node:fs/promises";
@@ -39,5 +41,21 @@ export async function writeHarnessContext(cwd: string, boundWorkflow: WorkflowIn
     await fs.rename(tmpPath, filePath);
   } catch (err) {
     console.error(`[harness] failed to write ${filePath}:`, err);
+  }
+}
+
+/**
+ * True if `<cwd>/.sapiom/harness-context.json` already exists. Used by
+ * `SessionManager.resume()` to decide whether a backfill write is needed —
+ * resume must never clobber a file that could already reflect a real
+ * binding this layer has no way to reconstruct (it only knows a workflow
+ * *path*, not the full `WorkflowInfo` `writeHarnessContext` needs).
+ */
+export async function harnessContextFileExists(cwd: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(cwd, HARNESS_CONTEXT_FILE));
+    return true;
+  } catch {
+    return false;
   }
 }

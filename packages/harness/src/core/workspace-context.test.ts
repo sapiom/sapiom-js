@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { WorkflowInfo } from "../shared/types.js";
-import { writeHarnessContext } from "./workspace-context.js";
+import { harnessContextFileExists, writeHarnessContext } from "./workspace-context.js";
 
 const workflow: WorkflowInfo = {
   name: "leasing",
@@ -72,5 +72,30 @@ describe("writeHarnessContext", () => {
     const blockedFile = path.join(cwd, "blocked");
     await fs.writeFile(blockedFile, "x");
     await expect(writeHarnessContext(blockedFile, workflow)).resolves.toBeUndefined();
+  });
+});
+
+describe("harnessContextFileExists", () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-context-exists-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(cwd, { recursive: true, force: true });
+  });
+
+  it("is false for a cwd that has never had a context file written", async () => {
+    await expect(harnessContextFileExists(cwd)).resolves.toBe(false);
+  });
+
+  it("is true once writeHarnessContext has run, regardless of bound/unbound", async () => {
+    await writeHarnessContext(cwd, null);
+    await expect(harnessContextFileExists(cwd)).resolves.toBe(true);
+  });
+
+  it("is false for a cwd that doesn't exist at all", async () => {
+    await expect(harnessContextFileExists(path.join(cwd, "nope"))).resolves.toBe(false);
   });
 });

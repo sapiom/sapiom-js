@@ -129,6 +129,25 @@ export interface SessionManagerOptions {
   buildLaunchOpts?: LaunchOptsBuilder;
   now?: () => string;
   generateId?: () => string;
+  /**
+   * Writes the initial HARNESS_CONTEXT_FILE (`boundWorkflow: null`) for a
+   * session's cwd. Called unconditionally from `create()`, before the pty is
+   * spawned, so every session gets the file regardless of entry point (REST,
+   * `autoCreateSession`) — no entry point can skip it by calling `create()`
+   * directly. Also used by `resume()` as a backfill when the file is
+   * entirely missing (see `workspaceContextExists`). Defaults to a no-op so
+   * tests that pass a fake `cwd` (e.g. `/tmp/proj`) never touch the real
+   * filesystem unless they opt in.
+   */
+  writeWorkspaceContext?: (cwd: string) => Promise<void>;
+  /**
+   * Reports whether HARNESS_CONTEXT_FILE already exists for a cwd. Used only
+   * by `resume()`, to decide whether a backfill write is needed — resume
+   * must never clobber a file that could already reflect a real binding.
+   * Defaults to `true` (assume it exists, never backfill) to match the
+   * no-op default of `writeWorkspaceContext`.
+   */
+  workspaceContextExists?: (cwd: string) => Promise<boolean>;
 }
 
 interface PtyHandle {
@@ -147,6 +166,8 @@ export class SessionManager {
   private readonly buildLaunchOpts: LaunchOptsBuilder;
   private readonly now: () => string;
   private readonly generateId: () => string;
+  private readonly writeWorkspaceContext: (cwd: string) => Promise<void>;
+  private readonly workspaceContextExists: (cwd: string) => Promise<boolean>;
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
@@ -165,6 +186,8 @@ export class SessionManager {
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
+    this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
+    this.workspaceContextExists = options.workspaceContextExists ?? (async () => true);
     // Many WS clients (terminal + events) can subscribe over a long-running process.
     this.statusEmitter.setMaxListeners(0);
   }
@@ -232,6 +255,10 @@ export class SessionManager {
     };
     this.sessions.set(id, session);
     await this.persist();
+    // Before spawning, not fire-and-forget: the agent's very first read of
+    // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
+    // regardless of which entry point called create() (REST, autoCreateSession).
+    await this.writeWorkspaceContext(req.cwd);
     await this.spawn(session, spec);
     return session;
   }
@@ -287,6 +314,12 @@ export class SessionManager {
     session.lastActiveAt = this.now();
     await this.persist();
     this.emitStatus(session);
+    // Backfill only — never overwrite a file that could already reflect a
+    // real binding this layer has no way to reconstruct (it only knows a
+    // workflow *path*, not the full WorkflowInfo a fresh write needs).
+    if (!(await this.workspaceContextExists(session.cwd))) {
+      await this.writeWorkspaceContext(session.cwd);
+    }
     await this.spawn(session, spec);
     return session;
   }

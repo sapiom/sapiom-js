@@ -26,8 +26,12 @@
  *      workflows.changed frame on /ws/events.
  *   8. (separate, isolated server instance) autoCreateSession creates a
  *      session in launchDir without any client ever calling POST
- *      /api/sessions, AppState.launchDir reports it, and the generated
- *      mcp-config for an authenticated identity carries the x-api-key header.
+ *      /api/sessions, AppState.launchDir reports it, the generated
+ *      mcp-config for an authenticated identity carries the x-api-key header,
+ *      and — the entry point that used to skip this file entirely, since the
+ *      write used to live only in the POST /api/sessions REST handler —
+ *      HARNESS_CONTEXT_FILE already exists in its cwd with
+ *      boundWorkflow: null, before any PATCH has ever run.
  *   9. GET /api/fs/list (the path-picker's directory autocomplete) is
  *      mounted and boot-token-gated like the rest of /api.
  *  10. (third, isolated server instance) `defaultHarnessKind: "codex"`
@@ -572,6 +576,31 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
       "autoCreateSession created a session in launchDir with no client ever calling POST /api/sessions",
     );
     assert(state.launchDir === projectDir, "GET /api/state reports launchDir");
+
+    // This is the exact entry point that used to skip harness-context.json
+    // entirely — autoCreateSession calls sessionManager.create() directly,
+    // bypassing the POST /api/sessions REST handler the write used to live
+    // in. Assert it now exists, unbound, with no PATCH ever having run.
+    // Polled, not a single read: the session appears in GET /api/state as
+    // soon as it's added to the in-memory registry, which happens before
+    // create()'s own await on the context-file write completes.
+    type HarnessContextLike = {
+      boundWorkflow: { name: string; path: string; definitionId: number | null } | null;
+      updatedAt: string;
+    };
+    const autoSessionContext = await waitFor<HarnessContextLike>(async () => {
+      try {
+        return JSON.parse(
+          await fs.readFile(path.join(projectDir, ".sapiom", "harness-context.json"), "utf8"),
+        ) as HarnessContextLike;
+      } catch {
+        return undefined;
+      }
+    });
+    assert(
+      autoSessionContext.boundWorkflow === null,
+      "the auto-created boot session's harness-context.json exists with boundWorkflow: null, before any bind",
+    );
 
     const capture = await waitFor<FakeClaudeCapture>(async () => {
       try {

@@ -139,12 +139,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       return;
     }
     try {
+      // sessionManager.create() writes the initial harness-context.json
+      // itself (before spawning) so every entry point gets it, not just
+      // this REST route — see SessionManager.create().
       const session = await sessionManager.create(parsed.data);
-      // Written before responding (not fire-and-forget, unlike the workflow
-      // scan below) — it's one small file write, and it means the agent's
-      // very first read of HARNESS_CONTEXT_FILE can never race session
-      // creation with an ENOENT.
-      await options.writeWorkspaceContext(session.cwd, null);
       res.status(201).json(session);
       options.onSessionCreated?.(parsed.data.cwd);
     } catch (err) {

@@ -41,7 +41,7 @@ import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
-import { writeHarnessContext } from "../core/workspace-context.js";
+import { writeHarnessContext, harnessContextFileExists } from "../core/workspace-context.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -205,6 +205,10 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath,
     buildLaunchOpts: options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null),
+    // Every session gets its initial harness-context.json regardless of
+    // entry point (REST, autoCreateSession) — see SessionManager.create().
+    writeWorkspaceContext: (cwd) => writeHarnessContext(cwd, null),
+    workspaceContextExists: (cwd) => harnessContextFileExists(cwd),
   });
   await sessionManager.init();
 
