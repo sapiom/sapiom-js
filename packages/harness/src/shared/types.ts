@@ -160,6 +160,8 @@ export type BusMessage =
 // Analytics events
 // ---------------------------------------------------------------------------
 
+export const ANALYTICS_SCHEMA_VERSION = 1;
+
 export type AnalyticsEventType =
   | "session.start"
   | "prompt.submitted"
@@ -174,10 +176,14 @@ export type AnalyticsEventType =
  */
 export interface AnalyticsEvent {
   eventId: string;
-  /** ISO-8601. */
+  /** Per-harnessSessionId monotonic counter from 1 — ordering + loss detection. */
+  seq: number;
+  /** ISO-8601, client clock. Use seq (not ts) for intra-session ordering. */
   ts: string;
   /** Sapiom user id from auth; null when not logged in. */
   userId: string | null;
+  /** Sapiom tenant id from auth; null when not logged in. */
+  tenantId: string | null;
   machineId: string;
   harnessSessionId: string;
   agentSessionId: string | null;
@@ -186,10 +192,27 @@ export interface AnalyticsEvent {
   payload: Record<string, unknown>;
 }
 
-/** Batch shape POSTed to the remote collector (mock for now). */
+/** Static per-install/boot context, sent at batch level. */
+export interface CollectorContext {
+  harnessVersion: string;
+  os: string;
+  arch: string;
+  nodeVersion: string;
+  /** Best-effort agent binary versions, e.g. { "claude-code": "2.0.1" }. */
+  agentVersions?: Record<string, string>;
+}
+
+/**
+ * Batch POSTed to `${SAPIOM_COLLECTOR_URL}/v1/harness/events`.
+ * Delivery is at-least-once (3 retries then drop): consumers dedupe on
+ * eventId and detect loss via seq gaps. 2xx = accepted; 4xx = drop; 5xx = retry.
+ */
 export interface CollectorBatch {
+  batchId: string;
+  schemaVersion: typeof ANALYTICS_SCHEMA_VERSION;
   machineId: string;
   sentAt: string;
+  context: CollectorContext;
   events: AnalyticsEvent[];
 }
 
