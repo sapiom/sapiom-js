@@ -89,6 +89,11 @@ const SCROLLBACK_BYTES = 131_072;
  * a paste, then a separate Enter.
  */
 const SUBMIT_DELAY_MS = 300;
+/** See `kill()`: how long to wait for a graceful exit before escalating to SIGKILL. */
+const KILL_ESCALATION_MS = 2_000;
+/** See `kill()`: how long after escalating to give node-pty one last chance
+ *  to report the exit itself before synthesizing it from an OS-level check. */
+const KILL_ESCALATION_CONFIRM_MS = 500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -295,6 +300,35 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) return false;
     handle.pty.kill();
+    // Root-caused via instrumented real-process runs: node-pty's `onExit`
+    // can simply never fire for a pty killed within milliseconds of being
+    // spawned — confirmed by `process.kill(pid, 0)` throwing ESRCH (no such
+    // process) well after the graceful signal, i.e. the OS process really
+    // is already gone; node-pty's own exit-reporting just missed it. So a
+    // stronger signal alone doesn't help (there's nothing left to signal) —
+    // the fallback below re-checks after a grace period, and if the pty is
+    // still "running" in our registry but the OS confirms the process no
+    // longer exists, synthesizes the exit ourselves rather than waiting on
+    // an event that isn't coming. If the process genuinely is still alive
+    // (the ordinary case: kill() just hasn't taken effect yet), send SIGKILL
+    // as a real escalation before the same check.
+    const escalate = setTimeout(() => {
+      if (this.ptys.get(id) !== handle) return;
+      const pid = handle.pty.pid;
+      const stillAlive = (): boolean => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      if (stillAlive()) handle.pty.kill("SIGKILL");
+      setTimeout(() => {
+        if (this.ptys.get(id) === handle && !stillAlive()) this.markExited(id, handle, null);
+      }, KILL_ESCALATION_CONFIRM_MS).unref?.();
+    }, KILL_ESCALATION_MS);
+    escalate.unref?.();
     return true;
   }
 
@@ -458,14 +492,28 @@ export class SessionManager {
       handle.emitter.emit("data", chunk);
     });
 
-    pty.onExit(({ exitCode }) => {
-      this.ptys.delete(session.id);
-      session.status = "exited";
-      session.exitCode = exitCode;
-      session.lastActiveAt = this.now();
-      void this.persist();
-      this.emitStatus(session);
-    });
+    pty.onExit(({ exitCode }) => this.markExited(session.id, handle, exitCode));
+  }
+
+  /**
+   * Transitions a session to "exited". Shared by node-pty's own `onExit`
+   * callback and `kill()`'s missed-event fallback (see `kill()`) — both are
+   * racing to be the one that reports a given pty's death, so this is
+   * idempotent: a stale/duplicate call (`this.ptys.get(id) !== handle`,
+   * i.e. this handle was already replaced or already reported exited) is a
+   * silent no-op rather than double-transitioning or clobbering a newer
+   * session/handle that's since taken its place (e.g. a resume).
+   */
+  private markExited(id: string, handle: PtyHandle, exitCode: number | null): void {
+    if (this.ptys.get(id) !== handle) return;
+    this.ptys.delete(id);
+    const session = this.sessions.get(id);
+    if (!session) return;
+    session.status = "exited";
+    session.exitCode = exitCode;
+    session.lastActiveAt = this.now();
+    void this.persist();
+    this.emitStatus(session);
   }
 
   private emitStatus(session: HarnessSession): void {
