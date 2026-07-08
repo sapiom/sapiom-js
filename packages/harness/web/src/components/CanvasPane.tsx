@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import type { BusMessage, MacroDef, WorkflowInfo } from "@shared/types";
 
 import { isMockMode } from "../lib/api";
-import { needsSubject } from "../lib/macro-gating";
+import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
@@ -13,7 +13,7 @@ interface CanvasPaneProps {
   boundWorkflow: WorkflowInfo | null;
   activeSessionId: string | null;
   macros: MacroDef[];
-  onRunMacro: (macro: MacroDef, subject?: string) => void;
+  onRunMacro: (macro: MacroDef) => void;
 }
 
 export function CanvasPane({
@@ -26,8 +26,6 @@ export function CanvasPane({
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [visualizing, setVisualizing] = useState(false);
-  const [visualizeSubject, setVisualizeSubject] = useState("");
 
   // Probe once per session for pre-existing content — the agent may have written
   // it in an earlier turn, before this pane was around to catch a reload event.
@@ -51,12 +49,21 @@ export function CanvasPane({
     }
   }, [lastMessage, sessionId]);
 
-  const visualizeMacro = macros.find(needsSubject);
-  const submitVisualize = (): void => {
-    if (!visualizeMacro) return;
-    onRunMacro(visualizeMacro, visualizeSubject.trim() || undefined);
-    setVisualizing(false);
+  // Manual affordance for the toolbar — no auto-refresh signal in mock mode,
+  // and even for real sessions it's a cheap way to re-check content without
+  // waiting on a canvas.reload event.
+  const handleRefresh = (): void => {
+    setReloadKey((key) => key + 1);
+    if (!sessionId || isMockMode()) return;
+    fetch(`/canvas/${sessionId}/`, { method: "HEAD" })
+      .then((res) => setHasGeneratedContent(res.ok))
+      .catch(() => {});
   };
+
+  const visualizeMacro = findVisualizeMacro(macros);
+  const visualizeDisabledReason = visualizeMacro
+    ? macroDisabledReason(visualizeMacro, boundWorkflow, activeSessionId)
+    : null;
 
   return (
     <aside className="canvas-pane">
@@ -66,6 +73,7 @@ export function CanvasPane({
           activeSessionId={activeSessionId}
           macros={macros}
           onRunMacro={onRunMacro}
+          onRefresh={handleRefresh}
         />
       )}
 
@@ -74,42 +82,17 @@ export function CanvasPane({
       ) : !hasGeneratedContent ? (
         <div className="canvas-empty">
           <p>Nothing generated yet.</p>
-          {visualizeMacro &&
-            (visualizing ? (
-              <div className="canvas-visualize-inline">
-                <input
-                  autoFocus
-                  className="modal-input"
-                  data-testid="canvas-visualize-subject"
-                  placeholder="What should the agent visualize?"
-                  value={visualizeSubject}
-                  onChange={(e) => setVisualizeSubject(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submitVisualize();
-                    if (e.key === "Escape") setVisualizing(false);
-                  }}
-                />
-                <div className="modal-actions">
-                  <button className="btn-ghost" onClick={() => setVisualizing(false)}>
-                    Cancel
-                  </button>
-                  <button className="btn-primary" onClick={submitVisualize}>
-                    Run
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                className="btn-primary canvas-visualize-cta"
-                data-testid="canvas-visualize-cta"
-                onClick={() => {
-                  setVisualizeSubject("");
-                  setVisualizing(true);
-                }}
-              >
-                <Icon name="Sparkles" size={14} /> Visualize
-              </button>
-            ))}
+          {visualizeMacro && (
+            <button
+              className="btn-primary canvas-visualize-cta"
+              data-testid="canvas-visualize-cta"
+              data-tooltip={visualizeDisabledReason ?? visualizeMacro.label}
+              disabled={Boolean(visualizeDisabledReason)}
+              onClick={() => onRunMacro(visualizeMacro)}
+            >
+              <Icon name="Sparkles" size={14} /> Visualize
+            </button>
+          )}
           <p className="canvas-empty-hint">
             Ask your agent to visualize, or write HTML directly to <code>.sapiom/canvas/index.html</code> — this pane
             hot-reloads whenever it changes.

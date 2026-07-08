@@ -436,8 +436,10 @@ input {
 }
 
 /* Custom tooltip (not the native `title` bubble) — shows the macro label, or the
-   disabled reason when it has one, above the button. */
-.macro-icon-btn::after {
+   disabled reason when it has one, above the button. Shared by the icon-only
+   macro buttons and the labeled canvas-empty-state Visualize CTA. */
+.macro-icon-btn::after,
+.canvas-visualize-cta::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 6px);
@@ -458,7 +460,9 @@ input {
 }
 
 .macro-icon-btn:hover::after,
-.macro-icon-btn:focus-visible::after {
+.macro-icon-btn:focus-visible::after,
+.canvas-visualize-cta:hover::after,
+.canvas-visualize-cta:focus-visible::after {
   opacity: 1;
 }
 
@@ -812,6 +816,13 @@ input {
   margin-left: auto;
 }
 
+.canvas-refresh-btn {
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+}
+
 .canvas-iframe {
   flex: 1;
   width: 100%;
@@ -846,18 +857,10 @@ input {
 }
 
 .canvas-visualize-cta {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 4px 0;
-}
-
-.canvas-visualize-inline {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  width: 280px;
   margin: 4px 0;
 }
 
@@ -917,10 +920,6 @@ input {
   width: 380px;
   max-width: calc(100vw - 32px);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-}
-
-.modal-subject {
-  width: 320px;
 }
 
 .command-palette {

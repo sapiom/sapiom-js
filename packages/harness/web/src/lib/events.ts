@@ -19,8 +19,13 @@ const mockListeners = new Set<BusListener>();
  * VITE_MOCK=1.
  */
 if (isMockMode() && typeof window !== "undefined") {
-  (window as unknown as { __HARNESS_TEST__: { publish: BusListener } }).__HARNESS_TEST__ = {
-    publish: (message) => mockListeners.forEach((listener) => listener(message)),
+  // Merge rather than replace — api.ts's mock runMacro attaches its own key
+  // (lastMacroRun) to the same test-only object, and module init order isn't
+  // guaranteed either way.
+  const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+  win.__HARNESS_TEST__ = {
+    ...(win.__HARNESS_TEST__ ?? {}),
+    publish: ((message) => mockListeners.forEach((listener) => listener(message))) as BusListener,
   };
 }
 
