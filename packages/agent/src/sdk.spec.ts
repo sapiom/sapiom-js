@@ -25,6 +25,8 @@ import {
   isRetry,
   isTerminate,
   isAgentDefinition,
+  isLegacyOrchestrationDefinition,
+  LEGACY_ORCHESTRATION_DEFINITION_BRAND,
   terminate,
 } from './index.js';
 import type {
@@ -207,6 +209,49 @@ describe('isAgentDefinition', () => {
     } else {
       throw new Error('expected isAgentDefinition to return true');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isLegacyOrchestrationDefinition type guard (pre-rename @sapiom/orchestration)
+// ---------------------------------------------------------------------------
+
+describe('isLegacyOrchestrationDefinition', () => {
+  // What the old SDK's defineOrchestration produced: the same definition
+  // shape, branded with Symbol.for('sapiom.orchestration.definition') = 1
+  // as a non-enumerable property.
+  function makeLegacyDefinition(): unknown {
+    const def = { name: 'legacy-wf', entry: 'start', steps: { start: makeStep('start') } };
+    Object.defineProperty(def, LEGACY_ORCHESTRATION_DEFINITION_BRAND, {
+      value: 1,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+    return def;
+  }
+
+  it('returns true for a legacy-branded definition', () => {
+    expect(isLegacyOrchestrationDefinition(makeLegacyDefinition())).toBe(true);
+  });
+
+  it('returns false for a current defineAgent definition — the two brands are distinct', () => {
+    const def = defineAgent({ name: 'wf', entry: 'start', steps: { start: makeStep('start') } });
+    expect(isLegacyOrchestrationDefinition(def)).toBe(false);
+    expect(isAgentDefinition(makeLegacyDefinition())).toBe(false);
+  });
+
+  it('returns false for plain objects, null and primitives', () => {
+    expect(isLegacyOrchestrationDefinition({ name: 'wf', entry: 'start', steps: {} })).toBe(false);
+    expect(isLegacyOrchestrationDefinition(null)).toBe(false);
+    expect(isLegacyOrchestrationDefinition('workflow')).toBe(false);
+    expect(isLegacyOrchestrationDefinition(undefined)).toBe(false);
+  });
+
+  it('resolves through the global symbol registry — a brand attached via its own Symbol.for call matches', () => {
+    const def = { name: 'other-copy', entry: 's', steps: { s: makeStep('s') } };
+    Object.defineProperty(def, Symbol.for('sapiom.orchestration.definition'), { value: 1, enumerable: false });
+    expect(isLegacyOrchestrationDefinition(def)).toBe(true);
   });
 });
 
