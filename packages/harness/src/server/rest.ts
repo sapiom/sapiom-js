@@ -101,6 +101,11 @@ export interface RestRouterOptions {
    * sample project"). Optional so callers without the real seeder (tests)
    * get a 501 from the route instead of having to stub one. */
   seedSampleProject?: () => Promise<SampleProjectSeedResponse>;
+  /** Where GET/PATCH /settings (and /state's settings read) persist to.
+   * Omitted, the real `~/.sapiom/harness/settings.json` — the integrator
+   * (server/index.ts) passes the path under its resolved state root so an
+   * isolated boot never reads or writes the developer's real settings. */
+  settingsPath?: string;
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
@@ -110,7 +115,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
 
   router.get("/state", async (_req, res, next) => {
     try {
-      const settings = await loadSettings();
+      const settings = await loadSettings(options.settingsPath);
       const state: AppState = {
         version,
         authenticated: identity !== null,
@@ -133,7 +138,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
 
   router.get("/settings", async (_req, res, next) => {
     try {
-      res.json(await loadSettings());
+      res.json(await loadSettings(options.settingsPath));
     } catch (err) {
       next(err);
     }
@@ -146,9 +151,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
       return;
     }
     try {
-      const current = await loadSettings();
+      const current = await loadSettings(options.settingsPath);
       const updated: HarnessSettings = { ...current, ...parsed.data };
-      await saveSettings(updated);
+      await saveSettings(updated, options.settingsPath);
       if (
         parsed.data.telemetryOptIn !== undefined &&
         parsed.data.telemetryOptIn !== current.telemetryOptIn

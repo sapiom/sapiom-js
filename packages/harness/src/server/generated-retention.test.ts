@@ -69,10 +69,7 @@ describe("generated-dir retention wiring", () => {
       telemetryOptIn: false,
       autoCreateSession: false,
       adapters: { "claude-code": fakeClaudeAdapter() },
-      sessionsPath: join(dir, "sessions.json"),
-      eventStorePath: join(dir, "events.ndjson"),
-      workflowsRegistryPath: join(dir, "workflows.json"),
-      generatedRoot,
+      stateRoot: dir,
     });
   }
 

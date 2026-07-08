@@ -10,7 +10,10 @@ const DEFAULT_SETTINGS: HarnessSettings = {
 
 const MAX_RECENT_DIRS = 8;
 
-function settingsFilePath(): string {
+/** The real settings file. Every function below accepts an explicit path so
+ *  tests and scripted checks can point at a scratch state root instead —
+ *  omitted, they operate on the real file, unchanged for CLI users. */
+function defaultSettingsFilePath(): string {
   return expandHome(HARNESS_PATHS.settings);
 }
 
@@ -55,18 +58,18 @@ export async function sanitizeRecentDirs(candidates: string[]): Promise<string[]
 }
 
 /** Whether settings have ever been persisted — used to detect first run. */
-export async function hasStoredSettings(): Promise<boolean> {
+export async function hasStoredSettings(settingsPath: string = defaultSettingsFilePath()): Promise<boolean> {
   try {
-    await fs.access(settingsFilePath());
+    await fs.access(settingsPath);
     return true;
   } catch {
     return false;
   }
 }
 
-export async function loadSettings(): Promise<HarnessSettings> {
+export async function loadSettings(settingsPath: string = defaultSettingsFilePath()): Promise<HarnessSettings> {
   try {
-    const raw = await fs.readFile(settingsFilePath(), "utf-8");
+    const raw = await fs.readFile(settingsPath, "utf-8");
     const parsed = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<HarnessSettings>) };
     return { ...parsed, recentDirs: await sanitizeRecentDirs(parsed.recentDirs) };
   } catch {
@@ -74,18 +77,49 @@ export async function loadSettings(): Promise<HarnessSettings> {
   }
 }
 
-export async function saveSettings(settings: HarnessSettings): Promise<void> {
-  const filePath = settingsFilePath();
+export async function saveSettings(
+  settings: HarnessSettings,
+  settingsPath: string = defaultSettingsFilePath(),
+): Promise<void> {
   const sanitized: HarnessSettings = {
     ...settings,
     recentDirs: await sanitizeRecentDirs(settings.recentDirs),
   };
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(sanitized, null, 2) + "\n");
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify(sanitized, null, 2) + "\n");
 }
 
 /** Record `cwd` as the most-recently-used project directory (validated, deduped, capped). */
-export async function recordRecentDir(cwd: string): Promise<void> {
-  const settings = await loadSettings();
-  await saveSettings({ ...settings, recentDirs: [cwd, ...settings.recentDirs] });
+export async function recordRecentDir(cwd: string, settingsPath: string = defaultSettingsFilePath()): Promise<void> {
+  const settings = await loadSettings(settingsPath);
+  await saveSettings({ ...settings, recentDirs: [cwd, ...settings.recentDirs] }, settingsPath);
+}
+
+/**
+ * Boot-time hygiene: persist the removal of recent-dir entries whose path no
+ * longer exists on disk. sanitizeRecentDirs() already drops them from every
+ * in-memory read, but a read alone never rewrites the file — so a dead entry
+ * (deleted project, a crashed check's temp dir) would otherwise sit in
+ * settings.json indefinitely. Returns the entries that were dropped; leaves
+ * the file completely untouched (not even created) when there is nothing to
+ * prune, so this can never break first-run detection (hasStoredSettings).
+ */
+export async function pruneDeadRecentDirs(settingsPath: string = defaultSettingsFilePath()): Promise<string[]> {
+  let stored: Partial<HarnessSettings>;
+  try {
+    stored = JSON.parse(await fs.readFile(settingsPath, "utf-8")) as Partial<HarnessSettings>;
+  } catch {
+    return []; // no settings file yet (or unreadable) — nothing to prune
+  }
+  const recentDirs = Array.isArray(stored.recentDirs)
+    ? stored.recentDirs.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const dead: string[] = [];
+  for (const entry of recentDirs) {
+    if ((await normalizeRecentDir(entry)) === null) dead.push(entry);
+  }
+  if (dead.length === 0) return [];
+  // saveSettings' own sanitize pass is what actually drops the dead entries.
+  await saveSettings({ ...DEFAULT_SETTINGS, ...stored, recentDirs }, settingsPath);
+  return dead;
 }

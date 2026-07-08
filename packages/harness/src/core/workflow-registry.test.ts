@@ -112,4 +112,51 @@ describe("WorkflowRegistry", () => {
     const entry = list.find((workflow) => workflow.path === projectDir);
     expect(entry?.source).toBe("connect");
   });
+
+  describe("prune", () => {
+    it("drops entries whose path no longer exists and persists the result", async () => {
+      const liveDir = path.join(tmpRoot, "live");
+      const deadDir = path.join(tmpRoot, "dead");
+      await writeMarker(liveDir, 1);
+      await writeMarker(deadDir, 2);
+      await registry.scan(tmpRoot);
+      await fs.rm(deadDir, { recursive: true, force: true });
+
+      const pruned = await registry.prune();
+      expect(pruned.map((workflow) => workflow.path)).toEqual([deadDir]);
+      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([liveDir]);
+
+      // Persisted, not just dropped from the in-memory list.
+      const reloaded = new WorkflowRegistry(registryPath);
+      expect((await reloaded.list()).map((workflow) => workflow.path)).toEqual([liveDir]);
+    });
+
+    it("keeps an existing-but-unbuilt project (only nonexistent paths are pruned)", async () => {
+      // A bare directory with a marker and nothing else — no node_modules,
+      // no build output. Deleting nothing: prune must keep it.
+      const unbuiltDir = path.join(tmpRoot, "unbuilt");
+      await writeMarker(unbuiltDir, 3);
+      await registry.scan(tmpRoot);
+
+      expect(await registry.prune()).toEqual([]);
+      expect((await registry.list()).map((workflow) => workflow.path)).toEqual([unbuiltDir]);
+    });
+
+    it("does not rewrite the registry file when nothing was pruned", async () => {
+      const liveDir = path.join(tmpRoot, "live");
+      await writeMarker(liveDir, 1);
+      await registry.scan(tmpRoot);
+      const before = await fs.stat(registryPath);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(await registry.prune()).toEqual([]);
+      const after = await fs.stat(registryPath);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+    });
+
+    it("is a no-op when no registry file exists yet", async () => {
+      expect(await registry.prune()).toEqual([]);
+      await expect(fs.access(registryPath)).rejects.toThrow();
+    });
+  });
 });

@@ -98,10 +98,7 @@ describe("codex session lifecycle (real files, no mocking)", () => {
       telemetryOptIn: false,
       autoCreateSession: false,
       adapters: { codex: fakeCodexAdapter() },
-      sessionsPath: join(dir, "sessions.json"),
-      generatedRoot: join(dir, "generated"),
-      eventStorePath,
-      workflowsRegistryPath: join(dir, "workflows.json"),
+      stateRoot: dir,
       codexHomeDir,
     });
 

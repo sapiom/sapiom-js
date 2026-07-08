@@ -10,7 +10,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpDir };
 });
 
-import { hasStoredSettings, loadSettings, saveSettings, recordRecentDir } from "./settings.js";
+import { hasStoredSettings, loadSettings, saveSettings, recordRecentDir, pruneDeadRecentDirs } from "./settings.js";
 
 /** A real, existing directory to use as a valid recent-dir candidate. */
 async function makeRealDir(name: string): Promise<string> {
@@ -145,6 +145,54 @@ describe("settings persistence", () => {
 
       const settings = await loadSettings();
       expect(settings.recentDirs).toEqual([survivor]);
+    });
+  });
+
+  describe("explicit settingsPath", () => {
+    it("reads and writes the given file instead of the home-dir default", async () => {
+      const customPath = path.join(tmpDir, "custom-root", "settings.json");
+      const a = await makeRealDir("a");
+      await saveSettings({ telemetryOptIn: true, recentDirs: [a] }, customPath);
+
+      expect(await hasStoredSettings(customPath)).toBe(true);
+      expect(await loadSettings(customPath)).toEqual({ telemetryOptIn: true, recentDirs: [a] });
+      // The (mocked-home) default location was never touched.
+      expect(await hasStoredSettings()).toBe(false);
+    });
+  });
+
+  describe("pruneDeadRecentDirs", () => {
+    it("persists the removal of entries whose path no longer exists", async () => {
+      const survivor = await makeRealDir("survivor");
+      const doomed = await makeRealDir("doomed");
+      await saveSettings({ telemetryOptIn: true, recentDirs: [doomed, survivor] });
+      await fs.rm(doomed, { recursive: true, force: true });
+
+      expect(await pruneDeadRecentDirs()).toEqual([doomed]);
+
+      // Persisted on disk, not just filtered by loadSettings' own sanitize.
+      const raw = JSON.parse(await fs.readFile(settingsFilePathFor(tmpDir), "utf-8")) as {
+        telemetryOptIn: boolean;
+        recentDirs: string[];
+      };
+      expect(raw.recentDirs).toEqual([survivor]);
+      expect(raw.telemetryOptIn).toBe(true);
+    });
+
+    it("does not rewrite the file when every entry still exists", async () => {
+      const a = await makeRealDir("a");
+      await saveSettings({ telemetryOptIn: false, recentDirs: [a] });
+      const before = await fs.stat(settingsFilePathFor(tmpDir));
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(await pruneDeadRecentDirs()).toEqual([]);
+      const after = await fs.stat(settingsFilePathFor(tmpDir));
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+    });
+
+    it("does not create a settings file where none exists (first-run detection stays intact)", async () => {
+      expect(await pruneDeadRecentDirs()).toEqual([]);
+      expect(await hasStoredSettings()).toBe(false);
     });
   });
 });

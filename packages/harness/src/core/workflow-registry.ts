@@ -104,6 +104,35 @@ export class WorkflowRegistry {
     return this.workflows;
   }
 
+  /**
+   * Drops entries whose `path` no longer exists on disk and persists the
+   * result — users delete projects, and a crashed run can leave a temp
+   * directory registered. Deliberately narrow: only a confirmed-missing
+   * path (ENOENT/ENOTDIR) is pruned. A directory that exists but is
+   * merely unbuilt, unreadable (permissions), or temporarily unstattable
+   * stays registered. Returns what was pruned so the caller can log it.
+   */
+  async prune(): Promise<WorkflowInfo[]> {
+    await this.ensureLoaded();
+    const kept: WorkflowInfo[] = [];
+    const pruned: WorkflowInfo[] = [];
+    for (const workflow of this.workflows) {
+      try {
+        await fs.stat(workflow.path);
+        kept.push(workflow);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") pruned.push(workflow);
+        else kept.push(workflow);
+      }
+    }
+    if (pruned.length > 0) {
+      this.workflows = kept;
+      await this.persist();
+    }
+    return pruned;
+  }
+
   /** Scans `root` and merges discovered projects into the persisted registry. */
   async scan(root: string): Promise<WorkflowInfo[]> {
     await this.ensureLoaded();
