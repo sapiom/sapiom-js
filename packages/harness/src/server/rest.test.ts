@@ -13,6 +13,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 import type { HarnessSession, MacroDef, WorkflowInfo } from "../shared/types.js";
+import { SessionNotReadyError } from "../core/session-manager.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -26,6 +27,7 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     resume: vi.fn(),
     kill: vi.fn(() => true),
     write: vi.fn(() => true),
+    submitInput: vi.fn(async () => true),
     setBoundWorkflowPath: vi.fn((id: string, workflowPath: string | null) => {
       const session = sessions.get(id);
       if (session) session.boundWorkflowPath = workflowPath;
@@ -122,6 +124,7 @@ describe("createRestRouter", () => {
         lastActiveAt: "2026-01-01T00:00:00.000Z",
         exitCode: null,
         boundWorkflowPath: null,
+        ready: true,
       };
       const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
       const macro: MacroDef = { id: "run_local", label: "Run local", icon: "Play", action: { kind: "inject", text: "x" } };
@@ -284,6 +287,65 @@ describe("createRestRouter", () => {
     });
   });
 
+  describe("POST /sessions/:id/input", () => {
+    it("submits input and returns ok:true", async () => {
+      const sessionManager = fakeSessionManager();
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "hello", submit: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(sessionManager.submitInput).toHaveBeenCalledWith("sess-1", "hello", true);
+    });
+
+    it("400s a malformed body (missing text)", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ submit: true }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("404s when submitInput reports no live pty for the session", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.submitInput as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "hello" }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("409s with a UI-visible reason when the session isn't ready yet (SessionNotReadyError) — never silently swallows the input", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.submitInput as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SessionNotReadyError("sess-1"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "hello" }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toMatch(/not ready yet/i);
+      expect(body.error).toMatch(/trust the folder/i);
+    });
+  });
+
   describe("PATCH /sessions/:id/workflow", () => {
     const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
     const baseSession: HarnessSession = {
@@ -297,6 +359,7 @@ describe("createRestRouter", () => {
       lastActiveAt: "2026-01-01T00:00:00.000Z",
       exitCode: null,
       boundWorkflowPath: null,
+      ready: true,
     };
 
     it("binds a known workflow: validates it, updates the session, and writes the context file", async () => {
