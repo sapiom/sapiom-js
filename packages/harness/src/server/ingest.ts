@@ -36,6 +36,15 @@ export interface IngestDeps {
   resolveSession: (harnessSessionId: string) => IngestSessionContext | undefined;
   /** Called once a session.start event reveals the agent's own session id. */
   onAgentSessionResolved: (harnessSessionId: string, agentSessionId: string) => void;
+  /**
+   * Called once a SessionStart(-equivalent) event is actually processed for
+   * a session — the signal that its TUI is genuinely interactive, not just
+   * that its pty exists. See `SessionManager.setReady`/`HarnessSession.ready`
+   * for what this gates. Fires alongside `onAgentSessionResolved` (same
+   * event), kept separate since "ready" and "agent session id known" are
+   * conceptually distinct even though they happen to co-occur today.
+   */
+  onSessionReady?: (harnessSessionId: string) => void;
   store: { append(event: AnalyticsEvent): Promise<void> };
   batcher: { enqueue(event: AnalyticsEvent): void };
   /** Optional transcript backfill for turn.completed / session.end. */
@@ -106,8 +115,9 @@ export async function processIngest(
     finalEvent = await deps.enrichFromTranscript(event, transcriptPath);
   }
 
-  if (hookEvent === "SessionStart" && finalEvent.agentSessionId) {
-    deps.onAgentSessionResolved(harnessSessionId, finalEvent.agentSessionId);
+  if (hookEvent === "SessionStart") {
+    if (finalEvent.agentSessionId) deps.onAgentSessionResolved(harnessSessionId, finalEvent.agentSessionId);
+    deps.onSessionReady?.(harnessSessionId);
   }
 
   deps.onNormalizedEvent?.(finalEvent);

@@ -17,6 +17,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
+import { Toast } from "./components/Toast";
 import { WorkflowActionStrip } from "./components/WorkflowActionStrip";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
@@ -215,6 +216,8 @@ export const App = (): JSX.Element => {
           onClose={() => setPaletteOpen(false)}
         />
       )}
+
+      {harness.toast && <Toast message={harness.toast} onDismiss={harness.dismissToast} />}
     </div>
   );
 };

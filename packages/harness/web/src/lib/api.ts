@@ -32,6 +32,26 @@ export function boundWorkflowPathOf(session: HarnessSession | null | undefined):
   return session?.boundWorkflowPath ?? null;
 }
 
+/**
+ * Thrown by `RealApi.request()` for any non-2xx response. `.message` keeps
+ * the full "METHOD path → status: body" shape for logs/devtools; `.reason`
+ * is the server's own `{ error: "..." }` message when the body parses as
+ * that shape (e.g. `SessionNotReadyError`'s UI-facing text) — callers that
+ * want to show something a user should actually read (not a debug string)
+ * should prefer `.reason` and fall back to `.message`.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly reason: string | undefined;
+
+  constructor(status: number, message: string, reason: string | undefined) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
 /** Read once at module load: `window.__HARNESS__ = {token}` (baked in by the server), falling back to `?token=`. */
 export function getBootToken(): string {
   const injected = (window as unknown as { __HARNESS__?: { token?: string } }).__HARNESS__;
@@ -70,7 +90,20 @@ class RealApi implements HarnessApi {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new Error(`${init?.method ?? "GET"} ${path} → ${res.status}${body ? `: ${body}` : ""}`);
+      let reason: string | undefined;
+      try {
+        const parsed: unknown = body ? JSON.parse(body) : undefined;
+        if (parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string") {
+          reason = (parsed as { error: string }).error;
+        }
+      } catch {
+        // Not JSON — reason stays undefined, callers fall back to .message.
+      }
+      throw new ApiError(
+        res.status,
+        `${init?.method ?? "GET"} ${path} → ${res.status}${body ? `: ${body}` : ""}`,
+        reason,
+      );
     }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
@@ -187,6 +220,7 @@ class MockApi implements HarnessApi {
       status: "starting",
       createdAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
+      ready: false,
     };
     this.sessions = [...this.sessions, session];
     return session;

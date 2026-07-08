@@ -20,7 +20,7 @@ import type {
   SessionSummary,
   WorkflowInfo,
 } from "../shared/types.js";
-import type { SessionManager } from "../core/session-manager.js";
+import { SessionNotReadyError, type SessionManager } from "../core/session-manager.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
 const createSessionSchema = z.object({
@@ -266,6 +266,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       }
       res.json({ ok: true });
     } catch (err) {
+      if (err instanceof SessionNotReadyError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
       next(err);
     }
   });

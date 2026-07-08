@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import { createMacrosRouter, type MacrosRouterDeps } from "./macros.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { CANVAS_STYLE_GUIDELINES } from "../profiles/canvas-guidelines.js";
+import { SessionNotReadyError } from "../core/session-manager.js";
 import type { WorkflowInfo } from "../shared/types.js";
 
 let server: Server;
@@ -211,5 +212,23 @@ describe("macros router", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("requires a selected workflow");
+  });
+
+  it("409s with a UI-visible reason when the session isn't ready yet (SessionNotReadyError) — never silently swallows the macro", async () => {
+    const deps = makeDeps({
+      injectInput: vi.fn().mockRejectedValue(new SessionNotReadyError("sess-1")),
+    });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/not ready yet/i);
+    expect(body.error).toMatch(/trust the folder/i);
   });
 });

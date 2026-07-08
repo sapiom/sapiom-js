@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 import { CANVAS_INDEX, type MacroDef, type RunMacroRequest, type WorkflowInfo } from "../shared/types.js";
 import { MacroValidationError, resolveMacro } from "../core/macro-runner.js";
+import { SessionNotReadyError } from "../core/session-manager.js";
 
 export interface MacrosRouterDeps {
   listMacros(): MacroDef[];
@@ -76,6 +77,10 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
     } catch (err) {
       if (err instanceof MacroValidationError) {
         res.status(400).json({ error: err.message });
+        return;
+      }
+      if (err instanceof SessionNotReadyError) {
+        res.status(409).json({ error: err.message });
         return;
       }
       res.status(500).json({ error: (err as Error).message });

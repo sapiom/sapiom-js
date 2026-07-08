@@ -88,6 +88,20 @@ export interface HarnessSession {
    *  via `PATCH /api/sessions/:id/workflow`; mirrored into
    *  HARNESS_CONTEXT_FILE in the session's cwd so the agent can read it. */
   boundWorkflowPath: string | null;
+  /**
+   * `status === "running"` only means the pty is alive — the agent's TUI
+   * can still be sitting on a blocking prompt (most commonly: "trust this
+   * directory?") that isn't accepting real input yet. `ready` is the
+   * stronger signal: this pty is actually interactive. Reset to `false` on
+   * every fresh spawn (including resume) and only ever set by
+   * `SessionManager.setReady()` — see there for what flips it. Injecting
+   * input (macros, `/sessions/:id/input`) against a not-ready session
+   * queues briefly then fails loudly (`SessionNotReadyError`) rather than
+   * silently writing into a TUI that isn't listening; raw terminal
+   * keystrokes (`write()`) are deliberately never gated on this, since a
+   * human must always be able to answer the blocking prompt themselves.
+   */
+  ready: boolean;
 }
 
 /** A resumable past session discovered from agent transcripts or our registry. */
@@ -145,6 +159,17 @@ export interface HarnessAdapter {
   eventSource: "hooks" | "transcript-tail";
   /** Resumable sessions for a directory (agent-side history). */
   listPastSessions(cwd: string): Promise<SessionSummary[]>;
+  /**
+   * Best-effort scrollback check for this harness's own known blocking
+   * prompts (e.g. "trust this directory?"), for harnesses whose real
+   * readiness signal (SessionStart-equivalent) can't be trusted to arrive
+   * before the very first input is worth injecting — see CodexAdapter's
+   * implementation for why. Optional: a harness whose readiness signal IS
+   * trustworthy standalone (Claude Code's SessionStart hook) should leave
+   * this unimplemented rather than have SessionManager fall back to a
+   * scrollback heuristic it doesn't need.
+   */
+  detectBlockingPrompt?(scrollback: string): boolean;
 }
 
 // ---------------------------------------------------------------------------

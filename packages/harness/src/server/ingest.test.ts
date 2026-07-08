@@ -131,6 +131,34 @@ describe("createIngestRouter", () => {
     expect(resolved[0]).toEqual({ harnessSessionId: "session-1", agentSessionId: "agent-42" });
   });
 
+  it("calls onSessionReady on session.start — the readiness signal SessionManager gates programmatic input on", async () => {
+    const ready: string[] = [];
+    start({ onSessionReady: (harnessSessionId) => ready.push(harnessSessionId) });
+
+    const res = await postIngest(baseUrl, {
+      hookEvent: "SessionStart",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-42", source: "startup" },
+    });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => expect(ready).toEqual(["session-1"]));
+  });
+
+  it("does not call onSessionReady for events other than SessionStart", async () => {
+    const ready: string[] = [];
+    start({ onSessionReady: (harnessSessionId) => ready.push(harnessSessionId) });
+
+    await postIngest(baseUrl, {
+      hookEvent: "UserPromptSubmit",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1", prompt: "hello" },
+    });
+
+    await vi.waitFor(() => expect(stored).toHaveLength(1));
+    expect(ready).toEqual([]);
+  });
+
   it("drops events for unknown sessions without storing anything", async () => {
     const res = await postIngest(baseUrl, {
       hookEvent: "UserPromptSubmit",
