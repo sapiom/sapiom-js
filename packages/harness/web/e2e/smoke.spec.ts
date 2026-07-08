@@ -634,6 +634,61 @@ test("a canvas.reload bus message swaps the empty state for the generated iframe
   await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", /^\/canvas\/sess-boot\/\?theme=(light|dark)$/);
 });
 
+test("a pending canvas load shows a skeleton over the iframe — never a blank pane", async ({ page }) => {
+  // Stall the canvas document so the load stays pending long enough to assert
+  // on the skeleton deterministically.
+  let releaseCanvas = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseCanvas = resolve;
+  });
+  await page.route("**/canvas/sess-boot/**", async (route) => {
+    await gate;
+    await route.fulfill({ contentType: "text/html", body: "<html><body>diagram</body></html>" });
+  });
+
+  await page.evaluate(() => {
+    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+      type: "canvas.reload",
+      harnessSessionId: "sess-boot",
+    });
+  });
+
+  // While the iframe document is in flight: skeleton visible, no bare pane.
+  await expect(page.getByTestId("canvas-loading")).toBeVisible();
+  await expect(page.getByTestId("canvas-loading")).toContainText("Rendering diagram");
+
+  releaseCanvas();
+  await expect(page.getByTestId("canvas-loading")).toHaveCount(0);
+  await expect(page.locator(".canvas-iframe")).toBeVisible();
+});
+
+test("switching the bound workflow refetches the canvas immediately — the server resolves the binding per request", async ({
+  page,
+}) => {
+  let canvasRequests = 0;
+  await page.route("**/canvas/sess-boot/**", async (route) => {
+    canvasRequests += 1;
+    await route.fulfill({ contentType: "text/html", body: "<html><body>diagram</body></html>" });
+  });
+
+  await page.evaluate(() => {
+    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+      type: "canvas.reload",
+      harnessSessionId: "sess-boot",
+    });
+  });
+  await expect(page.locator(".canvas-iframe")).toBeVisible();
+  await expect.poll(() => canvasRequests).toBeGreaterThan(0);
+  const requestsBeforeBind = canvasRequests;
+
+  // Re-bind to a different workflow: the pane must refetch the same URL on
+  // its own (the served document changes with the binding) — no canvas.reload
+  // round-trip required first.
+  await page.getByTestId("workflow-rfq").click();
+  await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
+  await expect.poll(() => canvasRequests).toBeGreaterThan(requestsBeforeBind);
+});
+
 test.describe("background-task canvas states", () => {
   const baseTask = {
     id: "task-1",
