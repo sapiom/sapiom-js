@@ -429,9 +429,11 @@ function killChildAndWait(child: ReturnType<typeof spawn>, timeoutMs = 3000): Pr
 }
 
 // Explicit exit as a backstop: teardown above should already release every
-// handle (server, sessions, WS client, mock-collector), but a CI runner
-// hanging on a stray one is a much worse failure mode than an explicit exit
-// here masking it — `process.exitCode` alone only takes effect once the
+// handle (server, sessions, WS client, mock-collector) — server.close() now
+// calls SessionManager.killAll(), so the fake-claude pty child is actually
+// terminated rather than merely orphaned by an exit here — but a CI runner
+// hanging on a stray handle is a much worse failure mode than an explicit
+// exit masking one, and `process.exitCode` alone only takes effect once the
 // event loop drains on its own, which is exactly the thing we can't fully
 // guarantee.
 main()
