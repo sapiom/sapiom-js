@@ -53,11 +53,12 @@
  *      the analytics collector's port produces no port.detected frame at
  *      all — proving server/index.ts's exclusion wiring, not just
  *      PortDetector's own unit-tested filter in isolation.
- *  13. Canvas kit: the canvas template (core/canvas-template.ts) is already
- *      on disk at .sapiom/canvas/index.html the moment a session is
- *      created — before any visualize run — and POST /api/macros/
- *      visualize/run succeeds both with no workflow bound (requiresWorkflow:
- *      false — workspace-overview mode) and after one is bound.
+ *  13. Canvas kit: both .sapiom/canvas/_template.html (pristine clone
+ *      source) and index.html (live canvas, same initial content) are
+ *      already on disk the moment a session is created — before any
+ *      visualize run — and POST /api/macros/visualize/run succeeds both
+ *      with no workflow bound (requiresWorkflow: false — workspace-overview
+ *      mode) and after one is bound.
  *
  * Run with: pnpm e2e:live
  */
@@ -73,7 +74,7 @@ import { startServer } from "../src/server/index.js";
 import { createClaudeCodeAdapter } from "../src/core/adapters/claude-code.js";
 import { createCodexAdapter } from "../src/core/adapters/codex.js";
 import { ensureSpawnHelperExecutable } from "../src/core/session-manager.js";
-import { EMPTY_CANVAS_DATA, renderCanvasHtml } from "../src/core/canvas-template.js";
+import { CANVAS_TEMPLATE_FILE, TEMPLATE_HTML } from "../src/core/canvas-template.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = path.join(SCRIPT_DIR, "fixtures", "fake-claude.mjs");
@@ -254,11 +255,17 @@ async function testCoreFlow(): Promise<void> {
     assert(initialContext.boundWorkflow === null, "harness-context.json is written on session create with boundWorkflow: null");
 
     // The canvas kit's template is also backfilled before the pty spawns —
-    // the canvas pane must never open to a bare empty iframe.
+    // the canvas pane must never open to a bare empty iframe, and a pristine
+    // clone source must already exist for the visualize macro to clone from.
     const initialCanvasHtml = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
     assert(
-      initialCanvasHtml === renderCanvasHtml(EMPTY_CANVAS_DATA),
+      initialCanvasHtml === TEMPLATE_HTML,
       "the canvas kit's empty-state template is already on disk when the session is created",
+    );
+    const initialTemplateHtml = await fs.readFile(path.join(projectDir, CANVAS_TEMPLATE_FILE), "utf8");
+    assert(
+      initialTemplateHtml === TEMPLATE_HTML,
+      "a pristine _template.html clone source is also already on disk when the session is created",
     );
 
     // --- 2. the fixture captured its own argv/env — proves the launch-opts wiring ---
@@ -311,15 +318,12 @@ async function testCoreFlow(): Promise<void> {
     });
     console.log("session reported running");
 
-    // --- 4. write to the pty via /api/sessions/:id/input ---
-    const inputRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/input`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ text: "echo hi", submit: true }),
-    });
-    assert(inputRes.status === 200, "POST /api/sessions/:id/input returns 200");
-
-    // --- 5. simulate SessionStart + a PostToolUse (tool.call with a localhost port) hook POST to /ingest ---
+    // --- 4. simulate the SessionStart hook POST to /ingest — for claude-code (no
+    // detectBlockingPrompt fallback), this is what flips HarnessSession.ready, and
+    // submitInput() gates real input on that (SessionNotReadyError otherwise: the
+    // trust-dialog race this mechanism exists to catch). Must happen before any
+    // /api/sessions/:id/input call below, same as a real agent's own hook firing
+    // before the harness ever tries to type into it. ---
     const ingestHeaders = { "Content-Type": "application/json", Authorization: `Bearer ${bootToken}` };
     const agentSessionId = "e2e-agent-session-1";
 
@@ -334,6 +338,15 @@ async function testCoreFlow(): Promise<void> {
     });
     assert(sessionStartRes.status === 200, "POST /ingest (SessionStart) returns 200");
 
+    // --- 5. now that the session is ready, write to the pty via /api/sessions/:id/input ---
+    const inputRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/input`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: "echo hi", submit: true }),
+    });
+    assert(inputRes.status === 200, "POST /api/sessions/:id/input returns 200");
+
+    // --- 5a. a PostToolUse (tool.call with a localhost port) hook POST to /ingest ---
     const toolCallRes = await fetch(`${baseUrl}/ingest`, {
       method: "POST",
       headers: ingestHeaders,

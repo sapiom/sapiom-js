@@ -32,7 +32,7 @@ describe("DEFAULT_MACROS", () => {
     });
   });
 
-  it("visualize is a one-click, unbound-friendly data-only edit — no free-text subject, no workflow required", () => {
+  it("visualize is a one-click, unbound-friendly template clone — no free-text subject, no workflow required", () => {
     const macro = DEFAULT_MACROS.find((m) => m.id === "visualize")!;
     // Works whether or not a workflow is bound — the agent reads
     // harness-context.json at run time to decide single-workflow vs.
@@ -44,9 +44,12 @@ describe("DEFAULT_MACROS", () => {
       expect(macro.action.text).toContain("{{canvas.path}}");
       expect(macro.action.text).not.toContain("{{workflow.path}}");
       expect(macro.action.text).not.toContain("{{subject}}");
-      // Data-only edit, not "write HTML" — the whole point of the canvas kit.
-      expect(macro.action.text).toMatch(/canvas-data/);
+      // Clone-and-fill, not a JSON data edit and not "write HTML from
+      // scratch" — the whole point of the template-clone canvas kit.
+      expect(macro.action.text).toMatch(/_template\.html/);
+      expect(macro.action.text).toMatch(/canvas-patterns/);
       expect(macro.action.text).toMatch(/harness-context\.json/);
+      expect(macro.action.text).toMatch(/do not write new css/i);
     }
   });
 
