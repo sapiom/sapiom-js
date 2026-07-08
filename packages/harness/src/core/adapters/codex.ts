@@ -317,7 +317,25 @@ export class CodexAdapter implements HarnessAdapter {
  * process on startup.
  */
 function buildConfigArgs(opts: LaunchOpts): string[] {
-  const args = ["-c", "check_for_update_on_startup=false"];
+  const args = [
+    "-c",
+    "check_for_update_on_startup=false",
+    // Codex's default approval policy interrupts the session with "Would you
+    // like to run the following command?" prompts (even for read-only
+    // commands like `ps`). Harness sessions are expected to run without
+    // approval interruptions — the analog of Claude Code sessions, which the
+    // harness runs in auto mode — so pin codex's non-interactive pairing:
+    // never ask for approval, and confine writes to the workspace via the OS
+    // sandbox instead of via per-command human review. Both keys and their
+    // values confirmed against a locally installed codex-cli 0.134.0 (its
+    // config deserializer enumerates `never` / `workspace-write` among the
+    // accepted variants when probed with a bogus value). `-c` values parse
+    // as TOML, so the string values need the embedded quotes.
+    "-c",
+    'approval_policy="never"',
+    "-c",
+    'sandbox_mode="workspace-write"',
+  ];
   if (opts.systemPromptFile) {
     try {
       const prompt = readFileSync(opts.systemPromptFile, "utf8");
