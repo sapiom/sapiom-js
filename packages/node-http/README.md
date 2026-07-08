@@ -1,5 +1,13 @@
 # @sapiom/node-http
 
+> 🕗 **Deprecated.** Sapiom has moved to a new agent-first platform. This
+> package is not recommended for new projects and receives maintenance fixes
+> only. Build on the new packages instead — [`@sapiom/agent`](https://www.npmjs.com/package/@sapiom/agent)
+> and [`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools), with the
+> [`@sapiom/cli`](https://www.npmjs.com/package/@sapiom/cli) and
+> [`@sapiom/mcp`](https://www.npmjs.com/package/@sapiom/mcp) developer tools. See
+> the [SDK README](https://github.com/sapiom/sapiom-js#readme).
+
 [![npm version](https://badge.fury.io/js/%40sapiom%2Fnode-http.svg)](https://www.npmjs.com/package/@sapiom/node-http)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

@@ -311,12 +311,6 @@ importers:
       '@sapiom/agent-core':
         specifier: workspace:^
         version: link:../agent-core
-      '@sapiom/core':
-        specifier: workspace:*
-        version: link:../core
-      '@sapiom/fetch':
-        specifier: workspace:*
-        version: link:../fetch
       zod:
         specifier: ^3.25.0
         version: 3.25.76
