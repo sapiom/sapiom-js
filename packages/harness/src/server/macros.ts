@@ -27,6 +27,10 @@ export interface MacrosRouterDeps {
   injectInput(harnessSessionId: string, text: string, submit: boolean): Promise<void>;
   /** Opens a URL in the user's default browser (the `open` package). */
   openUrl(url: string): Promise<void>;
+  /** Runs the deterministic canvas render for a session (the "visualize"
+   *  macro's `render-canvas` action) — never throws (core/canvas-render.ts's
+   *  contract), so this has no error path of its own to report. */
+  renderCanvas(harnessSessionId: string): Promise<void>;
 }
 
 export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
@@ -69,6 +73,8 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
 
       if (resolved.kind === "open-url") {
         await deps.openUrl(resolved.url);
+      } else if (resolved.kind === "render-canvas") {
+        await deps.renderCanvas(body.harnessSessionId);
       } else {
         await deps.injectInput(body.harnessSessionId, resolved.text, resolved.submit);
       }

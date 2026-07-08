@@ -8,5 +8,10 @@
     "types": ["node"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "web"]
+  // __fixtures__ trees are bundled independently by esbuild inside
+  // core/canvas-graph.ts's `check()` call (its own module resolution root) —
+  // some are deliberately broken (unresolvable import, no defineAgent
+  // export) to exercise the extractor's degradation paths, so they must
+  // never be type-checked as part of the harness's own source tree.
+  "exclude": ["node_modules", "dist", "web", "src/**/__fixtures__/**"]
 }

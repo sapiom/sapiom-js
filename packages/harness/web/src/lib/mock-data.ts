@@ -173,11 +173,19 @@ export const MOCK_MACROS: MacroDef[] = [
     requiresWorkflow: true,
   },
   {
-    // One-click render/re-render of the bound workflow — no free-text subject,
-    // matches the real DEFAULT_MACROS contract (src/core/macros.ts).
+    // One-click, unbound-friendly deterministic render — no LLM, no pty
+    // involved. Matches the real DEFAULT_MACROS contract (src/core/macros.ts).
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
+    action: { kind: "render-canvas" },
+    requiresWorkflow: false,
+  },
+  {
+    // The LLM-authored fallback for custom/narrative views.
+    id: "ai-visualize",
+    label: "AI Visualize",
+    icon: "Wand2",
     action: {
       kind: "inject",
       text: "Render (or re-render, overwriting {{canvas.path}}) a visualization of the workflow at {{workflow.path}} — its steps, control flow, and how it interconnects with the other workflows in this workspace.",

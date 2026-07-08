@@ -426,10 +426,12 @@ export interface WorkflowInfo {
 // ---------------------------------------------------------------------------
 
 /**
- * A macro either injects text into the active session's pty or opens a URL.
- * Template placeholders, substituted server-side before execution:
+ * A macro injects text into the active session's pty, opens a URL, or (the
+ * one exception to "always goes through the agent's session") runs the
+ * deterministic canvas render server-side. Template placeholders, substituted
+ * server-side before "inject"/"open-url" execution:
  *   {{workflow.path}} {{workflow.name}} {{workflow.definitionId}}
- *   {{session.cwd}}   {{canvas.path}}   {{subject}}   (Visualize free-text)
+ *   {{session.cwd}}   {{canvas.path}}   {{subject}}   (ai-visualize free-text)
  */
 export interface MacroDef {
   id: string;
@@ -438,7 +440,11 @@ export interface MacroDef {
   icon: string;
   action:
     | { kind: "inject"; text: string; submit?: boolean }
-    | { kind: "open-url"; url: string };
+    | { kind: "open-url"; url: string }
+    /** Zero-LLM, instant: runs core/canvas-render.ts against the session's
+     *  bound workflow (or the workspace overview when unbound) and writes
+     *  .sapiom/canvas/index.html directly — no prompt, no pty involved. */
+    | { kind: "render-canvas" };
   /** Macro requires a selected workflow to be enabled. */
   requiresWorkflow?: boolean;
 }

@@ -25,14 +25,21 @@ function userMessageLine(message: string): string {
 
 describe("CodexAdapter", () => {
   describe("launch/resume", () => {
-    it("builds a launch SpawnSpec disabling the update check and no env overrides", () => {
+    it("builds a launch SpawnSpec with update check off, never-ask approvals, workspace-write sandbox, and no env overrides", () => {
       const adapter = new CodexAdapter({ binary: "fake-codex" });
       const spec = adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj" });
 
       expect(spec.command).toBe("fake-codex");
       expect(spec.cwd).toBe("/tmp/proj");
       expect(spec.env).toEqual({});
-      expect(spec.args).toEqual(["-c", "check_for_update_on_startup=false"]);
+      expect(spec.args).toEqual([
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        'sandbox_mode="workspace-write"',
+      ]);
     });
 
     it("embeds the systemPromptFile's content inline via -c developer_instructions=<value>", async () => {
@@ -54,6 +61,10 @@ describe("CodexAdapter", () => {
         "-c",
         "check_for_update_on_startup=false",
         "-c",
+        'approval_policy="never"',
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "-c",
         `developer_instructions=${JSON.stringify("You are a Sapiom workflow builder.\nBe concise.")}`,
       ]);
 
@@ -68,7 +79,14 @@ describe("CodexAdapter", () => {
         systemPromptFile: "/does/not/exist/prompt.txt",
       });
 
-      expect(spec.args).toEqual(["-c", "check_for_update_on_startup=false"]);
+      expect(spec.args).toEqual([
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        'sandbox_mode="workspace-write"',
+      ]);
     });
 
     it("builds a resume SpawnSpec with `resume <rolloutId>` as the leading args", () => {
@@ -84,6 +102,10 @@ describe("CodexAdapter", () => {
         "019e62d5-a020-75f1-b5e8-253383076f83",
         "-c",
         "check_for_update_on_startup=false",
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        'sandbox_mode="workspace-write"',
       ]);
       expect(spec.env).toEqual({});
     });
@@ -96,7 +118,14 @@ describe("CodexAdapter", () => {
         mcpConfigFile: "/tmp/proj/.sapiom/mcp.json",
         settingsFile: "/tmp/proj/.sapiom/settings.json",
       });
-      expect(spec.args).toEqual(["-c", "check_for_update_on_startup=false"]);
+      expect(spec.args).toEqual([
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        'sandbox_mode="workspace-write"',
+      ]);
     });
   });
 

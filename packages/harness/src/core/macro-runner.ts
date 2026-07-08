@@ -18,7 +18,8 @@ export interface MacroContext {
 
 export type ResolvedMacroAction =
   | { kind: "inject"; text: string; submit: boolean }
-  | { kind: "open-url"; url: string };
+  | { kind: "open-url"; url: string }
+  | { kind: "render-canvas" };
 
 export class MacroValidationError extends Error {
   constructor(message: string) {
@@ -89,6 +90,9 @@ export function resolveMacro(macro: MacroDef, ctx: MacroContext): ResolvedMacroA
 
   if (macro.action.kind === "open-url") {
     return { kind: "open-url", url: substitute(macro.action.url, ctx) };
+  }
+  if (macro.action.kind === "render-canvas") {
+    return { kind: "render-canvas" };
   }
 
   return {

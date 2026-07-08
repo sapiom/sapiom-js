@@ -350,28 +350,36 @@ input {
 /* Icon-only at rest; hovering it OR focusing anything inside it
    (:focus-within — keyboard tabbing gets the same reveal a mouse hover
    does) expands it into a floating icon+label panel over the terminal.
-   Full labels without permanently costing the terminal any width. */
+   Full labels without permanently costing the terminal any width.
+   Background is a fully opaque surface color (not --accent-dim, which is
+   translucent) — expanded, this panel floats directly over the terminal,
+   and a translucent fill let terminal text bleed through it. */
 .workflow-action-strip {
   position: absolute;
   left: 3px;
   width: 26px;
-  z-index: 5;
+  z-index: 10;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 4px 3px;
-  background: var(--accent-dim);
+  background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-left: none;
   border-radius: 0 8px 8px 8px;
   transition:
     top 0.15s ease,
-    width 0.15s ease;
+    width 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .workflow-action-strip:hover,
 .workflow-action-strip:focus-within {
   width: 200px;
+  /* Only while expanded over the terminal does it need to read as
+     floating above it — flush against the rail column at rest, no
+     shadow is needed there. */
+  box-shadow: var(--shadow-lg);
 }
 
 .strip-item {

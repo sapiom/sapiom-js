@@ -52,18 +52,28 @@ export const DEFAULT_MACROS: MacroDef[] = [
     },
   },
   {
-    // One-click render/re-render, unbound-friendly: the canvas kit
-    // (core/canvas-template.ts) has already dropped a prebuilt, pristine
-    // _template.html plus a live index.html into .sapiom/canvas/ — the
-    // agent clones the template and fills it in with real markup, using the
-    // classes/patterns the template documents, rather than hand-rolling CSS
-    // or a whole document from scratch. No free-text subject and no
-    // {{workflow.path}} reference: whether there's a bound workflow is
-    // something the agent reads out of harness-context.json at run time, so
-    // the same static prompt works whether or not one is selected.
+    // One-click render/re-render, unbound-friendly: runs the deterministic,
+    // zero-LLM pipeline (core/canvas-render.ts) server-side — extracts the
+    // bound workflow's real step graph (or every registered workflow, for a
+    // workspace overview) via @sapiom/agent-core's `check()` and lays it out
+    // itself, typically well under a second, without touching the session's
+    // pty at all. See "ai-visualize" below for the narrative/custom path.
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
+    requiresWorkflow: false,
+    action: { kind: "render-canvas" },
+  },
+  {
+    // The pre-deterministic-render behavior, kept as an explicit fallback for
+    // custom/narrative views the structural extraction can't produce (e.g. a
+    // description of *why* a step branches, not just that it does). Clones
+    // the canvas kit template and asks the agent to hand-write the SVG using
+    // its documented patterns — the same ~1-2 minute LLM round-trip
+    // "visualize" used to always pay.
+    id: "ai-visualize",
+    label: "AI Visualize",
+    icon: "Wand2",
     requiresWorkflow: false,
     action: {
       kind: "inject",

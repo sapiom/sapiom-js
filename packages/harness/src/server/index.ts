@@ -41,11 +41,13 @@ import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
+import { removeGeneratedSessionDir, sweepGeneratedDirs } from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import { writeHarnessContext, harnessContextFileExists } from "../core/workspace-context.js";
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
+import { renderCanvasForSession } from "../core/canvas-render.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -54,6 +56,7 @@ import { createEventsWebSocketHandler } from "./events-ws.js";
 import { attachWebSocketRouters } from "./ws-router.js";
 import { createIngestRouter, processIngest, type IngestDeps, type IngestRequestBody, type IngestSessionContext } from "./ingest.js";
 import { createCanvasRouter } from "./canvas.js";
+import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 
@@ -73,6 +76,14 @@ const CODEX_ROLLOUT_DISCOVERY_POLL_MS = 300;
  * thread an async registry lookup through the macro-runner's sync contract. */
 const WORKFLOWS_CACHE_REFRESH_MS = 3_000;
 
+/** How often SessionManager.sweepDeadSessions() runs — the backstop that
+ * reconciles any non-exited session record whose pty process is actually
+ * gone (node-pty's occasionally-missed onExit, or a transition nothing else
+ * reconciled), so a ghost tab self-heals within seconds instead of sitting
+ * in the tab strip until the server restarts. The sweep is a cheap in-memory
+ * walk plus a signal-0 probe per live pty. */
+const SESSION_LIVENESS_SWEEP_MS = 10_000;
+
 export interface HarnessServerOptions {
   port: number;
   /** Bind address. Defaults to 127.0.0.1 — the server must never listen on 0.0.0.0. */
@@ -88,6 +99,12 @@ export interface HarnessServerOptions {
   adapters?: Partial<Record<HarnessKind, HarnessAdapter>>;
   sessionsPath?: string;
   buildLaunchOpts?: LaunchOptsBuilder;
+  /** Root directory per-session generated agent configs are written under —
+   *  and cleaned up from (exit-time delete + boot-time sweep, see
+   *  core/inject/retention.ts). Defaults to HARNESS_PATHS.generated
+   *  (`~/.sapiom/harness/generated`). Tests point this at a temp dir so they
+   *  never write to (or sweep) the real home directory. */
+  generatedRoot?: string;
   collectorUrl?: string;
   workflowsRegistryPath?: string;
   eventStorePath?: string;
@@ -157,12 +174,12 @@ function readVersion(): string {
  * so the remote `sapiom` MCP is actually authenticated — a factory rather
  * than a plain function since it's per-server-instance state.
  */
-function createDefaultBuildLaunchOpts(apiKey: string | null): LaunchOptsBuilder {
+function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: string): LaunchOptsBuilder {
   return async (harnessSessionId) => {
     const [settings, mcpConfigFile, systemPromptFile] = await Promise.all([
-      generateClaudeSettings({ harnessSessionId }),
-      generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey }),
-      generateSystemPromptFile(harnessSessionId),
+      generateClaudeSettings({ harnessSessionId, generatedRoot }),
+      generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey, generatedRoot }),
+      generateSystemPromptFile(harnessSessionId, { generatedRoot }),
     ]);
     return {
       settingsFile: settings.settingsPath,
@@ -241,13 +258,27 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     await writeHarnessContext(session, boundWorkflow, workflowsCache);
   };
 
+  // Exit-time deletion of generated/<id> (see the onStatusChange handler
+  // below) can race a fast resume(): resume regenerates the dir via
+  // buildLaunchOpts, and the rm scheduled at the previous exit could still
+  // be in flight. Serialize by awaiting any pending removal for this id
+  // before (re)generating its files.
+  const generatedRoot = options.generatedRoot;
+  const pendingGeneratedRemovals = new Map<string, Promise<void>>();
+  const innerBuildLaunchOpts =
+    options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot);
+  const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
+    await pendingGeneratedRemovals.get(harnessSessionId);
+    return innerBuildLaunchOpts(harnessSessionId, req);
+  };
+
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
     ingestToken: options.bootToken,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath,
-    buildLaunchOpts: options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null),
+    buildLaunchOpts,
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
     writeWorkspaceContext: writeSessionContext,
@@ -256,6 +287,24 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   });
   await sessionManager.init();
 
+  const sessionSweepTimer = setInterval(() => sessionManager.sweepDeadSessions(), SESSION_LIVENESS_SWEEP_MS);
+  sessionSweepTimer.unref?.();
+
+  // One boot-time sweep for generated dirs the exit-time cleanup below never
+  // reached (crashes, force-kills, accumulation from before retention
+  // existed). Age-gated (GENERATED_SWEEP_MAX_AGE_MS) and skips live
+  // sessions' dirs — fire-and-forget, boot must not wait on potentially
+  // thousands of removals.
+  void sweepGeneratedDirs({
+    generatedRoot,
+    isLiveSession: (harnessSessionId) => {
+      const session = sessionManager.get(harnessSessionId);
+      return session !== undefined && session.status !== "exited";
+    },
+  }).catch((err: unknown) => {
+    console.error("[harness] generated-dir sweep failed:", err);
+  });
+
   sessionManager.onStatusChange((session) => {
     bus.publish({ type: "session.status", session });
     if (session.status === "running") {
@@ -263,6 +312,20 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     } else if (session.status === "exited") {
       canvasWatcher.stop(session.id);
       portDetector.reset(session.id);
+      // The generated config dir is dead once the pty is: every file in it
+      // is regenerated by buildLaunchOpts on resume, and the agent's last
+      // emit.cjs execution (SessionEnd) happens before its process exits.
+      const removal = removeGeneratedSessionDir(session.id, { generatedRoot })
+        .then(() => undefined)
+        .catch((err: unknown) => {
+          console.error("[harness] generated-dir cleanup failed:", err);
+        })
+        .finally(() => {
+          if (pendingGeneratedRemovals.get(session.id) === removal) {
+            pendingGeneratedRemovals.delete(session.id);
+          }
+        });
+      pendingGeneratedRemovals.set(session.id, removal);
     }
   });
 
@@ -282,8 +345,12 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // workflow registry is shared across the whole harness instance, so a
   // scan/connect anywhere changes what every session's `workflows` list
   // should say, not just the session that triggered the scan.
-  const scanWorkflowsAndBroadcast = async (root: string): Promise<void> => {
-    await workflowRegistry.scan(root);
+  // Returns the workflows freshly discovered under `root` (not the whole
+  // merged registry) — callers use this to decide whether THIS scan turned
+  // up something new worth an unprompted canvas render, without conflating
+  // it with unrelated workflows some earlier scan already found elsewhere.
+  const scanWorkflowsAndBroadcast = async (root: string): Promise<WorkflowInfo[]> => {
+    const found = await workflowRegistry.scan(root);
     workflowsCache = await workflowRegistry.list();
     // Rewrite every open session's context file before broadcasting — a
     // listener reacting to workflows.changed (the SPA, or an agent that
@@ -291,10 +358,20 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     // notification before the file it describes is actually updated.
     await Promise.all(sessionManager.list().map((session) => writeSessionContext(session)));
     bus.publish({ type: "workflows.changed" });
+    return found;
   };
 
-  scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
+  // Renders a session's canvas (its bound workflow, or the whole-workspace
+  // overview when unbound) via the deterministic pipeline — always against
+  // the live workflowsCache, never an LLM. Never throws (see core/
+  // canvas-render.ts); best-effort, like every other canvas write here.
+  const renderCanvas = async (session: HarnessSession): Promise<void> => {
+    await renderCanvasForSession(session, workflowsCache);
+  };
+
+  const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
     console.error("[harness] initial workflow scan failed:", err);
+    return [] as WorkflowInfo[];
   });
 
   const eventStore = createEventStore(options.eventStorePath);
@@ -341,11 +418,22 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       writeWorkspaceContext: writeSessionContext,
+      renderCanvas,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
-      onSessionCreated: (cwd) => {
-        scanWorkflowsAndBroadcast(cwd).catch((err: unknown) => {
-          console.error("[harness] workflow scan on session create failed:", err);
-        });
+      onSessionCreated: (cwd, harnessSessionId) => {
+        scanWorkflowsAndBroadcast(cwd)
+          .then((found) => {
+            // Only auto-render when THIS session's own directory turned up a
+            // workflow — an unrelated project scanned earlier elsewhere in
+            // the registry shouldn't unprompt-render into a brand new,
+            // unrelated session's pane.
+            if (found.length === 0) return;
+            const session = sessionManager.get(harnessSessionId);
+            if (session) return renderCanvas(session);
+          })
+          .catch((err: unknown) => {
+            console.error("[harness] workflow scan on session create failed:", err);
+          });
       },
       launchDir,
       availableHarnesses: options.availableHarnesses,
@@ -359,6 +447,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     }),
   );
   app.use(
+    "/api",
+    createCanvasRenderRouter({
+      getSession: (harnessSessionId) => sessionManager.get(harnessSessionId),
+      listWorkflows: () => workflowsCache,
+    }),
+  );
+  app.use(
     createWorkflowsRouter(workflowRegistry),
     createFsRouter(),
     createMacrosRouter({
@@ -366,6 +461,10 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       getSessionCwd: (harnessSessionId) => sessionManager.get(harnessSessionId)?.cwd ?? null,
       getBoundWorkflowPath: (harnessSessionId) => sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
+      renderCanvas: async (harnessSessionId) => {
+        const session = sessionManager.get(harnessSessionId);
+        if (session) await renderCanvas(session);
+      },
       injectInput: async (harnessSessionId, text, submit) => {
         // Two-phase write: a combined text+\r lands in Claude Code as a
         // bracketed paste and never submits.
@@ -553,9 +652,18 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // resolving shouldn't wait on a real pty spawn.
   if (options.autoCreateSession ?? true) {
     const harness = options.defaultHarnessKind ?? "claude-code";
-    sessionManager.create({ cwd: launchDir, harness }).catch((err: unknown) => {
-      console.error("[harness] auto-create boot session failed:", err);
-    });
+    sessionManager
+      .create({ cwd: launchDir, harness })
+      .then(async (session) => {
+        // Reuses the scan already kicked off above rather than scanning
+        // launchDir twice — only renders when it actually found something,
+        // same "discoverable" gate as the REST onSessionCreated path.
+        const found = await initialWorkflowScan;
+        if (found.length > 0) await renderCanvas(session);
+      })
+      .catch((err: unknown) => {
+        console.error("[harness] auto-create boot session failed:", err);
+      });
   }
 
   const address = httpServer.address();
@@ -571,6 +679,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     close: () =>
       new Promise<void>((resolve, reject) => {
         clearInterval(workflowsCacheTimer);
+        clearInterval(sessionSweepTimer);
         canvasWatcher.stopAll();
         for (const tailer of codexTailers.values()) tailer.stop();
         codexTailers.clear();

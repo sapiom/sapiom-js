@@ -263,7 +263,7 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions", () => {
-    it("calls onSessionCreated with the new session's cwd", async () => {
+    it("calls onSessionCreated with the new session's cwd and id", async () => {
       const onSessionCreated = vi.fn();
       const sessionManager = fakeSessionManager();
       (sessionManager.create as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -281,7 +281,7 @@ describe("createRestRouter", () => {
       });
 
       expect(res.status).toBe(201);
-      expect(onSessionCreated).toHaveBeenCalledWith("/tmp/proj");
+      expect(onSessionCreated).toHaveBeenCalledWith("/tmp/proj", "sess-1");
     });
 
     it("does not call onSessionCreated when the request body is invalid", async () => {

@@ -61,6 +61,11 @@
  *      visualize run — and POST /api/macros/visualize/run succeeds both
  *      with no workflow bound (requiresWorkflow: false — workspace-overview
  *      mode) and after one is bound.
+ *  14. Deterministic canvas render (zero LLM): bound to a real @sapiom/agent
+ *      project, POST /api/canvas/:id/render extracts its actual step graph
+ *      and writes real step names + SVG node markup to index.html, and the
+ *      write fires a canvas.reload frame exactly like an agent's own edit
+ *      would — the visualize macro's default path never touches the pty.
  *
  * Run with: pnpm e2e:live
  */
@@ -155,7 +160,12 @@ async function testCoreFlow(): Promise<void> {
   await fs.mkdir(projectDir, { recursive: true });
   // A sapiom.json marker here, in the CLI's launch directory, proves the
   // boot-time workflow scan (item 7 below) — it must be in place before
-  // startServer() runs its one-shot scan of launchDir.
+  // startServer() runs its one-shot scan of launchDir. Deliberately just a
+  // marker (no index.ts) — projectDir doubles as the session's own cwd, and
+  // the "pristine empty template already on disk at create" assertion below
+  // reads its canvas synchronously right after creation, which would race a
+  // real workflow's auto-render. The deterministic-render proof (item 14)
+  // uses a separate, dedicated workflow directory instead — see below.
   await fs.writeFile(path.join(projectDir, "sapiom.json"), JSON.stringify({ definitionId: 4821 }));
   const collectorCwd = path.join(tmpRoot, "collector");
   await fs.mkdir(collectorCwd, { recursive: true });
@@ -198,6 +208,7 @@ async function testCoreFlow(): Promise<void> {
       codex: createCodexAdapter(),
     },
     sessionsPath: path.join(tmpRoot, "sessions.json"),
+    generatedRoot: path.join(tmpRoot, "generated"),
     eventStorePath,
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
     launchDir: projectDir,
@@ -537,6 +548,76 @@ async function testCoreFlow(): Promise<void> {
     const macroBody = (await macroRes.json()) as { ok: boolean };
     assert(macroBody.ok === true, "macro run responds { ok: true }");
 
+    // --- 14. deterministic render: bind to a REAL @sapiom/agent project (the
+    // same shape as the order-triage test fixture — copied, not
+    // reimplemented, so the two can't drift) and prove POST
+    // /api/canvas/:id/render writes the workflow's real step names to
+    // index.html and fires a canvas.reload frame, with zero LLM involvement.
+    // A separate directory from `projectDir` (which stays a bare marker —
+    // see its own comment above) so this doesn't race the "pristine empty
+    // template on create" assertion. Only `node_modules/@sapiom/agent` is
+    // symlinked (this package's own, a real workspace dependency) — NOT the
+    // whole node_modules tree, which would also expose harness's own
+    // node_modules/.bin/tsc and make check()'s typecheck step try (and fail)
+    // to run tsc with no tsconfig.json in this fixture dir; esbuild only
+    // needs the one package resolvable, exactly like any real consumer
+    // project's own install.
+    const workflowDir = path.join(tmpRoot, "order-triage");
+    await fs.mkdir(path.join(workflowDir, "node_modules", "@sapiom"), { recursive: true });
+    await fs.writeFile(path.join(workflowDir, "sapiom.json"), JSON.stringify({ definitionId: 5150 }));
+    await fs.copyFile(
+      path.join(SCRIPT_DIR, "..", "src", "core", "__fixtures__", "order-triage", "index.ts"),
+      path.join(workflowDir, "index.ts"),
+    );
+    await fs.symlink(
+      path.join(SCRIPT_DIR, "..", "node_modules", "@sapiom", "agent"),
+      path.join(workflowDir, "node_modules", "@sapiom", "agent"),
+      "dir",
+    );
+
+    const connectRes = await fetch(`${baseUrl}/api/workflows/connect`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path: workflowDir }),
+    });
+    assert(connectRes.status === 200, "POST /api/workflows/connect registers the real order-triage project");
+
+    const renderBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ workflowPath: workflowDir }),
+    });
+    assert(renderBindRes.status === 200, "binds the session to the real order-triage workflow");
+
+    const reloadFramesBefore = wsMessages.filter(
+      (m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId,
+    ).length;
+
+    const renderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
+    assert(renderRes.status === 200, "POST /api/canvas/:id/render returns 200");
+    const renderBody = (await renderRes.json()) as { ok: boolean; mode: string; extractionFailed: string[] };
+    assert(renderBody.ok === true && renderBody.mode === "single", "render reports { ok: true, mode: 'single' }");
+    assert(
+      renderBody.extractionFailed.length === 0,
+      `extraction succeeded (no degraded panels): ${JSON.stringify(renderBody.extractionFailed)}`,
+    );
+
+    await waitFor(async () => {
+      const count = wsMessages.filter(
+        (m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId,
+      ).length;
+      return count > reloadFramesBefore ? true : undefined;
+    });
+    console.log("canvas.reload frame received for the deterministic render's write");
+
+    // Canvas is per SESSION cwd (projectDir), not per bound workflow —
+    // the workflow's own directory is only where its source lives.
+    const renderedHtml = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
+    for (const step of ["intake", "classify", "route", "auto_resolve", "escalate"]) {
+      assert(renderedHtml.includes(`>${step}<`), `rendered canvas contains the real step name '${step}'`);
+    }
+    assert(renderedHtml.includes("canvas-node-rect"), "rendered canvas contains real SVG node markup, not just text");
+
     // --- 11b. unbind — the context file gets boundWorkflow: null, not deleted ---
     const unbindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
       method: "PATCH",
@@ -635,6 +716,7 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
       codex: createCodexAdapter(),
     },
     sessionsPath: path.join(tmpRoot, "sessions.json"),
+    generatedRoot: path.join(tmpRoot, "generated"),
     eventStorePath: path.join(tmpRoot, "events.ndjson"),
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
     launchDir: projectDir,
@@ -762,6 +844,7 @@ async function testAutoSessionKindSelection(): Promise<void> {
     // passing for the wrong reason.
     adapters: { codex: createCodexAdapter({ binary: FAKE_CLAUDE }) },
     sessionsPath: path.join(tmpRoot, "sessions.json"),
+    generatedRoot: path.join(tmpRoot, "generated"),
     eventStorePath: path.join(tmpRoot, "events.ndjson"),
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
     launchDir: projectDir,
