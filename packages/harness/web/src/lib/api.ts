@@ -193,6 +193,7 @@ class MockApi implements HarnessApi {
     const session: HarnessSession = {
       id: `sess-mock-${this.sessions.length + 1}`,
       agentSessionId: null,
+      boundWorkflowPath: null,
       harness: req.harness,
       cwd: req.cwd,
       title: req.cwd.split("/").filter(Boolean).pop() ?? req.cwd,

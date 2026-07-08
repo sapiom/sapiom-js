@@ -15,6 +15,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
   {
     id: "sess-boot",
     agentSessionId: null,
+      boundWorkflowPath: null,
     harness: "claude-code",
     cwd: MOCK_LAUNCH_DIR,
     // The server auto-creates and starts one session in launchDir at boot, so
@@ -27,6 +28,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
   {
     id: "sess-leasing",
     agentSessionId: "8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f",
+      boundWorkflowPath: null,
     harness: "claude-code",
     cwd: "/Users/demo/acme-app",
     title: "Build the leasing pipeline",
@@ -38,6 +40,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
   {
     id: "sess-rfq",
     agentSessionId: "9c1a2b3d-4e5f-4061-8a7b-6c5d4e3f2a10",
+      boundWorkflowPath: null,
     harness: "codex",
     cwd: "/Users/demo/rfq-workflows",
     title: "rfq-workflows",

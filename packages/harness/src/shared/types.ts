@@ -39,6 +39,16 @@ export const CANVAS_DIR = ".sapiom/canvas";
 export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
 
 /**
+ * Workspace-binding convention: the harness maintains the session's current
+ * workflow selection here, relative to the session cwd, so the agent has an
+ * always-current, agent-legible answer to "what am I working on" without
+ * asking. Written on session create (boundWorkflow: null) and on every
+ * `PATCH /api/sessions/:id/workflow`. Kept present (never deleted) even on
+ * unbind — see HarnessWorkspaceContext.
+ */
+export const HARNESS_CONTEXT_FILE = ".sapiom/harness-context.json";
+
+/**
  * Environment variables passed to hook scripts / child processes.
  * INGEST_TOKEN is a per-boot secret; /ingest rejects requests without it.
  */
@@ -73,6 +83,10 @@ export interface HarnessSession {
   lastActiveAt: string;
   /** Exit code when status === "exited". */
   exitCode?: number | null;
+  /** The workflow (by path) this session is currently bound to, if any. Set
+   *  via `PATCH /api/sessions/:id/workflow`; mirrored into
+   *  HARNESS_CONTEXT_FILE in the session's cwd so the agent can read it. */
+  boundWorkflowPath: string | null;
 }
 
 /** A resumable past session discovered from agent transcripts or our registry. */
@@ -229,6 +243,7 @@ export interface CollectorBatch {
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
+// PATCH  /api/sessions/:id/workflow     BindWorkflowRequest → HarnessSession
 // GET    /api/workflows                 → WorkflowInfo[]
 // POST   /api/workflows/connect         { path } → WorkflowInfo
 // POST   /api/workflows/scan            { root } → WorkflowInfo[]
@@ -251,6 +266,23 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
+}
+
+/** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
+ *  must be a path already known to the workflow registry (scan/connect). */
+export interface BindWorkflowRequest {
+  workflowPath: string | null;
+}
+
+/**
+ * The shape written to HARNESS_CONTEXT_FILE in a session's cwd. Schemaless
+ * by convention elsewhere in the harness, but this one file IS a contract —
+ * the default system prompt tells the agent to read it, so its shape is
+ * fixed here like any other REST payload.
+ */
+export interface HarnessWorkspaceContext {
+  boundWorkflow: { name: string; path: string; definitionId: number | null } | null;
+  updatedAt: string;
 }
 
 export interface AppState {

@@ -35,6 +35,12 @@
  *      makes the auto-created boot session launch via the codex adapter, and
  *      `availableHarnesses` passed to startServer() round-trips through
  *      GET /api/state.
+ *  11. PATCH /api/sessions/:id/workflow binds a session to a registered
+ *      workflow, writes HARNESS_CONTEXT_FILE in the session's cwd with the
+ *      bound workflow's {name, path, definitionId}, broadcasts the change
+ *      as a session.status frame on /ws/events, and unbinding (workflowPath:
+ *      null) writes `boundWorkflow: null` to the same file rather than
+ *      deleting it.
  *
  * Run with: pnpm e2e:live
  */
@@ -210,9 +216,21 @@ async function testCoreFlow(): Promise<void> {
       body: JSON.stringify({ cwd: projectDir, harness: "claude-code" }),
     });
     assert(createRes.status === 201, "POST /api/sessions returns 201");
-    const session = (await createRes.json()) as { id: string };
+    const session = (await createRes.json()) as { id: string; boundWorkflowPath: string | null };
     const sessionId = session.id;
     console.log(`created session ${sessionId}`);
+    assert(session.boundWorkflowPath === null, "a freshly created session reports boundWorkflowPath: null");
+
+    type HarnessContextLike = {
+      boundWorkflow: { name: string; path: string; definitionId: number | null } | null;
+      updatedAt: string;
+    };
+    const readContext = async (): Promise<HarnessContextLike> =>
+      JSON.parse(await fs.readFile(path.join(projectDir, ".sapiom", "harness-context.json"), "utf8")) as HarnessContextLike;
+
+    // Written synchronously before POST /api/sessions responds — should already be there.
+    const initialContext = await readContext();
+    assert(initialContext.boundWorkflow === null, "harness-context.json is written on session create with boundWorkflow: null");
 
     // --- 2. the fixture captured its own argv/env — proves the launch-opts wiring ---
     const capture = await waitFor<FakeClaudeCapture>(async () => {
@@ -376,6 +394,57 @@ async function testCoreFlow(): Promise<void> {
       bootWorkflows.some((w) => w.path === projectDir && w.definitionId === 4821),
       "boot-time scan of the CLI's launch directory discovered its sapiom.json (definitionId read from the marker)",
     );
+
+    // --- 11a. bind the session to that discovered workflow ---
+    const workflowStatusBefore = wsMessages.filter((m) => m.type === "session.status").length;
+    const bindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ workflowPath: projectDir }),
+    });
+    assert(bindRes.status === 200, "PATCH /api/sessions/:id/workflow (bind) returns 200");
+    const boundSession = (await bindRes.json()) as { boundWorkflowPath: string | null };
+    assert(boundSession.boundWorkflowPath === projectDir, "response reports the new boundWorkflowPath");
+
+    await waitFor(async () => {
+      const count = wsMessages.filter((m) => m.type === "session.status").length;
+      return count > workflowStatusBefore ? true : undefined;
+    });
+    const lastStatusFrame = wsMessages
+      .filter((m) => m.type === "session.status")
+      .at(-1) as { session?: { id: string; boundWorkflowPath: string | null } } | undefined;
+    assert(
+      lastStatusFrame?.session?.id === sessionId && lastStatusFrame.session.boundWorkflowPath === projectDir,
+      "binding broadcasts a session.status frame reflecting the new boundWorkflowPath",
+    );
+
+    const boundContext = await readContext();
+    assert(
+      boundContext.boundWorkflow?.path === projectDir && boundContext.boundWorkflow.definitionId === 4821,
+      "harness-context.json reflects the bound workflow's {name, path, definitionId}",
+    );
+
+    // --- 11b. unbind — the context file gets boundWorkflow: null, not deleted ---
+    const unbindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ workflowPath: null }),
+    });
+    assert(unbindRes.status === 200, "PATCH /api/sessions/:id/workflow (unbind) returns 200");
+
+    const unboundContext = await waitFor(async () => {
+      const context = await readContext();
+      return context.boundWorkflow === null ? context : undefined;
+    });
+    assert(unboundContext.boundWorkflow === null, "unbinding writes boundWorkflow: null to harness-context.json");
+
+    // --- 11c. binding to a path that isn't a registered workflow is rejected ---
+    const badBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ workflowPath: "/not/a/registered/workflow" }),
+    });
+    assert(badBindRes.status === 400, "binding to an unregistered workflow path 400s");
 
     // --- 12. opening a session in a brand-new directory scans it too, and broadcasts workflows.changed ---
     const secondProjectDir = path.join(tmpRoot, "second-project");

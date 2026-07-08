@@ -359,6 +359,77 @@ describe("SessionManager", () => {
     expect(resumed.status).toBe("running");
   });
 
+  it("new sessions start with boundWorkflowPath: null", async () => {
+    const { manager } = makeManager();
+    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    expect(session.boundWorkflowPath).toBeNull();
+    expect(manager.get(session.id)?.boundWorkflowPath).toBeNull();
+  });
+
+  describe("setBoundWorkflowPath", () => {
+    it("updates the in-memory session, persists it, and notifies status listeners", async () => {
+      const { manager } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const statuses: (string | null)[] = [];
+      manager.onStatusChange((s) => {
+        if (s.id === session.id) statuses.push(s.boundWorkflowPath);
+      });
+
+      manager.setBoundWorkflowPath(session.id, "/tmp/leasing");
+      await manager.flush();
+
+      expect(manager.get(session.id)?.boundWorkflowPath).toBe("/tmp/leasing");
+      expect(statuses).toEqual(["/tmp/leasing"]);
+
+      const raw = JSON.parse(await readFile(sessionsPath, "utf8")) as HarnessSession[];
+      expect(raw.find((s) => s.id === session.id)?.boundWorkflowPath).toBe("/tmp/leasing");
+    });
+
+    it("unbinds with null, persisting and notifying again", async () => {
+      const { manager } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setBoundWorkflowPath(session.id, "/tmp/leasing");
+
+      const statuses: (string | null)[] = [];
+      manager.onStatusChange((s) => {
+        if (s.id === session.id) statuses.push(s.boundWorkflowPath);
+      });
+
+      manager.setBoundWorkflowPath(session.id, null);
+      await manager.flush();
+
+      expect(manager.get(session.id)?.boundWorkflowPath).toBeNull();
+      expect(statuses).toEqual([null]);
+    });
+
+    it("is a no-op (doesn't throw, doesn't notify) for an unknown session id", async () => {
+      const { manager } = makeManager();
+      const statuses: string[] = [];
+      manager.onStatusChange(() => statuses.push("fired"));
+
+      expect(() => manager.setBoundWorkflowPath("does-not-exist", "/tmp/leasing")).not.toThrow();
+      await manager.flush();
+      expect(statuses).toEqual([]);
+    });
+
+    it("is a no-op when rebinding to the already-current value (no redundant persist/notify)", async () => {
+      const { manager } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      manager.setBoundWorkflowPath(session.id, "/tmp/leasing");
+      await manager.flush();
+
+      const statuses: (string | null)[] = [];
+      manager.onStatusChange((s) => {
+        if (s.id === session.id) statuses.push(s.boundWorkflowPath);
+      });
+
+      manager.setBoundWorkflowPath(session.id, "/tmp/leasing");
+      await manager.flush();
+      expect(statuses).toEqual([]);
+    });
+  });
+
   it("injects the contract's ENV.* variables into the spawned process env", async () => {
     const capturedEnvs: Record<string, string | undefined>[] = [];
     const spawnPty: PtySpawnFn = (_file, _args, options) => {

@@ -18,6 +18,10 @@ export interface MacrosRouterDeps {
   findWorkflow(workflowPath: string): WorkflowInfo | null;
   /** The session's project directory, or null when the session is unknown. */
   getSessionCwd(harnessSessionId: string): string | null;
+  /** The session's currently bound workflow path (PATCH /sessions/:id/workflow),
+   *  or null when unbound / the session is unknown. Explicit `workflowPath` on
+   *  the request always wins — this is only a fallback for when it's omitted. */
+  getBoundWorkflowPath(harnessSessionId: string): string | null;
   /** Injects resolved text into the session's pty (the SessionManager). */
   injectInput(harnessSessionId: string, text: string, submit: boolean): Promise<void>;
   /** Opens a URL in the user's default browser (the `open` package). */
@@ -50,7 +54,9 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
       return;
     }
 
-    const workflow = typeof body.workflowPath === "string" ? deps.findWorkflow(body.workflowPath) : null;
+    const workflowPath =
+      typeof body.workflowPath === "string" ? body.workflowPath : deps.getBoundWorkflowPath(body.harnessSessionId);
+    const workflow = workflowPath ? deps.findWorkflow(workflowPath) : null;
 
     try {
       const resolved = resolveMacro(macro, {
