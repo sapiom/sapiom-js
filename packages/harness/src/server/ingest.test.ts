@@ -175,4 +175,39 @@ describe("createIngestRouter", () => {
     expect(enrichFromTranscript).toHaveBeenCalledTimes(1);
     expect(stored[0].payload.model).toBe("claude-sonnet-5");
   });
+
+  it("calls onNormalizedEvent for every successfully normalized event", async () => {
+    const onNormalizedEvent = vi.fn();
+    start({ onNormalizedEvent });
+
+    await postIngest(baseUrl, {
+      hookEvent: "PostToolUse",
+      harnessSessionId: "session-1",
+      payload: {
+        session_id: "agent-1",
+        tool_name: "Bash",
+        tool_input: "npm run dev",
+        tool_response: "ready - started server on http://localhost:5555",
+      },
+    });
+
+    await vi.waitFor(() => expect(onNormalizedEvent).toHaveBeenCalledTimes(1));
+    const [event] = onNormalizedEvent.mock.calls[0];
+    expect(event.type).toBe("tool.call");
+    expect(event.payload.toolResponseSummary).toContain("localhost:5555");
+  });
+
+  it("does not call onNormalizedEvent for a hook with no analytics mapping", async () => {
+    const onNormalizedEvent = vi.fn();
+    start({ onNormalizedEvent });
+
+    await postIngest(baseUrl, {
+      hookEvent: "PreToolUse",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1" },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onNormalizedEvent).not.toHaveBeenCalled();
+  });
 });

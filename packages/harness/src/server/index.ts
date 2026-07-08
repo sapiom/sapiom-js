@@ -15,7 +15,7 @@ import express, { type Express } from "express";
 import { WebSocketServer } from "ws";
 import open from "open";
 
-import type { HarnessAdapter, HarnessKind, WorkflowInfo } from "../shared/types.js";
+import type { AnalyticsEvent, HarnessAdapter, HarnessKind, WorkflowInfo } from "../shared/types.js";
 import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
@@ -27,6 +27,12 @@ import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
 import type { HarnessIdentity } from "../cli/auth.js";
+import { generateClaudeSettings } from "../core/inject/claude-settings.js";
+import { generateMcpConfig } from "../core/inject/mcp-config.js";
+import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
+import { CanvasWatcherManager } from "../core/canvas-watcher.js";
+import { PortDetector } from "../core/port-detector.js";
+import { EventBus } from "../core/event-bus.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -89,6 +95,26 @@ function readVersion(): string {
   }
 }
 
+/**
+ * Real launch-opts wiring: generates the per-session --settings, --mcp-config,
+ * and --append-system-prompt source files. Generated uniformly for every
+ * harness kind — an adapter that doesn't use one of these fields (codex,
+ * today) simply ignores it, same as the claude-code adapter already does for
+ * whichever of the three a given launch doesn't set.
+ */
+const defaultBuildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId) => {
+  const [settings, mcpConfigFile, systemPromptFile] = await Promise.all([
+    generateClaudeSettings({ harnessSessionId }),
+    generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT }),
+    generateSystemPromptFile(harnessSessionId),
+  ]);
+  return {
+    settingsFile: settings.settingsPath,
+    mcpConfigFile,
+    systemPromptFile,
+  };
+};
+
 export const startServer = async (options: HarnessServerOptions): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
   const identity = options.identity ?? null;
@@ -100,15 +126,33 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       codex: createCodexAdapter(),
     } satisfies Partial<Record<HarnessKind, HarnessAdapter>>);
 
+  const bus = new EventBus();
+  const canvasWatcher = new CanvasWatcherManager({
+    onChange: (harnessSessionId) => bus.publish({ type: "canvas.reload", harnessSessionId }),
+  });
+  const portDetector = new PortDetector({
+    onPort: (harnessSessionId, port, url) => bus.publish({ type: "port.detected", harnessSessionId, port, url }),
+  });
+
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
     ingestToken: options.bootToken,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath,
-    buildLaunchOpts: options.buildLaunchOpts,
+    buildLaunchOpts: options.buildLaunchOpts ?? defaultBuildLaunchOpts,
   });
   await sessionManager.init();
+
+  sessionManager.onStatusChange((session) => {
+    bus.publish({ type: "session.status", session });
+    if (session.status === "running") {
+      canvasWatcher.start(session.id, session.cwd);
+    } else if (session.status === "exited") {
+      canvasWatcher.stop(session.id);
+      portDetector.reset(session.id);
+    }
+  });
 
   const workflowRegistry = new WorkflowRegistry(options.workflowsRegistryPath);
   let workflowsCache: WorkflowInfo[] = await workflowRegistry.list();
@@ -192,6 +236,25 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       store: eventStore,
       batcher,
       enrichFromTranscript: enrichTurnCompleted,
+      onNormalizedEvent: (event: AnalyticsEvent) => {
+        if (event.type !== "tool.call") return;
+        const { toolInput, toolResponseSummary } = event.payload as {
+          toolInput?: unknown;
+          toolResponseSummary?: unknown;
+        };
+        // Each field is a discrete, already-complete string (not a live
+        // stream) — flush() immediately so a port landing at the very end
+        // of it (a common shape: "...started server on http://localhost:5544")
+        // isn't held back waiting for a "next chunk" that will never arrive.
+        if (typeof toolInput === "string") {
+          portDetector.feed(toolInput, event.harnessSessionId);
+          portDetector.flush(event.harnessSessionId);
+        }
+        if (typeof toolResponseSummary === "string") {
+          portDetector.feed(toolResponseSummary, event.harnessSessionId);
+          portDetector.flush(event.harnessSessionId);
+        }
+      },
       onError: (err) => console.error("[harness] ingest processing error:", err),
     }),
   );
@@ -228,7 +291,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     {
       path: "/ws/events",
       wss: eventsWss,
-      onConnection: createEventsWebSocketHandler(sessionManager, options.bootToken),
+      onConnection: createEventsWebSocketHandler(bus, options.bootToken),
     },
   ]);
 
@@ -249,6 +312,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     close: () =>
       new Promise<void>((resolve, reject) => {
         clearInterval(workflowsCacheTimer);
+        canvasWatcher.stopAll();
         void batcher.close();
         terminalWss.close();
         eventsWss.close();

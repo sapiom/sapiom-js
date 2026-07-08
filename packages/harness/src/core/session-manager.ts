@@ -7,8 +7,9 @@
 
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { mkdir, readFile, rename, writeFile, chmod } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { createRequire } from "node:module";
 
 import {
   ENV,
@@ -32,10 +33,36 @@ export type PtySpawnFn = (file: string, args: string[], options: PtyForkOptions)
 let defaultSpawn: PtySpawnFn | undefined;
 let defaultSpawnError: Error | undefined;
 
+/**
+ * node-pty ships prebuilt native binaries (including a tiny `spawn-helper`
+ * on macOS/Linux) rather than compiling from source. Observed in the wild:
+ * a pnpm-managed install can extract that helper without its executable bit
+ * set, which fails every single spawn with an opaque "posix_spawnp failed"
+ * — nothing to do with the harness's own code, but fatal to every session
+ * launch. Best-effort self-heal before the first real spawn; silently a
+ * no-op if the file's missing (wrong platform/arch) or already executable.
+ */
+async function ensureSpawnHelperExecutable(): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    const nodePtyPkgJson = createRequire(import.meta.url).resolve("node-pty/package.json");
+    const helperPath = join(
+      dirname(nodePtyPkgJson),
+      "prebuilds",
+      `${process.platform}-${process.arch}`,
+      "spawn-helper",
+    );
+    await chmod(helperPath, 0o755);
+  } catch {
+    // Not present for this platform/arch — nothing to fix.
+  }
+}
+
 async function loadDefaultSpawn(): Promise<PtySpawnFn> {
   if (defaultSpawn) return defaultSpawn;
   if (defaultSpawnError) throw defaultSpawnError;
   try {
+    await ensureSpawnHelperExecutable();
     const nodePty = await import("node-pty");
     defaultSpawn = nodePty.spawn as PtySpawnFn;
     return defaultSpawn;
@@ -58,11 +85,15 @@ export type SessionDataListener = (chunk: string) => void;
  * mcp-config / settings file paths). SessionManager owns cwd + harnessSessionId;
  * this lets the server layer inject config-file generation (profiles, MCP
  * wiring) without SessionManager needing to know how those files are produced.
+ * May return synchronously or a Promise — generating the config files is
+ * inherently async (they're written to disk), so `create()`/`resume()` await
+ * whichever shape is handed in; existing sync test doubles keep working
+ * unchanged (`await` on a plain value just resolves immediately).
  */
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
   req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile">,
-) => Omit<LaunchOpts, "harnessSessionId" | "cwd">;
+) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
 
@@ -167,7 +198,7 @@ export class SessionManager {
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: req.cwd,
-      ...this.buildLaunchOpts(id, req),
+      ...(await this.buildLaunchOpts(id, req)),
     };
     const spec = adapter.launch(opts);
     const session: HarnessSession = {
@@ -229,7 +260,7 @@ export class SessionManager {
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: session.cwd,
-      ...this.buildLaunchOpts(id, session),
+      ...(await this.buildLaunchOpts(id, session)),
     };
     const spec = adapter.resume(session.agentSessionId, opts);
     session.status = "starting";

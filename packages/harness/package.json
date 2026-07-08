@@ -46,7 +46,8 @@
     "prepublishOnly": "pnpm build",
     "mock-collector": "node scripts/mock-collector.mjs",
     "sim:e2e": "tsx scripts/e2e-sim.ts",
-    "seed-example": "node scripts/seed-example.mjs"
+    "seed-example": "node scripts/seed-example.mjs",
+    "e2e:live": "tsx scripts/e2e-live.ts"
   },
   "dependencies": {
     "@sapiom/agent-core": "workspace:^",

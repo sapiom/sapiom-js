@@ -43,6 +43,10 @@ export interface IngestDeps {
     event: AnalyticsEvent,
     transcriptPath: string | undefined,
   ) => Promise<AnalyticsEvent>;
+  /** Called for every successfully normalized event (after any transcript
+   *  enrichment), before it's persisted — e.g. to feed a tool.call event's
+   *  command/output text to dev-server port detection. */
+  onNormalizedEvent?: (event: AnalyticsEvent) => void;
   onError?: (err: unknown) => void;
   /** Injectable for tests; defaults to a fresh per-router counter. */
   seqCounter?: SeqCounter;
@@ -96,6 +100,7 @@ async function processIngest(
     deps.onAgentSessionResolved(harnessSessionId, finalEvent.agentSessionId);
   }
 
+  deps.onNormalizedEvent?.(finalEvent);
   await deps.store.append(finalEvent);
   deps.batcher.enqueue(finalEvent);
 
