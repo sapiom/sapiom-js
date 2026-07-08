@@ -35,20 +35,40 @@ describe("CodexAdapter", () => {
       expect(spec.args).toEqual(["-c", "check_for_update_on_startup=false"]);
     });
 
-    it("adds -c model_instructions_file=<path> when a systemPromptFile is given", () => {
-      const adapter = new CodexAdapter({ binary: "fake-codex" });
-      const spec = adapter.launch({
-        harnessSessionId: "h1",
-        cwd: "/tmp/proj",
-        systemPromptFile: "/tmp/proj/.sapiom/prompt.txt",
-      });
+    it("embeds the systemPromptFile's content inline via -c developer_instructions=<value>", async () => {
+      const promptDir = await mkdtemp(join(tmpdir(), "harness-codex-prompt-"));
+      const promptFile = join(promptDir, "prompt.txt");
+      await writeFile(promptFile, "You are a Sapiom workflow builder.\nBe concise.", "utf8");
 
+      const adapter = new CodexAdapter({ binary: "fake-codex" });
+      const spec = adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj", systemPromptFile: promptFile });
+
+      // Reading the file's content in and embedding it (rather than passing
+      // codex a path to re-read at its own startup) is the actual fix here —
+      // an unreadable model_instructions_file path kills codex instantly
+      // with no trust prompt, no TUI, which is exactly the "session has no
+      // live pty" symptom a user sees with no indication why. -c values
+      // parse as TOML; JSON.stringify produces a valid TOML string literal
+      // for a value with embedded newlines/quotes.
       expect(spec.args).toEqual([
         "-c",
         "check_for_update_on_startup=false",
         "-c",
-        "model_instructions_file=/tmp/proj/.sapiom/prompt.txt",
+        `developer_instructions=${JSON.stringify("You are a Sapiom workflow builder.\nBe concise.")}`,
       ]);
+
+      await rm(promptDir, { recursive: true, force: true });
+    });
+
+    it("launches without a system prompt (rather than a guaranteed-crashing arg) when systemPromptFile can't be read", () => {
+      const adapter = new CodexAdapter({ binary: "fake-codex" });
+      const spec = adapter.launch({
+        harnessSessionId: "h1",
+        cwd: "/tmp/proj",
+        systemPromptFile: "/does/not/exist/prompt.txt",
+      });
+
+      expect(spec.args).toEqual(["-c", "check_for_update_on_startup=false"]);
     });
 
     it("builds a resume SpawnSpec with `resume <rolloutId>` as the leading args", () => {
