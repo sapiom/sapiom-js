@@ -401,10 +401,47 @@ test.describe("docked workflow action strip", () => {
     await page.screenshot({ path: "web/e2e/screenshots/workflow-action-strip-moved.png", fullPage: true });
   });
 
-  test("the header's refresh affordance reloads the canvas without discarding it", async ({ page }) => {
-    const refreshBtn = page.getByTestId("workflow-actions-header").getByTestId("canvas-refresh");
-    await expect(refreshBtn).toBeVisible();
+  test("the canvas header stays fully on-screen even when the app is narrower than the default pane widths", async ({
+    page,
+  }) => {
+    // Rail (220) + strip (32) + terminal floor (360) + canvas (420) = 1032px
+    // of default/preferred widths — narrower than that used to overflow
+    // .app's right edge and get silently clipped by its old overflow:hidden.
+    await page.setViewportSize({ width: 900, height: 640 });
+    await page.waitForTimeout(50);
 
+    const header = page.getByTestId("workflow-actions-header");
+    const reVisualizeBtn = header.getByTestId("canvas-revisualize");
+    await expect(reVisualizeBtn).toBeVisible();
+
+    const btnBox = await reVisualizeBtn.boundingBox();
+    expect(btnBox).not.toBeNull();
+    expect((btnBox?.x ?? 0) + (btnBox?.width ?? 0)).toBeLessThanOrEqual(900);
+
+    await page.screenshot({ path: "web/e2e/screenshots/narrow-viewport-header.png", fullPage: true });
+  });
+
+  test("the header's action is re-visualize, not a no-op iframe reload", async ({ page }) => {
+    const reVisualizeBtn = page.getByTestId("workflow-actions-header").getByTestId("canvas-revisualize");
+    await expect(reVisualizeBtn).toBeEnabled();
+    await expect(reVisualizeBtn).toHaveAttribute("data-tooltip", "Re-visualize");
+
+    await reVisualizeBtn.click();
+
+    // Clicking it fires the same one-click Visualize macro the strip and the
+    // empty-state CTA use — not a bare reload with no new content.
+    await page.waitForFunction(
+      () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
+    );
+    const lastRun = await page.evaluate(
+      () =>
+        (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string; req: { subject?: string } } } })
+          .__HARNESS_TEST__.lastMacroRun,
+    );
+    expect(lastRun?.id).toBe("visualize");
+
+    // The pane itself swaps in the new render once canvas.reload arrives —
+    // that part is unchanged, and still the only thing that flips the iframe in.
     await page.evaluate(() => {
       (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
         type: "canvas.reload",
@@ -412,9 +449,6 @@ test.describe("docked workflow action strip", () => {
       });
     });
     await expect(page.locator(".canvas-iframe")).toBeVisible();
-
-    await refreshBtn.click();
-    await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", /^\/canvas\/sess-boot\/\?theme=(light|dark)$/);
   });
 });
 

@@ -56,25 +56,28 @@ export function CanvasPane({
     }
   }, [lastMessage, sessionId]);
 
-  // Manual affordance for the toolbar — no auto-refresh signal in mock mode,
-  // and even for real sessions it's a cheap way to re-check content without
-  // waiting on a canvas.reload event.
-  const handleRefresh = (): void => {
-    setReloadKey((key) => key + 1);
-    if (!sessionId || isMockMode()) return;
-    fetch(`/canvas/${sessionId}/`, { method: "HEAD" })
-      .then((res) => setHasGeneratedContent(res.ok))
-      .catch(() => {});
-  };
-
   const visualizeMacro = findVisualizeMacro(macros);
   const visualizeDisabledReason = visualizeMacro
     ? macroDisabledReason(visualizeMacro, boundWorkflow, activeSessionId)
     : null;
 
+  // The header's action IS Visualize now — one click re-fires the same macro
+  // that generated what's already on screen; the pane itself swaps in the
+  // new render once the agent's canvas.reload event arrives above.
+  const handleReVisualize = (): void => {
+    if (!visualizeMacro) return;
+    onRunMacro(visualizeMacro);
+  };
+
   return (
     <aside className="canvas-pane">
-      {boundWorkflow && <WorkflowActionsHeader workflow={boundWorkflow} onRefresh={handleRefresh} />}
+      {boundWorkflow && (
+        <WorkflowActionsHeader
+          workflow={boundWorkflow}
+          onReVisualize={handleReVisualize}
+          reVisualizeDisabledReason={visualizeDisabledReason}
+        />
+      )}
 
       {!sessionId ? (
         <div className="canvas-empty">Start a session to see its canvas here.</div>
