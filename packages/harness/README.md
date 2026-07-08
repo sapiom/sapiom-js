@@ -24,6 +24,8 @@ system prompt, in whatever project directory you choose.
 - **Zero config mutation** — everything is injected per-session via flags;
   your global agent settings are never touched.
 
+Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
+
 ## Telemetry
 
 With explicit opt-in, the harness collects usage events (prompts, tool calls,
