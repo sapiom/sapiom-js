@@ -187,4 +187,41 @@ describe("createRestRouter", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
   });
+
+  describe("POST /sessions", () => {
+    it("calls onSessionCreated with the new session's cwd", async () => {
+      const onSessionCreated = vi.fn();
+      const sessionManager = fakeSessionManager();
+      (sessionManager.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "sess-1",
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+        status: "starting",
+      });
+      start({ sessionManager, onSessionCreated });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(onSessionCreated).toHaveBeenCalledWith("/tmp/proj");
+    });
+
+    it("does not call onSessionCreated when the request body is invalid", async () => {
+      const onSessionCreated = vi.fn();
+      start({ onSessionCreated });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "" }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(onSessionCreated).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -82,6 +82,7 @@ function parseArgs(argv: string[]): CliOptions {
 function printBanner(opts: {
   dir: string;
   port: number;
+  bootToken: string;
   identity: HarnessIdentity | null;
   telemetryOptIn: boolean;
   serverStarted: boolean;
@@ -96,8 +97,13 @@ function printBanner(opts: {
   console.log(`  directory   ${opts.dir}`);
   console.log(`  auth        ${authLine}`);
   console.log(`  telemetry   ${opts.telemetryOptIn ? "on" : "off"}`);
+  // Always the full tokened URL — with --no-open (or a browser that failed
+  // to launch) this is the only way to reach the app; a bare host:port
+  // 401s on every /api call and can't open the WS connections.
   console.log(
-    `  url         ${opts.serverStarted ? `http://localhost:${opts.port}` : "(server not started)"}`,
+    `  url         ${
+      opts.serverStarted ? `http://localhost:${opts.port}/?token=${opts.bootToken}` : "(server not started)"
+    }`,
   );
   console.log("");
 }
@@ -124,7 +130,14 @@ const main = async (): Promise<void> => {
 
   let server: HarnessServer | null = null;
   try {
-    server = await startServer({ port: options.port, bootToken, telemetryOptIn, identity, machineId });
+    server = await startServer({
+      port: options.port,
+      bootToken,
+      telemetryOptIn,
+      identity,
+      machineId,
+      launchDir: options.dir,
+    });
   } catch (err) {
     if (!options.dev) throw err;
     const message = err instanceof Error ? err.message : String(err);
@@ -137,6 +150,7 @@ const main = async (): Promise<void> => {
   printBanner({
     dir: options.dir,
     port: server?.port ?? options.port,
+    bootToken,
     identity,
     telemetryOptIn,
     serverStarted: server !== null,
