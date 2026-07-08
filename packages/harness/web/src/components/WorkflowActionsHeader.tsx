@@ -25,7 +25,9 @@ export function WorkflowActionsHeader({
   return (
     <div className="workflow-actions-header" data-testid="workflow-actions-header">
       <span className="workflow-actions-name">{workflow.name}</span>
-      {workflow.definitionId != null && <span className="workflow-dot" title="Deployed" />}
+      {workflow.definitionId != null && (
+        <span className="workflow-dot workflow-dot-pinned" data-tooltip="Deployed to production" />
+      )}
       <button
         className="macro-icon-btn canvas-refresh-btn"
         aria-label="Re-visualize"

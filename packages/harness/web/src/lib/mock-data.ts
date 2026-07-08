@@ -108,7 +108,9 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
   { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821, source: "scan" },
   { name: "rfq", path: "/Users/demo/rfq-workflows", definitionId: null, source: "scan" },
-  { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: null, source: "connect" },
+  // Deployed like "leasing" but with a much longer name — exercises the
+  // canvas header's deployed-dot staying pinned regardless of name length.
+  { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: 9001, source: "connect" },
 ];
 
 export const MOCK_MACROS: MacroDef[] = [
