@@ -1,8 +1,9 @@
 /**
  * Server-side SVG layout for a `CanvasGraph` (see core/canvas-graph.ts),
  * emitting markup against the classes `core/canvas-template.ts`'s CSS shell
- * already defines (node--entry/step/pause/terminal-success/terminal-warn,
- * canvas-edge/--success/--warn/--cross). No DOM, no client-side script — the
+ * already defines (node--entry/step/pause/terminal-success/terminal-warn/
+ * launched-workflow, canvas-edge/--success/--warn/--cross/--launch). No DOM,
+ * no client-side script — the
  * whole diagram is a static string built once, at render time.
  *
  * Layout: longest-path-from-roots layering (a Kahn's-algorithm variant),
@@ -138,13 +139,16 @@ export function renderGraphSvg(graph: CanvasGraph): string {
       const y1 = from.y + NODE_H;
       const x2 = to.x + NODE_W / 2;
       const y2 = to.y;
-      const isCross = edge.kind === "cross";
-      const colorSuffix = isCross ? "" : edgeColorClass(nodesById, edge);
-      const classes = ["canvas-edge", isCross ? "canvas-edge--cross" : colorSuffix && `canvas-edge${colorSuffix}`]
+      // Cross (signal/handoff) and launch edges are always dashed-neutral,
+      // never colored by their destination.
+      const dashedClass =
+        edge.kind === "cross" ? "canvas-edge--cross" : edge.kind === "launch" ? "canvas-edge--launch" : null;
+      const colorSuffix = dashedClass ? "" : edgeColorClass(nodesById, edge);
+      const classes = ["canvas-edge", dashedClass ?? (colorSuffix && `canvas-edge${colorSuffix}`)]
         .filter(Boolean)
         .join(" ");
       const d = edgePath(edge.kind, x1, y1, x2, y2);
-      const marker = isCross ? "url(#canvas-arrow)" : arrowMarker(colorSuffix);
+      const marker = dashedClass ? "url(#canvas-arrow)" : arrowMarker(colorSuffix);
       const path = `<path class="${classes}" d="${d}" marker-end="${marker}" />`;
       if (!edge.label) return path;
       const dx = x2 - x1;

@@ -418,15 +418,15 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     return found;
   };
 
-  // Renders a session's canvas (its bound workflow, or the whole-workspace
-  // overview when unbound) via the deterministic pipeline — always against
-  // the live workflowsCache, never an LLM. Never throws (see core/
-  // canvas-render.ts); best-effort, like every other canvas write here.
-  // Explicit user-invoked renders (the Visualize macro, POST
-  // /canvas/:id/render) use this as-is; the UNPROMPTED call sites
-  // (session-create/boot auto-render) use autoRenderCanvas below, which
-  // won't replace an existing canvas (e.g. the sample project's seeded
-  // opening shot) with nothing but error panels when every extraction fails.
+  // Renders a session's bound workflow via the deterministic pipeline —
+  // always against the live workflowsCache, never an LLM; a cheap no-op for
+  // an unbound session (the canvas router serves the empty state on its
+  // own). Never throws (see core/canvas-render.ts); best-effort, like every
+  // other canvas write here. Explicit user-invoked renders (the Visualize
+  // macro, POST /canvas/:id/render) use this as-is; the UNPROMPTED call
+  // sites (session-create/boot auto-render) use autoRenderCanvas below,
+  // which won't replace a workflow's existing render with an error panel
+  // when its extraction fails.
   const renderCanvas = async (session: HarnessSession): Promise<void> => {
     await renderCanvasForSession(session, workflowsCache);
   };
@@ -689,7 +689,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   app.use(
     createCanvasRouter((harnessSessionId) => {
       const session = sessionManager.get(harnessSessionId);
-      return session ? { cwd: session.cwd } : undefined;
+      return session ? { cwd: session.cwd, boundWorkflowPath: session.boundWorkflowPath } : undefined;
     }),
   );
 

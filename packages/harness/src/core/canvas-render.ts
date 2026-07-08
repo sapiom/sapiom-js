@@ -1,36 +1,40 @@
 /**
- * The deterministic render pipeline: given a session (bound or not) and the
- * workflow registry, extracts the relevant workflow graph(s) (core/
- * canvas-graph.ts), builds the SVG + panel markup (core/canvas-svg.ts,
- * core/canvas-body.ts), wraps it through the shared document shell
- * (core/canvas-template.ts's `renderCanvasDocument`), and writes
- * `<cwd>/.sapiom/canvas/index.html`. Zero LLM involvement, typically well
- * under a second for a small workflow — extraction failure degrades to an
- * honest error panel per workflow, never a crash and never a silent fallback
- * to the LLM path (see core/macros.ts's separate "ai-visualize" macro for
- * that path).
+ * The deterministic render pipeline: given a session bound to a workflow,
+ * extracts that workflow's graph (core/canvas-cache.ts — cached, so an
+ * unchanged workflow never pays for a second child process), builds the SVG +
+ * panel markup (core/canvas-svg.ts, core/canvas-body.ts), wraps it through
+ * the shared document shell (core/canvas-template.ts's
+ * `renderCanvasDocument`), and writes it to the workflow's own render file,
+ * `<cwd>/.sapiom/canvas/renders/<slug>.html`. Zero LLM involvement —
+ * extraction failure degrades to an honest error panel, never a crash.
+ *
+ * Renders are per-WORKFLOW files (not a shared index.html) so switching the
+ * binding never rewrites anything another binding depends on — the server
+ * (src/server/canvas.ts) resolves the session's current binding at request
+ * time and serves the matching render. `index.html` remains the
+ * agent-authored/custom canvas and is never touched here. An unbound session
+ * renders nothing at all (no extraction, no write): the server serves the
+ * existing empty-state/custom canvas for it.
  *
  * The write alone is enough to hot-reload an open canvas pane —
  * CanvasWatcherManager already watches the whole session cwd and treats any
  * change under `.sapiom/canvas/` as a reload signal, regardless of who wrote
  * it.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CANVAS_INDEX } from "../shared/types.js";
+import { CANVAS_RENDERS_DIR } from "../shared/types.js";
 import { renderCanvasDocument } from "./canvas-template.js";
-import { extractWorkflowGraph, type CanvasGraph } from "./canvas-graph.js";
+import { extractWorkflowGraphCached } from "./canvas-cache.js";
+import type { CanvasGraph } from "./canvas-graph.js";
+import { usedKinds } from "./canvas-svg.js";
 import {
-  aggregateUsedKinds,
   assembleCanvasBody,
-  buildEmptyWorkspaceHtml,
   buildErrorPanelHtml,
-  buildInterconnectionsPanelHtml,
   buildLegendHtml,
   buildWorkflowPanelHtml,
-  type InterconnectionRow,
 } from "./canvas-body.js";
-import { detectInterconnections } from "./canvas-interconnections.js";
 
 export interface RenderableSession {
   cwd: string;
@@ -43,27 +47,54 @@ export interface RenderableWorkflow {
   definitionId: number | null;
 }
 
+/**
+ * Stable, filesystem-safe render-file name for a workflow: its directory
+ * basename (readable in `ls`) plus a short path hash (two same-named
+ * workflows at different paths can never collide). Shared by the writer here
+ * and the server's request-time resolution — must stay deterministic.
+ */
+export function slugForWorkflowPath(workflowPath: string): string {
+  const base =
+    path
+      .basename(workflowPath)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "workflow";
+  const hash = createHash("sha256").update(path.resolve(workflowPath)).digest("hex").slice(0, 8);
+  return `${base}-${hash}`;
+}
+
+/** Absolute path of `workflowPath`'s render file under `cwd`'s canvas dir. */
+export function renderFileFor(cwd: string, workflowPath: string): string {
+  return path.join(cwd, CANVAS_RENDERS_DIR, `${slugForWorkflowPath(workflowPath)}.html`);
+}
+
 export interface CanvasRenderOutcome {
-  mode: "single" | "overview" | "empty";
+  /** "single": a bound workflow was rendered to its render file. "empty":
+   *  the session is unbound (or bound to an unknown path) — nothing was
+   *  extracted or written; the server serves the empty state on its own. */
+  mode: "single" | "empty";
   workflowPath?: string;
-  workflowCount?: number;
+  /** Absolute path of the render file written (mode "single" only). */
+  renderPath?: string;
   /** Display names of workflows whose graph couldn't be extracted (still rendered as a degraded panel). */
   extractionFailed: string[];
+  /** True when the graph came from the extraction cache — no child process ran. */
+  cachedExtraction?: boolean;
   /** Set only when writing the file itself failed (e.g. an unwritable cwd) — extraction success/failure above is unaffected. */
   writeError?: string;
-  /** True when `preserveExistingOnFailure` kept the existing canvas instead of writing error panels over it. */
+  /** True when `preserveExistingOnFailure` kept the existing render instead of writing an error panel over it. */
   preservedExisting?: boolean;
 }
 
 export interface RenderCanvasOptions {
   /**
-   * For unprompted (auto) renders only — session create, boot. When every
-   * extraction failed AND a canvas index.html already exists, keep the
-   * existing file rather than replace possibly-good content (a seeded
-   * opening shot, an agent-authored view) with nothing but error panels.
-   * An explicit user-invoked render (the Visualize macro, POST
-   * /canvas/:id/render) should NOT set this: there the honest error page
-   * IS the answer the user asked for.
+   * For unprompted (auto) renders only — session create, boot. When the
+   * extraction failed AND a render file for this workflow already exists,
+   * keep the existing file rather than replace a possibly-good diagram with
+   * an error panel. An explicit user-invoked render (the Visualize macro,
+   * POST /canvas/:id/render) should NOT set this: there the honest error
+   * page IS the answer the user asked for.
    */
   preserveExistingOnFailure?: boolean;
 }
@@ -72,121 +103,57 @@ function badgesFor(workflow: RenderableWorkflow): string[] {
   return [workflow.definitionId != null ? "deployed" : "local only"];
 }
 
-async function renderOne(
-  workflow: RenderableWorkflow,
-): Promise<{ panel: string; graph: CanvasGraph | null; failed: boolean }> {
-  const result = await extractWorkflowGraph(workflow.path);
-  if (!result.ok) {
-    return { panel: buildErrorPanelHtml(workflow.name, result.reason), graph: null, failed: true };
+function buildSingleBody(workflow: RenderableWorkflow, graph: CanvasGraph | null, reason: string | null): string {
+  if (!graph) {
+    return assembleCanvasBody({
+      panels: [buildErrorPanelHtml(workflow.name, reason ?? "unknown extraction failure")],
+      legend: "",
+      note: "Static preview — this workflow has a build error; regenerate once it's fixed.",
+    });
   }
-  return {
-    panel: buildWorkflowPanelHtml(result.graph, { title: workflow.name, badges: badgesFor(workflow) }),
-    graph: result.graph,
-    failed: false,
-  };
-}
-
-async function renderSingle(workflow: RenderableWorkflow): Promise<{ body: string; failed: boolean }> {
-  const { panel, graph, failed } = await renderOne(workflow);
-  const used = graph ? aggregateUsedKinds([graph]) : null;
-  const legend = used ? buildLegendHtml(used.nodeKinds, used.edgeKinds) : "";
-  const body = assembleCanvasBody({
-    panels: [panel],
-    legend,
-    note: failed
-      ? "Static preview — this workflow has a build error; regenerate once it's fixed."
-      : "Static preview — regenerate after the workflow changes.",
+  const used = usedKinds(graph);
+  return assembleCanvasBody({
+    panels: [buildWorkflowPanelHtml(graph, { title: workflow.name, badges: badgesFor(workflow) })],
+    legend: buildLegendHtml(used.nodeKinds, used.edgeKinds),
+    note: "Static preview — re-renders automatically when the workflow changes.",
   });
-  return { body, failed };
-}
-
-async function renderOverview(workflows: readonly RenderableWorkflow[]): Promise<{ body: string; failed: string[] }> {
-  const rendered = await Promise.all(workflows.map((w) => renderOne(w)));
-  const panels = rendered.map((r) => r.panel);
-  const graphs = rendered.map((r) => r.graph).filter((g): g is CanvasGraph => g !== null);
-  const failed = workflows.filter((_, i) => rendered[i]!.failed).map((w) => w.name);
-
-  const displayByManifestName = new Map<string, string>();
-  workflows.forEach((w, i) => {
-    const graph = rendered[i]!.graph;
-    if (graph) displayByManifestName.set(graph.manifestName, w.name);
-  });
-
-  const grepInputs = workflows.map((w, i) => ({
-    path: w.path,
-    manifestName: rendered[i]!.graph?.manifestName ?? w.name,
-  }));
-  const interconnections = await detectInterconnections(grepInputs);
-  const rows: InterconnectionRow[] = interconnections.map((edge) => ({
-    fromLabel: displayByManifestName.get(edge.fromManifestName) ?? edge.fromManifestName,
-    toLabel: edge.toManifestName ? (displayByManifestName.get(edge.toManifestName) ?? edge.toManifestName) : `external ("${edge.toSlug}")`,
-    tag: "launch",
-  }));
-
-  const used = aggregateUsedKinds(graphs);
-  if (rows.length > 0) used.edgeKinds.add("cross");
-  const legend = buildLegendHtml(used.nodeKinds, used.edgeKinds);
-  const interconnectionsHtml = buildInterconnectionsPanelHtml(rows);
-
-  const body = assembleCanvasBody({
-    panels,
-    interconnections: interconnectionsHtml || undefined,
-    legend,
-    note:
-      failed.length > 0
-        ? `Static preview — regenerate after a workflow changes (${failed.length} workflow${failed.length === 1 ? "" : "s"} failed to build).`
-        : "Static preview — regenerate after a workflow changes.",
-  });
-  return { body, failed };
 }
 
 /**
- * Renders the appropriate view for `session` (its bound workflow, or the
- * whole-workspace overview when unbound) and writes it to `<cwd>/.sapiom/
- * canvas/index.html`. Never throws — every failure mode (extraction,
- * filesystem) is captured in the returned outcome instead.
+ * Renders `session`'s bound workflow to its per-workflow render file. Never
+ * throws — every failure mode (extraction, filesystem) is captured in the
+ * returned outcome instead. Unbound sessions are a cheap no-op: no
+ * extraction, no write (`mode: "empty"`).
  */
 export async function renderCanvasForSession(
   session: RenderableSession,
   workflows: readonly RenderableWorkflow[],
   options: RenderCanvasOptions = {},
 ): Promise<CanvasRenderOutcome> {
-  let body: string;
-  let outcome: CanvasRenderOutcome;
-  let renderedAnyGraph: boolean;
-
   const bound = session.boundWorkflowPath ? workflows.find((w) => w.path === session.boundWorkflowPath) : undefined;
-
-  if (bound) {
-    const { body: renderedBody, failed } = await renderSingle(bound);
-    body = renderedBody;
-    renderedAnyGraph = !failed;
-    outcome = { mode: "single", workflowPath: bound.path, extractionFailed: failed ? [bound.name] : [] };
-  } else if (workflows.length === 0) {
-    body = assembleCanvasBody({
-      panels: [buildEmptyWorkspaceHtml()],
-      legend: "",
-      note: "Nothing to visualize yet — connect a workflow to get started.",
-    });
-    // The empty-workspace panel is real content, not a degraded render.
-    renderedAnyGraph = true;
-    outcome = { mode: "empty", extractionFailed: [] };
-  } else {
-    const { body: renderedBody, failed } = await renderOverview(workflows);
-    body = renderedBody;
-    renderedAnyGraph = failed.length < workflows.length;
-    outcome = { mode: "overview", workflowCount: workflows.length, extractionFailed: failed };
+  if (!bound) {
+    return { mode: "empty", extractionFailed: [] };
   }
 
-  const indexPath = path.join(session.cwd, CANVAS_INDEX);
+  const { result, cached } = await extractWorkflowGraphCached(bound.path);
+  const failed = !result.ok;
+  const body = buildSingleBody(bound, result.ok ? result.graph : null, result.ok ? null : result.reason);
 
-  // An unprompted render that produced ONLY error panels must not destroy an
-  // existing canvas (the seeded sample's opening shot, an agent-authored
-  // view): a project that merely hasn't run `npm install` yet would
-  // otherwise open to a wall of build errors it did nothing to deserve.
-  if (options.preserveExistingOnFailure && !renderedAnyGraph) {
+  const renderPath = renderFileFor(session.cwd, bound.path);
+  const outcome: CanvasRenderOutcome = {
+    mode: "single",
+    workflowPath: bound.path,
+    renderPath,
+    extractionFailed: failed ? [bound.name] : [],
+    cachedExtraction: cached,
+  };
+
+  // An unprompted render that failed to extract must not destroy an existing
+  // (possibly good) diagram for this workflow — e.g. a project that merely
+  // hasn't run `npm install` yet after a fresh clone.
+  if (options.preserveExistingOnFailure && failed) {
     const exists = await fs
-      .access(indexPath)
+      .access(renderPath)
       .then(() => true)
       .catch(() => false);
     if (exists) {
@@ -196,8 +163,8 @@ export async function renderCanvasForSession(
   }
 
   try {
-    await fs.mkdir(path.dirname(indexPath), { recursive: true });
-    await fs.writeFile(indexPath, renderCanvasDocument(body), "utf8");
+    await fs.mkdir(path.dirname(renderPath), { recursive: true });
+    await fs.writeFile(renderPath, renderCanvasDocument(body), "utf8");
   } catch (err) {
     outcome.writeError = err instanceof Error ? err.message : String(err);
   }

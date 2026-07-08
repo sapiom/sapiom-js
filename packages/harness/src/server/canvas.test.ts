@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import express from "express";
 import type { Server } from "node:http";
+import { renderFileFor } from "../core/canvas-render.js";
 import { createCanvasRouter, type CanvasSession } from "./canvas.js";
 
 let projectDir: string;
@@ -61,6 +62,53 @@ describe("canvas router", () => {
   it("404s when no canvas has been written yet", async () => {
     const res = await fetch(`${baseUrl}/canvas/sess-1/`, { method: "HEAD" });
     expect(res.status).toBe(404);
+  });
+
+  it("serves the bound workflow's render file at the canvas root — resolved at request time, no index.html rewrite", async () => {
+    const workflowPath = "/registered/workflows/order-triage";
+    sessions.set("sess-1", { cwd: projectDir, boundWorkflowPath: workflowPath });
+    const renderPath = renderFileFor(projectDir, workflowPath);
+    await fs.mkdir(path.dirname(renderPath), { recursive: true });
+    await fs.writeFile(renderPath, "<html><body>diagram</body></html>");
+    // A stale index.html must NOT shadow the bound render.
+    await fs.writeFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "<html><body>legacy</body></html>");
+
+    const res = await fetch(`${baseUrl}/canvas/sess-1/`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("diagram");
+  });
+
+  it("switching the binding changes what the same URL serves — per-request resolution", async () => {
+    const flowA = "/registered/workflows/flow-a";
+    const flowB = "/registered/workflows/flow-b";
+    for (const [flow, body] of [
+      [flowA, "diagram A"],
+      [flowB, "diagram B"],
+    ] as const) {
+      const renderPath = renderFileFor(projectDir, flow);
+      await fs.mkdir(path.dirname(renderPath), { recursive: true });
+      await fs.writeFile(renderPath, `<html><body>${body}</body></html>`);
+    }
+
+    sessions.set("sess-1", { cwd: projectDir, boundWorkflowPath: flowA });
+    expect(await (await fetch(`${baseUrl}/canvas/sess-1/`)).text()).toContain("diagram A");
+    sessions.set("sess-1", { cwd: projectDir, boundWorkflowPath: flowB });
+    expect(await (await fetch(`${baseUrl}/canvas/sess-1/`)).text()).toContain("diagram B");
+  });
+
+  it("serves a 200 'rendering…' page for a bound session whose render file doesn't exist yet", async () => {
+    sessions.set("sess-1", { cwd: projectDir, boundWorkflowPath: "/registered/workflows/not-rendered-yet" });
+    const res = await fetch(`${baseUrl}/canvas/sess-1/`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Rendering workflow diagram");
+  });
+
+  it("an unbound session keeps the legacy behavior: the canvas root serves index.html", async () => {
+    await fs.mkdir(path.join(projectDir, ".sapiom", "canvas"), { recursive: true });
+    await fs.writeFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "<html><body>custom</body></html>");
+    const res = await fetch(`${baseUrl}/canvas/sess-1/`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("custom");
   });
 
   it("serves index.html at the session's canvas root", async () => {

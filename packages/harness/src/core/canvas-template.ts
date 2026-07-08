@@ -93,12 +93,13 @@ html, body {
 .canvas-empty-note { color: var(--canvas-text-dim); font-size: 13px; text-align: center; padding: 60px 20px; margin: 0; }
 .canvas-graph-svg { display: block; width: 100%; height: auto; }
 
-/* --- node kinds: entry | step | pause | terminal-success | terminal-warn --- */
+/* --- node kinds: entry | step | pause | terminal-success | terminal-warn | launched-workflow --- */
 .canvas-node .canvas-node-rect { fill: var(--canvas-panel); stroke-width: 1.5; stroke: var(--canvas-border-strong); }
 .node--entry .canvas-node-rect { stroke: var(--canvas-accent); }
 .node--pause .canvas-node-rect { stroke: var(--canvas-text-dim); stroke-dasharray: 5 4; }
 .node--terminal-success .canvas-node-rect { stroke: var(--canvas-success); }
 .node--terminal-warn .canvas-node-rect { stroke: var(--canvas-escalation); }
+.node--launched-workflow .canvas-node-rect { stroke: var(--canvas-accent); stroke-dasharray: 5 4; }
 .canvas-node-title { fill: var(--canvas-text); font-size: 13px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
 .canvas-node-sub { fill: var(--canvas-text-dim); font-size: 9.5px; text-anchor: middle; dominant-baseline: middle; }
 
@@ -107,6 +108,7 @@ html, body {
 .canvas-edge--success { stroke: var(--canvas-success); }
 .canvas-edge--warn { stroke: var(--canvas-escalation); }
 .canvas-edge--cross { stroke: var(--canvas-text-dim); stroke-dasharray: 4 4; }
+.canvas-edge--launch { stroke: var(--canvas-accent); stroke-dasharray: 4 4; }
 .canvas-edge-label { fill: var(--canvas-text-dim); font-size: 9px; }
 .canvas-arrow-fill { fill: var(--canvas-border-strong); }
 .canvas-arrow-fill--success { fill: var(--canvas-success); }
@@ -122,6 +124,7 @@ html, body {
 .canvas-legend-marker--terminal-success { background: var(--canvas-success); border-radius: 3px; }
 .canvas-legend-marker--terminal-warn { background: var(--canvas-escalation); border-radius: 3px; }
 .canvas-legend-marker--cross { border: 1.5px dashed var(--canvas-text-dim); border-radius: 2px; background: transparent; }
+.canvas-legend-marker--launched-workflow { border: 1.5px dashed var(--canvas-accent); border-radius: 3px; background: transparent; }
 .canvas-interconnections { display: flex; flex-direction: column; gap: 12px; }
 .canvas-panel-title { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--canvas-text-dim); }
 .canvas-interconnection-row { display: grid; grid-template-columns: 12px 1fr auto; column-gap: 8px; row-gap: 2px; align-items: baseline; }

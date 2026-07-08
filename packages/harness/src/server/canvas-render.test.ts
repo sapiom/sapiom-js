@@ -6,7 +6,7 @@ import express from "express";
 import type { Server } from "node:http";
 import { createCanvasRenderRouter, type CanvasRenderRouterDeps } from "./canvas-render.js";
 import { createBootTokenMiddleware } from "./auth.js";
-import { CANVAS_INDEX } from "../shared/types.js";
+import { CANVAS_DIR } from "../shared/types.js";
 
 const BOOT_TOKEN = "test-boot-token";
 const TOKEN_HEADER = { "X-Harness-Token": BOOT_TOKEN };
@@ -67,15 +67,16 @@ describe("canvas render router", () => {
     expect(res.status).toBe(404);
   });
 
-  it("renders the empty-workspace state and reports ok:true with mode 'empty' when no workflows are known", async () => {
+  it("reports ok:true with mode 'empty' — and writes nothing — for an unbound session", async () => {
     await start({ getSession: () => ({ cwd: projectDir, boundWorkflowPath: null }), listWorkflows: () => [] });
     const res = await fetch(`${baseUrl}/api/canvas/sess-1/render`, { method: "POST", headers: TOKEN_HEADER });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; mode: string };
     expect(body).toMatchObject({ ok: true, mode: "empty" });
 
-    const html = await fs.readFile(path.join(projectDir, CANVAS_INDEX), "utf8");
-    expect(html).toContain("No workflows found");
+    // Zero extraction, zero writes: the canvas router serves the unbound
+    // empty state on its own.
+    await expect(fs.access(path.join(projectDir, CANVAS_DIR))).rejects.toThrow();
   });
 
   it("passes the session's real binding and the live workflow list through to the render", async () => {

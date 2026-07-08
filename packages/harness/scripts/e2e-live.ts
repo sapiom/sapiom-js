@@ -63,9 +63,15 @@
  *      mode) and after one is bound.
  *  14. Deterministic canvas render (zero LLM): bound to a real @sapiom/agent
  *      project, POST /api/canvas/:id/render extracts its actual step graph
- *      and writes real step names + SVG node markup to index.html, and the
- *      write fires a canvas.reload frame exactly like an agent's own edit
- *      would — the visualize macro's default path never touches the pty.
+ *      and writes real step names + SVG node markup to the workflow's own
+ *      render file under .sapiom/canvas/renders/, GET /canvas/:id/ serves
+ *      that render for the bound session (per-request resolution — no
+ *      index.html rewrite), and the write fires a canvas.reload frame
+ *      exactly like an agent's own edit would — the visualize macro's
+ *      default path never touches the pty. A second render of the unchanged
+ *      workflow is served from the extraction cache (no child process), and
+ *      unbinding flips GET /canvas/:id/ back to the agent-authored
+ *      index.html untouched.
  *  15. State isolation + registry hygiene: `stateRoot` alone (no per-file
  *      overrides, no machineId) roots every piece of persistent state under
  *      the scratch dir — machine-id included — and a pre-seeded registry
@@ -636,11 +642,20 @@ async function testCoreFlow(): Promise<void> {
 
     const renderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
     assert(renderRes.status === 200, "POST /api/canvas/:id/render returns 200");
-    const renderBody = (await renderRes.json()) as { ok: boolean; mode: string; extractionFailed: string[] };
+    const renderBody = (await renderRes.json()) as {
+      ok: boolean;
+      mode: string;
+      extractionFailed: string[];
+      renderPath?: string;
+    };
     assert(renderBody.ok === true && renderBody.mode === "single", "render reports { ok: true, mode: 'single' }");
     assert(
       renderBody.extractionFailed.length === 0,
       `extraction succeeded (no degraded panels): ${JSON.stringify(renderBody.extractionFailed)}`,
+    );
+    assert(
+      (renderBody.renderPath ?? "").startsWith(path.join(projectDir, ".sapiom", "canvas", "renders") + path.sep),
+      "the render landed in the session cwd's .sapiom/canvas/renders/ (per-workflow file, not index.html)",
     );
 
     await waitFor(async () => {
@@ -651,13 +666,26 @@ async function testCoreFlow(): Promise<void> {
     });
     console.log("canvas.reload frame received for the deterministic render's write");
 
-    // Canvas is per SESSION cwd (projectDir), not per bound workflow —
-    // the workflow's own directory is only where its source lives.
-    const renderedHtml = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
+    // GET /canvas/:id/ resolves the session's binding at request time and
+    // serves the bound workflow's render file.
+    const renderedHtml = await (await fetch(`${baseUrl}/canvas/${sessionId}/`)).text();
     for (const step of ["intake", "classify", "route", "auto_resolve", "escalate"]) {
-      assert(renderedHtml.includes(`>${step}<`), `rendered canvas contains the real step name '${step}'`);
+      assert(renderedHtml.includes(`>${step}<`), `served canvas contains the real step name '${step}'`);
     }
-    assert(renderedHtml.includes("canvas-node-rect"), "rendered canvas contains real SVG node markup, not just text");
+    assert(renderedHtml.includes("canvas-node-rect"), "served canvas contains real SVG node markup, not just text");
+    // index.html was NOT rewritten by the deterministic render — the agent's
+    // own canvas (written in step 9) is still exactly what it wrote.
+    const indexAfterRender = await fs.readFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "utf8");
+    assert(indexAfterRender.includes("e2e"), "index.html (the agent-authored canvas) is untouched by the render");
+
+    // A second render of the unchanged workflow comes from the extraction
+    // cache — no child check() process runs at all.
+    const cachedRenderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
+    const cachedRenderBody = (await cachedRenderRes.json()) as { ok: boolean; cachedExtraction?: boolean };
+    assert(
+      cachedRenderBody.ok === true && cachedRenderBody.cachedExtraction === true,
+      "re-rendering the unchanged workflow is served from the extraction cache (no child process)",
+    );
 
     // --- 11b. unbind — the context file gets boundWorkflow: null, not deleted ---
     const unbindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
@@ -672,6 +700,14 @@ async function testCoreFlow(): Promise<void> {
       return context.boundWorkflow === null ? context : undefined;
     });
     assert(unboundContext.boundWorkflow === null, "unbinding writes boundWorkflow: null to harness-context.json");
+
+    // Unbound again, the canvas root falls back to the legacy agent-authored
+    // index.html — the render files stay on disk for the next bind.
+    const unboundCanvas = await (await fetch(`${baseUrl}/canvas/${sessionId}/`)).text();
+    assert(
+      unboundCanvas.includes("e2e") && !unboundCanvas.includes("canvas-node-rect"),
+      "unbinding flips GET /canvas/:id/ back to the agent-authored index.html",
+    );
 
     // --- 11c. binding to a path that isn't a registered workflow is rejected ---
     const badBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
