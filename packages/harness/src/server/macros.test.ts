@@ -3,6 +3,7 @@ import express from "express";
 import type { Server } from "node:http";
 import { createMacrosRouter, type MacrosRouterDeps } from "./macros.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
+import { CANVAS_STYLE_GUIDELINES } from "../profiles/canvas-guidelines.js";
 import type { WorkflowInfo } from "../shared/types.js";
 
 let server: Server;
@@ -194,7 +195,7 @@ describe("macros router", () => {
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      "Write a live HTML visualization of the leasing funnel to .sapiom/canvas/index.html and keep it updated as things change.",
+      `Write a live HTML visualization of the leasing funnel to .sapiom/canvas/index.html and keep it updated as things change.\n\n${CANVAS_STYLE_GUIDELINES}`,
       true,
     );
   });

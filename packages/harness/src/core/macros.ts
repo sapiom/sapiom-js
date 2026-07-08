@@ -6,6 +6,7 @@
  * present the same action rail.
  */
 import type { MacroDef } from "../shared/types.js";
+import { CANVAS_STYLE_GUIDELINES } from "../profiles/canvas-guidelines.js";
 
 export const DEFAULT_MACROS: MacroDef[] = [
   {
@@ -59,7 +60,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     action: {
       kind: "inject",
       submit: true,
-      text: "Write a live HTML visualization of {{subject}} to .sapiom/canvas/index.html and keep it updated as things change.",
+      text: `Write a live HTML visualization of {{subject}} to .sapiom/canvas/index.html and keep it updated as things change.\n\n${CANVAS_STYLE_GUIDELINES}`,
     },
   },
 ];
