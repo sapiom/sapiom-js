@@ -6,6 +6,7 @@
  */
 import type {
   AppState,
+  BindWorkflowRequest,
   CreateSessionRequest,
   FsDirEntry,
   FsListResponse,
@@ -26,23 +27,9 @@ export function isMockMode(): boolean {
   return import.meta.env.VITE_MOCK === "1";
 }
 
-/**
- * `PATCH /api/sessions/:id/workflow` body + the `HarnessSession.boundWorkflowPath`
- * field it sets. Mirrors the workspace-binding contract landing in parallel
- * (server side owns `.sapiom/harness-context.json` + the system-prompt
- * awareness); typed locally here rather than editing the shared contract.
- * `null` unbinds.
- */
-export interface BindWorkflowRequest {
-  workflowPath: string | null;
-}
-
-export type SessionWithBinding = HarnessSession & { boundWorkflowPath: string | null };
-
-/** Reads the binding defensively — `HarnessSession` doesn't declare the field yet. */
+/** `session.boundWorkflowPath` is nullable already, but keeps callers safe against a missing session. */
 export function boundWorkflowPathOf(session: HarnessSession | null | undefined): string | null {
-  if (!session) return null;
-  return (session as SessionWithBinding).boundWorkflowPath ?? null;
+  return session?.boundWorkflowPath ?? null;
 }
 
 /** Read once at module load: `window.__HARNESS__ = {token}` (baked in by the server), falling back to `?token=`. */
@@ -305,7 +292,7 @@ class MockApi implements HarnessApi {
     await delay(150);
     const existing = this.sessions.find((session) => session.id === sessionId);
     if (!existing) throw new Error(`mock: no session to bind for ${sessionId}`);
-    const bound = { ...existing, boundWorkflowPath: workflowPath } as SessionWithBinding;
+    const bound: HarnessSession = { ...existing, boundWorkflowPath: workflowPath };
     this.sessions = this.sessions.map((session) => (session.id === sessionId ? bound : session));
     return bound;
   }
