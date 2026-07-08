@@ -76,6 +76,21 @@ const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 /** Bytes of terminal output retained per session for replay on WS (re)attach. */
 const SCROLLBACK_BYTES = 131_072;
+/**
+ * Delay between writing prompt text and a trailing Enter, when submitting
+ * non-empty text in one call (see `submitInput`). Claude Code — like many
+ * bracketed-paste-aware TUIs — treats a single write containing both text
+ * and a newline as one paste event: the newline lands inside the pasted
+ * content instead of registering as a separate "submit" keypress, so the
+ * prompt sits in the input box and is never sent. Splitting the write with
+ * a short delay makes the terminal see two distinct input events instead —
+ * a paste, then a separate Enter.
+ */
+const SUBMIT_DELAY_MS = 300;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export type SessionStatusListener = (session: HarnessSession) => void;
 export type SessionDataListener = (chunk: string) => void;
@@ -291,6 +306,37 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) return false;
     handle.pty.write(data);
+    const session = this.sessions.get(id);
+    if (session) {
+      session.lastActiveAt = this.now();
+      void this.persist();
+    }
+    return true;
+  }
+
+  /**
+   * Inject a discrete prompt (macros, the Visualize button, `/api/sessions/:id/input`)
+   * with proper submit semantics — distinct from `write()`, which is a raw
+   * passthrough for live keystrokes from the terminal WS and must never add
+   * this delay/splitting behavior. See `SUBMIT_DELAY_MS` for why non-empty
+   * submitted text can't just be written as `${text}\r` in one call.
+   */
+  async submitInput(id: string, text: string, submit = true): Promise<boolean> {
+    const handle = this.ptys.get(id);
+    if (!handle) return false;
+
+    if (!submit) {
+      handle.pty.write(text);
+    } else if (text.length === 0) {
+      handle.pty.write("\r");
+    } else {
+      handle.pty.write(text);
+      await sleep(SUBMIT_DELAY_MS);
+      // The pty may have been killed/replaced while we were waiting.
+      if (this.ptys.get(id) !== handle) return false;
+      handle.pty.write("\r");
+    }
+
     const session = this.sessions.get(id);
     if (session) {
       session.lastActiveAt = this.now();

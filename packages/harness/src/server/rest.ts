@@ -189,20 +189,23 @@ export function createRestRouter(options: RestRouterOptions): Router {
     res.json({ ok: true });
   });
 
-  router.post("/sessions/:id/input", (req, res) => {
+  router.post("/sessions/:id/input", async (req, res, next) => {
     const parsed = injectInputSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const submit = parsed.data.submit ?? true;
-    const payload = submit ? `${parsed.data.text}\r` : parsed.data.text;
-    const ok = sessionManager.write(req.params.id, payload);
-    if (!ok) {
-      res.status(404).json({ error: "session not found or has no live pty" });
-      return;
+    try {
+      const submit = parsed.data.submit ?? true;
+      const ok = await sessionManager.submitInput(req.params.id, parsed.data.text, submit);
+      if (!ok) {
+        res.status(404).json({ error: "session not found or has no live pty" });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
     }
-    res.json({ ok: true });
   });
 
   return router;
