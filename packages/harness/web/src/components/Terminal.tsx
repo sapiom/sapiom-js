@@ -19,6 +19,8 @@ export interface TerminalProps {
   sessionId: string;
   /** Per-boot token baked into the SPA; required on the WS upgrade. */
   token: string;
+  /** Fires on every socket message — feeds the session tab's busy pulse. */
+  onActivity?: () => void;
 }
 
 type ConnectionStatus = "connecting" | "connected" | "error";
@@ -106,12 +108,20 @@ const LIGHT_PALETTE: PanelPalette = {
 
 const paletteFor = (theme: Theme): PanelPalette => (theme === "dark" ? DARK_PALETTE : LIGHT_PALETTE);
 
-export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
+export const Terminal = ({ sessionId, token, onActivity }: TerminalProps): JSX.Element => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(getTheme());
+
+  // Latest-ref, not a dependency of the socket effect below — onActivity is
+  // an inline closure from the parent and shouldn't tear down/reconnect the
+  // WS just because its identity changed on some unrelated re-render.
+  const onActivityRef = useRef(onActivity);
+  useEffect(() => {
+    onActivityRef.current = onActivity;
+  }, [onActivity]);
 
   // Re-applies live on toggle — doesn't touch the pty connection, so this is
   // a separate effect from the one that opens the terminal/socket below.
@@ -204,6 +214,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
         const data =
           typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data as ArrayBuffer);
         term.write(data);
+        onActivityRef.current?.();
       };
 
       socket.onclose = (event) => {

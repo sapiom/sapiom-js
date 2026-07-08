@@ -25,6 +25,8 @@ interface SessionBarProps {
   organizationName: string | null;
   telemetryOptIn: boolean;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  /** Sessions with output activity in roughly the last 3s — pulses their tab. */
+  busySessionIds: Set<string>;
 }
 
 export function SessionBar({
@@ -44,20 +46,17 @@ export function SessionBar({
   organizationName,
   telemetryOptIn,
   onToggleTelemetry,
+  busySessionIds,
 }: SessionBarProps): JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
-  const runningSessions = sessions.filter((session) => session.status !== "exited");
-  // Reachable here even though they're not "running" — so a session that died stays
-  // selectable (to inspect/resume/close it) instead of only being escapable.
-  const exitedSessions = sessions.filter((session) => session.status === "exited");
 
-  const toggle = (): void => {
-    const next = !open;
-    setOpen(next);
+  const toggleHistory = (): void => {
+    const next = !historyOpen;
+    setHistoryOpen(next);
     if (next) {
       const cwd = activeSession?.cwd ?? recentDirs[0];
       if (cwd) onOpenDropdown(cwd);
@@ -66,58 +65,48 @@ export function SessionBar({
 
   return (
     <div className="session-bar">
-      <div className="session-dropdown-wrap">
-        <button className="session-dropdown-trigger" data-testid="session-dropdown-trigger" onClick={toggle}>
-          <span className="session-dot" data-status={activeSession?.status ?? "none"} />
-          <span className="session-title">{activeSession ? activeSession.title : "No session"}</span>
-          {boundWorkflowName && (
-            <span className="session-workflow-chip" data-testid="session-workflow-chip">
-              ▸ working on {boundWorkflowName}
-            </span>
-          )}
-          <Icon name="ChevronDown" size={14} />
+      <div className="session-tabs" data-testid="session-tabs">
+        {sessions.length === 0 && <span className="session-tabs-empty">No session</span>}
+        {sessions.map((session) => (
+          <button
+            key={session.id}
+            className={
+              "session-tab" +
+              (session.id === activeSessionId ? " is-active" : "") +
+              (busySessionIds.has(session.id) ? " is-busy" : "")
+            }
+            // Dead sessions keep their pre-existing testid convention (many
+            // specs already key off it); a running/starting one gets a
+            // parallel, id-scoped testid for anything that needs to target
+            // a specific tab rather than "whichever is active."
+            data-testid={session.status === "exited" ? `exited-session-${session.id}` : `session-tab-${session.id}`}
+            title={session.cwd}
+            onClick={() => onSelectSession(session.id)}
+          >
+            <span className="session-dot" data-status={session.status} />
+            <span className="session-tab-title">{session.title}</span>
+          </button>
+        ))}
+      </div>
+
+      {boundWorkflowName && (
+        <span className="session-workflow-chip" data-testid="session-workflow-chip">
+          ▸ working on {boundWorkflowName}
+        </span>
+      )}
+
+      <div className="session-history-wrap">
+        <button
+          className="session-history-trigger"
+          aria-label="Session history"
+          data-testid="session-history-trigger"
+          onClick={toggleHistory}
+        >
+          <Icon name="Clock" size={13} />
         </button>
 
-        {open && (
+        {historyOpen && (
           <div className="session-dropdown-menu">
-            <div className="session-dropdown-section">Running</div>
-            {runningSessions.length === 0 && <div className="session-dropdown-empty">No running sessions</div>}
-            {runningSessions.map((session) => (
-              <button
-                key={session.id}
-                className={"session-dropdown-item" + (session.id === activeSessionId ? " is-selected" : "")}
-                onClick={() => {
-                  onSelectSession(session.id);
-                  setOpen(false);
-                }}
-              >
-                <span className="session-dot" data-status={session.status} />
-                <span className="session-item-title">{session.title}</span>
-                <span className="session-item-cwd">{session.cwd}</span>
-              </button>
-            ))}
-
-            {exitedSessions.length > 0 && (
-              <>
-                <div className="session-dropdown-section">Exited</div>
-                {exitedSessions.map((session) => (
-                  <button
-                    key={session.id}
-                    data-testid={`exited-session-${session.id}`}
-                    className={"session-dropdown-item" + (session.id === activeSessionId ? " is-selected" : "")}
-                    onClick={() => {
-                      onSelectSession(session.id);
-                      setOpen(false);
-                    }}
-                  >
-                    <span className="session-dot" data-status={session.status} />
-                    <span className="session-item-title">{session.title}</span>
-                    <span className="session-item-cwd">{session.cwd}</span>
-                  </button>
-                ))}
-              </>
-            )}
-
             <div className="session-dropdown-section">History</div>
             {historyLoading && <div className="session-dropdown-empty">Loading…</div>}
             {!historyLoading && history.length === 0 && (
@@ -131,7 +120,7 @@ export function SessionBar({
                   data-testid={`history-${summary.agentSessionId}`}
                   onClick={() => {
                     onResumeHistory(summary);
-                    setOpen(false);
+                    setHistoryOpen(false);
                   }}
                 >
                   <span className="session-item-title">{summary.title}</span>

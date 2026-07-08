@@ -46,6 +46,15 @@ export interface HarnessStateHook {
    *  instead, since its only caller today fires it without awaiting. */
   toast: string | null;
   dismissToast: () => void;
+  /** Marks a session as having just produced output — feeds the session tabs'
+   *  busy pulse. The active session's Terminal calls this directly on every
+   *  socket message; there's no way to learn about a *background* session's
+   *  activity yet (would need a bus broadcast neither the shared contract nor
+   *  the server emits today), so only the active tab ever actually pulses in
+   *  real (non-mock) mode currently. */
+  recordActivity: (sessionId: string) => void;
+  /** Sessions with output in roughly the last 3s. */
+  busySessionIds: Set<string>;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -60,6 +69,26 @@ export function useHarnessState(): HarnessStateHook {
   const [toast, setToast] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
+  const [sessionActivity, setSessionActivity] = useState<Record<string, number>>({});
+  // Nothing reads this directly — it exists purely to force a re-render every
+  // so often so busySessionIds actually decays once a session goes quiet,
+  // not just when new activity arrives.
+  const [, forceBusyRecheck] = useState(0);
+
+  const recordActivity = useCallback((sessionId: string) => {
+    setSessionActivity((prev) => ({ ...prev, [sessionId]: Date.now() }));
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => forceBusyRecheck((tick) => tick + 1), 500);
+    return () => clearInterval(interval);
+  }, []);
+
+  const busySessionIds = new Set(
+    Object.entries(sessionActivity)
+      .filter(([, lastActiveAtMs]) => Date.now() - lastActiveAtMs < 3000)
+      .map(([sessionId]) => sessionId),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -108,9 +137,19 @@ export function useHarnessState(): HarnessStateHook {
         });
       } else if (message.type === "workflows.changed") {
         void refreshWorkflows();
+      } else {
+        // Speculative: anticipates a `session.activity` broadcast from the
+        // background-task work (a session producing output while it's not
+        // the active tab) that doesn't exist in the shared contract yet —
+        // see recordActivity's doc comment. A cast, not a shared/types.ts
+        // edit, since that type isn't real yet; harmless no-op until it is.
+        const anticipated = message as unknown as { type: string; harnessSessionId?: string };
+        if (anticipated.type === "session.activity" && anticipated.harnessSessionId) {
+          recordActivity(anticipated.harnessSessionId);
+        }
       }
     });
-  }, [refreshWorkflows]);
+  }, [refreshWorkflows, recordActivity]);
 
   const loadHistory = useCallback(async (cwd: string) => {
     setHistoryLoading(true);
@@ -238,5 +277,7 @@ export function useHarnessState(): HarnessStateHook {
     lastMessage,
     toast,
     dismissToast,
+    recordActivity,
+    busySessionIds,
   };
 }

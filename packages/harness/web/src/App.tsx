@@ -168,6 +168,7 @@ export const App = (): JSX.Element => {
             onToggleTelemetry={async (next) => {
               await harness.updateSettings({ telemetryOptIn: next });
             }}
+            busySessionIds={harness.busySessionIds}
           />
           <div className="terminal-slot">
             {activeSession?.status === "exited" ? (
@@ -177,7 +178,11 @@ export const App = (): JSX.Element => {
                 onClose={() => void harness.closeSession(activeSession.id)}
               />
             ) : harness.activeSessionId ? (
-              <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+              <Terminal
+                sessionId={harness.activeSessionId}
+                token={harness.bootToken}
+                onActivity={() => harness.recordActivity(harness.activeSessionId as string)}
+              />
             ) : (
               <div className="terminal-empty">No active session — click “+ new” to start one.</div>
             )}

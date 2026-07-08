@@ -640,36 +640,97 @@ input {
   position: relative;
 }
 
-.session-dropdown-wrap {
-  position: relative;
+/* One tab per open session (running or exited — dead sessions stay reachable
+   rather than vanishing into a menu). Scrolls horizontally rather than
+   wrapping or spawning an overflow menu once there are more than fit. */
+.session-tabs {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
-.session-dropdown-trigger {
+.session-tabs-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.session-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  padding: 5px 8px;
+  flex: 0 0 auto;
+  max-width: 200px;
+  padding: 5px 10px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
+  color: var(--text-dim);
+}
+
+.session-tab:hover {
+  border-color: var(--accent);
   color: var(--text);
 }
 
-.session-dropdown-trigger:hover {
+.session-tab.is-active {
+  background: var(--accent-dim);
   border-color: var(--accent);
+  color: var(--text);
 }
 
-.session-title {
-  flex: 1;
+.session-tab-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
   font-size: 12px;
+}
+
+/* Output within the last ~3s — see App.tsx's busySessionIds. A pulsing ring
+   on the tab's own dot, not the whole tab, so it reads as "this session is
+   doing something" without competing with the is-active highlight. */
+.session-tab.is-busy .session-dot {
+  box-shadow: 0 0 0 0 var(--green);
+  animation: session-busy-pulse 1.4s ease-out infinite;
+}
+
+@keyframes session-busy-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--green) 0%, transparent);
+  }
+}
+
+.session-history-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.session-history-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-dim);
+}
+
+.session-history-trigger:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
 .session-workflow-chip {
@@ -706,11 +767,14 @@ input {
   background: var(--text-faint);
 }
 
+/* Anchored to session-history-wrap (a small icon button) rather than the old
+   full-width dropdown trigger — hangs from the right so it doesn't run off
+   the left edge of the bar. */
 .session-dropdown-menu {
   position: absolute;
   top: calc(100% + 4px);
-  left: 0;
   right: 0;
+  width: 320px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);

@@ -83,7 +83,7 @@ test("auto-selects the running boot session on initial load", async ({ page }) =
   // The server auto-creates a session in launchDir at boot — the app should
   // never open to an empty terminal pane.
   await expect(page.locator(".terminal-empty")).toHaveCount(0);
-  await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("No session");
+  await expect(page.locator(".session-tab.is-active")).toBeVisible();
   await expect(page.locator(".session-dot[data-status='running']")).toBeVisible();
 });
 
@@ -147,7 +147,7 @@ test.describe("workspace binding", () => {
     await expect(page.getByTestId("session-workflow-chip")).toContainText("leasing");
 
     // Switch to a session that's never had anything bound.
-    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("session-history-trigger").click();
     await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
     await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
   });
@@ -191,16 +191,16 @@ test("new-session modal: directory picker navigates and validates", async ({ pag
 });
 
 test("resuming a history entry switches the active session", async ({ page }) => {
-  await page.getByTestId("session-dropdown-trigger").click();
+  await page.getByTestId("session-history-trigger").click();
   await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
-  await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+  await expect(page.locator(".session-tab.is-active")).toContainText("Build the leasing pipeline");
 });
 
 test.describe("dead sessions never trap the user", () => {
-  test("an exited session is reachable from the dropdown and shows a dead-session pane, not a stuck terminal", async ({
+  test("an exited session is reachable as its own tab and shows a dead-session pane, not a stuck terminal", async ({
     page,
   }) => {
-    await page.getByTestId("session-dropdown-trigger").click();
+    // Exited sessions are always-visible tabs now — no dropdown to open first.
     await page.getByTestId("exited-session-sess-leasing").click();
 
     const pane = page.getByTestId("dead-session-pane");
@@ -213,24 +213,21 @@ test.describe("dead sessions never trap the user", () => {
   });
 
   test("Resume on a dead session starts it running again", async ({ page }) => {
-    await page.getByTestId("session-dropdown-trigger").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-resume").click();
 
     await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+    await expect(page.locator(".session-tab.is-active")).toContainText("Build the leasing pipeline");
   });
 
   test("Close on a dead session removes it and falls back to another running session", async ({ page }) => {
     // The boot session is running, so falling back to it is always possible here.
-    await page.getByTestId("session-dropdown-trigger").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-close").click();
 
     await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
-    await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("No session");
+    await expect(page.locator(".session-tab.is-active")).toBeVisible();
 
-    await page.getByTestId("session-dropdown-trigger").click();
     await expect(page.getByTestId("exited-session-sess-leasing")).toHaveCount(0);
   });
 });
@@ -263,19 +260,19 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
     await page.getByTestId("palette-trigger").click();
     await page.getByTestId("command-palette-input").fill("onboarding-flow");
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("onboarding-flow");
+    await expect(page.locator(".session-tab.is-active")).toContainText("onboarding-flow");
   });
 
   test("Enter on a session hit switches to it instead of starting a new one", async ({ page }) => {
     // Resume a different session first so switching back is observable.
-    await page.getByTestId("session-dropdown-trigger").click();
+    await page.getByTestId("session-history-trigger").click();
     await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("Build the leasing pipeline");
+    await expect(page.locator(".session-tab.is-active")).toContainText("Build the leasing pipeline");
 
     await page.getByTestId("palette-trigger").click();
     await page.getByTestId("command-palette-input").fill("acme-app");
     await page.getByTestId("command-palette-item-0").click();
-    await expect(page.getByTestId("session-dropdown-trigger")).not.toContainText("Build the leasing pipeline");
+    await expect(page.locator(".session-tab.is-active")).not.toContainText("Build the leasing pipeline");
   });
 
   test("a path-shaped query uses live GET /api/fs/list completion instead of fuzzy matching", async ({ page }) => {
@@ -287,7 +284,7 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
     await expect(dirItem).toContainText("acme-app");
 
     await dirItem.click();
-    await expect(page.getByTestId("session-dropdown-trigger")).toContainText("acme-app");
+    await expect(page.locator(".session-tab.is-active")).toContainText("acme-app");
   });
 });
 
@@ -642,6 +639,41 @@ test.describe("resizable panes", () => {
     await handle.dblclick();
     const railWidth = (await page.locator(".rail-workflows").boundingBox())?.width ?? 0;
     expect(Math.abs(railWidth - 220)).toBeLessThan(3);
+  });
+});
+
+test.describe("session tabs", () => {
+  test("one tab per open session (running or exited), clicking switches instantly", async ({ page }) => {
+    const tabs = page.locator(".session-tab");
+    await expect(tabs).toHaveCount(3); // sess-boot (running) + sess-leasing, sess-rfq (exited)
+    await expect(tabs.filter({ hasText: "acme-app" })).toHaveClass(/is-active/);
+
+    await page.getByTestId("exited-session-sess-leasing").click();
+    await expect(page.getByTestId("exited-session-sess-leasing")).toHaveClass(/is-active/);
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/session-tabs.png", fullPage: true });
+  });
+
+  test("the busy indicator pulses on recent activity and decays after ~3s", async ({ page }) => {
+    const activeTab = page.locator(".session-tab.is-active");
+    await expect(activeTab).not.toHaveClass(/is-busy/);
+
+    // Mock-mode-only: simulates the speculative session.activity broadcast
+    // (see use-harness-state.ts's doc comment — no real event source exists
+    // yet for a *background*, non-active session; this exercises the same
+    // code path the active session's own Terminal output drives for real).
+    await page.evaluate(() => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "session.activity",
+        harnessSessionId: "sess-boot",
+      });
+    });
+    await expect(activeTab).toHaveClass(/is-busy/);
+    await page.screenshot({ path: "web/e2e/screenshots/session-tab-busy.png", fullPage: true });
+
+    await page.waitForTimeout(3600);
+    await expect(activeTab).not.toHaveClass(/is-busy/);
   });
 });
 
