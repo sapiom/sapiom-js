@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { PortDetector } from "./port-detector.js";
+import { PortDetector, portFromUrl } from "./port-detector.js";
 
-function makeDetector() {
+function makeDetector(excludedPorts?: Iterable<number>) {
   const onPort = vi.fn();
-  const detector = new PortDetector({ onPort });
+  const detector = new PortDetector({ onPort, excludedPorts });
   return { detector, onPort };
 }
 
@@ -132,5 +132,60 @@ describe("PortDetector.flush", () => {
     detector.feed("http://localhost:5544", "sess-1");
     detector.flush("sess-1");
     expect(onPort).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("PortDetector excludedPorts", () => {
+  it("does not fire for a port supplied at construction time", () => {
+    const { detector, onPort } = makeDetector([4100]);
+    detector.feed("localhost:4100\n", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+  });
+
+  it("still fires for a different, non-excluded port", () => {
+    const { detector, onPort } = makeDetector([4100]);
+    detector.feed("localhost:3000\n", "sess-1");
+    expect(onPort).toHaveBeenCalledWith("sess-1", 3000, "http://localhost:3000");
+  });
+
+  it("addExcludedPort() suppresses a port added after construction", () => {
+    const { detector, onPort } = makeDetector();
+    detector.addExcludedPort(4100);
+    detector.feed("localhost:4100\n", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+  });
+
+  it("an excluded port isn't recorded as seen, so un-excluding via a fresh detector still dedupes normally", () => {
+    // Exclusion happens before the seenPorts check — this just confirms
+    // an excluded port doesn't leave any dedupe-state side effect behind.
+    const { detector, onPort } = makeDetector([4100]);
+    detector.feed("localhost:4100\n", "sess-1");
+    detector.feed("localhost:4100\n", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+  });
+
+  it("also suppresses an excluded port via flush()", () => {
+    const { detector, onPort } = makeDetector([4100]);
+    detector.feed("ready on http://localhost:4100", "sess-1");
+    detector.flush("sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+  });
+});
+
+describe("portFromUrl", () => {
+  it("reads an explicit port", () => {
+    expect(portFromUrl("http://localhost:4199")).toBe(4199);
+  });
+
+  it("defaults to 80 for http with no explicit port", () => {
+    expect(portFromUrl("http://collector.example.com/v1/harness/events")).toBe(80);
+  });
+
+  it("defaults to 443 for https with no explicit port", () => {
+    expect(portFromUrl("https://collector.example.com/v1/harness/events")).toBe(443);
+  });
+
+  it("returns null for an unparseable URL", () => {
+    expect(portFromUrl("not a url")).toBeNull();
   });
 });

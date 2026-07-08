@@ -19,6 +19,29 @@ const TAIL_SAFETY = 24;
 
 export interface PortDetectorDeps {
   onPort(harnessSessionId: string, port: number, url: string): void;
+  /** Ports considered the harness's own infrastructure — a match against one
+   *  of these is silently dropped (not even recorded as "seen") rather than
+   *  broadcast as a discovery. Known ports at construction time; more can be
+   *  added later via `addExcludedPort` (e.g. an ephemeral `port: 0` only
+   *  resolves to its real bound port after the server starts listening,
+   *  which happens after this detector is already constructed). */
+  excludedPorts?: Iterable<number>;
+}
+
+/**
+ * Extracts the port a URL string actually resolves to, including the
+ * protocol's implicit default when none is written out explicitly (`new
+ * URL(...).port` is `""` in that case, not the real port) — used to exclude
+ * the analytics collector's own port from detection.
+ */
+export function portFromUrl(rawUrl: string): number | null {
+  try {
+    const url = new URL(rawUrl);
+    if (url.port) return Number(url.port);
+    return url.protocol === "https:" ? 443 : 80;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -28,13 +51,25 @@ export interface PortDetectorDeps {
  * pty output, not just complete lines). Call `flush()` after feeding a
  * discrete, already-complete string (e.g. one tool.call event's output) —
  * see its doc comment for why that's necessary. Dedupes per (session, port)
- * so a port that keeps appearing in output only ever fires `onPort` once.
+ * so a port that keeps appearing in output only ever fires `onPort` once —
+ * permanently for the session's lifetime (not a TTL): `reset()` is what
+ * clears it, on session exit, so a reused session id starts clean.
  */
 export class PortDetector {
   private readonly buffers = new Map<string, string>();
   private readonly seenPorts = new Map<string, Set<number>>();
+  private readonly excludedPorts: Set<number>;
 
-  constructor(private readonly deps: PortDetectorDeps) {}
+  constructor(private readonly deps: PortDetectorDeps) {
+    this.excludedPorts = new Set(deps.excludedPorts ?? []);
+  }
+
+  /** Exclude a port discovered after construction — e.g. the harness's own
+   *  actual bound port, which is only known once the HTTP server resolves
+   *  its `listen()` call (relevant for an ephemeral `port: 0`). */
+  addExcludedPort(port: number): void {
+    this.excludedPorts.add(port);
+  }
 
   feed(chunk: string, harnessSessionId: string): void {
     const combined = (this.buffers.get(harnessSessionId) ?? "") + chunk;
@@ -59,6 +94,9 @@ export class PortDetector {
 
   private tryEmit(harnessSessionId: string, port: number): void {
     if (!Number.isInteger(port) || port <= 0 || port > 65535) return;
+    // Never even recorded as "seen" — an excluded port isn't a real
+    // discovery, so it shouldn't consume per-session dedupe state either.
+    if (this.excludedPorts.has(port)) return;
 
     let ports = this.seenPorts.get(harnessSessionId);
     if (!ports) {
