@@ -25,8 +25,10 @@ export interface PortDetectorDeps {
  * Stateful, streaming-safe: a match that touches the very end of the
  * buffered text is held back rather than finalized, in case more digits are
  * still arriving in the next chunk (so this is safe to feed byte-for-byte
- * pty output, not just complete lines). Dedupes per (session, port) so a
- * port that keeps appearing in output only ever fires `onPort` once.
+ * pty output, not just complete lines). Call `flush()` after feeding a
+ * discrete, already-complete string (e.g. one tool.call event's output) —
+ * see its doc comment for why that's necessary. Dedupes per (session, port)
+ * so a port that keeps appearing in output only ever fires `onPort` once.
  */
 export class PortDetector {
   private readonly buffers = new Map<string, string>();
@@ -67,6 +69,29 @@ export class PortDetector {
     ports.add(port);
 
     this.deps.onPort(harnessSessionId, port, `http://localhost:${port}`);
+  }
+
+  /**
+   * Finalizes whatever's currently held back for a session, immediately.
+   * `feed()` deliberately withholds a match touching the end of the buffered
+   * text in case more digits are still arriving — correct for a live pty
+   * byte stream, but wrong for a single discrete, complete string (e.g. one
+   * `tool.call` event's already-finished output) where no "next chunk" is
+   * ever coming: without this, a port at the very end of that string (a
+   * common shape — "...started server on http://localhost:5544") would be
+   * held pending forever and `onPort` would never fire. Call this right
+   * after `feed()` whenever the fed text is known to be complete.
+   */
+  flush(harnessSessionId: string): void {
+    const pending = this.buffers.get(harnessSessionId);
+    if (!pending) return;
+
+    const regex = new RegExp(PORT_PATTERN_SOURCE, "g");
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(pending))) {
+      this.tryEmit(harnessSessionId, Number(match[1]));
+    }
+    this.buffers.delete(harnessSessionId);
   }
 
   /** Drops buffered/dedupe state for a session — call on session exit/kill so

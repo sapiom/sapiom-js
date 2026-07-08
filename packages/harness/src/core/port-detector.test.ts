@@ -91,4 +91,46 @@ describe("PortDetector.feed", () => {
     detector.feed("localhost:6000\n", "sess-1");
     expect(onPort).toHaveBeenCalledWith("sess-1", 6000, "http://localhost:6000");
   });
+
+  it("holds back a port that lands exactly at the end of a fed chunk, without flush()", () => {
+    // A discrete tool.call payload's text commonly ends *exactly* on the
+    // port digits, with no trailing character — this must not misfire as a
+    // truncated port, but it also must not just vanish: see flush() below.
+    const { detector, onPort } = makeDetector();
+    detector.feed("ready - started server on http://localhost:5544", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+  });
+});
+
+describe("PortDetector.flush", () => {
+  it("finalizes a port held back at the end of a discrete, complete string", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("ready - started server on http://localhost:5544", "sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+
+    detector.flush("sess-1");
+    expect(onPort).toHaveBeenCalledWith("sess-1", 5544, "http://localhost:5544");
+  });
+
+  it("is a harmless no-op when there's nothing pending", () => {
+    const { detector, onPort } = makeDetector();
+    detector.flush("sess-1");
+    expect(onPort).not.toHaveBeenCalled();
+  });
+
+  it("does not re-emit an already-finalized port", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("localhost:4000\n", "sess-1");
+    detector.flush("sess-1");
+    expect(onPort).toHaveBeenCalledTimes(1);
+  });
+
+  it("still respects per-(session,port) dedupe across feed+flush calls", () => {
+    const { detector, onPort } = makeDetector();
+    detector.feed("http://localhost:5544", "sess-1");
+    detector.flush("sess-1");
+    detector.feed("http://localhost:5544", "sess-1");
+    detector.flush("sess-1");
+    expect(onPort).toHaveBeenCalledTimes(1);
+  });
 });

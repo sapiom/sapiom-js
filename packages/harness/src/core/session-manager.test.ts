@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HarnessAdapter, HarnessSession, SpawnSpec } from "../shared/types.js";
-import { SessionManager, type PtySpawnFn } from "./session-manager.js";
+import { SessionManager, type PtySpawnFn, type SessionManagerOptions } from "./session-manager.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill. */
 function createFakePty() {
@@ -75,7 +75,13 @@ describe("SessionManager", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function makeManager(opts: { adapter?: HarnessAdapter; spawnPty?: PtySpawnFn } = {}) {
+  function makeManager(
+    opts: {
+      adapter?: HarnessAdapter;
+      spawnPty?: PtySpawnFn;
+      buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
+    } = {},
+  ) {
     const adapter = opts.adapter ?? createFakeAdapter();
     const spawns: ReturnType<typeof createFakePty>[] = [];
     const spawnPty: PtySpawnFn =
@@ -93,6 +99,7 @@ describe("SessionManager", () => {
       ingestToken: "boot-token",
       sessionsPath,
       spawnPty,
+      buildLaunchOpts: opts.buildLaunchOpts,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -206,6 +213,40 @@ describe("SessionManager", () => {
     expect(resumed.id).toBe(session.id);
 
     await expect(manager.resume("does-not-exist")).rejects.toThrow(/Unknown session/);
+  });
+
+  it("awaits an async buildLaunchOpts and merges its result into launch opts", async () => {
+    const buildLaunchOpts = vi.fn(async (harnessSessionId: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { settingsFile: `/generated/${harnessSessionId}/settings.json` };
+    });
+    const { manager, adapter } = makeManager({ buildLaunchOpts });
+    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+    expect(buildLaunchOpts).toHaveBeenCalledWith(
+      session.id,
+      expect.objectContaining({ cwd: "/tmp/proj", harness: "claude-code" }),
+    );
+    expect(adapter.launch).toHaveBeenCalledWith(
+      expect.objectContaining({ settingsFile: `/generated/${session.id}/settings.json` }),
+    );
+  });
+
+  it("also awaits an async buildLaunchOpts on resume()", async () => {
+    const buildLaunchOpts = vi.fn(async (harnessSessionId: string) => ({
+      mcpConfigFile: `/generated/${harnessSessionId}/mcp-config.json`,
+    }));
+    const { manager, adapter, spawns } = makeManager({ buildLaunchOpts });
+    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    manager.setAgentSessionId(session.id, "agent-uuid-1");
+    spawns[0]?.emitExit(0);
+
+    await manager.resume(session.id);
+
+    expect(adapter.resume).toHaveBeenLastCalledWith(
+      "agent-uuid-1",
+      expect.objectContaining({ mcpConfigFile: `/generated/${session.id}/mcp-config.json` }),
+    );
   });
 
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {

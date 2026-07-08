@@ -1,17 +1,18 @@
 /**
- * /ws/events?token= — server→client bus broadcasting BusMessage. This
- * workstream emits session.status; canvas.reload / port.detected /
- * workflows.changed are published by later workstreams over the same socket.
+ * /ws/events?token= — server→client bus broadcasting BusMessage. Forwards
+ * whatever the shared EventBus publishes (session.status, canvas.reload,
+ * port.detected, workflows.changed) — the integrator is responsible for
+ * feeding all of those into the bus from their respective sources.
  */
 
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
 
-import type { SessionManager } from "../core/session-manager.js";
+import type { EventBus } from "../core/event-bus.js";
 import type { BusMessage } from "../shared/types.js";
 import { timingSafeEqualString } from "./auth.js";
 
-export function createEventsWebSocketHandler(sessionManager: SessionManager, bootToken: string) {
+export function createEventsWebSocketHandler(bus: EventBus, bootToken: string) {
   return (ws: WebSocket, _req: IncomingMessage, params: URLSearchParams): void => {
     const token = params.get("token") ?? "";
     if (!timingSafeEqualString(token, bootToken)) {
@@ -23,9 +24,7 @@ export function createEventsWebSocketHandler(sessionManager: SessionManager, boo
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
     };
 
-    const unsubscribe = sessionManager.onStatusChange((session) => {
-      send({ type: "session.status", session });
-    });
+    const unsubscribe = bus.subscribe(send);
 
     ws.on("close", unsubscribe);
     ws.on("error", unsubscribe);
