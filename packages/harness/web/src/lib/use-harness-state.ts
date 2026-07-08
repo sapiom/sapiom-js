@@ -32,6 +32,7 @@ export interface HarnessStateHook {
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
+  updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
   lastMessage: BusMessage | null;
 }
@@ -145,6 +146,15 @@ export function useHarnessState(): HarnessStateHook {
     return workflow;
   }, []);
 
+  const updateSettings = useCallback(async (patch: Partial<HarnessSettings>): Promise<HarnessSettings> => {
+    const updated = await api.updateSettings(patch);
+    setSettings(updated);
+    if (patch.telemetryOptIn !== undefined) {
+      setState((prev) => (prev ? { ...prev, telemetryOptIn: updated.telemetryOptIn } : prev));
+    }
+    return updated;
+  }, []);
+
   const runMacro = useCallback(async (id: string, req: RunMacroRequest): Promise<void> => {
     await api.runMacro(id, req);
   }, []);
@@ -166,6 +176,7 @@ export function useHarnessState(): HarnessStateHook {
     resumeSession,
     resumeFromHistory,
     connectWorkflow,
+    updateSettings,
     runMacro,
     lastMessage,
   };
