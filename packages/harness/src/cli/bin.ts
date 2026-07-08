@@ -95,7 +95,9 @@ function printBanner(opts: {
   serverStarted: boolean;
 }): void {
   const authLine = opts.identity
-    ? `${opts.identity.organizationName} (${opts.identity.userId})`
+    ? `${opts.identity.organizationName} (${opts.identity.userId})${
+        opts.identity.source === "cached" ? " — cached" : ""
+      }`
     : "not authenticated";
 
   console.log("");
@@ -130,6 +132,12 @@ const main = async (): Promise<void> => {
   const machineId = await getOrCreateMachineId();
 
   const identity = await ensureAuthenticated({ interactive: true, noAuth: options.noAuth });
+  // A cached credential signs you in with no visible prompt at all — call it
+  // out explicitly so "auth silently worked" doesn't read as "nothing
+  // happened" (a fresh login is its own visible browser flow already).
+  if (identity?.source === "cached") {
+    console.log(`\nSigned in as ${identity.organizationName} (cached credential).`);
+  }
   const telemetryOptIn = await ensureConsent({ noTelemetry: options.noTelemetry });
   await recordRecentDir(options.dir);
 

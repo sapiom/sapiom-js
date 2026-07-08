@@ -42,6 +42,7 @@ import { attachWebSocketRouters } from "./ws-router.js";
 import { createIngestRouter, type IngestSessionContext } from "./ingest.js";
 import { createCanvasRouter } from "./canvas.js";
 import { createMacrosRouter } from "./macros.js";
+import { createFsRouter } from "./fs.js";
 
 /** Workflow list is refreshed off this interval for the (synchronous)
  * macro-resolution lookup — connect/scan are infrequent user actions, so a
@@ -245,6 +246,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   );
   app.use(
     createWorkflowsRouter(workflowRegistry),
+    createFsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
