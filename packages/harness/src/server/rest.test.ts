@@ -44,6 +44,7 @@ describe("createRestRouter", () => {
       listWorkflows: async () => [],
       listMacros: () => [],
       onTelemetryOptInChange,
+      launchDir: "/tmp/launch-dir",
       ...overrides,
     };
     const app = express();
@@ -76,7 +77,15 @@ describe("createRestRouter", () => {
         sessions: [],
         workflows: [],
         macros: [],
+        launchDir: "/tmp/launch-dir",
       });
+    });
+
+    it("reports the server's launchDir", async () => {
+      start({ launchDir: "/Users/demo/acme-app" });
+      const res = await fetch(`${baseUrl}/state`);
+      const body = (await res.json()) as { launchDir: string };
+      expect(body.launchDir).toBe("/Users/demo/acme-app");
     });
 
     it("reflects identity, sessions, workflows, and macros from their sources", async () => {

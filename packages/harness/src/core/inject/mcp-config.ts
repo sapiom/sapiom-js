@@ -6,6 +6,16 @@ import { expandHome } from "../../cli/paths.js";
 export interface McpConfigOptions {
   /** SAPIOM_ENVIRONMENT to pass through to the sapiom-dev child process. */
   environment?: string;
+  /**
+   * Cached Sapiom API key (from CLI auth), if signed in. Sent as
+   * `x-api-key` on the remote `sapiom` MCP — empirically verified against
+   * api.sapiom.ai/v1/mcp (both `x-api-key` and `Authorization: Bearer` are
+   * accepted for `sk_`-prefixed keys; `x-api-key` matches its CORS
+   * allow-list order and needs no prefix formatting). Omitted entirely when
+   * absent (`--no-auth`, or not yet signed in) — every remote tool call
+   * then 401s, same as today.
+   */
+  apiKey?: string | null;
 }
 
 /**
@@ -32,6 +42,7 @@ export async function generateMcpConfig(
       sapiom: {
         type: "http",
         url: "https://api.sapiom.ai/v1/mcp",
+        ...(options.apiKey ? { headers: { "x-api-key": options.apiKey } } : {}),
       },
       "sapiom-dev": {
         command: "npx",
@@ -42,6 +53,8 @@ export async function generateMcpConfig(
   };
 
   const filePath = path.join(dir, "mcp-config.json");
-  await fs.writeFile(filePath, JSON.stringify(config, null, 2) + "\n");
+  // May now carry a live API key (the `sapiom` entry's headers) — restrict
+  // to the owner, matching how ~/.sapiom/credentials.json is written.
+  await fs.writeFile(filePath, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   return filePath;
 }

@@ -1,29 +1,34 @@
 import * as readline from "node:readline/promises";
 import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 
+// Internal/friendlies phase: default to opted in (matches the on-by-default
+// prompt below and the non-TTY fallback) — flip this the other way for a
+// wider release.
+const DEFAULT_TELEMETRY_OPT_IN = true;
+
 const CONSENT_COPY = `
 Sapiom Harness collects local usage analytics to improve the product:
   - the prompts you send and the tool calls your agent makes
   - session start/stop lifecycle events
 This is always written locally to ~/.sapiom/harness/events.ndjson for your
-own inspection. With your consent, it's also sent to Sapiom — a free-credits
-program for opted-in users is coming soon.
+own inspection.
 
-You can change this any time: pass --no-telemetry, or edit
-~/.sapiom/harness/settings.json.
+Telemetry is ON to help us improve (opt out anytime in the app's settings
+gear, or run with --no-telemetry).
 `.trim();
 
 async function promptConsent(): Promise<boolean> {
   console.log(`\n${CONSENT_COPY}\n`);
 
   if (!process.stdin.isTTY) {
-    console.log("Non-interactive session — defaulting telemetry to off.\n");
-    return false;
+    console.log(`Non-interactive session — defaulting telemetry to ${DEFAULT_TELEMETRY_OPT_IN ? "on" : "off"}.\n`);
+    return DEFAULT_TELEMETRY_OPT_IN;
   }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = (await rl.question("Enable analytics? [y/N] ")).trim().toLowerCase();
+    const answer = (await rl.question("Keep it on? [Y/n] ")).trim().toLowerCase();
+    if (answer === "") return DEFAULT_TELEMETRY_OPT_IN;
     return answer === "y" || answer === "yes";
   } finally {
     rl.close();

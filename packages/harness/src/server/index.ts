@@ -70,8 +70,13 @@ export interface HarnessServerOptions {
   /** Directory the built SPA lives in. Defaults to dist/web next to this module. */
   webDir?: string;
   /** The directory the CLI was launched against — scanned for workflows at
-   *  boot so the rail isn't empty until a manual "+ Connect". */
+   *  boot so the rail isn't empty until a manual "+ Connect", and (unless
+   *  autoCreateSession is false) where the boot session is created. */
   launchDir?: string;
+  /** Auto-create a claude-code session in launchDir once the server is
+   *  listening, so the app doesn't open empty. Defaults to true; the CLI's
+   *  --no-session flag sets this to false. */
+  autoCreateSession?: boolean;
 }
 
 export interface HarnessServer {
@@ -103,25 +108,31 @@ function readVersion(): string {
  * and --append-system-prompt source files. Generated uniformly for every
  * harness kind — an adapter that doesn't use one of these fields (codex,
  * today) simply ignores it, same as the claude-code adapter already does for
- * whichever of the three a given launch doesn't set.
+ * whichever of the three a given launch doesn't set. `apiKey` (from CLI auth,
+ * null when unauthenticated / --no-auth) flows into the generated mcp-config
+ * so the remote `sapiom` MCP is actually authenticated — a factory rather
+ * than a plain function since it's per-server-instance state.
  */
-const defaultBuildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId) => {
-  const [settings, mcpConfigFile, systemPromptFile] = await Promise.all([
-    generateClaudeSettings({ harnessSessionId }),
-    generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT }),
-    generateSystemPromptFile(harnessSessionId),
-  ]);
-  return {
-    settingsFile: settings.settingsPath,
-    mcpConfigFile,
-    systemPromptFile,
+function createDefaultBuildLaunchOpts(apiKey: string | null): LaunchOptsBuilder {
+  return async (harnessSessionId) => {
+    const [settings, mcpConfigFile, systemPromptFile] = await Promise.all([
+      generateClaudeSettings({ harnessSessionId }),
+      generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey }),
+      generateSystemPromptFile(harnessSessionId),
+    ]);
+    return {
+      settingsFile: settings.settingsPath,
+      mcpConfigFile,
+      systemPromptFile,
+    };
   };
-};
+}
 
 export const startServer = async (options: HarnessServerOptions): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
   const identity = options.identity ?? null;
   const machineId = options.machineId ?? (await getOrCreateMachineId());
+  const launchDir = options.launchDir ?? process.cwd();
   const adapters: Partial<Record<HarnessKind, HarnessAdapter>> =
     options.adapters ??
     ({
@@ -143,7 +154,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     ingestToken: options.bootToken,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath,
-    buildLaunchOpts: options.buildLaunchOpts ?? defaultBuildLaunchOpts,
+    buildLaunchOpts: options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null),
   });
   await sessionManager.init();
 
@@ -177,11 +188,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     bus.publish({ type: "workflows.changed" });
   };
 
-  if (options.launchDir) {
-    scanWorkflowsAndBroadcast(options.launchDir).catch((err: unknown) => {
-      console.error("[harness] initial workflow scan failed:", err);
-    });
-  }
+  scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
+    console.error("[harness] initial workflow scan failed:", err);
+  });
 
   const eventStore = createEventStore(options.eventStorePath);
   const batcher = new CollectorBatcher({
@@ -231,6 +240,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
           console.error("[harness] workflow scan on session create failed:", err);
         });
       },
+      launchDir,
     }),
   );
   app.use(
@@ -329,6 +339,16 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       resolve();
     });
   });
+
+  // The app otherwise opens to an empty terminal pane — not fire-and-forget
+  // because a spawn failure here (e.g. claude not on PATH) is worth
+  // surfacing loudly, but also not awaited before returning: startServer()
+  // resolving shouldn't wait on a real pty spawn.
+  if (options.autoCreateSession ?? true) {
+    sessionManager.create({ cwd: launchDir, harness: "claude-code" }).catch((err: unknown) => {
+      console.error("[harness] auto-create boot session failed:", err);
+    });
+  }
 
   const address = httpServer.address();
   const actualPort = typeof address === "object" && address ? address.port : options.port;

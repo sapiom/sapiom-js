@@ -24,6 +24,10 @@
  *   7. The CLI's launch directory is scanned for workflows at boot, and a
  *      new directory is scanned when a session opens in it — both fire a
  *      workflows.changed frame on /ws/events.
+ *   8. (separate, isolated server instance) autoCreateSession creates a
+ *      session in launchDir without any client ever calling POST
+ *      /api/sessions, AppState.launchDir reports it, and the generated
+ *      mcp-config for an authenticated identity carries the x-api-key header.
  *
  * Run with: pnpm e2e:live
  */
@@ -38,6 +42,7 @@ import { WebSocket } from "ws";
 import { startServer } from "../src/server/index.js";
 import { createClaudeCodeAdapter } from "../src/core/adapters/claude-code.js";
 import { createCodexAdapter } from "../src/core/adapters/codex.js";
+import { ensureSpawnHelperExecutable } from "../src/core/session-manager.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = path.join(SCRIPT_DIR, "fixtures", "fake-claude.mjs");
@@ -72,13 +77,15 @@ interface FakeClaudeCapture {
  * onlyBuiltDependencies configured) can extract the darwin/linux
  * `spawn-helper` without its executable bit set, which fails every single
  * pty spawn with an opaque "posix_spawnp failed" — nothing to do with this
- * script or the harness's own code. session-manager.ts's loadDefaultSpawn()
- * self-heals this on first real use, but this script spawns real ptys as
- * its whole point, so fail fast here with an actionable message rather than
- * an obscure native stack trace three layers down.
+ * script or the harness's own code. Applies the same self-heal
+ * session-manager.ts's loadDefaultSpawn() does before its first real spawn
+ * (so a fresh install doesn't spuriously fail this preflight), then probes
+ * with a real spawn to fail fast with an actionable message if that wasn't
+ * enough, rather than an obscure native stack trace three layers down.
  */
 async function preflightNodePty(): Promise<void> {
   try {
+    await ensureSpawnHelperExecutable();
     const nodePty = await import("node-pty");
     const probe = nodePty.spawn(process.execPath, ["-e", "process.exit(0)"], {
       name: "xterm-256color",
@@ -106,10 +113,9 @@ async function preflightNodePty(): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  await preflightNodePty();
-  console.log("node-pty preflight ok");
-
+/** Phases 1–7 (see the module doc comment): the core session/ingest/canvas/
+ *  macro/workflow-scan loop, with a single explicitly-created session. */
+async function testCoreFlow(): Promise<void> {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-live-"));
   const projectDir = path.join(tmpRoot, "project");
   await fs.mkdir(projectDir, { recursive: true });
@@ -161,6 +167,11 @@ async function main(): Promise<void> {
     eventStorePath,
     workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
     launchDir: projectDir,
+    // This phase explicitly creates its own session below (step 1) and
+    // asserts on its exact id/argv — autoCreateSession would spawn a second,
+    // concurrent fake-claude racing the same FAKE_CLAUDE_CAPTURE file.
+    // Covered on its own, deterministically, in the isolated phase (step 8).
+    autoCreateSession: false,
   });
   console.log(`harness server listening on http://127.0.0.1:${server.port}`);
 
@@ -387,8 +398,6 @@ async function main(): Promise<void> {
       afterSecondSession.some((w) => w.path === secondProjectDir && w.definitionId === 9001),
       "creating a session in a new directory scanned and discovered its sapiom.json",
     );
-
-    console.log("\nPASS — live integration proof succeeded\n");
   } finally {
     // Runs on both success and failure — a failed assertion mid-run must not
     // strand the fake-claude pty (or the mock collector) any more than a
@@ -402,6 +411,79 @@ async function main(): Promise<void> {
     // handles under tmpRoot for a moment after we've resolved past killing
     // it — rm's own maxRetries (ENOTEMPTY-safe, linear backoff) covers that
     // race properly instead of a fixed sleep.
+    await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+}
+
+/**
+ * Phase 8: a second, fully isolated server instance (own tmp dir, own
+ * FAKE_CLAUDE_CAPTURE) — no client ever calls POST /api/sessions here, so a
+ * session existing at all proves autoCreateSession, and a distinct apiKey
+ * proves it flows into the generated mcp-config's auth headers.
+ */
+async function testAutoSessionAndMcpAuth(): Promise<void> {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-live-boot-"));
+  const projectDir = path.join(tmpRoot, "project");
+  await fs.mkdir(projectDir, { recursive: true });
+
+  const bootToken = crypto.randomUUID();
+  const captureFile = path.join(tmpRoot, "fake-claude-capture.json");
+  const apiKey = "sk_test_e2e_boot_key";
+  process.env.FAKE_CLAUDE_CAPTURE = captureFile;
+
+  const server = await startServer({
+    port: 0,
+    bootToken,
+    telemetryOptIn: false,
+    identity: { userId: "boot-user", tenantId: "boot-tenant", organizationName: "Boot Org", apiKey },
+    machineId: "e2e-boot-machine",
+    adapters: {
+      "claude-code": createClaudeCodeAdapter({ binary: FAKE_CLAUDE }),
+      codex: createCodexAdapter(),
+    },
+    sessionsPath: path.join(tmpRoot, "sessions.json"),
+    eventStorePath: path.join(tmpRoot, "events.ndjson"),
+    workflowsRegistryPath: path.join(tmpRoot, "workflows.json"),
+    launchDir: projectDir,
+    // Left at its default (true) — this is exactly the behavior under test.
+  });
+  const baseUrl = `http://127.0.0.1:${server.port}`;
+  const headers = { "Content-Type": "application/json", "X-Harness-Token": bootToken };
+
+  try {
+    type StateLike = {
+      launchDir: string;
+      sessions: Array<{ id: string; cwd: string; status: string }>;
+    };
+    const state = await waitFor<StateLike>(async () => {
+      const res = await fetch(`${baseUrl}/api/state`, { headers });
+      const body = (await res.json()) as StateLike;
+      return body.sessions.some((s) => s.cwd === projectDir) ? body : undefined;
+    });
+    assert(
+      state.sessions.some((s) => s.cwd === projectDir),
+      "autoCreateSession created a session in launchDir with no client ever calling POST /api/sessions",
+    );
+    assert(state.launchDir === projectDir, "GET /api/state reports launchDir");
+
+    const capture = await waitFor<FakeClaudeCapture>(async () => {
+      try {
+        return JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
+      } catch {
+        return undefined;
+      }
+    });
+    const mcpConfigIdx = capture.argv.indexOf("--mcp-config");
+    assert(mcpConfigIdx !== -1, "boot session launched with --mcp-config");
+    const mcpConfigJson = JSON.parse(await fs.readFile(capture.argv[mcpConfigIdx + 1], "utf8")) as {
+      mcpServers?: { sapiom?: { headers?: Record<string, string> } };
+    };
+    assert(
+      mcpConfigJson.mcpServers?.sapiom?.headers?.["x-api-key"] === apiKey,
+      "generated mcp-config's remote sapiom entry carries the cached apiKey as x-api-key",
+    );
+  } finally {
+    await server.close();
     await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
@@ -426,6 +508,19 @@ function killChildAndWait(child: ReturnType<typeof spawn>, timeoutMs = 3000): Pr
     }, 1000);
     const hardStop = setTimeout(done, timeoutMs);
   });
+}
+
+async function main(): Promise<void> {
+  await preflightNodePty();
+  console.log("node-pty preflight ok");
+
+  await testCoreFlow();
+  console.log("phase 1/2 ok (core session/ingest/canvas/macro/workflow-scan loop)\n");
+
+  await testAutoSessionAndMcpAuth();
+  console.log("phase 2/2 ok (autoCreateSession + mcp-config auth headers)\n");
+
+  console.log("PASS — live integration proof succeeded\n");
 }
 
 // Explicit exit as a backstop: teardown above should already release every
