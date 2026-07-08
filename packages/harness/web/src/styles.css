@@ -59,6 +59,10 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* The app is a viewport-locked shell: the page itself must never scroll.
+     Scrollable regions (terminal buffer, rails, pickers) own their overflow.
+     Also prevents focus-driven auto-scroll to xterm's hidden textarea. */
+  overflow: hidden;
 }
 
 body {
@@ -195,6 +199,7 @@ input {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
 }
