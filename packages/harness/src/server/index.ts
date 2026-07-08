@@ -198,6 +198,38 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     excludedPorts,
   });
 
+  // Declared before sessionManager: writeSessionContext (sessionManager's
+  // writeWorkspaceContext option) needs workflowsCache in scope to resolve a
+  // session's boundWorkflowPath into a full WorkflowInfo. scanWorkflowsAndBroadcast
+  // stays defined below sessionManager instead, since it needs sessionManager
+  // itself (to rewrite every open session's context file on a registry change) —
+  // no circularity, since only writeSessionContext is threaded into SessionManager's
+  // constructor, and it doesn't need sessionManager.
+  const workflowRegistry = new WorkflowRegistry(options.workflowsRegistryPath);
+  let workflowsCache: WorkflowInfo[] = await workflowRegistry.list();
+  const workflowsCacheTimer = setInterval(() => {
+    void workflowRegistry.list().then((list) => {
+      workflowsCache = list;
+    });
+  }, WORKFLOWS_CACHE_REFRESH_MS);
+  workflowsCacheTimer.unref?.();
+
+  /**
+   * Writes HARNESS_CONTEXT_FILE for a single session, resolving its
+   * `boundWorkflowPath` against the live registry so the file always
+   * reflects the session's actual current binding (not just what a caller
+   * happened to have on hand) — and the full `workflows` list, so an agent
+   * can answer "what workflows exist" without a UI round-trip. Shared by
+   * SessionManager's create()/resume(), the PATCH bind/unbind route, and
+   * scanWorkflowsAndBroadcast's rewrite-all-open-sessions step below.
+   */
+  const writeSessionContext = async (session: HarnessSession): Promise<void> => {
+    const boundWorkflow = session.boundWorkflowPath
+      ? (workflowsCache.find((w) => w.path === session.boundWorkflowPath) ?? null)
+      : null;
+    await writeHarnessContext(session, boundWorkflow, workflowsCache);
+  };
+
   const sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
@@ -207,7 +239,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     buildLaunchOpts: options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null),
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
-    writeWorkspaceContext: (cwd) => writeHarnessContext(cwd, null),
+    writeWorkspaceContext: writeSessionContext,
     workspaceContextExists: (cwd) => harnessContextFileExists(cwd),
   });
   await sessionManager.init();
@@ -222,23 +254,23 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     }
   });
 
-  const workflowRegistry = new WorkflowRegistry(options.workflowsRegistryPath);
-  let workflowsCache: WorkflowInfo[] = await workflowRegistry.list();
-  const workflowsCacheTimer = setInterval(() => {
-    void workflowRegistry.list().then((list) => {
-      workflowsCache = list;
-    });
-  }, WORKFLOWS_CACHE_REFRESH_MS);
-  workflowsCacheTimer.unref?.();
-
   // Nothing else triggers a scan (the only other entry point is the SPA's
   // manual "+ Connect"), so the rail would otherwise stay empty until a user
   // does that by hand. Scan the CLI's launch directory once at boot, and
   // again whenever a session opens in a (possibly different) directory —
-  // and let anyone already looking at the rail know it changed.
+  // and let anyone already looking at the rail know it changed. Also
+  // rewrites every currently-open session's harness-context.json: the
+  // workflow registry is shared across the whole harness instance, so a
+  // scan/connect anywhere changes what every session's `workflows` list
+  // should say, not just the session that triggered the scan.
   const scanWorkflowsAndBroadcast = async (root: string): Promise<void> => {
     await workflowRegistry.scan(root);
     workflowsCache = await workflowRegistry.list();
+    // Rewrite every open session's context file before broadcasting — a
+    // listener reacting to workflows.changed (the SPA, or an agent that
+    // happens to re-read the file right then) must never see the
+    // notification before the file it describes is actually updated.
+    await Promise.all(sessionManager.list().map((session) => writeSessionContext(session)));
     bus.publish({ type: "workflows.changed" });
   };
 
@@ -289,7 +321,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       listWorkflows: () => workflowRegistry.list(),
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
-      writeWorkspaceContext: (cwd, boundWorkflow) => writeHarnessContext(cwd, boundWorkflow),
+      writeWorkspaceContext: writeSessionContext,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
       onSessionCreated: (cwd) => {
         scanWorkflowsAndBroadcast(cwd).catch((err: unknown) => {

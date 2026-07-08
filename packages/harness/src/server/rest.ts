@@ -13,6 +13,7 @@ import type {
   CreateSessionRequest,
   HarnessAdapter,
   HarnessKind,
+  HarnessSession,
   HarnessSettings,
   InjectInputRequest,
   MacroDef,
@@ -54,11 +55,13 @@ export interface RestRouterOptions {
    *  PATCH /sessions/:id/workflow's validation (a bind target must already
    *  be a known workflow — scan/connect it first). */
   findWorkflow: (workflowPath: string) => WorkflowInfo | null;
-  /** Mirrors a session's workflow binding into HARNESS_CONTEXT_FILE in its
-   *  cwd. Called on session create (`null`) and on every successful bind/
-   *  unbind. Never throws — a write failure is logged by the implementation,
-   *  not surfaced as a request error. */
-  writeWorkspaceContext: (cwd: string, boundWorkflow: WorkflowInfo | null) => Promise<void>;
+  /** Mirrors a session's workspace state (its binding plus the full workflow
+   *  registry) into HARNESS_CONTEXT_FILE in its cwd — the caller (server/
+   *  index.ts) resolves `session.boundWorkflowPath` against the live
+   *  registry, so this only needs the session itself. Called on every
+   *  successful bind/unbind. Never throws — a write failure is logged by the
+   *  implementation, not surfaced as a request error. */
+  writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
   /** Called after a settings PATCH persists a changed telemetryOptIn, so the
    * live collector batcher can be gated without a server restart. */
   onTelemetryOptInChange?: (optIn: boolean) => void;
@@ -163,20 +166,19 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
 
     const { workflowPath } = parsed.data;
-    let workflow: WorkflowInfo | null = null;
-    if (workflowPath !== null) {
-      workflow = options.findWorkflow(workflowPath);
-      if (!workflow) {
-        res.status(400).json({
-          error: `Unknown workflow path '${workflowPath}' — scan or connect it before binding a session to it`,
-        });
-        return;
-      }
+    if (workflowPath !== null && !options.findWorkflow(workflowPath)) {
+      res.status(400).json({
+        error: `Unknown workflow path '${workflowPath}' — scan or connect it before binding a session to it`,
+      });
+      return;
     }
 
     try {
       sessionManager.setBoundWorkflowPath(req.params.id, workflowPath);
-      await options.writeWorkspaceContext(session.cwd, workflow);
+      // setBoundWorkflowPath() mutates the same session object in place, so
+      // `session` here already reflects the new boundWorkflowPath — the
+      // callee resolves it against the live registry itself.
+      await options.writeWorkspaceContext(session);
       res.json(sessionManager.get(req.params.id));
     } catch (err) {
       next(err);

@@ -39,12 +39,13 @@ export const CANVAS_DIR = ".sapiom/canvas";
 export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
 
 /**
- * Workspace-binding convention: the harness maintains the session's current
- * workflow selection here, relative to the session cwd, so the agent has an
- * always-current, agent-legible answer to "what am I working on" without
- * asking. Written on session create (boundWorkflow: null) and on every
- * `PATCH /api/sessions/:id/workflow`. Kept present (never deleted) even on
- * unbind — see HarnessWorkspaceContext.
+ * Workspace-state convention: the harness mirrors this session's binding,
+ * the full workflow registry, and its own identity here, relative to the
+ * session cwd, so the agent has an always-current, agent-legible answer to
+ * "what am I working on" and "what workflows exist" without asking. Written
+ * on session create, on every `PATCH /api/sessions/:id/workflow`, and
+ * whenever the workflow registry changes (scan/connect) — see
+ * HarnessWorkspaceContext. Kept present (never deleted) even on unbind.
  */
 export const HARNESS_CONTEXT_FILE = ".sapiom/harness-context.json";
 
@@ -274,14 +275,30 @@ export interface BindWorkflowRequest {
   workflowPath: string | null;
 }
 
+/** The trimmed workflow shape embedded in HarnessWorkspaceContext — just
+ *  enough for an agent to identify a workflow, not the full WorkflowInfo
+ *  (e.g. `source` is registry bookkeeping the agent has no use for). */
+export interface HarnessWorkspaceContextWorkflow {
+  name: string;
+  path: string;
+  definitionId: number | null;
+}
+
 /**
  * The shape written to HARNESS_CONTEXT_FILE in a session's cwd. Schemaless
  * by convention elsewhere in the harness, but this one file IS a contract —
  * the default system prompt tells the agent to read it, so its shape is
- * fixed here like any other REST payload.
+ * fixed here like any other REST payload. Deliberately small and
+ * stable-ordered (`workflows` sorted by path) so an agent can diff it
+ * cheaply across reads rather than re-parsing a growing blob.
  */
 export interface HarnessWorkspaceContext {
-  boundWorkflow: { name: string; path: string; definitionId: number | null } | null;
+  boundWorkflow: HarnessWorkspaceContextWorkflow | null;
+  /** Every workflow currently known to this harness instance's registry,
+   *  selected or not — lets an agent answer "what workflows exist" without
+   *  a UI action, not just "which one is selected." */
+  workflows: HarnessWorkspaceContextWorkflow[];
+  session: { id: string; cwd: string; harness: HarnessKind };
   updatedAt: string;
 }
 

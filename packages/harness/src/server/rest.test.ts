@@ -313,7 +313,12 @@ describe("createRestRouter", () => {
       const body = (await res.json()) as HarnessSession;
       expect(body.boundWorkflowPath).toBe(workflow.path);
       expect(sessionManager.setBoundWorkflowPath).toHaveBeenCalledWith(baseSession.id, workflow.path);
-      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj", workflow);
+      // setBoundWorkflowPath() mutates the fake manager's session in place —
+      // the route hands the whole (already-updated) session to the callee,
+      // which resolves the bound workflow against the live registry itself.
+      expect(writeWorkspaceContext).toHaveBeenCalledWith(
+        expect.objectContaining({ id: baseSession.id, cwd: "/tmp/proj", boundWorkflowPath: workflow.path }),
+      );
     });
 
     it("unbinds with workflowPath: null, writing boundWorkflow: null to the context file", async () => {
@@ -330,7 +335,9 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as HarnessSession;
       expect(body.boundWorkflowPath).toBeNull();
-      expect(writeWorkspaceContext).toHaveBeenCalledWith("/tmp/proj", null);
+      expect(writeWorkspaceContext).toHaveBeenCalledWith(
+        expect.objectContaining({ id: bound.id, cwd: "/tmp/proj", boundWorkflowPath: null }),
+      );
     });
 
     it("400s when workflowPath isn't a registered workflow", async () => {
