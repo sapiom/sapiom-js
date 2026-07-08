@@ -414,7 +414,7 @@ test.describe("docked workflow action strip", () => {
     await expect(page.locator(".canvas-iframe")).toBeVisible();
 
     await refreshBtn.click();
-    await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", "/canvas/sess-boot/");
+    await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", /^\/canvas\/sess-boot\/\?theme=(light|dark)$/);
   });
 });
 
@@ -471,5 +471,99 @@ test("a canvas.reload bus message swaps the empty state for the generated iframe
   });
 
   await expect(page.locator(".canvas-empty")).toHaveCount(0);
-  await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", "/canvas/sess-boot/");
+  await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", /^\/canvas\/sess-boot\/\?theme=(light|dark)$/);
+});
+
+test.describe("resizable panes", () => {
+  test("dragging the rail handle resizes the rail and persists across reload", async ({ page }) => {
+    const handle = page.getByTestId("resize-handle-rail");
+    const railBefore = await page.locator(".rail-workflows").boundingBox();
+    const handleBox = await handle.boundingBox();
+    if (!railBefore || !handleBox) throw new Error("expected bounding boxes");
+
+    const y = handleBox.y + handleBox.height / 2;
+    await page.mouse.move(handleBox.x + handleBox.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2 + 80, y, { steps: 5 });
+    await page.mouse.up();
+
+    const railAfter = await page.locator(".rail-workflows").boundingBox();
+    expect((railAfter?.width ?? 0) - railBefore.width).toBeGreaterThan(60);
+
+    await page.reload();
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    const railReloaded = await page.locator(".rail-workflows").boundingBox();
+    expect(Math.abs((railReloaded?.width ?? 0) - (railAfter?.width ?? 0))).toBeLessThan(3);
+  });
+
+  test("dragging the canvas handle resizes the canvas pane", async ({ page }) => {
+    const handle = page.getByTestId("resize-handle-canvas");
+    const canvasBefore = await page.locator(".canvas-pane").boundingBox();
+    const handleBox = await handle.boundingBox();
+    if (!canvasBefore || !handleBox) throw new Error("expected bounding boxes");
+
+    const y = handleBox.y + handleBox.height / 2;
+    await page.mouse.move(handleBox.x + handleBox.width / 2, y);
+    await page.mouse.down();
+    // Dragging the canvas handle toward the terminal (left) grows the canvas.
+    await page.mouse.move(handleBox.x + handleBox.width / 2 - 80, y, { steps: 5 });
+    await page.mouse.up();
+
+    const canvasAfter = await page.locator(".canvas-pane").boundingBox();
+    expect((canvasAfter?.width ?? 0) - canvasBefore.width).toBeGreaterThan(60);
+  });
+
+  test("rail and canvas widths cannot be dragged past their min-width floors", async ({ page }) => {
+    const railHandle = page.getByTestId("resize-handle-rail");
+    let box = await railHandle.boundingBox();
+    if (!box) throw new Error("expected bounding box");
+    await page.mouse.move(box.x, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 1000, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    const railWidth = (await page.locator(".rail-workflows").boundingBox())?.width ?? 0;
+    expect(railWidth).toBeGreaterThanOrEqual(178); // RAIL_MIN = 180, small rounding slack
+    expect(railWidth).toBeLessThan(195);
+
+    const canvasHandle = page.getByTestId("resize-handle-canvas");
+    box = await canvasHandle.boundingBox();
+    if (!box) throw new Error("expected bounding box");
+    await page.mouse.move(box.x, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 1000, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    const canvasWidth = (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasWidth).toBeGreaterThanOrEqual(278); // CANVAS_MIN = 280, small rounding slack
+    expect(canvasWidth).toBeLessThan(295);
+  });
+
+  test("double-clicking a handle resets it to its default width", async ({ page }) => {
+    const handle = page.getByTestId("resize-handle-rail");
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("expected bounding box");
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 100, y, { steps: 5 });
+    await page.mouse.up();
+
+    await handle.dblclick();
+    const railWidth = (await page.locator(".rail-workflows").boundingBox())?.width ?? 0;
+    expect(Math.abs(railWidth - 220)).toBeLessThan(3);
+  });
+});
+
+test("the canvas iframe carries the app's theme and flips on toggle", async ({ page }) => {
+  await page.evaluate(() => {
+    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+      type: "canvas.reload",
+      harnessSessionId: "sess-boot",
+    });
+  });
+
+  const iframe = page.locator(".canvas-iframe");
+  await expect(iframe).toHaveAttribute("src", /theme=light/);
+
+  await page.getByTestId("theme-toggle").click();
+  await expect(iframe).toHaveAttribute("src", /theme=dark/);
 });

@@ -211,11 +211,41 @@ input {
 }
 
 .app {
+  position: relative;
   display: grid;
-  grid-template-columns: 220px 32px 1fr minmax(280px, 40%);
+  grid-template-columns: 220px 32px minmax(360px, 1fr) 420px;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Resize handles --------------------------------------------------------- */
+
+/* Absolutely positioned over the boundary they resize (left/right set via
+   inline style, tied to the same state driving .app's grid-template-columns)
+   rather than being their own grid track — keeps the grid's column count
+   fixed regardless of how many handles exist. */
+.pane-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 20;
+  touch-action: none;
+}
+
+.pane-resize-handle:hover,
+.pane-resize-handle:active {
+  background: var(--accent-dim);
+}
+
+.pane-resize-handle-rail {
+  transform: translateX(-50%);
+}
+
+.pane-resize-handle-canvas {
+  transform: translateX(50%);
 }
 
 /* Docked workflow action strip ------------------------------------------ */
