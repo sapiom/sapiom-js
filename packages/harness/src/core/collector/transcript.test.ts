@@ -167,4 +167,45 @@ describe("enrichTurnCompleted", () => {
     const enriched = await enrichTurnCompleted(baseEvent, undefined);
     expect(enriched).toBe(baseEvent);
   });
+
+  it("does not clobber an assistantText the Stop hook payload already supplied", async () => {
+    // Regression test: the Stop hook's own last_assistant_message (normalizer.ts)
+    // is authoritative and must survive even when the transcript file exists
+    // and disagrees (e.g. stale/partial content) — only model/usage get merged in.
+    const eventWithHookText = {
+      ...baseEvent,
+      payload: { stopHookActive: false, assistantText: "HARNESS OK" },
+    };
+    const filePath = path.join(tmpDir, "transcript.jsonl");
+    await fs.writeFile(
+      filePath,
+      line({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          model: "claude-sonnet-5",
+          content: "a different, stale message",
+          usage: { input_tokens: 10, output_tokens: 3 },
+        },
+      }),
+      "utf8",
+    );
+
+    const enriched = await enrichTurnCompleted(eventWithHookText, filePath);
+    expect(enriched.payload.assistantText).toBe("HARNESS OK");
+    expect(enriched.payload.model).toBe("claude-sonnet-5");
+    expect(enriched.payload.usage).toEqual({ inputTokens: 10, outputTokens: 3 });
+  });
+
+  it("does not clobber the hook's assistantText when the transcript file doesn't exist yet", async () => {
+    // The real-world case that motivated this fix: Stop can fire before the
+    // transcript is written to disk at all.
+    const eventWithHookText = {
+      ...baseEvent,
+      payload: { stopHookActive: false, assistantText: "HARNESS OK" },
+    };
+    const enriched = await enrichTurnCompleted(eventWithHookText, path.join(tmpDir, "never-written.jsonl"));
+    expect(enriched.payload.assistantText).toBe("HARNESS OK");
+    expect(enriched.payload.model).toBeUndefined();
+  });
 });

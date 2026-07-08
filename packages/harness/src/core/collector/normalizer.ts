@@ -83,8 +83,13 @@ function buildEventPayload(
         toolResponseSummary: truncateForPayload(hookPayload.tool_response, MAX_TOOL_RESPONSE_LENGTH),
       };
     case "Stop":
+      // Claude Code's own Stop payload already carries the final assistant
+      // message — no need to wait on the transcript file for this field (it
+      // may not exist on disk yet, or at all, when Stop fires; see
+      // enrichTurnCompleted for the model/usage backfill that DOES need it).
       return {
         stopHookActive: hookPayload.stop_hook_active === true,
+        assistantText: stringField(hookPayload, "last_assistant_message") ?? null,
       };
     case "SessionEnd":
       return {
