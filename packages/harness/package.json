@@ -42,7 +42,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "mock-collector": "node scripts/mock-collector.mjs",
+    "sim:e2e": "tsx scripts/e2e-sim.ts"
   },
   "dependencies": {
     "@sapiom/mcp": "workspace:^",
@@ -62,6 +64,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
+    "lucide-react": "^1.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tsx": "^4.19.0",

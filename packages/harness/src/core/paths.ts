@@ -1,6 +1,7 @@
 /**
- * Small path helper shared by the session manager and adapters: the contract
- * (`src/shared/types.ts`) expresses well-known paths with a leading `~`.
+ * Small path helper shared across the harness's core modules (session
+ * manager, adapters, analytics store): the contract (`src/shared/types.ts`)
+ * expresses well-known paths with a leading `~`.
  */
 
 import { homedir } from "node:os";
