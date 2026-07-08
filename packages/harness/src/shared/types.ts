@@ -196,7 +196,15 @@ export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
   | { type: "canvas.reload"; harnessSessionId: string }
   | { type: "port.detected"; harnessSessionId: string; port: number; url: string }
-  | { type: "workflows.changed" };
+  | { type: "workflows.changed" }
+  /**
+   * Best-effort "this session's pty just produced output" signal, throttled
+   * server-side to at most once per session per ~2s (see SessionManager's
+   * pty.onData handler) — a lightweight substitute for byte-level streaming
+   * on /ws/events, which only the session with an open /ws/terminal socket
+   * receives. Drives the SPA's per-tab busy pulse for background sessions.
+   */
+  | { type: "session.activity"; harnessSessionId: string; at: string };
 
 // ---------------------------------------------------------------------------
 // Analytics events

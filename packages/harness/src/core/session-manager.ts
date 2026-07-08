@@ -117,6 +117,11 @@ const BLOCKING_PROMPT_SCAN_BYTES = 4_096;
 const READY_GRACE_MS = 8_000;
 /** Poll interval while waiting out READY_GRACE_MS. */
 const READY_POLL_MS = 150;
+/** See `recordActivity()`: minimum gap between two `onActivity` broadcasts
+ *  for the same session — pty.onData fires per chunk (often many times a
+ *  second for a busy TUI), but the SPA's busy indicator only needs "this
+ *  session produced output recently", not every individual chunk. */
+const ACTIVITY_BROADCAST_THROTTLE_MS = 2_000;
 
 /**
  * Thrown by `submitInput()` when a session's pty is alive but never became
@@ -141,6 +146,8 @@ function sleep(ms: number): Promise<void> {
 
 export type SessionStatusListener = (session: HarnessSession) => void;
 export type SessionDataListener = (chunk: string) => void;
+/** See `onActivity()`. */
+export type SessionActivityListener = (harnessSessionId: string) => void;
 
 /**
  * Builds the harness-specific part of LaunchOpts (generated system-prompt /
@@ -234,6 +241,9 @@ export class SessionManager {
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
   private readonly statusEmitter = new EventEmitter();
+  private readonly activityEmitter = new EventEmitter();
+  /** Epoch ms of the last `onActivity` broadcast per session — see `recordActivity()`. */
+  private readonly lastActivityBroadcast = new Map<string, number>();
   private writeQueue: Promise<void> = Promise.resolve();
   private writeSeq = 0;
   private initialized = false;
@@ -253,6 +263,7 @@ export class SessionManager {
     this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
     // Many WS clients (terminal + events) can subscribe over a long-running process.
     this.statusEmitter.setMaxListeners(0);
+    this.activityEmitter.setMaxListeners(0);
   }
 
   /**
@@ -528,6 +539,34 @@ export class SessionManager {
     };
   }
 
+  /**
+   * Subscribe to a session producing terminal output — throttled (see
+   * `ACTIVITY_BROADCAST_THROTTLE_MS`), not one event per pty.onData chunk.
+   * Fires for every session regardless of whether anything has its
+   * /ws/terminal socket open, unlike `attach()`.
+   */
+  onActivity(listener: SessionActivityListener): () => void {
+    this.activityEmitter.on("activity", listener);
+    return () => {
+      this.activityEmitter.off("activity", listener);
+    };
+  }
+
+  /**
+   * Leading-edge throttle: broadcasts immediately on the first byte after a
+   * quiet period, then drops everything else for this session until
+   * `ACTIVITY_BROADCAST_THROTTLE_MS` has elapsed — a busy TUI's onData fires
+   * far more often than that, and callers (the SPA's per-tab pulse) only
+   * care that the session is active right now, not each individual chunk.
+   */
+  private recordActivity(id: string): void {
+    const now = Date.now();
+    const last = this.lastActivityBroadcast.get(id) ?? 0;
+    if (now - last < ACTIVITY_BROADCAST_THROTTLE_MS) return;
+    this.lastActivityBroadcast.set(id, now);
+    this.activityEmitter.emit("activity", id);
+  }
+
   setAgentSessionId(id: string, agentSessionId: string): void {
     const session = this.sessions.get(id);
     if (!session || session.agentSessionId === agentSessionId) return;
@@ -675,6 +714,7 @@ export class SessionManager {
     pty.onData((chunk) => {
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
       handle.emitter.emit("data", chunk);
+      this.recordActivity(session.id);
     });
 
     pty.onExit(({ exitCode }) => this.markExited(session.id, handle, exitCode));
@@ -692,6 +732,7 @@ export class SessionManager {
   private markExited(id: string, handle: PtyHandle, exitCode: number | null): void {
     if (this.ptys.get(id) !== handle) return;
     this.ptys.delete(id);
+    this.lastActivityBroadcast.delete(id);
     const session = this.sessions.get(id);
     if (!session) return;
     session.status = "exited";

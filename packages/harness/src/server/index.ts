@@ -256,6 +256,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     }
   });
 
+  // Background sessions have no /ws/terminal socket open to stream bytes over
+  // (only the active tab does) — this is the lightweight substitute that lets
+  // every session's tab show a busy pulse regardless of which one is active.
+  sessionManager.onActivity((harnessSessionId) => {
+    bus.publish({ type: "session.activity", harnessSessionId, at: new Date().toISOString() });
+  });
+
   // Nothing else triggers a scan (the only other entry point is the SPA's
   // manual "+ Connect"), so the rail would otherwise stay empty until a user
   // does that by hand. Scan the CLI's launch directory once at boot, and

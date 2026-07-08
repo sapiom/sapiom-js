@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AppState,
   BusMessage,
@@ -14,6 +14,14 @@ import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResp
 import { subscribeEvents } from "./events";
 
 const api = createApi();
+
+/**
+ * How long a session's tab stays "busy" after its last `session.activity`
+ * ping — matches the "output in the last ~3s" busy-indicator spec. Longer
+ * than the server's own broadcast throttle (2s) so a steadily-typing session
+ * reads as continuously busy rather than flickering between pings.
+ */
+const BUSY_WINDOW_MS = 3_000;
 
 export interface HarnessStateHook {
   state: AppState | null;
@@ -46,6 +54,9 @@ export interface HarnessStateHook {
    *  instead, since its only caller today fires it without awaiting. */
   toast: string | null;
   dismissToast: () => void;
+  /** Session ids with terminal output in roughly the last `BUSY_WINDOW_MS` —
+   *  drives each session tab's busy pulse (see `session.activity` BusMessage). */
+  busySessionIds: Set<string>;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -60,6 +71,19 @@ export function useHarnessState(): HarnessStateHook {
   const [toast, setToast] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
+  const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
+  const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Timers are keyed per-session and outlive individual renders — clear them
+  // all on unmount so a pending "clear busy" timeout never fires against a
+  // torn-down component.
+  useEffect(() => {
+    const timers = busyTimers.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,8 +130,42 @@ export function useHarnessState(): HarnessStateHook {
             : [...prev.sessions, message.session];
           return { ...prev, sessions };
         });
+        // An exited session can never produce more output — drop any pending
+        // busy state/timer for it rather than leaving a stale pulse on a tab
+        // that's about to move to the history menu.
+        if (message.session.status === "exited") {
+          const id = message.session.id;
+          const timer = busyTimers.current.get(id);
+          if (timer) {
+            clearTimeout(timer);
+            busyTimers.current.delete(id);
+          }
+          setBusySessionIds((prev) => {
+            if (!prev.has(id)) return prev;
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        }
       } else if (message.type === "workflows.changed") {
         void refreshWorkflows();
+      } else if (message.type === "session.activity") {
+        const id = message.harnessSessionId;
+        setBusySessionIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+        const existingTimer = busyTimers.current.get(id);
+        if (existingTimer) clearTimeout(existingTimer);
+        busyTimers.current.set(
+          id,
+          setTimeout(() => {
+            busyTimers.current.delete(id);
+            setBusySessionIds((prev) => {
+              if (!prev.has(id)) return prev;
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+          }, BUSY_WINDOW_MS),
+        );
       }
     });
   }, [refreshWorkflows]);
@@ -238,5 +296,6 @@ export function useHarnessState(): HarnessStateHook {
     lastMessage,
     toast,
     dismissToast,
+    busySessionIds,
   };
 }
