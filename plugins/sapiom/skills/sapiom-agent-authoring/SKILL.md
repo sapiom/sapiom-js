@@ -191,13 +191,13 @@ input reaches only the entry step's argument; to use it in later steps, write it
 | Field | Type | Notes |
 |---|---|---|
 | `ctx.executionId` | `string` | Unique id for this execution |
-| `ctx.workflowName` | `string` | The agent's `name` (field name predates the rename) |
+| `ctx.agentName` | `string` | The agent's `name` |
 | `ctx.input` | `unknown` | The execution's entry input — same value the entry step's `run` arg receives. Use `ctx.shared` to carry it forward; don't rely on `ctx.input` downstream. |
 | `ctx.shared` | `TypedContextStore<TShared>` | Cross-step key/value store |
 | `ctx.history` | `readonly StepExecutionRecord[]` | Previous steps' records |
 | `ctx.attempts` | `number` | How many times this step has run (0-indexed) |
 | `ctx.logger` | `StepLogger` | `info / warn / error / debug(msg, meta?)` |
-| `ctx.sapiom` | `Sapiom` | The typed capability client — see "Capabilities" below |
+| `ctx.sapiom` | `Sapiom` | The typed capability client — the `Sapiom` interface from `@sapiom/tools`, installed in your `node_modules` (see "Capabilities" below) |
 | `ctx.organizationId` | `string \| null` | Tenant org |
 | `ctx.tenantId` | `string \| null` | Tenant id |
 
@@ -206,9 +206,10 @@ input reaches only the entry step's argument; to use it in later steps, write it
 Steps call Sapiom's paid capabilities through `ctx.sapiom.*` — sandboxes, repositories,
 coding models (`ctx.sapiom.models.coding`), file storage, content generation, search,
 databases, email, domains, memory, and more as they land. **Do not memorize the catalog:
-types are the source of truth.** `ctx.sapiom.` autocompletes what exists, `npm run typecheck`
-rejects what doesn't, and the full catalog with pricing lives at
-[docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities).
+types are the source of truth.** The full surface is the `Sapiom` interface in `@sapiom/tools`
+— installed in your project's `node_modules`, so its types match the exact version you're on.
+`ctx.sapiom.` autocompletes what exists, `npm run typecheck` rejects what doesn't, and the full
+catalog with pricing lives at [docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities).
 
 ## Failure Handling & Retries
 
