@@ -1,5 +1,10 @@
 # @sapiom/sandbox
 
+> 🕗 **Deprecated for new projects.** [`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools)
+> now ships sandbox support built in — use its `sapiom.sandboxes.*` surface
+> instead. This standalone package remains published and supported for existing
+> production use, but new projects should not adopt it.
+
 Sandbox environment management for the Sapiom SDK. Create isolated execution environments, manage files, run commands, and stream output in real time.
 
 ## Installation
