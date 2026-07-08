@@ -36,9 +36,11 @@ remote MCP or the SDK for a single action.
 ## Lifecycle (in order)
 1. \`sapiom_authenticate\` — browser login; caches an API key (makes you an API-key principal,
    required for deploy/run). Confirm with \`sapiom_status\`.
-2. \`sapiom_dev_agents_scaffold\` — writes the project, including the full authoring guide:
-   read \`AGENTS.md\` first, and the \`sapiom-agent-authoring\` skill in \`.claude/skills/\`
-   (auto-loads in Claude Code). Then \`npm install\`.
+2. Start a project — \`sapiom_dev_agents_scaffold\` (a fresh starter) or \`sapiom_dev_agents_clone\`
+   (materialize a gallery template or an existing fork — the "use this template" handoff).
+   READ the project's \`AGENTS.md\` first, plus the \`sapiom-agent-authoring\` skill in
+   \`.claude/skills/\` where present (scaffolded projects include it; auto-loads in Claude Code).
+   Then \`npm install\`.
 3. Test for free: \`npm run typecheck\` → \`sapiom_dev_agents_check\` (validates the step graph,
    offline) → \`sapiom_dev_agents_run_local\` (capabilities are stubbed; zero spend).
 4. Ship: \`sapiom_dev_agents_link\` → \`_deploy\` → \`_run\` (real, billed) → \`_inspect\`.
