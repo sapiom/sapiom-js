@@ -1,9 +1,10 @@
 /**
  * Harness SPA shell (workstream W2).
  *
- * Layout: workflows rail (left) | session dropdown + terminal (center)
- * | canvas/preview pane (right). Actions live on their workflow: inline
- * row icons in the rail, and a header strip above the canvas for whichever
+ * Layout: workflows rail (left) | docked action strip (anchored to the
+ * selected workflow's row) | session dropdown + terminal (center) |
+ * canvas/preview pane (right). The strip carries the selected workflow's
+ * full action set; the canvas gets a slim identity header for whichever
  * workflow is bound to the active session.
  */
 import { useEffect, useState } from "react";
@@ -16,14 +17,19 @@ import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
+import { WorkflowActionStrip } from "./components/WorkflowActionStrip";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
+import { useElementTopOffset } from "./lib/use-element-top-offset";
 import { resolveMacroUrl } from "./lib/macro-gating";
 import { useHarnessState } from "./lib/use-harness-state";
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
+  const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
+  const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // preventDefault so it doesn't fall through to the browser's print/search dialogs.
@@ -50,6 +56,7 @@ export const App = (): JSX.Element => {
   const activeSession = state.sessions.find((session) => session.id === harness.activeSessionId) ?? null;
   const boundWorkflowPath = boundWorkflowPathOf(activeSession);
   const boundWorkflow = state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
+  const selectedWorkflow = state.workflows.find((w) => w.path === harness.selectedWorkflowPath) ?? null;
 
   const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
     await harness.createSession({ cwd, harness: agentHarness });
@@ -62,13 +69,13 @@ export const App = (): JSX.Element => {
     if (harness.activeSessionId) void harness.bindWorkflow(harness.activeSessionId, path);
   };
 
-  // Shared by workflow-row hover actions, the bound-workflow header above the
-  // canvas, and the canvas empty-state's Visualize CTA. Running a macro against
-  // a workflow also (re-)binds it, so acting on a row that isn't the current
-  // binding switches "what I'm working on" too. `workflow` is nullable for
-  // macros that don't require one (Visualize) when nothing's bound yet. Every
-  // macro is one click — there's no subject/free-text step on this side; the
-  // agent is the interface for anything more specific.
+  // Shared by the docked workflow action strip, the canvas empty-state's
+  // Visualize CTA, and anything else that fires a macro. Running a macro
+  // against a workflow also (re-)binds it, so acting on a workflow that isn't
+  // the current binding switches "what I'm working on" too. `workflow` is
+  // nullable for macros that don't require one when nothing's bound yet.
+  // Every macro is one click — there's no subject/free-text step on this
+  // side; the agent is the interface for anything more specific.
   const handleRunMacroForWorkflow = (workflow: WorkflowInfo | null, macro: MacroDef): void => {
     if (workflow) handleSelectWorkflow(workflow.path);
     if (macro.action.kind === "open-url") {
@@ -96,13 +103,25 @@ export const App = (): JSX.Element => {
           sessions={state.sessions}
           activeSessionId={harness.activeSessionId}
           selectedPath={harness.selectedWorkflowPath}
-          macros={state.macros}
           onSelect={handleSelectWorkflow}
-          onRunMacro={handleRunMacroForWorkflow}
+          onSelectedRowElement={setSelectedRowEl}
           onConnect={async (path) => {
             await harness.connectWorkflow(path);
           }}
         />
+
+        <div className="workflow-action-strip-col" ref={setStripColEl}>
+          {selectedWorkflow && rowAnchor && (
+            <WorkflowActionStrip
+              workflow={selectedWorkflow}
+              top={rowAnchor.top}
+              height={rowAnchor.height}
+              activeSessionId={harness.activeSessionId}
+              macros={state.macros}
+              onRunMacro={(macro) => handleRunMacroForWorkflow(selectedWorkflow, macro)}
+            />
+          )}
+        </div>
 
         <div className="center-pane">
           <SessionBar

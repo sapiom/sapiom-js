@@ -1,10 +1,8 @@
 import { useState } from "react";
 import type { JSX } from "react";
-import type { HarnessSession, MacroDef, WorkflowInfo } from "@shared/types";
+import type { HarnessSession, WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
-import { MacroButtons } from "./MacroButtons";
-import { isVisualizeMacro } from "../lib/macro-gating";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 
 interface WorkflowsRailProps {
@@ -12,44 +10,33 @@ interface WorkflowsRailProps {
   sessions: HarnessSession[];
   activeSessionId: string | null;
   selectedPath: string | null;
-  macros: MacroDef[];
   onSelect: (path: string) => void;
-  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef) => void;
+  onSelectedRowElement: (el: HTMLDivElement | null) => void;
   onConnect: (path: string) => Promise<void>;
 }
 
 function WorkflowRow({
   workflow,
   isSelected,
-  activeSessionId,
-  rowMacros,
   onSelect,
-  onRunMacro,
+  onSelectedRowElement,
 }: {
   workflow: WorkflowInfo;
   isSelected: boolean;
-  activeSessionId: string | null;
-  rowMacros: MacroDef[];
   onSelect: (path: string) => void;
-  onRunMacro: (workflow: WorkflowInfo, macro: MacroDef) => void;
+  onSelectedRowElement: (el: HTMLDivElement | null) => void;
 }): JSX.Element {
   return (
-    <div className={"workflow-item" + (isSelected ? " is-selected" : "")} data-testid={`workflow-${workflow.name}`}>
+    <div
+      ref={isSelected ? onSelectedRowElement : undefined}
+      className={"workflow-item" + (isSelected ? " is-selected" : "")}
+      data-testid={`workflow-${workflow.name}`}
+    >
       <button className="workflow-item-trigger" onClick={() => onSelect(workflow.path)} title={workflow.path}>
         <span className="workflow-caret">▸</span>
         <span className="workflow-name">{workflow.name}</span>
         {workflow.definitionId != null && <span className="workflow-dot" title="Deployed" />}
       </button>
-      <div className="workflow-row-actions">
-        <MacroButtons
-          macros={rowMacros}
-          workflow={workflow}
-          activeSessionId={activeSessionId}
-          onRun={(macro) => onRunMacro(workflow, macro)}
-          size={13}
-          testIdPrefix={`${workflow.name}-`}
-        />
-      </div>
     </div>
   );
 }
@@ -59,9 +46,8 @@ export function WorkflowsRail({
   sessions,
   activeSessionId,
   selectedPath,
-  macros,
   onSelect,
-  onRunMacro,
+  onSelectedRowElement,
   onConnect,
 }: WorkflowsRailProps): JSX.Element {
   const [connecting, setConnecting] = useState(false);
@@ -85,11 +71,6 @@ export function WorkflowsRail({
     }
   };
 
-  // Row actions are compact quick-actions — Visualize renders whatever's
-  // bound to the active session, so it stays reserved for the bound-workflow
-  // header rather than every row you hover.
-  const rowMacros = macros.filter((macro) => macro.requiresWorkflow && !isVisualizeMacro(macro));
-
   const { groups, ungrouped } = buildWorkspaceTree(workflows, sessions, activeSessionId);
 
   const renderRow = (workflow: WorkflowInfo): JSX.Element => (
@@ -97,10 +78,8 @@ export function WorkflowsRail({
       key={workflow.path}
       workflow={workflow}
       isSelected={workflow.path === selectedPath}
-      activeSessionId={activeSessionId}
-      rowMacros={rowMacros}
       onSelect={onSelect}
-      onRunMacro={onRunMacro}
+      onSelectedRowElement={onSelectedRowElement}
     />
   );
 

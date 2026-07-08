@@ -212,10 +212,56 @@ input {
 
 .app {
   display: grid;
-  grid-template-columns: 220px 1fr minmax(280px, 40%);
+  grid-template-columns: 220px 32px 1fr minmax(280px, 40%);
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Docked workflow action strip ------------------------------------------ */
+
+.workflow-action-strip-col {
+  position: relative;
+  border-left: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+/* Erases the strip column's own border for exactly the selected row's
+   height — the row bleeds into this same space (see .workflow-item.is-
+   selected's negative margin) so the two reads as one continuous shape. */
+.workflow-action-strip-notch {
+  position: absolute;
+  left: -1px;
+  width: 5px;
+  background: var(--accent-dim);
+  transition: top 0.15s ease;
+  pointer-events: none;
+}
+
+.workflow-action-strip {
+  position: absolute;
+  left: 3px;
+  right: 4px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 3px;
+  background: var(--accent-dim);
+  border: 1px solid var(--border-strong);
+  border-left: none;
+  border-radius: 0 8px 8px 8px;
+  transition: top 0.15s ease;
+}
+
+/* The strip is narrow and vertical — tooltips show to the side instead of
+   above, so they don't collide with the next icon up. */
+.workflow-action-strip .macro-icon-btn::after {
+  bottom: auto;
+  top: 50%;
+  left: calc(100% + 6px);
+  transform: translateY(-50%);
 }
 
 .center-pane {
@@ -302,9 +348,15 @@ input {
   color: var(--text);
 }
 
+/* Bleeds into rail-workflows' own right padding (8px) to reach the rail's
+   edge flush — meeting the action strip's notch with no gap, so the two
+   read as one connected shape (a browser-tab-style fusion). Flat on the
+   right since that's the edge doing the fusing; rounded everywhere else. */
 .workflow-item.is-selected {
   background: var(--accent-dim);
   color: var(--text);
+  margin-right: -8px;
+  border-radius: var(--radius) 0 0 var(--radius);
 }
 
 .workflow-item-trigger {
@@ -318,21 +370,6 @@ input {
   background: transparent;
   color: inherit;
   text-align: left;
-}
-
-/* VS Code tree-item style: quick actions stay invisible until you're looking at the row. */
-.workflow-row-actions {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  padding-right: 4px;
-  opacity: 0;
-  transition: opacity 0.1s ease;
-}
-
-.workflow-item:hover .workflow-row-actions,
-.workflow-item.is-selected .workflow-row-actions {
-  opacity: 1;
 }
 
 .workflow-caret {
@@ -427,12 +464,6 @@ input {
   color: var(--text-faint);
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-/* Row actions are compact — shrink the hit target to match the tree's density. */
-.workflow-row-actions .macro-icon-btn {
-  width: 20px;
-  height: 20px;
 }
 
 /* Custom tooltip (not the native `title` bubble) — shows the macro label, or the

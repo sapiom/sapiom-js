@@ -67,15 +67,7 @@ export function CanvasPane({
 
   return (
     <aside className="canvas-pane">
-      {boundWorkflow && (
-        <WorkflowActionsHeader
-          workflow={boundWorkflow}
-          activeSessionId={activeSessionId}
-          macros={macros}
-          onRunMacro={onRunMacro}
-          onRefresh={handleRefresh}
-        />
-      )}
+      {boundWorkflow && <WorkflowActionsHeader workflow={boundWorkflow} onRefresh={handleRefresh} />}
 
       {!sessionId ? (
         <div className="canvas-empty">Start a session to see its canvas here.</div>
