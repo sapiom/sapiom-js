@@ -18,6 +18,7 @@ import { DeadSessionPane } from "./components/DeadSessionPane";
 import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
+import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowActionStrip } from "./components/WorkflowActionStrip";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf } from "./lib/api";
@@ -29,6 +30,7 @@ import { useHarnessState } from "./lib/use-harness-state";
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false);
   const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
@@ -75,6 +77,13 @@ export const App = (): JSX.Element => {
   const boundWorkflowPath = boundWorkflowPathOf(activeSession);
   const boundWorkflow = state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
   const selectedWorkflow = state.workflows.find((w) => w.path === harness.selectedWorkflowPath) ?? null;
+
+  // First-run welcome: this install has never been used (firstRun — the CLI
+  // also skips the auto boot session then) and nothing is live yet. Taking
+  // either welcome action creates a session, which hides it; a returning
+  // user (firstRun absent/false) never sees it at all.
+  const hasLiveSession = state.sessions.some((session) => session.status !== "exited");
+  const showWelcome = state.firstRun === true && !hasLiveSession && !welcomeDismissed;
 
   const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
     await harness.createSession({ cwd, harness: agentHarness });
@@ -194,6 +203,17 @@ export const App = (): JSX.Element => {
               />
             ) : harness.activeSessionId ? (
               <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+            ) : showWelcome ? (
+              <WelcomePanel
+                recentDirs={harness.settings?.recentDirs ?? []}
+                launchDir={state.launchDir ?? null}
+                listDir={harness.listDir}
+                onCreateSession={handleCreateSession}
+                onRunSample={async () => {
+                  await harness.createSampleSession();
+                }}
+                onDismiss={() => setWelcomeDismissed(true)}
+              />
             ) : (
               <div className="terminal-empty">No active session — click “+ new” to start one.</div>
             )}

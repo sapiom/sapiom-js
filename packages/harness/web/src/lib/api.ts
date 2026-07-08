@@ -15,16 +15,27 @@ import type {
   InjectInputRequest,
   MacroDef,
   RunMacroRequest,
+  SampleProjectSeedResponse,
   SessionSummary,
   WorkflowInfo,
 } from "@shared/types";
 
-import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
+import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
 
 export type { FsDirEntry, FsListResponse };
 
 export function isMockMode(): boolean {
   return import.meta.env.VITE_MOCK === "1";
+}
+
+/**
+ * Mock mode only: `?mockState=fresh` renders the app as a brand-new install
+ * (no sessions, no recent dirs, no workflows, firstRun set) instead of the
+ * lived-in default fixtures — this is how Playwright exercises the first-run
+ * welcome panel without a real server.
+ */
+export function isFreshMockState(): boolean {
+  return isMockMode() && new URLSearchParams(window.location.search).get("mockState") === "fresh";
 }
 
 /** `session.boundWorkflowPath` is nullable already, but keeps callers safe against a missing session. */
@@ -76,6 +87,9 @@ export interface HarnessApi {
   updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings>;
   listDir(path?: string): Promise<FsListResponse>;
   bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession>;
+  /** Seeds (or reuses) the bundled example project; the caller follows up
+   *  with a normal createSession against the returned root. */
+  seedSampleProject(): Promise<SampleProjectSeedResponse>;
 }
 
 class RealApi implements HarnessApi {
@@ -183,15 +197,23 @@ class RealApi implements HarnessApi {
       body: JSON.stringify(body),
     });
   }
+
+  seedSampleProject(): Promise<SampleProjectSeedResponse> {
+    return this.request<SampleProjectSeedResponse>("/api/sample-project", { method: "POST" });
+  }
 }
 
 const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
 class MockApi implements HarnessApi {
-  private sessions = MOCK_SESSIONS.map((session) => ({ ...session }));
-  private workflows = MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
-  private settings: HarnessSettings = { ...MOCK_SETTINGS, recentDirs: [...MOCK_SETTINGS.recentDirs] };
+  // `?mockState=fresh` = brand-new install: nothing yet, firstRun set — see isFreshMockState().
+  private readonly fresh = isFreshMockState();
+  private sessions = this.fresh ? [] : MOCK_SESSIONS.map((session) => ({ ...session }));
+  private workflows = this.fresh ? [] : MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
+  private settings: HarnessSettings = this.fresh
+    ? { ...MOCK_SETTINGS, recentDirs: [] }
+    : { ...MOCK_SETTINGS, recentDirs: [...MOCK_SETTINGS.recentDirs] };
 
   async getState(): Promise<AppState> {
     await delay();
@@ -205,6 +227,7 @@ class MockApi implements HarnessApi {
       workflows: this.workflows,
       macros: MOCK_MACROS,
       launchDir: MOCK_LAUNCH_DIR,
+      ...(this.fresh ? { firstRun: true } : {}),
     };
   }
 
@@ -336,6 +359,23 @@ class MockApi implements HarnessApi {
     const bound: HarnessSession = { ...existing, boundWorkflowPath: workflowPath };
     this.sessions = this.sessions.map((session) => (session.id === sessionId ? bound : session));
     return bound;
+  }
+
+  async seedSampleProject(): Promise<SampleProjectSeedResponse> {
+    await delay(300);
+    const response: SampleProjectSeedResponse = {
+      root: MOCK_SAMPLE_PROJECT_ROOT,
+      projectDir: `${MOCK_SAMPLE_PROJECT_ROOT}/order-triage`,
+      created: true,
+    };
+    // Test-only escape hatch, mock mode only — same pattern as runMacro's
+    // lastMacroRun: seeding has no other observable effect in mock mode, so
+    // Playwright reads this back to assert the click actually seeded.
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastSampleSeed: response };
+    }
+    return response;
   }
 }
 
