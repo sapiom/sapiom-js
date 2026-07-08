@@ -114,7 +114,7 @@ const main = async (): Promise<void> => {
     process.exit(1);
   }
 
-  await getOrCreateMachineId();
+  const machineId = await getOrCreateMachineId();
 
   const identity = await ensureAuthenticated({ interactive: true, noAuth: options.noAuth });
   const telemetryOptIn = await ensureConsent({ noTelemetry: options.noTelemetry });
@@ -124,7 +124,7 @@ const main = async (): Promise<void> => {
 
   let server: HarnessServer | null = null;
   try {
-    server = await startServer({ port: options.port, bootToken, telemetryOptIn });
+    server = await startServer({ port: options.port, bootToken, telemetryOptIn, identity, machineId });
   } catch (err) {
     if (!options.dev) throw err;
     const message = err instanceof Error ? err.message : String(err);
