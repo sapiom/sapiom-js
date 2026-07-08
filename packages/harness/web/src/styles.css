@@ -640,36 +640,128 @@ input {
   position: relative;
 }
 
-.session-dropdown-wrap {
-  position: relative;
+.session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: 1;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
-.session-dropdown-trigger {
+.session-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  padding: 5px 8px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 5px 10px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
+  color: var(--text-dim);
+}
+
+.session-tab:hover {
+  border-color: var(--accent);
   color: var(--text);
 }
 
-.session-dropdown-trigger:hover {
+.session-tab.is-active {
+  background: var(--bg-3);
   border-color: var(--accent);
+  color: var(--text);
 }
 
-.session-title {
-  flex: 1;
+.session-tab-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
   font-size: 12px;
+}
+
+/* Subtle pulse — a session with output in roughly the last 3s, whether or
+   not it's the tab you're currently looking at. */
+.session-tab-busy {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--accent);
+  animation: session-tab-busy-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes session-tab-busy-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.session-tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+}
+
+.session-tab-add:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.session-history-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.session-history-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 30px;
+  height: 30px;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-2);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  position: relative;
+}
+
+.session-history-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-history-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
 }
 
 .session-workflow-chip {
@@ -709,8 +801,8 @@ input {
 .session-dropdown-menu {
   position: absolute;
   top: calc(100% + 4px);
-  left: 0;
   right: 0;
+  width: 320px;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -763,24 +855,6 @@ input {
 .session-item-meta {
   font-size: 10.5px;
   color: var(--text-faint);
-}
-
-.new-session-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
-  background: var(--accent-dim);
-  color: var(--text);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.new-session-btn:hover {
-  background: var(--accent-hover);
-  color: var(--accent-foreground);
 }
 
 .settings-wrap {

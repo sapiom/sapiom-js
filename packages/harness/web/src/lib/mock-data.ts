@@ -54,7 +54,33 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     exitCode: 0,
     ready: false,
   },
+  {
+    id: "sess-bg",
+    agentSessionId: "1a2b3c4d-5e6f-4a71-8b2c-3d4e5f6a7b8c",
+    boundWorkflowPath: null,
+    harness: "claude-code",
+    // A second running session, not the active tab on load — demonstrates the
+    // tab strip (multiple live tabs) and the busy pulse (see
+    // MOCK_ACTIVITY_SESSION_ID in ./events), which only means anything on a
+    // tab you're not already looking at. cwd is deliberately "scratch" (no
+    // workflow lives there) so it doesn't move "onboarding-flow" out of the
+    // rail's "Other" group — see smoke.spec.ts's workspace-tree test.
+    cwd: "/Users/demo/scratch",
+    title: "scratch",
+    status: "running",
+    // Later than sess-boot's createdAt (minutesAgo(1)) — tabs sort
+    // oldest-first, so this deliberately keeps boot as tab 1, scratch as
+    // tab 2 (see smoke.spec.ts's Cmd+1/Cmd+2 test).
+    createdAt: minutesAgo(0),
+    lastActiveAt: minutesAgo(0),
+    ready: true,
+  },
 ];
+
+/** The mock session `subscribeEvents` periodically fires simulated
+ *  `session.activity` pings for — see ./events.ts. Exercises the tab strip's
+ *  busy pulse on a background (non-active) tab without a real pty. */
+export const MOCK_ACTIVITY_SESSION_ID = "sess-bg";
 
 /** Fake filesystem for the new-session directory picker (GET /api/fs/list). Keys are absolute paths. */
 export const MOCK_FS_TREE: Record<string, string[]> = {

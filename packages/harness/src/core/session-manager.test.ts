@@ -409,6 +409,59 @@ describe("SessionManager", () => {
     expect(received).toEqual(["hello world", "!"]);
   });
 
+  describe("onActivity", () => {
+    it("broadcasts once immediately, then throttles further data within the window", async () => {
+      vi.useFakeTimers();
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const activity: string[] = [];
+      manager.onActivity((id) => activity.push(id));
+
+      spawns[0]?.emitData("hello");
+      expect(activity).toEqual([session.id]);
+
+      // Still within the 2s throttle window — no second broadcast yet.
+      spawns[0]?.emitData("more");
+      await vi.advanceTimersByTimeAsync(1_000);
+      spawns[0]?.emitData("even more");
+      expect(activity).toEqual([session.id]);
+
+      // Past the window — the next chunk broadcasts again.
+      await vi.advanceTimersByTimeAsync(1_100);
+      spawns[0]?.emitData("after the window");
+      expect(activity).toEqual([session.id, session.id]);
+
+      vi.useRealTimers();
+    });
+
+    it("broadcasts independently per session", async () => {
+      const { manager, spawns } = makeManager();
+      const a = await manager.create({ cwd: "/tmp/a", harness: "claude-code" });
+      const b = await manager.create({ cwd: "/tmp/b", harness: "claude-code" });
+
+      const activity: string[] = [];
+      manager.onActivity((id) => activity.push(id));
+
+      spawns[0]?.emitData("from a");
+      spawns[1]?.emitData("from b");
+
+      expect(activity).toEqual([a.id, b.id]);
+    });
+
+    it("stops notifying an unsubscribed listener", async () => {
+      const { manager, spawns } = makeManager();
+      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const activity: string[] = [];
+      const unsubscribe = manager.onActivity((id) => activity.push(id));
+      unsubscribe();
+
+      spawns[0]?.emitData("hello");
+      expect(activity).toEqual([]);
+    });
+  });
+
   it("marks a session exited when its pty exits, and notifies status listeners", async () => {
     const { manager, spawns } = makeManager();
     const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
