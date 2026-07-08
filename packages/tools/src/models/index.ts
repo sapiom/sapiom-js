@@ -21,15 +21,14 @@
  * wire; this module maps them to the camelCase SDK surface below.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
-import { resolveServiceUrl } from "../_client/service-url.js";
 import type { DispatchHandle } from "../dispatch.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { Repository } from "../repositories/index.js";
 
-const DEFAULT_BASE_URL = resolveServiceUrl(
-  "agents",
-  process.env.SAPIOM_AGENTS_URL,
-);
+const DEFAULT_BASE_URL =
+  process.env.SAPIOM_MODELS_URL ??
+  process.env.SAPIOM_TOOLS_BASE ??
+  "https://tools.sapiom.ai";
 
 /**
  * Capability-stable signal a coding run fires when it reaches a terminal state
@@ -324,7 +323,7 @@ export async function codingLaunch(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<RunHandle> {
   // 202 + a launch document; the execution_environment relationship is always present.
-  const doc = await transport.request<RunDoc>(`${baseUrl}/v1/coding/runs`, {
+  const doc = await transport.request<RunDoc>(`${baseUrl}/models/v1/coding/runs`, {
     method: "POST",
     body: JSON.stringify(buildBody(spec)),
     headers: workflowResumeHeaders(transport.resumeToken),
@@ -338,7 +337,7 @@ export async function codingLaunch(
 
   const fetchDoc = () =>
     transport.request<RunDoc>(
-      `${baseUrl}/v1/coding/runs/${encodeURIComponent(runId)}`,
+      `${baseUrl}/models/v1/coding/runs/${encodeURIComponent(runId)}`,
     );
   const toResult = (d: RunDoc): CodingRunResult => ({
     runId,
@@ -555,7 +554,7 @@ export async function launch(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ModelRunHandle> {
-  const doc = await transport.request<ModelRunDoc>(`${baseUrl}/v1/agent/runs`, {
+  const doc = await transport.request<ModelRunDoc>(`${baseUrl}/models/v1/runs`, {
     method: "POST",
     body: JSON.stringify(buildModelBody(spec)),
     headers: workflowResumeHeaders(transport.resumeToken),
@@ -563,7 +562,7 @@ export async function launch(
   const runId = doc.data.id;
 
   const fetchDoc = () =>
-    transport.request<ModelRunDoc>(`${baseUrl}/v1/agent/runs/${encodeURIComponent(runId)}`);
+    transport.request<ModelRunDoc>(`${baseUrl}/models/v1/runs/${encodeURIComponent(runId)}`);
   const toResult = (d: ModelRunDoc): ModelRunResult => ({
     runId,
     status: d.data.attributes.status,

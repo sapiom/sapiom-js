@@ -15,13 +15,12 @@
  * a pausable handle). An orchestration is addressed by its **slug** (its stable handle).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
-import { resolveServiceUrl } from "../_client/service-url.js";
 import type { DispatchHandle } from "../dispatch.js";
 
-const DEFAULT_BASE_URL = resolveServiceUrl(
-  "workflows",
-  process.env.SAPIOM_WORKFLOWS_URL,
-);
+const DEFAULT_BASE_URL =
+  process.env.SAPIOM_AGENTS_URL ??
+  process.env.SAPIOM_TOOLS_BASE ??
+  "https://tools.sapiom.ai";
 
 /**
  * Signal a run fires when it reaches a terminal state (completed OR failed — the
@@ -186,7 +185,7 @@ interface ExecutionDoc {
  */
 async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl: string): Promise<RunHandle> {
   const res = await transport.request<{ id: string }>(
-    `${baseUrl}/v1/workflows/${encodeURIComponent(spec.definition)}/triggers`,
+    `${baseUrl}/agents/v1/${encodeURIComponent(spec.definition)}/triggers`,
     {
       method: "POST",
       body: JSON.stringify({ kind: "schedule_once", at: spec.at, input: spec.input ?? {} }),
@@ -215,7 +214,7 @@ export async function launch(
     return launchScheduled(spec, transport, baseUrl);
   }
   const res = await transport.request<StartResponse>(
-    `${baseUrl}/v1/workflows/${encodeURIComponent(spec.definition)}/executions`,
+    `${baseUrl}/agents/v1/${encodeURIComponent(spec.definition)}/executions`,
     {
       method: "POST",
       body: JSON.stringify({
@@ -229,7 +228,7 @@ export async function launch(
 
   const fetchDoc = () =>
     transport.request<ExecutionDoc>(
-      `${baseUrl}/v1/workflows/executions/${encodeURIComponent(executionId)}`,
+      `${baseUrl}/agents/v1/executions/${encodeURIComponent(executionId)}`,
     );
 
   return {

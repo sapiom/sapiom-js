@@ -56,11 +56,11 @@ describe("agent.launch — dispatch handle", () => {
     expect(MODEL_RUN_RESULT_SIGNAL).toBe("agent.run.result");
   });
 
-  it("posts to /v1/agent/runs", async () => {
+  it("posts to /models/v1/runs", async () => {
     const capture: { url?: string } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
     await sapiom.models.launch({ prompt: "say OK" });
-    expect(capture.url).toContain("/v1/agent/runs");
+    expect(capture.url).toContain("/models/v1/runs");
   });
 });
 

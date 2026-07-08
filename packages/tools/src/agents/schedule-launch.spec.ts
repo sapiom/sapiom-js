@@ -39,7 +39,7 @@ describe("orchestrations.launch — delayed (scheduled) dispatch", () => {
     });
 
     // Hits the schedule (trigger) create route, not the execution route.
-    expect(cap.url).toMatch(/\/v1\/workflows\/B\/triggers$/);
+    expect(cap.url).toMatch(/\/agents\/v1\/B\/triggers$/);
     expect(cap.init?.method).toBe("POST");
     expect(JSON.parse(cap.init?.body as string)).toEqual({
       kind: "schedule_once",
