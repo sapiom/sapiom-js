@@ -46,7 +46,12 @@ jobs:
           cache: pnpm
 
       - name: Ensure npm >= 11.5 (OIDC trusted publishing)
-        run: npm install -g npm@latest && npm --version
+        # Pinned to the 11.x line rather than `npm@latest`: npm 12.0.0's
+        # publish path fails to resolve its bundled `sigstore` module when
+        # generating provenance attestations under trusted publishing
+        # ("Cannot find module 'sigstore'"), which aborts `changeset publish`
+        # for every package. 11.x (>= the 11.5 OIDC minimum) publishes cleanly.
+        run: npm install -g 'npm@^11.5' && npm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
