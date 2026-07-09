@@ -178,6 +178,13 @@ export interface LaunchOpts {
   mcpConfigFile?: string;
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
+  /**
+   * Absolute path to a generated --plugin-dir directory. Currently used to
+   * inject Sapiom's bundled skills as session-scoped slash commands via
+   * claude-code's `--plugin-dir` flag. Adapters that don't support
+   * --plugin-dir (e.g. codex) silently ignore this field.
+   */
+  pluginDir?: string;
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;

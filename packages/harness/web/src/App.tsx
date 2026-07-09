@@ -317,6 +317,8 @@ export const App = (): JSX.Element => {
                 listSkills={listSkills}
                 getSkill={getSkill}
                 isActive={rightTab === "skills"}
+                activeSession={activeSession}
+                onUseSkill={(sessionId, text) => void harness.useSkill(sessionId, text)}
               />
             </div>
           )}

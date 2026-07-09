@@ -1,23 +1,34 @@
 /**
- * SkillsPanel — read-only skill browser in the right pane alongside the canvas.
+ * SkillsPanel — skill browser in the right pane alongside the canvas.
  *
  * Skills come from two sources surfaced by GET /api/skills:
- *   - package: shipped with @sapiom/* npm packages
+ *   - package: shipped with @sapiom/* npm packages (slash-registered in sessions)
  *   - user: ~/.claude/skills/{id}/SKILL.md
  *
  * Browsing pattern:
  *   - Card list: name + one-line description grouped by source
  *   - Click a card → detail view (rendered markdown body)
  *   - Back button returns to the list
+ *   - "Use skill" button in the detail view populates the terminal's input
+ *     line WITHOUT submitting (submit:false), so the user can review and
+ *     edit before pressing Enter.
+ *
+ * Use-skill text depends on the skill's source:
+ *   - package skill → "/<id> " (trailing space for args; slash-registered by
+ *     the session's --plugin-dir injection)
+ *   - user skill → natural-language invocation "Use the \"<name>\" skill: <desc>"
+ *
+ * Requires an active, ready session: the button is disabled with a short
+ * reason when there is no ready session.
  *
  * Creating skills: place a SKILL.md under ~/.claude/skills/<id>/SKILL.md in
  * your terminal (claude-code or codex) and they appear here automatically.
- * Tell your agent to use a skill when you want it applied — no button needed.
  *
- * Analytics: skill.viewed events are emitted via POST /api/track on card open.
+ * Analytics: skill.viewed + skill.used events are emitted via POST /api/track.
  */
 import { useState, useCallback, useEffect, type JSX } from "react";
 
+import type { HarnessSession } from "@shared/types";
 import type { SkillDetail, SkillMeta } from "../lib/api";
 import { ApiError } from "../lib/api";
 import { track } from "../lib/track";
@@ -28,12 +39,43 @@ import { Markdown } from "./Markdown";
 // Skill detail view
 // ---------------------------------------------------------------------------
 
+/**
+ * Returns the text to inject into the terminal when "Use skill" is clicked.
+ *   - package skill: "/<id> " — the slash command with a trailing space for args
+ *   - user skill: natural-language invocation (user skills aren't slash-registered)
+ */
+function skillInjectText(skill: SkillDetail): string {
+  if (skill.source === "package") {
+    return `/${skill.id} `;
+  }
+  return `Use the "${skill.name}" skill: ${skill.description}`;
+}
+
 interface SkillDetailViewProps {
   skill: SkillDetail;
   onBack: () => void;
+  /** The active session, if any — needed to gate and fire "Use skill". */
+  activeSession: HarnessSession | null;
+  /** Populates the terminal's input line without submitting. */
+  onUseSkill: (text: string) => void;
 }
 
-function SkillDetailView({ skill, onBack }: SkillDetailViewProps): JSX.Element {
+function SkillDetailView({ skill, onBack, activeSession, onUseSkill }: SkillDetailViewProps): JSX.Element {
+  const isReady = activeSession?.ready === true && activeSession.status !== "exited";
+  const disabledReason = !activeSession
+    ? "No active session"
+    : activeSession.status === "exited"
+      ? "Session has exited"
+      : !activeSession.ready
+        ? "Session is starting"
+        : null;
+
+  const handleUseSkill = (): void => {
+    if (!isReady) return;
+    track("skill.used", { skillId: skill.id, source: skill.source });
+    onUseSkill(skillInjectText(skill));
+  };
+
   return (
     <div className="skill-detail" data-testid="skill-detail">
       <div className="skill-detail-header">
@@ -44,6 +86,24 @@ function SkillDetailView({ skill, onBack }: SkillDetailViewProps): JSX.Element {
         <span className={"skill-source-badge skill-source-" + skill.source}>
           {skill.source === "user" ? "user" : "pkg"}
         </span>
+      </div>
+
+      <div className="skill-detail-actions">
+        <button
+          className="skill-use-btn"
+          data-testid="skill-use-btn"
+          disabled={!isReady}
+          title={disabledReason ?? "Populate the terminal with this skill"}
+          onClick={handleUseSkill}
+          aria-label={disabledReason ? `Use skill — ${disabledReason}` : "Use skill"}
+        >
+          Use skill
+        </button>
+        {disabledReason && (
+          <span className="skill-use-disabled-reason" data-testid="skill-use-disabled-reason">
+            {disabledReason}
+          </span>
+        )}
       </div>
 
       <div className="skill-detail-body">
@@ -134,9 +194,16 @@ export interface SkillsPanelProps {
    * needing a full page reload.
    */
   isActive: boolean;
+  /** The currently active session — used to gate the "Use skill" button. */
+  activeSession: HarnessSession | null;
+  /**
+   * Populates the terminal's input line with `text` WITHOUT submitting.
+   * Called when the user clicks "Use skill" in the detail view.
+   */
+  onUseSkill: (sessionId: string, text: string) => void;
 }
 
-export function SkillsPanel({ listSkills, getSkill, isActive }: SkillsPanelProps): JSX.Element {
+export function SkillsPanel({ listSkills, getSkill, isActive, activeSession, onUseSkill }: SkillsPanelProps): JSX.Element {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -195,6 +262,10 @@ export function SkillsPanel({ listSkills, getSkill, isActive }: SkillsPanelProps
           <SkillDetailView
             skill={selectedSkill}
             onBack={() => setSelectedSkill(null)}
+            activeSession={activeSession}
+            onUseSkill={(text) => {
+              if (activeSession) onUseSkill(activeSession.id, text);
+            }}
           />
         ) : (
           <SkillsList

@@ -275,12 +275,12 @@ test.describe("skills panel — detail view", () => {
     await expect(page.getByTestId("skill-detail")).toHaveCount(0);
   });
 
-  test("detail view has no 'Use skill' button (read-only browser)", async ({ page }) => {
+  test("detail view shows the 'Use skill' button", async ({ page }) => {
     await page.getByTestId("skill-card-sapiom-agent-authoring").click();
     await expect(page.getByTestId("skill-detail")).toBeVisible({ timeout: 3_000 });
 
-    // The panel is read-only — there is no Use skill button.
-    await expect(page.getByTestId("skill-use-btn")).toHaveCount(0);
+    // The Use skill button is present in the detail view.
+    await expect(page.getByTestId("skill-use-btn")).toBeVisible();
   });
 });
 
@@ -360,6 +360,132 @@ test.describe("dead session pane — resume and close", () => {
 
     // No disabled reason text should be shown.
     await expect(page.getByTestId("dead-session-resume-reason")).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Use skill button
+// ---------------------------------------------------------------------------
+
+test.describe("Use skill button", () => {
+  // Navigate to a skill detail view.
+  const openSkillDetail = async (page: import("@playwright/test").Page, skillId: string): Promise<void> => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.getByTestId("right-tab-skills").click();
+    await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 5_000 });
+    await page.getByTestId(`skill-card-${skillId}`).click();
+    await expect(page.getByTestId("skill-detail")).toBeVisible({ timeout: 3_000 });
+  };
+
+  test("clicking Use on a package skill calls injectInput with submit:false and /<id> text", async ({ page }) => {
+    await openSkillDetail(page, "sapiom-agent-authoring");
+
+    // The mock default has a ready running session (sess-boot, ready:true).
+    const useBtn = page.getByTestId("skill-use-btn");
+    await expect(useBtn).toBeEnabled();
+
+    await useBtn.click();
+
+    // Wait for the mock async delay to complete and the record to be set.
+    await page.waitForFunction(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
+    );
+
+    // Assert that MockApi.injectInput was called with submit:false and the slash-command text.
+    const record = await page.evaluate(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
+    );
+    expect(record).toBeDefined();
+    expect(record!.req.submit).toBe(false);
+    expect(record!.req.text).toBe("/sapiom-agent-authoring ");
+
+    await page.screenshot({ path: "web/e2e/screenshots/skill-use-package.png", fullPage: true });
+  });
+
+  test("clicking Use on a user skill calls injectInput with submit:false and NL text", async ({ page }) => {
+    await openSkillDetail(page, "frontend-design");
+
+    const useBtn = page.getByTestId("skill-use-btn");
+    await expect(useBtn).toBeEnabled();
+
+    await useBtn.click();
+
+    // Wait for the mock async delay to complete and the record to be set.
+    await page.waitForFunction(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
+    );
+
+    const record = await page.evaluate(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
+    );
+    expect(record).toBeDefined();
+    expect(record!.req.submit).toBe(false);
+    // User skill → natural-language invocation with name and description.
+    expect(record!.req.text).toContain("Frontend Design");
+    expect(record!.req.text).toMatch(/^Use the "/);
+
+    await page.screenshot({ path: "web/e2e/screenshots/skill-use-user.png", fullPage: true });
+  });
+
+  test("Use skill button is disabled when the active session is not ready", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    // Make the active session (sess-boot) exit — the active tab stays on it,
+    // so activeSession in SkillsPanel reflects an exited (not ready) session.
+    await page.evaluate(() => {
+      (window as unknown as TestHarness).__HARNESS_TEST__.publish({
+        type: "session.status",
+        session: {
+          id: "sess-boot",
+          agentSessionId: null,
+          boundWorkflowPath: "/Users/demo/acme-app/leasing",
+          harness: "claude-code",
+          cwd: "/Users/demo/acme-app",
+          title: "acme-app",
+          status: "exited",
+          exitCode: 0,
+          createdAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+          ready: false,
+        },
+      });
+    });
+
+    await page.getByTestId("right-tab-skills").click();
+    await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 5_000 });
+    await page.getByTestId("skill-card-sapiom-agent-authoring").click();
+    await expect(page.getByTestId("skill-detail")).toBeVisible({ timeout: 3_000 });
+
+    const useBtn = page.getByTestId("skill-use-btn");
+    await expect(useBtn).toBeDisabled();
+
+    // A visible reason for the disabled state must be present.
+    await expect(page.getByTestId("skill-use-disabled-reason")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/skill-use-disabled.png", fullPage: true });
+  });
+
+  test("Use skill does NOT auto-submit (no Enter / CR sent)", async ({ page }) => {
+    await openSkillDetail(page, "sapiom-agent-authoring");
+
+    const useBtn = page.getByTestId("skill-use-btn");
+    await expect(useBtn).toBeEnabled();
+    await useBtn.click();
+
+    // Wait for the async mock delay to complete.
+    await page.waitForFunction(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
+    );
+
+    const record = await page.evaluate(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
+    );
+    // submit must be false — the API must not send a carriage return.
+    expect(record?.req.submit).toBe(false);
+
+    await page.screenshot({ path: "web/e2e/screenshots/skill-use-no-submit.png", fullPage: true });
   });
 });
 
