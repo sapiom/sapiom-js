@@ -48,9 +48,9 @@ remote MCP or the SDK for a single action.
 
 ## Preview a web app
 From inside the project: \`sapiom_dev_sandbox_configure\` (writes the validated \`sapiom.json\`
-resource — start command, port, optional build/tier/ttl/env) → optionally
-\`sapiom_dev_sandbox_check\` → \`sapiom_dev_sandbox_preview\` (uploads, builds, starts, and
-returns a live URL; a \`failed\` status carries the build/start logs — fix and retry).
+resource — source, start command, port, optional build/tier/ttl/env) →
+\`sapiom_dev_sandbox_check\` (optional) → \`sapiom_dev_sandbox_preview\` (uploads, builds, starts,
+and returns a live URL; a \`failed\` status carries the build/start logs — fix and retry).
 
 ## Canonical rules (types are the source of truth — run \`npm run typecheck\`)
 - Import \`defineAgent\`, \`defineStep\`, and the directives

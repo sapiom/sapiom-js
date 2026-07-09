@@ -22,7 +22,8 @@ directory.
 ## Prerequisite
 
 Run `sapiom_authenticate` once (browser login; caches a key in `~/.sapiom/credentials.json`).
-The sandbox tools return a structured not-authenticated error otherwise. Check with
+`sapiom_dev_sandbox_preview` returns a structured not-authenticated error otherwise;
+`configure` and `check` only touch local files and work signed-out. Check with
 `sapiom_status`.
 
 ## The lifecycle
@@ -82,11 +83,13 @@ Defaults to the single resource when the project defines exactly one.
 
 ## From inside a Sapiom agent step
 
-Steps can deploy previews through the typed client: `ctx.sapiom.sandboxes.uploadDir(localDir)`
-to stage the code, then `sandbox.deployPreview({ start, port, build?, env? })` →
+Steps can deploy previews through the typed client. Get a `Sandbox` instance first —
+`await ctx.sapiom.sandboxes.create({...})` or `.attach(name)` — then call
+`sandbox.uploadDir(localDir)` to stage the code and
+`sandbox.deployPreview({ start, port, build?, env? })` →
 `{ url, status: "deployed" | "unverified" | "failed", logs }` (failures return `status:
-"failed"` with logs, not a throw). `createPublicUrl({ port })` is the low-level primitive —
-the port must have been declared when the sandbox was created.
+"failed"` with logs, not a throw). `sandbox.createPublicUrl({ port })` is the low-level
+primitive — the port must have been declared when the sandbox was created.
 
 ## Reference
 
