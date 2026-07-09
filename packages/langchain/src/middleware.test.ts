@@ -337,7 +337,7 @@ describe("createSapiomMiddleware", () => {
       const request = createMockToolRequest();
       const handler = jest.fn().mockResolvedValue("Sunny, 25C");
 
-      await middleware.wrapToolCall!(request, handler);
+      await middleware.wrapToolCall!(request as any, handler);
 
       expect(mockAuthorizer.createAndAuthorize).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -358,7 +358,7 @@ describe("createSapiomMiddleware", () => {
       const request = createMockToolRequest();
       const handler = jest.fn().mockResolvedValue("Result");
 
-      await middleware.wrapToolCall!(request, handler);
+      await middleware.wrapToolCall!(request as any, handler);
 
       expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
@@ -379,9 +379,9 @@ describe("createSapiomMiddleware", () => {
       const request = createMockToolRequest();
       const handler = jest.fn().mockRejectedValue(new Error("Tool failed"));
 
-      await expect(middleware.wrapToolCall!(request, handler)).rejects.toThrow(
-        "Tool failed",
-      );
+      await expect(
+        middleware.wrapToolCall!(request as any, handler),
+      ).rejects.toThrow("Tool failed");
 
       expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
@@ -423,7 +423,7 @@ describe("createSapiomMiddleware", () => {
           payment: { authorizationPayload: "auth-token" },
         });
 
-      const result = await middleware.wrapToolCall!(request, handler);
+      const result = await middleware.wrapToolCall!(request as any, handler);
 
       expect(result).toBe("Success after payment");
       expect(handler).toHaveBeenCalledTimes(2);
