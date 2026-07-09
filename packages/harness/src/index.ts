@@ -4,3 +4,11 @@
  */
 
 export * from "./shared/types.js";
+export {
+  HarnessError,
+  UnknownSessionError,
+  SessionNotReadyError,
+  SessionNotResumeableError,
+  SessionAlreadyLiveError,
+  AdapterNotFoundError,
+} from "./core/errors.js";

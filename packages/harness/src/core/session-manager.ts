@@ -22,6 +22,21 @@ import {
   type SpawnSpec,
 } from "../shared/types.js";
 import { expandHome } from "./paths.js";
+import {
+  AdapterNotFoundError,
+  SessionAlreadyLiveError,
+  SessionNotReadyError,
+  SessionNotResumeableError,
+  UnknownSessionError,
+} from "./errors.js";
+
+export {
+  AdapterNotFoundError,
+  SessionAlreadyLiveError,
+  SessionNotReadyError,
+  SessionNotResumeableError,
+  UnknownSessionError,
+} from "./errors.js";
 
 // node-pty is a native module. Load it lazily so a missing/broken prebuild on
 // an unsupported platform surfaces as a spawn-time error instead of crashing
@@ -147,23 +162,6 @@ const defaultIsPidAlive = (pid: number): boolean => {
     return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 };
-
-/**
- * Thrown by `submitInput()` when a session's pty is alive but never became
- * ready (see `HarnessSession.ready`) within `READY_GRACE_MS` — the trust-
- * dialog race this whole readiness mechanism exists to catch. Callers
- * (rest.ts, macros.ts) catch this specifically and surface it as a 409 with
- * a UI-visible reason, rather than letting it fall into a generic 500 or
- * (worse, the bug this fixes) silently writing into a non-interactive TUI.
- */
-export class SessionNotReadyError extends Error {
-  constructor(id: string) {
-    super(
-      `Session "${id}" is not ready yet — check the terminal, it may be asking to trust the folder.`,
-    );
-    this.name = "SessionNotReadyError";
-  }
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -334,7 +332,7 @@ export class SessionManager {
 
   private getAdapter(harness: HarnessKind): HarnessAdapter {
     const adapter = this.adapters[harness];
-    if (!adapter) throw new Error(`No adapter registered for harness "${harness}"`);
+    if (!adapter) throw new AdapterNotFoundError(harness);
     return adapter;
   }
 
@@ -415,12 +413,12 @@ export class SessionManager {
 
   async resume(id: string): Promise<HarnessSession> {
     const session = this.sessions.get(id);
-    if (!session) throw new Error(`Unknown session "${id}"`);
+    if (!session) throw new UnknownSessionError(id);
     if (!session.agentSessionId) {
-      throw new Error(`Session "${id}" has no agentSessionId to resume from`);
+      throw new SessionNotResumeableError(id);
     }
     if (this.ptys.has(id)) {
-      throw new Error(`Session "${id}" already has a live pty`);
+      throw new SessionAlreadyLiveError(id);
     }
     const adapter = this.getAdapter(session.harness);
     const opts: LaunchOpts = {
