@@ -168,7 +168,7 @@ the collector stores `event_type` verbatim either way.
 | `mcp` | `tool.call` |
 | `cli` | `command.run`, `notice.shown`, `telemetry.opt_out` |
 | `agent` | `workflow.deploy`, `workflow.run`, `workflow.link`, `step.start`, `step.complete`, `step.error` |
-| `langchain` | `model.call`, `tool.call` |
+| `langchain` | `model.call`, `tool.call` — pay-gated calls emit one event; `payment_retried: true` marks the 402-retry path |
 | `harness` | `session.start`, `prompt.submitted`, `tool.call`, `turn.completed`, `session.end` |
 
 New event types require no contract change — send them.
