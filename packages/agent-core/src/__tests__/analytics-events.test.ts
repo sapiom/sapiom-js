@@ -7,7 +7,7 @@
  *
  * Gates covered:
  *   - link → deploy → run emit `workflow.link` / `workflow.deploy` /
- *     `workflow.run` (source "orchestration") with ids, status, duration
+ *     `workflow.run` (source "agent") with ids, status, duration
  *   - runLocal emits `step.start` / `step.complete` / `step.error` flagged
  *     `local: true`
  *   - opt-out env vars → zero collector requests, identical results
@@ -269,7 +269,7 @@ describe("workflow lifecycle events (link → deploy → run)", () => {
       ]);
 
       for (const event of events) {
-        expect(event.source).toBe("orchestration");
+        expect(event.source).toBe("agent");
         expect(event.sdk_name).toBe("@sapiom/agent-core");
         expect(event.sdk_version).toMatch(/^\d+\.\d+\.\d+/);
         expect(typeof event.data.duration_ms).toBe("number");
@@ -343,7 +343,7 @@ describe("local run step events", () => {
       ["step.complete", "two"],
     ]);
     for (const event of events) {
-      expect(event.source).toBe("orchestration");
+      expect(event.source).toBe("agent");
       expect(event.data.local).toBe(true);
       expect(event.data.workflow_name).toBe("local-wf");
       expect(event.data.execution_id).toBe(result.executionId);

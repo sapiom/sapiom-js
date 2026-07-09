@@ -167,7 +167,7 @@ the collector stores `event_type` verbatim either way.
 | `tools` | `capability.call` |
 | `mcp` | `tool.call` |
 | `cli` | `command.run`, `notice.shown`, `telemetry.opt_out` |
-| `agent` | `workflow.deploy`, `workflow.run`, `step.start`, `step.complete`, `step.error` |
+| `agent` | `workflow.deploy`, `workflow.run`, `workflow.link`, `step.start`, `step.complete`, `step.error` |
 | `langchain` | `model.call`, `tool.call` |
 
 New event types require no contract change — send them.

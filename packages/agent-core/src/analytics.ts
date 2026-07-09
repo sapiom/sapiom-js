@@ -86,7 +86,7 @@ let instance: SapiomAnalytics | null = null;
 export function getOrchestrationAnalytics(): SapiomAnalytics {
   if (instance === null) {
     instance = createAnalytics({
-      source: "orchestration",
+      source: "agent",
       sdkName: "@sapiom/agent-core",
       sdkVersion: readOwnVersion(),
     });
