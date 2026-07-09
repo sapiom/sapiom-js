@@ -13,7 +13,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 import type { HarnessSession, MacroDef, WorkflowInfo } from "../shared/types.js";
-import { SessionNotReadyError } from "../core/session-manager.js";
+import { SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -478,5 +478,40 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
     });
 
+  });
+
+  describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
+    it("404s when resume() throws UnknownSessionError (class-based dispatch, not string match)", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new UnknownSessionError("does-not-exist"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/does-not-exist/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("404s even when UnknownSessionError carries a reworded message — proves class dispatch, not string-match", async () => {
+      // This is the point of the port: the old code did
+      //   err.message.startsWith("Unknown session")
+      // so any rewording would silently fall to a 500. Now that the route
+      // checks instanceof, the message can say anything.
+      const sessionManager = fakeSessionManager();
+      const err = new UnknownSessionError("xyz");
+      Object.defineProperty(err, "message", { value: "session xyz could not be located" });
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(err);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/xyz/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      // Old string-match would give 500 here; class dispatch gives 404.
+      expect(res.status).toBe(404);
+    });
   });
 });

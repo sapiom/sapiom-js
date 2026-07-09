@@ -22,7 +22,7 @@ import type {
   SessionSummary,
   WorkflowInfo,
 } from "../shared/types.js";
-import { SessionNotReadyError, type SessionManager } from "../core/session-manager.js";
+import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
 const createSessionSchema = z.object({
@@ -281,7 +281,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith("Unknown session")) {
+      if (err instanceof UnknownSessionError) {
         res.status(404).json({ error: err.message });
         return;
       }

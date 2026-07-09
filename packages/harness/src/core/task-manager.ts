@@ -33,6 +33,7 @@ import {
 } from "../shared/types.js";
 import type { LaunchOptsBuilder } from "./session-manager.js";
 import { parseTaskStreamLine } from "./task-stream.js";
+import { AdapterNotFoundError } from "./errors.js";
 
 /** Rolling status-line window kept per task — enough for the activity view's
  *  recent-history list without unbounded growth on a chatty run. */
@@ -190,7 +191,7 @@ export class TaskManager {
    */
   async run(req: RunTaskRequest): Promise<BackgroundTask> {
     const adapter = this.adapters[req.harness];
-    if (!adapter) throw new Error(`No adapter registered for harness "${req.harness}"`);
+    if (!adapter) throw new AdapterNotFoundError(req.harness);
     if (!adapter.launchTask) throw new TaskNotSupportedError(req.harness, req.label);
 
     const reqWorkflowPath = req.workflowPath ?? null;
