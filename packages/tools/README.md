@@ -105,6 +105,19 @@ const { downloadUrl } = await fileStorage.getDownloadUrl(
 );
 ```
 
+## Usage analytics
+
+The SDK can emit anonymous usage analytics — one `capability.call` event per
+capability request, carrying the capability name, HTTP status, duration, and
+request size (never request or response bodies). Events describe calls to
+Sapiom's own API only; nothing is captured about any third-party traffic.
+
+By default nothing is sent anywhere: the emitter (see
+[`@sapiom/analytics-core`](https://github.com/sapiom/sapiom-js/tree/main/packages/analytics-core))
+is a no-op unless a collector endpoint is configured. Delivery is batched in the background and can
+never throw, block, or slow a capability call. Opt out any time with
+`SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
+
 ## License
 
 MIT

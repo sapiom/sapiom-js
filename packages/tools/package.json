@@ -81,6 +81,9 @@
     "LICENSE",
     "CHANGELOG.md"
   ],
+  "dependencies": {
+    "@sapiom/analytics-core": "workspace:^"
+  },
   "scripts": {
     "build": "npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",

@@ -17,7 +17,17 @@
  * router / standalone cases. Capability method signatures deliberately have no
  * attribution argument: that absence keeps LLM-authored step code from setting
  * (and getting wrong) context it doesn't own.
+ *
+ * Being the single HTTP choke point also makes this the (one) instrumentation
+ * seam: every call enqueues a `capability.call` usage event — synchronously,
+ * never awaited, dark by default. See `./analytics.ts`.
  */
+import {
+  CAPABILITY_CALL_EVENT,
+  analyticsFor,
+  capabilityCallData,
+  type AnalyticsHolder,
+} from "./analytics.js";
 
 /**
  * Per-request attribution recorded with the gateway transaction. Every field is
@@ -112,6 +122,12 @@ export class Transport {
    * which injects `SAPIOM_CAPABILITY_RESUME_TOKEN` — keeps working unchanged.
    */
   readonly resumeToken: string | undefined;
+  /**
+   * Lazily-created usage-analytics emitter (see `./analytics.ts`). Not readonly:
+   * `withAttribution` re-points the derived transport at ITS holder so one client
+   * keeps one emitter no matter how many attributed views are derived from it.
+   */
+  private analyticsHolder: AnalyticsHolder = {};
 
   constructor(config: TransportConfig = {}) {
     this.apiKey = config.apiKey ?? process.env.SAPIOM_API_KEY ?? undefined;
@@ -130,12 +146,14 @@ export class Transport {
    * step-authoring code reaches for.
    */
   withAttribution(attribution: Attribution): Transport {
-    return new Transport({
+    const derived = new Transport({
       apiKey: this.apiKey,
       fetch: this.fetchImpl,
       attribution: { ...this.attribution, ...attribution },
       resumeToken: this.resumeToken,
     });
+    derived.analyticsHolder = this.analyticsHolder;
+    return derived;
   }
 
   /**
@@ -159,14 +177,56 @@ export class Transport {
           "or run inside a Sapiom workflow (the engine injects SAPIOM_API_KEY).",
       );
     }
-    return this.fetchImpl(url, {
-      ...init,
-      headers: {
-        [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
-        ...attributionToHeaders(this.attribution),
-        ...(init.headers ?? {}),
-      },
-    });
+    const startedAt = Date.now();
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        ...init,
+        headers: {
+          [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
+          ...attributionToHeaders(this.attribution),
+          ...(init.headers ?? {}),
+        },
+      });
+    } catch (error) {
+      this.trackCapabilityCall(url, init, startedAt, undefined, error);
+      throw error;
+    }
+    this.trackCapabilityCall(url, init, startedAt, response);
+    return response;
+  }
+
+  /**
+   * Enqueue ONE `capability.call` usage event for a finished (or failed) HTTP
+   * call. Synchronous — nothing on the call path is awaited — and never throws;
+   * a silent no-op unless a collector endpoint is configured (see `./analytics.ts`).
+   * `request()` funnels through `fetch()`, so every capability call is counted
+   * exactly once.
+   */
+  private trackCapabilityCall(
+    url: string,
+    init: RequestInit,
+    startedAt: number,
+    response?: Response,
+    error?: unknown,
+  ): void {
+    try {
+      analyticsFor(this.analyticsHolder, this.apiKey).track(
+        CAPABILITY_CALL_EVENT,
+        capabilityCallData({
+          url,
+          method: init.method,
+          requestBody: init.body,
+          durationMs: Date.now() - startedAt,
+          status: response?.status,
+          ok: response?.ok ?? false,
+          error,
+          attribution: this.attribution,
+        }),
+      );
+    } catch {
+      // Usage analytics must never affect a capability call.
+    }
   }
 
   /** Authenticated JSON request — parses the body and throws on a non-2xx status. */
