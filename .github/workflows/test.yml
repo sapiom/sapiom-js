@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+# Minimal token scope: these jobs only read the checked-out code.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

@@ -45,6 +45,26 @@ export interface SkillDetail extends SkillMeta {
 /** Stable slug: only letters, digits, and hyphens/underscores. */
 const SAFE_SLUG = /^[a-zA-Z0-9_-]+$/;
 
+/**
+ * Build `<root>/<slug>/SKILL.md` and return it ONLY if the resolved path stays
+ * inside `root`. Two independent barriers against path traversal: (1) callers
+ * validate the slug with SAFE_SLUG, and (2) this containment check on the
+ * fully-resolved path — a defense-in-depth barrier that also makes the
+ * no-traversal guarantee legible to static analysis (the resolved child must
+ * sit under the resolved root + separator). Returns null if containment fails.
+ */
+function resolveSkillFileWithin(root: string, slug: string): string | null {
+  const resolvedRoot = path.resolve(root);
+  const candidate = path.resolve(resolvedRoot, slug, "SKILL.md");
+  if (
+    candidate !== path.join(resolvedRoot, slug, "SKILL.md") ||
+    !candidate.startsWith(resolvedRoot + path.sep)
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
 /** Parse the `---\n...\n---` YAML frontmatter block (simple key: value only). */
 function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
   const meta: Record<string, string> = {};
@@ -224,14 +244,17 @@ export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
 
     try {
       // O(1) resolution: the id is the directory name, so build the candidate
-      // paths directly. User root first (user skills win on id collision).
-      const userRoot = options.userSkillsRoot ?? null;
-      const userSkillFile = userRoot
-        ? path.join(userRoot, id, "SKILL.md")
-        : path.join(os.homedir(), ".claude", "skills", id, "SKILL.md");
+      // paths directly through the containment barrier. User root first (user
+      // skills win on id collision).
+      const userRoot =
+        options.userSkillsRoot ??
+        path.join(os.homedir(), ".claude", "skills");
+      const userSkillFile = resolveSkillFileWithin(userRoot, id);
 
       // Try user skill first; fall through to package skills on null result.
-      let found = await readSkillFile(userSkillFile, id, "user");
+      let found = userSkillFile
+        ? await readSkillFile(userSkillFile, id, "user")
+        : null;
 
       if (!found) {
         // Package skills: resolve the node_modules root and try each @sapiom
@@ -248,8 +271,13 @@ export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
           pkgDirs = [];
         }
         for (const pkg of pkgDirs) {
-          const candidate = path.join(sapiomDir, pkg, "skills", id, "SKILL.md");
-          const parsed = await readSkillFile(candidate, id, "package");
+          const candidate = resolveSkillFileWithin(
+            path.join(sapiomDir, pkg, "skills"),
+            id,
+          );
+          const parsed = candidate
+            ? await readSkillFile(candidate, id, "package")
+            : null;
           if (parsed) {
             found = parsed;
             break;
