@@ -13,6 +13,9 @@
  * No real harness server is started in any of these tests.
  */
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { Command } from 'commander';
 
@@ -132,9 +135,6 @@ describe('resolveHarnessBin — injectable resolver', () => {
   });
 
   it('throws HARNESS_BIN_NOT_FOUND when package.json has no bin field', () => {
-    const { writeFileSync, mkdtempSync } = require('node:fs') as typeof import('node:fs');
-    const os = require('node:os') as typeof import('node:os');
-    const path = require('node:path') as typeof import('node:path');
 
     const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sapiom-dev-test-'));
     const pkgPath = path.join(tmpDir, 'package.json');
@@ -147,9 +147,6 @@ describe('resolveHarnessBin — injectable resolver', () => {
   });
 
   it('throws HARNESS_BIN_NOT_FOUND when bin file does not exist on disk', () => {
-    const { writeFileSync, mkdtempSync } = require('node:fs') as typeof import('node:fs');
-    const os = require('node:os') as typeof import('node:os');
-    const path = require('node:path') as typeof import('node:path');
 
     const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sapiom-dev-test-'));
     const pkgPath = path.join(tmpDir, 'package.json');
@@ -238,14 +235,11 @@ describe('runDev — spawn behaviour', () => {
 
   // A resolver that points at a real (fabricated) bin path so resolveHarnessBin passes.
   function makeOkResolver(): HarnessResolver {
-    const { writeFileSync, mkdtempSync } = require('node:fs') as typeof import('node:fs');
-    const os = require('node:os') as typeof import('node:os');
-    const nodePath = require('node:path') as typeof import('node:path');
 
-    const tmpDir = mkdtempSync(nodePath.join(os.tmpdir(), 'sapiom-dev-test-'));
-    const binPath = nodePath.join(tmpDir, 'bin.js');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sapiom-dev-test-'));
+    const binPath = path.join(tmpDir, 'bin.js');
     writeFileSync(binPath, '');
-    const pkgPath = nodePath.join(tmpDir, 'package.json');
+    const pkgPath = path.join(tmpDir, 'package.json');
     writeFileSync(pkgPath, JSON.stringify({ bin: { 'sapiom-harness': './bin.js' } }));
     return { resolvePackageJson: () => pkgPath };
   }
