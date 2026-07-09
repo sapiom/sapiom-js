@@ -35,11 +35,11 @@ describe("orchestrations.launch — dispatch handle", () => {
     });
   });
 
-  it("POSTs to /agents/v1/:slug/executions (by slug)", async () => {
+  it("POSTs to /agents/v1/definitions/:slug/executions (by slug)", async () => {
     const capture: { url?: string } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(capture) });
     await sapiom.agents.launch({ definition: "enrich-lead" });
-    expect(capture.url).toContain("/agents/v1/enrich-lead/executions");
+    expect(capture.url).toContain("/agents/v1/definitions/enrich-lead/executions");
   });
 
   it("AGENTS_RESULT_SIGNAL is the capability-stable terminal signal", () => {

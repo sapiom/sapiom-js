@@ -2,9 +2,10 @@
  * schedule — manage scheduled triggers for a server-side agent definition.
  *
  * Networked operations: each takes a GatewayClient. The backend routes sit under the
- * `/v1/workflows` base the client already targets: create/list nest under the definition slug
- * (`/:slug/triggers`); detail/cancel are top-level (`/triggers/:id`); cron preview is stateless
- * (`/triggers/preview-cron`). "Schedule" is the SDK word for the engine's "trigger".
+ * `/v1/workflows` base the client already targets: create/list nest under the definition
+ * (`/definitions/:slug/triggers`) so the slug is never a leading path segment; detail/cancel are
+ * top-level (`/triggers/:id`); cron preview is stateless (`/triggers/preview-cron`). "Schedule" is
+ * the SDK word for the engine's "trigger".
  */
 import { GatewayClient } from './client.js';
 
@@ -84,13 +85,13 @@ export interface CronPreview {
 /** Create a schedule (cron or one-off) for the agent. Returns the schedule detail. */
 export async function createSchedule(opts: CreateScheduleOptions, client: GatewayClient): Promise<ScheduleDetail> {
   const { definition, ...body } = opts;
-  return client.post<ScheduleDetail>(`/${encodeURIComponent(definition)}/triggers`, body);
+  return client.post<ScheduleDetail>(`/definitions/${encodeURIComponent(definition)}/triggers`, body);
 }
 
 /** List an agent's schedules (newest first), optionally filtered by status. */
 export async function listSchedules(opts: ListSchedulesOptions, client: GatewayClient): Promise<ScheduleSummary[]> {
   const { definition, ...filters } = opts;
-  return client.get<ScheduleSummary[]>(`/${encodeURIComponent(definition)}/triggers${toQuery(filters)}`);
+  return client.get<ScheduleSummary[]>(`/definitions/${encodeURIComponent(definition)}/triggers${toQuery(filters)}`);
 }
 
 /** Get one schedule: config + next fire + recent fire ledger. */

@@ -183,7 +183,7 @@ interface ExecutionDoc {
  */
 async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl: string): Promise<RunHandle> {
   const res = await transport.request<{ id: string }>(
-    `${baseUrl}/agents/v1/${encodeURIComponent(spec.definition)}/triggers`,
+    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/triggers`,
     {
       method: "POST",
       body: JSON.stringify({ kind: "schedule_once", at: spec.at, input: spec.input ?? {} }),
@@ -212,7 +212,7 @@ export async function launch(
     return launchScheduled(spec, transport, baseUrl);
   }
   const res = await transport.request<StartResponse>(
-    `${baseUrl}/agents/v1/${encodeURIComponent(spec.definition)}/executions`,
+    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/executions`,
     {
       method: "POST",
       body: JSON.stringify({

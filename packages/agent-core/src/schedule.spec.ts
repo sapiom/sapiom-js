@@ -31,7 +31,7 @@ function fakeClient(): { client: GatewayClient; calls: Call[] } {
 }
 
 describe('schedule core fns', () => {
-  it('createSchedule POSTs /:slug/triggers with the body (definition stripped)', async () => {
+  it('createSchedule POSTs /definitions/:slug/triggers with the body (definition stripped)', async () => {
     const { client, calls } = fakeClient();
     await createSchedule(
       { definition: 'enrich-lead', kind: 'schedule_cron', cron: '0 9 * * *', timezone: 'UTC' },
@@ -39,21 +39,21 @@ describe('schedule core fns', () => {
     );
     expect(calls[0]).toEqual({
       method: 'POST',
-      path: '/enrich-lead/triggers',
+      path: '/definitions/enrich-lead/triggers',
       body: { kind: 'schedule_cron', cron: '0 9 * * *', timezone: 'UTC' },
     });
   });
 
-  it('listSchedules GETs /:slug/triggers with a query string', async () => {
+  it('listSchedules GETs /definitions/:slug/triggers with a query string', async () => {
     const { client, calls } = fakeClient();
     await listSchedules({ definition: 'enrich-lead', status: 'active', limit: 10 }, client);
-    expect(calls[0]).toEqual({ method: 'GET', path: '/enrich-lead/triggers?status=active&limit=10' });
+    expect(calls[0]).toEqual({ method: 'GET', path: '/definitions/enrich-lead/triggers?status=active&limit=10' });
   });
 
   it('listSchedules omits an empty query', async () => {
     const { client, calls } = fakeClient();
     await listSchedules({ definition: 'enrich-lead' }, client);
-    expect(calls[0].path).toBe('/enrich-lead/triggers');
+    expect(calls[0].path).toBe('/definitions/enrich-lead/triggers');
   });
 
   it('getSchedule GETs /triggers/:id', async () => {

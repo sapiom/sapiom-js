@@ -5,16 +5,17 @@
  *   import { schedules } from "@sapiom/tools";
  *   await schedules.create({ definition: "enrich-lead", kind: "schedule_cron", cron: "0 9 * * 1-5" });
  *
- * "Schedule" is the SDK word for the engine's "trigger". Routes sit under `/v1/workflows`:
- * create/list nest under the definition slug; detail/cancel are top-level under `/triggers`.
+ * "Schedule" is the SDK word for the engine's "trigger". Routes sit under the agents gateway
+ * (`/agents/v1`, same front door as {@link ../agents/index.js}): create/list nest under
+ * `definitions/:slug/triggers` (slug never a leading segment); detail/cancel are top-level under
+ * `/agents/v1/triggers`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
-import { resolveServiceUrl } from "../_client/service-url.js";
 
-const DEFAULT_BASE_URL = resolveServiceUrl(
-  "workflows",
-  process.env.SAPIOM_WORKFLOWS_URL,
-);
+const DEFAULT_BASE_URL =
+  process.env.SAPIOM_AGENTS_URL ??
+  process.env.SAPIOM_TOOLS_BASE ??
+  "https://tools.sapiom.ai";
 
 export type ScheduleKind = "schedule_cron" | "schedule_once";
 export type ScheduleStatus = "active" | "paused" | "completed" | "disabled";
@@ -81,7 +82,7 @@ export async function create(
 ): Promise<ScheduleDetail> {
   const { definition, ...body } = spec;
   return transport.request<ScheduleDetail>(
-    `${baseUrl}/v1/workflows/${encodeURIComponent(definition)}/triggers`,
+    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definition)}/triggers`,
     { method: "POST", body: JSON.stringify(body) },
   );
 }
@@ -94,7 +95,7 @@ export async function list(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ScheduleSummary[]> {
   return transport.request<ScheduleSummary[]>(
-    `${baseUrl}/v1/workflows/${encodeURIComponent(definition)}/triggers${toQuery(opts)}`,
+    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definition)}/triggers${toQuery(opts)}`,
   );
 }
 
@@ -105,7 +106,7 @@ export async function get(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ScheduleDetail> {
   return transport.request<ScheduleDetail>(
-    `${baseUrl}/v1/workflows/triggers/${encodeURIComponent(scheduleId)}`,
+    `${baseUrl}/agents/v1/triggers/${encodeURIComponent(scheduleId)}`,
   );
 }
 
@@ -116,7 +117,7 @@ export async function cancel(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<{ id: string; status: ScheduleStatus }> {
   return transport.request<{ id: string; status: ScheduleStatus }>(
-    `${baseUrl}/v1/workflows/triggers/${encodeURIComponent(scheduleId)}`,
+    `${baseUrl}/agents/v1/triggers/${encodeURIComponent(scheduleId)}`,
     { method: "DELETE" },
   );
 }
