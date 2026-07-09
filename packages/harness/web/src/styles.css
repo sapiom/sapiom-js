@@ -2298,11 +2298,14 @@ input {
   color: var(--text-faint);
 }
 
-/* Rail container + tab switcher (Workspace | Skills) ------------------- */
+/* Right pane: Canvas | Skills segmented switch -------------------------- */
 
-/* The rail container is the single grid cell that holds both the tab strip
-   and whichever rail pane (WorkflowsRail or SkillsPanel) is active. */
-.rail-container {
+/* The right pane hosts both the canvas and the skills panel. A segmented
+   control at the top (matching the harness-picker pattern used in the
+   new-session modal) switches between them. The canvas is always mounted
+   (display:none via .is-hidden) so a running Visualize enrichment task is
+   never disturbed when the user flips to Skills. */
+.right-pane {
   display: flex;
   flex-direction: column;
   background: var(--bg-1);
@@ -2311,40 +2314,74 @@ input {
   overflow: hidden;
 }
 
-.rail-tabs {
+/* Segmented control row — mirrors the harness-picker container pattern. */
+.right-pane-tabs {
   display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--border);
+  align-items: center;
+  gap: 3px;
   flex-shrink: 0;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
 }
 
-.rail-tab {
-  flex: 1;
-  padding: 6px 4px;
-  font-size: 11px;
+/* Individual segment buttons — matches the harness-option pill style from
+   the new-session modal and the install-mcp-tab pattern (small, rounded,
+   fills bg-1 / subtle shadow when active). */
+.right-pane-tab {
+  padding: 3px 10px;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--text-faint);
   background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition:
+    background-color var(--transition-fast),
     color var(--transition-fast),
     border-color var(--transition-fast);
 }
 
-.rail-tab:hover {
+.right-pane-tab:hover {
   color: var(--text-dim);
+  background: var(--bg-hover);
 }
 
-.rail-tab.is-active {
+.right-pane-tab.is-active {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  background: var(--bg-1);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
 }
 
-.rail-tab:focus-visible {
+.right-pane-tab:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 2px var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Panel slot — fills the remaining height below the segmented switch. */
+.right-pane-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Canvas keep-alive: hidden via display:none rather than unmounting so
+   React state (probing, reloadKey, task-tracking) survives a tab flip. */
+.right-pane-panel.is-hidden {
+  display: none;
+}
+
+/* Both child panels (canvas-pane, rail-skills) must fill the slot fully.
+   canvas-pane and rail-skills both use display:flex/flex-direction:column
+   already; this makes them stretch to occupy the available height. */
+.right-pane-panel > .canvas-pane,
+.right-pane-panel > .rail-skills {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Skills panel ---------------------------------------------------------- */

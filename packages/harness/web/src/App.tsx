@@ -3,9 +3,10 @@
  *
  * Layout: workflows rail (left) | docked action strip (anchored to the
  * selected workflow's row) | session tab strip + terminal (center) |
- * canvas/preview pane (right). The strip carries the selected workflow's
- * full action set; the canvas gets a slim identity header for whichever
- * workflow is bound to the active session.
+ * canvas/skills right pane. The strip carries the selected workflow's
+ * full action set; the right pane has a segmented switch (Canvas | Skills)
+ * at the top — canvas stays mounted behind CSS when Skills is active so a
+ * running Visualize enrichment is never disturbed by a tab flip.
  */
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
@@ -30,7 +31,7 @@ import { resolveMacroUrl } from "./lib/macro-gating";
 import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 
-type RailTab = "workspace" | "skills";
+type RightTab = "canvas" | "skills";
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
@@ -41,7 +42,7 @@ export const App = (): JSX.Element => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
-  const [railTab, setRailTab] = useState<RailTab>("workspace");
+  const [rightTab, setRightTab] = useState<RightTab>("canvas");
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
@@ -158,50 +159,17 @@ export const App = (): JSX.Element => {
           gridTemplateColumns: `minmax(${RAIL_MIN}px, ${widths.rail}px) 32px minmax(360px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
         }}
       >
-        {/* Left rail with tab switcher: Workspace | Skills */}
-        <div className="rail-container">
-          <div className="rail-tabs" role="tablist" aria-label="Rail panels">
-            <button
-              role="tab"
-              aria-selected={railTab === "workspace"}
-              className={"rail-tab" + (railTab === "workspace" ? " is-active" : "")}
-              onClick={() => setRailTab("workspace")}
-              data-testid="rail-tab-workspace"
-            >
-              Workspace
-            </button>
-            <button
-              role="tab"
-              aria-selected={railTab === "skills"}
-              className={"rail-tab" + (railTab === "skills" ? " is-active" : "")}
-              onClick={() => setRailTab("skills")}
-              data-testid="rail-tab-skills"
-            >
-              Skills
-            </button>
-          </div>
-
-          {railTab === "workspace" ? (
-            <WorkflowsRail
-              workflows={state.workflows}
-              sessions={state.sessions}
-              activeSessionId={harness.activeSessionId}
-              selectedPath={harness.selectedWorkflowPath}
-              onSelect={handleSelectWorkflow}
-              onSelectedRowElement={setSelectedRowEl}
-              onConnect={async (path) => {
-                await harness.connectWorkflow(path);
-              }}
-            />
-          ) : (
-            <SkillsPanel
-              session={activeSession}
-              onInjectInput={harness.injectInput}
-              listSkills={harness.api.listSkills.bind(harness.api)}
-              getSkill={harness.api.getSkill.bind(harness.api)}
-            />
-          )}
-        </div>
+        <WorkflowsRail
+          workflows={state.workflows}
+          sessions={state.sessions}
+          activeSessionId={harness.activeSessionId}
+          selectedPath={harness.selectedWorkflowPath}
+          onSelect={handleSelectWorkflow}
+          onSelectedRowElement={setSelectedRowEl}
+          onConnect={async (path) => {
+            await harness.connectWorkflow(path);
+          }}
+        />
 
         <div className="workflow-action-strip-col" ref={setStripColEl}>
           {selectedWorkflow && rowAnchor && (
@@ -294,15 +262,55 @@ export const App = (): JSX.Element => {
           data-testid="resize-handle-canvas"
         />
 
-        <CanvasPane
-          sessionId={harness.activeSessionId}
-          lastMessage={harness.lastMessage}
-          boundWorkflow={boundWorkflow}
-          activeSessionId={harness.activeSessionId}
-          macros={state.macros}
-          tasks={harness.tasks}
-          onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
-        />
+        {/* Right pane: Canvas | Skills segmented switch + panels */}
+        <div className="right-pane">
+          <div className="right-pane-tabs" role="tablist" aria-label="Right pane">
+            <button
+              role="tab"
+              aria-selected={rightTab === "canvas"}
+              className={"right-pane-tab" + (rightTab === "canvas" ? " is-active" : "")}
+              onClick={() => setRightTab("canvas")}
+              data-testid="right-tab-canvas"
+            >
+              Canvas
+            </button>
+            <button
+              role="tab"
+              aria-selected={rightTab === "skills"}
+              className={"right-pane-tab" + (rightTab === "skills" ? " is-active" : "")}
+              onClick={() => setRightTab("skills")}
+              data-testid="right-tab-skills"
+            >
+              Skills
+            </button>
+          </div>
+
+          {/* Canvas: always mounted so a running Visualize enrichment is never
+              disturbed when the user flips to Skills — hidden via CSS only. */}
+          <div className={"right-pane-panel" + (rightTab === "canvas" ? "" : " is-hidden")} data-testid="right-panel-canvas">
+            <CanvasPane
+              sessionId={harness.activeSessionId}
+              lastMessage={harness.lastMessage}
+              boundWorkflow={boundWorkflow}
+              activeSessionId={harness.activeSessionId}
+              macros={state.macros}
+              tasks={harness.tasks}
+              onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
+            />
+          </div>
+
+          {/* Skills: lazy-mount; once mounted stays alive for the session. */}
+          {rightTab === "skills" && (
+            <div className="right-pane-panel" data-testid="right-panel-skills">
+              <SkillsPanel
+                session={activeSession}
+                onInjectInput={harness.injectInput}
+                listSkills={harness.api.listSkills.bind(harness.api)}
+                getSkill={harness.api.getSkill.bind(harness.api)}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {paletteOpen && (

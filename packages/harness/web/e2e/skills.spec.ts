@@ -1,13 +1,21 @@
 /**
  * Skills panel Playwright smoke tests — mock-mode UI (VITE_MOCK=1).
  *
+ * The skills panel lives in the RIGHT pane alongside the canvas, behind a
+ * segmented switch: Canvas (default) | Skills. The canvas is always mounted
+ * (CSS display:none when hidden) so a running Visualize enrichment is never
+ * disturbed by a tab flip.
+ *
  * Coverage:
- *   - Rail tab switcher shows Workspace / Skills tabs
+ *   - Segmented switch renders Canvas / Skills tabs, Canvas is default
+ *   - Flipping to Skills shows the skills panel; canvas pane is hidden via CSS
+ *   - Switching back to Canvas restores the canvas visible, skills panel gone
  *   - Skills panel renders skill cards from the mock API
  *   - Clicking a card shows the detail view with rendered markdown
  *   - "Use skill" button injects a prompt into the active session
  *   - "Use skill" is disabled with a reason when no ready session exists
  *   - Install-MCP shows the right per-agent instructions for the active session's harness
+ *   - Canvas keep-alive: a running Visualize survives a tab round-trip
  *   - WelcomePanel coexistence: skills tab renders on fresh state too
  */
 import { expect, test } from "@playwright/test";
@@ -26,41 +34,153 @@ const publish = (page: import("@playwright/test").Page, message: unknown): Promi
   }, message);
 
 // ---------------------------------------------------------------------------
-// Rail tab switcher
+// Right-pane segmented switch
 // ---------------------------------------------------------------------------
 
-test.describe("rail tab switcher", () => {
+test.describe("right-pane segmented switch", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
-  test("renders Workspace and Skills tabs", async ({ page }) => {
-    await expect(page.getByTestId("rail-tab-workspace")).toBeVisible();
-    await expect(page.getByTestId("rail-tab-skills")).toBeVisible();
+  test("renders Canvas and Skills tabs in the right pane", async ({ page }) => {
+    await expect(page.getByTestId("right-tab-canvas")).toBeVisible();
+    await expect(page.getByTestId("right-tab-skills")).toBeVisible();
   });
 
-  test("Workspace tab is active by default", async ({ page }) => {
-    await expect(page.getByTestId("rail-tab-workspace")).toHaveClass(/is-active/);
-    await expect(page.getByTestId("rail-tab-skills")).not.toHaveClass(/is-active/);
+  test("Canvas tab is active by default", async ({ page }) => {
+    await expect(page.getByTestId("right-tab-canvas")).toHaveClass(/is-active/);
+    await expect(page.getByTestId("right-tab-skills")).not.toHaveClass(/is-active/);
   });
 
-  test("clicking Skills tab shows the skills panel, not the workflows rail", async ({ page }) => {
-    await page.getByTestId("rail-tab-skills").click();
+  test("left rail (WorkflowsRail) is always visible regardless of right-pane tab", async ({ page }) => {
+    // Left rail must be present on Canvas tab.
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    // Left rail must remain visible after switching to Skills.
+    await page.getByTestId("right-tab-skills").click();
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    // And after switching back.
+    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/right-pane-tabs.png", fullPage: true });
+  });
+
+  test("clicking Skills tab shows the skills panel inside the right pane", async ({ page }) => {
+    await page.getByTestId("right-tab-skills").click();
+    await expect(page.getByTestId("right-panel-skills")).toBeVisible();
     await expect(page.getByTestId("skills-panel")).toBeVisible();
-    // WorkflowsRail (.rail-workflows) must not be in the DOM while Skills is active.
-    await expect(page.locator(".rail-workflows")).toHaveCount(0);
 
     await page.screenshot({ path: "web/e2e/screenshots/skills-panel.png", fullPage: true });
   });
 
-  test("switching back to Workspace restores the workflows rail", async ({ page }) => {
-    await page.getByTestId("rail-tab-skills").click();
+  test("canvas panel is in the DOM but hidden via CSS when Skills tab is active", async ({ page }) => {
+    await page.getByTestId("right-tab-skills").click();
+    // The canvas panel element stays mounted (keep-alive), just not displayed.
+    await expect(page.getByTestId("right-panel-canvas")).toBeAttached();
+    // Must not be visually visible while Skills is active.
+    await expect(page.getByTestId("right-panel-canvas")).not.toBeVisible();
+  });
+
+  test("switching back to Canvas tab restores the canvas and removes the skills panel", async ({ page }) => {
+    await page.getByTestId("right-tab-skills").click();
     await expect(page.getByTestId("skills-panel")).toBeVisible();
 
-    await page.getByTestId("rail-tab-workspace").click();
+    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.getByTestId("right-panel-canvas")).toBeVisible();
+    // Skills panel is conditionally rendered — no longer in the DOM.
+    await expect(page.getByTestId("right-panel-skills")).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Canvas keep-alive: running Visualize survives a tab round-trip
+// ---------------------------------------------------------------------------
+
+test.describe("canvas keep-alive across tab flips", () => {
+  const baseTask = {
+    id: "task-keepalive",
+    macroId: "visualize",
+    label: "Visualize",
+    harnessSessionId: "sess-boot",
+    cwd: "/Users/demo/acme-app",
+    workflowPath: "/Users/demo/acme-app/leasing",
+    startedAt: new Date().toISOString(),
+    endedAt: null as string | null,
+    exitCode: null as number | null,
+    statusLines: [] as string[],
+    resultText: null as string | null,
+    errorTail: null as string | null,
+  };
+
+  // Publish a task.status bus message (mirrors the smoke.spec.ts helper pattern).
+  const publishTask = (page: import("@playwright/test").Page, task: unknown): Promise<void> =>
+    page.evaluate((t) => {
+      (window as unknown as TestHarness).__HARNESS_TEST__.publish({ type: "task.status", task: t });
+    }, task);
+
+  test("a running Visualize task survives a Skills tab round-trip and completes correctly", async ({ page }) => {
+    await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await expect(page.getByTestId("skills-panel")).toHaveCount(0);
+
+    // Start a running Visualize task — canvas shows the activity state.
+    await publishTask(page, { ...baseTask, status: "running" });
+    const activity = page.getByTestId("canvas-task-activity");
+    await expect(activity).toBeVisible();
+    await expect(activity).toContainText("Visualize is running");
+
+    // Flip to Skills — canvas stays mounted (CSS hidden), task is still running.
+    await page.getByTestId("right-tab-skills").click();
+    await expect(page.getByTestId("skills-panel")).toBeVisible();
+    // Canvas DOM is present, just hidden — the task hasn't been destroyed.
+    await expect(page.getByTestId("right-panel-canvas")).toBeAttached();
+
+    // Flip back to Canvas — activity state must still be showing.
+    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.getByTestId("right-panel-canvas")).toBeVisible();
+    await expect(page.getByTestId("canvas-task-activity")).toBeVisible();
+    await expect(page.getByTestId("canvas-task-activity")).toContainText("Visualize is running");
+
+    // Task completes — activity clears; a canvas.reload swaps in the iframe.
+    await publishTask(page, { ...baseTask, status: "completed", endedAt: new Date().toISOString(), exitCode: 0 });
+    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
+
+    await page.evaluate(() => {
+      (window as unknown as TestHarness).__HARNESS_TEST__.publish({
+        type: "canvas.reload",
+        harnessSessionId: "sess-boot",
+      });
+    });
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+
+    await page.screenshot({ path: "web/e2e/screenshots/canvas-keepalive-tab-flip.png", fullPage: true });
+  });
+
+  test("status lines streamed while on the Skills tab are visible once you switch back", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    await publishTask(page, { ...baseTask, status: "running", statusLines: ["Started"] });
+    await expect(page.getByTestId("canvas-task-activity")).toBeVisible();
+
+    // Flip to Skills while task is running.
+    await page.getByTestId("right-tab-skills").click();
+    await expect(page.getByTestId("skills-panel")).toBeVisible();
+
+    // Publish more status lines while on the Skills tab (canvas is CSS-hidden).
+    await publishTask(page, {
+      ...baseTask,
+      status: "running",
+      statusLines: ["Started", "Processing intake.ts", "Writing output"],
+    });
+
+    // Flip back — latest lines must all be visible.
+    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.getByTestId("canvas-task-lines")).toContainText("Writing output");
+
+    await page.screenshot({ path: "web/e2e/screenshots/canvas-keepalive-statuslines.png", fullPage: true });
   });
 });
 
@@ -72,7 +192,7 @@ test.describe("skills panel — list view", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("rail-tab-skills").click();
+    await page.getByTestId("right-tab-skills").click();
     await expect(page.getByTestId("skills-panel")).toBeVisible();
   });
 
@@ -100,7 +220,7 @@ test.describe("skills panel — detail view", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("rail-tab-skills").click();
+    await page.getByTestId("right-tab-skills").click();
     await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 5_000 });
   });
 
@@ -186,7 +306,7 @@ test.describe("Install Sapiom MCP modal", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("rail-tab-skills").click();
+    await page.getByTestId("right-tab-skills").click();
     await expect(page.getByTestId("install-mcp-trigger")).toBeVisible({ timeout: 5_000 });
   });
 
@@ -206,7 +326,7 @@ test.describe("Install Sapiom MCP modal", () => {
     await expect(instructions).toContainText("npx -y @sapiom/mcp");
   });
 
-  test("copy button shows 'Copied!' feedback after clicking", async ({ page }) => {
+  test("copy button shows 'Copy instructions' text", async ({ page }) => {
     await page.getByTestId("install-mcp-trigger").click();
     const copyBtn = page.getByTestId("install-mcp-copy");
     await expect(copyBtn).toBeVisible();
@@ -236,7 +356,7 @@ test.describe("Install Sapiom MCP modal", () => {
     // Navigate to fresh state — no sessions, so session is null and picker shows.
     await page.goto("/?mockState=fresh");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("rail-tab-skills").click();
+    await page.getByTestId("right-tab-skills").click();
     await page.getByTestId("install-mcp-trigger").click();
 
     // Picker renders two tabs: Claude Code, Codex.
@@ -250,29 +370,39 @@ test.describe("Install Sapiom MCP modal", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("skills panel + WelcomePanel coexistence", () => {
-  test("switching to Skills on fresh state renders the panel, not a blank rail", async ({ page }) => {
+  test("switching to Skills on fresh state renders the panel, not a blank right pane", async ({ page }) => {
     await page.goto("/?mockState=fresh");
     // Wait for the welcome panel itself to confirm we're in first-run state.
     await expect(page.getByTestId("welcome-panel")).toBeVisible();
 
+    // The WorkflowsRail remains visible (left rail is untouched).
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
     // Clicking the Skills tab works without crashing.
-    await page.getByTestId("rail-tab-skills").click();
+    await page.getByTestId("right-tab-skills").click();
     await expect(page.getByTestId("skills-panel")).toBeVisible();
 
     // The welcome panel is still in the center pane, unaffected.
     await expect(page.getByTestId("welcome-panel")).toBeVisible();
 
+    // The left rail is still visible.
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
     await page.screenshot({ path: "web/e2e/screenshots/skills-welcome-coexist.png", fullPage: true });
   });
 
-  test("returning to Workspace tab on fresh state still shows the workflows rail", async ({ page }) => {
+  test("returning to Canvas tab on fresh state shows the canvas empty state", async ({ page }) => {
     await page.goto("/?mockState=fresh");
     await expect(page.getByTestId("welcome-panel")).toBeVisible();
 
-    await page.getByTestId("rail-tab-skills").click();
-    await page.getByTestId("rail-tab-workspace").click();
+    await page.getByTestId("right-tab-skills").click();
+    await page.getByTestId("right-tab-canvas").click();
 
-    await expect(page.locator(".rail-workflows")).toBeVisible();
+    // Canvas panel is visible again.
+    await expect(page.getByTestId("right-panel-canvas")).toBeVisible();
+    // Welcome panel in center pane — untouched.
     await expect(page.getByTestId("welcome-panel")).toBeVisible();
+    // Left rail — untouched.
+    await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 });

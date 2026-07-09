@@ -1,5 +1,5 @@
 /**
- * SkillsPanel — left-rail tab showing browsable skills.
+ * SkillsPanel — Skills tab in the right pane alongside the canvas.
  *
  * Skills come from two sources surfaced by GET /api/skills:
  *   - package: shipped with @sapiom/* npm packages
@@ -13,7 +13,7 @@
  *     Disabled with reason when no ready session (mirrors PromptBar's
  *     readiness logic).
  *
- * Install-MCP action (Feature 2):
+ * Install-MCP action:
  *   - Footer button that opens a modal with per-agent instructions from
  *     the adapter registry's installMcpPrompt() text.
  *   - When an active session exists its harness kind determines which
