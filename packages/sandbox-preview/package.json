@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/sandbox-preview",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Client-side flow for deploying a web-app preview to a Sapiom sandbox — provision, upload, deploy to a live URL. Shared by the CLI and MCP packages.",
   "license": "MIT",
   "author": "Sapiom",
