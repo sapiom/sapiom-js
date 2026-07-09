@@ -9,7 +9,7 @@
  *     sdkName: "@sapiom/cli",
  *     sdkVersion: "1.0.0",
  *   });
- *   analytics.track("cli_command", { command: "dev" });
+ *   analytics.track("command.run", { command: "dev" });
  *   await analytics.shutdown();
  *
  * The emitter ships dark: unless an endpoint is explicitly configured

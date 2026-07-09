@@ -53,8 +53,8 @@ describe("mock collector (testing subpath)", () => {
       createAnalytics(baseConfig({ apiKey: "sk-test-123" })),
     );
 
-    analytics.track("capability_call", { capability: "search" });
-    analytics.track("capability_call", { capability: "scrape" });
+    analytics.track("capability.call", { capability: "search" });
+    analytics.track("capability.call", { capability: "scrape" });
     await analytics.flush();
 
     expect(collector.requests).toHaveLength(1);

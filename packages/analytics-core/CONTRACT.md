@@ -37,7 +37,7 @@ telemetry section).
       "session_id": "5e6f7a8b-...",          // producer-defined session
       "event_timestamp": "2026-01-15T10:30:00.000Z", // ISO-8601, client clock
       "source": "ui",                        // ui|mcp|tools|cli|orchestration|langchain|backend
-      "event_type": "prompt_submitted",
+      "event_type": "prompt.submitted",
       "user_id": "usr_123",                  // ONLY when signed in (real account identity)
       "sdk_name": "@sapiom/harness",
       "sdk_version": "0.1.0",
@@ -121,16 +121,52 @@ Client-claimed `user_id` passes through as sent.
    user-supplied tools wrapped by a Sapiom integration) send metadata only —
    names, durations, statuses — never arguments or content.
 
+## Harness & session telemetry conventions
+
+Everything in this section is convention, not enforcement: it all rides
+inside `data`, and the collector validates none of it. The conventions
+exist so independent producers converge on the same shapes and
+cross-producer analysis stays cheap.
+
+**Per-session `seq`.** Producers that manage sessions locally (e.g. the dev
+harness) MAY assign each session's events a monotonic sequence number
+starting at 1, carried as `data.seq`. Within one `session_id`, gaps
+indicate loss and `seq` order is authoritative — when it disagrees with
+`event_timestamp` (a client clock), trust `seq`. It is producer-assigned
+and stored verbatim; the collector never renumbers, and `seq` values from
+different sessions are not comparable.
+
+**Batch context.** `data.context` MAY carry `app_version`, `os`, `arch`,
+and `node`, stamped once per batch by the producer — the conventional
+nesting point for ambient info shown in the
+[request envelope](#request-envelope).
+
+**Session dimensions.** Harness-style producers SHOULD carry these on every
+event so sessions can be joined and sliced across event types:
+
+| field | meaning |
+|---|---|
+| `data.harness_session_id` | the harness's own session |
+| `data.agent_session_id` | the agent session the harness is driving |
+| `data.harness_kind` | which kind of harness emitted the event |
+
+**Canonical event naming.** Event names are dot-separated
+`<noun>.<verb/state>`: `session.start`, `prompt.submitted`,
+`capability.call`, `command.run`. The envelope `source` field disambiguates
+same-named events from different producers — `tool.call` from `mcp` is not
+`tool.call` from `langchain`. This is guidance for producers, not a gate:
+the collector stores `event_type` verbatim either way.
+
 ## Event taxonomy seed (non-exhaustive by design)
 
 | source | event_type examples |
 |---|---|
-| `ui` | `session_started`, `session_ended`, `consent_granted`, `consent_declined`, `prompt_submitted`, `keystrokes_batch`, `button_clicked`, `harness_selected`, `skill_viewed`, `skill_used`, `mcp_install_triggered`, `preview_triggered`, `doctor_check`, `doctor_fix_applied` |
-| `tools` | `capability_call` |
-| `mcp` | `mcp_tool_call` |
-| `cli` | `cli_command`, `first_run_notice_shown`, `telemetry_opt_out` |
-| `orchestration` | `workflow_deploy`, `workflow_run`, `workflow_step` |
-| `langchain` | `model_call_meta`, `tool_call_meta` |
+| `ui` | `session.start`, `session.end`, `consent.granted`, `consent.declined`, `prompt.submitted`, `keystrokes.batch`, `button.click`, `harness.selected`, `skill.viewed`, `skill.used`, `mcp.install_triggered`, `preview.triggered`, `doctor.check`, `doctor.fix_applied` |
+| `tools` | `capability.call` |
+| `mcp` | `tool.call` |
+| `cli` | `command.run`, `notice.shown`, `telemetry.opt_out` |
+| `orchestration` | `workflow.deploy`, `workflow.run`, `step.start`, `step.complete`, `step.error` |
+| `langchain` | `model.call`, `tool.call` |
 
 New event types require no contract change — send them.
 
