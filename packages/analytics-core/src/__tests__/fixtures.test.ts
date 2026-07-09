@@ -200,7 +200,7 @@ describe("contract fixtures", () => {
       },
       anonymousId: "b7e2a3f1-4c5d-4a6b-8e9f-0a1b2c3d4e5f",
       sessionId: "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
-      eventType: "prompt_submitted",
+      eventType: "prompt.submitted",
       data: { prompt: "..." },
       overrides: { environment: "development" },
     });

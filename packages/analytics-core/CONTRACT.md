@@ -35,7 +35,7 @@ telemetry section).
       "event_id": "9f1c7e9e-...",            // uuid v4, client-generated (dedup key)
       "anonymous_id": "b1a2c3d4-...",        // machine UUID — send whenever available
       "session_id": "5e6f7a8b-...",          // producer-defined session
-      "event_timestamp": "2026-01-15T10:30:00.000Z", // ISO-8601, client clock
+      "event_timestamp": "2026-01-15T10:30:00.000Z", // ISO-8601, client clock — data.seq is authoritative for ordering when present
       "source": "ui",                        // ui|mcp|tools|cli|orchestration|langchain|backend
       "event_type": "prompt.submitted",
       "user_id": "usr_123",                  // ONLY when signed in (real account identity)
@@ -134,7 +134,9 @@ starting at 1, carried as `data.seq`. Within one `session_id`, gaps
 indicate loss and `seq` order is authoritative — when it disagrees with
 `event_timestamp` (a client clock), trust `seq`. It is producer-assigned
 and stored verbatim; the collector never renumbers, and `seq` values from
-different sessions are not comparable.
+different sessions are not comparable. If a producer restarts mid-session,
+`seq` resets — consumers should treat a `seq` decrease as a restart
+boundary, not loss.
 
 **Batch context.** `data.context` MAY carry `app_version`, `os`, `arch`,
 and `node`, stamped once per batch by the producer — the conventional
@@ -161,7 +163,7 @@ the collector stores `event_type` verbatim either way.
 
 | source | event_type examples |
 |---|---|
-| `ui` | `session.start`, `session.end`, `consent.granted`, `consent.declined`, `prompt.submitted`, `keystrokes.batch`, `button.click`, `harness.selected`, `skill.viewed`, `skill.used`, `mcp.install_triggered`, `preview.triggered`, `doctor.check`, `doctor.fix_applied` |
+| `ui` | `session.start`, `session.end`, `consent.granted`, `consent.declined`, `prompt.submitted`, `keystrokes.batch`, `button.click`, `harness.selected`, `skill.viewed`, `skill.used`, `mcp.install`, `preview.triggered`, `doctor.check`, `doctor.fix_applied` |
 | `tools` | `capability.call` |
 | `mcp` | `tool.call` |
 | `cli` | `command.run`, `notice.shown`, `telemetry.opt_out` |
