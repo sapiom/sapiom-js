@@ -14,6 +14,7 @@ import type { Sapiom } from '@sapiom/tools';
 
 import { getSandbox } from './config.js';
 import { PreviewOperationError } from './errors.js';
+import { pushLocalDir } from './git-push.js';
 import type { PreviewResult, SandboxConfig } from './types.js';
 
 const RUNNING_TIMEOUT_MS = 120_000;
@@ -36,30 +37,41 @@ export interface PreviewSandboxOptions {
 
 export async function previewSandbox(opts: PreviewSandboxOptions): Promise<PreviewResult> {
   const cfg = getSandbox(opts.dir, opts.name);
-  if (cfg.source.kind !== 'upload') {
-    throw new PreviewOperationError({
-      code: 'UNSUPPORTED_SOURCE',
-      message: `Source kind '${cfg.source.kind}' is not supported yet.`,
-      hint: "Use source.kind 'upload' for now.",
-    });
-  }
   const log = opts.log ?? (() => {});
   const sapiom = createClient({ apiKey: opts.apiKey });
   const baseUrl = opts.servicesBaseUrl;
+  const sub = cfg.source.path ?? '.';
+  const sourceDir = path.resolve(opts.dir, sub);
 
-  // 1. Ensure a running sandbox (provision-if-absent, then wait).
+  // 1. `git` source: get the code into a Sapiom repo BEFORE the sandbox — ensure
+  //    the repo (create-if-absent) and push the local working tree. The server
+  //    deploy op then checks that repo out into the sandbox.
+  let deploySource: { kind: 'git'; repo: string } | undefined;
+  if (cfg.source.kind === 'git') {
+    const slug = cfg.source.slug;
+    log(`ensuring repo "${slug}" …`);
+    const repo = await sapiom.repositories.get(slug).catch(() => null);
+    const cloneUrl = repo?.cloneUrl ?? (await sapiom.repositories.create(slug)).cloneUrl;
+    log(`pushing ${sub} → repo "${slug}" …`);
+    pushLocalDir(sourceDir, cloneUrl, opts.apiKey ?? '');
+    deploySource = { kind: 'git', repo: slug };
+  }
+
+  // 2. Ensure a running sandbox (provision-if-absent, then wait).
   log(`ensuring sandbox "${cfg.name}" …`);
   await ensureRunning(sapiom, cfg, baseUrl, log);
-
-  // 2. Upload the local source tree.
-  const sub = cfg.source.path ?? '.';
   const box = sapiom.sandboxes.attach(cfg.name, baseUrl ? { baseUrl } : {});
-  log(`uploading ${sub} …`);
-  await box.uploadDir(path.resolve(opts.dir, sub));
 
-  // 3. Trigger the server-side deploy op (build → start → expose → poll).
+  // 3. `upload` source: push the local tree straight into the sandbox.
+  if (cfg.source.kind === 'upload') {
+    log(`uploading ${sub} …`);
+    await box.uploadDir(sourceDir);
+  }
+
+  // 4. Trigger the server-side deploy op (checkout-if-git → build → start → expose → poll).
   log('deploying …');
   const res = await box.deployPreview({
+    ...(deploySource ? { source: deploySource } : {}),
     build: cfg.build,
     start: cfg.start,
     port: cfg.port,

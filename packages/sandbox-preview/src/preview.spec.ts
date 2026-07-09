@@ -10,10 +10,17 @@ const mockCreate = jest.fn().mockResolvedValue({});
 const mockUploadDir = jest.fn().mockResolvedValue(undefined);
 const mockDeployPreview = jest.fn();
 const mockAttach = jest.fn(() => ({ uploadDir: mockUploadDir, deployPreview: mockDeployPreview }));
+const mockRepoGet = jest.fn();
+const mockRepoCreate = jest.fn();
+const mockPushLocalDir = jest.fn();
 
 jest.mock('@sapiom/tools', () => ({
-  createClient: () => ({ sandboxes: { get: mockGet, create: mockCreate, attach: mockAttach } }),
+  createClient: () => ({
+    sandboxes: { get: mockGet, create: mockCreate, attach: mockAttach },
+    repositories: { get: mockRepoGet, create: mockRepoCreate },
+  }),
 }));
+jest.mock('./git-push.js', () => ({ pushLocalDir: (...args: unknown[]) => mockPushLocalDir(...args) }));
 
 function tmpProject(sandbox: Record<string, unknown>): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'sbxprev-'));
@@ -62,11 +69,34 @@ describe('previewSandbox', () => {
     }
   });
 
-  it('rejects an unsupported (git) source kind before any client call', async () => {
-    const dir = tmpProject({ ...UPLOAD_SANDBOX, source: { kind: 'git', slug: 'x' } });
+  it('git source: ensures the repo (create-if-absent), pushes local, deploys from git', async () => {
+    mockRepoGet.mockRejectedValue(new Error('404')); // repo does not exist yet
+    mockRepoCreate.mockResolvedValue({ slug: 'my-app', cloneUrl: 'http://git.local/repositories/t/my-app' });
+    const dir = tmpProject({ ...UPLOAD_SANDBOX, source: { kind: 'git', slug: 'my-app' } });
     try {
-      await expect(previewSandbox({ dir })).rejects.toThrow(/not supported yet/);
-      expect(mockAttach).not.toHaveBeenCalled();
+      const result = await previewSandbox({ dir, apiKey: 'sk_test' });
+
+      expect(mockRepoCreate).toHaveBeenCalledWith('my-app');
+      expect(mockPushLocalDir).toHaveBeenCalledWith(
+        path.resolve(dir, '.'),
+        'http://git.local/repositories/t/my-app',
+        'sk_test',
+      );
+      expect(mockUploadDir).not.toHaveBeenCalled(); // git source doesn't upload
+      expect(mockDeployPreview).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'git', repo: 'my-app' } }));
+      expect(result.status).toBe('deployed');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('git source: reuses an existing repo (no create)', async () => {
+    mockRepoGet.mockResolvedValue({ slug: 'my-app', cloneUrl: 'http://git.local/repositories/t/my-app' });
+    const dir = tmpProject({ ...UPLOAD_SANDBOX, source: { kind: 'git', slug: 'my-app' } });
+    try {
+      await previewSandbox({ dir, apiKey: 'sk_test' });
+      expect(mockRepoCreate).not.toHaveBeenCalled();
+      expect(mockPushLocalDir).toHaveBeenCalled();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
