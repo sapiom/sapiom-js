@@ -12,13 +12,13 @@
  *   analytics.track("command.run", { command: "dev" });
  *   await analytics.shutdown();
  *
- * The emitter ships dark: unless an endpoint is explicitly configured
- * (`endpoint` in the config, or the `SAPIOM_ANALYTICS_ENDPOINT` environment
- * variable), it is a silent no-op — zero network calls, zero disk writes.
- * Pass `SAPIOM_COLLECTOR_ENDPOINT` to deliver to the hosted collector.
+ * The emitter delivers to the hosted Sapiom collector
+ * (`SAPIOM_COLLECTOR_ENDPOINT`) by default; a configured `endpoint`
+ * overrides it.
  *
  * Opt out with `SAPIOM_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`, or
- * `disabled: true`. Analytics never throws and never blocks the host.
+ * `disabled: true` — an opted-out emitter is a silent no-op: zero network
+ * calls, zero disk writes. Analytics never throws and never blocks the host.
  *
  * Test utilities (an in-process mock collector) live in the
  * `@sapiom/analytics-core/testing` subpath export.

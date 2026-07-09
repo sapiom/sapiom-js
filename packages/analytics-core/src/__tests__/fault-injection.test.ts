@@ -132,30 +132,62 @@ describe("fault injection", () => {
     expect(capture.calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("treats an explicit empty-string endpoint as absent (ship-dark no-op)", async () => {
+  it("treats an explicit empty-string endpoint as absent → hosted default", async () => {
     delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
     const capture = createCapturingFetch();
     const analytics = tracker.register(
-      createAnalytics(baseConfig({ endpoint: "", fetchImpl: capture.fetchImpl })),
+      createAnalytics(
+        baseConfig({ endpoint: "", fetchImpl: capture.fetchImpl }),
+      ),
     );
 
-    expect(analytics.enabled).toBe(false);
+    expect(analytics.enabled).toBe(true);
     analytics.track("event", { n: 1 });
     await analytics.flush();
-    expect(capture.calls).toHaveLength(0);
+    expect(capture.calls).toHaveLength(1);
+    expect(capture.calls[0].url).toBe(SAPIOM_COLLECTOR_ENDPOINT);
   });
 
-  it("ships dark: no endpoint configured → no-op, zero fetches, zero disk writes", async () => {
+  it("no endpoint configured → delivers to the hosted collector by default", async () => {
     delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
     const capture = createCapturingFetch();
     const analytics = tracker.register(
       createAnalytics(baseConfig({ fetchImpl: capture.fetchImpl })),
     );
 
-    expect(analytics.enabled).toBe(false);
+    expect(analytics.enabled).toBe(true);
     expect(() => analytics.track("event", { n: 1 })).not.toThrow();
     await expect(analytics.flush()).resolves.toBeUndefined();
     await expect(analytics.shutdown()).resolves.toBeUndefined();
+
+    expect(capture.calls).toHaveLength(1);
+    expect(capture.calls[0].url).toBe(SAPIOM_COLLECTOR_ENDPOINT);
+  });
+
+  it("opt-out keeps the true no-op path: zero fetches, zero disk writes", async () => {
+    // The live default makes consent the only dark switch — verify it still
+    // guarantees a full no-op even when the default endpoint would apply.
+    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
+    process.env.SAPIOM_TELEMETRY_DISABLED = "1";
+    const capture = createCapturingFetch();
+
+    const optedOutByEnv = tracker.register(
+      createAnalytics(baseConfig({ fetchImpl: capture.fetchImpl })),
+    );
+    expect(optedOutByEnv.enabled).toBe(false);
+    expect(() => optedOutByEnv.track("event", { n: 1 })).not.toThrow();
+    await expect(optedOutByEnv.flush()).resolves.toBeUndefined();
+    await expect(optedOutByEnv.shutdown()).resolves.toBeUndefined();
+
+    delete process.env.SAPIOM_TELEMETRY_DISABLED;
+    const optedOutByConfig = tracker.register(
+      createAnalytics(
+        baseConfig({ disabled: true, fetchImpl: capture.fetchImpl }),
+      ),
+    );
+    expect(optedOutByConfig.enabled).toBe(false);
+    optedOutByConfig.track("event", { n: 1 });
+    await optedOutByConfig.flush();
 
     expect(capture.calls).toHaveLength(0);
     expect(fs.existsSync(home.identityPath)).toBe(false);
