@@ -36,7 +36,7 @@ telemetry section).
       "anonymous_id": "b1a2c3d4-...",        // machine UUID — send whenever available
       "session_id": "5e6f7a8b-...",          // producer-defined session
       "event_timestamp": "2026-01-15T10:30:00.000Z", // ISO-8601, client clock — data.seq is authoritative for ordering when present
-      "source": "ui",                        // ui|mcp|tools|cli|orchestration|langchain|backend
+      "source": "ui",                        // ui|mcp|tools|cli|agent|langchain|backend
       "event_type": "prompt.submitted",
       "user_id": "usr_123",                  // ONLY when signed in (real account identity)
       "sdk_name": "@sapiom/harness",
@@ -167,7 +167,7 @@ the collector stores `event_type` verbatim either way.
 | `tools` | `capability.call` |
 | `mcp` | `tool.call` |
 | `cli` | `command.run`, `notice.shown`, `telemetry.opt_out` |
-| `orchestration` | `workflow.deploy`, `workflow.run`, `step.start`, `step.complete`, `step.error` |
+| `agent` | `workflow.deploy`, `workflow.run`, `step.start`, `step.complete`, `step.error` |
 | `langchain` | `model.call`, `tool.call` |
 
 New event types require no contract change — send them.
