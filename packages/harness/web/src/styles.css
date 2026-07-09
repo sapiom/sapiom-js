@@ -1306,11 +1306,10 @@ input {
   background: var(--bg-0);
 }
 
-/* The xterm.js container (.harness-terminal) is the flex-growing child;
-   PromptBar (.prompt-bar) is flex-shrink: 0 (see its own rules). When no
-   terminal is shown (welcome panel, dead-session pane), those components
-   occupy the full height naturally since they're not flex-children of this
-   layout — see their own `.height: 100%` / `flex: 1` declarations. */
+/* The xterm.js container (.harness-terminal) is the flex-growing child.
+   When no terminal is shown (welcome panel, dead-session pane), those
+   components occupy the full height naturally since they're not flex-children
+   of this layout — see their own `.height: 100%` / `flex: 1` declarations. */
 .terminal-slot > .harness-terminal {
   flex: 1;
   min-height: 0;
@@ -1515,6 +1514,14 @@ input {
 .dead-session-actions {
   display: flex;
   gap: 8px;
+}
+
+.dead-session-resume-reason {
+  color: var(--text-faint);
+  font-size: 11px;
+  max-width: 300px;
+  line-height: 1.4;
+  margin-top: 4px;
 }
 
 /* Canvas pane ---------------------------------------------------------- */
@@ -2334,8 +2341,8 @@ input {
 }
 
 /* Individual segment buttons — matches the harness-option pill style from
-   the new-session modal and the install-mcp-tab pattern (small, rounded,
-   fills bg-1 / subtle shadow when active). */
+   the new-session modal (small, rounded, fills bg-1 / subtle shadow when
+   active). */
 .right-pane-tab {
   padding: 3px 10px;
   font-size: 11.5px;
@@ -2607,112 +2614,6 @@ input {
 }
 
 /* Skills footer */
-
-.skills-footer {
-  border-top: 1px solid var(--border);
-  padding: 6px 8px;
-  flex-shrink: 0;
-}
-
-.install-mcp-trigger {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  width: 100%;
-  padding: 5px 6px;
-  font-size: 11.5px;
-  color: var(--text-dim);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.install-mcp-trigger:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-/* Install-MCP modal ---------------------------------------------------- */
-
-.install-mcp-modal {
-  width: min(480px, 90vw);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.install-mcp-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.install-mcp-close {
-  flex-shrink: 0;
-}
-
-.modal-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.install-mcp-intro {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-dim);
-  line-height: 1.5;
-}
-
-.install-mcp-picker {
-  display: flex;
-  gap: 4px;
-  background: var(--bg-0);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 3px;
-}
-
-.install-mcp-tab {
-  flex: 1;
-  padding: 5px 8px;
-  font-size: 12px;
-  color: var(--text-dim);
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background-color var(--transition-fast);
-}
-
-.install-mcp-tab.is-selected {
-  background: var(--bg-1);
-  color: var(--text);
-  box-shadow: var(--shadow-xs);
-}
-
-.install-mcp-instructions {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--bg-0);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  color: var(--text);
-  overflow-x: auto;
-}
-
-.install-mcp-copy {
-  font-size: 12px;
-  padding: 5px 12px;
-}
 
 /* Scrollbars — thin thumb-only styling, matching the product's own
    (rgba(161, 161, 170, 0.75), 8px, no visible track) in both themes. */

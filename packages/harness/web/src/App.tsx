@@ -54,7 +54,6 @@ export const App = (): JSX.Element => {
   // hooks must be called unconditionally).
   const listSkills = useMemo(() => harness.api.listSkills.bind(harness.api), [harness.api]);
   const getSkill = useMemo(() => harness.api.getSkill.bind(harness.api), [harness.api]);
-  const listHarnesses = useMemo(() => harness.api.listHarnesses.bind(harness.api), [harness.api]);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
@@ -304,20 +303,20 @@ export const App = (): JSX.Element => {
             />
           </div>
 
-          {/* Skills: lazy-mount on first open, then kept alive hidden via CSS —
-              same keep-alive contract as canvas so the skill list state (detail
-              view, scroll position) survives a tab flip without a refetch. */}
+          {/* Skills: lazy-mount on first open, then kept alive hidden via CSS.
+              isActive flips to true on each tab activation, which triggers a
+              fresh skills list fetch — newly created skills appear without a
+              page reload. The component instance is preserved so detail view
+              state and scroll position survive tab flips. */}
           {(rightTab === "skills" || skillsPanelEverShown) && (
             <div
               className={"right-pane-panel" + (rightTab === "skills" ? "" : " is-hidden")}
               data-testid="right-panel-skills"
             >
               <SkillsPanel
-                session={activeSession}
-                onInjectInput={harness.injectInput}
                 listSkills={listSkills}
                 getSkill={getSkill}
-                listHarnesses={listHarnesses}
+                isActive={rightTab === "skills"}
               />
             </div>
           )}

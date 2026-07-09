@@ -10,7 +10,6 @@ import type {
   CreateSessionRequest,
   FsDirEntry,
   FsListResponse,
-  HarnessEntry,
   HarnessSession,
   HarnessSettings,
   InjectInputRequest,
@@ -34,9 +33,9 @@ export interface SkillDetail extends SkillMeta {
   body: string;
 }
 
-import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
+import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
 
-export type { FsDirEntry, FsListResponse, HarnessEntry };
+export type { FsDirEntry, FsListResponse };
 
 export function isMockMode(): boolean {
   return import.meta.env.VITE_MOCK === "1";
@@ -108,8 +107,6 @@ export interface HarnessApi {
   listSkills(): Promise<SkillMeta[]>;
   /** Fetch the full detail (including markdown body) for a single skill. */
   getSkill(id: string): Promise<SkillDetail>;
-  /** Returns the full harness adapter registry (GET /api/harnesses). */
-  listHarnesses(): Promise<HarnessEntry[]>;
 }
 
 class RealApi implements HarnessApi {
@@ -228,10 +225,6 @@ class RealApi implements HarnessApi {
 
   getSkill(id: string): Promise<SkillDetail> {
     return this.request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`);
-  }
-
-  listHarnesses(): Promise<HarnessEntry[]> {
-    return this.request<HarnessEntry[]>("/api/harnesses");
   }
 }
 
@@ -457,6 +450,12 @@ class MockApi implements HarnessApi {
 
   async listSkills(): Promise<SkillMeta[]> {
     await delay(150);
+    // Test-only escape hatch: record the call count for Playwright assertions.
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      const prev = (win.__HARNESS_TEST__?.listSkillsCallCount as number) ?? 0;
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), listSkillsCallCount: prev + 1 };
+    }
     return MOCK_SKILLS;
   }
 
@@ -465,11 +464,6 @@ class MockApi implements HarnessApi {
     const found = MOCK_SKILLS.find((s) => s.id === id);
     if (!found) throw new ApiError(404, `GET /api/skills/${id} → 404`, `Unknown skill '${id}'`);
     return { ...found, body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}` };
-  }
-
-  async listHarnesses(): Promise<HarnessEntry[]> {
-    await delay(100);
-    return MOCK_HARNESSES;
   }
 }
 

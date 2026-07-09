@@ -1,131 +1,28 @@
 /**
- * SkillsPanel — Skills tab in the right pane alongside the canvas.
+ * SkillsPanel — read-only skill browser in the right pane alongside the canvas.
  *
  * Skills come from two sources surfaced by GET /api/skills:
  *   - package: shipped with @sapiom/* npm packages
  *   - user: ~/.claude/skills/{id}/SKILL.md
  *
- * NON-TECHNICAL browsing pattern:
- *   - Card list: name + one-line description
+ * Browsing pattern:
+ *   - Card list: name + one-line description grouped by source
  *   - Click a card → detail view (rendered markdown body)
- *   - "Use" button → injects an invocation prompt into the active session
- *     via POST /api/sessions/:id/input.
- *     Disabled with reason when no ready session.
+ *   - Back button returns to the list
  *
- * Install-MCP action:
- *   - Footer button that opens a modal with per-agent instructions from
- *     the adapter registry's installMcpPrompt() text.
- *   - When an active session exists its harness kind determines which
- *     adapter's text to show; otherwise we show a picker of all adapters.
- *   - The action is "show accurate per-agent instructions with copy" —
- *     no config file mutation. This is a deliberate choice: the instructions
- *     are human-verified copy-paste steps, and config-file formats differ
- *     per agent version.
+ * Creating skills: place a SKILL.md under ~/.claude/skills/<id>/SKILL.md in
+ * your terminal (claude-code or codex) and they appear here automatically.
+ * Tell your agent to use a skill when you want it applied — no button needed.
  *
- * Analytics: skill.viewed, skill.used, and mcp.install events are emitted
- * via POST /api/track on the relevant user actions.
+ * Analytics: skill.viewed events are emitted via POST /api/track on card open.
  */
 import { useState, useCallback, useEffect, type JSX } from "react";
 
-import type { HarnessSession } from "@shared/types";
-import type { HarnessEntry, SkillDetail, SkillMeta } from "../lib/api";
+import type { SkillDetail, SkillMeta } from "../lib/api";
 import { ApiError } from "../lib/api";
 import { track } from "../lib/track";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
-
-// ---------------------------------------------------------------------------
-// Install-MCP modal
-// ---------------------------------------------------------------------------
-
-interface InstallMcpModalProps {
-  activeHarness: string | null;
-  /** Harness adapter list — fetched from GET /api/harnesses at open time. */
-  harnesses: HarnessEntry[];
-  onClose: () => void;
-}
-
-function InstallMcpModal({ activeHarness, harnesses, onClose }: InstallMcpModalProps): JSX.Element {
-  // Embedded adapters only — external harnesses (conductor) have no MCP concept.
-  const embeddedHarnesses = harnesses.filter((h) => h.mode === "embedded");
-  const defaultId = activeHarness ?? embeddedHarnesses[0]?.id ?? "";
-  const [selectedId, setSelectedId] = useState<string>(defaultId);
-  const [copied, setCopied] = useState(false);
-
-  const entry = embeddedHarnesses.find((h) => h.id === selectedId);
-
-  const handleCopy = useCallback(async () => {
-    if (!entry) return;
-    try {
-      await navigator.clipboard.writeText(entry.installMcpPrompt);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API unavailable — silently ignore.
-    }
-    track("mcp.install", { harness: entry.id });
-  }, [entry]);
-
-  return (
-    <div
-      className="modal-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Install Sapiom MCP"
-    >
-      <div className="modal install-mcp-modal">
-        <div className="modal-header install-mcp-header">
-          <span className="modal-title">Install Sapiom MCP</span>
-          <button className="btn-ghost install-mcp-close" onClick={onClose} aria-label="Close">
-            <Icon name="X" size={14} />
-          </button>
-        </div>
-
-        <p className="install-mcp-intro">
-          Install the Sapiom MCP server into your agent's own config so it's
-          available outside harness sessions.
-        </p>
-
-        {/* Harness picker — only shown when no session determines the kind. */}
-        {!activeHarness && embeddedHarnesses.length > 1 && (
-          <div className="install-mcp-picker">
-            {embeddedHarnesses.map((h) => (
-              <button
-                key={h.id}
-                className={"install-mcp-tab" + (selectedId === h.id ? " is-selected" : "")}
-                onClick={() => setSelectedId(h.id)}
-              >
-                {h.label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {entry && (
-          <pre className="install-mcp-instructions" data-testid="install-mcp-instructions">
-            {entry.installMcpPrompt}
-          </pre>
-        )}
-
-        <div className="modal-actions">
-          <button
-            className="btn-primary install-mcp-copy"
-            onClick={() => void handleCopy()}
-            data-testid="install-mcp-copy"
-          >
-            {copied ? "Copied!" : "Copy instructions"}
-          </button>
-          <button className="btn-ghost" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Skill detail view
@@ -133,28 +30,10 @@ function InstallMcpModal({ activeHarness, harnesses, onClose }: InstallMcpModalP
 
 interface SkillDetailViewProps {
   skill: SkillDetail;
-  session: HarnessSession | null;
-  onUse: (text: string) => void;
   onBack: () => void;
 }
 
-/** Derive the readiness reason from a session for the "Use" button. */
-function sessionReadyReason(session: HarnessSession | null): string | null {
-  if (!session) return "No active session — start one to use skills.";
-  if (session.status === "exited") return "Session ended — resume it to use skills.";
-  if (session.status === "starting" || !session.ready) return "Session is starting…";
-  return null;
-}
-
-function SkillDetailView({ skill, session, onUse, onBack }: SkillDetailViewProps): JSX.Element {
-  const notReadyReason = sessionReadyReason(session);
-
-  const handleUse = useCallback(() => {
-    const prompt = `Use the "${skill.name}" skill: ${skill.description}`;
-    onUse(prompt);
-    track("skill.used", { skillId: skill.id });
-  }, [skill, onUse]);
-
+function SkillDetailView({ skill, onBack }: SkillDetailViewProps): JSX.Element {
   return (
     <div className="skill-detail" data-testid="skill-detail">
       <div className="skill-detail-header">
@@ -169,21 +48,6 @@ function SkillDetailView({ skill, session, onUse, onBack }: SkillDetailViewProps
 
       <div className="skill-detail-body">
         <Markdown text={skill.body} />
-      </div>
-
-      <div className="skill-detail-footer">
-        <button
-          className="btn-primary skill-use-btn"
-          disabled={Boolean(notReadyReason)}
-          title={notReadyReason ?? undefined}
-          onClick={handleUse}
-          data-testid="skill-use-btn"
-        >
-          Use skill
-        </button>
-        {notReadyReason && (
-          <span className="skill-use-reason">{notReadyReason}</span>
-        )}
       </div>
     </div>
   );
@@ -210,7 +74,13 @@ function SkillsList({ skills, loading, error, onSelectSkill }: SkillsListProps):
   if (skills.length === 0) {
     return (
       <div className="skills-empty">
-        No skills found. Add skills to <code>~/.claude/skills/</code>.
+        <p>No skills found yet.</p>
+        <p>
+          Browse Sapiom's skills and your own here. Create your own under{" "}
+          <code>~/.claude/skills/&lt;id&gt;/SKILL.md</code> in the terminal
+          (claude-code or codex) and they appear here. Tell your agent to use a
+          skill when you want it.
+        </p>
       </div>
     );
   }
@@ -252,29 +122,33 @@ function SkillsList({ skills, loading, error, onSelectSkill }: SkillsListProps):
 // ---------------------------------------------------------------------------
 
 export interface SkillsPanelProps {
-  /** The active session — drives the "Use" button readiness and Install-MCP labeling. */
-  session: HarnessSession | null;
-  /** Called to inject text into the active session's pty. */
-  onInjectInput: (sessionId: string, text: string) => Promise<void>;
   /** Fetches the skills list from the API. */
   listSkills: () => Promise<SkillMeta[]>;
   /** Fetches full skill detail (with body). */
   getSkill: (id: string) => Promise<SkillDetail>;
-  /** Fetches harness adapter list (includes installMcpPrompt for the modal). */
-  listHarnesses: () => Promise<HarnessEntry[]>;
+  /**
+   * Whether the Skills tab is currently active. The panel is kept alive
+   * across tab flips via CSS hide/show, so a mount-only effect would only
+   * run on the very first open. Re-fetching when this flips to true ensures
+   * a skill created in the terminal while Skills was hidden appears without
+   * needing a full page reload.
+   */
+  isActive: boolean;
 }
 
-export function SkillsPanel({ session, onInjectInput, listSkills, getSkill, listHarnesses }: SkillsPanelProps): JSX.Element {
+export function SkillsPanel({ listSkills, getSkill, isActive }: SkillsPanelProps): JSX.Element {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<SkillDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [installMcpOpen, setInstallMcpOpen] = useState(false);
-  const [harnesses, setHarnesses] = useState<HarnessEntry[]>([]);
 
-  // Load skill list on mount.
+  // Re-fetch the skill list each time the Skills tab becomes active so newly
+  // created skills appear without a page reload. The panel is kept alive via
+  // CSS while the Canvas tab is shown, so a mount-only effect is stale after
+  // the first open.
   useEffect(() => {
+    if (!isActive) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -291,23 +165,7 @@ export function SkillsPanel({ session, onInjectInput, listSkills, getSkill, list
     return () => {
       cancelled = true;
     };
-  }, [listSkills]);
-
-  // Load harness adapter list for the Install-MCP modal (fetched once per
-  // mount — the list is stable across the session's lifetime).
-  useEffect(() => {
-    let cancelled = false;
-    listHarnesses()
-      .then((data) => {
-        if (!cancelled) setHarnesses(data);
-      })
-      .catch(() => {
-        // Non-critical — the modal degrades gracefully with an empty list.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [listHarnesses]);
+  }, [isActive, listSkills]);
 
   const handleSelectSkill = useCallback(
     async (id: string) => {
@@ -326,18 +184,6 @@ export function SkillsPanel({ session, onInjectInput, listSkills, getSkill, list
     [getSkill],
   );
 
-  const handleUse = useCallback(
-    async (text: string) => {
-      if (!session) return;
-      try {
-        await onInjectInput(session.id, text);
-      } catch {
-        // Errors surface in the prompt bar's own reactive state; swallow here.
-      }
-    },
-    [session, onInjectInput],
-  );
-
   return (
     <aside className="rail rail-skills" data-testid="skills-panel">
       <div className="rail-header">Skills</div>
@@ -348,8 +194,6 @@ export function SkillsPanel({ session, onInjectInput, listSkills, getSkill, list
         ) : selectedSkill ? (
           <SkillDetailView
             skill={selectedSkill}
-            session={session}
-            onUse={(text) => void handleUse(text)}
             onBack={() => setSelectedSkill(null)}
           />
         ) : (
@@ -361,25 +205,6 @@ export function SkillsPanel({ session, onInjectInput, listSkills, getSkill, list
           />
         )}
       </div>
-
-      <div className="skills-footer">
-        <button
-          className="install-mcp-trigger btn-ghost"
-          data-testid="install-mcp-trigger"
-          onClick={() => setInstallMcpOpen(true)}
-        >
-          <Icon name="Plug" size={13} />
-          Install Sapiom MCP
-        </button>
-      </div>
-
-      {installMcpOpen && (
-        <InstallMcpModal
-          activeHarness={session?.harness ?? null}
-          harnesses={harnesses}
-          onClose={() => setInstallMcpOpen(false)}
-        />
-      )}
     </aside>
   );
 }

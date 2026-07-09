@@ -12,9 +12,9 @@
  *   - Switching back to Canvas restores the canvas visible, skills panel gone
  *   - Skills panel renders skill cards from the mock API
  *   - Clicking a card shows the detail view with rendered markdown
- *   - "Use skill" button injects a prompt into the active session
- *   - "Use skill" is disabled with a reason when no ready session exists
- *   - Install-MCP shows the right per-agent instructions for the active session's harness
+ *   - Skills list is re-fetched each time the Skills tab becomes active
+ *   - Dead session with no agentSessionId: Resume disabled, Close works
+ *   - Dead session with agentSessionId: Resume enabled and works
  *   - Canvas keep-alive: a running Visualize survives a tab round-trip
  *   - WelcomePanel coexistence: skills tab renders on fresh state too
  */
@@ -26,6 +26,7 @@ type TestHarness = {
     publish: (message: unknown) => void;
     lastInjectInput?: { id: string; req: { text: string; submit?: boolean } };
     trackEvents?: Array<{ event: string; data?: Record<string, unknown> }>;
+    listSkillsCallCount?: number;
   };
 };
 
@@ -97,52 +98,32 @@ test.describe("right-pane segmented switch", () => {
     await expect(page.getByTestId("right-panel-skills")).not.toBeVisible();
   });
 
-  test("returning to Skills tab does not trigger a new API fetch (call count stable)", async ({ page }) => {
-    // Track listSkills calls via window.__HARNESS_TEST__ using a custom counter
-    // injected before the app renders. Since MockApi already serves from
-    // in-memory fixtures (no real network), we instrument the mock to count.
-    await page.evaluate(() => {
-      let count = 0;
-      const win = window as unknown as {
-        __HARNESS_TEST__?: Record<string, unknown>;
-        __SKILLS_FETCH_COUNT__?: number;
-      };
-      // Proxy listSkills on the exposed mock — works because MockApi is
-      // constructed after the module evaluates.
-      Object.defineProperty(win, "__SKILLS_FETCH_COUNT__", {
-        get: () => count,
-        configurable: true,
-      });
-      // Intercept the custom fetch("/api/skills") call through the fetch override
-      // for mock mode. Instead, watch the MockApi.listSkills by monkey-patching
-      // after the SPA mounts (the App hydrates synchronously).
-      const originalFetch = window.fetch.bind(window);
-      window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-        if (url.includes("/api/skills")) count++;
-        return originalFetch(input, init);
-      };
-    });
+  test("skills list is re-fetched when switching to the Skills tab (tab-activate refetch)", async ({ page }) => {
+    // The Skills panel re-fetches when its isActive prop flips to true on each
+    // tab switch. MockApi.listSkills() records each call via listSkillsCallCount
+    // on window.__HARNESS_TEST__.
 
     // First open — triggers initial fetch.
     await page.getByTestId("right-tab-skills").click();
     await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 5_000 });
 
-    // Flip away and back.
+    const countAfterFirst = await page.evaluate(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.listSkillsCallCount ?? 0,
+    );
+    expect(countAfterFirst).toBeGreaterThanOrEqual(1);
+
+    // Flip away and back — should trigger a second fetch.
     await page.getByTestId("right-tab-canvas").click();
     await page.getByTestId("right-tab-skills").click();
 
-    // Skills panel is visible again (no re-mount, no re-fetch).
+    // Wait for the list to be visible again (post-refetch).
     await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 3_000 });
 
-    // In VITE_MOCK=1 mode, MockApi.listSkills() doesn't hit /api/skills at all
-    // (it's a pure in-memory stub), so the fetch counter stays at 0. The
-    // critical invariant is that the counter does NOT increase between the first
-    // and second tab visit — asserting 0 is the strongest form of that invariant.
-    const fetchCount = await page.evaluate(
-      () => (window as unknown as { __SKILLS_FETCH_COUNT__?: number }).__SKILLS_FETCH_COUNT__ ?? 0,
+    const countAfterSecond = await page.evaluate(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.listSkillsCallCount ?? 0,
     );
-    expect(fetchCount).toBe(0); // no real HTTP in mock mode
+    // Each tab activation must trigger a new fetch — count strictly increases.
+    expect(countAfterSecond).toBeGreaterThan(countAfterFirst);
   });
 });
 
@@ -257,10 +238,6 @@ test.describe("skills panel — list view", () => {
     await expect(page.getByTestId("skill-card-frontend-design")).toBeVisible();
     await page.screenshot({ path: "web/e2e/screenshots/skills-list.png", fullPage: true });
   });
-
-  test("shows the Install Sapiom MCP button in the footer", async ({ page }) => {
-    await expect(page.getByTestId("install-mcp-trigger")).toBeVisible();
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -298,132 +275,91 @@ test.describe("skills panel — detail view", () => {
     await expect(page.getByTestId("skill-detail")).toHaveCount(0);
   });
 
-  test("'Use skill' button injects a prompt into the active session", async ({ page }) => {
+  test("detail view has no 'Use skill' button (read-only browser)", async ({ page }) => {
     await page.getByTestId("skill-card-sapiom-agent-authoring").click();
     await expect(page.getByTestId("skill-detail")).toBeVisible({ timeout: 3_000 });
 
-    // Boot session is running+ready — the Use button must be enabled.
-    const useBtn = page.getByTestId("skill-use-btn");
-    await expect(useBtn).toBeEnabled({ timeout: 3_000 });
-    await useBtn.click();
-
-    // MockApi records the injected input.
-    await page.waitForFunction(
-      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
-    );
-    const captured = await page.evaluate(
-      () => (window as unknown as TestHarness).__HARNESS_TEST__.lastInjectInput,
-    );
-    // The prompt includes the skill name.
-    expect(captured?.req.text).toContain("Agent Authoring");
-
-    // skill.used analytics event must have been captured by the mock track interceptor.
-    await page.waitForFunction(
-      () => (window as unknown as TestHarness).__HARNESS_TEST__?.trackEvents?.some(
-        (e) => e.event === "skill.used",
-      ),
-    );
-    const trackEvents = await page.evaluate(
-      () => (window as unknown as TestHarness).__HARNESS_TEST__.trackEvents ?? [],
-    );
-    const skillUsed = trackEvents.find((e) => e.event === "skill.used");
-    expect(skillUsed).toBeDefined();
-    expect(skillUsed?.data?.skillId).toBe("sapiom-agent-authoring");
-
-    await page.screenshot({ path: "web/e2e/screenshots/skill-used.png", fullPage: true });
-  });
-
-  test("'Use skill' is disabled when no session is ready", async ({ page }) => {
-    // Flip the active session to not-ready.
-    await publish(page, {
-      type: "session.status",
-      session: {
-        id: "sess-boot",
-        agentSessionId: null,
-        boundWorkflowPath: "/Users/demo/acme-app/leasing",
-        harness: "claude-code",
-        cwd: "/Users/demo/acme-app",
-        title: "acme-app",
-        status: "starting",
-        createdAt: new Date().toISOString(),
-        lastActiveAt: new Date().toISOString(),
-        ready: false,
-      },
-    });
-
-    await page.getByTestId("skill-card-sapiom-agent-authoring").click();
-    await expect(page.getByTestId("skill-detail")).toBeVisible({ timeout: 3_000 });
-
-    const useBtn = page.getByTestId("skill-use-btn");
-    await expect(useBtn).toBeDisabled({ timeout: 3_000 });
-    // A reason tooltip/text is shown.
-    await expect(page.locator(".skill-use-reason")).toBeVisible();
+    // The panel is read-only — there is no Use skill button.
+    await expect(page.getByTestId("skill-use-btn")).toHaveCount(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Install-MCP modal
+// Dead session pane — Resume/Close hardening
 // ---------------------------------------------------------------------------
 
-test.describe("Install Sapiom MCP modal", () => {
-  test.beforeEach(async ({ page }) => {
+test.describe("dead session pane — resume and close", () => {
+  // Publish a session.status to make the active session look exited.
+  const makeSessionExited = (
+    page: import("@playwright/test").Page,
+    agentSessionId: string | null,
+  ): Promise<void> =>
+    page.evaluate((sid) => {
+      (window as unknown as TestHarness).__HARNESS_TEST__.publish({
+        type: "session.status",
+        session: {
+          id: "sess-boot",
+          agentSessionId: sid,
+          boundWorkflowPath: "/Users/demo/acme-app/leasing",
+          harness: "claude-code",
+          cwd: "/Users/demo/acme-app",
+          title: "acme-app",
+          status: "exited",
+          exitCode: 1,
+          createdAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+          ready: false,
+        },
+      });
+    }, agentSessionId);
+
+  test("dead session with agentSessionId=null: Resume is disabled with a reason", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("right-tab-skills").click();
-    await expect(page.getByTestId("install-mcp-trigger")).toBeVisible({ timeout: 5_000 });
+
+    // Make the active session exit without an agentSessionId (exited before
+    // the agent established its session).
+    await makeSessionExited(page, null);
+
+    // The dead-session overlay must appear.
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible({ timeout: 3_000 });
+
+    // Resume button must be disabled.
+    const resumeBtn = page.getByTestId("dead-session-resume");
+    await expect(resumeBtn).toBeDisabled();
+
+    // A human-readable reason must be visible to explain why.
+    await expect(page.getByTestId("dead-session-resume-reason")).toBeVisible();
+    await expect(page.getByTestId("dead-session-resume-reason")).toContainText("can't be resumed");
+
+    await page.screenshot({ path: "web/e2e/screenshots/dead-session-null-agent.png", fullPage: true });
   });
 
-  test("opens the modal when the install trigger is clicked", async ({ page }) => {
-    await page.getByTestId("install-mcp-trigger").click();
-    await expect(page.locator(".install-mcp-modal")).toBeVisible();
-    await page.screenshot({ path: "web/e2e/screenshots/install-mcp-modal.png", fullPage: true });
-  });
-
-  test("shows Claude Code instructions for the active claude-code session", async ({ page }) => {
-    // Boot session harness is claude-code (fixture default).
-    await page.getByTestId("install-mcp-trigger").click();
-    const instructions = page.getByTestId("install-mcp-instructions");
-    await expect(instructions).toBeVisible();
-    // Claude Code specific text.
-    await expect(instructions).toContainText("sapiom-dev");
-    await expect(instructions).toContainText("npx -y @sapiom/mcp");
-  });
-
-  test("copy button shows 'Copy instructions' text", async ({ page }) => {
-    await page.getByTestId("install-mcp-trigger").click();
-    const copyBtn = page.getByTestId("install-mcp-copy");
-    await expect(copyBtn).toBeVisible();
-    await expect(copyBtn).toHaveText("Copy instructions");
-  });
-
-  test("closes when the backdrop is clicked", async ({ page }) => {
-    await page.getByTestId("install-mcp-trigger").click();
-    await expect(page.locator(".install-mcp-modal")).toBeVisible();
-
-    // Click the backdrop (outside the modal panel).
-    await page.locator(".modal-backdrop").click({ position: { x: 5, y: 5 } });
-    await expect(page.locator(".install-mcp-modal")).toHaveCount(0);
-  });
-
-  test("closes when the Close button is clicked", async ({ page }) => {
-    await page.getByTestId("install-mcp-trigger").click();
-    await expect(page.locator(".install-mcp-modal")).toBeVisible();
-
-    // Use the modal's own Close button (inside the modal-actions div).
-    await page.locator(".install-mcp-modal .modal-actions button:last-child").click();
-    await expect(page.locator(".install-mcp-modal")).toHaveCount(0);
-  });
-
-  test("shows a harness picker when no session is active (fresh state)", async ({ page }) => {
-    // Navigate to fresh state — no sessions, so session is null and picker shows.
-    await page.goto("/?mockState=fresh");
+  test("dead session with agentSessionId=null: Close removes the session overlay", async ({ page }) => {
+    await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("right-tab-skills").click();
-    await page.getByTestId("install-mcp-trigger").click();
 
-    // Picker renders two tabs: Claude Code, Codex.
-    await expect(page.locator(".install-mcp-tab")).toHaveCount(2);
-    await expect(page.locator(".install-mcp-tab").first()).toContainText("Claude Code");
+    await makeSessionExited(page, null);
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible({ timeout: 3_000 });
+
+    // Close must work even when Resume is disabled.
+    await page.getByTestId("dead-session-close").click();
+    await expect(page.getByTestId("dead-session-pane")).toHaveCount(0, { timeout: 3_000 });
+  });
+
+  test("dead session with a valid agentSessionId: Resume button is enabled", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    // Exit with a real agentSessionId — Resume should be available.
+    await makeSessionExited(page, "8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f");
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible({ timeout: 3_000 });
+
+    const resumeBtn = page.getByTestId("dead-session-resume");
+    await expect(resumeBtn).toBeEnabled();
+
+    // No disabled reason text should be shown.
+    await expect(page.getByTestId("dead-session-resume-reason")).toHaveCount(0);
   });
 });
 
