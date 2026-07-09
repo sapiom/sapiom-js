@@ -1494,6 +1494,17 @@ input {
   line-height: 1.6;
 }
 
+/* Overlay variant: sits on top of the iframe so the deterministic render
+   remains visible while the enrichment task is in flight — only the
+   activity strip appears on top, not a full replacement of the canvas. */
+.canvas-task-activity--overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--bg-1) 85%, transparent);
+  backdrop-filter: blur(2px);
+}
+
 .canvas-task-title {
   display: flex;
   align-items: center;

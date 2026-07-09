@@ -78,6 +78,7 @@ interface FakeRunner extends EnrichmentTaskRunner {
 function makeRunner(): FakeRunner {
   const listeners = new Set<(task: BackgroundTask) => void>();
   const requests: RunTaskRequest[] = [];
+  const running = new Map<string, BackgroundTask>(); // keyed by task id
   let n = 0;
   let last: BackgroundTask | undefined;
   return {
@@ -99,13 +100,28 @@ function makeRunner(): FakeRunner {
         resultText: null,
         errorTail: null,
       };
+      running.set(last.id, last);
       return last;
     },
     onStatusChange(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    isRunning(macroId: string, workflowPath: string): boolean {
+      for (const task of running.values()) {
+        if (task.status === "running" && task.macroId === macroId && task.workflowPath === workflowPath) {
+          return true;
+        }
+      }
+      return false;
+    },
     emit(task) {
+      // Mirror real TaskManager: update status in running map when emitting
+      const existing = running.get(task.id);
+      if (existing) {
+        existing.status = task.status;
+        if (task.status !== "running") running.delete(task.id);
+      }
       for (const listener of [...listeners]) listener(task);
     },
     lastTask() {
@@ -310,6 +326,48 @@ describe("CanvasEnrichmentCoordinator.forceRefresh", () => {
     const { coordinator, session } = makeCoordinator(refusing as unknown as FakeRunner, cwd);
 
     await expect(coordinator.forceRefresh(session, [WORKFLOW])).rejects.toBeInstanceOf(TaskAlreadyRunningError);
+  });
+
+  it("double-click guard: second forceRefresh while a task is running rejects BEFORE touching the cache or re-rendering", async () => {
+    const runner = makeRunner();
+    const cwd = await tmpCwd();
+    const { coordinator, rerender, session } = makeCoordinator(runner, cwd);
+
+    // Write an enrichment cache file that should survive the second call.
+    const cacheFile = enrichmentCacheFileFor(cwd, WORKFLOW.path);
+    await writeEnrichmentCacheFile(cacheFile, {
+      graph: GRAPH,
+      enrichment: { summary: "cached annotations" },
+      sourceFingerprint: "fp-1",
+      enrichedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    // First forceRefresh: starts the task (cache is cleared, rerender called once).
+    await coordinator.forceRefresh(session, [WORKFLOW]);
+    expect(runner.requests).toHaveLength(1);
+    // The running task is still in flight (never emitted a terminal status).
+
+    // Write the cache back, simulating the state mid-run where the cache has
+    // been partially repopulated (or was never cleared yet by the second call).
+    await writeEnrichmentCacheFile(cacheFile, {
+      graph: GRAPH,
+      enrichment: { summary: "mid-run annotations" },
+      sourceFingerprint: "fp-1",
+      enrichedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    // Second forceRefresh while the task is still running: must reject with
+    // TaskAlreadyRunningError and be a true no-op — cache untouched, no
+    // additional rerender, no additional spawn.
+    const rerenderCallsBefore = rerender.mock.calls.length;
+    await expect(coordinator.forceRefresh(session, [WORKFLOW])).rejects.toBeInstanceOf(TaskAlreadyRunningError);
+
+    // Cache survives the second call (the running enrichment still needs it).
+    expect(await readEnrichmentCacheFile(cacheFile)).not.toBeNull();
+    // No additional rerender was triggered.
+    expect(rerender.mock.calls.length).toBe(rerenderCallsBefore);
+    // No additional task was spawned.
+    expect(runner.requests).toHaveLength(1);
   });
 
   it("is a no-op for an unbound session — matching the deterministic render's unbound contract", async () => {
