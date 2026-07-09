@@ -8,7 +8,7 @@
  * at the top — canvas stays mounted behind CSS when Skills is active so a
  * running Visualize enrichment is never disturbed by a tab flip.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind, MacroDef, WorkflowInfo } from "@shared/types";
 
@@ -43,7 +43,19 @@ export const App = (): JSX.Element => {
   const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("canvas");
+  // Tracks whether Skills has ever been shown — once true, SkillsPanel stays
+  // mounted (hidden via CSS) so re-opening never triggers a refetch.
+  const [skillsPanelEverShown, setSkillsPanelEverShown] = useState(false);
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
+
+  // Stable function references for SkillsPanel props — prevents the panel's
+  // effects from refiring on every unrelated App re-render (e.g. tab switches,
+  // session state updates) since `api.listSkills.bind(api)` produces a new
+  // function object on each render. Must be before any early return (React
+  // hooks must be called unconditionally).
+  const listSkills = useMemo(() => harness.api.listSkills.bind(harness.api), [harness.api]);
+  const getSkill = useMemo(() => harness.api.getSkill.bind(harness.api), [harness.api]);
+  const listHarnesses = useMemo(() => harness.api.listHarnesses.bind(harness.api), [harness.api]);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
@@ -278,7 +290,7 @@ export const App = (): JSX.Element => {
               role="tab"
               aria-selected={rightTab === "skills"}
               className={"right-pane-tab" + (rightTab === "skills" ? " is-active" : "")}
-              onClick={() => setRightTab("skills")}
+              onClick={() => { setRightTab("skills"); setSkillsPanelEverShown(true); }}
               data-testid="right-tab-skills"
             >
               Skills
@@ -299,14 +311,20 @@ export const App = (): JSX.Element => {
             />
           </div>
 
-          {/* Skills: lazy-mount; once mounted stays alive for the session. */}
-          {rightTab === "skills" && (
-            <div className="right-pane-panel" data-testid="right-panel-skills">
+          {/* Skills: lazy-mount on first open, then kept alive hidden via CSS —
+              same keep-alive contract as canvas so the skill list state (detail
+              view, scroll position) survives a tab flip without a refetch. */}
+          {(rightTab === "skills" || skillsPanelEverShown) && (
+            <div
+              className={"right-pane-panel" + (rightTab === "skills" ? "" : " is-hidden")}
+              data-testid="right-panel-skills"
+            >
               <SkillsPanel
                 session={activeSession}
                 onInjectInput={harness.injectInput}
-                listSkills={harness.api.listSkills.bind(harness.api)}
-                getSkill={harness.api.getSkill.bind(harness.api)}
+                listSkills={listSkills}
+                getSkill={getSkill}
+                listHarnesses={listHarnesses}
               />
             </div>
           )}
