@@ -60,9 +60,6 @@ export const App = (): JSX.Element => {
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
   // Per-session center-pane tab (chat | terminal). Defaults to "chat".
   const [centerTab, setCenterTab] = useState<CenterTab>("chat");
-  // When switching sessions, stay on "chat" unless already on terminal for this session.
-  const prevSessionIdRef = { current: harness.activeSessionId };
-  void prevSessionIdRef; // used below in effect
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // preventDefault so it doesn't fall through to the browser's print/search dialogs.

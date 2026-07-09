@@ -438,6 +438,168 @@ describe("tailClaudeTranscript", () => {
     expect(hist).toHaveLength(1);
     expect(hist[0]).toMatchObject({ role: "assistant", content: "Let me check that for you." });
   });
+
+  // ── readHistory() — newest-content window ────────────────────────────────
+
+  it("readHistory() returns the NEWEST turns when the transcript exceeds HISTORY_MAX_BYTES", async () => {
+    // Build a transcript that is 3× the 128 KB cap so the oldest turns are
+    // evicted from the window. Each line is padded to a fixed size so we know
+    // exactly which turns end up in the tail window.
+    //
+    // Strategy: write (cap / lineSize) "old" turns then twice that many "new"
+    // turns so the history window contains only the newer half.
+    const HISTORY_MAX_BYTES = 128 * 1024;
+
+    // Each padded user line is approximately 150 bytes; 1000 of them ~= 150 KB.
+    const pad = "x".repeat(100);
+    const makeLine = (label: string) =>
+      JSON.stringify({ type: "user", message: { role: "user", content: `${label} ${pad}` } }) + "\n";
+
+    // Write enough "old" turns to fill >1× cap, then "new" turns to fill another ~2× cap.
+    const LINES_PER_BATCH = Math.ceil(HISTORY_MAX_BYTES / makeLine("old-0000").length) + 10;
+    let content = "";
+    for (let i = 0; i < LINES_PER_BATCH; i++) {
+      content += makeLine(`old-${String(i).padStart(4, "0")}`);
+    }
+    // Marker: last "old" turn that should NOT appear in history window
+    const lastOldTurn = `old-${String(LINES_PER_BATCH - 1).padStart(4, "0")} ${pad}`;
+
+    // Write enough new turns so the combined file is well over 3× cap
+    const newTurnLabel = "newest-turn";
+    for (let i = 0; i < LINES_PER_BATCH * 2; i++) {
+      content += makeLine(`${newTurnLabel}-${String(i).padStart(4, "0")}`);
+    }
+    const lastNewTurn = `${newTurnLabel}-${String(LINES_PER_BATCH * 2 - 1).padStart(4, "0")} ${pad}`;
+
+    await writeFile(transcriptPath, content);
+
+    const h = tailClaudeTranscript({
+      transcriptPath,
+      onTurn,
+      onToolCall,
+      pollIntervalMs: POLL_MS,
+    });
+    const hist = await h.readHistory();
+    h.stop();
+
+    // The history window should contain the newest turns
+    const contents = hist.map((t) => t.content);
+    expect(contents.some((c) => c.includes(newTurnLabel))).toBe(true);
+    // The very last new turn must be present (it's within the window)
+    expect(contents.some((c) => c.includes(lastNewTurn))).toBe(true);
+    // The old turns that fell before the window should be absent
+    expect(contents.some((c) => c.includes(lastOldTurn))).toBe(false);
+  });
+
+  it("readHistory() drops the first partial line when seeking mid-file", async () => {
+    // Write a file that is just over HISTORY_MAX_BYTES so the seek lands
+    // partway through the second line. The first "line" in the read buffer
+    // will be a fragment and must be dropped.
+    const HISTORY_MAX_BYTES = 128 * 1024;
+    const pad = "y".repeat(100);
+    const makeLine = (label: string) =>
+      JSON.stringify({ type: "user", message: { role: "user", content: `${label} ${pad}` } }) + "\n";
+    const lineSize = makeLine("probe").length;
+
+    // Fill to just beyond the cap so startAt > 0 but small
+    const linesNeeded = Math.ceil(HISTORY_MAX_BYTES / lineSize) + 1;
+    let content = "";
+    for (let i = 0; i < linesNeeded; i++) {
+      content += makeLine(`line-${i}`);
+    }
+    await writeFile(transcriptPath, content);
+
+    const h = tailClaudeTranscript({
+      transcriptPath,
+      onTurn,
+      onToolCall,
+      pollIntervalMs: POLL_MS,
+    });
+    const hist = await h.readHistory();
+    h.stop();
+
+    // All returned turns should be fully-parsed (no JSON errors, clean content)
+    for (const turn of hist) {
+      expect(turn.content).toMatch(/^line-\d+/);
+    }
+    // The very first historical turn (line-0) is outside the window
+    expect(hist.map((t) => t.content).some((c) => c.startsWith("line-0 "))).toBe(false);
+  });
+
+  // ── resume regression — no duplicate turns ────────────────────────────────
+
+  it("resume: readHistory() delivers past turns; fresh new turn arrives exactly once via onTurn", async () => {
+    // Seed a transcript with two historical turns already written
+    const histTurn1 = userLine("historical turn 1");
+    const histTurn2 = assistantLine("historical reply");
+    await writeFile(transcriptPath, histTurn1 + histTurn2);
+
+    // Resume semantics: startFromBeginning = false → tailer starts at EOF,
+    // so the live stream only emits content appended AFTER start.
+    const h = tailClaudeTranscript({
+      transcriptPath,
+      startFromBeginning: false,
+      onTurn,
+      onToolCall,
+      onError,
+      pollIntervalMs: POLL_MS,
+    });
+
+    // Read history synchronously first (as the server does)
+    const hist = await h.readHistory();
+
+    // History path: both seeded turns should appear exactly once
+    expect(hist).toHaveLength(2);
+    expect(hist[0]).toMatchObject({ role: "user", content: "historical turn 1" });
+    expect(hist[1]).toMatchObject({ role: "assistant", content: "historical reply" });
+
+    // Wait for the tailer to resolve its baseline (EOF)
+    await sleep(POLL_MS * 3);
+    // The live stream must NOT have fired for the historical content
+    expect(onTurn).not.toHaveBeenCalled();
+
+    // Append a truly new turn — must arrive exactly once via onTurn
+    await appendFile(transcriptPath, userLine("brand new turn"));
+    await sleep(POLL_MS * 4);
+
+    expect(onTurn).toHaveBeenCalledTimes(1);
+    expect(onTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "user", content: "brand new turn" }),
+    );
+
+    h.stop();
+  });
+
+  it("fresh launch (startFromBeginning=true): turns arrive via onTurn, NOT via readHistory duplication", async () => {
+    // A fresh session file — tailer tails from offset 0
+    const h = tailClaudeTranscript({
+      transcriptPath,
+      startFromBeginning: true,
+      onTurn,
+      onToolCall,
+      onError,
+      pollIntervalMs: POLL_MS,
+    });
+
+    // File doesn't exist yet — create it with one turn
+    await writeFile(transcriptPath, userLine("first ever turn"));
+    await sleep(POLL_MS * 4);
+
+    // Live stream delivers the turn
+    expect(onTurn).toHaveBeenCalledTimes(1);
+    expect(onTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "first ever turn" }),
+    );
+
+    // readHistory() on a fresh session also sees the same turn — but the
+    // caller (server) only invokes one or the other, not both.
+    // Verify readHistory still returns it correctly.
+    const hist = await h.readHistory();
+    expect(hist).toHaveLength(1);
+    expect(hist[0]).toMatchObject({ content: "first ever turn" });
+
+    h.stop();
+  });
 });
 
 // ---------------------------------------------------------------------------

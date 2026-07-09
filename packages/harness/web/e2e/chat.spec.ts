@@ -477,3 +477,75 @@ test("when Terminal tab is active, the chat panel is hidden and the terminal pan
   await expect(page.getByTestId("center-panel-terminal")).toBeAttached();
   await expect(page.getByTestId("center-panel-terminal")).not.toHaveAttribute("hidden");
 });
+
+// ---------------------------------------------------------------------------
+// Directive: no machinery terms leak to the user surface
+// ---------------------------------------------------------------------------
+
+test("banned machinery terms never appear in the chat surface innerText", async ({ page }) => {
+  // Build a "busy" mock session: historical turns, a tool chip, an attention
+  // banner, and a slash-command system note — everything the UI can show.
+  // Then assert that no internal implementation term leaks to the visible text.
+
+  // 1. Seed history turns (via chat.history)
+  await publishHistory(page, {
+    sessionId: "sess-boot",
+    turns: [
+      { role: "user", content: "Show me the project structure" },
+      { role: "assistant", content: "I will explore the directory tree." },
+    ],
+  });
+  await expect(page.getByTestId("chat-turns")).toBeVisible();
+
+  // 2. Add a live assistant turn (via chat.turn)
+  await publishTurn(page, {
+    sessionId: "sess-boot",
+    role: "assistant",
+    content: "Running a scan of your workspace now.",
+    turnId: "banned-live-1",
+  });
+  await expect(page.locator("[data-turn-id=banned-live-1]")).toBeVisible();
+
+  // 3. Publish a tool chip (chat.tool)
+  await publish(page, {
+    type: "chat.tool",
+    harnessSessionId: "sess-boot",
+    call: {
+      callId: "tool-banned-1",
+      name: "Bash",
+      state: "running",
+      input: "ls -la",
+    },
+  });
+
+  // 4. Show the attention banner (chat.attention)
+  await publish(page, {
+    type: "chat.attention",
+    harnessSessionId: "sess-boot",
+    message: "Claude is asking permission to run a command",
+  });
+  await expect(page.getByTestId("chat-attention-banner")).toBeVisible();
+
+  // 5. Send a slash command so the system note appears in the chat
+  const textarea = page.locator(".prompt-bar-textarea");
+  await textarea.click();
+  await textarea.fill("/model claude-opus-4-5");
+  await textarea.press("Enter");
+  await page.waitForFunction(
+    () =>
+      (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput?.req.text ===
+      "/model claude-opus-4-5",
+  );
+  await expect(page.getByTestId("chat-system-note")).toBeVisible();
+
+  // Grab the full visible text of the chat pane
+  const chatView = page.getByTestId("chat-view");
+  const visibleText = (await chatView.innerText()).toLowerCase();
+
+  // Assert no internal machinery terms appear to the user.
+  // These words belong to the implementation layer, not the user-facing layer.
+  const banned = ["hook", "analytics", "telemetry", "ingest", "collector"];
+  for (const term of banned) {
+    expect(visibleText, `"${term}" must not appear in the chat surface`).not.toContain(term);
+  }
+});

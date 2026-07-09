@@ -699,12 +699,18 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
     onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
+      // Capture whether this harness session had a prior agent session before
+      // updating — used by startClaudeChatTailerFor to distinguish a fresh
+      // launch (tail from offset 0) from a resume (tail from EOF, history
+      // provides the past turns).
+      const priorSession = sessionManager.get(harnessSessionId);
+      const isResume = priorSession?.agentSessionId != null && priorSession.agentSessionId !== agentSessionId;
       sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
       // For claude-code sessions, start the chat transcript tailer now that
       // we know the transcript file path (it's keyed by agentSessionId).
       const session = sessionManager.get(harnessSessionId);
       if (session && adapters[session.harness]?.eventSource === "hooks") {
-        startClaudeChatTailerFor(harnessSessionId, agentSessionId).catch((err: unknown) => {
+        startClaudeChatTailerFor(harnessSessionId, agentSessionId, isResume).catch((err: unknown) => {
           console.error("[harness] claude chat tailer startup failed:", err);
         });
       }
@@ -780,7 +786,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const claudeChatTailers = new Map<string, ClaudeTranscriptTailerHandle>();
 
   /** Start tailing the Claude Code transcript for chat events. */
-  async function startClaudeChatTailerFor(harnessSessionId: string, agentSessionId: string): Promise<void> {
+  async function startClaudeChatTailerFor(harnessSessionId: string, agentSessionId: string, isResume: boolean): Promise<void> {
     if (claudeChatTailers.has(harnessSessionId)) return;
     const session = sessionManager.get(harnessSessionId);
     if (!session) return;
@@ -788,10 +794,12 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     const transcriptPath = transcriptPathForSession(session.cwd, agentSessionId, options.claudeHomeDir);
     const tailer = tailClaudeTranscript({
       transcriptPath,
-      // A fresh launch: start from beginning so we capture the first user prompt.
-      // A resume: also start from beginning to deliver the full history snapshot,
-      // but the historical turns go through readHistory() not the live stream.
-      startFromBeginning: true,
+      // Fresh session: tail from offset 0 to capture the first user prompt as
+      // it arrives. Resume: tail from EOF so the live stream only delivers NEW
+      // content; readHistory() supplies the past turns (sent via chat.history).
+      // Tailing from 0 on a resume would duplicate every historical turn — once
+      // via the live stream and once via the history snapshot.
+      startFromBeginning: !isResume,
       onTurn: (turn) => {
         bus.publish({ type: "chat.turn", harnessSessionId, turn });
       },

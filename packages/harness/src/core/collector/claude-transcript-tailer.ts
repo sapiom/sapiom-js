@@ -320,15 +320,18 @@ export function tailClaudeTranscript(options: ClaudeTranscriptTailerOptions): Cl
     },
 
     async readHistory(): Promise<ChatTurn[]> {
-      // Read up to HISTORY_MAX_BYTES from the beginning of the transcript
+      // Read up to HISTORY_MAX_BYTES from the END of the transcript so that
+      // long sessions surface the most-recent turns rather than ancient history.
       let content: string;
+      let startAt = 0;
       try {
         const fileStat = await stat(options.transcriptPath);
-        const length = Math.min(fileStat.size, HISTORY_MAX_BYTES);
+        startAt = Math.max(0, fileStat.size - HISTORY_MAX_BYTES);
+        const length = fileStat.size - startAt;
         const handle = await open(options.transcriptPath, "r");
         try {
           const buffer = Buffer.allocUnsafe(length);
-          await handle.read(buffer, 0, length, 0);
+          await handle.read(buffer, 0, length, startAt);
           content = buffer.toString("utf8");
         } finally {
           await handle.close();
@@ -338,8 +341,10 @@ export function tailClaudeTranscript(options: ClaudeTranscriptTailerOptions): Cl
       }
 
       const lines = content.split("\n");
-      // Drop the last line if we hit the byte cap (may be truncated)
-      if (content.length >= HISTORY_MAX_BYTES) lines.pop();
+      // When we started mid-file (startAt > 0) the first bytes may be a
+      // partial JSONL line — drop it so we never feed a truncated record to
+      // the parser.
+      if (startAt > 0) lines.shift();
 
       const { turns } = parseTranscriptLines(lines);
       return turns;
