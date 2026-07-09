@@ -69,8 +69,12 @@ export interface PublicUrlInfo {
  * sandbox (e.g. via {@link Sandbox.uploadDir}); `source` defaults to those files.
  */
 export interface DeployPreviewOptions {
-  /** Where the app code comes from. Defaults to already-uploaded files. */
-  source?: { kind: "fs" };
+  /**
+   * Where the app code comes from. `fs` (default) = files already uploaded to the
+   * sandbox. `git` = the server checks the Sapiom repo `repo` out into the sandbox
+   * first (no local upload needed — the in-process/agent path).
+   */
+  source?: { kind: "fs" } | { kind: "git"; repo: string; ref?: string };
   /** Build command run before start (e.g. `npm install`). Skipped if omitted. */
   build?: string;
   /** Command that starts the long-running server. */

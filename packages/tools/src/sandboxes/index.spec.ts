@@ -305,4 +305,14 @@ describe("Sandbox.deployPreview", () => {
     expect(result.status).toBe("failed");
     expect(result.logs).toContain("boom");
   });
+
+  it("forwards a git source verbatim in the body", async () => {
+    let seenBody: Record<string, unknown> = {};
+    const box = sandboxWith((_url, init) => {
+      seenBody = JSON.parse((init.body as string) ?? "{}");
+      return ok({ url: "https://g.preview.bl.run", status: "deployed", logs: "" });
+    });
+    await box.deployPreview({ source: { kind: "git", repo: "my-app", ref: "main" }, start: "node server.js", port: 3000 });
+    expect(seenBody.source).toEqual({ kind: "git", repo: "my-app", ref: "main" });
+  });
 });
