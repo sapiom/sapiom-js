@@ -133,23 +133,6 @@ export function CanvasPane({
 
       {!sessionId ? (
         <div className="canvas-empty">Start a session to see its canvas here.</div>
-      ) : runningTask ? (
-        <div className="canvas-task-activity" data-testid="canvas-task-activity">
-          <div className="canvas-task-title">
-            <span className="canvas-task-spinner" aria-hidden="true" />
-            <span>{runningTask.label} is running…</span>
-          </div>
-          {runningTask.statusLines.length > 0 && (
-            <ul className="canvas-task-lines" data-testid="canvas-task-lines">
-              {runningTask.statusLines.slice(-ACTIVITY_LINES_SHOWN).map((line, index) => (
-                <li key={`${index}-${line}`}>{line}</li>
-              ))}
-            </ul>
-          )}
-          <p className="canvas-empty-hint">
-            Running as a background task — your session stays free. The canvas reloads here when it finishes.
-          </p>
-        </div>
       ) : failedTask ? (
         <div className="canvas-task-failed" data-testid="canvas-task-failed">
           <p className="canvas-task-title">
@@ -181,6 +164,23 @@ export function CanvasPane({
             </button>
           </div>
         </div>
+      ) : runningTask && !hasGeneratedContent ? (
+        <div className="canvas-task-activity" data-testid="canvas-task-activity">
+          <div className="canvas-task-title">
+            <span className="canvas-task-spinner" aria-hidden="true" />
+            <span>{runningTask.label} is running…</span>
+          </div>
+          {runningTask.statusLines.length > 0 && (
+            <ul className="canvas-task-lines" data-testid="canvas-task-lines">
+              {runningTask.statusLines.slice(-ACTIVITY_LINES_SHOWN).map((line, index) => (
+                <li key={`${index}-${line}`}>{line}</li>
+              ))}
+            </ul>
+          )}
+          <p className="canvas-empty-hint">
+            Running as a background task — your session stays free. The canvas reloads here when it finishes.
+          </p>
+        </div>
       ) : probing ? (
         <div className="canvas-loading" data-testid="canvas-loading">
           <span className="canvas-task-spinner" aria-hidden="true" />
@@ -211,6 +211,27 @@ export function CanvasPane({
             <div className="canvas-loading canvas-loading--overlay" data-testid="canvas-loading">
               <span className="canvas-task-spinner" aria-hidden="true" />
               <p className="canvas-empty-hint">Rendering diagram…</p>
+            </div>
+          )}
+          {runningTask && (
+            <div
+              className="canvas-task-activity canvas-task-activity--overlay"
+              data-testid="canvas-task-activity"
+            >
+              <div className="canvas-task-title">
+                <span className="canvas-task-spinner" aria-hidden="true" />
+                <span>{runningTask.label} is running…</span>
+              </div>
+              {runningTask.statusLines.length > 0 && (
+                <ul className="canvas-task-lines" data-testid="canvas-task-lines">
+                  {runningTask.statusLines.slice(-ACTIVITY_LINES_SHOWN).map((line, index) => (
+                    <li key={`${index}-${line}`}>{line}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="canvas-empty-hint">
+                Running as a background task — your session stays free. The canvas reloads here when it finishes.
+              </p>
             </div>
           )}
           <iframe
