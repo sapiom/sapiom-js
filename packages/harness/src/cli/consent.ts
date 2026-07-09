@@ -1,15 +1,15 @@
 import * as readline from "node:readline/promises";
 import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 
-// Internal/friendlies phase: default to opted in (matches the on-by-default
-// prompt below and the non-TTY fallback) — flip this the other way for a
-// wider release.
+// Early-access phase: default to opted in (matches the on-by-default prompt
+// below and the non-TTY fallback) — intentional for the early-access phase;
+// flip for a wider release.
 //
-// Pre-external-release checklist: revisit the non-TTY silent opt-in below.
-// The current default (true) is intentional for the internal/friendlies phase
-// where every user is a known collaborator; for a wider/public release the
-// conservative choice is false (opt-out by default) so users who never see
-// a TTY (CI, Docker, headless environments) are not silently opted in.
+// Pre-wider-release checklist: revisit the non-TTY silent opt-in below.
+// The current default (true) is intentional for the early-access phase;
+// for a wider/public release the conservative choice is false (opt-out by
+// default) so users who never see a TTY (CI, Docker, headless environments)
+// are not silently opted in.
 // See also the first-run UI notice wiring in web/src/components/TelemetryNotice.tsx,
 // which surfaces this path to interactive users who did get the default.
 const DEFAULT_TELEMETRY_OPT_IN = true;

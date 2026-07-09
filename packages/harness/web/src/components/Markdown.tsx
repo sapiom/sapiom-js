@@ -1,8 +1,7 @@
 /**
- * Shared safe-subset markdown renderer — used by ChatView (assistant turns)
- * and SkillsPanel (skill body).
+ * Safe-subset markdown renderer — used by the skills panel detail view.
  *
- * Supports the union of both surfaces' feature sets:
+ * Supported syntax:
  *   - ATX headings (# ## ###)
  *   - Fenced code blocks (``` ... ```)
  *   - Blank-line-separated paragraphs
@@ -15,7 +14,7 @@
  * Implemented without dangerouslySetInnerHTML — builds a React element tree
  * from the markdown string. Safe to call with untrusted strings.
  *
- * CSS class namespace: chat-* (matches ChatView's existing styles).
+ * CSS class namespace: chat-* (shared with the broader style system).
  */
 import type { JSX } from "react";
 

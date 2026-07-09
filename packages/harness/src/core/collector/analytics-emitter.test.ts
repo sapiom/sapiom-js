@@ -17,7 +17,6 @@ import { startMockCollector, type MockCollector } from "@sapiom/analytics-core/t
 
 import {
   createHarnessEmitter,
-  type HarnessAnalyticsEmitterOptions,
   type HarnessEmitter,
 } from "./analytics-emitter.js";
 import type { AnalyticsEvent, CollectorContext, HarnessKind } from "../../shared/types.js";
