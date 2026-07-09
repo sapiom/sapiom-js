@@ -33,7 +33,18 @@ export interface SkillDetail extends SkillMeta {
   body: string;
 }
 
-import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
+/** Shape of a single entry returned by GET /api/harnesses. */
+export interface HarnessEntry {
+  id: string;
+  label: string;
+  mode: "embedded" | "external";
+  experimental: boolean;
+  installed: boolean;
+  /** Per-harness MCP install instructions from the adapter registry. */
+  installMcpPrompt: string;
+}
+
+import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
 
 export type { FsDirEntry, FsListResponse };
 
@@ -107,6 +118,8 @@ export interface HarnessApi {
   listSkills(): Promise<SkillMeta[]>;
   /** Fetch the full detail (including markdown body) for a single skill. */
   getSkill(id: string): Promise<SkillDetail>;
+  /** List all harness adapters with their MCP install prompts. */
+  listHarnesses(): Promise<HarnessEntry[]>;
 }
 
 class RealApi implements HarnessApi {
@@ -225,6 +238,10 @@ class RealApi implements HarnessApi {
 
   getSkill(id: string): Promise<SkillDetail> {
     return this.request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`);
+  }
+
+  listHarnesses(): Promise<HarnessEntry[]> {
+    return this.request<HarnessEntry[]>("/api/harnesses");
   }
 }
 
@@ -458,6 +475,11 @@ class MockApi implements HarnessApi {
     const found = MOCK_SKILLS.find((s) => s.id === id);
     if (!found) throw new ApiError(404, `GET /api/skills/${id} → 404`, `Unknown skill '${id}'`);
     return { ...found, body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}` };
+  }
+
+  async listHarnesses(): Promise<HarnessEntry[]> {
+    await delay(100);
+    return MOCK_HARNESSES;
   }
 }
 

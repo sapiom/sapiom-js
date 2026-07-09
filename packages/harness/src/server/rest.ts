@@ -254,6 +254,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
           mode: adapter.mode,
           experimental: adapter.experimental ?? false,
           installed: await adapter.detectInstalled(),
+          installMcpPrompt: adapter.installMcpPrompt(),
         })),
       );
       res.json(entries);

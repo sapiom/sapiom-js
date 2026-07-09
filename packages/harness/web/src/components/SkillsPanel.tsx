@@ -29,7 +29,7 @@
 import { useState, useCallback, useEffect, type JSX } from "react";
 
 import type { HarnessSession } from "@shared/types";
-import type { SkillDetail, SkillMeta } from "../lib/api";
+import type { HarnessEntry, SkillDetail, SkillMeta } from "../lib/api";
 import { ApiError } from "../lib/api";
 import { Icon } from "./Icon";
 
@@ -174,63 +174,24 @@ function renderMarkdown(md: string): JSX.Element {
 
 interface InstallMcpModalProps {
   activeHarness: string | null;
+  /** Harness adapter list — fetched from GET /api/harnesses at open time. */
+  harnesses: HarnessEntry[];
   onClose: () => void;
 }
 
-// Static per-harness install instructions (sourced from the adapter registry's
-// installMcpPrompt() texts — kept here as constants so the SPA doesn't need
-// a separate API call; the registry text is the canonical source).
-const HARNESS_INSTALL_PROMPTS: Record<string, { label: string; text: string }> = {
-  "claude-code": {
-    label: "Claude Code",
-    text: [
-      "Set up the Sapiom MCP server for Claude Code.",
-      "",
-      "1. Register it under the server name `sapiom-dev`:",
-      "",
-      "   claude mcp add sapiom-dev -- npx -y @sapiom/mcp",
-      "",
-      "   The `@sapiom/mcp` npm package ships the `sapiom-mcp` binary, a local",
-      "   MCP server that speaks stdio — no global install or daemon needed.",
-      "2. Verify the registration: `claude mcp list` should show `sapiom-dev`.",
-      "3. Restart Claude Code (or start a new session) so the server is loaded.",
-      "4. Networked Sapiom tools need an API key: run the `sapiom_authenticate`",
-      "   tool once and complete the browser login it opens.",
-    ].join("\n"),
-  },
-  "codex": {
-    label: "Codex",
-    text: [
-      "Set up the Sapiom MCP server for OpenAI Codex CLI.",
-      "",
-      "1. Add the server to your Codex config file (~/.codex/config.yaml):",
-      "",
-      "   mcpServers:",
-      "     sapiom-dev:",
-      "       command: npx",
-      "       args: [\"-y\", \"@sapiom/mcp\"]",
-      "",
-      "2. Restart Codex so the server is loaded.",
-      "3. Networked Sapiom tools need an API key: run the `sapiom_authenticate`",
-      "   tool once and complete the browser login it opens.",
-    ].join("\n"),
-  },
-};
-
-const HARNESS_ORDER = ["claude-code", "codex"];
-
-function InstallMcpModal({ activeHarness, onClose }: InstallMcpModalProps): JSX.Element {
-  const [selectedHarness, setSelectedHarness] = useState<string>(
-    activeHarness ?? "claude-code",
-  );
+function InstallMcpModal({ activeHarness, harnesses, onClose }: InstallMcpModalProps): JSX.Element {
+  // Embedded adapters only — external harnesses (conductor) have no MCP concept.
+  const embeddedHarnesses = harnesses.filter((h) => h.mode === "embedded");
+  const defaultId = activeHarness ?? embeddedHarnesses[0]?.id ?? "";
+  const [selectedId, setSelectedId] = useState<string>(defaultId);
   const [copied, setCopied] = useState(false);
 
-  const entry = HARNESS_INSTALL_PROMPTS[selectedHarness];
+  const entry = embeddedHarnesses.find((h) => h.id === selectedId);
 
   const handleCopy = useCallback(async () => {
     if (!entry) return;
     try {
-      await navigator.clipboard.writeText(entry.text);
+      await navigator.clipboard.writeText(entry.installMcpPrompt);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -263,15 +224,15 @@ function InstallMcpModal({ activeHarness, onClose }: InstallMcpModalProps): JSX.
         </p>
 
         {/* Harness picker — only shown when no session determines the kind. */}
-        {!activeHarness && (
+        {!activeHarness && embeddedHarnesses.length > 1 && (
           <div className="install-mcp-picker">
-            {HARNESS_ORDER.filter((h) => HARNESS_INSTALL_PROMPTS[h]).map((h) => (
+            {embeddedHarnesses.map((h) => (
               <button
-                key={h}
-                className={"install-mcp-tab" + (selectedHarness === h ? " is-selected" : "")}
-                onClick={() => setSelectedHarness(h)}
+                key={h.id}
+                className={"install-mcp-tab" + (selectedId === h.id ? " is-selected" : "")}
+                onClick={() => setSelectedId(h.id)}
               >
-                {HARNESS_INSTALL_PROMPTS[h].label}
+                {h.label}
               </button>
             ))}
           </div>
@@ -279,7 +240,7 @@ function InstallMcpModal({ activeHarness, onClose }: InstallMcpModalProps): JSX.
 
         {entry && (
           <pre className="install-mcp-instructions" data-testid="install-mcp-instructions">
-            {entry.text}
+            {entry.installMcpPrompt}
           </pre>
         )}
 
@@ -433,15 +394,18 @@ export interface SkillsPanelProps {
   listSkills: () => Promise<SkillMeta[]>;
   /** Fetches full skill detail (with body). */
   getSkill: (id: string) => Promise<SkillDetail>;
+  /** Fetches harness adapter list (includes installMcpPrompt for the modal). */
+  listHarnesses: () => Promise<HarnessEntry[]>;
 }
 
-export function SkillsPanel({ session, onInjectInput, listSkills, getSkill }: SkillsPanelProps): JSX.Element {
+export function SkillsPanel({ session, onInjectInput, listSkills, getSkill, listHarnesses }: SkillsPanelProps): JSX.Element {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<SkillDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [installMcpOpen, setInstallMcpOpen] = useState(false);
+  const [harnesses, setHarnesses] = useState<HarnessEntry[]>([]);
 
   // Load skill list on mount.
   useEffect(() => {
@@ -462,6 +426,22 @@ export function SkillsPanel({ session, onInjectInput, listSkills, getSkill }: Sk
       cancelled = true;
     };
   }, [listSkills]);
+
+  // Load harness adapter list for the Install-MCP modal (fetched once per
+  // mount — the list is stable across the session's lifetime).
+  useEffect(() => {
+    let cancelled = false;
+    listHarnesses()
+      .then((data) => {
+        if (!cancelled) setHarnesses(data);
+      })
+      .catch(() => {
+        // Non-critical — the modal degrades gracefully with an empty list.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listHarnesses]);
 
   const handleSelectSkill = useCallback(
     async (id: string) => {
@@ -530,6 +510,7 @@ export function SkillsPanel({ session, onInjectInput, listSkills, getSkill }: Sk
       {installMcpOpen && (
         <InstallMcpModal
           activeHarness={session?.harness ?? null}
+          harnesses={harnesses}
           onClose={() => setInstallMcpOpen(false)}
         />
       )}
