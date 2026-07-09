@@ -7,7 +7,9 @@
 import express, { Router } from "express";
 import { z } from "zod";
 
+import { randomUUID } from "node:crypto";
 import type {
+  AnalyticsEvent,
   AppState,
   BackgroundTask,
   BindWorkflowRequest,
@@ -20,6 +22,8 @@ import type {
   MacroDef,
   SampleProjectSeedResponse,
   SessionSummary,
+  UiEventName,
+  UiTrackRequest,
   WorkflowInfo,
 } from "../shared/types.js";
 import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
@@ -51,6 +55,21 @@ const settingsPatchSchema = z.object({
   telemetryOptIn: z.boolean().optional(),
   recentDirs: z.array(z.string()).optional(),
 }) satisfies z.ZodType<Partial<HarnessSettings>>;
+
+const UI_EVENT_NAMES: readonly UiEventName[] = [
+  "prompt.submitted",
+  "session.switched",
+  "macro.invoked",
+  "visualize.triggered",
+  "consent.changed",
+  "session.created",
+];
+
+const uiTrackSchema = z.object({
+  event: z.enum(UI_EVENT_NAMES as [UiEventName, ...UiEventName[]]),
+  data: z.record(z.unknown()).optional(),
+  harnessSessionId: z.string().optional(),
+}) satisfies z.ZodType<UiTrackRequest>;
 
 export interface RestRouterOptions {
   sessionManager: SessionManager;
@@ -103,6 +122,13 @@ export interface RestRouterOptions {
    * mutated any state, surfaced verbatim in AppState.firstRun. Omitted when
    * the caller doesn't supply it (tests), leaving AppState.firstRun absent. */
   firstRun?: boolean;
+  /** How telemetry consent was determined at boot — surfaced in AppState so the
+   * UI can show the first-run notice when the user never explicitly answered.
+   * Omitted when the caller didn't run the consent flow (tests). */
+  consentSource?: AppState["consentSource"];
+  /** Which env var forced telemetry off — surfaced in AppState for the
+   * tracking indicator's "off (env)" label. Null/absent otherwise. */
+  consentEnvReason?: string | null;
   /** Seeds (or reuses) the bundled example project and returns where it
    * landed — backs POST /api/sample-project (the welcome panel's "Run the
    * sample project"). Optional so callers without the real seeder (tests)
@@ -113,6 +139,20 @@ export interface RestRouterOptions {
    * (server/index.ts) passes the path under its resolved state root so an
    * isolated boot never reads or writes the developer's real settings. */
   settingsPath?: string;
+  /**
+   * Dependencies for POST /api/track (UI-interaction analytics).
+   * Optional: when omitted, /api/track returns 501 (tests that don't care
+   * about UI analytics don't need to stub these).
+   */
+  uiTrack?: {
+    store: { append(event: import("../shared/types.js").AnalyticsEvent): Promise<void> };
+    batcher: { enqueue(event: import("../shared/types.js").AnalyticsEvent): void };
+    /** Per-boot seq counter shared with the ingest pipeline. */
+    nextSeq: (sessionId: string) => number;
+    machineId: string;
+    userId: string | null;
+    tenantId: string | null;
+  };
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
@@ -136,6 +176,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
         ...(options.availableHarnesses ? { availableHarnesses: options.availableHarnesses } : {}),
         ...(options.listTasks ? { tasks: options.listTasks() } : {}),
         ...(options.firstRun !== undefined ? { firstRun: options.firstRun } : {}),
+        ...(options.consentSource !== undefined ? { consentSource: options.consentSource } : {}),
+        ...(options.consentEnvReason !== undefined ? { consentEnvReason: options.consentEnvReason } : {}),
       };
       res.json(state);
     } catch (err) {
@@ -362,6 +404,65 @@ export function createRestRouter(options: RestRouterOptions): Router {
       }
       next(err);
     }
+  });
+
+  /**
+   * POST /api/track — UI-interaction analytics.
+   *
+   * Feeds the same store + batcher pipeline as hook events from /ingest, so
+   * ui.* events get the same local ndjson write (always) and remote delivery
+   * (per consent) that agent hook events do.  The client fires fire-and-forget
+   * — we always respond 200 fast, then process.
+   *
+   * Consent semantics: store.append always; batcher.enqueue only when opted in
+   * (batcher.enqueue is gated by the HarnessEmitter's disabled flag, which
+   * mirrors the live consent state — same as hook events).
+   */
+  router.post("/track", (req, res) => {
+    if (!options.uiTrack) {
+      // Not wired in this server instance (tests without UI analytics deps).
+      res.status(501).json({ error: "ui tracking not available" });
+      return;
+    }
+
+    // Validate before responding — bad shape gets a 400 synchronously.
+    const parsed = uiTrackSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    // Respond immediately — fire-and-forget from the client's perspective.
+    res.json({ ok: true });
+
+    const { store, batcher, nextSeq, machineId, userId, tenantId } = options.uiTrack;
+    const { event, data, harnessSessionId } = parsed.data;
+    // Use the provided session id for seq tracking; fall back to a synthetic
+    // one-use id so ui events without a session still get a valid seq.
+    const sessionId = harnessSessionId ?? `ui-${randomUUID()}`;
+
+    const analyticsEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: nextSeq(sessionId),
+      ts: new Date().toISOString(),
+      userId,
+      tenantId,
+      machineId,
+      harnessSessionId: sessionId,
+      agentSessionId: null,
+      harness: "claude-code", // ui events have no harness kind; use canonical placeholder
+      type: event as AnalyticsEvent["type"],
+      payload: {
+        ...(data ?? {}),
+        surface: "ui",
+      },
+    };
+
+    void store.append(analyticsEvent).catch((err: unknown) => {
+      // Non-fatal: local write failure should never surface to the user.
+      void err;
+    });
+    batcher.enqueue(analyticsEvent);
   });
 
   return router;
