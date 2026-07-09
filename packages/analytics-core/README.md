@@ -24,7 +24,7 @@ emit. The full wire contract lives in [CONTRACT.md](./CONTRACT.md).
 
 Each event is a small JSON envelope:
 
-- **What happened**: an event name (e.g. `cli_command`, `capability_call`)
+- **What happened**: an event name (e.g. `command.run`, `capability.call`)
   and a JSON payload describing it.
 - **Which software sent it**: the emitting package's name and version, the
   surface it belongs to (`cli`, `tools`, `mcp`, ...), and a schema version.
@@ -89,7 +89,7 @@ const analytics = createAnalytics({
   // endpoint: SAPIOM_COLLECTOR_ENDPOINT,
 });
 
-analytics.track("cli_command", { command: "dev" });
+analytics.track("command.run", { command: "dev" });
 
 await analytics.flush(); // best-effort send, never rejects
 await analytics.shutdown(); // flush + stop timers, never rejects
@@ -117,7 +117,7 @@ const analytics = createAnalytics({
   endpoint: collector.url,
 });
 
-analytics.track("capability_call", { capability: "search" });
+analytics.track("capability.call", { capability: "search" });
 await analytics.flush();
 
 expect(collector.events()).toHaveLength(1);

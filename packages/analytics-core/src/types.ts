@@ -8,7 +8,7 @@ export type EventSource =
   | "mcp"
   | "tools"
   | "cli"
-  | "orchestration"
+  | "agent"
   | "langchain"
   | "backend";
 

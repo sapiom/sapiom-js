@@ -41,7 +41,7 @@ describe("event envelope", () => {
       createAnalytics(baseConfig({ fetchImpl: capture.fetchImpl })),
     );
 
-    analytics.track("capability_call", { capability: "search" });
+    analytics.track("capability.call", { capability: "search" });
     await analytics.flush();
 
     const [event] = capture.batch();
@@ -50,7 +50,7 @@ describe("event envelope", () => {
     expect(event.session_id).toBe(analytics.sessionId);
     expect(new Date(event.event_timestamp).toString()).not.toBe("Invalid Date");
     expect(event.source).toBe("tools");
-    expect(event.event_type).toBe("capability_call");
+    expect(event.event_type).toBe("capability.call");
     expect(event.sdk_name).toBe("@sapiom/tools");
     expect(event.sdk_version).toBe("1.2.3");
     expect(event.schema_version).toBe("1");
