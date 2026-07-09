@@ -530,6 +530,10 @@ importers:
         version: 5.9.3
 
   packages/tools:
+    dependencies:
+      '@sapiom/analytics-core':
+        specifier: workspace:^
+        version: link:../analytics-core
     devDependencies:
       '@types/jest':
         specifier: ^29.5.14

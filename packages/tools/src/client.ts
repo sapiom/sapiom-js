@@ -349,6 +349,19 @@ export interface Sapiom {
    * need this — attribution is set once when the client is constructed.
    */
   withAttribution(attribution: Attribution): Sapiom;
+  /**
+   * Release the client's background resources — today that is the usage-analytics
+   * emitter (buffered events are flushed best-effort and its process exit hook is
+   * detached). Resolves immediately when there is nothing to release; idempotent;
+   * never rejects. One call covers every client derived via `withAttribution`.
+   *
+   * Call this once per client in hosts that construct many clients in one process
+   * (e.g. an engine worker building a per-execution client via
+   * `createClientFromEnv()`), so exit hooks don't accumulate across executions.
+   * One-shot processes don't need it. Capability calls made after shutdown still
+   * work; they just no longer emit analytics.
+   */
+  shutdown(): Promise<void>;
 }
 
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
@@ -470,6 +483,7 @@ function bind(transport: Transport): Sapiom {
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
+    shutdown: () => transport.shutdown(),
   };
 }
 
