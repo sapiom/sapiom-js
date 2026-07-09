@@ -1,7 +1,7 @@
 {
   "name": "claude-code-boot",
   "synthetic": true,
-  "recordedFrom": "hand-modeled on Claude Code v2.x boot output under a 100x30 pty",
+  "modeledOn": "hand-modeled on Claude Code v2.x boot output under a 100x30 pty",
   "sanitized": true,
   "notes": "Hand-modeled rendition of a Claude Code boot sequence (trust prompt, trust acceptance, welcome box, promo notice, idle prompt/footer) — not a verbatim recording; every identifier (user, organization, path) is fictional. Waits capped at 800ms. Input handling (onLine) is synthetic. Re-model when the boot UI changes materially; see the fixture README for the sanitize-before-commit rule.",
   "echoKeystrokes": true,

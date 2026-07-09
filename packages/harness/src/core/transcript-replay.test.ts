@@ -18,6 +18,14 @@
  *                         under a 100x30 pty; all identifiers (user, org,
  *                         path) are fictional. Not a verbatim recording.
  *   See e2e/fixtures/fake-agent/README.md for the full provenance table.
+ *
+ * e2e-live.ts uses a separate capture-oriented fixture (fake-claude.mjs) rather
+ * than fake-agent.cjs. See e2e/fixtures/fake-agent/README.md § "Test consumer"
+ * for the rationale: fake-agent.cjs fires no hook events, so session.ready
+ * never flips and submitInput would throw SessionNotReadyError — wiring it into
+ * e2e-live.ts would require hook-firing logic (scope creep) or bypassing the
+ * ready-gate (breaks the invariant it tests). The vitest suite here covers the
+ * same SessionManager pty path without those constraints.
  */
 
 import * as fs from "node:fs";
@@ -28,6 +36,23 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { SessionManager } from "./session-manager.js";
 import type { HarnessAdapter, SpawnSpec } from "../shared/types.js";
+
+// ---------------------------------------------------------------------------
+// node-pty availability — resolve once at module load, skip all tests if
+// the native prebuilt is absent on this platform/arch.
+// ---------------------------------------------------------------------------
+
+const nodePty = await import("node-pty").then(
+  (m) => m,
+  () => {
+    console.log(
+      "[transcript-replay] node-pty native module unavailable on this platform — " +
+        "skipping all transcript-replay tests. " +
+        "If this is unexpected, try: pnpm rebuild node-pty",
+    );
+    return null;
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -124,17 +149,8 @@ class OutputCollector {
 // Low-level fake-agent pty tests (bypass SessionManager)
 // ---------------------------------------------------------------------------
 
-describe("fake-agent fixture (real pty, direct spawn)", () => {
-  // We use node-pty directly — import lazily to avoid crashing the test
-  // suite on a platform without the prebuilt native module.
-  let nodePty: typeof import("node-pty") | undefined;
-
-  interface SpawnedAgent {
-    pty: import("node-pty").IPty;
-    output: OutputCollector;
-  }
-
-  async function spawnAgent(
+describe.skipIf(!nodePty)("fake-agent fixture (real pty, direct spawn)", () => {
+  function spawnAgent(
     transcript: string,
     opts: {
       cols?: number;
@@ -142,12 +158,10 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
       env?: Record<string, string>;
       cwd?: string;
     } = {},
-  ): Promise<SpawnedAgent> {
-    if (!nodePty) {
-      nodePty = await import("node-pty");
-    }
+  ): { pty: import("node-pty").IPty; output: OutputCollector } {
+    // nodePty is non-null inside this describe block (skipIf guards it).
     const output = new OutputCollector();
-    const pty = nodePty.spawn(process.execPath, [FAKE_AGENT, path.join(TRANSCRIPTS, `${transcript}.json`)], {
+    const pty = nodePty!.spawn(process.execPath, [FAKE_AGENT, path.join(TRANSCRIPTS, `${transcript}.json`)], {
       name: "xterm-256color",
       cols: opts.cols ?? 80,
       rows: opts.rows ?? 24,
@@ -159,7 +173,7 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
   }
 
   it("streams the boot banner from the basic-echo transcript", async () => {
-    const { pty, output } = await spawnAgent("basic-echo");
+    const { pty, output } = spawnAgent("basic-echo");
     try {
       await output.waitFor("fake-agent");
       expect(output.text).toContain("v0.1.0");
@@ -170,7 +184,7 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
   }, 20_000);
 
   it("echoes typed input back after the busy spinner", async () => {
-    const { pty, output } = await spawnAgent("basic-echo");
+    const { pty, output } = spawnAgent("basic-echo");
     try {
       await output.waitFor("> ");
       pty.write("hello world\r");
@@ -187,7 +201,7 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
       fs.mkdtempSync(path.join(os.tmpdir(), "fake-agent-cwd-")),
     );
     try {
-      const { pty, output } = await spawnAgent("diagnostics", {
+      const { pty, output } = spawnAgent("diagnostics", {
         cols: 100,
         rows: 40,
         env: minimalEnv({ FAKE_AGENT_MARKER: "plumbing-ok" }),
@@ -206,7 +220,7 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
   }, 20_000);
 
   it("diagnostics transcript announces terminal resize", async () => {
-    const { pty, output } = await spawnAgent("diagnostics");
+    const { pty, output } = spawnAgent("diagnostics");
     try {
       await output.waitFor("> ");
       pty.resize(120, 30);
@@ -217,7 +231,7 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
   }, 20_000);
 
   it("stubborn transcript acknowledges SIGTERM but does not exit", async () => {
-    const { pty, output } = await spawnAgent("stubborn");
+    const { pty, output } = spawnAgent("stubborn");
     try {
       await output.waitFor("> ");
       // SIGTERM must not kill the process — the transcript sets ignoreSigterm.
@@ -230,7 +244,7 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
 
   it("replays the claude-code-boot transcript and reaches the idle footer", async () => {
     // Hand-modeled at 100x30; replay at the same size so box drawing is faithful.
-    const { pty, output } = await spawnAgent("claude-code-boot", {
+    const { pty, output } = spawnAgent("claude-code-boot", {
       cols: 100,
       rows: 30,
     });
@@ -248,7 +262,7 @@ describe("fake-agent fixture (real pty, direct spawn)", () => {
 // create→attach→write→kill path using the real node-pty spawn.
 // ---------------------------------------------------------------------------
 
-describe("transcript-fixture replay via SessionManager (real pty)", () => {
+describe.skipIf(!nodePty)("transcript-fixture replay via SessionManager (real pty)", () => {
   let tmpDir: string;
   let sessionsPath: string;
   let manager: SessionManager;
@@ -265,7 +279,7 @@ describe("transcript-fixture replay via SessionManager (real pty)", () => {
         env: minimalEnv(),
         cwd: path.dirname(FAKE_AGENT),
       }),
-      resume: (agentSessionId): SpawnSpec => ({
+      resume: (_agentSessionId): SpawnSpec => ({
         command: process.execPath,
         args: [FAKE_AGENT, path.join(TRANSCRIPTS, `${transcript}.json`)],
         env: minimalEnv(),
@@ -295,7 +309,6 @@ describe("transcript-fixture replay via SessionManager (real pty)", () => {
   });
 
   it("creates a session against the basic-echo transcript, streams boot output, echoes a line, then kills cleanly", async () => {
-    // This test uses the real node-pty so it needs more time than the default.
     const session = await manager.create({ harness: "claude-code", cwd: tmpDir });
 
     expect(session.status).toBe("running");
