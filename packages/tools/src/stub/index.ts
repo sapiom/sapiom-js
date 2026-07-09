@@ -1255,6 +1255,22 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           r("memory.forget", [id, options], () => undefined) as void,
         ),
     },
+    // Read-only vault (SAP-1471). Stubs return empty/absent — a local run must
+    // never surface real credentials, and "no secret found" is the safe default.
+    vault: {
+      list: (ref: string) =>
+        Promise.resolve(r("vault.list", [ref], () => []) as string[]),
+      get: (ref: string, key: string) =>
+        Promise.resolve(r("vault.get", [ref, key], () => null) as string | null),
+      getMany: (ref: string, keys: string[]) =>
+        Promise.resolve(
+          r("vault.getMany", [ref, keys], () => ({})) as Record<string, string>,
+        ),
+      getAll: (ref: string) =>
+        Promise.resolve(
+          r("vault.getAll", [ref], () => ({})) as Record<string, string>,
+        ),
+    },
     withAttribution: () => client,
     // The stub makes no HTTP calls and creates no analytics emitter — nothing
     // to release, so shutdown matches the real client's "resolve immediately".
