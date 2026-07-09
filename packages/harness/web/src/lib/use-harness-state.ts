@@ -286,9 +286,9 @@ export function useHarnessState(): HarnessStateHook {
       try {
         await api.killSession(id);
       } catch (err) {
-        // Surface close failures as a toast; still attempt local state cleanup
-        // so a transient server error doesn't leave the user stranded on the
-        // dead-session overlay.
+        // Surface the failure as a toast and keep the user on the dead-session
+        // overlay: the re-throw below skips the local removal, so a failed kill
+        // never makes the session vanish from the UI as if it had succeeded.
         setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
         throw err;
       }

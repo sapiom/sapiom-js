@@ -58,9 +58,10 @@ export interface IngestDeps {
   onNormalizedEvent?: (event: AnalyticsEvent) => void;
   /**
    * Called for every raw hook event BEFORE normalization — fired even for
-   * hook events that don't produce analytics events (e.g. `Notification`).
-   * Used to drive UI-transport-only signals such as the chat attention banner
-   * without going through the analytics normalize/store pipeline.
+   * hook events that don't produce an analytics event. A UI-transport-only
+   * passthrough seam (bypasses the analytics normalize/store pipeline) for
+   * consumers that need to observe raw hook activity. Currently unused;
+   * retained as an extension point.
    */
   onRawHookEvent?: (hookEvent: string, harnessSessionId: string, payload: Record<string, unknown>) => void;
   onError?: (err: unknown) => void;
@@ -104,9 +105,9 @@ export async function processIngest(
 
   const hookPayload = body.payload ?? {};
 
-  // Fire before normalization so callers can observe hook events that don't
-  // produce analytics events (e.g. Notification — no analytics, but the chat
-  // attention banner needs to know it fired).
+  // Fire before normalization so a consumer can observe raw hook events,
+  // including ones that produce no analytics event. UI-transport-only seam;
+  // no consumer today.
   deps.onRawHookEvent?.(hookEvent, harnessSessionId, hookPayload);
 
   const event = deps.normalize(hookEvent, hookPayload, {
