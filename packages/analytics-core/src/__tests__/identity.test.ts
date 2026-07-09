@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { createAnalytics, FIRST_RUN_NOTICE } from "../analytics.js";
+import { seedAnalyticsIdentity } from "../identity.js";
 import type { AnalyticsConfig } from "../types.js";
 import {
   cleanAnalyticsEnv,
@@ -169,5 +170,67 @@ describe("identity store + first-run notice", () => {
     const second = tracker.register(createAnalytics(baseConfig()));
     expect(first.sessionId).toMatch(UUID_V4_REGEX);
     expect(second.sessionId).toBe(first.sessionId);
+  });
+});
+
+describe("seedAnalyticsIdentity", () => {
+  let home: TempHome;
+  let restoreEnv: () => void;
+
+  beforeEach(() => {
+    restoreEnv = cleanAnalyticsEnv();
+    home = useTempHome();
+  });
+
+  afterEach(() => {
+    home.restore();
+    restoreEnv();
+  });
+
+  it("seeds the file with the supplied id, mode 0600, when the file is absent", () => {
+    const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    expect(fs.existsSync(home.identityPath)).toBe(false);
+
+    const result = seedAnalyticsIdentity(id);
+
+    expect(result).toBe(true);
+    expect(fs.existsSync(home.identityPath)).toBe(true);
+    expect(fs.statSync(home.identityPath).mode & 0o777).toBe(0o600);
+
+    const record = JSON.parse(fs.readFileSync(home.identityPath, "utf8")) as {
+      anonymous_id: string;
+      first_run_notice_at: string | null;
+    };
+    expect(record.anonymous_id).toBe(id);
+    expect(record.first_run_notice_at).toBeNull();
+  });
+
+  it("returns false without overwriting when the file already exists", () => {
+    // Seed once
+    const firstId = "11111111-2222-4333-8444-555555555555";
+    expect(seedAnalyticsIdentity(firstId)).toBe(true);
+
+    // Second seed with a different id — must be a no-op
+    const secondId = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+    const result = seedAnalyticsIdentity(secondId);
+
+    expect(result).toBe(false);
+    const record = JSON.parse(fs.readFileSync(home.identityPath, "utf8")) as { anonymous_id: string };
+    expect(record.anonymous_id).toBe(firstId); // unchanged
+  });
+
+  it("returns false without throwing when HOME is unwritable", () => {
+    // Block HOME below a regular file so mkdir fails
+    const blocker = path.join(home.dir, "blocker");
+    fs.writeFileSync(blocker, "i am a file");
+    process.env.HOME = path.join(blocker, "nested");
+    process.env.USERPROFILE = process.env.HOME;
+
+    const id = "cccccccc-dddd-4eee-8fff-000000000000";
+    let result: boolean | undefined;
+    expect(() => {
+      result = seedAnalyticsIdentity(id);
+    }).not.toThrow();
+    expect(result).toBe(false);
   });
 });

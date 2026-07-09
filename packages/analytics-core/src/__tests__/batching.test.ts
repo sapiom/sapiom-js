@@ -140,4 +140,30 @@ describe("batching", () => {
     await expect(analytics.shutdown()).resolves.toBeUndefined();
     await expect(analytics.shutdown()).resolves.toBeUndefined();
   });
+
+  it("discard() drops buffered events without sending them", async () => {
+    const capture = createCapturingFetch();
+    const analytics = tracker.register(
+      createAnalytics(baseConfig({ fetchImpl: capture.fetchImpl })),
+    );
+
+    // Buffer some events but don't flush yet
+    analytics.track("event_one");
+    analytics.track("event_two");
+
+    // Discard without flushing
+    analytics.discard();
+
+    // Flush afterwards — nothing should be sent
+    await analytics.flush();
+    expect(capture.calls).toHaveLength(0);
+  });
+
+  it("discard() on a disabled instance is a no-op", async () => {
+    process.env.SAPIOM_TELEMETRY_DISABLED = "1";
+    const analytics = tracker.register(
+      createAnalytics(baseConfig({ fetchImpl: createCapturingFetch().fetchImpl })),
+    );
+    expect(() => analytics.discard()).not.toThrow();
+  });
 });

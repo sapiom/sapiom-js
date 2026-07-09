@@ -85,6 +85,19 @@ export class BatchQueue {
     }
   }
 
+  /**
+   * Silently drop all buffered events. In-flight sends (already on the wire)
+   * complete normally — they cannot be recalled. Does not stop the queue.
+   * Use before {@link shutdown} when the caller wants to discard, not drain.
+   */
+  discard(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.buffer = [];
+  }
+
   /** Flush, then stop accepting events and detach timers/exit hooks. Never rejects. */
   async shutdown(): Promise<void> {
     try {
