@@ -98,6 +98,18 @@ never grows a per-capability tool of its own — capabilities live in
 `@sapiom/tools` and the remote `sapiom` MCP. See
 [the positioning doc](../../docs/mcp-servers.md) for the full policy.
 
+## Usage analytics
+
+The server can emit anonymous usage analytics (one `tool.call` event per tool
+invocation: tool name, arguments, duration, ok/error class) via
+[`@sapiom/analytics-core`](../analytics-core). It currently ships dark: unless
+a collector endpoint is explicitly configured through the
+`SAPIOM_ANALYTICS_ENDPOINT` environment variable, nothing is sent anywhere and
+nothing is written to disk. Opt out at any time with
+`SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`. Telemetry is a synchronous
+in-memory enqueue that never throws, never blocks a tool call, and can never
+change a tool result.
+
 ## License
 
 MIT

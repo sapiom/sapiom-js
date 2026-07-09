@@ -426,6 +426,9 @@ importers:
       '@sapiom/agent-core':
         specifier: workspace:^
         version: link:../agent-core
+      '@sapiom/analytics-core':
+        specifier: workspace:^
+        version: link:../analytics-core
       zod:
         specifier: ^3.25.0
         version: 3.25.76

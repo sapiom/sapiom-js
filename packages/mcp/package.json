@@ -55,6 +55,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sapiom/agent-core": "workspace:^",
+    "@sapiom/analytics-core": "workspace:^",
     "zod": "^3.25.0"
   },
   "devDependencies": {
