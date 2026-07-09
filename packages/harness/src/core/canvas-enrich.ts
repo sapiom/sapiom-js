@@ -113,6 +113,10 @@ export function extractEnrichmentJson(text: string): unknown | null {
 export interface EnrichmentTaskRunner {
   run(req: RunTaskRequest): Promise<BackgroundTask>;
   onStatusChange(listener: (task: BackgroundTask) => void): () => void;
+  /** Returns true when an enrichment task for this workflow is currently
+   *  running — checked before cache destruction in forceRefresh so a
+   *  double-click Visualize is a true no-op, not a half-destroyed cache. */
+  isRunning(macroId: string, workflowPath: string): boolean;
 }
 
 /** The session shape the coordinator needs — satisfied by HarnessSession. */
@@ -184,10 +188,18 @@ export class CanvasEnrichmentCoordinator {
    * to the macros router (TaskAlreadyRunningError → 409,
    * TaskNotSupportedError → 400). Unbound session: just a no-op, matching
    * the deterministic render's own unbound contract.
+   *
+   * The already-running check happens BEFORE any cache destruction so that a
+   * double-click Visualize is a true no-op: the second call rejects with
+   * TaskAlreadyRunningError and the caches and render are left exactly as
+   * the still-running enrichment will need them.
    */
   async forceRefresh(session: EnrichmentSession, workflows: readonly RenderableWorkflow[]): Promise<void> {
     const bound = this.resolveBound(session, workflows);
     if (!bound) return;
+    if (this.tasks.isRunning(ENRICHMENT_MACRO_ID, bound.path)) {
+      throw new TaskAlreadyRunningError(ENRICHMENT_TASK_LABEL);
+    }
     invalidateExtractionCache(bound.path);
     await removeEnrichmentCacheFile(enrichmentCacheFileFor(session.cwd, bound.path));
     await this.rerender(session.cwd, bound);

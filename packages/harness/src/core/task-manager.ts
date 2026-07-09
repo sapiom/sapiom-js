@@ -174,6 +174,18 @@ export class TaskManager {
     return this.tasks.get(id);
   }
 
+  /** Returns true when any registered task with the given macroId is currently
+   *  running against the given workflowPath — used by forceRefresh to check
+   *  before destroying caches so a second Visualize click is a true no-op. */
+  isRunning(macroId: string, workflowPath: string): boolean {
+    for (const task of this.tasks.values()) {
+      if (task.status === "running" && task.macroId === macroId && task.workflowPath === workflowPath) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   onStatusChange(listener: TaskStatusListener): () => void {
     this.statusEmitter.on("status", listener);
     return () => {
