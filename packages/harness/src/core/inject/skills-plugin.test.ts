@@ -15,33 +15,48 @@ import * as path from "node:path";
 // ---------------------------------------------------------------------------
 
 let tmpDir: string;
+// When false, the mock's require.resolve throws ERR_PACKAGE_PATH_NOT_EXPORTED
+// for the "@sapiom/agent-core/package.json" subpath — simulating an agent-core
+// whose `exports` map doesn't expose ./package.json (the real bug that made
+// the skill silently never load). Strategy-2 (main-entry walk-up) must cover it.
+let exposePackageJson = true;
 
-// We need to intercept the createRequire call inside skills-plugin.ts to
-// point at a fixture agent-core package rather than the real one.
-// The module is mocked at the module level using vi.mock.
+// We intercept the createRequire call inside skills-plugin.ts to point at a
+// fixture agent-core package rather than the real one. The module is mocked at
+// the module level; the returned require + its `.resolve` are only CALLED
+// lazily (inside a test, after beforeEach sets tmpDir/exposePackageJson), so
+// the closure captures live values.
 //
-// The mock's returned require function must expose a `.resolve` method because
-// resolveAgentCoreSkillsDir() calls `require.resolve("@sapiom/agent-core/package.json")`.
-// Both the direct call and `.resolve` return the same fixture path.
-
+// Two specifiers are honoured, matching resolveAgentCoreSkillsDir's two
+// strategies:
+//   - "@sapiom/agent-core/package.json" → fixture package.json (strategy 1),
+//     unless exposePackageJson is false, in which case it throws like a real
+//     exports-restricted package.
+//   - "@sapiom/agent-core"              → fixture main entry (strategy 2), from
+//     which the resolver walks up to the package root.
 vi.mock("node:module", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:module")>();
   return {
     ...actual,
     createRequire: () => {
-      const mockRequire = (specifier: string): string => {
+      const resolve = (specifier: string): string => {
         if (specifier === "@sapiom/agent-core/package.json") {
-          // tmpDir is set by beforeEach before generateSkillsPlugin() is called.
+          if (!exposePackageJson) {
+            const err = new Error(
+              `Package subpath './package.json' is not defined by "exports"`,
+            );
+            (err as NodeJS.ErrnoException).code = "ERR_PACKAGE_PATH_NOT_EXPORTED";
+            throw err;
+          }
           return path.join(tmpDir, "agent-core", "package.json");
         }
-        throw new Error(`Unexpected require: ${specifier}`);
-      };
-      mockRequire.resolve = (specifier: string): string => {
-        if (specifier === "@sapiom/agent-core/package.json") {
-          return path.join(tmpDir, "agent-core", "package.json");
+        if (specifier === "@sapiom/agent-core") {
+          return path.join(tmpDir, "agent-core", "dist", "esm", "index.js");
         }
         throw new Error(`Unexpected require.resolve: ${specifier}`);
       };
+      const mockRequire = (specifier: string): string => resolve(specifier);
+      mockRequire.resolve = resolve;
       return mockRequire;
     },
   };
@@ -77,6 +92,7 @@ async function seedAgentCoreFixture(dir: string): Promise<void> {
 
 describe("generateSkillsPlugin", () => {
   beforeEach(async () => {
+    exposePackageJson = true;
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-skills-plugin-"));
     await seedAgentCoreFixture(tmpDir);
   });
@@ -96,9 +112,28 @@ describe("generateSkillsPlugin", () => {
     const pluginJson = JSON.parse(
       await fs.readFile(path.join(pluginDir!, ".claude-plugin", "plugin.json"), "utf8"),
     );
-    expect(pluginJson).toEqual({ name: "sapiom-harness-skills" });
+    expect(pluginJson).toEqual({ name: "sapiom" });
 
     // The sapiom-agent-authoring SKILL.md must be copied in.
+    const copiedMd = await fs.readFile(
+      path.join(pluginDir!, "skills", "sapiom-agent-authoring", "SKILL.md"),
+      "utf8",
+    );
+    expect(copiedMd).toContain("Agent Authoring");
+  });
+
+  it("resolves skills via the main-entry fallback when ./package.json is not exported", async () => {
+    // Regression guard: agent-core's exports map historically didn't expose
+    // ./package.json, so require.resolve("@sapiom/agent-core/package.json")
+    // threw ERR_PACKAGE_PATH_NOT_EXPORTED and the skill silently never loaded.
+    // Strategy 2 (resolve the main entry, walk up to the package root) must
+    // still find skills/ without the direct package.json subpath.
+    exposePackageJson = false;
+
+    const generatedRoot = path.join(tmpDir, "generated");
+    const pluginDir = await generateSkillsPlugin("sess-no-exports", { generatedRoot });
+
+    expect(pluginDir).toBeDefined();
     const copiedMd = await fs.readFile(
       path.join(pluginDir!, "skills", "sapiom-agent-authoring", "SKILL.md"),
       "utf8",
