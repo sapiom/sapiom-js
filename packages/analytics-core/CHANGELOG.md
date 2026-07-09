@@ -1,5 +1,17 @@
 # @sapiom/analytics-core
 
+## 0.2.0
+
+### Minor Changes
+
+- 55462b3: Analytics delivery is now on by default to the hosted collector (the ship-dark default flipped live): with no `endpoint` configured, `createAnalytics` delivers to `SAPIOM_COLLECTOR_ENDPOINT`. Opt-outs unchanged (`SAPIOM_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`, programmatic `disabled: true`) — any of them still makes the emitter a complete no-op: zero network calls, zero disk writes. Consent providers returning `undefined` deliver by default; return `false` to stay off.
+
+### Patch Changes
+
+- 3f25008: Document session telemetry conventions and canonical event naming.
+
+  CONTRACT.md gains a "Harness & session telemetry conventions" section — per-session `data.seq` ordering, the `data.context` batch-context shape (`app_version`/`os`/`arch`/`node`), harness/agent session dimensions, and dot-separated `<noun>.<verb/state>` event naming — and the event taxonomy seed now uses the dot-form names (`session.start`, `capability.call`, `command.run`, ...). The `orchestration` producer source is renamed to `agent` in the contract and the `EventSource` type, matching the package family's rename — done before any events exist, and the collector accepts any source string verbatim regardless. Existing event names likewise remain valid: the collector keeps storing `event_type` verbatim.
+
 ## 0.1.0
 
 ### Minor Changes
