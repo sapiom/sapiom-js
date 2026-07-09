@@ -294,6 +294,43 @@ export type TerminalControlMessage = TerminalResizeMessage;
 // Event-bus WebSocket  (/ws/events?token=<boot token>)  — server → client
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Chat events (UI-transport only — never written to the analytics store)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single conversation turn delivered to the chat view. `streaming: true`
+ * means the turn is still in progress (content may grow); `streaming: false`
+ * (or absent) marks the final, settled version. The SPA merges by `turnId`.
+ */
+export interface ChatTurn {
+  /** Stable id for this turn — used to merge streaming updates. */
+  turnId: string;
+  role: "user" | "assistant";
+  /** Markdown text — rendered safely (no dangerouslySetInnerHTML). */
+  content: string;
+  /** True while the turn is still being streamed; omitted on final delivery. */
+  streaming?: boolean;
+  ts: string;
+}
+
+/**
+ * A tool invocation inline in the conversation. One event per status
+ * transition: start → ok | error. The SPA merges by `callId`.
+ */
+export interface ChatToolCall {
+  callId: string;
+  toolName: string;
+  status: "start" | "ok" | "error";
+  ts: string;
+}
+
+/** History snapshot delivered once when a chat session opens/resumes. */
+export interface ChatHistory {
+  harnessSessionId: string;
+  turns: ChatTurn[];
+}
+
 export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
   | { type: "canvas.reload"; harnessSessionId: string }
@@ -313,7 +350,44 @@ export type BusMessage =
    * on /ws/events, which only the session with an open /ws/terminal socket
    * receives. Drives the SPA's per-tab busy pulse for background sessions.
    */
-  | { type: "session.activity"; harnessSessionId: string; at: string };
+  | { type: "session.activity"; harnessSessionId: string; at: string }
+  /**
+   * A single chat turn (user prompt or assistant response). UI-transport only —
+   * never written to the analytics store. The SPA upserts by turnId.
+   */
+  | { type: "chat.turn"; harnessSessionId: string; turn: ChatTurn }
+  /**
+   * A tool call inline in the conversation. UI-transport only. The SPA
+   * merges by callId.
+   */
+  | { type: "chat.tool"; harnessSessionId: string; call: ChatToolCall }
+  /**
+   * Delivered once per session open/resume: the current transcript history so
+   * the chat view isn't empty on reconnect.
+   */
+  | { type: "chat.history"; history: ChatHistory }
+  /**
+   * Emitted when Claude Code's `Notification` hook fires — the agent is
+   * blocked on a TUI permission prompt and the chat surface should show a
+   * banner prompting the user to review in the Terminal. Cleared by the next
+   * hook activity (PreToolUse / PostToolUse / Stop) or a session status change.
+   * UI-transport only — never written to the analytics store.
+   */
+  | { type: "chat.attention"; harnessSessionId: string; message: string };
+
+// ---------------------------------------------------------------------------
+// Adapter registry (GET /api/harnesses — SAP-1435 consumer)
+// ---------------------------------------------------------------------------
+
+/** One entry in the adapter registry, as the SPA sees it. */
+export interface HarnessEntry {
+  id: HarnessKind;
+  label: string;
+  /** False when the adapter can be spawned (spawn gated by POST /sessions). */
+  disabled: boolean;
+  /** Human-readable reason why the adapter is disabled, for a tooltip. */
+  disabledReason?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Analytics events

@@ -56,6 +56,13 @@ export interface IngestDeps {
    *  enrichment), before it's persisted — e.g. to feed a tool.call event's
    *  command/output text to dev-server port detection. */
   onNormalizedEvent?: (event: AnalyticsEvent) => void;
+  /**
+   * Called for every raw hook event BEFORE normalization — fired even for
+   * hook events that don't produce analytics events (e.g. `Notification`).
+   * Used to drive UI-transport-only signals such as the chat attention banner
+   * without going through the analytics normalize/store pipeline.
+   */
+  onRawHookEvent?: (hookEvent: string, harnessSessionId: string, payload: Record<string, unknown>) => void;
   onError?: (err: unknown) => void;
   /** Injectable for tests; defaults to a fresh per-router counter. */
   seqCounter?: SeqCounter;
@@ -96,6 +103,12 @@ export async function processIngest(
   if (!session) return;
 
   const hookPayload = body.payload ?? {};
+
+  // Fire before normalization so callers can observe hook events that don't
+  // produce analytics events (e.g. Notification — no analytics, but the chat
+  // attention banner needs to know it fired).
+  deps.onRawHookEvent?.(hookEvent, harnessSessionId, hookPayload);
+
   const event = deps.normalize(hookEvent, hookPayload, {
     userId: session.userId,
     tenantId: session.tenantId,

@@ -38,6 +38,11 @@ import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { findRolloutFile, tailCodexRollout, type CodexTailerHandle } from "../core/collector/codex-tailer.js";
+import {
+  tailClaudeTranscript,
+  transcriptPathForSession,
+  type ClaudeTranscriptTailerHandle,
+} from "../core/collector/claude-transcript-tailer.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
@@ -133,6 +138,10 @@ export interface HarnessServerOptions {
    * (`<home>/.codex/sessions/...`). Defaults to the real OS home dir; tests
    * point this at a fixture tree instead of touching `~/.codex` for real. */
   codexHomeDir?: string;
+  /** Overrides the home directory Claude Code transcript discovery scans
+   * (`<home>/.claude/projects/...`). Defaults to the real OS home dir; tests
+   * point this at a fixture tree instead of touching `~/.claude` for real. */
+  claudeHomeDir?: string;
   /** Directory the built SPA lives in. Defaults to dist/web next to this module. */
   webDir?: string;
   /** The directory the CLI was launched against — scanned for workflows at
@@ -691,6 +700,14 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     resolveSession: resolveIngestSession,
     onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
       sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
+      // For claude-code sessions, start the chat transcript tailer now that
+      // we know the transcript file path (it's keyed by agentSessionId).
+      const session = sessionManager.get(harnessSessionId);
+      if (session && adapters[session.harness]?.eventSource === "hooks") {
+        startClaudeChatTailerFor(harnessSessionId, agentSessionId).catch((err: unknown) => {
+          console.error("[harness] claude chat tailer startup failed:", err);
+        });
+      }
     },
     onSessionReady: (harnessSessionId) => {
       sessionManager.setReady(harnessSessionId);
@@ -717,6 +734,28 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         portDetector.flush(event.harnessSessionId);
       }
     },
+    onRawHookEvent: (hookEvent, harnessSessionId, payload) => {
+      if (hookEvent === "Notification") {
+        // The Notification hook fires when Claude Code needs user attention —
+        // e.g. a tool-permission prompt in auto mode. Show the attention banner
+        // in the chat view. The `message` field carries the prompt text (when
+        // present); fall back to a generic message.
+        const message =
+          typeof payload.message === "string" && payload.message.trim()
+            ? payload.message.trim()
+            : "Claude is asking permission to run a command";
+        bus.publish({ type: "chat.attention", harnessSessionId, message });
+      } else if (
+        hookEvent === "PreToolUse" ||
+        hookEvent === "PostToolUse" ||
+        hookEvent === "Stop" ||
+        hookEvent === "UserPromptSubmit"
+      ) {
+        // Any subsequent hook activity means the permission prompt was answered
+        // or the session moved on — clear the attention banner.
+        bus.publish({ type: "chat.attention", harnessSessionId, message: "" });
+      }
+    },
     onError: (err) => console.error("[harness] ingest processing error:", err),
     seqCounter,
   };
@@ -733,6 +772,47 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // same seqCounter. On "exited", synthesize the SessionEnd the rollout
   // format has no line of its own for, and stop.
   const codexTailers = new Map<string, CodexTailerHandle>();
+
+  // Claude Code transcript tailers for chat events: keyed by harnessSessionId,
+  // started when the session's agentSessionId becomes known (the SessionStart
+  // hook fires and onAgentSessionResolved is called). Produces chat.turn and
+  // chat.tool bus events — UI-transport only, not written to analytics.
+  const claudeChatTailers = new Map<string, ClaudeTranscriptTailerHandle>();
+
+  /** Start tailing the Claude Code transcript for chat events. */
+  async function startClaudeChatTailerFor(harnessSessionId: string, agentSessionId: string): Promise<void> {
+    if (claudeChatTailers.has(harnessSessionId)) return;
+    const session = sessionManager.get(harnessSessionId);
+    if (!session) return;
+
+    const transcriptPath = transcriptPathForSession(session.cwd, agentSessionId, options.claudeHomeDir);
+    const tailer = tailClaudeTranscript({
+      transcriptPath,
+      // A fresh launch: start from beginning so we capture the first user prompt.
+      // A resume: also start from beginning to deliver the full history snapshot,
+      // but the historical turns go through readHistory() not the live stream.
+      startFromBeginning: true,
+      onTurn: (turn) => {
+        bus.publish({ type: "chat.turn", harnessSessionId, turn });
+      },
+      onToolCall: (call) => {
+        bus.publish({ type: "chat.tool", harnessSessionId, call });
+      },
+      onError: (err) => {
+        console.error(`[harness] claude chat tailer error for session ${harnessSessionId}:`, err);
+      },
+    });
+    claudeChatTailers.set(harnessSessionId, tailer);
+
+    // Deliver history snapshot immediately (fire-and-forget, non-blocking)
+    void tailer.readHistory().then((turns) => {
+      if (turns.length > 0) {
+        bus.publish({ type: "chat.history", history: { harnessSessionId, turns } });
+      }
+    }).catch((err: unknown) => {
+      console.error(`[harness] claude chat tailer history read failed for session ${harnessSessionId}:`, err);
+    });
+  }
 
   async function discoverCodexRolloutPath(session: HarnessSession): Promise<string | null> {
     const deadline = Date.now() + CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS;
@@ -784,6 +864,32 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         void processIngest(body, ingestDeps, seqCounter).catch((err: unknown) => {
           console.error("[harness] codex tailer ingest error:", err);
         });
+        // Also publish chat events for the conversation view — UI-transport
+        // only, not written to analytics. Map codex hook events to chat shapes.
+        const ts = new Date().toISOString();
+        if (hookEvent === "UserPromptSubmit" && typeof payload.prompt === "string" && payload.prompt.trim()) {
+          bus.publish({
+            type: "chat.turn",
+            harnessSessionId,
+            turn: {
+              turnId: `codex-user-${Date.now()}`,
+              role: "user",
+              content: payload.prompt.trim() as string,
+              ts,
+            },
+          });
+        } else if (hookEvent === "PostToolUse" && typeof payload.tool_name === "string") {
+          bus.publish({
+            type: "chat.tool",
+            harnessSessionId,
+            call: {
+              callId: `codex-tool-${Date.now()}`,
+              toolName: payload.tool_name as string,
+              status: "ok",
+              ts,
+            },
+          });
+        }
       },
       onError: (err) => console.error("[harness] codex tailer parse error:", err),
     });
@@ -808,6 +914,17 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         tailer.emitSessionEnd(session.exitCode != null ? `pty exited (code ${session.exitCode})` : undefined);
         codexTailers.delete(session.id);
       }
+    }
+  });
+
+  // Stop claude chat tailers when sessions exit (the analytics tailer for
+  // codex is handled above; this covers the hooks-sourced claude-code tailer).
+  sessionManager.onStatusChange((session) => {
+    if (session.status !== "exited") return;
+    const tailer = claudeChatTailers.get(session.id);
+    if (tailer) {
+      tailer.stop();
+      claudeChatTailers.delete(session.id);
     }
   });
 
@@ -893,6 +1010,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       workspaceWatcher.stopAll();
       for (const tailer of codexTailers.values()) tailer.stop();
       codexTailers.clear();
+      for (const tailer of claudeChatTailers.values()) tailer.stop();
+      claudeChatTailers.clear();
       // Closing the HTTP/WS server doesn't touch unrelated child processes
       // on its own — without this, every live claude/codex pty outlives
       // the harness server itself (e.g. after Ctrl+C or in a script that
