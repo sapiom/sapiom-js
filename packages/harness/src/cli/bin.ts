@@ -154,7 +154,8 @@ const main = async (): Promise<void> => {
   if (identity?.source === "cached") {
     console.log(`\nSigned in as ${identity.organizationName} (cached credential).`);
   }
-  const telemetryOptIn = await ensureConsent({ noTelemetry: options.noTelemetry });
+  const consentResult = await ensureConsent({ noTelemetry: options.noTelemetry });
+  const { telemetryOptIn } = consentResult;
   // First run = no recent directories recorded before this boot. Must be read
   // BEFORE recordRecentDir below stamps the launch dir in — after that the
   // signal is gone for good. Drives the SPA's welcome panel (AppState.firstRun)
@@ -172,6 +173,8 @@ const main = async (): Promise<void> => {
       port: options.port,
       bootToken,
       telemetryOptIn,
+      consentSource: consentResult.source,
+      consentEnvReason: consentResult.envReason,
       identity,
       machineId,
       launchDir: options.dir,
@@ -194,7 +197,7 @@ const main = async (): Promise<void> => {
     port: server?.port ?? options.port,
     bootToken,
     identity,
-    telemetryOptIn,
+    telemetryOptIn: consentResult.telemetryOptIn,
     serverStarted: server !== null,
   });
 
