@@ -116,6 +116,36 @@ describe("renderGraphSvg", () => {
     expect(svg).toMatch(/M\d+(\.\d+)?,\d+(\.\d+)? C\d+/); // branching: M...C...
   });
 
+  it("pins the svg to its natural intrinsic size — explicit width/height, not just a viewBox — so a narrow single-column graph can't stretch/upscale to fill the pane", () => {
+    const layout = layoutGraph(ORDER_TRIAGE_GRAPH);
+    expect(svg).toContain(`width="${layout.width}"`);
+    expect(svg).toContain(`height="${layout.height}"`);
+    expect(svg).toContain(`viewBox="0 0 ${layout.width} ${layout.height}"`);
+  });
+
+  it("keeps a single-column (linear) workflow at natural width — the pane, not the svg, absorbs extra space", () => {
+    const linear: CanvasGraph = {
+      manifestName: "linear",
+      entry: "a",
+      warnings: [],
+      nodes: [
+        { id: "a", kind: "entry", label: "a" },
+        { id: "b", kind: "step", label: "b" },
+        { id: "c", kind: "terminal-success", label: "c" },
+      ],
+      edges: [
+        { from: "a", to: "b", kind: "sequential" },
+        { from: "b", to: "c", kind: "sequential" },
+      ],
+    };
+    const layout = layoutGraph(linear);
+    // maxCols === 1 → width is just margins + one node box, ~256px. A width
+    // attribute this size means the browser renders it 1× and the CSS only
+    // ever scales it DOWN, never up.
+    expect(layout.width).toBeLessThan(300);
+    expect(renderGraphSvg(linear)).toContain(`width="${layout.width}"`);
+  });
+
   it("never emits its own <defs> — the shared document shell provides glow filter + arrow markers once", () => {
     expect(svg).not.toContain("<defs>");
     expect(svg).toContain('filter="url(#canvas-glow)"');

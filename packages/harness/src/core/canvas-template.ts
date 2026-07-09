@@ -92,7 +92,12 @@ html, body {
 .canvas-stat-label { font-size: 10px; color: var(--canvas-text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 .canvas-diagram-panel { overflow-x: auto; }
 .canvas-empty-note { color: var(--canvas-text-dim); font-size: 13px; text-align: center; padding: 60px 20px; margin: 0; }
-.canvas-graph-svg { display: block; width: 100%; height: auto; }
+/* The <svg> carries explicit width/height, so it always renders at its
+   NATURAL (1×) size — a narrow single-column graph can never stretch to fill
+   the pane (the old width:100% did that, ballooning nodes ~4×). Centered when
+   it fits; a graph wider than the pane keeps full size and scrolls via
+   .canvas-diagram-panel's overflow-x, staying legible instead of shrinking. */
+.canvas-graph-svg { display: block; margin: 0 auto; }
 
 /* --- node kinds: entry | step | pause | terminal-success | terminal-warn | launched-workflow --- */
 .canvas-node .canvas-node-rect { fill: var(--canvas-panel); stroke-width: 1.5; stroke: var(--canvas-border-strong); }

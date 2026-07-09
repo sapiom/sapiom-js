@@ -17,8 +17,8 @@ import type { CanvasEdge, CanvasEdgeKind, CanvasGraph, CanvasNode, CanvasNodeKin
 import type { CanvasEnrichment, CanvasLayoutHints } from "./canvas-enrichment.js";
 
 export const NODE_W = 176;
-export const NODE_H = 56;
-const LAYER_GAP = 96;
+export const NODE_H = 64;
+const LAYER_GAP = 72;
 const COL_GAP = 32;
 const MARGIN = 40;
 /** How far a group band extends past its member nodes' boxes. */
@@ -234,9 +234,9 @@ export function renderGraphSvg(graph: CanvasGraph, enrichment?: CanvasEnrichment
       if (!p) return "";
       const details = enrichment?.nodeDetails?.[node.id];
       const sublabel = details?.sublabel ?? node.sublabel;
-      const titleY = sublabel ? 22 : NODE_H / 2;
+      const titleY = sublabel ? 26 : NODE_H / 2;
       const sub = sublabel
-        ? `<text class="canvas-node-sub" x="${NODE_W / 2}" y="40">${esc(sublabel)}</text>`
+        ? `<text class="canvas-node-sub" x="${NODE_W / 2}" y="44">${esc(sublabel)}</text>`
         : "";
       // SVG <title> = native hover tooltip; the only enrichment slot with
       // room for a full sentence.
@@ -252,8 +252,14 @@ export function renderGraphSvg(graph: CanvasGraph, enrichment?: CanvasEnrichment
     })
     .join("\n");
 
+  // Explicit width/height pin the diagram to its NATURAL (1×) size. Without
+  // them, the CSS `width:100%` used to stretch a single-column workflow's
+  // tiny viewBox to fill the pane, ballooning every node and its font (~4×).
+  // The CSS now only centers the svg (`margin: 0 auto`); a graph wider than
+  // the pane keeps full size and scrolls (`.canvas-diagram-panel`'s
+  // overflow-x) rather than shrinking to an illegible size.
   return (
-    `<svg viewBox="0 0 ${layout.width} ${layout.height}" class="canvas-graph-svg">\n` +
+    `<svg viewBox="0 0 ${layout.width} ${layout.height}" width="${layout.width}" height="${layout.height}" class="canvas-graph-svg">\n` +
     (bandMarkup ? bandMarkup + "\n" : "") +
     edgeMarkup +
     "\n" +

@@ -51,6 +51,24 @@ describe("extractWorkflowGraph", () => {
     expect(result.graph.nodes.find((n) => n.id === "classify")!.kind).toBe("step");
   });
 
+  it("populates a deterministic sublabel on every node, derived from its kind/transitions — no AI needed", async () => {
+    const result = await extractWorkflowGraph(ORDER_TRIAGE_DIR);
+    if (!result.ok) throw new Error("expected extraction to succeed");
+    const sub = (id: string) => result.graph.nodes.find((n) => n.id === id)!.sublabel;
+    expect(sub("intake")).toBe("entry");
+    expect(sub("classify")).toBe("step");
+    expect(sub("auto_resolve")).toBe("terminal · success");
+    expect(sub("escalate")).toBe("terminal · success");
+    // Every node carries one — the diagram reads as titled cards before enrichment.
+    expect(result.graph.nodes.every((n) => typeof n.sublabel === "string" && n.sublabel.length > 0)).toBe(true);
+  });
+
+  it("gives a pause step a `pause · <signal>` sublabel naming the signal it waits on", async () => {
+    const result = await extractWorkflowGraph(path.join(FIXTURES_DIR, "legacy-flow"));
+    if (!result.ok) throw new Error("expected extraction to succeed");
+    expect(result.graph.nodes.find((n) => n.id === "confirm")!.sublabel).toBe("pause · vendor.confirm");
+  });
+
   it("emits one sequential edge for a single-target continue, and branching edges for multi-target continue", async () => {
     const result = await extractWorkflowGraph(ORDER_TRIAGE_DIR);
     if (!result.ok) throw new Error("expected extraction to succeed");
@@ -115,7 +133,12 @@ describe("extractWorkflowGraph", () => {
     if (!result.ok) return;
 
     const launched = result.graph.nodes.find((n) => n.kind === "launched-workflow");
-    expect(launched).toEqual({ id: "launch:spoke-workflow", kind: "launched-workflow", label: "spoke-workflow" });
+    expect(launched).toEqual({
+      id: "launch:spoke-workflow",
+      kind: "launched-workflow",
+      label: "spoke-workflow",
+      sublabel: "launched workflow",
+    });
     expect(result.graph.edges).toContainEqual({
       from: "kickoff",
       to: "launch:spoke-workflow",
