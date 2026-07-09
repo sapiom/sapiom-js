@@ -71,6 +71,27 @@ export function isAgentDefinition(val: unknown): val is AgentDefinition {
 }
 
 /**
+ * The brand `@sapiom/orchestration`'s `defineOrchestration` attached before
+ * the agents/models rename (cc1261e). Projects still on that SDK carry this
+ * symbol instead of `AGENT_DEFINITION_BRAND`; the definition shape itself is
+ * unchanged by the rename (same name/entry/steps, same step runtime
+ * properties), so a legacy-branded definition is safe to feed to
+ * `buildManifest` as-is.
+ */
+export const LEGACY_ORCHESTRATION_DEFINITION_BRAND = Symbol.for('sapiom.orchestration.definition');
+
+/**
+ * Type guard for definitions produced by the pre-rename SDK's
+ * `defineOrchestration`. Tooling that inspects arbitrary customer projects
+ * (e.g. `@sapiom/agent-core`'s `check()`) accepts either brand so workflows
+ * authored against the old SDK keep working without a dependency bump.
+ */
+export function isLegacyOrchestrationDefinition(val: unknown): val is AgentDefinition {
+  if (val === null || typeof val !== 'object') return false;
+  return (val as Record<symbol, unknown>)[LEGACY_ORCHESTRATION_DEFINITION_BRAND] === 1;
+}
+
+/**
  * Validate and return a workflow definition. Checks done here:
  *   1. `name` is non-empty
  *   2. `entry` exists in `steps`

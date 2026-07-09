@@ -23,6 +23,16 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth-api.d.ts",
+      "default": "./dist/auth-api.js"
+    }
+  },
   "bin": {
     "sapiom-mcp": "./dist/index.js"
   },

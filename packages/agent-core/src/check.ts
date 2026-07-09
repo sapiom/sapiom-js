@@ -10,7 +10,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { assertValidGraph, buildManifest, isAgentDefinition, agentManifestSchema } from '@sapiom/agent';
+import {
+  assertValidGraph,
+  buildManifest,
+  isAgentDefinition,
+  isLegacyOrchestrationDefinition,
+  agentManifestSchema,
+} from '@sapiom/agent';
 import * as esbuild from 'esbuild';
 
 import { AgentOperationError } from './errors.js';
@@ -46,6 +52,14 @@ const LOCAL_SDK_VERSION = '0.0.0-local';
 export interface CheckOptions {
   /** Absolute path to the agent project directory containing index.ts. */
   sourceDir: string;
+  /**
+   * Run the project's `tsc --noEmit` before bundling (default true). Callers
+   * that only need the manifest/graph — not type safety — can pass false to
+   * skip the dominant multi-second cost (e.g. the harness's diagram
+   * extraction); esbuild still surfaces real breakage (unresolvable imports,
+   * syntax errors) as BUNDLE_FAILED.
+   */
+  typecheck?: boolean;
 }
 
 export interface CheckResult {
@@ -79,8 +93,10 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
   // Typecheck first — it's the only step that validates types and capability
   // references (the bundle is type-stripped). Throws TYPECHECK_FAILED on errors.
   const warnings: string[] = [];
-  const typecheckSkip = runTypecheck(sourceDir);
-  if (typecheckSkip) warnings.push(typecheckSkip);
+  if (opts.typecheck !== false) {
+    const typecheckSkip = runTypecheck(sourceDir);
+    if (typecheckSkip) warnings.push(typecheckSkip);
+  }
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'sapiom-check-'));
   const bundlePath = path.join(tmp, 'definition.mjs');
@@ -105,11 +121,16 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
 
     // The brand survives bundling (Symbol.for keyed in the global registry), so
     // the imported definition is recognized even though it was bundled with the
-    // project's own copy of the SDK.
+    // project's own copy of the SDK. Both brands are accepted: the current
+    // `defineAgent` one and the pre-rename `defineOrchestration` one — the
+    // definition shape is identical, so everything downstream (buildManifest,
+    // graph validation) works unchanged on either.
     const mod: Record<string, unknown> = await import(`file://${bundlePath}?t=${Date.now()}`);
     const defs: unknown[] = [];
     for (const value of Object.values(mod)) {
-      if (isAgentDefinition(value) && !defs.includes(value)) defs.push(value);
+      if ((isAgentDefinition(value) || isLegacyOrchestrationDefinition(value)) && !defs.includes(value)) {
+        defs.push(value);
+      }
     }
 
     if (defs.length === 0) {
