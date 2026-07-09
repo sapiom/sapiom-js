@@ -1,0 +1,14 @@
+{
+  "name": "stubborn",
+  "synthetic": true,
+  "description": "Ignores SIGTERM so tests can exercise the runtime's SIGTERM→SIGKILL escalation.",
+  "ignoreSigterm": true,
+  "echoKeystrokes": true,
+  "boot": [
+    {
+      "type": "print",
+      "data": "fake-agent (stubborn) — SIGTERM will be ignored\r\n> "
+    }
+  ],
+  "onLine": [{ "type": "print", "data": "{{line}}\r\n> " }]
+}

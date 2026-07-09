@@ -1,0 +1,26 @@
+{
+  "name": "basic-echo",
+  "synthetic": true,
+  "description": "Minimal deterministic agent: boot banner, short wait, idle prompt, then echoes each input line back after a brief busy cycle.",
+  "echoKeystrokes": true,
+  "boot": [
+    {
+      "type": "print",
+      "data": "\u001b[1mfake-agent\u001b[0m v0.1.0 — transcript: basic-echo\r\n"
+    },
+    { "type": "wait", "ms": 40 },
+    { "type": "print", "data": "Ready. Type something and press Enter.\r\n" },
+    { "type": "print", "data": "> " }
+  ],
+  "onLine": [
+    {
+      "type": "busy",
+      "frames": ["⠋", "⠙", "⠹", "⠸"],
+      "intervalMs": 15,
+      "cycles": 4,
+      "label": "thinking"
+    },
+    { "type": "print", "data": "you said: {{line}}\r\n" },
+    { "type": "print", "data": "> " }
+  ]
+}
