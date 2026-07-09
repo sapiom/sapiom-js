@@ -91,9 +91,13 @@ function buildAnalytics(config: AnalyticsConfig): SapiomAnalytics {
 
         // First-ever tracked event across all packages on this machine
         // prints a one-line notice (marker lives in the identity file).
+        // When identity storage is unavailable the marker cannot persist:
+        // print unconditionally rather than collect silently — repeating
+        // the notice every process start in that edge case is acceptable,
+        // silent delivery is not.
         if (!noticeAttempted) {
           noticeAttempted = true;
-          if (identityStore.markFirstRunNoticeShown()) {
+          if (identity === null || identityStore.markFirstRunNoticeShown()) {
             try {
               process.stderr.write(FIRST_RUN_NOTICE + "\n");
             } catch {

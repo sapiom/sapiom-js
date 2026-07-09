@@ -55,6 +55,9 @@ Any of these disables analytics entirely (highest precedence first):
 2. `SAPIOM_TELEMETRY_DISABLED=1` in the environment.
 3. `DO_NOT_TRACK=1` in the environment (the ecosystem-wide convention).
 
+For packages wiring a custom `consentProvider`: returning `undefined` defers
+to the default, which is enabled — return `false` to keep analytics off.
+
 When opted out, nothing is sent, nothing is written to disk, zero network
 calls are made — and no notice is printed.
 

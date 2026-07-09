@@ -63,9 +63,10 @@ export interface AnalyticsConfig {
   /** Programmatic opt-out. Highest-precedence consent signal. */
   disabled?: boolean;
   /**
-   * Optional consent hook, consulted after the environment opt-outs.
-   * Return `true` or `false` to decide; return `undefined` (or throw) to
-   * fall through to the default (enabled).
+   * Optional consent hook, consulted after `disabled` and the environment
+   * opt-outs. Return `true` or `false` to decide. Returning `undefined`
+   * (or throwing) defers to the default, which is ENABLED — return `false`
+   * to disable; do not use `undefined` as a "not decided yet" sentinel.
    */
   consentProvider?: () => boolean | undefined;
   /** Custom fetch implementation (dependency injection, primarily for tests). */

@@ -42,7 +42,7 @@ export function resolveEndpoint(configEndpoint?: string): string {
   const fromEnv = process.env[ENDPOINT_ENV_VAR];
   if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
   // LIVE DEFAULT: the hosted collector is deployed, so an unconfigured
-  // emitter delivers there. (This is the pre-planned ship-dark flip.)
+  // emitter delivers there.
   return SAPIOM_COLLECTOR_ENDPOINT;
 }
 
