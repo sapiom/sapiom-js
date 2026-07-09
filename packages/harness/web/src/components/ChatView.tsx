@@ -93,6 +93,7 @@ function HarnessLabel({ harness }: { harness: string }): JSX.Element {
     : harness;
   return (
     <span className="chat-harness-label" data-testid="chat-harness-label" aria-label={`Active harness: ${label}`}>
+      <span className="chat-harness-label-dot" aria-hidden="true" />
       {label}
     </span>
   );

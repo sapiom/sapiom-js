@@ -65,7 +65,8 @@ function readinessReason(session: HarnessSession | null): StatusReason | null {
   if (session.status === "starting" || !session.ready) {
     return {
       short: "Session starting",
-      detail: "The agent is initialising — input will be available shortly.",
+      detail:
+        "The agent is starting up. If it's waiting on first-run setup (theme, login, or a trust prompt), open the Terminal tab to continue — chat unlocks once it's ready.",
     };
   }
   return null;
