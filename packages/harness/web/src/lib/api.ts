@@ -33,17 +33,6 @@ export interface SkillDetail extends SkillMeta {
   body: string;
 }
 
-/** Shape of a single entry returned by GET /api/harnesses. */
-export interface HarnessEntry {
-  id: string;
-  label: string;
-  mode: "embedded" | "external";
-  experimental: boolean;
-  installed: boolean;
-  /** Per-harness MCP install instructions from the adapter registry. */
-  installMcpPrompt: string;
-}
-
 import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
 
 export type { FsDirEntry, FsListResponse };
@@ -118,7 +107,7 @@ export interface HarnessApi {
   listSkills(): Promise<SkillMeta[]>;
   /** Fetch the full detail (including markdown body) for a single skill. */
   getSkill(id: string): Promise<SkillDetail>;
-  /** List all harness adapters with their MCP install prompts. */
+  /** Returns the full harness adapter registry (GET /api/harnesses). */
   listHarnesses(): Promise<HarnessEntry[]>;
 }
 

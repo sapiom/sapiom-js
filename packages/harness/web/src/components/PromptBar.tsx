@@ -39,6 +39,18 @@ export interface PromptBarProps {
   session: HarnessSession | null;
   /** Calls POST /api/sessions/:id/input. Must throw ApiError on 409/other errors. */
   onSubmit: (sessionId: string, text: string) => Promise<void>;
+  /**
+   * When set, overrides the session id used for submit (useful when PromptBar
+   * is embedded inside ChatView and the session object might transiently lag).
+   * Defaults to session.id when omitted.
+   */
+  sessionId?: string;
+  /**
+   * Called when the submitted text starts with "/" — signals that a slash
+   * command was sent to the agent and the caller should show a system note.
+   * The text is the full raw command string (e.g. "/model claude-4").
+   */
+  onSlashCommand?: (command: string) => void;
 }
 
 interface StatusReason {
@@ -61,7 +73,7 @@ function readinessReason(session: HarnessSession | null): StatusReason | null {
 
 const MAX_ROWS = 6;
 
-export const PromptBar = ({ session, onSubmit }: PromptBarProps): JSX.Element => {
+export const PromptBar = ({ session, onSubmit, sessionId: sessionIdProp, onSlashCommand }: PromptBarProps): JSX.Element => {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Per-session draft storage: switching tabs preserves each session's own
@@ -143,13 +155,18 @@ export const PromptBar = ({ session, onSubmit }: PromptBarProps): JSX.Element =>
   const handleSubmit = useCallback(async () => {
     if (!canSubmit || !session) return;
     const text = draft;
+    const effectiveSessionId = sessionIdProp ?? session.id;
     setSubmitting(true);
     try {
-      await onSubmit(session.id, text);
+      await onSubmit(effectiveSessionId, text);
       setDraft("");
       setReactiveReason(null);
       // Emit prompt.submitted — length only, never the text itself.
       track("prompt.submitted", { length: text.length }, session.id);
+      // Notify caller about slash commands (verbatim forwarding, system note).
+      if (text.trimStart().startsWith("/")) {
+        onSlashCommand?.(text.trimStart());
+      }
       // Focus back in the bar for rapid follow-ups.
       textareaRef.current?.focus();
     } catch (err) {

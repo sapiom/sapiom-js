@@ -2740,3 +2740,511 @@ input {
   scrollbar-width: thin;
   scrollbar-color: rgba(161, 161, 170, 0.75) transparent;
 }
+
+/* Center pane: Chat | Terminal tab switcher -------------------------------- */
+
+.center-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.center-tab {
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+  cursor: pointer;
+}
+
+.center-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.center-tab.is-active {
+  background: var(--bg-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-xs);
+}
+
+.center-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Center pane panels — both mounted in the DOM; CSS-hide the inactive one
+   so the xterm WebSocket survives tab flips (same pattern as canvas keep-alive). */
+.center-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.center-panel:not(.is-visible) {
+  /* Visually hidden but still mounted — the xterm connection must not die
+     when the user switches to the Chat tab. */
+  visibility: hidden;
+  position: absolute;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* ChatView ----------------------------------------------------------------- */
+
+.chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-0);
+  position: relative;
+}
+
+/* Scrollable turn list */
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 0 8px;
+}
+
+/* Empty state */
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--text-faint);
+  text-align: center;
+  padding: 32px;
+}
+
+.chat-empty-icon {
+  width: 32px;
+  height: 32px;
+  color: var(--border-strong);
+  margin-bottom: 4px;
+}
+
+.chat-empty-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-empty-heading {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.chat-empty-hint {
+  font-size: 12px;
+  margin: 0;
+}
+
+/* Turn list */
+.chat-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-bottom: 8px;
+}
+
+/* Individual turn */
+.chat-turn {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 16px;
+}
+
+/* User turns: right-aligned, no avatar */
+.chat-turn--user {
+  flex-direction: row-reverse;
+}
+
+.chat-turn--user .chat-turn-bubble {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  border-radius: var(--radius-xl) var(--radius-sm) var(--radius-xl) var(--radius-xl);
+  max-width: 72%;
+}
+
+/* Assistant turns: left-aligned, with avatar */
+.chat-turn--assistant .chat-turn-bubble {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm) var(--radius-xl) var(--radius-xl) var(--radius-xl);
+  max-width: 86%;
+}
+
+.chat-turn-avatar {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.chat-turn-avatar svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-turn-bubble {
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-turn-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Markdown in assistant turns */
+.chat-turn-markdown {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.chat-turn-markdown .chat-paragraph {
+  margin: 0 0 6px;
+}
+
+.chat-turn-markdown .chat-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.chat-turn-markdown .chat-heading {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chat-turn-markdown h1.chat-heading { font-size: 14px; }
+
+.chat-turn-markdown .chat-list {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+}
+
+.chat-turn-markdown .chat-list li {
+  margin-bottom: 2px;
+}
+
+.chat-turn-markdown .chat-blockquote {
+  margin: 4px 0;
+  padding: 4px 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.chat-inline-code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 3px;
+}
+
+.chat-code-block {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+/* Streaming cursor blink */
+.chat-streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: chat-cursor-blink 1s step-end infinite;
+}
+
+@keyframes chat-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Tool call chips */
+.chat-tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 16px 4px 46px; /* indented to align with assistant turn content */
+}
+
+.chat-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-dim);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.chat-tool-chip--running {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.chat-tool-chip--ok {
+  color: var(--green);
+  border-color: rgba(5, 169, 188, 0.2);
+}
+
+[data-theme="dark"] .chat-tool-chip--ok {
+  border-color: rgba(107, 225, 149, 0.2);
+}
+
+.chat-tool-chip--error {
+  color: var(--red);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.chat-tool-spinner {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: chat-tool-spin 0.7s linear infinite;
+}
+
+@keyframes chat-tool-spin {
+  to { transform: rotate(360deg); }
+}
+
+.chat-tool-ok-icon,
+.chat-tool-err-icon {
+  width: 10px;
+  height: 10px;
+}
+
+/* Working indicator */
+.chat-working {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px 6px 46px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.chat-working-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.chat-working-dots span {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  animation: chat-working-bounce 1.2s ease-in-out infinite;
+}
+
+.chat-working-dots span:nth-child(2) { animation-delay: 0.2s; }
+.chat-working-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes chat-working-bounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-4px); }
+}
+
+/* System notes (slash commands, status events) */
+.chat-system-note {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 16px;
+  font-size: 11px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  margin: 4px 0;
+}
+
+.chat-system-note-text {
+  font-family: var(--font-mono);
+}
+
+.chat-system-note-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-system-note-link:hover {
+  color: var(--accent-hover);
+}
+
+.chat-system-note-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  border-radius: 2px;
+}
+
+/* Jump-to-bottom pill */
+.chat-scroll-to-bottom {
+  position: absolute;
+  bottom: 84px; /* above the composer */
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  color: var(--text-dim);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  z-index: 10;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.chat-scroll-to-bottom:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Permission-pending attention banner */
+.chat-attention-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-warning, #fff8e6);
+  border-top: 1px solid var(--border-warning, #f5d06a);
+  border-bottom: 1px solid var(--border-warning, #f5d06a);
+  font-size: 12.5px;
+  color: var(--text, #1a1a1a);
+}
+
+[data-theme="dark"] .chat-attention-banner {
+  background: #2a2200;
+  border-color: #5a4500;
+}
+
+.chat-attention-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--text-warning, #a07000);
+}
+
+[data-theme="dark"] .chat-attention-icon {
+  color: #e0a800;
+}
+
+.chat-attention-message {
+  flex: 1 1 auto;
+}
+
+.chat-attention-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent, #0060d0);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.chat-attention-link:hover {
+  color: var(--accent-hover, #0050b0);
+}
+
+.chat-attention-link:focus-visible {
+  outline: 2px solid var(--accent, #0060d0);
+  border-radius: 2px;
+}
+
+/* Composer */
+.chat-composer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+/* PromptBar inside ChatView inherits its own styles but loses its outer border
+   (the chat-composer provides the top border). */
+.chat-composer .prompt-bar {
+  border-top: none;
+  background: transparent;
+}
+
+.chat-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 2px 12px 6px;
+  min-height: 20px;
+}
+
+/* Passive harness label in the composer footer */
+.chat-harness-label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+
+.chat-harness-label--none {
+  display: none;
+}

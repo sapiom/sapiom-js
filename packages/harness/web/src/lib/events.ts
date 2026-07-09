@@ -6,7 +6,7 @@
 import type { BusMessage } from "@shared/types";
 
 import { getBootToken, isMockMode } from "./api";
-import { MOCK_ACTIVITY_SESSION_ID } from "./mock-data";
+import { MOCK_ACTIVITY_SESSION_ID, MOCK_CHAT_HISTORY } from "./mock-data";
 
 export type BusListener = (message: BusMessage) => void;
 
@@ -15,6 +15,8 @@ const RECONNECT_DELAY_MS = 2000;
  *  see `subscribeEvents`'s mock branch. Long enough that the tab strip has
  *  already rendered idle before the pulse appears. */
 const MOCK_ACTIVITY_DELAY_MS = 1200;
+/** Delay before the mock chat history is delivered to the session. */
+const MOCK_CHAT_DELAY_MS = 600;
 
 const mockListeners = new Set<BusListener>();
 let mockActivitySimulated = false;
@@ -55,6 +57,21 @@ export function subscribeEvents(onMessage: BusListener): () => void {
           }),
         );
       }, MOCK_ACTIVITY_DELAY_MS);
+
+      // Deliver mock chat history for the boot session so ChatView isn't empty
+      // in mock mode. This matches the real server's behavior (chat.history on
+      // open) — tests drive their own turns via __HARNESS_TEST__.publish.
+      setTimeout(() => {
+        mockListeners.forEach((listener) =>
+          listener({
+            type: "chat.history",
+            history: {
+              harnessSessionId: "sess-boot",
+              turns: MOCK_CHAT_HISTORY,
+            },
+          }),
+        );
+      }, MOCK_CHAT_DELAY_MS);
     }
     return () => mockListeners.delete(onMessage);
   }
