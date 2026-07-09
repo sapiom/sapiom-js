@@ -16,6 +16,7 @@ import { buildEnvelope } from "../envelope.js";
 import {
   HttpSender,
   resolveEndpoint,
+  SAPIOM_COLLECTOR_ENDPOINT,
   type SendOutcome,
 } from "../http-sender.js";
 import type { AnalyticsConfig, Envelope, EnvelopeFields } from "../types.js";
@@ -226,17 +227,23 @@ describe("resolveEndpoint (unit)", () => {
     restoreEnv();
   });
 
-  it("stays dark (null, no throw) when nothing is configured", () => {
-    expect(resolveEndpoint()).toBeNull();
-    expect(resolveEndpoint(undefined)).toBeNull();
+  it("defaults to the hosted collector when nothing is configured", () => {
+    expect(resolveEndpoint()).toBe(SAPIOM_COLLECTOR_ENDPOINT);
+    expect(resolveEndpoint(undefined)).toBe(SAPIOM_COLLECTOR_ENDPOINT);
   });
 
-  it("does not treat empty strings as endpoints", () => {
-    expect(resolveEndpoint("")).toBeNull();
+  it("treats empty strings as absent, falling through to the next source", () => {
+    // Empty config endpoint falls through to the environment override…
+    process.env.SAPIOM_ANALYTICS_ENDPOINT = "http://127.0.0.1:9/env";
+    expect(resolveEndpoint("")).toBe("http://127.0.0.1:9/env");
 
+    // …and when that is empty or absent too, to the hosted default.
     process.env.SAPIOM_ANALYTICS_ENDPOINT = "";
-    expect(resolveEndpoint()).toBeNull();
-    expect(resolveEndpoint("")).toBeNull();
+    expect(resolveEndpoint()).toBe(SAPIOM_COLLECTOR_ENDPOINT);
+    expect(resolveEndpoint("")).toBe(SAPIOM_COLLECTOR_ENDPOINT);
+
+    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
+    expect(resolveEndpoint("")).toBe(SAPIOM_COLLECTOR_ENDPOINT);
   });
 
   it("prefers the config endpoint over the environment override", () => {

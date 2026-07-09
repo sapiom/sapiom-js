@@ -3,11 +3,10 @@ import type { DebugHook, Envelope, FetchLike } from "./types.js";
 /**
  * The hosted Sapiom collector URL (see CONTRACT.md).
  *
- * The emitter does NOT send here by default — it ships dark (see
- * {@link resolveEndpoint}). Pass this constant as `endpoint` to deliver to
- * the hosted collector:
- *
- *   createAnalytics({ ..., endpoint: SAPIOM_COLLECTOR_ENDPOINT })
+ * This is the emitter's DEFAULT endpoint: an emitter with no explicit
+ * `endpoint` configured delivers here (see {@link resolveEndpoint}).
+ * Turning analytics off is a consent decision (`disabled: true`,
+ * `SAPIOM_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`), not an endpoint one.
  */
 export const SAPIOM_COLLECTOR_ENDPOINT =
   "https://api.sapiom.ai/v1/analytics/collector";
@@ -27,21 +26,24 @@ const REQUEST_TIMEOUT_MS = 5_000;
 export type SendOutcome = "ok" | "retry" | "drop";
 
 /**
- * Endpoint resolution: explicit config → environment override → dark.
+ * Endpoint resolution: explicit config → environment override → hosted
+ * default ({@link SAPIOM_COLLECTOR_ENDPOINT}).
  *
- * `null` means "no endpoint configured": the emitter becomes a silent no-op
- * (zero fetches, zero retries, nothing written to disk).
+ * Empty strings are treated as absent rather than as endpoints, so an
+ * explicit `endpoint: ""` falls through to the environment override and
+ * then to the hosted default. Resolution always yields an endpoint;
+ * disabling delivery is consent's job (see `consent.ts`), never this
+ * function's.
  */
-export function resolveEndpoint(configEndpoint?: string): string | null {
+export function resolveEndpoint(configEndpoint?: string): string {
   if (typeof configEndpoint === "string" && configEndpoint.length > 0) {
     return configEndpoint;
   }
   const fromEnv = process.env[ENDPOINT_ENV_VAR];
   if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
-  // SHIP-DARK DEFAULT: the hosted collector is not deployed yet, so an
-  // unconfigured emitter must send nothing. Once the collector is live,
-  // flip the next line to `return SAPIOM_COLLECTOR_ENDPOINT;`.
-  return null;
+  // LIVE DEFAULT: the hosted collector is deployed, so an unconfigured
+  // emitter delivers there.
+  return SAPIOM_COLLECTOR_ENDPOINT;
 }
 
 export interface HttpSenderOptions {

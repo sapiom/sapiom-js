@@ -2,10 +2,11 @@
  * Usage analytics for the CLI: one `command.run` event per executed command,
  * emitted through @sapiom/analytics-core via commander lifecycle hooks.
  *
- * Ships dark: unless a collector endpoint is explicitly configured (the
- * `SAPIOM_ANALYTICS_ENDPOINT` environment variable), the emitter is a silent
- * no-op — zero network calls, zero disk writes, no notice. Opt out any time
- * with `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
+ * Live by default: the emitter delivers to the hosted Sapiom collector unless
+ * opted out. `SAPIOM_ANALYTICS_ENDPOINT` overrides the destination (useful in
+ * tests). Opt out with `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1` —
+ * either makes the emitter a complete no-op (zero network calls, zero disk
+ * writes, no notice).
  *
  * Privacy: an event carries the command path (canonical command names only),
  * the NAMES of the flags that were passed, the duration, and the exit status.

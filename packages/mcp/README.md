@@ -105,15 +105,14 @@ never grows a per-capability tool of its own — capabilities live in
 
 ## Usage analytics
 
-The server can emit anonymous usage analytics (one `tool.call` event per tool
+The server emits anonymous usage analytics (one `tool.call` event per tool
 invocation: tool name, arguments, duration, ok/error class) via
-[`@sapiom/analytics-core`](../analytics-core). It currently ships dark: unless
-a collector endpoint is explicitly configured through the
-`SAPIOM_ANALYTICS_ENDPOINT` environment variable, nothing is sent anywhere and
-nothing is written to disk. Opt out at any time with
-`SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`. Telemetry is a synchronous
-in-memory enqueue that never throws, never blocks a tool call, and can never
-change a tool result.
+[`@sapiom/analytics-core`](../analytics-core) to the hosted Sapiom collector
+by default. Opt out at any time with `SAPIOM_TELEMETRY_DISABLED=1` or
+`DO_NOT_TRACK=1` — either makes the emitter a complete no-op (nothing is sent,
+nothing is written to disk). `SAPIOM_ANALYTICS_ENDPOINT` overrides the
+destination. Telemetry is a synchronous in-memory enqueue that never throws,
+never blocks a tool call, and can never change a tool result.
 
 ## License
 

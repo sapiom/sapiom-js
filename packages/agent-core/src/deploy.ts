@@ -52,7 +52,7 @@ export interface DeployResult {
  * Throws `AgentOperationError` on git, network, or build failures.
  *
  * Emits one `workflow.deploy` usage-analytics event (metadata only: ids,
- * status, duration). Ships dark — see ./analytics.ts; telemetry never
+ * status, duration). Live by default — see ./analytics.ts; telemetry never
  * changes the operation's behavior.
  */
 export async function deploy(opts: DeployOptions, client: GatewayClient): Promise<DeployResult> {

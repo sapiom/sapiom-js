@@ -246,7 +246,7 @@ describe("analytics e2e (real stdio server)", () => {
   );
 
   it(
-    "tool results are identical across collector down/500/slow, telemetry disabled, and no endpoint",
+    "tool results are identical across collector down/500/slow, telemetry disabled, and analytics unreachable",
     { timeout: 60_000 },
     async () => {
       // A fixed path (not under the per-server temp HOME) so error payloads
@@ -265,7 +265,12 @@ describe("analytics e2e (real stdio server)", () => {
         SAPIOM_ANALYTICS_ENDPOINT: collector.url,
         SAPIOM_TELEMETRY_DISABLED: "1",
       });
-      const dark = await spawnServer({}); // ships dark: no endpoint at all
+      // Live-default with a permanently-refused endpoint (port 9 = discard).
+      // Telemetry is enabled (no opt-out), delivery fails silently — tool
+      // results must be identical whether analytics succeeds or fails.
+      const refused = await spawnServer({
+        SAPIOM_ANALYTICS_ENDPOINT: "http://127.0.0.1:9/v1/analytics/collector",
+      });
       try {
         const snapshot = async (client: Client) => ({
           status: await callTool(client, "sapiom_status"),
@@ -290,13 +295,13 @@ describe("analytics e2e (real stdio server)", () => {
         collector.setMode({ kind: "slow", delayMs: 300 });
         expect(await snapshot(healthy.client)).toEqual(baseline);
 
-        // Telemetry disabled and never-configured servers behave identically.
+        // Telemetry disabled and analytics-unreachable servers behave identically.
         expect(await snapshot(disabled.client)).toEqual(baseline);
-        expect(await snapshot(dark.client)).toEqual(baseline);
+        expect(await snapshot(refused.client)).toEqual(baseline);
       } finally {
         await closeServer(healthy);
         await closeServer(disabled);
-        await closeServer(dark);
+        await closeServer(refused);
         await collector.close();
       }
     },

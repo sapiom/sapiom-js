@@ -1,9 +1,8 @@
 /**
  * Usage-analytics plumbing for the orchestration operations (deploy / run /
  * link / run-local). Events are emitted through `@sapiom/analytics-core`,
- * which ships dark by default: unless a collector endpoint is explicitly
- * configured (the `SAPIOM_ANALYTICS_ENDPOINT` environment variable), every
- * `track` call is a silent no-op — zero network calls, zero disk writes.
+ * which is live by default: an unconfigured emitter delivers to the hosted
+ * Sapiom collector. Use `SAPIOM_ANALYTICS_ENDPOINT` to redirect (test use).
  * Opt out any time with `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
  *
  * This module is the package's ONLY exception to the "no process.env reads /

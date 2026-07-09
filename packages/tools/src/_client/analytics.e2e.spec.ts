@@ -346,7 +346,7 @@ describe("capability.call analytics (e2e, mock collector)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Consent + ship-dark
+  // Consent + live-default
   // -------------------------------------------------------------------------
 
   it("SAPIOM_TELEMETRY_DISABLED=1 → zero collector requests, identical result", async () => {
@@ -375,18 +375,22 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     expect(collector.requests).toHaveLength(0);
   });
 
-  it("ships dark: with no endpoint configured, nothing is sent and nothing is written", async () => {
-    // No SAPIOM_ANALYTICS_ENDPOINT. Remove the seeded identity file so any
-    // (forbidden) disk write would be visible.
-    fs.rmSync(path.join(tempHome, ".sapiom"), { recursive: true, force: true });
+  it("live by default: with no explicit endpoint config, emitter is enabled and requests reach the collector", async () => {
+    // No explicit `endpoint` on the analytics config, but the env override
+    // (SAPIOM_ANALYTICS_ENDPOINT) points at the mock so nothing hits the
+    // production URL. This exercises the live-default fall-through path:
+    // resolveEndpoint() returns the hosted collector when no config/env is set,
+    // and here the env override redirects that to the mock.
+    process.env.SAPIOM_ANALYTICS_ENDPOINT = collector.url;
 
     const { result, transport } = await scrapeOnce();
     expect(result.markdown).toBe("# Example");
     await analyticsOf(transport)?.flush();
 
-    expect(collector.requests).toHaveLength(0);
-    expect(analyticsOf(transport)?.enabled).toBe(false);
-    expect(fs.existsSync(path.join(tempHome, ".sapiom"))).toBe(false);
+    expect(analyticsOf(transport)?.enabled).toBe(true);
+    expect(collector.requests.length).toBeGreaterThan(0);
+    // The identity file is written (first-run on a fresh HOME).
+    expect(fs.existsSync(path.join(tempHome, ".sapiom", "analytics.json"))).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -401,10 +405,13 @@ describe("capability.call analytics (e2e, mock collector)", () => {
 
   for (const [label, applyMode] of failureModes) {
     it(`collector ${label} → capability result identical, nothing thrown`, async () => {
-      // Baseline: telemetry fully dark.
-      const { result: baseline } = await scrapeOnce();
-
+      // Baseline: telemetry on with a healthy mock collector.
       enableTelemetry();
+      const { result: baseline } = await scrapeOnce();
+      // Reset before applying the fault mode so the assertions below only
+      // reflect the fault-mode scrape's delivery attempts.
+      collector.reset();
+
       applyMode();
       const { result, transport } = await scrapeOnce();
       expect(result).toEqual(baseline);
@@ -424,7 +431,7 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     });
   }
 
-  it("a failing capability call throws identically whether telemetry is on, dark, or disabled", async () => {
+  it("a failing capability call throws identically whether telemetry is on (default-live) or disabled", async () => {
     const failingScrape = async (): Promise<SearchHttpError> => {
       const { transport } = makeTransport(
         () => new Response("upstream exploded", { status: 502 }),
@@ -437,19 +444,25 @@ describe("capability.call analytics (e2e, mock collector)", () => {
       throw new Error("scrape unexpectedly succeeded");
     };
 
-    const dark = await failingScrape();
+    // Default-live: no explicit endpoint override — the emitter resolves to the
+    // hosted collector, but here the env override redirects to the mock so
+    // nothing hits production. The throw behavior is the baseline.
+    process.env.SAPIOM_ANALYTICS_ENDPOINT = collector.url;
+    const defaultLive = await failingScrape();
 
+    // Explicit enableTelemetry (same endpoint, same behavior).
     enableTelemetry();
     const withTelemetry = await failingScrape();
 
+    // Disabled: no sends at all, but the throw must be identical.
     process.env.SAPIOM_TELEMETRY_DISABLED = "1";
     const disabled = await failingScrape();
 
     for (const thrown of [withTelemetry, disabled]) {
-      expect(thrown.name).toBe(dark.name);
-      expect(thrown.message).toBe(dark.message);
-      expect(thrown.status).toBe(dark.status);
-      expect(thrown.body).toEqual(dark.body);
+      expect(thrown.name).toBe(defaultLive.name);
+      expect(thrown.message).toBe(defaultLive.message);
+      expect(thrown.status).toBe(defaultLive.status);
+      expect(thrown.body).toEqual(defaultLive.body);
     }
   });
 });

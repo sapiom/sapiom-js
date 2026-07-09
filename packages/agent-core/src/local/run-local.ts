@@ -99,7 +99,7 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
   dispatcher.setSignals(signals);
   // Step lifecycle usage analytics (`step.start` / `step.complete` /
   // `step.error`), flagged `local: true` so local runs are distinguishable
-  // from server executions. Ships dark — see ../analytics.ts; `track` is
+  // from server executions. Live by default — see ../analytics.ts; `track` is
   // enqueue-only and never throws, so the run itself is unaffected.
   const analytics = getOrchestrationAnalytics();
   const core = new AgentRunnerCore({

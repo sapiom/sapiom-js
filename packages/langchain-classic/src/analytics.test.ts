@@ -456,7 +456,7 @@ describe("langchain-classic usage analytics", () => {
     });
   });
 
-  describe("opt-out and ship-dark", () => {
+  describe("opt-out and live-default", () => {
     it.each(["SAPIOM_TELEMETRY_DISABLED", "DO_NOT_TRACK"])(
       "%s=1 results in zero collector requests",
       async (envKey) => {
@@ -481,10 +481,12 @@ describe("langchain-classic usage analytics", () => {
       },
     );
 
-    it("ships dark (no requests) when no endpoint is configured", async () => {
-      delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
-      await __resetAnalyticsForTests();
-
+    it("live by default: with no explicit endpoint config, emitter is enabled and events reach the collector", async () => {
+      // No explicit `endpoint` on the analytics config, but the env override
+      // (SAPIOM_ANALYTICS_ENDPOINT) set by beforeEach points at the mock so
+      // nothing hits the production URL. This exercises the live-default
+      // fall-through path: resolveEndpoint() returns the hosted collector when
+      // no config is set, and the env override redirects that to the mock.
       mockOpenAIGenerate("Hi", {
         input_tokens: 1,
         output_tokens: 1,
@@ -496,9 +498,9 @@ describe("langchain-classic usage analytics", () => {
       );
       await model.invoke("Hello");
 
-      expect(getAnalytics().enabled).toBe(false);
+      expect(getAnalytics().enabled).toBe(true);
       await getAnalytics().flush();
-      expect(collector.requests).toHaveLength(0);
+      expect(collector.requests.length).toBeGreaterThan(0);
     });
   });
 

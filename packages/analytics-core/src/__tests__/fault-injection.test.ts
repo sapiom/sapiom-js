@@ -2,7 +2,7 @@ import * as fs from "fs";
 
 import { createAnalytics } from "../analytics.js";
 import { SAPIOM_COLLECTOR_ENDPOINT } from "../http-sender.js";
-import type { AnalyticsConfig } from "../types.js";
+import type { AnalyticsConfig, FetchLike } from "../types.js";
 import {
   cleanAnalyticsEnv,
   createCapturingFetch,
@@ -55,15 +55,40 @@ describe("fault injection", () => {
 
   it("collector down (real ECONNREFUSED on a closed port, env endpoint override): never rejects", async () => {
     const port = await getClosedPort();
+    // DO NOT REMOVE this override: without it the live default is the
+    // production collector, and this test — which uses the real global
+    // fetch — would dial real network.
     process.env.SAPIOM_ANALYTICS_ENDPOINT = `http://127.0.0.1:${port}/collector`;
 
-    // Real global fetch, real connection failure.
-    const analytics = tracker.register(createAnalytics(baseConfig()));
-    expect(analytics.enabled).toBe(true);
+    // Real global fetch, real connection failure. The wrapper records every
+    // dialed URL and refuses the production collector outright, so a lost
+    // override fails the assertions below instead of leaking real traffic.
+    const dialed: string[] = [];
+    const globalWithFetch = globalThis as { fetch: FetchLike };
+    const realFetch = globalWithFetch.fetch;
+    globalWithFetch.fetch = (url, init) => {
+      dialed.push(String(url));
+      if (String(url) === SAPIOM_COLLECTOR_ENDPOINT) {
+        return Promise.reject(
+          new Error("test attempted to dial the production collector"),
+        );
+      }
+      return realFetch(url, init);
+    };
 
-    expect(() => analytics.track("event", { n: 1 })).not.toThrow();
-    await expect(analytics.flush()).resolves.toBeUndefined();
-    await expect(analytics.shutdown()).resolves.toBeUndefined();
+    try {
+      const analytics = tracker.register(createAnalytics(baseConfig()));
+      expect(analytics.enabled).toBe(true);
+
+      expect(() => analytics.track("event", { n: 1 })).not.toThrow();
+      await expect(analytics.flush()).resolves.toBeUndefined();
+      await expect(analytics.shutdown()).resolves.toBeUndefined();
+    } finally {
+      globalWithFetch.fetch = realFetch;
+    }
+
+    expect(dialed.length).toBeGreaterThanOrEqual(1);
+    expect(dialed).not.toContain(SAPIOM_COLLECTOR_ENDPOINT);
   });
 
   it("HTTP 500: no throw, at most one retry, then silent drop", async () => {
@@ -132,37 +157,73 @@ describe("fault injection", () => {
     expect(capture.calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("treats an explicit empty-string endpoint as absent (ship-dark no-op)", async () => {
+  it("treats an explicit empty-string endpoint as absent → hosted default", async () => {
+    // Unpinned to prove default fall-through; fetchImpl is the egress guard.
     delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
     const capture = createCapturingFetch();
     const analytics = tracker.register(
-      createAnalytics(baseConfig({ endpoint: "", fetchImpl: capture.fetchImpl })),
+      createAnalytics(
+        baseConfig({ endpoint: "", fetchImpl: capture.fetchImpl }),
+      ),
     );
 
-    expect(analytics.enabled).toBe(false);
+    expect(analytics.enabled).toBe(true);
     analytics.track("event", { n: 1 });
     await analytics.flush();
-    expect(capture.calls).toHaveLength(0);
+    expect(capture.calls).toHaveLength(1);
+    expect(capture.calls[0].url).toBe(SAPIOM_COLLECTOR_ENDPOINT);
   });
 
-  it("ships dark: no endpoint configured → no-op, zero fetches, zero disk writes", async () => {
+  it("no endpoint configured → delivers to the hosted collector by default", async () => {
+    // Unpinned to prove default fall-through; fetchImpl is the egress guard.
     delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
     const capture = createCapturingFetch();
     const analytics = tracker.register(
       createAnalytics(baseConfig({ fetchImpl: capture.fetchImpl })),
     );
 
-    expect(analytics.enabled).toBe(false);
+    expect(analytics.enabled).toBe(true);
     expect(() => analytics.track("event", { n: 1 })).not.toThrow();
     await expect(analytics.flush()).resolves.toBeUndefined();
     await expect(analytics.shutdown()).resolves.toBeUndefined();
+
+    expect(capture.calls).toHaveLength(1);
+    expect(capture.calls[0].url).toBe(SAPIOM_COLLECTOR_ENDPOINT);
+  });
+
+  it("opt-out keeps the true no-op path: zero fetches, zero disk writes", async () => {
+    // The live default makes consent the only dark switch — verify it still
+    // guarantees a full no-op even when the default endpoint would apply.
+    // Unpinned so consent beats the live default; fetchImpl guards egress.
+    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
+    process.env.SAPIOM_TELEMETRY_DISABLED = "1";
+    const capture = createCapturingFetch();
+
+    const optedOutByEnv = tracker.register(
+      createAnalytics(baseConfig({ fetchImpl: capture.fetchImpl })),
+    );
+    expect(optedOutByEnv.enabled).toBe(false);
+    expect(() => optedOutByEnv.track("event", { n: 1 })).not.toThrow();
+    await expect(optedOutByEnv.flush()).resolves.toBeUndefined();
+    await expect(optedOutByEnv.shutdown()).resolves.toBeUndefined();
+
+    delete process.env.SAPIOM_TELEMETRY_DISABLED;
+    const optedOutByConfig = tracker.register(
+      createAnalytics(
+        baseConfig({ disabled: true, fetchImpl: capture.fetchImpl }),
+      ),
+    );
+    expect(optedOutByConfig.enabled).toBe(false);
+    optedOutByConfig.track("event", { n: 1 });
+    await optedOutByConfig.flush();
 
     expect(capture.calls).toHaveLength(0);
     expect(fs.existsSync(home.identityPath)).toBe(false);
   });
 
   it("explicitly passing SAPIOM_COLLECTOR_ENDPOINT targets the hosted collector", async () => {
-    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
+    // The beforeEach pin stays: a config endpoint beats the env override
+    // (proven separately below), so no unpinning is needed here.
     const capture = createCapturingFetch();
     const analytics = tracker.register(
       createAnalytics(

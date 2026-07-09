@@ -123,7 +123,7 @@ describe("identity store + first-run notice", () => {
     expect(fs.existsSync(home.identityPath)).toBe(false);
   });
 
-  it("keeps emitting (anonymous_id null, no notice) when HOME is unwritable", async () => {
+  it("keeps emitting (anonymous_id null, notice still prints) when HOME is unwritable", async () => {
     // Point HOME below a regular file so mkdir must fail.
     const blocker = path.join(home.dir, "blocker");
     fs.writeFileSync(blocker, "i am a file");
@@ -138,10 +138,30 @@ describe("identity store + first-run notice", () => {
     expect(() => analytics.track("event")).not.toThrow();
     await analytics.flush();
 
-    expect(noticeCount()).toBe(0);
+    // Delivery happens, so the notice must too ("never silent") — even
+    // though the shown-marker cannot persist without identity storage.
+    expect(noticeCount()).toBe(1);
     expect(capture.calls).toHaveLength(1);
     expect(capture.batch()[0].anonymous_id).toBeNull();
     expect(analytics.anonymousId).toBeNull();
+  });
+
+  it("unwritable HOME + enabled → first-run notice fires on first track", () => {
+    // Same blocked-HOME technique as above: the marker cannot persist, so
+    // the notice prints unconditionally instead of being suppressed.
+    const blocker = path.join(home.dir, "blocker");
+    fs.writeFileSync(blocker, "i am a file");
+    process.env.HOME = path.join(blocker, "nested");
+    process.env.USERPROFILE = process.env.HOME;
+
+    const analytics = tracker.register(createAnalytics(baseConfig()));
+    expect(noticeCount()).toBe(0); // tied to track(), not instance creation
+
+    analytics.track("event");
+    expect(noticeCount()).toBe(1);
+
+    analytics.track("event_two");
+    expect(noticeCount()).toBe(1); // once per instance, not per event
   });
 
   it("shares one session id per process and exposes it as uuid4", () => {

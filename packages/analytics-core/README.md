@@ -12,8 +12,9 @@ be invisible to the host application:
   best-effort on process exit. A failed batch is retried at most once, then
   dropped. Oversized fields are truncated (flagged with `data._truncated`).
 - **Zero runtime dependencies.** Node built-ins only.
-- **Ships dark by default.** Unless an endpoint is explicitly configured,
-  nothing is sent anywhere — see below.
+- **On by default, off with one switch.** Events go to the hosted Sapiom
+  collector unless you opt out — every opt-out is documented below and makes
+  the emitter a complete no-op.
 
 ## Telemetry: what, where, and how to turn it off
 
@@ -54,6 +55,9 @@ Any of these disables analytics entirely (highest precedence first):
 2. `SAPIOM_TELEMETRY_DISABLED=1` in the environment.
 3. `DO_NOT_TRACK=1` in the environment (the ecosystem-wide convention).
 
+For packages wiring a custom `consentProvider`: returning `undefined` defers
+to the default, which is enabled — return `false` to keep analytics off.
+
 When opted out, nothing is sent, nothing is written to disk, zero network
 calls are made — and no notice is printed.
 
@@ -65,16 +69,17 @@ one-line notice to stderr, so collection is never silent.
 A single file, `~/.sapiom/analytics.json` (permissions `0600`), holding a
 random anonymous machine id and the first-run-notice marker. It contains no
 personal information. Delete it at any time to reset the identity; it is
-never created while analytics is disabled or unconfigured.
+never created while analytics is disabled.
 
-### Current status: ships dark
+### Current status: live by default
 
-The emitter has **no default endpoint**. Unless an endpoint is explicitly
-configured — `endpoint` in the config, or the `SAPIOM_ANALYTICS_ENDPOINT`
-environment variable (used by tests) — `createAnalytics` returns a no-op
-instance: zero network calls, zero disk writes, no first-run notice. The
-hosted collector URL is exported as the constant `SAPIOM_COLLECTOR_ENDPOINT`
-for when you (or a future release of this package) want to send there.
+The emitter delivers to the hosted Sapiom collector by default — the URL is
+exported as the constant `SAPIOM_COLLECTOR_ENDPOINT`, and an explicit
+`endpoint` in the config sends somewhere else (for example, the mock
+collector in tests). Everything in [Opting out](#opting-out) above applies
+unchanged: `disabled: true` in the config, `SAPIOM_TELEMETRY_DISABLED=1`, or
+`DO_NOT_TRACK=1` disables analytics entirely — nothing is sent, nothing is
+written to disk, zero network calls are made, and no notice is printed.
 
 ## Usage
 
@@ -85,8 +90,8 @@ const analytics = createAnalytics({
   source: "cli",
   sdkName: "@sapiom/cli",
   sdkVersion: "1.0.0",
-  // No endpoint → a silent no-op. To actually deliver:
-  // endpoint: SAPIOM_COLLECTOR_ENDPOINT,
+  // Delivers to the hosted Sapiom collector (SAPIOM_COLLECTOR_ENDPOINT)
+  // by default; pass `endpoint` to send somewhere else.
 });
 
 analytics.track("command.run", { command: "dev" });

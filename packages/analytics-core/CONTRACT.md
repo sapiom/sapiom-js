@@ -22,9 +22,9 @@ to the events (see [Server-stamped fields](#server-stamped-fields-never-client-t
 An invalid or missing key never causes a rejection.
 
 This URL is exported by `@sapiom/analytics-core` as the constant
-`SAPIOM_COLLECTOR_ENDPOINT`. Note that the emitter **ships dark by default**:
-it sends nothing unless an endpoint is configured explicitly (see the README's
-telemetry section).
+`SAPIOM_COLLECTOR_ENDPOINT` and is the emitter's **default endpoint**: an
+emitter with no explicit `endpoint` configured delivers here, unless the
+user has opted out (see the README's telemetry section).
 
 ## Request envelope
 

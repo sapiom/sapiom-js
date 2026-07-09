@@ -22,8 +22,8 @@
  *   content.
  *
  * Emission is enqueue-only (`track()` is synchronous and never throws) and
- * ships dark by default: without the `SAPIOM_ANALYTICS_ENDPOINT` environment
- * variable (or an explicit endpoint) `@sapiom/analytics-core` is a no-op.
+ * live by default: an unconfigured emitter delivers to the hosted Sapiom
+ * collector. Use `SAPIOM_ANALYTICS_ENDPOINT` to redirect (test use).
  * Opt-outs: `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
  */
 import { createAnalytics, type SapiomAnalytics } from "@sapiom/analytics-core";

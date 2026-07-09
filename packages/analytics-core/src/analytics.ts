@@ -31,10 +31,12 @@ function getProcessSessionId(): string {
  * Guarantees, regardless of configuration or environment:
  * - `createAnalytics` and `track` never throw
  * - `flush`/`shutdown` never reject
- * - nothing is written or sent unless consent resolves to enabled AND a
- *   collector endpoint is explicitly configured (`endpoint` in the config or
- *   the `SAPIOM_ANALYTICS_ENDPOINT` environment variable) — the default
- *   build ships dark
+ * - nothing is written or sent unless consent resolves to enabled —
+ *   `disabled: true`, `SAPIOM_TELEMETRY_DISABLED=1`, and `DO_NOT_TRACK=1`
+ *   each force a full no-op (zero fetches, zero disk writes)
+ *
+ * Events deliver to the hosted Sapiom collector by default
+ * (`SAPIOM_COLLECTOR_ENDPOINT`); a configured `endpoint` overrides it.
  */
 export function createAnalytics(config: AnalyticsConfig): SapiomAnalytics {
   try {
@@ -61,14 +63,9 @@ function buildAnalytics(config: AnalyticsConfig): SapiomAnalytics {
   const sessionId = getProcessSessionId();
   if (!resolveConsent(config)) return createDisabledInstance(sessionId);
 
-  // Ship-dark: with no explicitly configured endpoint there is nowhere to
-  // send, so the instance is a full no-op — events are dropped at enqueue,
-  // nothing is written to disk, and no first-run notice is printed.
+  // Resolution always yields an endpoint — the hosted collector when nothing
+  // is configured. Consent (checked above) is the only off switch.
   const endpoint = resolveEndpoint(config.endpoint);
-  if (endpoint === null) {
-    debug("no collector endpoint configured; analytics is a no-op");
-    return createDisabledInstance(sessionId);
-  }
 
   const identityStore = new IdentityStore(debug);
   const sender = new HttpSender({
@@ -94,9 +91,13 @@ function buildAnalytics(config: AnalyticsConfig): SapiomAnalytics {
 
         // First-ever tracked event across all packages on this machine
         // prints a one-line notice (marker lives in the identity file).
+        // When identity storage is unavailable the marker cannot persist:
+        // print unconditionally rather than collect silently — repeating
+        // the notice every process start in that edge case is acceptable,
+        // silent delivery is not.
         if (!noticeAttempted) {
           noticeAttempted = true;
-          if (identityStore.markFirstRunNoticeShown()) {
+          if (identity === null || identityStore.markFirstRunNoticeShown()) {
             try {
               process.stderr.write(FIRST_RUN_NOTICE + "\n");
             } catch {

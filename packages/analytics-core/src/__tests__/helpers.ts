@@ -75,9 +75,9 @@ export const TEST_ENDPOINT = "http://127.0.0.1:9/test-collector";
 /**
  * Give the test a deterministic analytics environment: clear the consent
  * opt-outs and pin `SAPIOM_ANALYTICS_ENDPOINT` to {@link TEST_ENDPOINT}.
- * The emitter ships dark (no endpoint → no-op), so tests exercising delivery
- * must configure an endpoint — the env override is how these suites do it.
- * Returns a restore fn.
+ * The emitter delivers to the hosted collector by default, so the pin is
+ * mandatory: it guarantees no test can ever target the production URL, even
+ * if one forgets to inject a `fetchImpl`. Returns a restore fn.
  */
 export function cleanAnalyticsEnv(): () => void {
   const keys = [

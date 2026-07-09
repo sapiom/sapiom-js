@@ -263,17 +263,21 @@ describe('command.run analytics (built CLI against a mock collector)', () => {
     expect(optedOut.stderr).toBe('');
   }, 30_000);
 
-  it('ships dark: without an endpoint nothing is sent, written, or printed', async () => {
+  it('live by default: with no opt-outs configured, the first-run notice prints and events reach the collector', async () => {
+    // No SAPIOM_TELEMETRY_DISABLED or DO_NOT_TRACK — the emitter is live by
+    // default and routes to the hosted collector. SAPIOM_ANALYTICS_ENDPOINT
+    // redirects that to the mock so nothing hits the production URL.
     const home = freshHome();
-    const result = await runCli(['logout', '--json'], cliEnv(home));
-    await settle(250);
+    const result = await runCli(['logout', '--json'], cliEnv(home, { SAPIOM_ANALYTICS_ENDPOINT: collector.url }));
 
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ ok: true, cleared: false });
-    expect(result.stderr).toBe('');
-    expect(collector.requests).toHaveLength(0);
-    // No identity file, no first-run marker — zero disk writes.
-    expect(existsSync(path.join(home, '.sapiom', 'analytics.json'))).toBe(false);
+    // The first-run notice prints because no opt-out silences it.
+    expect(result.stderr).toContain(FIRST_RUN_NOTICE);
+    await collector.waitForRequests(1);
+    expect(collector.requests.length).toBeGreaterThan(0);
+    // Identity file is created (first run on a fresh HOME).
+    expect(existsSync(path.join(home, '.sapiom', 'analytics.json'))).toBe(true);
   }, 20_000);
 
   it('prints the first-run notice exactly once per machine and stamps the marker', async () => {

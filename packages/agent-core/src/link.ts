@@ -34,7 +34,7 @@ export interface LinkResult {
  * failures.
  *
  * Emits one `workflow.link` usage-analytics event (metadata only: name, id,
- * status, duration). Ships dark — see ./analytics.ts; telemetry never
+ * status, duration). Live by default — see ./analytics.ts; telemetry never
  * changes the operation's behavior.
  */
 export async function link(opts: LinkOptions, client: GatewayClient): Promise<LinkResult> {
