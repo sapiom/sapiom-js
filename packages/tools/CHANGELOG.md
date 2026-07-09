@@ -1,5 +1,11 @@
 # @sapiom/tools
 
+## 0.17.1
+
+### Patch Changes
+
+- 7fa17d1: Align agent run and schedule requests with the current API endpoints. This also fixes `@sapiom/tools` `schedules` operations (create/list/get/cancel), which were targeting an outdated endpoint. Public function signatures are unchanged.
+
 ## 0.17.0
 
 ### Minor Changes
