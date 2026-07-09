@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 
 import { HARNESS_PATHS, type WorkflowInfo } from "../shared/types.js";
+import { hasTraversalSegment, resolveWithinRoot } from "./path-safety.js";
 
 const MAX_SCAN_DEPTH = 3;
 const SKIP_DIR_NAMES = new Set(["node_modules", ".git"]);
@@ -29,7 +30,14 @@ interface SapiomMarker {
   definitionId?: number | null;
 }
 
+// `dir` reaching these sinks is always a resolved absolute path (from
+// path.resolve in scan/connectPath, or a confined descent in scanDir), so a
+// `..` segment can never survive. Asserting it anyway keeps the no-traversal
+// guarantee explicit and local to each fs read, and covers the arbitrary
+// path connectPath accepts (which has no scan root to confine it to).
+
 async function readMarker(dir: string): Promise<SapiomMarker | null> {
+  if (hasTraversalSegment(dir)) return null;
   try {
     const raw = await fs.readFile(path.join(dir, "sapiom.json"), "utf8");
     return JSON.parse(raw) as SapiomMarker;
@@ -39,6 +47,7 @@ async function readMarker(dir: string): Promise<SapiomMarker | null> {
 }
 
 async function nameFor(dir: string): Promise<string> {
+  if (hasTraversalSegment(dir)) return path.basename(dir);
   try {
     const raw = await fs.readFile(path.join(dir, "package.json"), "utf8");
     const pkg = JSON.parse(raw) as { name?: string };
@@ -49,15 +58,26 @@ async function nameFor(dir: string): Promise<string> {
   return path.basename(dir);
 }
 
-/** Depth-first scan; a directory carrying a marker is registered and not descended into. */
-async function scanDir(dir: string, depth: number, found: WorkflowInfo[]): Promise<void> {
+/**
+ * Depth-first scan; a directory carrying a marker is registered and not
+ * descended into. Every directory touched is confined to `root` (the tree the
+ * caller asked to scan): the initial call is `root` itself, and recursion only
+ * ever descends into a direct child, so no crafted entry name can walk the
+ * scan outside `root`. Symlinked entries report `isDirectory() === false`
+ * (withFileTypes uses raw dirent info, not a followed stat) and so are never
+ * descended into either.
+ */
+async function scanDir(root: string, dir: string, depth: number, found: WorkflowInfo[]): Promise<void> {
   if (depth > MAX_SCAN_DEPTH) return;
 
-  const marker = await readMarker(dir);
+  const safeDir = resolveWithinRoot(root, dir);
+  if (!safeDir) return;
+
+  const marker = await readMarker(safeDir);
   if (marker) {
     found.push({
-      name: await nameFor(dir),
-      path: dir,
+      name: await nameFor(safeDir),
+      path: safeDir,
       definitionId: marker.definitionId ?? null,
       source: "scan",
     });
@@ -66,14 +86,14 @@ async function scanDir(dir: string, depth: number, found: WorkflowInfo[]): Promi
 
   let entries: import("node:fs").Dirent[];
   try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
+    entries = await fs.readdir(safeDir, { withFileTypes: true });
   } catch {
     return;
   }
 
   for (const entry of entries) {
     if (!entry.isDirectory() || SKIP_DIR_NAMES.has(entry.name)) continue;
-    await scanDir(path.join(dir, entry.name), depth + 1, found);
+    await scanDir(root, path.join(safeDir, entry.name), depth + 1, found);
   }
 }
 
@@ -138,7 +158,7 @@ export class WorkflowRegistry {
     await this.ensureLoaded();
     const absoluteRoot = path.resolve(expandHome(root));
     const found: WorkflowInfo[] = [];
-    await scanDir(absoluteRoot, 0, found);
+    await scanDir(absoluteRoot, absoluteRoot, 0, found);
 
     const byPath = new Map(this.workflows.map((workflow) => [workflow.path, workflow]));
     for (const workflow of found) {

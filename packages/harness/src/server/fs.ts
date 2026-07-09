@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 import type { FsDirEntry, FsListResponse } from "../shared/types.js";
+import { hasTraversalSegment } from "../core/path-safety.js";
 
 export type { FsDirEntry, FsListResponse } from "../shared/types.js";
 
@@ -40,6 +41,16 @@ export function createFsRouter(): ExpressRouter {
     // input already was (checked above), so this can't turn a validated
     // absolute path into a relative one.
     const resolved = path.resolve(expanded);
+
+    // This picker intentionally browses any absolute directory the user names,
+    // so there's no single root to confine to — but a fully resolved path must
+    // never retain a `..` segment. Assert that explicitly at the sink: it
+    // rejects nothing legitimate (resolve() already normalized traversal away)
+    // and makes the no-traversal guarantee local to the readdir below.
+    if (hasTraversalSegment(resolved)) {
+      res.status(400).json({ error: `path must not contain traversal segments: ${rawPath}` });
+      return;
+    }
 
     const includeHidden = req.query.hidden === "1";
 

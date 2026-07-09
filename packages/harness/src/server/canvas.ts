@@ -24,6 +24,7 @@ import { Router, type Router as ExpressRouter, type Request, type Response } fro
 import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { slugForWorkflowPath } from "../core/canvas-render.js";
 import { isMachineGeneratedCanvas } from "../core/canvas-index-classify.js";
+import { resolveWithinRoot } from "../core/path-safety.js";
 
 const INDEX_FILENAME = path.basename(CANVAS_INDEX);
 
@@ -121,10 +122,13 @@ function serveCanvas(getSession: CanvasSessionLookup, req: Request, res: Respons
   const unboundRoot = isRoot && !bound;
 
   const canvasRoot = path.resolve(session.cwd, CANVAS_DIR);
-  const filePath = path.resolve(canvasRoot, resolved);
-
-  // Path traversal guard: the resolved file must stay under canvasRoot.
-  if (filePath !== canvasRoot && !filePath.startsWith(canvasRoot + path.sep)) {
+  // Path-traversal guard, applied to the user-controlled request path
+  // (`resolved` is the `*` wildcard for a non-root request). resolveWithinRoot
+  // rejects any value — a `..` climb, an absolute path — that would resolve
+  // outside canvasRoot; a bound/index root request passes a server-built,
+  // already-safe `resolved` (a hashed slug or the index constant).
+  const filePath = resolveWithinRoot(canvasRoot, resolved);
+  if (!filePath) {
     res.status(400).end();
     return;
   }

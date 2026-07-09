@@ -24,7 +24,7 @@
  *
  * Safety: deletion only ever targets a plain directory that is a direct
  * child of a root that itself looks like a dedicated generated-config dir
- * (resolveGeneratedRoot / childDirPath). Symlinked entries are never
+ * (resolveGeneratedRoot / childPath). Symlinked entries are never
  * followed and never deleted.
  */
 
@@ -33,6 +33,7 @@ import * as path from "node:path";
 
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../paths.js";
+import { childPath } from "../path-safety.js";
 
 /** Sweep threshold: a non-live dir must be at least this stale (mtime) to be
  *  removed. Generous — the only cost of keeping a dead dir is disk clutter,
@@ -72,18 +73,6 @@ function resolveGeneratedRoot(generatedRoot?: string): string {
 }
 
 /**
- * The absolute path of `name` as a direct child of `root`, or null when
- * `name` is anything other than one plain path segment — separators, "..",
- * absolute paths, or anything else that could resolve outside the root.
- */
-function childDirPath(root: string, name: string): string | null {
-  if (!name || name === "." || name === "..") return null;
-  const resolved = path.resolve(root, name);
-  if (path.dirname(resolved) !== root || path.basename(resolved) !== name) return null;
-  return resolved;
-}
-
-/**
  * Deletes one session's generated dir. Only call once the session's pty has
  * exited — the agent re-executes emit.cjs from this dir on every hook event
  * while it runs. Returns true if a directory was removed; a missing entry,
@@ -94,7 +83,7 @@ export async function removeGeneratedSessionDir(
   options: GeneratedRetentionOptions = {},
 ): Promise<boolean> {
   const root = resolveGeneratedRoot(options.generatedRoot);
-  const dir = childDirPath(root, harnessSessionId);
+  const dir = childPath(root, harnessSessionId);
   if (!dir) return false;
   const stats = await fs.lstat(dir).catch(() => null);
   if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) return false;
@@ -130,7 +119,7 @@ export async function sweepGeneratedDirs(options: SweepGeneratedDirsOptions = {}
     // isSymbolicLink(), not isDirectory() — so this both skips symlinks and
     // guarantees rm below never follows one out of the root.
     if (!entry.isDirectory()) continue;
-    const dir = childDirPath(root, entry.name);
+    const dir = childPath(root, entry.name);
     if (!dir) continue;
     if (options.isLiveSession?.(entry.name)) continue;
     const stats = await fs.lstat(dir).catch(() => null);
