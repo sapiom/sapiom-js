@@ -17,6 +17,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { PromptBar } from "./components/PromptBar";
 import { SessionBar } from "./components/SessionBar";
+import { SkillsPanel } from "./components/SkillsPanel";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
@@ -29,6 +30,8 @@ import { resolveMacroUrl } from "./lib/macro-gating";
 import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 
+type RailTab = "workspace" | "skills";
+
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -38,6 +41,7 @@ export const App = (): JSX.Element => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
+  const [railTab, setRailTab] = useState<RailTab>("workspace");
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
@@ -154,17 +158,50 @@ export const App = (): JSX.Element => {
           gridTemplateColumns: `minmax(${RAIL_MIN}px, ${widths.rail}px) 32px minmax(360px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
         }}
       >
-        <WorkflowsRail
-          workflows={state.workflows}
-          sessions={state.sessions}
-          activeSessionId={harness.activeSessionId}
-          selectedPath={harness.selectedWorkflowPath}
-          onSelect={handleSelectWorkflow}
-          onSelectedRowElement={setSelectedRowEl}
-          onConnect={async (path) => {
-            await harness.connectWorkflow(path);
-          }}
-        />
+        {/* Left rail with tab switcher: Workspace | Skills */}
+        <div className="rail-container">
+          <div className="rail-tabs" role="tablist" aria-label="Rail panels">
+            <button
+              role="tab"
+              aria-selected={railTab === "workspace"}
+              className={"rail-tab" + (railTab === "workspace" ? " is-active" : "")}
+              onClick={() => setRailTab("workspace")}
+              data-testid="rail-tab-workspace"
+            >
+              Workspace
+            </button>
+            <button
+              role="tab"
+              aria-selected={railTab === "skills"}
+              className={"rail-tab" + (railTab === "skills" ? " is-active" : "")}
+              onClick={() => setRailTab("skills")}
+              data-testid="rail-tab-skills"
+            >
+              Skills
+            </button>
+          </div>
+
+          {railTab === "workspace" ? (
+            <WorkflowsRail
+              workflows={state.workflows}
+              sessions={state.sessions}
+              activeSessionId={harness.activeSessionId}
+              selectedPath={harness.selectedWorkflowPath}
+              onSelect={handleSelectWorkflow}
+              onSelectedRowElement={setSelectedRowEl}
+              onConnect={async (path) => {
+                await harness.connectWorkflow(path);
+              }}
+            />
+          ) : (
+            <SkillsPanel
+              session={activeSession}
+              onInjectInput={harness.injectInput}
+              listSkills={harness.api.listSkills.bind(harness.api)}
+              getSkill={harness.api.getSkill.bind(harness.api)}
+            />
+          )}
+        </div>
 
         <div className="workflow-action-strip-col" ref={setStripColEl}>
           {selectedWorkflow && rowAnchor && (

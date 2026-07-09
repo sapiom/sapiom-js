@@ -3,6 +3,7 @@
  * running harness server (see MockApi in ./api).
  */
 import type { HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
+import type { SkillMeta } from "./api";
 
 const now = Date.now();
 const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
@@ -148,21 +149,21 @@ export const MOCK_MACROS: MacroDef[] = [
     id: "run_local",
     label: "Run local",
     icon: "Play",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target local", submit: true },
+    action: { kind: "inject", text: 'cd "{{workflow.path}}" && sapiom agents run --target local', submit: true },
     requiresWorkflow: true,
   },
   {
     id: "deploy",
     label: "Deploy",
     icon: "Cloud",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents deploy", submit: true },
+    action: { kind: "inject", text: 'cd "{{workflow.path}}" && sapiom agents deploy', submit: true },
     requiresWorkflow: true,
   },
   {
     id: "prod_run",
     label: "Prod run",
     icon: "Zap",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target prod", submit: true },
+    action: { kind: "inject", text: 'cd "{{workflow.path}}" && sapiom agents run --target prod', submit: true },
     requiresWorkflow: true,
   },
   {
@@ -187,4 +188,77 @@ export const MOCK_MACROS: MacroDef[] = [
 export const MOCK_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
   recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-workflows", "/Users/demo/onboarding-flow"],
+};
+
+export const MOCK_SKILLS: SkillMeta[] = [
+  {
+    id: "sapiom-agent-authoring",
+    name: "Agent Authoring",
+    description: "Build, test, and deploy a Sapiom agent — a controlled, multi-step, deployable automation.",
+    source: "package",
+  },
+  {
+    id: "frontend-design",
+    name: "Frontend Design",
+    description: "Create distinctive, production-grade frontend interfaces with high design quality.",
+    source: "user",
+  },
+  {
+    id: "code-review",
+    name: "Code Review",
+    description: "Systematic review of code changes for correctness, style, and security.",
+    source: "user",
+  },
+];
+
+export const MOCK_SKILL_BODIES: Record<string, string> = {
+  "sapiom-agent-authoring": `# Agent Authoring
+
+A Sapiom **agent** is a small TypeScript project you author with your coding agent: a
+\`defineAgent({ name, entry, steps })\` where each step's \`run(input, ctx)\` does work.
+
+## Quick start
+
+\`\`\`bash
+sapiom agents init my-agent
+cd my-agent
+sapiom agents run --target local
+\`\`\`
+
+## Steps
+
+Each step is a pure function that receives input and returns a directive:
+
+- \`continue(output)\` — advance to the next step
+- \`wait(signal)\` — pause until a signal arrives
+- \`complete(result)\` — finish the agent run
+`,
+  "frontend-design": `# Frontend Design
+
+Create distinctive, production-grade frontend interfaces with high design quality.
+
+## Principles
+
+- **Typography**: Choose fonts that are beautiful and unique
+- **Color**: Commit to a cohesive aesthetic with CSS variables
+- **Motion**: Use animations for micro-interactions
+- **Composition**: Unexpected layouts, asymmetry, generous negative space
+
+## Getting started
+
+Tell the agent what you want to build — component, page, or application —
+and describe the aesthetic direction (minimal, editorial, industrial, etc.).
+`,
+  "code-review": `# Code Review
+
+Systematic review of code changes for correctness, style, and security.
+
+## Checklist
+
+- [ ] Logic is correct (no off-by-one, null dereference, race conditions)
+- [ ] Error paths are handled
+- [ ] Types are sound — no \`any\` without justification
+- [ ] No debug artifacts (console.log, TODO, commented-out code)
+- [ ] Tests cover the happy path and key error cases
+`,
 };

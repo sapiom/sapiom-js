@@ -2298,6 +2298,387 @@ input {
   color: var(--text-faint);
 }
 
+/* Rail container + tab switcher (Workspace | Skills) ------------------- */
+
+/* The rail container is the single grid cell that holds both the tab strip
+   and whichever rail pane (WorkflowsRail or SkillsPanel) is active. */
+.rail-container {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.rail-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.rail-tab {
+  flex: 1;
+  padding: 6px 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.rail-tab:hover {
+  color: var(--text-dim);
+}
+
+.rail-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.rail-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
+/* Skills panel ---------------------------------------------------------- */
+
+.rail-skills {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.rail-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.skills-list {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 4px;
+  gap: 2px;
+}
+
+.skills-group {
+  margin-bottom: 8px;
+}
+
+.skills-group-header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 4px 6px 4px;
+}
+
+.skill-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.skill-card:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.skill-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.skill-card-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.skill-card-desc {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.35;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.skills-loading,
+.skills-error,
+.skills-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.skills-error {
+  color: var(--red);
+}
+
+/* Skill detail view */
+
+.skill-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.skill-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.skill-detail-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-back {
+  flex-shrink: 0;
+}
+
+.skill-source-badge {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text-faint);
+}
+
+.skill-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 10px 6px;
+  min-height: 0;
+}
+
+.skill-detail-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.skill-use-reason {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.skill-use-btn {
+  font-size: 11.5px;
+  padding: 5px 10px;
+}
+
+/* Markdown body styles */
+
+.skill-md {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.skill-md-h1 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.skill-md-h2 {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 10px 0 6px;
+}
+
+.skill-md-h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 8px 0 4px;
+}
+
+.skill-md-p {
+  margin: 0 0 8px;
+  color: var(--text-dim);
+}
+
+.skill-md-pre {
+  background: var(--bg-3, var(--bg-0));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 6px 0;
+}
+
+.skill-md-ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  color: var(--text-dim);
+}
+
+.skill-md-ul li {
+  margin-bottom: 2px;
+}
+
+.skill-md-inline-code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  background: var(--bg-hover);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+
+/* Skills footer */
+
+.skills-footer {
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+  flex-shrink: 0;
+}
+
+.install-mcp-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 5px 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.install-mcp-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Install-MCP modal ---------------------------------------------------- */
+
+.install-mcp-modal {
+  width: min(480px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.install-mcp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.install-mcp-close {
+  flex-shrink: 0;
+}
+
+.modal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.install-mcp-intro {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.install-mcp-picker {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+
+.install-mcp-tab {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.install-mcp-tab.is-selected {
+  background: var(--bg-1);
+  color: var(--text);
+  box-shadow: var(--shadow-xs);
+}
+
+.install-mcp-instructions {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text);
+  overflow-x: auto;
+}
+
+.install-mcp-copy {
+  font-size: 12px;
+  padding: 5px 12px;
+}
+
 /* Scrollbars — thin thumb-only styling, matching the product's own
    (rgba(161, 161, 170, 0.75), 8px, no visible track) in both themes. */
 ::-webkit-scrollbar {
