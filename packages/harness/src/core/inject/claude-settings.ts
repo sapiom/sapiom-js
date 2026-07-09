@@ -15,8 +15,6 @@ import { expandHome } from "../paths.js";
 
 /**
  * The Claude Code hook events the harness listens for.
- * `Notification` fires when Claude Code needs user attention (e.g. a tool
- * permission prompt in auto mode) — used to show the chat attention banner.
  */
 const HOOK_EVENTS = [
   "SessionStart",
@@ -25,7 +23,6 @@ const HOOK_EVENTS = [
   "PostToolUse",
   "Stop",
   "SessionEnd",
-  "Notification",
 ] as const;
 
 export type ClaudeHookEvent = (typeof HOOK_EVENTS)[number];

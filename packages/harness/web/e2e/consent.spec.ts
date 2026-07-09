@@ -10,7 +10,6 @@
  *   - Chip click opens settings popover
  *   - TelemetryNotice shown for "default-silent", dismissed permanently
  *   - TelemetryNotice NOT shown for other consent sources
- *   - track("prompt.submitted") fires on prompt-bar submit
  *   - track("consent.changed") fires on toggle
  *   - track("session.created") fires on new session creation
  */
@@ -20,7 +19,6 @@ type TestHarnessWindow = {
   __HARNESS_TEST__: {
     publish: (message: unknown) => void;
     trackEvents?: Array<{ event: string; data?: Record<string, unknown>; harnessSessionId?: string }>;
-    lastInjectInput?: { id: string; req: { text: string; submit?: boolean } };
   };
 };
 
@@ -166,28 +164,6 @@ test.describe("UI event tracking (track() calls)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-  });
-
-  test("prompt bar submit emits track('prompt.submitted') with length", async ({ page }) => {
-    const textarea = page.locator(".prompt-bar-textarea");
-    await textarea.click();
-    await textarea.fill("Hello agent");
-    await textarea.press("Enter");
-
-    // Wait for the submit to record.
-    await page.waitForFunction(
-      () =>
-        (window as unknown as TestHarnessWindow).__HARNESS_TEST__?.lastInjectInput?.req.text === "Hello agent",
-    );
-
-    // Now wait for the track event.
-    await waitForTrackEvent(page, "prompt.submitted");
-    const events = await getTrackEvents(page);
-    const submitEvent = events.find((e) => e.event === "prompt.submitted");
-    expect(submitEvent).toBeDefined();
-    // Length should be the character count, never the text itself.
-    expect(submitEvent?.data?.length).toBe("Hello agent".length);
-    expect(submitEvent?.data?.text).toBeUndefined();
   });
 
   test("telemetry toggle emits track('consent.changed') with optIn value", async ({ page }) => {

@@ -9,9 +9,8 @@
  *   - Card list: name + one-line description
  *   - Click a card → detail view (rendered markdown body)
  *   - "Use" button → injects an invocation prompt into the active session
- *     via POST /api/sessions/:id/input (same path as the prompt bar).
- *     Disabled with reason when no ready session (mirrors PromptBar's
- *     readiness logic).
+ *     via POST /api/sessions/:id/input.
+ *     Disabled with reason when no ready session.
  *
  * Install-MCP action:
  *   - Footer button that opens a modal with per-agent instructions from
@@ -139,7 +138,7 @@ interface SkillDetailViewProps {
   onBack: () => void;
 }
 
-/** Derive the readiness reason from a session — same logic as PromptBar. */
+/** Derive the readiness reason from a session for the "Use" button. */
 function sessionReadyReason(session: HarnessSession | null): string | null {
   if (!session) return "No active session — start one to use skills.";
   if (session.status === "exited") return "Session ended — resume it to use skills.";
@@ -255,7 +254,7 @@ function SkillsList({ skills, loading, error, onSelectSkill }: SkillsListProps):
 export interface SkillsPanelProps {
   /** The active session — drives the "Use" button readiness and Install-MCP labeling. */
   session: HarnessSession | null;
-  /** Called to inject text into the active session's pty (same as PromptBar). */
+  /** Called to inject text into the active session's pty. */
   onInjectInput: (sessionId: string, text: string) => Promise<void>;
   /** Fetches the skills list from the API. */
   listSkills: () => Promise<SkillMeta[]>;

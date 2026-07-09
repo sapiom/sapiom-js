@@ -2,7 +2,7 @@
  * Fixture data for `VITE_MOCK=1` — lets the SPA render fully without a
  * running harness server (see MockApi in ./api).
  */
-import type { ChatTurn, HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
+import type { HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
 import type { HarnessEntry, SkillMeta } from "./api";
 
 const now = Date.now();
@@ -319,32 +319,3 @@ Systematic review of code changes for correctness, style, and security.
 `,
 };
 
-/** Pre-seeded chat turns for the boot session — shown in mock mode. */
-export const MOCK_CHAT_HISTORY: ChatTurn[] = [
-  {
-    turnId: "turn-1",
-    role: "user",
-    content: "Set up the leasing workflow with the intake and approval steps",
-    ts: new Date(Date.now() - 5 * 60_000).toISOString(),
-  },
-  {
-    turnId: "turn-2",
-    role: "assistant",
-    content:
-      "I'll set up the leasing workflow for you. Let me start by reading the existing workflow definition and then adding the intake and approval steps.\n\nThe workflow will have:\n- **Intake**: Collects applicant details and runs initial screening\n- **Approval**: Routes to underwriting and generates a decision",
-    ts: new Date(Date.now() - 4 * 60_000).toISOString(),
-  },
-  {
-    turnId: "turn-3",
-    role: "user",
-    content: "Make sure the approval step sends a notification email",
-    ts: new Date(Date.now() - 2 * 60_000).toISOString(),
-  },
-  {
-    turnId: "turn-4",
-    role: "assistant",
-    content:
-      "Done. I've added an `email_notification` action to the approval step that fires when a decision is made. The notification includes the applicant name, decision, and a link to the full report in the dashboard.",
-    ts: new Date(Date.now() - 1 * 60_000).toISOString(),
-  },
-];

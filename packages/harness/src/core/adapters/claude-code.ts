@@ -19,7 +19,15 @@ import type {
   SessionSummary,
   SpawnSpec,
 } from "../../shared/types.js";
-import { encodeProjectPath } from "../collector/claude-transcript-tailer.js";
+/**
+ * Maps a project cwd to the directory name Claude Code uses for its transcript
+ * store under `~/.claude/projects/`. Claude Code applies this encoding before
+ * creating the directory — see its own source for the canonical definition.
+ */
+function encodeProjectPath(cwd: string): string {
+  const normalized = cwd.replace(/\\/g, "/");
+  return normalized.replace(/:/g, "").replace(/[/.]/g, "-");
+}
 
 const execFileAsync = promisify(execFile);
 

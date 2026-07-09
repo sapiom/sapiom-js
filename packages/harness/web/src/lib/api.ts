@@ -341,7 +341,7 @@ class MockApi implements HarnessApi {
         __MOCK_INJECT_FAIL_ONCE__?: boolean;
       };
       // Test-only 409 simulation: Playwright sets this flag before a submit to
-      // exercise the reactive 409 path in PromptBar (reason shown, draft intact).
+      // exercise the reactive 409 path (reason shown, caller retains draft).
       // Consumed exactly once — cleared immediately so the next submit succeeds.
       if (win.__MOCK_INJECT_FAIL_ONCE__) {
         win.__MOCK_INJECT_FAIL_ONCE__ = false;

@@ -1,12 +1,12 @@
 /**
- * Harness SPA shell — chat-first center pane.
+ * Harness SPA shell (workstream W2).
  *
  * Layout: workflows rail (left) | docked action strip (anchored to the
- * selected workflow's row) | session tab strip + chat/terminal (center) |
- * canvas/skills right pane. The center pane defaults to ChatView (conversation
- * surface); the Terminal is a tab. The right pane has Canvas | Skills tabs —
- * canvas stays mounted via CSS so a running Visualize enrichment is never
- * disturbed by a tab flip.
+ * selected workflow's row) | session tab strip + terminal (center) |
+ * canvas/skills right pane. The strip carries the selected workflow's
+ * full action set; the right pane has a segmented switch (Canvas | Skills)
+ * at the top — canvas stays mounted behind CSS when Skills is active so a
+ * running Visualize enrichment is never disturbed by a tab flip.
  */
 import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
@@ -14,7 +14,6 @@ import type { HarnessKind, MacroDef, WorkflowInfo } from "@shared/types";
 
 import { BrandHeader } from "./components/BrandHeader";
 import { CanvasPane } from "./components/CanvasPane";
-import { ChatView } from "./components/ChatView";
 import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { SessionBar } from "./components/SessionBar";
@@ -32,7 +31,6 @@ import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 
 type RightTab = "canvas" | "skills";
-type CenterTab = "chat" | "terminal";
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
@@ -58,8 +56,6 @@ export const App = (): JSX.Element => {
   const getSkill = useMemo(() => harness.api.getSkill.bind(harness.api), [harness.api]);
   const listHarnesses = useMemo(() => harness.api.listHarnesses.bind(harness.api), [harness.api]);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
-  // Per-session center-pane tab (chat | terminal). Defaults to "chat".
-  const [centerTab, setCenterTab] = useState<CenterTab>("chat");
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // preventDefault so it doesn't fall through to the browser's print/search dialogs.
@@ -214,11 +210,7 @@ export const App = (): JSX.Element => {
           <SessionBar
             sessions={state.sessions}
             activeSessionId={harness.activeSessionId}
-            onSelectSession={(id) => {
-              harness.setActiveSessionId(id);
-              // Default to chat view when switching sessions.
-              setCenterTab("chat");
-            }}
+            onSelectSession={harness.setActiveSessionId}
             onResumeHistory={(summary) => void harness.resumeFromHistory(summary)}
             history={harness.history}
             historyLoading={harness.historyLoading}
@@ -246,64 +238,7 @@ export const App = (): JSX.Element => {
                 onClose={() => void harness.closeSession(activeSession.id)}
               />
             ) : harness.activeSessionId ? (
-              <>
-                {/* Chat / Terminal tab switcher */}
-                <div className="center-tab-bar" data-testid="center-tab-bar" role="tablist" aria-label="Center pane view">
-                  <button
-                    className={`center-tab${centerTab === "chat" ? " is-active" : ""}`}
-                    data-testid="center-tab-chat"
-                    role="tab"
-                    aria-selected={centerTab === "chat"}
-                    onClick={() => setCenterTab("chat")}
-                  >
-                    Chat
-                  </button>
-                  <button
-                    className={`center-tab${centerTab === "terminal" ? " is-active" : ""}`}
-                    data-testid="center-tab-terminal"
-                    role="tab"
-                    aria-selected={centerTab === "terminal"}
-                    onClick={() => setCenterTab("terminal")}
-                  >
-                    Terminal
-                  </button>
-                </div>
-
-                {/* Chat view — default */}
-                <div
-                  className={`center-panel center-panel-chat${centerTab === "chat" ? " is-visible" : ""}`}
-                  aria-hidden={centerTab !== "chat"}
-                  data-testid="center-panel-chat"
-                >
-                  {(() => {
-                    const chatState = harness.getChatState(harness.activeSessionId);
-                    return (
-                      <ChatView
-                        sessionId={harness.activeSessionId}
-                        session={activeSession ?? null}
-                        turns={chatState.turns}
-                        toolCalls={chatState.toolCalls}
-                        agentWorking={chatState.agentWorking}
-                        attentionMessage={chatState.attentionMessage}
-                        onSubmit={harness.injectInput}
-                        onSwitchToTerminal={() => setCenterTab("terminal")}
-                      />
-                    );
-                  })()}
-                </div>
-
-                {/* Terminal — kept MOUNTED via CSS keep-alive (.center-panel:not(.is-visible) uses
-                    visibility+absolute+zero-size) so the xterm connection survives tab flips.
-                    aria-hidden (not HTML hidden) avoids UA display:none which would force xterm to
-                    a 0×0 viewport and degenerate the terminal on refit. */}
-                <div
-                  className={`center-panel center-panel-terminal${centerTab === "terminal" ? " is-visible" : ""}`}
-                  aria-hidden={centerTab !== "terminal"}
-                  data-testid="center-panel-terminal"
-                >
-                  <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
-                </div>
-              </>
+              <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
             ) : showWelcome ? (
               <WelcomePanel
                 recentDirs={harness.settings?.recentDirs ?? []}
