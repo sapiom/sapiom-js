@@ -90,10 +90,19 @@ export function CanvasPane({
     ? macroDisabledReason(visualizeMacro, boundWorkflow, activeSessionId)
     : null;
 
-  // Background-task state for THIS session's pane: a running task shows the
-  // live activity view; otherwise the most recently finished task, if it
-  // failed and hasn't been dismissed, shows the failure view with a retry.
-  const sessionTasks = tasks.filter((task) => task.harnessSessionId === sessionId);
+  // Background-task state for THIS session's pane, scoped to the CURRENT
+  // binding: a task that carries a workflowPath only surfaces while the pane
+  // is showing that workflow — switching the binding mid-run must not bleed
+  // another workflow's activity (or failure) into this one's pane. Tasks
+  // without a workflowPath keep the plain per-session scoping. A running
+  // task shows the live activity view; otherwise the most recently finished
+  // task, if it failed and hasn't been dismissed, shows the failure view
+  // with a retry.
+  const sessionTasks = tasks.filter(
+    (task) =>
+      task.harnessSessionId === sessionId &&
+      (task.workflowPath == null || task.workflowPath === boundWorkflowPath),
+  );
   const runningTask = sessionTasks.find((task) => task.status === "running") ?? null;
   const latestFinished = sessionTasks
     .filter((task) => task.status !== "running")

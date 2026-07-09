@@ -47,8 +47,12 @@ describe("extractWorkflowGraphCached", () => {
     const second = await extractWorkflowGraphCached(dir, extract);
 
     expect(extract).toHaveBeenCalledTimes(1);
-    expect(first).toEqual({ result: OK, cached: false });
-    expect(second).toEqual({ result: OK, cached: true });
+    expect(first).toMatchObject({ result: OK, cached: false });
+    expect(second).toMatchObject({ result: OK, cached: true });
+    // Both calls report the same fingerprint — the value the enrichment
+    // cache stores as sourceFingerprint for freshness comparison.
+    expect(first.fingerprint).toBeTruthy();
+    expect(second.fingerprint).toBe(first.fingerprint);
   });
 
   it("invalidates when a source file's mtime changes", async () => {
@@ -83,8 +87,8 @@ describe("extractWorkflowGraphCached", () => {
     const second = await extractWorkflowGraphCached(dir, extract);
 
     expect(extract).toHaveBeenCalledTimes(2);
-    expect(first).toEqual({ result: FAIL, cached: false });
-    expect(second).toEqual({ result: OK, cached: false });
+    expect(first).toMatchObject({ result: FAIL, cached: false });
+    expect(second).toMatchObject({ result: OK, cached: false });
   });
 
   it("caches per workflow directory — two workflows never share an entry", async () => {

@@ -150,3 +150,91 @@ describe("usedKinds", () => {
     expect([...edgeKinds].sort()).toEqual(["branching", "sequential"]);
   });
 });
+
+describe("renderGraphSvg with enrichment", () => {
+  it("prefers enrichment sublabels over structural ones and adds <title> tooltips for descriptions", () => {
+    const graph: CanvasGraph = {
+      ...ORDER_TRIAGE_GRAPH,
+      nodes: [
+        { id: "intake", kind: "entry", label: "intake" },
+        { id: "classify", kind: "pause", label: "classify", sublabel: 'waits for signal "go"' },
+      ],
+      edges: [],
+    };
+    const svg = renderGraphSvg(graph, {
+      nodeDetails: {
+        intake: { sublabel: "receives the order", description: "Entry point for order events." },
+        classify: { sublabel: "AI-written override" },
+      },
+    });
+    expect(svg).toContain(">receives the order</text>");
+    expect(svg).toContain("<title>Entry point for order events.</title>");
+    expect(svg).toContain(">AI-written override</text>");
+    expect(svg).not.toContain('waits for signal "go"');
+  });
+
+  it("labels edges by the enrichment's from->to key and ignores keys for edges that don't exist", () => {
+    const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
+      edgeLabels: { "route->auto_resolve": "low priority", "ghost->nowhere": "never rendered" },
+    });
+    expect(svg).toContain(">low priority</text>");
+    expect(svg).not.toContain("never rendered");
+  });
+
+  it("renders a background band + label for a group whose members all exist, behind the nodes", () => {
+    const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
+      layoutHints: { groups: [{ label: "decision core", nodeIds: ["classify", "route"] }] },
+    });
+    expect(svg).toContain('class="canvas-group-band"');
+    expect(svg).toContain(">decision core</text>");
+    // Behind everything: the band precedes the first node group in the markup.
+    expect(svg.indexOf("canvas-group-band")).toBeLessThan(svg.indexOf("canvas-node"));
+  });
+
+  it("silently drops a group hint that references a node id not in the graph", () => {
+    const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
+      layoutHints: { groups: [{ label: "phantom", nodeIds: ["classify", "not-a-node"] }] },
+    });
+    expect(svg).not.toContain("canvas-group-band");
+    expect(svg).not.toContain("phantom");
+  });
+
+  it("laneOrder reorders nodes within their computed layer only", () => {
+    // auto_resolve and escalate share the terminal layer; default order is
+    // insertion order (auto_resolve first). The hint flips them.
+    const layout = layoutGraph(ORDER_TRIAGE_GRAPH, { "3": ["escalate", "auto_resolve"] });
+    expect(layout.pos["escalate"].x).toBeLessThan(layout.pos["auto_resolve"].x);
+    // Same y — the hint may not move a node between layers.
+    expect(layout.pos["escalate"].y).toBe(layout.pos["auto_resolve"].y);
+    expect(layout.pos["escalate"].y).toBeGreaterThan(layout.pos["route"].y);
+  });
+
+  it("ignores a laneOrder entry containing a node id that doesn't exist in the graph", () => {
+    const base = layoutGraph(ORDER_TRIAGE_GRAPH);
+    const hinted = layoutGraph(ORDER_TRIAGE_GRAPH, { "3": ["escalate", "no-such-node"] });
+    expect(hinted.pos).toEqual(base.pos);
+  });
+
+  it("ignores a laneOrder entry whose listed node lives in a different layer — nodes never change layers", () => {
+    const base = layoutGraph(ORDER_TRIAGE_GRAPH);
+    // "intake" is in layer 0, listed under layer 3: every id exists, so the
+    // hint applies to layer 3's row — but intake isn't in that row, so only
+    // the row's own members reorder and intake stays exactly where it was.
+    const hinted = layoutGraph(ORDER_TRIAGE_GRAPH, { "3": ["escalate", "intake", "auto_resolve"] });
+    expect(hinted.pos["intake"]).toEqual(base.pos["intake"]);
+    expect(hinted.pos["escalate"].x).toBeLessThan(hinted.pos["auto_resolve"].x);
+  });
+
+  it("escapes every enrichment-supplied string", () => {
+    const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
+      nodeDetails: { intake: { sublabel: '<img src=x onerror="1">', description: "a <b>bold</b> claim" } },
+      edgeLabels: { "intake->classify": "<script>" },
+      layoutHints: { groups: [{ label: "<style>", nodeIds: ["intake"] }] },
+    });
+    expect(svg).not.toContain("<img");
+    expect(svg).not.toContain("<script>");
+    expect(svg).not.toContain("<style>");
+    expect(svg).not.toContain("<b>");
+    expect(svg).toContain("&lt;script&gt;");
+  });
+});

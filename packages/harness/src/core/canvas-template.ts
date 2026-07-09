@@ -84,6 +84,7 @@ html, body {
   font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--canvas-border-strong);
   color: var(--canvas-text-dim);
 }
+.canvas-badge--stale { color: var(--canvas-escalation); border-color: var(--canvas-escalation); }
 .canvas-subtitle { margin: 0; color: var(--canvas-text-dim); font-size: 12.5px; }
 .canvas-stats { display: flex; gap: 22px; margin-top: 2px; }
 .canvas-stat { display: flex; flex-direction: column; }
@@ -102,6 +103,10 @@ html, body {
 .node--launched-workflow .canvas-node-rect { stroke: var(--canvas-accent); stroke-dasharray: 5 4; }
 .canvas-node-title { fill: var(--canvas-text); font-size: 13px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
 .canvas-node-sub { fill: var(--canvas-text-dim); font-size: 9.5px; text-anchor: middle; dominant-baseline: middle; }
+
+/* --- enrichment layout hints: group bands sit behind edges and nodes --- */
+.canvas-group-band { fill: var(--canvas-accent); fill-opacity: 0.06; stroke: var(--canvas-border); stroke-dasharray: 3 5; }
+.canvas-group-label { fill: var(--canvas-text-dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* --- edge kinds: sequential (base) | branching (--success/--warn) | cross-workflow signal/handoff (--cross) --- */
 .canvas-edge { fill: none; stroke-width: 1.8; stroke: var(--canvas-border-strong); }
@@ -133,6 +138,8 @@ html, body {
 .canvas-interconnection-desc { grid-column: 2 / -1; margin: 0; font-size: 11.5px; color: var(--canvas-text-dim); }
 .canvas-footer { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px 2px; }
 .canvas-note { margin: 0; font-size: 11px; color: var(--canvas-text-dim); font-style: italic; }
+.canvas-notes { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--canvas-text-dim); }
+.canvas-cross-workflow { margin: 0; font-size: 11.5px; color: var(--canvas-text-dim); }
 template { display: none; }
 `.trim();
 }

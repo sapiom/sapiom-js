@@ -7,6 +7,7 @@
  * and writes it to the workflow's render file.
  */
 import type { CanvasEdgeKind, CanvasGraph, CanvasNodeKind } from "./canvas-graph.js";
+import type { CanvasEnrichment } from "./canvas-enrichment.js";
 import { renderGraphSvg } from "./canvas-svg.js";
 
 function esc(s: string): string {
@@ -18,8 +19,22 @@ export interface WorkflowPanelMeta {
   badges?: string[];
 }
 
-/** One workflow's full panel: title/badges header, step/entry stats, SVG diagram. */
-export function buildWorkflowPanelHtml(graph: CanvasGraph, meta: WorkflowPanelMeta): string {
+/** How enrichment content reaches the panel/footer builders: the validated
+ *  content itself plus whether its source fingerprint no longer matches the
+ *  workflow's current sources (kept displayed, marked stale). */
+export interface PanelEnrichment {
+  enrichment: CanvasEnrichment;
+  stale: boolean;
+}
+
+/** One workflow's full panel: title/badges header, step/entry stats, SVG
+ *  diagram — with any enrichment merged in (summary line, node/edge
+ *  annotations, a "stale" chip when its fingerprint no longer matches). */
+export function buildWorkflowPanelHtml(
+  graph: CanvasGraph,
+  meta: WorkflowPanelMeta,
+  panelEnrichment?: PanelEnrichment | null,
+): string {
   const badges = (meta.badges ?? [])
     .map((b) => `<span class="canvas-badge">${esc(b)}</span>`)
     .join("");
@@ -27,19 +42,24 @@ export function buildWorkflowPanelHtml(graph: CanvasGraph, meta: WorkflowPanelMe
     graph.warnings.length > 0
       ? `<span class="canvas-badge">${graph.warnings.length} warning${graph.warnings.length === 1 ? "" : "s"}</span>`
       : "";
+  const enrichment = panelEnrichment?.enrichment ?? null;
+  const staleBadge = panelEnrichment?.stale
+    ? `<span class="canvas-badge canvas-badge--stale">stale — Refresh</span>`
+    : "";
+  const summary = enrichment?.summary ? `\n    <p class="canvas-subtitle">${esc(enrichment.summary)}</p>` : "";
   return `<section class="canvas-panel">
   <header class="canvas-header">
     <div class="canvas-title-row">
       <h1 class="canvas-title">${esc(meta.title)}</h1>
-      ${badges}${warningBadge}
-    </div>
+      ${badges}${warningBadge}${staleBadge}
+    </div>${summary}
     <div class="canvas-stats">
       <div class="canvas-stat"><span class="canvas-stat-value">${graph.nodes.length}</span><span class="canvas-stat-label">steps</span></div>
       <div class="canvas-stat"><span class="canvas-stat-value">${esc(graph.entry)}</span><span class="canvas-stat-label">entry</span></div>
     </div>
   </header>
   <div class="canvas-diagram-panel">
-${renderGraphSvg(graph)}
+${renderGraphSvg(graph, enrichment)}
   </div>
 </section>`;
 }
@@ -93,11 +113,27 @@ export function buildLegendHtml(nodeKinds: Set<CanvasNodeKind>, edgeKinds: Set<C
   return `<div class="canvas-legend">${items.join("")}</div>`;
 }
 
-/** Joins panels + a footer (legend + note) into the final `#canvas-root`
- *  body — the string `renderCanvasDocument()` wraps. */
-export function assembleCanvasBody(input: { panels: string[]; legend: string; note: string }): string {
+/** Joins panels + a footer (enrichment notes/cross-workflow tie, legend,
+ *  note) into the final `#canvas-root` body — the string
+ *  `renderCanvasDocument()` wraps. */
+export function assembleCanvasBody(input: {
+  panels: string[];
+  legend: string;
+  note: string;
+  /** Enrichment footer facts (already schema-bounded), rendered as a list. */
+  notes?: string[];
+  /** Enrichment's "how this ties into the other workflows" line. */
+  crossWorkflow?: string;
+}): string {
   const parts = [...input.panels];
-  parts.push(`<footer class="canvas-footer">
+  const notesHtml =
+    input.notes && input.notes.length > 0
+      ? `\n  <ul class="canvas-notes">${input.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`
+      : "";
+  const crossHtml = input.crossWorkflow
+    ? `\n  <p class="canvas-cross-workflow">${esc(input.crossWorkflow)}</p>`
+    : "";
+  parts.push(`<footer class="canvas-footer">${notesHtml}${crossHtml}
 ${input.legend}
   <p class="canvas-note">${esc(input.note)}</p>
 </footer>`);
