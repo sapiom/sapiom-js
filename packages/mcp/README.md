@@ -80,10 +80,15 @@ authentication — they run entirely offline.
 | `sapiom_dev_agents_check` | — | Bundle + validate the step graph offline |
 | `sapiom_dev_agents_run_local` | — | Run the workflow locally, resolving capability calls from stubs (no cost) |
 | `sapiom_dev_agents_link` | ✓ | Resolve/create the hosted orchestration and cache its id |
+| `sapiom_dev_agents_clone` | ✓ | Fork a gallery template (or re-clone a fork) into a local project |
 | `sapiom_dev_agents_deploy` | ✓ | Push the current commit, build, and wait for it |
 | `sapiom_dev_agents_run` | ✓ | Start a real cloud execution |
 | `sapiom_dev_agents_inspect` | ✓ | Inspect an execution or build (optionally waiting for it) |
 | `sapiom_dev_agents_signal` | ✓ | Resume a paused execution by delivering a signal |
+| `sapiom_dev_agents_schedule` | ✓ | Create a recurring (cron) or one-off schedule for a deployed agent |
+| `sapiom_dev_agents_schedule_inspect` | ✓ | Inspect one schedule (with fire history) or list an agent's schedules |
+| `sapiom_dev_agents_schedule_cancel` | ✓ | Cancel a schedule (stops all future fires) |
+| `sapiom_dev_agents_cron_preview` | ✓ | Validate a cron expression and preview its next occurrences |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.
@@ -97,6 +102,18 @@ from stubs; a real `run`/`deploy` executes them in the cloud (metered). This MCP
 never grows a per-capability tool of its own — capabilities live in
 `@sapiom/tools` and the remote `sapiom` MCP. See
 [the positioning doc](../../docs/mcp-servers.md) for the full policy.
+
+## Usage analytics
+
+The server can emit anonymous usage analytics (one `tool.call` event per tool
+invocation: tool name, arguments, duration, ok/error class) via
+[`@sapiom/analytics-core`](../analytics-core). It currently ships dark: unless
+a collector endpoint is explicitly configured through the
+`SAPIOM_ANALYTICS_ENDPOINT` environment variable, nothing is sent anywhere and
+nothing is written to disk. Opt out at any time with
+`SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`. Telemetry is a synchronous
+in-memory enqueue that never throws, never blocks a tool call, and can never
+change a tool result.
 
 ## License
 

@@ -5,9 +5,11 @@ import {
   type ResolvedEnvironment,
 } from "../credentials.js";
 import { performBrowserAuth } from "../auth.js";
+import { registerTool } from "../register-tool.js";
 
 export function register(server: McpServer, env: ResolvedEnvironment): void {
-  server.tool(
+  registerTool(
+    server,
     "sapiom_authenticate",
     "Authenticate this local Sapiom developer MCP (sapiom-dev) by opening a browser login flow. Run this when a networked agent tool (link/deploy/run/inspect/signal) reports that authentication is required.",
     {},

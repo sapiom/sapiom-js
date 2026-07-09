@@ -2,6 +2,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { configureAnalytics } from "./analytics.js";
 import { resolveEnvironment } from "./credentials.js";
 import { register as registerAuthenticate } from "./tools/authenticate.js";
 import { register as registerStatus } from "./tools/status.js";
@@ -17,6 +18,11 @@ async function main(): Promise<void> {
       `\u26a0 Using environment "${env.name}": app=${env.appURL} api=${env.apiURL}`,
     );
   }
+
+  // Construct the process-wide usage-analytics emitter once, keyed with the
+  // cached credential when one exists. Ships dark (a no-op unless a collector
+  // endpoint is configured) and honors the standard telemetry opt-outs.
+  configureAnalytics({ apiKey: env.credentials?.apiKey });
 
   // Pull the latest authoring instructions from the backend (falls back to the
   // bundled copy offline / on error), so guidance can change without a release.
