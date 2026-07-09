@@ -33,141 +33,7 @@ import type { HarnessEntry, SkillDetail, SkillMeta } from "../lib/api";
 import { ApiError } from "../lib/api";
 import { track } from "../lib/track";
 import { Icon } from "./Icon";
-
-// ---------------------------------------------------------------------------
-// Markdown renderer — safe subset (no dangerouslySetInnerHTML)
-// ---------------------------------------------------------------------------
-
-/**
- * Renders a small safe subset of Markdown as React elements:
- *   - ATX headings (# ## ###)
- *   - Fenced code blocks (``` ... ```)
- *   - Blank-line-separated paragraphs
- *   - Unordered lists (- and *)
- *   - Inline backtick code
- *
- * No HTML tags are rendered — input is always treated as plain text tokens,
- * never as markup. Safe to call with untrusted strings.
- */
-function renderMarkdown(md: string): JSX.Element {
-  const lines = md.split("\n");
-  const elements: JSX.Element[] = [];
-  let key = 0;
-  let i = 0;
-
-  // Inline renderer: bold, code. Text only — no raw HTML.
-  function renderInline(text: string): JSX.Element[] {
-    const parts: JSX.Element[] = [];
-    // `code` spans
-    const codeRe = /`([^`]+)`/g;
-    let last = 0;
-    let m: RegExpExecArray | null;
-    let inlineKey = 0;
-    while ((m = codeRe.exec(text)) !== null) {
-      if (m.index > last) parts.push(<span key={inlineKey++}>{text.slice(last, m.index)}</span>);
-      parts.push(<code key={inlineKey++} className="skill-md-inline-code">{m[1]}</code>);
-      last = m.index + m[0].length;
-    }
-    if (last < text.length) parts.push(<span key={inlineKey++}>{text.slice(last)}</span>);
-    return parts;
-  }
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Fenced code block
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      i++; // consume closing ```
-      elements.push(
-        <pre key={key++} className="skill-md-pre">
-          <code className={lang ? `language-${lang}` : undefined}>{codeLines.join("\n")}</code>
-        </pre>,
-      );
-      continue;
-    }
-
-    // ATX headings
-    const hMatch = /^(#{1,3})\s+(.*)/.exec(line);
-    if (hMatch) {
-      const level = hMatch[1].length as 1 | 2 | 3;
-      const Tag = (`h${level}`) as "h1" | "h2" | "h3";
-      elements.push(<Tag key={key++} className={`skill-md-h${level}`}>{hMatch[2]}</Tag>);
-      i++;
-      continue;
-    }
-
-    // Unordered list: collect consecutive "- " or "* " lines
-    if (/^[-*]\s/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^[-*]\s/.test(lines[i])) {
-        items.push(lines[i].replace(/^[-*]\s/, ""));
-        i++;
-      }
-      elements.push(
-        <ul key={key++} className="skill-md-ul">
-          {items.map((item, idx) => (
-            <li key={idx}>{renderInline(item)}</li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-
-    // Task-list items (- [ ] or - [x])
-    if (/^- \[[ x]\]/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^- \[[ x]\]/.test(lines[i])) {
-        items.push(lines[i].replace(/^- \[[ x]\]\s?/, ""));
-        i++;
-      }
-      elements.push(
-        <ul key={key++} className="skill-md-ul skill-md-checklist">
-          {items.map((item, idx) => (
-            <li key={idx}>{renderInline(item)}</li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-
-    // Blank line → separator (skip)
-    if (line.trim() === "") {
-      i++;
-      continue;
-    }
-
-    // Paragraph: collect non-blank, non-heading, non-list lines
-    const paraLines: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== "" &&
-      !/^[#`\-*]/.test(lines[i])
-    ) {
-      paraLines.push(lines[i]);
-      i++;
-    }
-    if (paraLines.length > 0) {
-      elements.push(
-        <p key={key++} className="skill-md-p">
-          {renderInline(paraLines.join(" "))}
-        </p>,
-      );
-    } else {
-      // Catch-all: render as paragraph to avoid infinite loop
-      elements.push(<p key={key++} className="skill-md-p">{renderInline(line)}</p>);
-      i++;
-    }
-  }
-
-  return <div className="skill-md">{elements}</div>;
-}
+import { Markdown } from "./Markdown";
 
 // ---------------------------------------------------------------------------
 // Install-MCP modal
@@ -303,7 +169,7 @@ function SkillDetailView({ skill, session, onUse, onBack }: SkillDetailViewProps
       </div>
 
       <div className="skill-detail-body">
-        {renderMarkdown(skill.body)}
+        <Markdown text={skill.body} />
       </div>
 
       <div className="skill-detail-footer">

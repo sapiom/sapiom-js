@@ -45,6 +45,7 @@ jobs:
   # invokes them — they require real agent binaries and credentials not in CI.
   playwright-mock:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Single Node version is enough — the mock tier tests browser behaviour,
     # not Node version compat; that's covered by the matrix job above.
     steps:

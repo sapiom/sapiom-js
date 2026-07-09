@@ -446,7 +446,10 @@ export type AnalyticsEventType =
   | "macro.invoked"
   | "visualize.triggered"
   | "consent.changed"
-  | "session.created";
+  | "session.created"
+  | "skill.viewed"
+  | "skill.used"
+  | "mcp.install";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the

@@ -19,6 +19,7 @@ import type {
   SessionSummary,
   SpawnSpec,
 } from "../../shared/types.js";
+import { encodeProjectPath } from "../collector/claude-transcript-tailer.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,16 +40,6 @@ interface TranscriptEntry {
   message?: { role?: string; content?: unknown };
 }
 
-/**
- * Claude Code stores transcripts at `~/.claude/projects/<encoded-cwd>/*.jsonl`.
- * The encoding strips the leading `/` and replaces `/` and `.` with `-`.
- * If Claude Code changes this scheme, discovery silently returns no history
- * (listPastSessions degrades to an empty list, not an error).
- */
-function encodeProjectPath(cwd: string): string {
-  const normalized = cwd.replace(/\\/g, "/");
-  return normalized.replace(/:/g, "").replace(/[/.]/g, "-");
-}
 
 function extractTextFromContent(content: unknown): string | undefined {
   if (typeof content === "string") return content;

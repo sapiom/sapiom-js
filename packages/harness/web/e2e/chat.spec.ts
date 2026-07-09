@@ -512,11 +512,13 @@ test("banned machinery terms never appear in the chat surface innerText", async 
     harnessSessionId: "sess-boot",
     call: {
       callId: "tool-banned-1",
-      name: "Bash",
-      state: "running",
-      input: "ls -la",
+      toolName: "Bash",
+      status: "start",
+      ts: new Date().toISOString(),
     },
   });
+  // Verify the chip is visible before checking for banned words.
+  await expect(page.locator("[data-testid^='tool-chip-']")).toBeVisible({ timeout: 3_000 });
 
   // 4. Show the attention banner (chat.attention)
   await publish(page, {

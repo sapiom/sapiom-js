@@ -30,7 +30,7 @@ export function registerDevCommand(program: Command): void {
     // Allow flags not declared above; they pass through to the harness verbatim.
     .allowUnknownOption()
     .allowExcessArguments(true)
-    .action(async (dir: string | undefined, opts: Record<string, unknown>) => {
+    .action(async (dir: string | undefined, _opts: Record<string, unknown>) => {
       try {
         // Extract everything after the 'dev' token from the original argv and
         // pass it raw to the harness. This avoids the commander ambiguity where

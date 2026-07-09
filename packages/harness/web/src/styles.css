@@ -58,6 +58,10 @@
   --green: #05a9bc;
   --amber: #b45309;
   --red: #ef4444;
+  /* Warning tokens — used by the chat attention banner. */
+  --bg-warning: #fff8e6;
+  --border-warning: #f5d06a;
+  --text-warning: #a07000;
 }
 
 [data-theme="dark"] {
@@ -86,6 +90,10 @@
   --green: #6be195;
   --amber: #f59e0b;
   --red: #f87171;
+  /* Warning tokens — dark equivalents for the chat attention banner. */
+  --bg-warning: #2a2200;
+  --border-warning: #5a4500;
+  --text-warning: #e0a800;
 }
 
 /* Shared entrance animation for floating surfaces (dialogs, popovers,
@@ -2544,68 +2552,58 @@ input {
   padding: 5px 10px;
 }
 
-/* Markdown body styles */
+/* Skill detail body — chat-* markdown classes scoped for the narrower rail */
 
-.skill-md {
+.skill-detail-body {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-dim);
 }
 
-.skill-md-h1 {
-  font-size: 14px;
-  font-weight: 700;
+.skill-detail-body .chat-heading {
   color: var(--text);
-  margin: 0 0 8px;
-}
-
-.skill-md-h2 {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-  margin: 10px 0 6px;
-}
-
-.skill-md-h3 {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-dim);
   margin: 8px 0 4px;
 }
 
-.skill-md-p {
+.skill-detail-body h1.chat-heading {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.skill-detail-body h2.chat-heading {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin: 10px 0 6px;
+}
+
+.skill-detail-body h3.chat-heading {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.skill-detail-body .chat-paragraph {
   margin: 0 0 8px;
   color: var(--text-dim);
 }
 
-.skill-md-pre {
-  background: var(--bg-3, var(--bg-0));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 8px 10px;
-  overflow-x: auto;
-  font-family: var(--font-mono);
+.skill-detail-body .chat-code-block {
   font-size: 11px;
-  line-height: 1.5;
   margin: 6px 0;
 }
 
-.skill-md-ul {
+.skill-detail-body .chat-list {
   margin: 0 0 8px;
   padding-left: 18px;
   color: var(--text-dim);
 }
 
-.skill-md-ul li {
+.skill-detail-body .chat-list li {
   margin-bottom: 2px;
 }
 
-.skill-md-inline-code {
-  font-family: var(--font-mono);
+.skill-detail-body .chat-inline-code {
   font-size: 10.5px;
-  background: var(--bg-hover);
-  padding: 1px 4px;
-  border-radius: var(--radius-sm);
 }
 
 /* Skills footer */
@@ -3169,26 +3167,17 @@ input {
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
-  background: var(--bg-warning, #fff8e6);
-  border-top: 1px solid var(--border-warning, #f5d06a);
-  border-bottom: 1px solid var(--border-warning, #f5d06a);
+  background: var(--bg-warning);
+  border-top: 1px solid var(--border-warning);
+  border-bottom: 1px solid var(--border-warning);
   font-size: 12.5px;
   color: var(--text, #1a1a1a);
-}
-
-[data-theme="dark"] .chat-attention-banner {
-  background: #2a2200;
-  border-color: #5a4500;
 }
 
 .chat-attention-icon {
   flex: 0 0 auto;
   font-size: 13px;
-  color: var(--text-warning, #a07000);
-}
-
-[data-theme="dark"] .chat-attention-icon {
-  color: #e0a800;
+  color: var(--text-warning);
 }
 
 .chat-attention-message {

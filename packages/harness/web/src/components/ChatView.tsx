@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState, type JSX, type UIEvent } from
 
 import type { ChatToolCall, ChatTurn, HarnessSession } from "@shared/types";
 
+import { Markdown } from "./Markdown";
 import { PromptBar } from "./PromptBar";
 
 /** A synthetic system-note row (e.g. "Sent /model to the agent"). */
@@ -54,127 +55,6 @@ export interface ChatViewProps {
 /** Heuristic SCROLL_LOCK_THRESHOLD: user is "reading up" if more than 60px from bottom. */
 const SCROLL_LOCK_THRESHOLD = 60;
 
-/**
- * Safe subset markdown renderer. Supports:
- *   **bold**, *italic*, `code`, ```code blocks```, # headings, - lists, > blockquotes
- *
- * Implemented without dangerouslySetInnerHTML — builds a React element tree
- * from the markdown string instead.
- */
-function renderMarkdown(text: string): JSX.Element {
-  const lines = text.split("\n");
-  const elements: JSX.Element[] = [];
-  let i = 0;
-  let key = 0;
-
-  function nextKey(): number {
-    return key++;
-  }
-
-  function renderInline(line: string): (string | JSX.Element)[] {
-    // Handle inline code, bold, italic in sequence
-    const parts: (string | JSX.Element)[] = [];
-    // Regex: code (`...`), bold (**...**), italic (*...*)
-    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
-    let last = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(line)) !== null) {
-      if (match.index > last) {
-        parts.push(line.slice(last, match.index));
-      }
-      const token = match[0];
-      if (token.startsWith("`") && token.endsWith("`")) {
-        parts.push(<code key={nextKey()} className="chat-inline-code">{token.slice(1, -1)}</code>);
-      } else if (token.startsWith("**") && token.endsWith("**")) {
-        parts.push(<strong key={nextKey()}>{token.slice(2, -2)}</strong>);
-      } else if (token.startsWith("*") && token.endsWith("*")) {
-        parts.push(<em key={nextKey()}>{token.slice(1, -1)}</em>);
-      } else {
-        parts.push(token);
-      }
-      last = match.index + token.length;
-    }
-    if (last < line.length) {
-      parts.push(line.slice(last));
-    }
-    return parts;
-  }
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Code block
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      i++; // consume closing ```
-      elements.push(
-        <pre key={nextKey()} className="chat-code-block" data-lang={lang || undefined}>
-          <code>{codeLines.join("\n")}</code>
-        </pre>,
-      );
-      continue;
-    }
-
-    // Headings
-    const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
-    if (headingMatch) {
-      const level = headingMatch[1].length as 1 | 2 | 3;
-      const Tag = (`h${level}`) as "h1" | "h2" | "h3";
-      elements.push(
-        <Tag key={nextKey()} className="chat-heading">
-          {renderInline(headingMatch[2])}
-        </Tag>,
-      );
-      i++;
-      continue;
-    }
-
-    // Blockquote
-    if (line.startsWith("> ")) {
-      elements.push(
-        <blockquote key={nextKey()} className="chat-blockquote">
-          {renderInline(line.slice(2))}
-        </blockquote>,
-      );
-      i++;
-      continue;
-    }
-
-    // List items
-    if (line.match(/^[-*+]\s+/)) {
-      const listItems: JSX.Element[] = [];
-      while (i < lines.length && lines[i].match(/^[-*+]\s+/)) {
-        const itemText = lines[i].replace(/^[-*+]\s+/, "");
-        listItems.push(<li key={nextKey()}>{renderInline(itemText)}</li>);
-        i++;
-      }
-      elements.push(<ul key={nextKey()} className="chat-list">{listItems}</ul>);
-      continue;
-    }
-
-    // Empty line
-    if (!line.trim()) {
-      i++;
-      continue;
-    }
-
-    // Paragraph
-    elements.push(
-      <p key={nextKey()} className="chat-paragraph">
-        {renderInline(line)}
-      </p>,
-    );
-    i++;
-  }
-
-  return <>{elements}</>;
-}
 
 function ToolChip({ call }: { call: ChatToolCall }): JSX.Element {
   const statusClass =
@@ -309,11 +189,11 @@ export function ChatView({
                       <div className="chat-turn-markdown">
                         {turn.streaming ? (
                           <>
-                            {renderMarkdown(turn.content)}
+                            <Markdown text={turn.content} />
                             <span className="chat-streaming-cursor" aria-hidden="true" />
                           </>
                         ) : (
-                          renderMarkdown(turn.content)
+                          <Markdown text={turn.content} />
                         )}
                       </div>
                     )}
