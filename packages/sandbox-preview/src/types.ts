@@ -2,32 +2,21 @@
  * Public contract for the sandbox-preview client flow. Provider-neutral: the
  * deploy recipe itself lives server-side (the `previews` capability); this layer
  * only reads intent, provisions the sandbox, uploads, and calls the server op.
+ *
+ * The declared-intent shapes below are derived from the zod schema (schema.ts) —
+ * the single source of truth — so the config validator and these types never drift.
  */
+import type { SandboxConfigBody } from './schema.js';
 
 /** Where the app's code comes from. `upload` (local fs) is supported now; `git` is a later phase. */
-export type SandboxSourceSpec =
-  | { kind: 'upload'; path?: string }
-  | { kind: 'git'; slug: string; path?: string };
+export type SandboxSourceSpec = SandboxConfigBody['source'];
 
-/** Declared intent for one sandbox-preview resource (`sapiom.json`, `type: "sandbox"`). */
-export interface SandboxConfig {
-  /** Local resource handle (the `resources` map key) — also the sandbox name. */
-  name: string;
-  /** Where the code comes from. */
-  source: SandboxSourceSpec;
-  /** Build command (e.g. `npm install`). Skipped if omitted. */
-  build?: string;
-  /** Command that starts the long-running server. */
-  start: string;
-  /** Port the app listens on — exposed publicly. */
-  port: number;
-  /** Memory tier for the sandbox (xs|s|m|l|xl). */
-  tier?: string;
-  /** Time-to-live (e.g. `24h`, `7d`). */
-  ttl?: string;
-  /** Extra environment variables injected into the app process. */
-  env?: Record<string, string>;
-}
+/**
+ * Declared intent for one sandbox-preview resource (`sapiom.json`, `type: "sandbox"`).
+ * The `name` is the `resources` map key (also the sandbox name); the rest is the
+ * validated resource body (source, build?, start, port, tier?, ttl?, env?).
+ */
+export type SandboxConfig = { name: string } & SandboxConfigBody;
 
 /** Result of a preview deploy. */
 export interface PreviewResult {

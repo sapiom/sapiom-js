@@ -161,12 +161,16 @@ try {
     }
   }
 } finally {
-  // 3. Revert source version bumps so the working tree stays clean.
-  run("git", [
-    "checkout",
-    "--",
-    ...PACKAGES.map((d) => path.join("packages", d, "package.json")),
-  ]);
+  // 3. Revert source version bumps so the working tree stays clean. Restore ONLY the
+  //    `version` field (from the pre-bump originals) — a `git checkout` of the whole
+  //    file would also clobber legitimate uncommitted edits (e.g. a new dependency).
+  for (const dir of PACKAGES) {
+    const pkg = readPkg(dir);
+    if (pkg.version !== originals[dir]) {
+      pkg.version = originals[dir];
+      writeFileSync(pkgJsonPath(dir), JSON.stringify(pkg, null, 2) + "\n");
+    }
+  }
 }
 
 if (failed.length) {

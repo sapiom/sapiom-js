@@ -50,7 +50,8 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@sapiom/tools": "workspace:^"
+    "@sapiom/tools": "workspace:^",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
