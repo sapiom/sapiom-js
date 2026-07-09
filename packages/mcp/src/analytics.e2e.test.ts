@@ -43,6 +43,9 @@ const ALL_TOOL_NAMES = [
   "sapiom_dev_agents_schedule_cancel",
   "sapiom_dev_agents_schedule_inspect",
   "sapiom_dev_agents_signal",
+  "sapiom_dev_sandbox_check",
+  "sapiom_dev_sandbox_configure",
+  "sapiom_dev_sandbox_preview",
   "sapiom_logout",
   "sapiom_status",
 ];
