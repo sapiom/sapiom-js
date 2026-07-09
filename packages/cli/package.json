@@ -44,6 +44,14 @@
     "commander": "^14.0.2",
     "zod": "^3.25.76"
   },
+  "peerDependencies": {
+    "@sapiom/harness": ">=0.1.1 <2"
+  },
+  "peerDependenciesMeta": {
+    "@sapiom/harness": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^20.11.30",
