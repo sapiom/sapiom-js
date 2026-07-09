@@ -41,6 +41,7 @@
     "@sapiom/agent": "workspace:^",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
+    "@sapiom/sandbox-preview": "workspace:^",
     "commander": "^14.0.2",
     "zod": "^3.25.76"
   },

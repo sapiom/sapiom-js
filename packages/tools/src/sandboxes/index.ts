@@ -32,19 +32,27 @@ import type {
   ExecStreamOptions,
   MultipartInitiateResponse,
   MultipartPartInfo,
+  DeployPreviewOptions,
+  DeployPreviewResult,
   MultipartUploadedPart,
   OutputLine,
   ProcessCreateResponse,
   ProcessStatus,
+  PublicUrlInfo,
+  PublicUrlOptions,
   SandboxCreateOptions,
   SandboxInfo,
   StreamingExecResult,
+  UploadDirOptions,
   UploadFileOptions,
 } from "./types.js";
+import { collectDirFiles } from "./upload-dir.js";
 
 export { SandboxHttpError } from "./multipart.js";
 
 export type {
+  DeployPreviewOptions,
+  DeployPreviewResult,
   ExecOptions,
   ExecResult,
   ExecStreamOptions,
@@ -54,10 +62,13 @@ export type {
   OutputLine,
   PortSpec,
   ProcessStatus,
+  PublicUrlInfo,
+  PublicUrlOptions,
   SandboxCreateOptions,
   SandboxInfo,
   SandboxTier,
   StreamingExecResult,
+  UploadDirOptions,
   UploadFileOptions,
   UploadProgress,
 } from "./types.js";
@@ -579,6 +590,77 @@ export class Sandbox {
     opts?: { pollInterval?: number; timeout?: number; signal?: AbortSignal },
   ): Promise<ExecResult> {
     return this.pollProcess(pid, opts);
+  }
+
+  /**
+   * Expose a sandbox port at a public URL (the low-level primitive). The port
+   * must have been declared when the sandbox was created (via `port`/`ports`).
+   * For a full "build + run + expose" flow, use {@link deployPreview}.
+   */
+  async createPublicUrl(opts: PublicUrlOptions): Promise<PublicUrlInfo> {
+    const url = `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/previews`;
+    const body = {
+      metadata: { name: opts.name ?? "default" },
+      spec: {
+        port: opts.port,
+        public: opts.public ?? true,
+        ...(opts.prefix ? { prefixUrl: opts.prefix } : {}),
+      },
+    };
+    const res = await this.transport.fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok)
+      throw new Error(
+        `Failed to create public URL: ${res.status} ${await res.text()}`,
+      );
+    const raw = (await res.json()) as {
+      spec?: { url?: string };
+      metadata?: { name?: string };
+    };
+    return { url: raw.spec?.url ?? "", name: raw.metadata?.name };
+  }
+
+  /**
+   * Deploy a preview of a web app: build and (re)start the app already present in
+   * the sandbox, then expose it at a stable public URL. Returns `{ url, status,
+   * logs }`; build/start failures come back as `status: "failed"` with `logs`
+   * (not a thrown error), so callers can inspect and retry. Upload the source
+   * first with {@link uploadDir} (or `writeFile`).
+   */
+  async deployPreview(opts: DeployPreviewOptions): Promise<DeployPreviewResult> {
+    const url = `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}/preview/deploy`;
+    const res = await this.transport.fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...(opts.source ? { source: opts.source } : {}),
+        ...(opts.build ? { build: opts.build } : {}),
+        start: opts.start,
+        port: opts.port,
+        ...(opts.env ? { env: opts.env } : {}),
+      }),
+    });
+    if (!res.ok)
+      throw new Error(
+        `Failed to deploy preview: ${res.status} ${await res.text()}`,
+      );
+    return (await res.json()) as DeployPreviewResult;
+  }
+
+  /**
+   * Upload a local directory into the sandbox (files relative to the workspace
+   * root), skipping `node_modules`, `.git`, and dotfiles. Dependencies install in
+   * the sandbox at build time — never uploaded. fs-only (no-op target for
+   * in-process callers without a local filesystem).
+   */
+  async uploadDir(localDir: string, opts?: UploadDirOptions): Promise<void> {
+    const files = collectDirFiles(localDir, opts?.ignore);
+    for (const f of files) {
+      await this.writeFile(f.path, f.content);
+    }
   }
 
   /** Destroy the sandbox and release its resources. */
