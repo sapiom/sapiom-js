@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { registerAuthCommands } from './commands/auth/index.js';
 import { registerConfigCommands } from './commands/config/index.js';
 import { registerAgentsCommands } from './commands/agents/index.js';
+import { registerDevCommand } from './commands/dev-register.js';
 import { registerCommandAnalytics } from './lib/analytics.js';
 
 /**
@@ -20,6 +21,7 @@ export function buildProgram(): Command {
   registerAuthCommands(program);
   registerConfigCommands(program);
   registerAgentsCommands(program);
+  registerDevCommand(program);
 
   return program;
 }

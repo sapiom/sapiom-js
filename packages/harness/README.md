@@ -4,6 +4,8 @@ A local web app for building on Sapiom with your own coding agent.
 
 ```bash
 npx @sapiom/harness [dir]
+# also available via the Sapiom CLI (npm i -g @sapiom/cli @sapiom/harness):
+sapiom dev [dir]
 ```
 
 One command: checks your environment, signs you in, and opens a browser app
