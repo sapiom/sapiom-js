@@ -15,7 +15,8 @@ import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 const DEFAULT_TELEMETRY_OPT_IN = true;
 
 const CONSENT_COPY = `
-Sapiom Harness collects local usage analytics to improve the product:
+Sapiom Harness collects usage analytics locally and, with telemetry on,
+sends them to Sapiom to improve the product:
   - the prompts you send and the tool calls your agent makes
   - session start/stop lifecycle events
 This is always written locally to ~/.sapiom/harness/events.ndjson for your
@@ -29,7 +30,13 @@ async function promptConsent(): Promise<boolean> {
   console.log(`\n${CONSENT_COPY}\n`);
 
   if (!process.stdin.isTTY) {
-    console.log(`Non-interactive session — defaulting telemetry to ${DEFAULT_TELEMETRY_OPT_IN ? "on" : "off"}.\n`);
+    // The full consent copy (what's collected, local store, and opt-out path)
+    // was already printed above. Make the default explicit so non-TTY users
+    // reviewing logs see it clearly.
+    console.log(
+      `Non-interactive session — telemetry is defaulting to ${DEFAULT_TELEMETRY_OPT_IN ? "on" : "off"}` +
+      ` per the notice above. Run with --no-telemetry or set SAPIOM_TELEMETRY_DISABLED=1 to opt out.\n`,
+    );
     return DEFAULT_TELEMETRY_OPT_IN;
   }
 

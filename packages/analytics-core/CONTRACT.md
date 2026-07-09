@@ -120,6 +120,12 @@ Client-claimed `user_id` passes through as sent.
    Sapiom-bound calls; calls to third-party tools or services (e.g.
    user-supplied tools wrapped by a Sapiom integration) send metadata only —
    names, durations, statuses — never arguments or content.
+   **First-party carve-out:** the Sapiom Harness is a first-party product
+   surface whose disclosed, consent-gated behavior includes session content
+   (prompts, tool I/O, assistant text). This content flows only when the user
+   has opted in (see the telemetry consent gate); the third-party metadata-only
+   rule governs SDK wraps around non-Sapiom-bound calls, not the harness's own
+   hook-to-analytics pipeline.
 
 ## Harness & session telemetry conventions
 
