@@ -1,6 +1,6 @@
 /**
  * TaskManager — registry of headless one-shot agent runs (BackgroundTask in
- * shared/types.ts). A "background" macro (ai-visualize today; deploy/run
+ * shared/types.ts). A background task (canvas enrichment today; deploy/run
  * candidates later) runs here instead of being injected into the user's
  * interactive session, so a long LLM turn can't hijack their thread.
  *
@@ -73,11 +73,15 @@ export class TaskNotSupportedError extends Error {
   }
 }
 
-/** Thrown when the same macro is already running for the same session —
- *  two concurrent ai-visualize runs would race on the same index.html. */
+/** Thrown when the same macro is already running against the same target —
+ *  two concurrent enrichment runs for one workflow would race on the same
+ *  render/cache files. The target is the workflow when both tasks carry one
+ *  (so one session CAN enrich two different workflows concurrently, and two
+ *  sessions can NEVER double-enrich the same workflow), falling back to the
+ *  session for workflow-less tasks. */
 export class TaskAlreadyRunningError extends Error {
   constructor(label: string) {
-    super(`${label} is already running for this session.`);
+    super(`${label} is already running.`);
     this.name = "TaskAlreadyRunningError";
   }
 }
@@ -89,6 +93,13 @@ export interface RunTaskRequest {
   harness: HarnessKind;
   cwd: string;
   prompt: string;
+  /** The workflow the task targets, when it has one — carried onto
+   *  BackgroundTask.workflowPath (pane scoping) and used as the dedupe key. */
+  workflowPath?: string | null;
+  /** Model override for the headless run (LaunchOpts.model). */
+  model?: string;
+  /** Turn cap for the headless run (LaunchOpts.maxTurns). */
+  maxTurns?: number;
 }
 
 export interface TaskManagerOptions {
@@ -131,6 +142,9 @@ export class TaskManager {
   /** The final result event's error text, when the stream produced one —
    *  preferred over a raw stderr tail for failure display. */
   private readonly resultErrors = new Map<string, string>();
+  /** The final result event's success text — published on the finished task
+   *  as `resultText`, so a structured task's caller can parse the answer. */
+  private readonly resultTexts = new Map<string, string>();
   private readonly statusEmitter = new EventEmitter();
 
   constructor(options: TaskManagerOptions) {
@@ -173,10 +187,17 @@ export class TaskManager {
     if (!adapter) throw new Error(`No adapter registered for harness "${req.harness}"`);
     if (!adapter.launchTask) throw new TaskNotSupportedError(req.harness, req.label);
 
+    const reqWorkflowPath = req.workflowPath ?? null;
     for (const task of this.tasks.values()) {
-      if (task.status === "running" && task.macroId === req.macroId && task.harnessSessionId === req.harnessSessionId) {
-        throw new TaskAlreadyRunningError(req.label);
-      }
+      if (task.status !== "running" || task.macroId !== req.macroId) continue;
+      // Workflow-targeted tasks dedupe on the workflow (never two enrichments
+      // of one workflow, from any session); workflow-less tasks keep the old
+      // per-session key.
+      const sameTarget =
+        task.workflowPath !== null && reqWorkflowPath !== null
+          ? task.workflowPath === reqWorkflowPath
+          : task.harnessSessionId === req.harnessSessionId;
+      if (sameTarget) throw new TaskAlreadyRunningError(req.label);
     }
 
     const id = this.generateId();
@@ -184,6 +205,8 @@ export class TaskManager {
       harnessSessionId: id,
       cwd: req.cwd,
       prompt: req.prompt,
+      ...(req.model !== undefined ? { model: req.model } : {}),
+      ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
       ...(await this.buildLaunchOpts(id, { cwd: req.cwd, harness: req.harness })),
     };
     const spec = adapter.launchTask(opts);
@@ -207,11 +230,13 @@ export class TaskManager {
       label: req.label,
       harnessSessionId: req.harnessSessionId,
       cwd: req.cwd,
+      workflowPath: reqWorkflowPath,
       status: "running",
       startedAt: this.now(),
       endedAt: null,
       exitCode: null,
       statusLines: [],
+      resultText: null,
       errorTail: null,
     };
 
@@ -272,6 +297,8 @@ export class TaskManager {
     if (!update) return;
     if (update.result?.isError && update.result.text) {
       this.resultErrors.set(id, update.result.text);
+    } else if (update.result && !update.result.isError) {
+      this.resultTexts.set(id, update.result.text);
     }
     if (update.statusLines.length === 0) return;
     task.statusLines = [...task.statusLines, ...update.statusLines].slice(-MAX_STATUS_LINES);
@@ -291,10 +318,13 @@ export class TaskManager {
     if (failed) {
       const stderrTail = this.stderrTails.get(id)?.trim();
       task.errorTail = resultError ?? (stderrTail || `exited with code ${exitCode ?? "unknown"}`);
+    } else {
+      task.resultText = this.resultTexts.get(id) ?? null;
     }
     this.processes.delete(id);
     this.stderrTails.delete(id);
     this.resultErrors.delete(id);
+    this.resultTexts.delete(id);
     this.emitStatus(task);
     this.onCleanup(id);
   }

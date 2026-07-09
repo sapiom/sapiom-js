@@ -53,6 +53,15 @@ export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
 export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
 
 /**
+ * Per-workflow enrichment cache lives here (one `<slug>.json` per workflow,
+ * same slug scheme as CANVAS_RENDERS_DIR), relative to the session cwd:
+ * `{ graph, enrichment, sourceFingerprint, enrichedAt }`. A stale
+ * sourceFingerprint keeps the enrichment displayed (with a "stale" chip)
+ * until a re-run replaces it — see core/canvas-enrich.ts.
+ */
+export const CANVAS_CACHE_DIR = `${CANVAS_DIR}/cache`;
+
+/**
  * Workspace-state convention: the harness mirrors this session's binding,
  * the full workflow registry, and its own identity here, relative to the
  * session cwd, so the agent has an always-current, agent-legible answer to
@@ -160,6 +169,12 @@ export interface LaunchOpts {
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;
+  /** Only consulted by `launchTask` — model override (`--model`), e.g.
+   *  "sonnet". Interactive sessions keep the user's own default. */
+  model?: string;
+  /** Only consulted by `launchTask` — hard cap on agent turns
+   *  (`--max-turns`), so a bounded task can't run away. */
+  maxTurns?: number;
 }
 
 /**
@@ -208,8 +223,8 @@ export interface HarnessAdapter {
 export type BackgroundTaskStatus = "running" | "completed" | "failed";
 
 /**
- * One headless agent run, spawned by a macro marked `execution: "background"`
- * (today: ai-visualize). Deliberately NOT a HarnessSession: tasks never
+ * One headless agent run (today: canvas enrichment, spawned on bind or by
+ * the visualize macro). Deliberately NOT a HarnessSession: tasks never
  * appear in the session registry (so no tab, no resume, no ghost-record
  * reconciliation to worry about) and live only in TaskManager's memory —
  * the pty-less process exits on its own when its single turn completes.
@@ -221,12 +236,17 @@ export interface BackgroundTask {
   id: string;
   /** The macro that spawned it (retry re-runs this id). */
   macroId: string;
-  /** Display label, e.g. "AI Visualize". */
+  /** Display label, e.g. "Visualize". */
   label: string;
   /** The interactive session the macro was triggered from — the canvas pane
    *  showing that session renders this task's live status. */
   harnessSessionId: string;
   cwd: string;
+  /** The workflow this task was launched for, when it targets one — the
+   *  canvas pane scopes its activity view to the session's CURRENT binding
+   *  via this, so switching workflows mid-task never bleeds another
+   *  workflow's progress into the pane. Null for workflow-less tasks. */
+  workflowPath: string | null;
   status: BackgroundTaskStatus;
   startedAt: string;
   endedAt: string | null;
@@ -234,6 +254,10 @@ export interface BackgroundTask {
   /** Rolling tail of compact human-readable progress lines derived from the
    *  task's stream-json stdout (see core/task-stream.ts), oldest first. */
   statusLines: string[];
+  /** The final result event's text when the task completed successfully —
+   *  the payload a structured task (canvas enrichment) parses. Null while
+   *  running and on failure. */
+  resultText: string | null;
   /** On failure: the result error / stderr tail worth showing a user. */
   errorTail: string | null;
 }
@@ -502,10 +526,10 @@ export interface WorkflowInfo {
 /**
  * A macro injects text into the active session's pty, opens a URL, or (the
  * one exception to "always goes through the agent's session") runs the
- * deterministic canvas render server-side. Template placeholders, substituted
- * server-side before "inject"/"open-url" execution:
+ * deterministic canvas render + AI enrichment refresh server-side. Template
+ * placeholders, substituted server-side before "inject"/"open-url" execution:
  *   {{workflow.path}} {{workflow.name}} {{workflow.definitionId}}
- *   {{session.cwd}}   {{canvas.path}}   {{subject}}   (ai-visualize free-text)
+ *   {{session.cwd}}   {{canvas.path}}   {{subject}}
  */
 export interface MacroDef {
   id: string;
@@ -515,9 +539,11 @@ export interface MacroDef {
   action:
     | { kind: "inject"; text: string; submit?: boolean }
     | { kind: "open-url"; url: string }
-    /** Zero-LLM, instant: runs core/canvas-render.ts against the session's
-     *  bound workflow (or the workspace overview when unbound) and writes
-     *  .sapiom/canvas/index.html directly — no prompt, no pty involved. */
+    /** Force refresh of the bound workflow's canvas: invalidates the
+     *  extraction + enrichment caches, re-renders the deterministic diagram
+     *  instantly, and re-spawns the bounded AI enrichment task (see
+     *  core/canvas-enrich.ts) — no pty involved. A cheap no-op when the
+     *  session is unbound. */
     | { kind: "render-canvas" };
   /** Macro requires a selected workflow to be enabled. */
   requiresWorkflow?: boolean;
@@ -527,7 +553,7 @@ export interface MacroDef {
    * their terminal and occupying their thread — same as always.
    * `"background"`: run headless in a one-shot task process via
    * TaskManager (the user's session is never touched), so a long-running
-   * macro like ai-visualize can't interrupt whatever the user was doing.
+   * macro can't interrupt whatever the user was doing.
    * Ignored for non-"inject" actions.
    */
   execution?: "inject" | "background";

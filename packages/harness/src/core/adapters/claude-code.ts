@@ -199,6 +199,9 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
    *   through a permission prompt — without it a tool call hangs forever.
    * - --output-format stream-json --verbose: line-oriented JSON progress on
    *   stdout (parsed by core/task-stream.ts) instead of a bare final answer.
+   * - --model / --max-turns: only when the caller sets them — a bounded task
+   *   (canvas enrichment) pins a cheaper model and a hard turn cap instead of
+   *   inheriting the user's interactive defaults.
    */
   launchTask(opts: LaunchOpts): SpawnSpec {
     if (!opts.prompt) {
@@ -208,6 +211,8 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     if (opts.systemPromptFile) {
       args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
     }
+    if (opts.model) args.push("--model", opts.model);
+    if (opts.maxTurns != null) args.push("--max-turns", String(opts.maxTurns));
     args.push("--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose");
     return {
       command: this.binary,
