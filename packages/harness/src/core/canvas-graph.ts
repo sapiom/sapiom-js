@@ -66,25 +66,33 @@ export type ExtractionResult = ExtractionSuccess | ExtractionFailure;
  * `continue` targets left resolves to a terminal color, warn (fail) over
  * success (terminate) is not possible to prioritize both apply — success
  * wins as the more common single-outcome shape.
+ *
+ * Every branch also carries a deterministic `sublabel` — a one-line role
+ * derived purely from the step's declared transitions (entry / step / pause ·
+ * <signal> / terminal · success / terminal · needs attention) — so each node
+ * renders as a titled card even before any AI enrichment. `renderGraphSvg`
+ * prefers an enrichment-supplied sublabel over this default when present.
  */
 function classifyNode(
   name: string,
   entry: string,
   step: AgentStepManifest,
-): { kind: CanvasNodeKind; sublabel?: string } {
+): { kind: CanvasNodeKind; sublabel: string } {
   const continueTargets = step.transitions.filter((t) => t.kind === "continue");
   const pause = step.transitions.find((t) => t.kind === "pause");
   const hasTerminate = step.transitions.some((t) => t.kind === "terminate");
   const hasFail = step.transitions.some((t) => t.kind === "fail");
 
-  if (name === entry) return { kind: "entry" };
-  if (pause) return { kind: "pause", sublabel: `waits for signal "${pause.signal}"` };
-  if (continueTargets.length === 0 && hasFail && !hasTerminate) return { kind: "terminal-warn" };
-  if (continueTargets.length === 0 && hasTerminate) return { kind: "terminal-success" };
+  if (name === entry) return { kind: "entry", sublabel: "entry" };
+  if (pause) return { kind: "pause", sublabel: `pause · ${pause.signal}` };
+  if (continueTargets.length === 0 && hasFail && !hasTerminate)
+    return { kind: "terminal-warn", sublabel: "terminal · needs attention" };
+  if (continueTargets.length === 0 && hasTerminate)
+    return { kind: "terminal-success", sublabel: "terminal · success" };
   if (continueTargets.length > 0 && (hasTerminate || hasFail)) {
-    return { kind: "step", sublabel: hasFail ? "can also fail" : "can also terminate" };
+    return { kind: "step", sublabel: hasFail ? "step · can also fail" : "step · can also terminate" };
   }
-  return { kind: "step" };
+  return { kind: "step", sublabel: "step" };
 }
 
 /** Builds every edge a step declares — one per `continue` target plus its
@@ -108,7 +116,7 @@ function edgesForStep(name: string, step: AgentStepManifest): CanvasEdge[] {
 export function graphFromManifest(manifest: AgentManifest, warnings: string[]): CanvasGraph {
   const nodes: CanvasNode[] = Object.entries(manifest.steps).map(([name, step]) => {
     const { kind, sublabel } = classifyNode(name, manifest.entry, step);
-    return { id: name, kind, label: name, ...(sublabel ? { sublabel } : {}) };
+    return { id: name, kind, label: name, sublabel };
   });
   const edges: CanvasEdge[] = Object.entries(manifest.steps).flatMap(([name, step]) =>
     edgesForStep(name, step),
@@ -136,7 +144,7 @@ export function mergeLaunchesIntoGraph(graph: CanvasGraph, launches: readonly De
     // happens to share its name.
     const nodeId = `launch:${launch.slug}`;
     if (!nodes.some((n) => n.id === nodeId)) {
-      nodes.push({ id: nodeId, kind: "launched-workflow", label: launch.slug });
+      nodes.push({ id: nodeId, kind: "launched-workflow", label: launch.slug, sublabel: "launched workflow" });
     }
     const from = launch.fromStepId && stepIds.has(launch.fromStepId) ? launch.fromStepId : graph.entry;
     const edgeKey = `${from}->${nodeId}`;

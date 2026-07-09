@@ -165,7 +165,7 @@ const ORDER_TRIAGE_CANVAS_BODY = `
     </div>
   </header>
   <div class="canvas-diagram-panel">
-    <svg class="canvas-graph-svg" viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg">
+    <svg class="canvas-graph-svg" viewBox="0 0 960 500" width="960" height="500" xmlns="http://www.w3.org/2000/svg">
       <path class="canvas-edge" d="M480,96 L480,150" marker-end="url(#canvas-arrow)" />
       <path class="canvas-edge" d="M480,206 L480,260" marker-end="url(#canvas-arrow)" />
       <path class="canvas-edge canvas-edge--success" d="M480,316 C480,360 288,360 288,410" marker-end="url(#canvas-arrow-success)" />
