@@ -1,0 +1,14 @@
+{
+  "name": "minimal-empty-event",
+  "rule": "The ONLY hard requirement is a parseable JSON body",
+  "description": "The most extreme leniency case: an entirely empty event object. Everything the collector can stamp is stamped (event_id, received_at, event_timestamp); everything else stores as null/empty.",
+  "request": {
+    "body": {
+      "events": [{}]
+    }
+  },
+  "expected": {
+    "status": 202,
+    "response": { "accepted": 1, "dropped": 0 }
+  }
+}

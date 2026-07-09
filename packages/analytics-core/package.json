@@ -1,0 +1,78 @@
+{
+  "name": "@sapiom/analytics-core",
+  "version": "0.0.0",
+  "description": "Zero-dependency usage analytics emitter shared by Sapiom SDK packages — consent-aware, batched, and guaranteed to never throw or block the host application.",
+  "license": "MIT",
+  "author": "Sapiom",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
+    "directory": "packages/analytics-core"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./testing": {
+      "types": "./dist/cjs/testing/index.d.ts",
+      "import": "./dist/esm/testing/index.js",
+      "require": "./dist/cjs/testing/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "testing": [
+        "./dist/cjs/testing/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "fixtures",
+    "CONTRACT.md",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
+    "build:cjs": "tsc --project tsconfig.cjs.json",
+    "build:esm": "tsc --project tsconfig.esm.json",
+    "build:esm-pkg": "echo '{\"type\": \"module\"}' > dist/esm/package.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "dev": "tsc --watch --project tsconfig.cjs.json",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:mutation": "stryker run",
+    "test:watch": "jest --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "prepublishOnly": "pnpm build"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/jest-runner": "^9.6.1",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.11.30",
+    "@typescript-eslint/eslint-plugin": "^7.3.1",
+    "@typescript-eslint/parser": "^7.3.1",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.5",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.4.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false
+}

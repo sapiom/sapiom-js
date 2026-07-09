@@ -1,0 +1,12 @@
+{
+  "name": "no-events-key",
+  "rule": "The ONLY hard requirement is a parseable JSON body",
+  "description": "A parseable body with no events array is acknowledged, not rejected. Nothing is ingested.",
+  "request": {
+    "body": {}
+  },
+  "expected": {
+    "status": 202,
+    "response": { "accepted": 0, "dropped": 0 }
+  }
+}

@@ -1,5 +1,13 @@
 # @sapiom/langchain
 
+> 🕗 **Deprecated.** Sapiom has moved to a new agent-first platform. This
+> package is not recommended for new projects and receives maintenance fixes
+> only. Build on the new packages instead — [`@sapiom/agent`](https://www.npmjs.com/package/@sapiom/agent)
+> and [`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools), with the
+> [`@sapiom/cli`](https://www.npmjs.com/package/@sapiom/cli) and
+> [`@sapiom/mcp`](https://www.npmjs.com/package/@sapiom/mcp) developer tools. See
+> the [SDK README](https://github.com/sapiom/sapiom-js#readme).
+
 > **LangChain v1.x Integration:** For LangChain v0.3.x, use [`@sapiom/langchain-classic`](../langchain-classic/README.md) instead.
 
 LangChain v1.x integration for Sapiom SDK.

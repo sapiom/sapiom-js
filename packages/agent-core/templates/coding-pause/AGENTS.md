@@ -1,6 +1,8 @@
-# Working in this orchestration
+# Working in this agent project
 
-This project defines exactly one Sapiom orchestration in `index.ts`, authored against `@sapiom/agent`. Inside a step's `run`, Sapiom capabilities are on `ctx.sapiom` (e.g. `ctx.sapiom.repositories.list()`, `repo.pushFromSandbox(...)`).
+This project defines exactly one Sapiom agent in `index.ts`, authored against `@sapiom/agent`. Inside a step's `run`, Sapiom capabilities are on `ctx.sapiom` (e.g. `ctx.sapiom.repositories.list()`, `repo.pushFromSandbox(...)`).
+
+The full authoring guide ships inside this project at `.claude/skills/sapiom-agent-authoring/SKILL.md` — read it for the step model, directives, failure patterns, pause/resume, and stub rules.
 
 ## Authoring
 

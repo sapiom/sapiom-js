@@ -1,5 +1,13 @@
 # @sapiom/orchestration
 
+## 0.6.0
+
+### Minor Changes
+
+- 7a9d57a: Rename the execution-context field `ctx.workflowName` → `ctx.agentName`.
+
+  **Breaking:** a step that reads `ctx.workflowName` must now read `ctx.agentName`. The value is unchanged — the agent's name (slug).
+
 ## 0.5.0
 
 ### Minor Changes

@@ -1,0 +1,27 @@
+{
+  "name": "missing-event-id",
+  "rule": "Missing event_id → server generates one",
+  "description": "An event without an event_id is accepted; the collector mints one on ingest. Producers that omit event_id forfeit retry deduplication: server-minted IDs are fresh per request, so a retried batch double-inserts.",
+  "request": {
+    "body": {
+      "events": [
+        {
+          "anonymous_id": "b7e2a3f1-4c5d-4a6b-8e9f-0a1b2c3d4e5f",
+          "session_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+          "event_timestamp": "2026-01-15T10:30:00.000Z",
+          "source": "cli",
+          "event_type": "cli_command",
+          "sdk_name": "@sapiom/cli",
+          "sdk_version": "1.4.0",
+          "schema_version": "1",
+          "data": { "command": "login" }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "status": 202,
+    "response": { "accepted": 1, "dropped": 0 },
+    "notes": "The stored event has a server-generated event_id."
+  }
+}

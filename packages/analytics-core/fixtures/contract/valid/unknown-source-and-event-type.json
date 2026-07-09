@@ -1,0 +1,27 @@
+{
+  "name": "unknown-source-and-event-type",
+  "rule": "Unknown source/event_type values → stored verbatim",
+  "description": "The source and event_type vocabularies are open. New producers and new event types require no contract change — send them and they are stored as-is.",
+  "request": {
+    "body": {
+      "events": [
+        {
+          "event_id": "7a8b9c0d-1e2f-4a3b-8c4d-6e7f8a9b0c1d",
+          "anonymous_id": "b7e2a3f1-4c5d-4a6b-8e9f-0a1b2c3d4e5f",
+          "session_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+          "event_timestamp": "2026-01-15T10:30:00.000Z",
+          "source": "vscode-extension",
+          "event_type": "totally_new_event_type",
+          "sdk_name": "@sapiom/experimental",
+          "sdk_version": "0.0.1",
+          "schema_version": "1",
+          "data": { "detail": "never seen before" }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "status": 202,
+    "response": { "accepted": 1, "dropped": 0 }
+  }
+}
