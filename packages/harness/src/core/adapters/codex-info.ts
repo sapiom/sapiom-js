@@ -3,7 +3,7 @@
  *
  * The runtime adapter implementation (launch/resume/doctor/listPastSessions)
  * lives in codex.ts. This file carries only the registry-level metadata
- * consumed by the harness listing endpoint and the skills panel (SAP-1424).
+ * consumed by the harness listing endpoint and the skills panel Install MCP modal.
  */
 import type { EmbeddedHarnessAdapterInfo } from "./adapter.js";
 import { isExecutableOnPath } from "./detect.js";

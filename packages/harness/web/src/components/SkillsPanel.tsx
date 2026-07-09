@@ -18,19 +18,20 @@
  *     the adapter registry's installMcpPrompt() text.
  *   - When an active session exists its harness kind determines which
  *     adapter's text to show; otherwise we show a picker of all adapters.
- *   - The v0 action is "show accurate per-agent instructions with copy" —
- *     no config file mutation. This is documented in the code as a
- *     deliberate choice: the instructions are human-verified copy-paste
- *     steps, and config-file formats differ per agent version.
+ *   - The action is "show accurate per-agent instructions with copy" —
+ *     no config file mutation. This is a deliberate choice: the instructions
+ *     are human-verified copy-paste steps, and config-file formats differ
+ *     per agent version.
  *
- * Analytics seams: marked with ANALYTICS_SEAM comments matching PromptBar's
- * convention. Hook SAP-analytics here once the ui.* layer is landed.
+ * Analytics: skill.viewed, skill.used, and mcp.install events are emitted
+ * via POST /api/track on the relevant user actions.
  */
 import { useState, useCallback, useEffect, type JSX } from "react";
 
 import type { HarnessSession } from "@shared/types";
 import type { HarnessEntry, SkillDetail, SkillMeta } from "../lib/api";
 import { ApiError } from "../lib/api";
+import { track } from "../lib/track";
 import { Icon } from "./Icon";
 
 // ---------------------------------------------------------------------------
@@ -197,7 +198,7 @@ function InstallMcpModal({ activeHarness, harnesses, onClose }: InstallMcpModalP
     } catch {
       // Clipboard API unavailable — silently ignore.
     }
-    // ANALYTICS_SEAM: emit mcp.install event here (SAP-analytics).
+    track("mcp.install", { harness: entry.id });
   }, [entry]);
 
   return (
@@ -286,7 +287,7 @@ function SkillDetailView({ skill, session, onUse, onBack }: SkillDetailViewProps
   const handleUse = useCallback(() => {
     const prompt = `Use the "${skill.name}" skill: ${skill.description}`;
     onUse(prompt);
-    // ANALYTICS_SEAM: emit skill.used event here (SAP-analytics).
+    track("skill.used", { skillId: skill.id });
   }, [skill, onUse]);
 
   return (
@@ -446,7 +447,7 @@ export function SkillsPanel({ session, onInjectInput, listSkills, getSkill, list
   const handleSelectSkill = useCallback(
     async (id: string) => {
       setDetailLoading(true);
-      // ANALYTICS_SEAM: emit skill.viewed event here (SAP-analytics).
+      track("skill.viewed", { skillId: id });
       try {
         const detail = await getSkill(id);
         setSelectedSkill(detail);

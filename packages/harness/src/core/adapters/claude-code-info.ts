@@ -3,8 +3,8 @@
  *
  * The runtime adapter implementation (launch/resume/doctor/listPastSessions)
  * lives in claude-code.ts. This file carries only the registry-level metadata
- * consumed by the harness listing endpoint and the skills panel (SAP-1424):
- * the human label, spawn mode, MCP install guidance, and PATH detection.
+ * consumed by the harness listing endpoint and the skills panel Install MCP
+ * modal: the human label, spawn mode, MCP install guidance, and PATH detection.
  */
 import type { EmbeddedHarnessAdapterInfo } from "./adapter.js";
 import { isExecutableOnPath } from "./detect.js";

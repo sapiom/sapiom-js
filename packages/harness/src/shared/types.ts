@@ -416,7 +416,10 @@ export type UiEventName =
   | "macro.invoked"
   | "visualize.triggered"
   | "consent.changed"
-  | "session.created";
+  | "session.created"
+  | "skill.viewed"
+  | "skill.used"
+  | "mcp.install";
 
 export interface UiTrackRequest {
   /** Dot-canonical event name — one of the UiEventName literals. */

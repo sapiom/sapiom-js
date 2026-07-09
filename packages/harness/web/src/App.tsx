@@ -1,5 +1,5 @@
 /**
- * Harness SPA shell (workstream W2 + SAP-1477 chat-first center pane).
+ * Harness SPA shell — chat-first center pane.
  *
  * Layout: workflows rail (left) | docked action strip (anchored to the
  * selected workflow's row) | session tab strip + chat/terminal (center) |

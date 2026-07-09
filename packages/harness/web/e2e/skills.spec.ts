@@ -25,6 +25,7 @@ type TestHarness = {
   __HARNESS_TEST__: {
     publish: (message: unknown) => void;
     lastInjectInput?: { id: string; req: { text: string; submit?: boolean } };
+    trackEvents?: Array<{ event: string; data?: Record<string, unknown> }>;
   };
 };
 
@@ -315,7 +316,19 @@ test.describe("skills panel — detail view", () => {
     );
     // The prompt includes the skill name.
     expect(captured?.req.text).toContain("Agent Authoring");
-    // ANALYTICS_SEAM: skill.used fires here (verify once SAP-analytics lands).
+
+    // skill.used analytics event must have been captured by the mock track interceptor.
+    await page.waitForFunction(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.trackEvents?.some(
+        (e) => e.event === "skill.used",
+      ),
+    );
+    const trackEvents = await page.evaluate(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__.trackEvents ?? [],
+    );
+    const skillUsed = trackEvents.find((e) => e.event === "skill.used");
+    expect(skillUsed).toBeDefined();
+    expect(skillUsed?.data?.skillId).toBe("sapiom-agent-authoring");
 
     await page.screenshot({ path: "web/e2e/screenshots/skill-used.png", fullPage: true });
   });
@@ -381,7 +394,6 @@ test.describe("Install Sapiom MCP modal", () => {
     const copyBtn = page.getByTestId("install-mcp-copy");
     await expect(copyBtn).toBeVisible();
     await expect(copyBtn).toHaveText("Copy instructions");
-    // ANALYTICS_SEAM: mcp.install fires here (verify once SAP-analytics lands).
   });
 
   test("closes when the backdrop is clicked", async ({ page }) => {
