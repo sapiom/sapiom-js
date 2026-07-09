@@ -51,6 +51,7 @@
   "dependencies": {
     "@sapiom/agent": "workspace:^",
     "@sapiom/agent-runtime": "workspace:^",
+    "@sapiom/analytics-core": "workspace:^",
     "@sapiom/tools": "workspace:^",
     "esbuild": "^0.28.1"
   },

@@ -38,10 +38,18 @@ import {
 import { validateManifestStepInput } from './manifest-validation.js';
 import { outcomeForFinishedRow } from './outcome.js';
 import { NOOP_OBSERVER } from './stores.js';
-import type { ExecutionStore, RuntimeObserver } from './stores.js';
+import type { ExecutionStore, RuntimeAnalytics, RuntimeObserver } from './stores.js';
 import { validateDirective } from './validate-directive.js';
 
 export const DEFAULT_MAX_ATTEMPTS_PER_STEP = 3;
+
+/**
+ * Upper bound on remembered step-start times (for `duration_ms` on the
+ * analytics events). Completions normally drain the map; the cap only
+ * matters for a long-lived analytics-enabled host whose completions land in
+ * a different process, where entries would otherwise accumulate forever.
+ */
+const MAX_TRACKED_STEP_STARTS = 10_000;
 
 /**
  * Extended observer interface with optional Core transaction spine hooks.
@@ -87,11 +95,20 @@ export class AgentRunnerCore {
   // until that patch lands, the cast is the compile-time bridge.
   private readonly obs: ObserverWithSpine;
 
+  /** stepRowId → Date.now() at dispatch, so finish events can carry `duration_ms`. */
+  private readonly stepStartedAt = new Map<string, number>();
+
   constructor(
     private readonly deps: {
       store: ExecutionStore;
       dispatcher: StepDispatcher;
       observer?: RuntimeObserver;
+      /**
+       * Optional usage-analytics sink for `step.start` / `step.complete` /
+       * `step.error` events (see {@link RuntimeAnalytics}). Absent → no
+       * events, identical behavior to before the option existed.
+       */
+      analytics?: RuntimeAnalytics;
     },
   ) {
     this.obs = (deps.observer ?? NOOP_OBSERVER) as ObserverWithSpine;
@@ -237,6 +254,15 @@ export class AgentRunnerCore {
       });
       // Complete the step's Core spine leg — best-effort.
       await this.completeObserverStepTransaction(stepRow.id, 'error');
+      this.trackStepFinish({
+        executionId: row.id,
+        workflowName: row.name,
+        stepName: stepRow.stepName,
+        stepRowId: stepRow.id,
+        attempt: stepRow.attempt,
+        outcome: 'error',
+        errorName: err.name,
+      });
       result = await this.handleRetryOrCap(row, stepRow.stepName, sharedSnapshot, maxAttemptsPerStep);
     } else {
       const stepResult = {
@@ -255,6 +281,15 @@ export class AgentRunnerCore {
           logs: payload.logs,
         });
         await this.completeObserverStepTransaction(stepRow.id, 'error');
+        this.trackStepFinish({
+          executionId: row.id,
+          workflowName: row.name,
+          stepName: stepRow.stepName,
+          stepRowId: stepRow.id,
+          attempt: stepRow.attempt,
+          outcome: 'error',
+          errorName: errorNameOf(violation),
+        });
         const won = await this.deps.store.failExecution({
           executionId: row.id,
           expectedVersion: row.version,
@@ -277,6 +312,14 @@ export class AgentRunnerCore {
         logs: payload.logs,
       });
       await this.completeObserverStepTransaction(stepRow.id, 'success');
+      this.trackStepFinish({
+        executionId: row.id,
+        workflowName: row.name,
+        stepName: stepRow.stepName,
+        stepRowId: stepRow.id,
+        attempt: stepRow.attempt,
+        outcome: 'success',
+      });
       result = await this.applyDirective(row, stepResult, sharedSnapshot, maxAttemptsPerStep);
     }
 
@@ -314,6 +357,15 @@ export class AgentRunnerCore {
         sharedStateAfter: row.sharedState ?? {},
       });
       await this.completeObserverStepTransaction(stepRow.id, 'error');
+      this.trackStepFinish({
+        executionId: row.id,
+        workflowName: row.name,
+        stepName,
+        stepRowId: stepRow.id,
+        attempt: stepRow.attempt,
+        outcome: 'error',
+        errorName: err.name,
+      });
     }
 
     const result = await this.handleRetryOrCap(row, stepName, row.sharedState ?? {}, maxAttemptsPerStep);
@@ -469,6 +521,8 @@ export class AgentRunnerCore {
           status: STEP_STATUS.DISPATCHED,
         });
 
+        this.trackStepStart(row, stepName, stepRowId);
+
         // Open the step's Core spine leg — best-effort observer hook.
         await this.openObserverStepTransaction(row, stepName, stepRowId);
 
@@ -490,6 +544,15 @@ export class AgentRunnerCore {
               this.recordCasLoss('dispatch_input_validation_fail', executionId, row.version);
             }
             await this.completeObserverStepTransaction(stepRowId, 'error');
+            this.trackStepFinish({
+              executionId,
+              workflowName: row.name,
+              stepName,
+              stepRowId,
+              attempt: row.currentStepAttempt,
+              outcome: 'error',
+              errorName: err.name,
+            });
             return { kind: ADVANCE_RESULT_KIND.FAILED, error: err };
           }
           throw err;
@@ -507,6 +570,15 @@ export class AgentRunnerCore {
           const err = new Error('Dispatch superseded by a concurrent advance (lost CAS before dispatching)');
           await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: row.sharedState ?? {} });
           await this.completeObserverStepTransaction(stepRowId, 'error');
+          this.trackStepFinish({
+            executionId,
+            workflowName: row.name,
+            stepName,
+            stepRowId,
+            attempt: row.currentStepAttempt,
+            outcome: 'error',
+            errorName: 'DispatchSuperseded',
+          });
           return { kind: ADVANCE_RESULT_KIND.RUNNING };
         }
 
@@ -530,6 +602,15 @@ export class AgentRunnerCore {
         } catch (err) {
           await this.deps.store.failStep({ stepRowId, error: err, sharedStateAfter: row.sharedState ?? {} });
           await this.completeObserverStepTransaction(stepRowId, 'error');
+          this.trackStepFinish({
+            executionId,
+            workflowName: row.name,
+            stepName,
+            stepRowId,
+            attempt: row.currentStepAttempt,
+            outcome: 'error',
+            errorName: errorNameOf(err),
+          });
           // After markStepDispatched won, the version was bumped +1.
           const postMarkRow = { ...row, version: row.version + 1 } as ExecutionState;
           return this.handleRetryOrCap(postMarkRow, stepName, row.sharedState ?? {}, maxAttemptsPerStep);
@@ -712,12 +793,80 @@ export class AgentRunnerCore {
       // Best-effort.
     }
   }
+
+  // ── Optional usage analytics ──────────────────────────────────────────────
+  //
+  // Step lifecycle events (`step.start` / `step.complete` / `step.error`)
+  // emitted through the host-provided `analytics` sink. This is usage
+  // analytics (workflow authoring visibility), not tracing — the
+  // RuntimeObserver spine hooks above remain the tracing channel. Emission is
+  // synchronous enqueue-only (never awaited) and every call is guarded, so
+  // analytics can never affect the walker's control flow. Payloads carry
+  // metadata only: names, ids, attempt counts, durations — never step inputs,
+  // outputs, or error messages.
+
+  /** Emit `step.start` and remember the attempt's start time for `duration_ms`. */
+  private trackStepStart(row: ExecutionState, stepName: string, stepRowId: string): void {
+    const analytics = this.deps.analytics;
+    if (!analytics) return;
+    try {
+      if (this.stepStartedAt.size >= MAX_TRACKED_STEP_STARTS) {
+        const oldest = this.stepStartedAt.keys().next().value;
+        if (oldest !== undefined) this.stepStartedAt.delete(oldest);
+      }
+      this.stepStartedAt.set(stepRowId, Date.now());
+      analytics.track('step.start', {
+        workflow_name: row.name,
+        step: stepName,
+        execution_id: row.id,
+        attempt: row.currentStepAttempt,
+      });
+    } catch {
+      // Never let telemetry break the walker.
+    }
+  }
+
+  /**
+   * Emit `step.complete` or `step.error` for a finished step attempt.
+   * `duration_ms` is included when this process saw the attempt start.
+   */
+  private trackStepFinish(args: {
+    executionId: string;
+    workflowName: string;
+    stepName: string;
+    stepRowId: string;
+    attempt: number;
+    outcome: 'success' | 'error';
+    errorName?: string;
+  }): void {
+    const analytics = this.deps.analytics;
+    if (!analytics) return;
+    try {
+      const startedAt = this.stepStartedAt.get(args.stepRowId);
+      if (startedAt !== undefined) this.stepStartedAt.delete(args.stepRowId);
+      analytics.track(args.outcome === 'success' ? 'step.complete' : 'step.error', {
+        workflow_name: args.workflowName,
+        step: args.stepName,
+        execution_id: args.executionId,
+        attempt: args.attempt,
+        ...(startedAt !== undefined ? { duration_ms: Date.now() - startedAt } : {}),
+        ...(args.outcome === 'error' && args.errorName ? { error_name: args.errorName } : {}),
+      });
+    } catch {
+      // Never let telemetry break the walker.
+    }
+  }
 }
 
 // ── Module-scope helpers ─────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Error class name for analytics payloads (names only — never messages). */
+function errorNameOf(err: unknown): string {
+  return err instanceof Error ? err.name : 'Error';
 }
 
 /**

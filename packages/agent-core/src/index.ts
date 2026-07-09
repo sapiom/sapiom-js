@@ -8,6 +8,13 @@
  *   - No global state
  *   - Every networked function accepts a GatewayClient as its last argument
  *
+ * Sole exception to the env/global rules: anonymous usage analytics
+ * (src/analytics.ts) — a lazy, process-shared @sapiom/analytics-core emitter
+ * constructed at the operation call boundary (never inside GatewayClient).
+ * It honors SAPIOM_TELEMETRY_DISABLED / DO_NOT_TRACK, is a silent no-op
+ * unless a collector endpoint is configured (ships dark), and never affects
+ * an operation's behavior or results.
+ *
  * Consumers: @sapiom/cli (thin arg-parse + render shell), @sapiom/mcp (SAP-930).
  */
 

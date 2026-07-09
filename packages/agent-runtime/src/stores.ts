@@ -116,3 +116,19 @@ export const NOOP_OBSERVER: RuntimeObserver = {
     /* no-op */
   },
 };
+
+/**
+ * Optional sink for workflow **usage analytics** — the `step.start` /
+ * `step.complete` / `step.error` lifecycle events the walker emits when a
+ * host provides one. Deliberately structural (just a `track` method) so the
+ * runtime takes no dependency on any emitter package; `SapiomAnalytics`
+ * from `@sapiom/analytics-core` satisfies it as-is.
+ *
+ * The walker treats the sink as enqueue-only fire-and-forget: it never
+ * awaits it, and it wraps every call in try/catch, so a throwing sink
+ * cannot affect an execution. Hosts that don't pass one get exactly the
+ * previous behavior — not even a no-op call.
+ */
+export interface RuntimeAnalytics {
+  track(eventType: string, data?: Record<string, unknown>): void;
+}

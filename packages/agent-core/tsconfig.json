@@ -8,11 +8,14 @@
     "declarationMap": false,
     "sourceMap": false,
     // Classic `node` resolution (inherited) doesn't read package `exports`, so the
-    // `@sapiom/tools/stub` subpath needs a type hint. Emit keeps the specifier;
-    // Node resolves it via exports at runtime.
+    // `@sapiom/tools/stub` and `@sapiom/analytics-core/testing` subpaths need
+    // type hints. Emit keeps the specifier; Node resolves it via exports at runtime.
     "baseUrl": ".",
     "paths": {
-      "@sapiom/tools/stub": ["../tools/dist/cjs/stub/index.d.ts"]
+      "@sapiom/tools/stub": ["../tools/dist/cjs/stub/index.d.ts"],
+      "@sapiom/analytics-core/testing": [
+        "../analytics-core/dist/cjs/testing/index.d.ts"
+      ]
     }
   },
   "include": ["src/**/*", "src/**/*.json"],

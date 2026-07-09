@@ -22,6 +22,7 @@ import {
   AgentRunnerCore,
 } from "@sapiom/agent-runtime";
 
+import { getOrchestrationAnalytics } from "../analytics.js";
 import { AgentOperationError } from "../errors.js";
 import { LocalStubDispatcher, type LocalStepTrace } from "./dispatcher.js";
 import { loadDefinition } from "./load.js";
@@ -96,10 +97,20 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
   // result that should resume a pause on its signal.
   const signals = new Map<string, unknown>();
   dispatcher.setSignals(signals);
+  // Step lifecycle usage analytics (`step.start` / `step.complete` /
+  // `step.error`), flagged `local: true` so local runs are distinguishable
+  // from server executions. Ships dark — see ../analytics.ts; `track` is
+  // enqueue-only and never throws, so the run itself is unaffected.
+  const analytics = getOrchestrationAnalytics();
   const core = new AgentRunnerCore({
     store,
     dispatcher,
     observer: NOOP_OBSERVER,
+    analytics: {
+      track(eventType, data) {
+        analytics.track(eventType, { ...data, local: true });
+      },
+    },
   });
   dispatcher.setCore(core);
   dispatcher.setMaxAttempts(max);

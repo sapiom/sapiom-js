@@ -10,5 +10,7 @@ module.exports = {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
     '^@sapiom/tools/stub$': '<rootDir>/../tools/dist/cjs/stub/index.js',
+    '^@sapiom/analytics-core/testing$':
+      '<rootDir>/../analytics-core/dist/cjs/testing/index.js',
   },
 };
