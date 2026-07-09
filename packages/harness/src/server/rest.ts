@@ -22,7 +22,9 @@ import type {
   SessionSummary,
   WorkflowInfo,
 } from "../shared/types.js";
+import { ExternalHarnessError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
+import { listHarnessAdapters } from "../core/adapters/registry.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
 const createSessionSchema = z.object({
@@ -182,6 +184,37 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
+  /**
+   * GET /api/harnesses — registry-driven listing of all known harness
+   * adapters with their mode (embedded vs external), label, and whether
+   * the binary is installed on this machine.
+   *
+   * Embedded adapters can be used in POST /sessions (harness field).
+   * External adapters expose mode:"external" so the UI can render them
+   * differently (e.g. a "companion app" chip) without being selectable
+   * as session targets.
+   *
+   * `installed` is best-effort and never throws — it may lag PATH changes
+   * by at most one request cycle since it probes the filesystem per request.
+   */
+  router.get("/harnesses", async (_req, res, next) => {
+    try {
+      const adapters = listHarnessAdapters();
+      const entries = await Promise.all(
+        adapters.map(async (adapter) => ({
+          id: adapter.id,
+          label: adapter.label,
+          mode: adapter.mode,
+          experimental: adapter.experimental ?? false,
+          installed: await adapter.detectInstalled(),
+        })),
+      );
+      res.json(entries);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post("/sessions", async (req, res, next) => {
     const parsed = createSessionSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -285,6 +318,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
         res.status(404).json({ error: err.message });
         return;
       }
+      if (err instanceof ExternalHarnessError) {
+        res.status(409).json({ error: err.message, code: (err as { code: string }).code });
+        return;
+      }
       next(err);
     }
   });
@@ -314,8 +351,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
       }
       res.json({ ok: true });
     } catch (err) {
-      if (err instanceof SessionNotReadyError) {
-        res.status(409).json({ error: err.message });
+      if (err instanceof SessionNotReadyError || err instanceof ExternalHarnessError) {
+        res.status(409).json({ error: err.message, code: (err as { code: string }).code });
         return;
       }
       next(err);

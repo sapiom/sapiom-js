@@ -11,4 +11,18 @@ export {
   SessionNotResumeableError,
   SessionAlreadyLiveError,
   AdapterNotFoundError,
+  ExternalHarnessError,
 } from "./core/errors.js";
+export {
+  listHarnessAdapters,
+  getHarnessAdapter,
+  createHarnessAdapterRegistry,
+  UnknownHarnessAdapterError,
+} from "./core/adapters/registry.js";
+export type {
+  HarnessAdapterInfo,
+  HarnessAdapterId,
+  HarnessAdapterMode,
+  EmbeddedHarnessAdapterInfo,
+  ExternalHarnessAdapterInfo,
+} from "./core/adapters/adapter.js";

@@ -82,3 +82,24 @@ export class AdapterNotFoundError extends HarnessError {
     super("ADAPTER_NOT_FOUND", `No adapter registered for harness "${harness}"`);
   }
 }
+
+/**
+ * Thrown when a spawn or send operation is attempted on an external-mode
+ * harness adapter (e.g. Conductor) whose sessions are managed by its own
+ * companion app — the harness cannot spawn or inject into them. Maps to
+ * HTTP 409.
+ *
+ * The `harness` field names the adapter so the UI can show a targeted message
+ * (e.g. "Conductor sessions are managed by the Conductor app").
+ */
+export class ExternalHarnessError extends HarnessError {
+  readonly harness: string;
+
+  constructor(harness: string, label: string) {
+    super(
+      "HARNESS_EXTERNAL",
+      `${label} sessions are managed by the ${label} app — spawn and send are not available.`,
+    );
+    this.harness = harness;
+  }
+}
