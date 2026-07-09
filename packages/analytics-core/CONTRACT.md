@@ -130,13 +130,17 @@ cross-producer analysis stays cheap.
 
 **Per-session `seq`.** Producers that manage sessions locally (e.g. the dev
 harness) MAY assign each session's events a monotonic sequence number
-starting at 1, carried as `data.seq`. Within one `session_id`, gaps
-indicate loss and `seq` order is authoritative — when it disagrees with
-`event_timestamp` (a client clock), trust `seq`. It is producer-assigned
-and stored verbatim; the collector never renumbers, and `seq` values from
-different sessions are not comparable. If a producer restarts mid-session,
-`seq` resets — consumers should treat a `seq` decrease as a restart
-boundary, not loss.
+starting at 1, carried as `data.seq`. Within one `session_id`, `seq` order
+is authoritative — when it disagrees with `event_timestamp` (a client
+clock), trust `seq`. It is producer-assigned and stored verbatim; the
+collector never renumbers, and `seq` values from different sessions are not
+comparable. If a producer restarts mid-session, `seq` resets — consumers
+should treat a `seq` decrease as a restart boundary, not loss.
+
+For the harness specifically: `seq` indexes the harness's local capture
+stream; some locally-sequenced event kinds are not forwarded remotely, so
+remote streams have **expected gaps** — duplicates are the anomaly signal,
+not gaps. (Verified against production data 2026-07-09.)
 
 **Batch context.** `data.context` MAY carry `app_version`, `os`, `arch`,
 and `node`, stamped once per batch by the producer — the conventional
