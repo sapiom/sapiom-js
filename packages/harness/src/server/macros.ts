@@ -30,10 +30,13 @@ export interface MacrosRouterDeps {
   injectInput(harnessSessionId: string, text: string, submit: boolean): Promise<void>;
   /** Runs an "inject" macro marked `execution: "background"` as a headless
    *  one-shot task (the TaskManager) instead of touching the session's pty.
+   *  `workflowPath` is the resolved workflow the macro was invoked against —
+   *  passed through to TaskManager so two sessions running the same macro
+   *  against the same workflow dedupe per-workflow rather than per-session.
    *  May throw TaskNotSupportedError (session's harness has no headless
    *  mode → 400) or TaskAlreadyRunningError (same macro already in flight
-   *  for this session → 409). */
-  runBackgroundTask(harnessSessionId: string, macro: MacroDef, prompt: string): Promise<void>;
+   *  for this target → 409). */
+  runBackgroundTask(harnessSessionId: string, macro: MacroDef, prompt: string, workflowPath: string | null): Promise<void>;
   /** Opens a URL in the user's default browser (the `open` package). */
   openUrl(url: string): Promise<void>;
   /** The "visualize" macro's `render-canvas` action: force refresh of the
@@ -88,7 +91,7 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
       } else if (resolved.kind === "render-canvas") {
         await deps.renderCanvas(body.harnessSessionId);
       } else if (macro.execution === "background") {
-        await deps.runBackgroundTask(body.harnessSessionId, macro, resolved.text);
+        await deps.runBackgroundTask(body.harnessSessionId, macro, resolved.text, workflowPath ?? null);
       } else {
         await deps.injectInput(body.harnessSessionId, resolved.text, resolved.submit);
       }

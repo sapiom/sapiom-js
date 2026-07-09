@@ -24,12 +24,18 @@
  *
  * The polling fallback (Linux, or a watcher runtime error) diffs the same
  * fingerprint on an interval, so both paths share one notion of "changed".
+ * The fallback walk is async (fs/promises) to avoid blocking the event loop
+ * on a wide cwd — the poll interval is longer than the watch debounce,
+ * so a filesystem event via the watcher is still the fast path.
  */
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
 const DEBOUNCE_MS = 250;
-const POLL_INTERVAL_MS = 1_000;
+/** Longer than the watch debounce — the watcher path is the fast signal;
+ *  the poll is just a backstop for platforms without recursive fs.watch. */
+const POLL_INTERVAL_MS = 2_000;
 
 /** Kept in sync with core/workflow-registry.ts's scan: the marker file that
  *  makes a directory a workflow, and how deep the scan looks for it. */
@@ -52,7 +58,12 @@ function firstSegmentIgnored(relPath: string): boolean {
  * Fingerprint of the set of workflow-marker directories under `root` (sorted,
  * bounded depth, ignored subtrees skipped). Changes exactly when a workflow is
  * added, removed, or renamed — not when unrelated files are edited. Exported
- * for the polling fallback and for direct testing.
+ * for direct testing.
+ *
+ * The synchronous form is retained for callers that need an immediate
+ * baseline at construction time (before async I/O is possible). The
+ * polling fallback uses the async form to avoid blocking the event loop on
+ * a wide directory tree.
  */
 export function snapshotWorkspaceWorkflows(root: string): string {
   const markerDirs: string[] = [];
@@ -81,6 +92,37 @@ export function snapshotWorkspaceWorkflows(root: string): string {
   return markerDirs.sort().join("|");
 }
 
+/**
+ * Async variant used by the polling fallback — yields between directories so
+ * a wide workspace can't stutter the event loop on platforms without recursive
+ * fs.watch. Produces the same fingerprint as the sync version. Exported for
+ * direct testing.
+ */
+export async function snapshotWorkspaceWorkflowsAsync(root: string): Promise<string> {
+  const markerDirs: string[] = [];
+
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (depth > MAX_SCAN_DEPTH) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    if (entries.some((entry) => entry.isFile() && entry.name === WORKFLOW_MARKER)) {
+      markerDirs.push(dir);
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || IGNORED_DIR_NAMES.has(entry.name)) continue;
+      await walk(path.join(dir, entry.name), depth + 1);
+    }
+  };
+
+  await walk(root, 0);
+  return markerDirs.sort().join("|");
+}
+
 /** One session's workspace watcher. */
 class SessionWorkspaceWatcher {
   private watcher: fs.FSWatcher | null = null;
@@ -98,7 +140,9 @@ class SessionWorkspaceWatcher {
     this.arm();
   }
 
-  /** Debounced check: recompute the fingerprint and fire only on a real change. */
+  /** Debounced check: recompute the fingerprint and fire only on a real change.
+   *  The watcher path uses the sync snapshot (fast, on a single event-loop
+   *  tick); the polling path uses the async variant (yields between dirs). */
   private scheduleCheck(): void {
     if (this.closed) return;
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
@@ -108,6 +152,17 @@ class SessionWorkspaceWatcher {
   private checkNow(): void {
     if (this.closed) return;
     const snapshot = snapshotWorkspaceWorkflows(this.cwd);
+    if (snapshot === this.lastSnapshot) return;
+    this.lastSnapshot = snapshot;
+    this.onChange(this.harnessSessionId);
+  }
+
+  /** Async variant of the fingerprint check — used by the polling fallback
+   *  so the walk doesn't block the event loop on a wide directory tree. */
+  private async checkNowAsync(): Promise<void> {
+    if (this.closed) return;
+    const snapshot = await snapshotWorkspaceWorkflowsAsync(this.cwd);
+    if (this.closed) return; // session may have closed during the await
     if (snapshot === this.lastSnapshot) return;
     this.lastSnapshot = snapshot;
     this.onChange(this.harnessSessionId);
@@ -137,7 +192,12 @@ class SessionWorkspaceWatcher {
     if (this.closed || this.pollTimer) return;
     this.watcher?.close();
     this.watcher = null;
-    this.pollTimer = setInterval(() => this.checkNow(), POLL_INTERVAL_MS);
+    this.pollTimer = setInterval(() => {
+      this.checkNowAsync().catch(() => {
+        // Snapshot errors (permission denied, etc.) are benign — the next
+        // tick will retry, same as the sync path silently swallowing them.
+      });
+    }, POLL_INTERVAL_MS);
   }
 
   close(): void {
