@@ -248,12 +248,19 @@ export function useHarnessState(): HarnessStateHook {
   }, [state?.availableHarnesses, createSession]);
 
   const resumeSession = useCallback(async (harnessSessionId: string): Promise<HarnessSession> => {
-    const session = await api.resumeSession(harnessSessionId);
-    setState((prev) =>
-      prev ? { ...prev, sessions: prev.sessions.map((s) => (s.id === session.id ? session : s)) } : prev,
-    );
-    setActiveSessionId(session.id);
-    return session;
+    try {
+      const session = await api.resumeSession(harnessSessionId);
+      setState((prev) =>
+        prev ? { ...prev, sessions: prev.sessions.map((s) => (s.id === session.id ? session : s)) } : prev,
+      );
+      setActiveSessionId(session.id);
+      return session;
+    } catch (err) {
+      // Surface resume failures as a toast so a failed resume is never silent
+      // (the caller fires this with void and swallows the rejection).
+      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      throw err;
+    }
   }, []);
 
   /**
@@ -276,7 +283,15 @@ export function useHarnessState(): HarnessStateHook {
 
   const closeSession = useCallback(
     async (id: string): Promise<void> => {
-      await api.killSession(id);
+      try {
+        await api.killSession(id);
+      } catch (err) {
+        // Surface close failures as a toast; still attempt local state cleanup
+        // so a transient server error doesn't leave the user stranded on the
+        // dead-session overlay.
+        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        throw err;
+      }
       const remaining = (state?.sessions ?? []).filter((session) => session.id !== id);
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
       if (activeSessionId === id) {
