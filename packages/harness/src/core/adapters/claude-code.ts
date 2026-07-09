@@ -130,6 +130,7 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
   const args: string[] = [];
   if (opts.settingsFile) args.push("--settings", opts.settingsFile);
   if (opts.mcpConfigFile) args.push("--mcp-config", opts.mcpConfigFile);
+  if (opts.pluginDir) args.push("--plugin-dir", opts.pluginDir);
   return args;
 }
 

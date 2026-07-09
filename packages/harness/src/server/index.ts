@@ -44,6 +44,7 @@ import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
+import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
 import { removeGeneratedSessionDir, sweepGeneratedDirs } from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { WorkspaceWatcherManager } from "../core/workspace-watcher.js";
@@ -222,15 +223,17 @@ function readVersion(): string {
  */
 function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: string): LaunchOptsBuilder {
   return async (harnessSessionId) => {
-    const [settings, mcpConfigFile, systemPromptFile] = await Promise.all([
+    const [settings, mcpConfigFile, systemPromptFile, pluginDir] = await Promise.all([
       generateClaudeSettings({ harnessSessionId, generatedRoot }),
       generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey, generatedRoot }),
       generateSystemPromptFile(harnessSessionId, { generatedRoot }),
+      generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
     return {
       settingsFile: settings.settingsPath,
       mcpConfigFile,
       systemPromptFile,
+      ...(pluginDir ? { pluginDir } : {}),
     };
   };
 }
