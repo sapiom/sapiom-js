@@ -526,7 +526,11 @@ export class SessionManager {
       const pid = handle.pty.pid;
       if (this.isPidAlive(pid)) handle.pty.kill("SIGKILL");
       setTimeout(() => {
-        if (this.ptys.get(id) === handle && !this.isPidAlive(pid)) this.markExited(id, handle, null);
+        // Synthesize unconditionally: SIGKILL was already sent; after the
+        // confirm window the session is over regardless of isPidAlive. An
+        // EPERM-alive zombie (a process that exists but can't be signalled)
+        // would leave handle.exited pending forever if we gated on liveness.
+        if (this.ptys.get(id) === handle) this.markExited(id, handle, null);
       }, KILL_ESCALATION_CONFIRM_MS).unref?.();
     }, KILL_ESCALATION_MS);
     escalate.unref?.();
@@ -864,9 +868,8 @@ export class SessionManager {
     if (this.ptys.get(id) !== handle) return;
     this.ptys.delete(id);
     this.lastActivityBroadcast.delete(id);
-    // Resolve the handle's `exited` promise so any awaiting kill() caller
-    // (and any caller of killAll()) unblocks. Must happen before the session
-    // status broadcast so subscribers see "exited" before the promise resolves.
+    // Resolve after the pty map is cleaned up. transitionExited runs
+    // synchronously to set status before any awaiting continuation resumes.
     handle.resolveExited();
     const session = this.sessions.get(id);
     if (!session) return;

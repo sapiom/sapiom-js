@@ -50,6 +50,14 @@ const MAX_FINISHED_TASKS = 20;
  * interactive ptys, but the same bounded escalation semantics apply.
  */
 const TASK_KILL_ESCALATION_MS = 2_000;
+/**
+ * How long killAll() waits after sending SIGKILL before synthesizing finish()
+ * for any still-registered process. Mirrors SessionManager's
+ * KILL_ESCALATION_CONFIRM_MS. After this window the task is declared dead
+ * regardless — a zombie that never emits "exit" would otherwise leave
+ * allExited pending forever.
+ */
+const TASK_KILL_CONFIRM_MS = 500;
 
 /**
  * The slice of node's ChildProcess a task actually uses — injectable so
@@ -335,14 +343,16 @@ export class TaskManager {
 
   /**
    * Kills every still-running task process and returns a Promise that resolves
-   * when all of them have actually exited (or when the escalation window
-   * expires). Call on server shutdown so headless agent processes (claude -p)
-   * don't outlive the harness server.
+   * when all of them have actually exited. Bounded and never hangs:
    *
-   * Escalation: sends SIGTERM to all running tasks, then waits
-   * `TASK_KILL_ESCALATION_MS`. Any still-alive task gets SIGKILL. The returned
-   * promise resolves once all tasks' `finish()` has run (real exit event or
-   * after SIGKILL), so it is bounded and never hangs.
+   * 1. SIGTERM all running tasks.
+   * 2. Wait up to `TASK_KILL_ESCALATION_MS` for graceful exits.
+   * 3. SIGKILL any survivors.
+   * 4. Wait up to `TASK_KILL_CONFIRM_MS` for SIGKILL exits.
+   * 5. Synthesize `finish(id, null)` for any still-registered processes —
+   *    a zombie that never emits "exit" would otherwise leave allExited
+   *    pending forever. finish()'s idempotence guard (status !== "running")
+   *    makes a double-call harmless if the exit event arrives concurrently.
    */
   async killAll(): Promise<void> {
     const runningIds = [...this.processes.keys()];
@@ -363,7 +373,7 @@ export class TaskManager {
       }
     }
 
-    // Wait for all to die gracefully or escalate.
+    // Wait for graceful exits or escalation window.
     const allExited = Promise.all(exitWaiters);
     const escalationTimer = new Promise<void>((resolve) => setTimeout(resolve, TASK_KILL_ESCALATION_MS));
     await Promise.race([allExited, escalationTimer]);
@@ -377,8 +387,19 @@ export class TaskManager {
       }
     }
 
-    // Final wait: after SIGKILL the processes should exit almost immediately.
-    await allExited;
+    // Wait for SIGKILL exits or the confirm window, then synthesize for zombies.
+    // Using a separate timer (not reusing escalationTimer which already fired)
+    // so the SIGKILL phase gets its own full window.
+    const confirmTimer = new Promise<void>((resolve) => setTimeout(resolve, TASK_KILL_CONFIRM_MS));
+    await Promise.race([allExited, confirmTimer]);
+
+    // Synthesize finish() for any process that still hasn't emitted an exit
+    // event — a zombie or a process whose exit event was lost. finish()'s
+    // idempotence guard (task.status !== "running") prevents a double-fire if
+    // the real exit event arrives concurrently or slightly later.
+    for (const id of [...this.processes.keys()]) {
+      this.finish(id, null);
+    }
   }
 
   private handleStdoutLine(id: string, line: string): void {

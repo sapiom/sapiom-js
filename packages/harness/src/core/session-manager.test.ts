@@ -1158,5 +1158,35 @@ describe("SessionManager", () => {
       await killAllPromise;
       expect(resolved).toBe(true);
     });
+
+    it("REGRESSION: kill() resolves unconditionally in the confirm window even when isPidAlive stays true (EPERM zombie after SIGKILL)", async () => {
+      // An EPERM zombie: process.kill(pid, 0) still returns true (EPERM means
+      // "exists but can't be signalled") even after SIGKILL. The old confirm-
+      // timer guarded on `!isPidAlive(pid)` — that would leave handle.exited
+      // pending forever. The fixed confirm callback synthesizes markExited()
+      // unconditionally (SIGKILL was already sent; the session is over).
+      const { manager, spawns } = makeManager({
+        fakePid: 4444,
+        // Always "alive" — simulates an EPERM zombie that survives all probes.
+        isPidAlive: () => true,
+      });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const killPromise = manager.kill(session.id);
+      // Initial signal sent.
+      expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(1);
+
+      // Advance past KILL_ESCALATION_MS: isPidAlive returns true → SIGKILL sent.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(2);
+      expect(spawns[0]?.pty.kill).toHaveBeenLastCalledWith("SIGKILL");
+
+      // Advance past KILL_ESCALATION_CONFIRM_MS: the confirm callback fires.
+      // isPidAlive is still true (zombie) but the fix synthesizes unconditionally.
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(await killPromise).toBe(true);
+      expect(manager.get(session.id)?.status).toBe("exited");
+    });
   });
 });

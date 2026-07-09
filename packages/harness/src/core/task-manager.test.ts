@@ -405,5 +405,43 @@ describe("TaskManager", () => {
       // No running tasks — should resolve immediately.
       await expect(manager.killAll()).resolves.toBeUndefined();
     });
+
+    it("REGRESSION: killAll() resolves and finalizes a zombie that never emits exit even after SIGKILL (synthesizes finish)", async () => {
+      // A process that swallows both SIGTERM and SIGKILL — its "exit" event
+      // never fires. Without the synthesis path in killAll(), allExited would
+      // hang forever. This test confirms killAll() resolves within the bounded
+      // window and that the task record is finalized (not left "running").
+      vi.useFakeTimers();
+      try {
+        const { manager, spawned, statuses } = makeManager();
+        const task = await manager.run(runRequest);
+        expect(task.status).toBe("running");
+
+        const killAllPromise = manager.killAll();
+
+        // Phase 1: SIGTERM sent, but the process ignores it — no exit event.
+        expect(spawned[0].proc.killed).toBe("SIGTERM");
+
+        // Advance past TASK_KILL_ESCALATION_MS — killAll escalates to SIGKILL.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(spawned[0].proc.killed).toBe("SIGKILL");
+
+        // The zombie never emits exit even after SIGKILL. Advance past
+        // TASK_KILL_CONFIRM_MS — killAll must synthesize finish() and resolve.
+        await vi.advanceTimersByTimeAsync(500);
+        // Drain any microtask ticks from the finish() synchronous chain.
+        await vi.advanceTimersByTimeAsync(0);
+
+        await killAllPromise;
+
+        // The task must be finalized — never left "running" — even without a
+        // real exit event.
+        const finished = manager.get(task.id);
+        expect(finished?.status).not.toBe("running");
+        expect(statuses.at(-1)?.status).not.toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

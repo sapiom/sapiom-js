@@ -303,7 +303,7 @@ describe.skipIf(!nodePty)("transcript-fixture replay via SessionManager (real pt
   });
 
   afterEach(async () => {
-    manager.killAll();
+    void manager.killAll();
     await manager.flush();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -329,7 +329,7 @@ describe.skipIf(!nodePty)("transcript-fixture replay via SessionManager (real pt
       await output.waitFor("you said: integration-test");
     } finally {
       detach?.();
-      manager.kill(session.id);
+      void manager.kill(session.id);
     }
 
     // After kill, the session should be exited.
