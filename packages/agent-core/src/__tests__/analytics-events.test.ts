@@ -394,7 +394,7 @@ describe("local run step events", () => {
   });
 });
 
-describe("consent and ship-dark", () => {
+describe("consent and live-default", () => {
   it.each(["SAPIOM_TELEMETRY_DISABLED", "DO_NOT_TRACK"])(
     "%s=1 → zero collector requests, identical results",
     async (envVar) => {
@@ -423,18 +423,20 @@ describe("consent and ship-dark", () => {
     },
   );
 
-  it("no endpoint configured (ships dark) → zero requests, identical results", async () => {
-    delete process.env.SAPIOM_ANALYTICS_ENDPOINT;
-    resetOrchestrationAnalyticsForTesting();
-
+  it("live by default: with no explicit endpoint config, emitter is enabled and events reach the collector", async () => {
+    // No explicit `endpoint` on the analytics config, but the env override
+    // (SAPIOM_ANALYTICS_ENDPOINT) set by beforeEach points at the mock so
+    // nothing hits the production URL. This exercises the live-default
+    // fall-through path: resolveEndpoint() returns the hosted collector when no
+    // config is set, and the env override redirects that to the mock.
     const gateway = await startFakeGateway(HAPPY_ROUTES);
     try {
       const { started } = await runHappyFlow(gateway.host);
       expect(started.executionId).toBe("exec_1");
-      expect(getOrchestrationAnalytics().enabled).toBe(false);
+      expect(getOrchestrationAnalytics().enabled).toBe(true);
 
       await getOrchestrationAnalytics().flush();
-      expect(collector.requests).toHaveLength(0);
+      expect(collector.requests.length).toBeGreaterThan(0);
     } finally {
       await gateway.close();
     }

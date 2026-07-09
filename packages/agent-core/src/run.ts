@@ -33,7 +33,7 @@ export interface RunResult {
  * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  *
  * Emits one `workflow.run` usage-analytics event (metadata only: ids,
- * status, duration — never the execution input). Ships dark — see
+ * status, duration — never the execution input). Live by default — see
  * ./analytics.ts; telemetry never changes the operation's behavior.
  */
 export async function run(opts: RunOptions, client: GatewayClient): Promise<RunResult> {
