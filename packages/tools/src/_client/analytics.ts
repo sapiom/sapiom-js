@@ -4,11 +4,13 @@
  * call through `@sapiom/analytics-core`.
  *
  * Non-negotiables, guaranteed regardless of configuration:
- * - Ships dark: without a collector endpoint (`SAPIOM_ANALYTICS_ENDPOINT`) the
- *   emitter is a silent no-op — zero network calls, zero disk writes.
+ * - Live by default: the emitter delivers to the hosted Sapiom collector unless
+ *   opted out. Opt out with `SAPIOM_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`,
+ *   or `disabled: true` in the config — any of these makes the emitter a
+ *   complete no-op (zero network calls, zero disk writes, no notice).
+ *   `SAPIOM_ANALYTICS_ENDPOINT` overrides the destination (useful in tests).
  * - Enqueue-only on the call path: `track()` is synchronous, delivery is
  *   batched off the call path, and no failure here can surface to a caller.
- * - Opt out with `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

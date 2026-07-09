@@ -6,12 +6,12 @@
  * environment's cached credentials when one exists (server-side enrichment);
  * everything else reaches the same instance through {@link getAnalytics}.
  *
- * The emitter ships dark: unless a collector endpoint is explicitly
- * configured (the `SAPIOM_ANALYTICS_ENDPOINT` environment variable), it is a
- * silent no-op — zero network calls, zero disk writes. The standard opt-outs
- * (`SAPIOM_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`) are honored by
- * `@sapiom/analytics-core`, and `track()` is a synchronous enqueue that
- * never throws and never blocks a tool call.
+ * The emitter is live by default: it delivers to the hosted Sapiom collector
+ * unless opted out. `SAPIOM_ANALYTICS_ENDPOINT` overrides the destination
+ * (useful in tests). The standard opt-outs (`SAPIOM_TELEMETRY_DISABLED=1`,
+ * `DO_NOT_TRACK=1`) are honored by `@sapiom/analytics-core` and produce a
+ * complete no-op (zero network calls, zero disk writes). `track()` is a
+ * synchronous enqueue that never throws and never blocks a tool call.
  */
 import { createRequire } from "node:module";
 

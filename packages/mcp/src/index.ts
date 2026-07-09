@@ -20,8 +20,8 @@ async function main(): Promise<void> {
   }
 
   // Construct the process-wide usage-analytics emitter once, keyed with the
-  // cached credential when one exists. Ships dark (a no-op unless a collector
-  // endpoint is configured) and honors the standard telemetry opt-outs.
+  // cached credential when one exists. Live by default; honors the standard
+  // telemetry opt-outs (SAPIOM_TELEMETRY_DISABLED=1, DO_NOT_TRACK=1).
   configureAnalytics({ apiKey: env.credentials?.apiKey });
 
   // Pull the latest authoring instructions from the backend (falls back to the

@@ -20,7 +20,7 @@
  *
  * Being the single HTTP choke point also makes this the (one) instrumentation
  * seam: every call enqueues a `capability.call` usage event — synchronously,
- * never awaited, dark by default. See `./analytics.ts`.
+ * never awaited, live by default. See `./analytics.ts`.
  */
 import {
   CAPABILITY_CALL_EVENT,
@@ -160,7 +160,7 @@ export class Transport {
    * Flush and shut down this client's usage-analytics emitter: buffered events
    * are delivered best-effort and the emitter's `beforeExit` hook is detached.
    * Resolves immediately when no emitter was ever created (no calls made, or
-   * analytics dark/disabled); idempotent; never rejects. One call covers every
+   * analytics disabled); idempotent; never rejects. One call covers every
    * transport derived via {@link withAttribution} (they share the emitter).
    *
    * Call this once per client in hosts that construct MANY clients in one

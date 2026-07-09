@@ -13,7 +13,8 @@
  * unchanged, and a thrown error is rethrown unchanged. Emission is a
  * synchronous enqueue — no awaits on the hot path — and can never throw, so
  * telemetry cannot alter a tool result or take the server down. The emitter
- * ships dark: with no collector endpoint configured it is a no-op.
+ * is live by default; `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`
+ * make it a no-op.
  */
 import type {
   McpServer,
