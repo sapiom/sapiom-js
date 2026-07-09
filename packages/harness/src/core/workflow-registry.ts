@@ -47,14 +47,13 @@ async function readMarker(dir: string): Promise<SapiomMarker | null> {
 }
 
 async function nameFor(dir: string): Promise<string> {
-  if (!hasTraversalSegment(dir)) {
-    try {
-      const raw = await fs.readFile(path.join(dir, "package.json"), "utf8");
-      const pkg = JSON.parse(raw) as { name?: string };
-      if (pkg.name) return pkg.name;
-    } catch {
-      // No package.json (or it doesn't parse) — fall back to the directory name.
-    }
+  if (hasTraversalSegment(dir)) return path.basename(dir);
+  try {
+    const raw = await fs.readFile(path.join(dir, "package.json"), "utf8");
+    const pkg = JSON.parse(raw) as { name?: string };
+    if (pkg.name) return pkg.name;
+  } catch {
+    // No package.json (or it doesn't parse) — fall back to the directory name.
   }
   return path.basename(dir);
 }
