@@ -376,17 +376,22 @@ export type BusMessage =
   | { type: "chat.attention"; harnessSessionId: string; message: string };
 
 // ---------------------------------------------------------------------------
-// Adapter registry (GET /api/harnesses — SAP-1435 consumer)
+// Adapter registry (GET /api/harnesses)
 // ---------------------------------------------------------------------------
 
-/** One entry in the adapter registry, as the SPA sees it. */
+/** One entry in the adapter registry, as the SPA sees it (GET /api/harnesses). */
 export interface HarnessEntry {
-  id: HarnessKind;
+  /** Stable adapter identifier — one of the known HarnessAdapterId values (e.g. "claude-code", "codex", "conductor"). */
+  id: string;
   label: string;
-  /** False when the adapter can be spawned (spawn gated by POST /sessions). */
-  disabled: boolean;
-  /** Human-readable reason why the adapter is disabled, for a tooltip. */
-  disabledReason?: string;
+  /** Whether the harness is spawned by the harness server ("embedded") or managed by its own companion app ("external"). */
+  mode: "embedded" | "external";
+  /** True for adapters whose launch behaviour is not yet hardened by an end-to-end suite. */
+  experimental: boolean;
+  /** True when the adapter's binary is detected on PATH at request time. */
+  installed: boolean;
+  /** Per-agent copy-paste instructions for installing and configuring the Sapiom MCP server. */
+  installMcpPrompt: string;
 }
 
 // ---------------------------------------------------------------------------

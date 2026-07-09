@@ -10,6 +10,7 @@ import type {
   CreateSessionRequest,
   FsDirEntry,
   FsListResponse,
+  HarnessEntry,
   HarnessSession,
   HarnessSettings,
   InjectInputRequest,
@@ -35,7 +36,7 @@ export interface SkillDetail extends SkillMeta {
 
 import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
 
-export type { FsDirEntry, FsListResponse };
+export type { FsDirEntry, FsListResponse, HarnessEntry };
 
 export function isMockMode(): boolean {
   return import.meta.env.VITE_MOCK === "1";
