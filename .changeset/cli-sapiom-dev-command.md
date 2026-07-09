@@ -1,5 +1,5 @@
 ---
-"@sapiom/cli": minor
+"@sapiom/cli": patch
 ---
 
 Add `sapiom dev [dir]` command that launches the Sapiom Harness.

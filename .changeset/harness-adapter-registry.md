@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": minor
+"@sapiom/harness": patch
 ---
 
 HarnessAdapter registry with embedded/external modes

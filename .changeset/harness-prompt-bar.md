@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": minor
+"@sapiom/harness": patch
 ---
 
 Chat-first center pane with prompt composer (ChatView + PromptBar)

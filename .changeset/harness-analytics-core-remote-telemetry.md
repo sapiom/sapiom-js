@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": minor
+"@sapiom/harness": patch
 ---
 
 Remote telemetry now reaches the hosted collector.
