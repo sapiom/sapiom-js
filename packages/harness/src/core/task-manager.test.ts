@@ -406,6 +406,43 @@ describe("TaskManager", () => {
       await expect(manager.killAll()).resolves.toBeUndefined();
     });
 
+    it("timer handles are unref'd so a clean exit does not hold the event loop (B2)", async () => {
+      // Verify that the escalation and confirm timers produced by killAll()
+      // are unref'd — an unref'd timer's handle has `_idleTimeout` still set
+      // (it exists) but `hasRef()` returns false, meaning it won't block the
+      // event loop from exiting once all other ref'd handles are gone.
+      //
+      // Strategy: spy on setTimeout and capture the returned handle, then
+      // assert hasRef() is false after killAll() is called but before the
+      // processes exit.
+      vi.useFakeTimers();
+      try {
+        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+        const { manager, spawned } = makeManager();
+        await manager.run(runRequest);
+
+        const _killAllPromise = manager.killAll();
+
+        // The spy captures handles for the escalation and confirm timers.
+        const timerHandles = setTimeoutSpy.mock.results
+          .map((r) => r.value as ReturnType<typeof setTimeout>)
+          .filter((h) => h && typeof (h as unknown as { hasRef?: () => boolean }).hasRef === "function");
+
+        // At least the escalation timer should have been created.
+        expect(timerHandles.length).toBeGreaterThanOrEqual(1);
+        for (const handle of timerHandles) {
+          expect((handle as unknown as { hasRef(): boolean }).hasRef()).toBe(false);
+        }
+
+        setTimeoutSpy.mockRestore();
+        // Let killAll resolve so no dangling promises.
+        spawned[0].proc.emit("exit", 0);
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("REGRESSION: killAll() resolves and finalizes a zombie that never emits exit even after SIGKILL (synthesizes finish)", async () => {
       // A process that swallows both SIGTERM and SIGKILL — its "exit" event
       // never fires. Without the synthesis path in killAll(), allExited would

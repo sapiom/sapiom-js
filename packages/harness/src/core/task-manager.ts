@@ -383,8 +383,15 @@ export class TaskManager {
 
     // Wait for graceful exits or escalation window.
     const allExited = Promise.all(exitWaiters);
-    const escalationTimer = new Promise<void>((resolve) => setTimeout(resolve, TASK_KILL_ESCALATION_MS));
+    let escalationHandle: ReturnType<typeof setTimeout> | undefined;
+    const escalationTimer = new Promise<void>((resolve) => {
+      escalationHandle = setTimeout(resolve, TASK_KILL_ESCALATION_MS);
+      // Unref so the timer never holds the event loop when processes exit
+      // before the window expires — mirrors SessionManager.kill()'s pattern.
+      escalationHandle.unref();
+    });
     await Promise.race([allExited, escalationTimer]);
+    if (escalationHandle !== undefined) clearTimeout(escalationHandle);
 
     // Phase 2: SIGKILL any still-alive processes after the grace window.
     for (const child of this.processes.values()) {
@@ -398,8 +405,13 @@ export class TaskManager {
     // Wait for SIGKILL exits or the confirm window, then synthesize for zombies.
     // Using a separate timer (not reusing escalationTimer which already fired)
     // so the SIGKILL phase gets its own full window.
-    const confirmTimer = new Promise<void>((resolve) => setTimeout(resolve, TASK_KILL_CONFIRM_MS));
+    let confirmHandle: ReturnType<typeof setTimeout> | undefined;
+    const confirmTimer = new Promise<void>((resolve) => {
+      confirmHandle = setTimeout(resolve, TASK_KILL_CONFIRM_MS);
+      confirmHandle.unref();
+    });
     await Promise.race([allExited, confirmTimer]);
+    if (confirmHandle !== undefined) clearTimeout(confirmHandle);
 
     // Synthesize finish() for any process that still hasn't emitted an exit
     // event — a zombie or a process whose exit event was lost. finish()'s

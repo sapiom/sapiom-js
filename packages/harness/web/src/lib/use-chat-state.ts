@@ -76,6 +76,12 @@ export function useChatState(): UseChatStateReturn {
       stateRef.current.set(message.harnessSessionId, {
         ...state,
         turns: newTurns,
+        // Belt-and-braces: also clear any pending attention banner when a new
+        // turn arrives — the server emits an empty chat.attention for
+        // PreToolUse/PostToolUse/Stop/UserPromptSubmit, but a chat.turn
+        // arriving before the clearing chat.attention (e.g. on reconnect)
+        // would leave the banner stuck. Clear here too so either path works.
+        attentionMessage: "",
       });
       bump();
     } else if (message.type === "chat.tool") {
@@ -87,6 +93,9 @@ export function useChatState(): UseChatStateReturn {
         ...state,
         toolCalls: newToolCalls,
         agentWorking,
+        // Also clear the attention banner on any tool activity — the agent
+        // is actively working, so the permission prompt was answered.
+        attentionMessage: "",
       });
       bump();
     } else if (message.type === "chat.history") {

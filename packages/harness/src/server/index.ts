@@ -1032,8 +1032,17 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       // = 2500ms); the outer timeout here is a final safety net above that.
       const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
       const killsSettled = Promise.all([sessionManager.killAll(), taskManager.killAll()]);
-      const shutdownTimeout = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_KILL_TIMEOUT_MS));
+      let shutdownTimerHandle: ReturnType<typeof setTimeout> | undefined;
+      const shutdownTimeout = new Promise<void>((resolve) => {
+        shutdownTimerHandle = setTimeout(resolve, SHUTDOWN_KILL_TIMEOUT_MS);
+        // Unref so the timer never keeps the event loop alive when the kill
+        // path wins — mirrors SessionManager.kill()'s escalation timer pattern.
+        shutdownTimerHandle.unref();
+      });
       await Promise.race([killsSettled, shutdownTimeout]);
+      // Clear the timer when the kill path wins (common case) so it doesn't
+      // linger ref'd in the background after shutdown completes.
+      if (shutdownTimerHandle !== undefined) clearTimeout(shutdownTimerHandle);
       void batcher.close();
       terminalWss.close();
       eventsWss.close();

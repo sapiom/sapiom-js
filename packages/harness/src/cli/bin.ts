@@ -204,6 +204,27 @@ const main = async (): Promise<void> => {
   if (server && !options.noOpen) {
     await open(`http://localhost:${server.port}/?token=${bootToken}`);
   }
+
+  if (server) {
+    // Wire SIGINT (Ctrl+C) and SIGTERM so the awaitable close() path actually
+    // runs, which kills all live claude/codex ptys before the process exits.
+    // Without this, server.close() is never called from the CLI and the pty
+    // orphan problem the awaitable-kill feature was built to fix remains inert
+    // in the primary usage path.
+    // Guard against double-fire: once is enough; a second signal gets default
+    // handling (immediate termination) which is the correct behavior anyway.
+    let closing = false;
+    const handleSignal = (signal: "SIGINT" | "SIGTERM"): void => {
+      if (closing) return;
+      closing = true;
+      // server.close() is already race-bounded to 5s internally.
+      void server!.close().finally(() => {
+        process.exit(signal === "SIGINT" ? 130 : 143);
+      });
+    };
+    process.once("SIGINT", () => handleSignal("SIGINT"));
+    process.once("SIGTERM", () => handleSignal("SIGTERM"));
+  }
 };
 
 main().catch((err) => {

@@ -42,8 +42,11 @@ export interface ChatViewProps {
   agentWorking: boolean;
   /**
    * Non-empty when the agent is blocked on a permission prompt (Notification
-   * hook). Shows a prominent banner with a Terminal tab link. Cleared by
-   * subsequent hook activity (PostToolUse / Stop / UserPromptSubmit).
+   * hook). Shows a prominent banner with a Terminal tab link. Cleared by:
+   *   - the server emitting an empty chat.attention (on PreToolUse / PostToolUse
+   *     / Stop / UserPromptSubmit hook events), OR
+   *   - any chat.turn or chat.tool arriving for this session (belt-and-braces,
+   *     guards against a clearing chat.attention arriving out of order).
    */
   attentionMessage?: string;
   /** Empty-state: no turns yet for this session. */
@@ -110,6 +113,15 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollLocked, setScrollLocked] = useState(false);
   const [systemNotes, setSystemNotes] = useState<SystemNote[]>([]);
+
+  // Reset per-session local state when the active session changes.
+  // Do NOT use key={sessionId} at the parent (App.tsx) to remount ChatView —
+  // that would also destroy PromptBar's per-session draftsRef which lives
+  // below the same key boundary.
+  useEffect(() => {
+    setScrollLocked(false);
+    setSystemNotes([]);
+  }, [sessionId]);
 
   const handleSlashCommand = useCallback((command: string): void => {
     setSystemNotes((prev) => [
