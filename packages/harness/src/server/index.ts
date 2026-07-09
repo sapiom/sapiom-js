@@ -17,6 +17,7 @@ import open from "open";
 
 import type {
   AnalyticsEvent,
+  AppState,
   HarnessAdapter,
   HarnessKind,
   HarnessSession,
@@ -52,6 +53,7 @@ import { writeHarnessContext, harnessContextFileExists } from "../core/workspace
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
 import { renderCanvasForSession, renderWorkflowRenderFile } from "../core/canvas-render.js";
 import { CanvasEnrichmentCoordinator } from "../core/canvas-enrich.js";
+import { sweepNdjson } from "../core/collector/store-retention.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -87,6 +89,10 @@ const WORKFLOWS_CACHE_REFRESH_MS = 3_000;
  * in the tab strip until the server restarts. The sweep is a cheap in-memory
  * walk plus a signal-0 probe per live pty. */
 const SESSION_LIVENESS_SWEEP_MS = 10_000;
+
+/** events.ndjson retention: sweeps once at boot and then periodically.
+ * Keeps the local sink from growing unbounded on long-lived installs. */
+const NDJSON_RETENTION_SWEEP_MS = 6 * 60 * 60 * 1_000; // every 6 hours
 
 export interface HarnessServerOptions {
   port: number;
@@ -149,6 +155,17 @@ export interface HarnessServerOptions {
    *  the CLI before it records the launch dir, surfaced verbatim in
    *  AppState.firstRun (see its doc comment). Omitted → absent there too. */
   firstRun?: boolean;
+  /**
+   * How telemetry consent was determined — passed through verbatim into
+   * AppState.consentSource. Omitted when the caller didn't run the consent
+   * flow (tests, mocks).
+   */
+  consentSource?: AppState["consentSource"];
+  /**
+   * Which env var forced telemetry off (when consentSource === "env-forced-off").
+   * Passed through into AppState.consentEnvReason.
+   */
+  consentEnvReason?: string | null;
   /** Where POST /api/sample-project seeds the bundled example. Defaults to
    *  `<stateRoot>/sample-project`. */
   sampleProjectRoot?: string;
@@ -505,7 +522,22 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     return [] as WorkflowInfo[];
   });
 
-  const eventStore = createEventStore(options.eventStorePath ?? statePaths.events);
+  const eventStorePath = options.eventStorePath ?? statePaths.events;
+  const eventStore = createEventStore(eventStorePath);
+
+  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
+  // caps even on long-lived installs. Runs through the store's exclusive queue
+  // so the sweep's read→filter→rename window never races a concurrent append.
+  // Fire-and-forget — a slow FS is no reason to delay server startup.
+  const runNdjsonSweep = (): void => {
+    void eventStore.runExclusive(() => sweepNdjson(eventStorePath)).catch((err: unknown) => {
+      console.error("[harness] events.ndjson retention sweep failed:", err);
+    });
+  };
+  runNdjsonSweep();
+  const ndjsonRetentionTimer = setInterval(runNdjsonSweep, NDJSON_RETENTION_SWEEP_MS);
+  ndjsonRetentionTimer.unref?.();
+
   const harnessVersion = readVersion();
   const batcher = createHarnessEmitter({
     telemetryOptIn: options.telemetryOptIn,
@@ -532,6 +564,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       agentSessionId: session.agentSessionId,
     };
   };
+
+  // Shared by the ingest pipeline, the Codex transcript tailer, and the UI
+  // track endpoint — all three sources feed the same seq namespace so a given
+  // harnessSessionId gets one consistent, gap-detectable seq space regardless
+  // of which source produced the event. Declared here (before createRestRouter
+  // and createIngestRouter) so the uiTrack closure can reference it lazily.
+  const seqCounter = createSeqCounter();
 
   const app: Express = express();
   app.disable("x-powered-by");
@@ -572,6 +611,16 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       availableHarnesses: options.availableHarnesses,
       listTasks: () => taskManager.list(),
       firstRun: options.firstRun,
+      consentSource: options.consentSource,
+      consentEnvReason: options.consentEnvReason,
+      uiTrack: {
+        store: eventStore,
+        batcher,
+        nextSeq: (sessionId) => seqCounter.next(sessionId),
+        machineId,
+        userId: identity?.userId ?? null,
+        tenantId: identity?.tenantId ?? null,
+      },
       seedSampleProject: async () => {
         const { root, projectDir, created } = await seedExampleProject({
           targetRoot: options.sampleProjectRoot ?? statePaths.sampleProject,
@@ -632,12 +681,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     }),
   );
 
-  // Shared by both event sources feeding the analytics pipeline: real hook
-  // POSTs (via the /ingest router below) and the Codex transcript tailer
-  // (in-process, no HTTP round-trip — see startCodexTailerFor). One
-  // seqCounter so a given harnessSessionId gets one consistent seq space
-  // regardless of which source produced the event.
-  const seqCounter = createSeqCounter();
+  // Feeds the same seqCounter declared above — both hook POSTs and the Codex
+  // transcript tailer run through processIngest(), which shares the counter.
   const ingestDeps: IngestDeps = {
     ingestToken: options.bootToken,
     normalize: normalizeHookEvent,
@@ -841,6 +886,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     close: async () => {
       clearInterval(workflowsCacheTimer);
       clearInterval(sessionSweepTimer);
+      clearInterval(ndjsonRetentionTimer);
       canvasWatcher.stopAll();
       workspaceWatcher.stopAll();
       for (const tailer of codexTailers.values()) tailer.stop();

@@ -17,6 +17,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { PromptBar } from "./components/PromptBar";
 import { SessionBar } from "./components/SessionBar";
+import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
 import { WelcomePanel } from "./components/WelcomePanel";
@@ -32,6 +33,9 @@ export const App = (): JSX.Element => {
   const harness = useHarnessState();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [welcomeDismissed, setWelcomeDismissed] = useState(false);
+  // Lifted so the telemetry chip in BrandHeader can open the settings popover
+  // from outside SessionBar (which owns the popover's render).
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
@@ -123,7 +127,20 @@ export const App = (): JSX.Element => {
         authenticated={state.authenticated}
         organizationName={state.organizationName}
         onOpenPalette={() => setPaletteOpen(true)}
+        telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+        consentSource={state.consentSource}
+        consentEnvReason={state.consentEnvReason}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
+
+      {state.consentSource === "default-silent" && !harness.settings?.telemetryNoticeDismissed && (
+        <TelemetryNotice
+          onDismiss={() => {
+            void harness.updateSettings({ telemetryNoticeDismissed: true });
+          }}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      )}
 
       <div
         className="app"
@@ -194,6 +211,8 @@ export const App = (): JSX.Element => {
               await harness.updateSettings({ telemetryOptIn: next });
             }}
             busySessionIds={harness.busySessionIds}
+            settingsOpen={settingsOpen}
+            onSetSettingsOpen={setSettingsOpen}
           />
           <div className="terminal-slot">
             {activeSession?.status === "exited" ? (

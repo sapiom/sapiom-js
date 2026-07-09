@@ -209,24 +209,50 @@ const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(r
 class MockApi implements HarnessApi {
   // `?mockState=fresh` = brand-new install: nothing yet, firstRun set — see isFreshMockState().
   private readonly fresh = isFreshMockState();
+  // `?mockConsentSource=prompted` mirrors a user who answered yes at the TTY prompt:
+  // telemetryOptIn starts true so the chip shows "analytics on" from the first render.
+  private readonly promptedConsent =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("mockConsentSource") === "prompted";
   private sessions = this.fresh ? [] : MOCK_SESSIONS.map((session) => ({ ...session }));
   private workflows = this.fresh ? [] : MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
   private settings: HarnessSettings = this.fresh
     ? { ...MOCK_SETTINGS, recentDirs: [] }
-    : { ...MOCK_SETTINGS, recentDirs: [...MOCK_SETTINGS.recentDirs] };
+    : {
+        ...MOCK_SETTINGS,
+        recentDirs: [...MOCK_SETTINGS.recentDirs],
+        ...(this.promptedConsent ? { telemetryOptIn: true } : {}),
+      };
 
   async getState(): Promise<AppState> {
     await delay();
+    // mockConsentSource query param lets Playwright exercise all chip states:
+    //   ?mockConsentSource=env-forced-off  → "analytics off (env)" chip
+    //   ?mockConsentSource=default-silent  → shows TelemetryNotice
+    //   ?mockConsentSource=stored-explicit → off chip (telemetryOptIn=false)
+    //   ?mockConsentSource=prompted        → on chip (telemetryOptIn=true in mock)
+    const mockConsentSource = typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("mockConsentSource") as AppState["consentSource"] ?? "stored-explicit"
+      : "stored-explicit";
+    const mockEnvReason = typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("mockEnvReason") ?? null
+      : null;
+    // When consent was answered via a TTY prompt ("prompted"), the user
+    // necessarily said yes — mirror that in the mock so the chip shows "on".
+    const telemetryOptIn =
+      mockConsentSource === "prompted" ? true : this.settings.telemetryOptIn;
     return {
       version: "0.0.1-mock",
       authenticated: true,
       userId: "user_mock",
       organizationName: "Acme (mock)",
-      telemetryOptIn: this.settings.telemetryOptIn,
+      telemetryOptIn,
       sessions: this.sessions,
       workflows: this.workflows,
       macros: MOCK_MACROS,
       launchDir: MOCK_LAUNCH_DIR,
+      consentSource: mockConsentSource,
+      ...(mockEnvReason ? { consentEnvReason: mockEnvReason } : {}),
       ...(this.fresh ? { firstRun: true } : {}),
     };
   }
@@ -396,6 +422,32 @@ class MockApi implements HarnessApi {
     }
     return response;
   }
+}
+
+/**
+ * Intercepts fetch("/api/track") in mock mode so Playwright can assert that
+ * track() calls fire without a real server. Attach BEFORE the app mounts.
+ * Accumulated events are available on window.__HARNESS_TEST__.trackEvents.
+ */
+export function interceptMockTrack(): void {
+  if (!isMockMode()) return;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === "/api/track" && init?.method === "POST") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      let body: unknown;
+      try {
+        body = JSON.parse(typeof init.body === "string" ? init.body : "{}");
+      } catch {
+        body = {};
+      }
+      const prev = (win.__HARNESS_TEST__?.trackEvents as unknown[]) ?? [];
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), trackEvents: [...prev, body] };
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  };
 }
 
 export function createApi(): HarnessApi {

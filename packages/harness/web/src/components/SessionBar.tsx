@@ -3,6 +3,7 @@ import type { JSX } from "react";
 import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
+import { track } from "../lib/track";
 import { useDismissable } from "../lib/use-dismissable";
 import { Icon } from "./Icon";
 import { NewSessionModal } from "./NewSessionModal";
@@ -29,6 +30,10 @@ interface SessionBarProps {
   /** Session ids with terminal output in roughly the last ~3s — renders a
    *  busy pulse on that session's tab regardless of whether it's active. */
   busySessionIds: Set<string>;
+  /** Controlled open state for the settings popover — lifted to App so the
+   *  telemetry chip in BrandHeader can open it from outside SessionBar. */
+  settingsOpen: boolean;
+  onSetSettingsOpen: (open: boolean) => void;
 }
 
 export function SessionBar({
@@ -49,10 +54,11 @@ export function SessionBar({
   telemetryOptIn,
   onToggleTelemetry,
   busySessionIds,
+  settingsOpen,
+  onSetSettingsOpen,
 }: SessionBarProps): JSX.Element {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const historyWrapRef = useRef<HTMLDivElement>(null);
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
@@ -61,7 +67,7 @@ export function SessionBar({
   const newSessionTriggerRef = useRef<HTMLButtonElement>(null);
 
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => onSetSettingsOpen(false), [onSetSettingsOpen]);
   useDismissable(historyOpen, {
     onDismiss: closeHistory,
     containerRef: historyWrapRef,
@@ -109,7 +115,10 @@ export function SessionBar({
               aria-selected={isActive}
               className={"session-tab" + (isActive ? " is-active" : "")}
               data-testid={`session-tab-${session.id}`}
-              onClick={() => onSelectSession(session.id)}
+              onClick={() => {
+                onSelectSession(session.id);
+                track("session.switched", {}, session.id);
+              }}
             >
               <span className="session-dot" data-status={session.status} />
               <span className="session-tab-title">{session.title}</span>
@@ -210,7 +219,7 @@ export function SessionBar({
           className="gear-btn"
           aria-label="Settings"
           data-testid="settings-trigger"
-          onClick={() => setSettingsOpen((prev) => !prev)}
+          onClick={() => onSetSettingsOpen(!settingsOpen)}
         >
           <Icon name="Settings" size={16} />
         </button>
@@ -220,7 +229,7 @@ export function SessionBar({
             organizationName={organizationName}
             telemetryOptIn={telemetryOptIn}
             onToggleTelemetry={onToggleTelemetry}
-            onClose={() => setSettingsOpen(false)}
+            onClose={() => onSetSettingsOpen(false)}
           />
         )}
       </div>

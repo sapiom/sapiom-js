@@ -5,6 +5,7 @@ import type { BackgroundTask, BusMessage, MacroDef, WorkflowInfo } from "@shared
 import { isMockMode } from "../lib/api";
 import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
+import { track } from "../lib/track";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
@@ -119,6 +120,7 @@ export function CanvasPane({
   const handleReVisualize = (): void => {
     if (!visualizeMacro) return;
     onRunMacro(visualizeMacro);
+    track("visualize.triggered");
   };
 
   return (
@@ -195,7 +197,10 @@ export function CanvasPane({
               data-testid="canvas-visualize-cta"
               data-tooltip={visualizeDisabledReason ?? visualizeMacro.label}
               disabled={Boolean(visualizeDisabledReason)}
-              onClick={() => onRunMacro(visualizeMacro)}
+              onClick={() => {
+                onRunMacro(visualizeMacro);
+                track("visualize.triggered");
+              }}
             >
               <Icon name="Sparkles" size={14} /> Visualize
             </button>

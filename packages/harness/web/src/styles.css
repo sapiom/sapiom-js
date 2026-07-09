@@ -288,6 +288,124 @@ input {
   background: var(--green);
 }
 
+/* Tracking indicator chip — persistent status display left of the org badge.
+   Click opens the settings popover. Three states: on / off / env (forced-off). */
+.telemetry-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.telemetry-chip:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.telemetry-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.telemetry-chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-faint);
+  transition: background-color var(--transition-fast);
+}
+
+/* on: accent-colored dot — remote analytics active */
+.telemetry-chip[data-state="on"] .telemetry-chip-dot {
+  background: var(--accent);
+}
+
+.telemetry-chip[data-state="on"] {
+  color: var(--text-dim);
+}
+
+/* off / env: muted dot — remote analytics inactive */
+.telemetry-chip[data-state="off"] .telemetry-chip-dot,
+.telemetry-chip[data-state="env"] .telemetry-chip-dot {
+  background: var(--text-faint);
+}
+
+.telemetry-chip-label {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+
+/* First-run telemetry notice — non-blocking banner shown when consent was
+   determined silently (non-TTY default). Dismissed permanently via settings. */
+.telemetry-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--accent-dim);
+  border-bottom: 1px solid var(--accent-border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.telemetry-notice-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.telemetry-notice-text {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.telemetry-notice-settings-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.telemetry-notice-settings-link:hover {
+  color: var(--accent-hover);
+}
+
+.telemetry-notice-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color var(--transition-fast);
+}
+
+.telemetry-notice-dismiss:hover {
+  color: var(--text);
+}
+
+.telemetry-notice-dismiss:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
 .app {
   position: relative;
   display: grid;

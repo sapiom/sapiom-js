@@ -26,15 +26,13 @@
  *
  * Draft text is per-session: switching tabs preserves each session's own
  * half-typed text; no cross-session leakage.
- *
- * Analytics seam: when a submit succeeds, emit a prompt.submitted event here.
- * TODO(SAP-analytics): hook the analytics layer at the `// ANALYTICS_SEAM` comment below.
  */
 import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from "react";
 
 import type { HarnessSession } from "@shared/types";
 
 import { ApiError } from "../lib/api";
+import { track } from "../lib/track";
 
 export interface PromptBarProps {
   /** The active session, or null when no session is selected. */
@@ -150,7 +148,8 @@ export const PromptBar = ({ session, onSubmit }: PromptBarProps): JSX.Element =>
       await onSubmit(session.id, text);
       setDraft("");
       setReactiveReason(null);
-      // ANALYTICS_SEAM: emit prompt.submitted event here (SAP-analytics).
+      // Emit prompt.submitted — length only, never the text itself.
+      track("prompt.submitted", { length: text.length }, session.id);
       // Focus back in the bar for rapid follow-ups.
       textareaRef.current?.focus();
     } catch (err) {
