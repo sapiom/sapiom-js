@@ -73,7 +73,7 @@ describe("macros router", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      'cd "/Users/demo/acme-app/leasing" && sapiom agents deploy',
       true,
     );
     expect(deps.openUrl).not.toHaveBeenCalled();
@@ -149,7 +149,7 @@ describe("macros router", () => {
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      'cd "/Users/demo/acme-app/leasing" && sapiom agents deploy',
       true,
     );
   });
@@ -171,7 +171,7 @@ describe("macros router", () => {
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      'cd "/Users/demo/acme-app/leasing" && sapiom agents deploy',
       true,
     );
   });
