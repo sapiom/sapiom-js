@@ -13,6 +13,7 @@ import type {
 
 import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse, type HarnessApi } from "./api";
 import { subscribeEvents } from "./events";
+import { useChatState, type SessionChatState } from "./use-chat-state";
 
 const api = createApi();
 
@@ -74,6 +75,8 @@ export interface HarnessStateHook {
   /** The underlying API client — exposed so consumers (e.g. SkillsPanel) can
    *  call methods (listSkills, getSkill) not surfaced as dedicated hook fns. */
   api: HarnessApi;
+  /** Get the chat state (turns, tool calls, working indicator) for a session. */
+  getChatState: (sessionId: string) => SessionChatState;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -91,6 +94,7 @@ export function useHarnessState(): HarnessStateHook {
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const { getChatState, handleBusMessage: handleChatMessage } = useChatState();
 
   // Timers are keyed per-session and outlive individual renders — clear them
   // all on unmount so a pending "clear busy" timeout never fires against a
@@ -140,6 +144,17 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     return subscribeEvents((message) => {
       setLastMessage(message);
+      // Route chat events to the chat state hook — these are not stored in
+      // analytics, just accumulated for the ChatView.
+      if (
+        message.type === "chat.turn" ||
+        message.type === "chat.tool" ||
+        message.type === "chat.history" ||
+        message.type === "chat.attention"
+      ) {
+        handleChatMessage(message);
+        return;
+      }
       if (message.type === "session.status") {
         setState((prev) => {
           if (!prev) return prev;
@@ -364,5 +379,6 @@ export function useHarnessState(): HarnessStateHook {
     busySessionIds,
     tasks,
     api,
+    getChatState,
   };
 }

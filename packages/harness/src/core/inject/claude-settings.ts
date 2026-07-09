@@ -13,7 +13,11 @@ import * as path from "node:path";
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../paths.js";
 
-/** The six Claude Code hook events the harness listens for. */
+/**
+ * The Claude Code hook events the harness listens for.
+ * `Notification` fires when Claude Code needs user attention (e.g. a tool
+ * permission prompt in auto mode) — used to show the chat attention banner.
+ */
 const HOOK_EVENTS = [
   "SessionStart",
   "UserPromptSubmit",
@@ -21,6 +25,7 @@ const HOOK_EVENTS = [
   "PostToolUse",
   "Stop",
   "SessionEnd",
+  "Notification",
 ] as const;
 
 export type ClaudeHookEvent = (typeof HOOK_EVENTS)[number];
