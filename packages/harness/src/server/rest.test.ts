@@ -621,13 +621,24 @@ describe("createRestRouter", () => {
      * code path that throws ExternalHarnessError — no mock-throw involved.
      */
     let smDir: string;
+    const liveManagers: SessionManager[] = [];
 
     beforeEach(async () => {
       smDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-rest-ext-test-"));
     });
 
     afterEach(async () => {
-      await fs.rm(smDir, { recursive: true, force: true });
+      // Settle every manager's queued sessions.json write before removing the
+      // dir — a write landing mid-rm walk races into ENOTEMPTY on slower CI.
+      await Promise.all(liveManagers.map((m) => m.flush().catch(() => {})));
+      liveManagers.length = 0;
+      try {
+        await fs.rm(smDir, { recursive: true, force: true });
+      } catch {
+        // One straggler retry: any writer that lost the flush race is done now.
+        await new Promise((r) => setTimeout(r, 150));
+        await fs.rm(smDir, { recursive: true, force: true });
+      }
     });
 
     function makeMinimalAdapter(): HarnessAdapter {
@@ -652,7 +663,7 @@ describe("createRestRouter", () => {
     }
 
     function makeRealSessionManager(): SessionManager {
-      return new SessionManager({
+      const manager = new SessionManager({
         adapters: { "claude-code": makeMinimalAdapter() },
         ingestUrl: "http://127.0.0.1:4100",
         ingestToken: "test-token",
@@ -660,6 +671,8 @@ describe("createRestRouter", () => {
         // spawnPty not provided — tests only call resume/submitInput which
         // throw before reaching spawn for external-harness sessions.
       });
+      liveManagers.push(manager);
+      return manager;
     }
 
     it("POST /sessions/:id/resume returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
