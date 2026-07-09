@@ -1,0 +1,59 @@
+{
+  "name": "claude-code-boot",
+  "synthetic": true,
+  "modeledOn": "hand-modeled on Claude Code v2.x boot output under a 100x30 pty",
+  "sanitized": true,
+  "notes": "Hand-modeled rendition of a Claude Code boot sequence (trust prompt, trust acceptance, welcome box, promo notice, idle prompt/footer) — not a verbatim recording; every identifier (user, organization, path) is fictional. Waits capped at 800ms. Input handling (onLine) is synthetic. Re-model when the boot UI changes materially; see the fixture README for the sanitize-before-commit rule.",
+  "echoKeystrokes": true,
+  "boot": [
+    {
+      "type": "wait",
+      "ms": 480
+    },
+    {
+      "type": "print",
+      "data": "\u001b7\u001b[r\u001b8\u001b[?25h\u001b[?25l\u001b[?2004h\u001b[?1004h\u001b[?2031h\r\r\n\u001b[38;5;220m────────────────────────────────────────────────────────────────────────────────────────────────────\u001b[39m\r\r\n\u001b[2G\u001b[38;5;220m\u001b[1mAccessing\u001b[12Gworkspace:\u001b[22m\u001b[39m\r\r\n\r\r\n\u001b[2G\u001b[1m/home/user/projects/workspace\u001b[22m\r\r\n\r\r\n\u001b[2GQuick\u001b[8Gsafety\u001b[15Gcheck:\u001b[22GIs\u001b[25Gthis\u001b[30Ga\u001b[32Gproject\u001b[40Gyou\u001b[44Gcreated\u001b[52Gor\u001b[55Gone\u001b[59Gyou\u001b[63Gtrust?\u001b[70G(Like\u001b[76Gyour\u001b[81Gown\u001b[85Gcode,\u001b[91Ga\r\r\n\u001b[2Gwell-known\u001b[13Gopen\u001b[18Gsource\u001b[25Gproject,\u001b[34Gor\u001b[37Gwork\u001b[42Gfrom\u001b[47Gyour\u001b[52Gteam).\u001b[59GIf\u001b[62Gnot,\u001b[67Gtake\u001b[72Ga\u001b[74Gmoment\u001b[81Gto\u001b[84Greview\u001b[91Gwhat's\u001b[98Gin\r\r\n\u001b[2Gthis\u001b[7Gfolder\u001b[14Gfirst.\r\r\n\r\r\n\u001b[2GClaude\u001b[9GCode'll\u001b[17Gbe\u001b[20Gable\u001b[25Gto\u001b[28Gread,\u001b[34Gedit,\u001b[40Gand\u001b[44Gexecute\u001b[52Gfiles\u001b[58Ghere.\r\r\n\r\r\n\u001b[2G\u001b[38;5;246mSecurity\u001b[11Gguide\u001b[39m\r\r\n\r\r\n\u001b[2G\u001b[38;5;153m❯\u001b[4G\u001b[38;5;246m1.\u001b[7G\u001b[38;5;153mYes,\u001b[12GI\u001b[14Gtrust\u001b[20Gthis\u001b[25Gfolder\u001b[39m\r\r\n\u001b[4G\u001b[38;5;246m2.\u001b[7G\u001b[39mNo,\u001b[11Gexit\r\r\n\r\r\n\u001b[2G\u001b[38;5;246mEnter\u001b[8Gto\u001b[11Gconfirm\u001b[19G·\u001b[21GEsc\u001b[25Gto\u001b[28Gcancel\u001b[39m\r\r\n\u001b[1C\u001b[4A\u001b[>0q\u001b[c"
+    },
+    {
+      "type": "wait",
+      "ms": 800
+    },
+    {
+      "type": "print",
+      "data": "\u001b[1D\u001b[4B\r\u001b[6C\u001b[4A\u001b[38;5;75mYes, I trust this folder\u001b[32G✔\u001b[39m\r\r\n\r\n\r\n\r\n\u001b[1C\u001b[4A"
+    },
+    {
+      "type": "wait",
+      "ms": 60
+    },
+    {
+      "type": "print",
+      "data": "\u001b[?1049h\u001b[2J\u001b[H\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b]0;✳ Claude Code\u0007\u001b[H\r\u001b[1B\u001b[38;5;215m╭───\u001b[6GClaude Code\u001b[18G\u001b[38;5;246mv2.1.204\u001b[27G\u001b[38;5;215m─────────────────────────────────────────────────────────────────────────╮\r\u001b[1B│\u001b[52G\u001b[2m│\u001b[54G\u001b[22m\u001b[1mTips for getting started\u001b[100G\u001b[22m│\r\u001b[1B│\u001b[17G\u001b[39m\u001b[1mWelcome back friend!\u001b[52G\u001b[22m\u001b[2m\u001b[38;5;215m│\u001b[54G\u001b[39m\u001b[22mAsk\u001b[58GClaude\u001b[65Gto\u001b[68Gcreate\u001b[75Ga\u001b[77Gnew\u001b[81Gapp\u001b[85Gor\u001b[88Gclone\u001b[94Ga\u001b[96Gre…\u001b[100G\u001b[38;5;215m│\r\u001b[1B│\u001b[52G\u001b[2m│\u001b[54G\u001b[22m─────────────────────────────────────────────\u001b[100G│\r\u001b[1B│\u001b[23G\u001b[38;5;174m ▐\u001b[48;5;16m▛███▜\u001b[49m▌\u001b[52G\u001b[2m\u001b[38;5;215m│\u001b[54G\u001b[22m\u001b[1mWhat's new\u001b[100G\u001b[22m│\r\u001b[1B│\u001b[23G\u001b[38;5;174m▝▜\u001b[48;5;16m█████\u001b[49m▛▘\u001b[52G\u001b[2m\u001b[38;5;215m│\u001b[54G\u001b[39m\u001b[22mFixed\u001b[60Ghook\u001b[65Gevents\u001b[72Gnot\u001b[76Gstreaming\u001b[86Gduring\u001b[93GSessi…\u001b[100G\u001b[38;5;215m│\r\u001b[1B│\u001b[23G\u001b[38;5;174m  ▘▘ ▝▝  \u001b[52G\u001b[2m\u001b[38;5;215m│\u001b[54G\u001b[39m\u001b[22mAdded\u001b[60Ga\u001b[62Gwarning\u001b[70Gwhen\u001b[75Gyour\u001b[80Glogin\u001b[86Gis\u001b[89Gabout\u001b[95Gto\u001b[98G…\u001b[100G\u001b[38;5;215m│\r\u001b[1B│\u001b[52G\u001b[2m│\u001b[54G\u001b[39m\u001b[22mAdded\u001b[60Ga\u001b[62Ggrey\u001b[67G⏸\u001b[69Gbadge\u001b[75Gto\u001b[78Gthe\u001b[82Gfooter\u001b[89Gwhen\u001b[94Gin\u001b[97Gm…\u001b[100G\u001b[38;5;215m│\r\u001b[1B│\u001b[5G\u001b[38;5;246mOpus 4.8 (1M context) · Claude Team · Acme Robotics\u001b[52G\u001b[2m\u001b[38;5;215m│\u001b[54G\u001b[22m\u001b[38;5;246m\u001b[3m/release-notes for more\u001b[100G\u001b[23m\u001b[38;5;215m│\r\u001b[1B│\u001b[12G\u001b[38;5;246m/home/user/projects/workspace\u001b[52G\u001b[2m\u001b[38;5;215m│\u001b[100G\u001b[22m│\r\u001b[1B╰──────────────────────────────────────────────────────────────────────────────────────────────────╯\r\u001b[1C\u001b[2B▎\u001b[4GExtended: Fable 5 is included in your weekly limit\r\u001b[1C\u001b[1B▎\u001b[4G\u001b[39mThrough\u001b[12GJuly\u001b[17G12,\u001b[21Gyou\u001b[25Gcan\u001b[29Guse\u001b[33Gup\u001b[36Gto\u001b[39G50%\u001b[43Gof\u001b[46Gyour\u001b[51Gweekly\u001b[58Gusage\u001b[64Glimit\u001b[70Gon\u001b[73GFable\u001b[79G5.\u001b[82GIf\u001b[85Gyou\u001b[89Ghit\u001b[93Gyour\r\u001b[1C\u001b[1B\u001b[38;5;215m▎\u001b[4G\u001b[39mlimit,\u001b[11Gyou\u001b[15Gcan\u001b[19Gcontinue\u001b[28Gon\u001b[31GFable\u001b[37G5\u001b[39Gwith\u001b[44Gusage\u001b[50Gcredits.\u001b[59GFable\u001b[65G5\u001b[67Gdraws\u001b[73Gdown\u001b[78Gusage\u001b[84Gfaster\u001b[91Gthan\u001b[96GOpus\r\u001b[1C\u001b[1B\u001b[38;5;215m▎\u001b[4G\u001b[39m4.8.\u001b[9GRun\u001b[13G/model\u001b[20Gand\u001b[24Gselect\u001b[31GFable\u001b[37Gto\u001b[40Guse\u001b[44Git.\u001b[48GLearn\u001b[54Gmore\r\u001b[1C\u001b[1B\u001b[38;5;215m▎\u001b[4G\u001b[39m(https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access)\r\u001b[83C\u001b[8B\u001b[38;5;246m● high · /effort\r\u001b[1B\u001b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\r\u001b[1B\u001b[39m❯ \u001b[2mTry \"edit <filepath> to...\"\r\u001b[1B\u001b[22m\u001b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\r\u001b[2C\u001b[1B\u001b[38;5;246m⏸ manual mode on · ? for shortcuts · ← for agents\u001b[39m\u001b[30;1H\u001b[28;3H\u001b[?25h"
+    },
+    {
+      "type": "wait",
+      "ms": 800
+    },
+    {
+      "type": "print",
+      "data": "\u001b[?25l\u001b[H\r\u001b[1C\u001b[13B\u001b[38;5;220m⚠\u001b[4G1 MCP server needs authentication\u001b[38;5;246m · run /mcp\u001b[39m\u001b[K\r\u001b[1C\u001b[1B\u001b[K\r\u001b[3C\u001b[1B\u001b[38;5;215mExtended: Fable 5 is included in your weekly limit\u001b[39m\u001b[K\r\u001b[3C\u001b[1BThrough July 12, you can use up to 50% of your weekly usage\u001b[64Glimit\u001b[70Gon\u001b[73GFable\u001b[79G5.\u001b[82GIf\u001b[85Gyou\u001b[89Ghit\u001b[93Gyour\r\u001b[3C\u001b[1Blimit, you can continu\u001b[27G on Fable 5 with usage credits. Fable 5 draws dow\u001b[77G us\u001b[81Gge faster\u001b[91Gthan\u001b[96GOpus\r\u001b[1C\u001b[1B\u001b[38;5;215m▎\u001b[4G\u001b[39m4.8.\u001b[9GRun\u001b[13G/model\u001b[20Gand\u001b[24Gselect\u001b[31GFable\u001b[37Gto\u001b[40Guse\u001b[44Git.\u001b[48GLearn\u001b[54Gmore\r\u001b[1C\u001b[1B\u001b[38;5;215m▎\u001b[4G\u001b[39m(https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access)\u001b[30;1H\u001b[28;3H\u001b[?25h"
+    }
+  ],
+  "onLine": [
+    {
+      "type": "busy",
+      "frames": ["·", "✢", "✳", "✶", "✻", "✽"],
+      "intervalMs": 50,
+      "cycles": 8,
+      "label": "Thinking…"
+    },
+    {
+      "type": "print",
+      "data": "● You typed: {{line}}\r\n\r\n"
+    },
+    {
+      "type": "print",
+      "data": "❯ "
+    }
+  ]
+}

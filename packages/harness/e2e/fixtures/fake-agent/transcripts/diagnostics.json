@@ -1,0 +1,15 @@
+{
+  "name": "diagnostics",
+  "synthetic": true,
+  "description": "Prints the terminal size, cwd and a marker env var on boot, and announces resizes — used to verify create() plumbs env/cwd/cols/rows and that resize reaches the child.",
+  "echoKeystrokes": true,
+  "announceResize": true,
+  "boot": [
+    { "type": "print", "data": "diagnostics online\r\n" },
+    { "type": "print-size" },
+    { "type": "print-cwd" },
+    { "type": "print-env", "name": "FAKE_AGENT_MARKER" },
+    { "type": "print", "data": "> " }
+  ],
+  "onLine": [{ "type": "print", "data": "{{line}}\r\n> " }]
+}
