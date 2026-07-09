@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBootTokenMiddleware } from "./auth.js";
+import { createSkillsRouter } from "./skills.js";
 
 let tmpHome: string;
 
@@ -516,7 +518,7 @@ describe("createRestRouter", () => {
   });
 
   describe("GET /harnesses", () => {
-    it("returns a list of adapter descriptors with id, label, mode, experimental, and installed", async () => {
+    it("returns a list of adapter descriptors with id, label, mode, experimental, installed, and installMcpPrompt", async () => {
       start();
       const res = await fetch(`${baseUrl}/harnesses`);
       expect(res.status).toBe(200);
@@ -526,6 +528,7 @@ describe("createRestRouter", () => {
         mode: string;
         experimental: boolean;
         installed: boolean;
+        installMcpPrompt: string;
       }>;
       expect(Array.isArray(body)).toBe(true);
       expect(body.length).toBeGreaterThanOrEqual(5); // claude-code, codex, pi, opencode, conductor
@@ -537,6 +540,10 @@ describe("createRestRouter", () => {
         expect(["embedded", "external"]).toContain(entry.mode);
         expect(typeof entry.experimental).toBe("boolean");
         expect(typeof entry.installed).toBe("boolean");
+        // installMcpPrompt must be a non-empty string — it's the copy that
+        // the SkillsPanel renders in the Install MCP modal.
+        expect(typeof entry.installMcpPrompt).toBe("string");
+        expect(entry.installMcpPrompt.length).toBeGreaterThan(0);
       }
     });
 
@@ -671,5 +678,75 @@ describe("createRestRouter", () => {
       expect(body.code).toBe("HARNESS_EXTERNAL");
       expect(body.error).toMatch(/Conductor/);
     });
+  });
+});
+
+/**
+ * Proof that the skills router is mounted in the real server wiring, not just
+ * unit-tested in isolation. This suite boots a minimal Express app that mirrors
+ * the real server/index.ts mount order (boot-token middleware + skills router)
+ * and asserts the authentication contract end-to-end.
+ */
+describe("skills router — real server mount proof", () => {
+  const BOOT_TOKEN = "skills-integration-test-token";
+  const TOKEN_HEADER = { "X-Harness-Token": BOOT_TOKEN };
+
+  let server: ReturnType<express.Express["listen"]>;
+  let baseUrl: string;
+  let skillsRoot: string;
+
+  beforeEach(async () => {
+    skillsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-skills-mount-"));
+
+    // Mirror the real server/index.ts mount: boot-token middleware on /api,
+    // then the skills router (which declares /api/skills internally).
+    const app = express();
+    app.use("/api", createBootTokenMiddleware(BOOT_TOKEN));
+    app.use(createSkillsRouter({ userSkillsRoot: skillsRoot }));
+
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.rm(skillsRoot, { recursive: true, force: true });
+  });
+
+  it("returns 200 with a valid boot token", async () => {
+    const res = await fetch(`${baseUrl}/api/skills`, { headers: TOKEN_HEADER });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  it("returns 401 without any token — skills are not public", async () => {
+    const res = await fetch(`${baseUrl}/api/skills`);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 with the wrong token", async () => {
+    const res = await fetch(`${baseUrl}/api/skills`, {
+      headers: { "X-Harness-Token": "wrong-token" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("serves user skills from the configured root after auth passes", async () => {
+    // Create a minimal skill file.
+    const skillDir = path.join(skillsRoot, "my-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: My Skill\ndescription: Test skill\n---\n\nBody here.",
+    );
+
+    const res = await fetch(`${baseUrl}/api/skills`, { headers: TOKEN_HEADER });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ id: string; source: string }>;
+    expect(body.some((s) => s.id === "my-skill" && s.source === "user")).toBe(true);
   });
 });

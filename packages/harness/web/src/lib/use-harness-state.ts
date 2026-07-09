@@ -11,7 +11,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse } from "./api";
+import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse, type HarnessApi } from "./api";
 import { subscribeEvents } from "./events";
 
 const api = createApi();
@@ -71,6 +71,9 @@ export interface HarnessStateHook {
    *  then kept fresh by `task.status` frames. Drives the canvas pane's
    *  activity/failure states. */
   tasks: BackgroundTask[];
+  /** The underlying API client — exposed so consumers (e.g. SkillsPanel) can
+   *  call methods (listSkills, getSkill) not surfaced as dedicated hook fns. */
+  api: HarnessApi;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -360,5 +363,6 @@ export function useHarnessState(): HarnessStateHook {
     dismissToast,
     busySessionIds,
     tasks,
+    api,
   };
 }

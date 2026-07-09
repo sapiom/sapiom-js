@@ -3,11 +3,12 @@
  *
  * Layout: workflows rail (left) | docked action strip (anchored to the
  * selected workflow's row) | session tab strip + terminal (center) |
- * canvas/preview pane (right). The strip carries the selected workflow's
- * full action set; the canvas gets a slim identity header for whichever
- * workflow is bound to the active session.
+ * canvas/skills right pane. The strip carries the selected workflow's
+ * full action set; the right pane has a segmented switch (Canvas | Skills)
+ * at the top — canvas stays mounted behind CSS when Skills is active so a
+ * running Visualize enrichment is never disturbed by a tab flip.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind, MacroDef, WorkflowInfo } from "@shared/types";
 
@@ -17,6 +18,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { PromptBar } from "./components/PromptBar";
 import { SessionBar } from "./components/SessionBar";
+import { SkillsPanel } from "./components/SkillsPanel";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
@@ -29,6 +31,8 @@ import { resolveMacroUrl } from "./lib/macro-gating";
 import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 
+type RightTab = "canvas" | "skills";
+
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -38,7 +42,20 @@ export const App = (): JSX.Element => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
+  const [rightTab, setRightTab] = useState<RightTab>("canvas");
+  // Tracks whether Skills has ever been shown — once true, SkillsPanel stays
+  // mounted (hidden via CSS) so re-opening never triggers a refetch.
+  const [skillsPanelEverShown, setSkillsPanelEverShown] = useState(false);
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
+
+  // Stable function references for SkillsPanel props — prevents the panel's
+  // effects from refiring on every unrelated App re-render (e.g. tab switches,
+  // session state updates) since `api.listSkills.bind(api)` produces a new
+  // function object on each render. Must be before any early return (React
+  // hooks must be called unconditionally).
+  const listSkills = useMemo(() => harness.api.listSkills.bind(harness.api), [harness.api]);
+  const getSkill = useMemo(() => harness.api.getSkill.bind(harness.api), [harness.api]);
+  const listHarnesses = useMemo(() => harness.api.listHarnesses.bind(harness.api), [harness.api]);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
@@ -257,15 +274,61 @@ export const App = (): JSX.Element => {
           data-testid="resize-handle-canvas"
         />
 
-        <CanvasPane
-          sessionId={harness.activeSessionId}
-          lastMessage={harness.lastMessage}
-          boundWorkflow={boundWorkflow}
-          activeSessionId={harness.activeSessionId}
-          macros={state.macros}
-          tasks={harness.tasks}
-          onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
-        />
+        {/* Right pane: Canvas | Skills segmented switch + panels */}
+        <div className="right-pane">
+          <div className="right-pane-tabs" role="tablist" aria-label="Right pane">
+            <button
+              role="tab"
+              aria-selected={rightTab === "canvas"}
+              className={"right-pane-tab" + (rightTab === "canvas" ? " is-active" : "")}
+              onClick={() => setRightTab("canvas")}
+              data-testid="right-tab-canvas"
+            >
+              Canvas
+            </button>
+            <button
+              role="tab"
+              aria-selected={rightTab === "skills"}
+              className={"right-pane-tab" + (rightTab === "skills" ? " is-active" : "")}
+              onClick={() => { setRightTab("skills"); setSkillsPanelEverShown(true); }}
+              data-testid="right-tab-skills"
+            >
+              Skills
+            </button>
+          </div>
+
+          {/* Canvas: always mounted so a running Visualize enrichment is never
+              disturbed when the user flips to Skills — hidden via CSS only. */}
+          <div className={"right-pane-panel" + (rightTab === "canvas" ? "" : " is-hidden")} data-testid="right-panel-canvas">
+            <CanvasPane
+              sessionId={harness.activeSessionId}
+              lastMessage={harness.lastMessage}
+              boundWorkflow={boundWorkflow}
+              activeSessionId={harness.activeSessionId}
+              macros={state.macros}
+              tasks={harness.tasks}
+              onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
+            />
+          </div>
+
+          {/* Skills: lazy-mount on first open, then kept alive hidden via CSS —
+              same keep-alive contract as canvas so the skill list state (detail
+              view, scroll position) survives a tab flip without a refetch. */}
+          {(rightTab === "skills" || skillsPanelEverShown) && (
+            <div
+              className={"right-pane-panel" + (rightTab === "skills" ? "" : " is-hidden")}
+              data-testid="right-panel-skills"
+            >
+              <SkillsPanel
+                session={activeSession}
+                onInjectInput={harness.injectInput}
+                listSkills={listSkills}
+                getSkill={getSkill}
+                listHarnesses={listHarnesses}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {paletteOpen && (

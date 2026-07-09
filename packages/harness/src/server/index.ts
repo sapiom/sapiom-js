@@ -65,6 +65,7 @@ import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
+import { createSkillsRouter } from "./skills.js";
 
 /**
  * Codex has no hook system — its rollout file is polled into existence
@@ -640,6 +641,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   app.use(
     createWorkflowsRouter(workflowRegistry),
     createFsRouter(),
+    createSkillsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
