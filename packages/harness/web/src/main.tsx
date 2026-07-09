@@ -1,7 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import { interceptMockTrack } from "./lib/api.js";
 import "./styles.css";
+
+// In mock mode, intercept /api/track calls so Playwright tests can assert
+// that track() events fire without a real server. No-op in real mode.
+interceptMockTrack();
 
 // The shell is viewport-locked (html/body overflow:hidden) — page scroll is
 // never legitimate. overflow:hidden stops user scrolling but NOT the

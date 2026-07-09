@@ -217,6 +217,17 @@ class MockApi implements HarnessApi {
 
   async getState(): Promise<AppState> {
     await delay();
+    // mockConsentSource query param lets Playwright exercise all chip states:
+    //   ?mockConsentSource=env-forced-off  → "analytics off (env)" chip
+    //   ?mockConsentSource=default-silent  → shows TelemetryNotice
+    //   ?mockConsentSource=stored-explicit → off chip (telemetryOptIn=false)
+    //   ?mockConsentSource=prompted        → on chip (telemetryOptIn=true in mock)
+    const mockConsentSource = typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("mockConsentSource") as AppState["consentSource"] ?? "stored-explicit"
+      : "stored-explicit";
+    const mockEnvReason = typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("mockEnvReason") ?? null
+      : null;
     return {
       version: "0.0.1-mock",
       authenticated: true,
@@ -227,6 +238,8 @@ class MockApi implements HarnessApi {
       workflows: this.workflows,
       macros: MOCK_MACROS,
       launchDir: MOCK_LAUNCH_DIR,
+      consentSource: mockConsentSource,
+      ...(mockEnvReason ? { consentEnvReason: mockEnvReason } : {}),
       ...(this.fresh ? { firstRun: true } : {}),
     };
   }
@@ -396,6 +409,32 @@ class MockApi implements HarnessApi {
     }
     return response;
   }
+}
+
+/**
+ * Intercepts fetch("/api/track") in mock mode so Playwright can assert that
+ * track() calls fire without a real server. Attach BEFORE the app mounts.
+ * Accumulated events are available on window.__HARNESS_TEST__.trackEvents.
+ */
+export function interceptMockTrack(): void {
+  if (!isMockMode()) return;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === "/api/track" && init?.method === "POST") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      let body: unknown;
+      try {
+        body = JSON.parse(typeof init.body === "string" ? init.body : "{}");
+      } catch {
+        body = {};
+      }
+      const prev = (win.__HARNESS_TEST__?.trackEvents as unknown[]) ?? [];
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), trackEvents: [...prev, body] };
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  };
 }
 
 export function createApi(): HarnessApi {
