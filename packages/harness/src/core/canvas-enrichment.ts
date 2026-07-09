@@ -92,6 +92,84 @@ export function parseCanvasEnrichment(value: unknown): CanvasEnrichment | null {
   return parsed.success ? parsed.data : null;
 }
 
+function clampString(value: unknown, max: number): unknown {
+  if (typeof value !== "string" || value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Removes null/undefined-valued properties (models write `"field": null`
+ *  to mean "omitted"; the schema means it as `undefined`). Shallow — called
+ *  per level below where object shapes are known. */
+function dropNulls(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([, v]) => v != null));
+}
+
+/**
+ * Deterministic repair of the two ways an otherwise-good answer most often
+ * misses the contract, applied BEFORE strict validation:
+ * - `null` where the schema means "omit the field"
+ * - strings a few words over their cap (measured live: sonnet writes
+ *   excellent content but doesn't count characters — a single 160-char note
+ *   against the 140 cap discarded 3 of 4 real enrichments whole), truncated
+ *   to the cap with an ellipsis; extra notes beyond the count cap dropped
+ *
+ * The bound the caps exist for — the AI can never blow up the layout with
+ * unbounded text — is still enforced, just deterministically here instead
+ * of by rejection. Everything else (wrong shapes, wrong types, unknown
+ * structure) still fails `parseCanvasEnrichment` and discards the
+ * enrichment whole.
+ */
+export function normalizeCanvasEnrichmentCandidate(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const L = ENRICHMENT_LIMITS;
+  const out: Record<string, unknown> = { ...value };
+
+  out.summary = clampString(out.summary, L.summary);
+  out.crossWorkflow = clampString(out.crossWorkflow, L.crossWorkflow);
+
+  if (isRecord(out.nodeDetails)) {
+    out.nodeDetails = Object.fromEntries(
+      Object.entries(out.nodeDetails).map(([id, details]) => {
+        if (!isRecord(details)) return [id, details];
+        return [
+          id,
+          dropNulls({
+            ...details,
+            sublabel: clampString(details.sublabel, L.sublabel),
+            description: clampString(details.description, L.description),
+          }),
+        ];
+      }),
+    );
+  }
+
+  if (isRecord(out.edgeLabels)) {
+    out.edgeLabels = Object.fromEntries(
+      Object.entries(out.edgeLabels).map(([key, label]) => [key, clampString(label, L.edgeLabel)]),
+    );
+  }
+
+  if (Array.isArray(out.notes)) {
+    out.notes = out.notes.slice(0, L.noteCount).map((note) => clampString(note, L.note));
+  }
+
+  if (isRecord(out.layoutHints)) {
+    const hints = dropNulls({ ...out.layoutHints });
+    if (Array.isArray(hints.groups)) {
+      hints.groups = hints.groups.map((group) =>
+        isRecord(group) ? dropNulls({ ...group, label: clampString(group.label, L.groupLabel) }) : group,
+      );
+    }
+    out.layoutHints = hints;
+  }
+
+  return dropNulls(out);
+}
+
 // ---------------------------------------------------------------------------
 // Per-workflow enrichment cache file (CANVAS_CACHE_DIR/<slug>.json)
 // ---------------------------------------------------------------------------

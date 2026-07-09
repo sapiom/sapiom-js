@@ -27,6 +27,7 @@ import { extractWorkflowGraphCached, invalidateExtractionCache, type CachedExtra
 import type { CanvasGraph } from "./canvas-graph.js";
 import {
   ENRICHMENT_LIMITS,
+  normalizeCanvasEnrichmentCandidate,
   parseCanvasEnrichment,
   readEnrichmentCacheFile,
   removeEnrichmentCacheFile,
@@ -79,9 +80,9 @@ Read the step run() bodies in ${workflowDir} to understand what each step actual
 }
 
 Rules:
-- Every field is optional — omit what you have nothing useful for. Empty strings are worse than omissions.
+- Every field is optional — omit what you have nothing useful for (omit, don't write null). Empty strings are worse than omissions.
 - Use ONLY node ids that appear in the graph above.
-- Every length limit is a hard cap: any oversize string makes the whole response invalid and it will be thrown away.
+- Length limits are hard caps and oversize strings get truncated mid-sentence — aim comfortably under each limit.
 - Your final message must be exactly the JSON object.`;
 }
 
@@ -244,7 +245,7 @@ export class CanvasEnrichmentCoordinator {
     resultText: string | null,
   ): Promise<void> {
     const candidate = resultText ? extractEnrichmentJson(resultText) : null;
-    const enrichment = candidate ? parseCanvasEnrichment(candidate) : null;
+    const enrichment = candidate ? parseCanvasEnrichment(normalizeCanvasEnrichmentCandidate(candidate)) : null;
     if (!enrichment) {
       this.onError(`canvas enrichment for ${workflow.path} returned invalid output — discarded, base render stands`);
       return;

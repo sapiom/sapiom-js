@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { CanvasGraph } from "./canvas-graph.js";
 import {
   ENRICHMENT_LIMITS,
+  normalizeCanvasEnrichmentCandidate,
   parseCanvasEnrichment,
   readEnrichmentCacheFile,
   removeEnrichmentCacheFile,
@@ -73,6 +74,55 @@ describe("parseCanvasEnrichment", () => {
     expect(parseCanvasEnrichment([FULL_ENRICHMENT])).toBeNull();
     expect(parseCanvasEnrichment({ nodeDetails: { intake: "not an object" } })).toBeNull();
     expect(parseCanvasEnrichment({ layoutHints: { groups: [{ label: "g", nodeIds: [] }] } })).toBeNull();
+  });
+});
+
+describe("normalizeCanvasEnrichmentCandidate", () => {
+  it("truncates oversize strings to their cap with an ellipsis — the repaired candidate validates", () => {
+    // The live failure shape: excellent content, one note a few words over
+    // the cap. Deterministic truncation keeps the bound without discarding
+    // the whole answer.
+    const oversizeNote = "x".repeat(ENRICHMENT_LIMITS.note + 20);
+    const normalized = normalizeCanvasEnrichmentCandidate({
+      summary: "y".repeat(ENRICHMENT_LIMITS.summary + 5),
+      notes: [oversizeNote, "fine"],
+      nodeDetails: { intake: { sublabel: "z".repeat(ENRICHMENT_LIMITS.sublabel * 2) } },
+      edgeLabels: { "a->b": "w".repeat(ENRICHMENT_LIMITS.edgeLabel + 1) },
+      layoutHints: { groups: [{ label: "g".repeat(ENRICHMENT_LIMITS.groupLabel + 9), nodeIds: ["a"] }] },
+      crossWorkflow: "c".repeat(ENRICHMENT_LIMITS.crossWorkflow + 1),
+    });
+    const parsed = parseCanvasEnrichment(normalized);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.summary).toHaveLength(ENRICHMENT_LIMITS.summary);
+    expect(parsed?.summary?.endsWith("…")).toBe(true);
+    expect(parsed?.notes?.[0]).toHaveLength(ENRICHMENT_LIMITS.note);
+    expect(parsed?.notes?.[1]).toBe("fine");
+    expect(parsed?.nodeDetails?.intake.sublabel).toHaveLength(ENRICHMENT_LIMITS.sublabel);
+    expect(parsed?.edgeLabels?.["a->b"]).toHaveLength(ENRICHMENT_LIMITS.edgeLabel);
+    expect(parsed?.layoutHints?.groups?.[0].label).toHaveLength(ENRICHMENT_LIMITS.groupLabel);
+    expect(parsed?.crossWorkflow).toHaveLength(ENRICHMENT_LIMITS.crossWorkflow);
+  });
+
+  it("drops null-valued fields (a model's 'omitted') and notes beyond the count cap", () => {
+    const normalized = normalizeCanvasEnrichmentCandidate({
+      summary: "ok",
+      crossWorkflow: null,
+      nodeDetails: { intake: { sublabel: "fine", description: null } },
+      notes: ["a", "b", "c", "d", "e"],
+      layoutHints: { groups: null, laneOrder: null },
+    });
+    expect(parseCanvasEnrichment(normalized)).toEqual({
+      summary: "ok",
+      nodeDetails: { intake: { sublabel: "fine" } },
+      notes: ["a", "b", "c"],
+      layoutHints: {},
+    });
+  });
+
+  it("leaves structurally wrong shapes for strict validation to reject — no salvage beyond bounds/nulls", () => {
+    expect(parseCanvasEnrichment(normalizeCanvasEnrichmentCandidate({ nodeDetails: "not an object" }))).toBeNull();
+    expect(parseCanvasEnrichment(normalizeCanvasEnrichmentCandidate({ notes: [42] }))).toBeNull();
+    expect(normalizeCanvasEnrichmentCandidate("just a string")).toBe("just a string");
   });
 });
 

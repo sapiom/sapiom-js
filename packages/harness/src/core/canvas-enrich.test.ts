@@ -229,8 +229,9 @@ describe("CanvasEnrichmentCoordinator.ensureFresh", () => {
     runner.emit({
       ...runner.lastTask(),
       status: "completed",
-      // Valid JSON, invalid enrichment: oversize summary.
-      resultText: JSON.stringify({ summary: "x".repeat(200) }),
+      // Valid JSON, structurally invalid enrichment — beyond what the
+      // bounds/nulls normalization repairs.
+      resultText: JSON.stringify({ nodeDetails: "not an object" }),
     });
     await vi.waitFor(() => {
       expect(onError).toHaveBeenCalledWith(expect.stringContaining("invalid output"));
