@@ -1158,7 +1158,7 @@ test.describe("prompt bar", () => {
     await expect(page.getByTestId("prompt-bar-status")).toHaveCount(0);
   });
 
-  test("409-on-submit: reactive reason shown, stays visible, draft intact, clears on ready transition", async ({
+  test("409-on-submit: reactive reason shown, bar stays ENABLED, draft intact, immediate retry succeeds", async ({
     page,
   }) => {
     // Arm the MockApi 409 simulation — consumed exactly once on the next injectInput call.
@@ -1169,7 +1169,7 @@ test.describe("prompt bar", () => {
     const textarea = page.locator(".prompt-bar-textarea");
     const status = page.getByTestId("prompt-bar-status");
 
-    // Session starts ready — bar is enabled.
+    // Session starts proactively ready — bar is enabled.
     await expect(textarea).toBeEnabled();
 
     // Type and submit — MockApi throws 409 once.
@@ -1177,28 +1177,18 @@ test.describe("prompt bar", () => {
     await textarea.fill("my draft text");
     await textarea.press("Enter");
 
-    // Reactive reason must appear and the draft must be intact.
+    // Reactive reason must appear, draft must be intact...
     await expect(status).toBeVisible({ timeout: 3_000 });
     await expect(status).toContainText(/initialising/i);
     await expect(textarea).toHaveValue("my draft text");
 
-    // PINS BUG 1 FIX: the reason must stay visible even though the session
-    // is still proactively ready (no session.status frame was published).
-    // Before the fix, the clearing effect would fire in the same tick and
-    // the status element would vanish immediately.
-    await expect(status).toBeVisible();
-
-    // Now simulate the session recovering via a not-ready→ready transition,
-    // which is the defined trigger for clearing the reactive reason.
-    await setSessionNotReady(page);
-    await setSessionReady(page);
-    await expect(status).toHaveCount(0, { timeout: 3_000 });
-
-    // Bar is re-enabled with the draft still intact — user can retry.
+    // ...AND the bar must remain ENABLED (reactive informs, never gates).
+    // This is the core two-tier semantics fix: a 409 while the session is
+    // proactively ready must never permanently lock the bar.
     await expect(textarea).toBeEnabled();
-    await expect(textarea).toHaveValue("my draft text");
 
-    // Resubmit succeeds (flag was consumed; MockApi behaves normally now).
+    // Immediate retry — no not-ready→ready dance required.
+    // The flag was consumed; MockApi now behaves normally.
     await textarea.press("Enter");
     await page.waitForFunction(
       () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput?.req.text === "my draft text",
@@ -1208,7 +1198,31 @@ test.describe("prompt bar", () => {
     );
     expect(captured?.req.text).toBe("my draft text");
 
+    // Successful submit clears the reactive reason and the draft.
+    await expect(status).toHaveCount(0, { timeout: 3_000 });
+    await expect(textarea).toHaveValue("");
+
     await page.screenshot({ path: "web/e2e/screenshots/prompt-bar-409-reactive.png" });
+  });
+
+  test("409 reactive reason disappears on the first keystroke the user types", async ({ page }) => {
+    // Arm 409, submit once to trigger the reactive reason.
+    await page.evaluate(() => {
+      (window as unknown as { __MOCK_INJECT_FAIL_ONCE__?: boolean }).__MOCK_INJECT_FAIL_ONCE__ = true;
+    });
+
+    const textarea = page.locator(".prompt-bar-textarea");
+    const status = page.getByTestId("prompt-bar-status");
+
+    await textarea.click();
+    await textarea.fill("something");
+    await textarea.press("Enter");
+    await expect(status).toBeVisible({ timeout: 3_000 });
+
+    // First edit keystroke: the reactive reason is immediately acknowledged
+    // and the status element disappears — no need to submit or wait.
+    await textarea.fill("something edited");
+    await expect(status).toHaveCount(0, { timeout: 3_000 });
   });
 
   test("bar does not steal focus from the terminal on initial load", async ({ page }) => {
