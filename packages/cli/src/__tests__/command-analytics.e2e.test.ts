@@ -327,4 +327,31 @@ describe('command.run analytics (built CLI against a mock collector)', () => {
     expect(serverError.code).toBe(0);
     expect(serverError.stdout).toBe(baseline.stdout);
   }, 40_000);
+
+  it('a slow collector delays exit boundedly and never changes command output', async () => {
+    const args = ['config', 'set-target', 'local', '--json'];
+    const baseline = await runCli(args, cliEnv(freshHome(), { SAPIOM_ANALYTICS_ENDPOINT: collector.url }));
+    expect(baseline.code).toBe(0);
+
+    // Respond only after 8s — past the sender's 5s per-attempt timeout — so
+    // the exit flush runs its worst case: one timed-out delivery attempt.
+    collector.reset();
+    collector.setMode({ kind: 'slow', delayMs: 8_000 });
+
+    const startedAt = Date.now();
+    const slow = await runCli(args, cliEnv(freshHome(), { SAPIOM_ANALYTICS_ENDPOINT: collector.url }));
+    const wallMs = Date.now() - startedAt;
+
+    expect(slow.code).toBe(0);
+    expect(slow.stdout).toBe(baseline.stdout);
+    // The exit flush genuinely waits through the timed-out attempt (measured
+    // ≈5.1s locally: 5s request timeout + process startup)…
+    expect(wallMs).toBeGreaterThan(4_500);
+    // …but exit latency stays bounded — generous ceiling to absorb CI noise.
+    expect(wallMs).toBeLessThan(12_000);
+    // Exactly one attempt reaches the wire: after it times out, the retry
+    // backoff timer is unref'd inside analytics-core, so it cannot hold the
+    // exiting process open — the batch is dropped instead of retried.
+    expect(collector.requests).toHaveLength(1);
+  }, 45_000);
 });

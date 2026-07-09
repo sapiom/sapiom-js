@@ -49,7 +49,11 @@ function buildTestProgram(
 
   json(program.command('login').description('top-level command')).action(action(act));
 
-  const group = program.command('things').alias('th').description('nested group');
+  const group = program
+    .command('things')
+    .alias('th')
+    .description('nested group')
+    .option('--level <n>', 'group-level option');
   json(
     group
       .command('push [dir]')
@@ -114,8 +118,21 @@ describe('command.run analytics hooks', () => {
     const { tracker, events } = recordingTracker();
     await buildTestProgram(tracker).parseAsync(['things', 'push'], { from: 'user' });
 
-    // --branch has a default of 'main' but was not passed.
+    // --branch has a default of 'main' but was not passed; the group-level
+    // --level was not passed either.
     expect(events[0].data.flags).toEqual([]);
+  });
+
+  it('captures group-level flags passed before the subcommand — names only, root-to-leaf order', async () => {
+    const { tracker, events } = recordingTracker();
+    await buildTestProgram(tracker).parseAsync(
+      ['things', '--level', 'secret-level-value', 'push', '--json'],
+      { from: 'user' },
+    );
+
+    expect(events[0].data.command).toBe('things push');
+    expect(events[0].data.flags).toEqual(['--level', '--json']);
+    expect(JSON.stringify(events[0].data)).not.toContain('secret-level-value');
   });
 
   it('resolves group aliases to their canonical command path', async () => {

@@ -38,7 +38,8 @@ The CLI can emit anonymous usage events through
 [`@sapiom/analytics-core`](https://github.com/sapiom/sapiom-js/tree/main/packages/analytics-core):
 one `command.run` event per executed command, carrying the command name, the
 names of the flags used (never their values or arguments), the duration, and
-the exit status. Nothing is sent unless a collector endpoint is explicitly
-configured, and delivery is best-effort in the background — analytics can
-never slow down or fail a command. Opt out at any time with
-`SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
+the exit status. Nothing is currently sent anywhere. When delivery is
+enabled, it is best-effort and can never fail a command: it never slows
+command execution, and on exit a final flush is bounded by the emitter's
+5-second request timeout — retries never hold the process open. Opt out at
+any time with `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.

@@ -65,8 +65,11 @@ let cachedVersion: string | null = null;
  * The CLI's own version, read from the package.json that ships next to the
  * running `dist/bin.js`. Resolved from the entry script (argv[1]) rather than
  * `import.meta` so this module stays loadable under CJS test runners; the
- * name check guarantees we never report some other package's version. Falls
- * back to `0.0.0` when the CLI is not the process entrypoint.
+ * name check guarantees we never report some other package's version.
+ *
+ * `0.0.0` is the expected, non-error state whenever the CLI is not the
+ * process entrypoint — e.g. under Jest, argv[1] is the worker script, so the
+ * name check fails by design; likewise for library imports of buildProgram().
  */
 function cliVersion(): string {
   if (cachedVersion !== null) return cachedVersion;
@@ -79,7 +82,7 @@ function cliVersion(): string {
       if (pkg.name === '@sapiom/cli' && typeof pkg.version === 'string') cachedVersion = pkg.version;
     }
   } catch {
-    // Keep the fallback — a wrong-but-honest 0.0.0 beats a wrong guess.
+    // Unreadable entry path — keep the honest fallback rather than guess.
   }
   return cachedVersion;
 }
@@ -97,14 +100,29 @@ export function commandPath(command: Command): string {
 
 /**
  * The long names of the options the user actually passed on the command line
- * (`--json`, `--host`, …). Defaults, env-derived, and implied values are
- * excluded, and option VALUES are never read — names only.
+ * (`--json`, `--host`, …), collected across the whole command chain (root
+ * program → groups → leaf) so group-level options are captured too. Defaults,
+ * env-derived, and implied values are excluded, and option VALUES are never
+ * read — names only.
  */
 export function specifiedFlagNames(command: Command): string[] {
+  // Root-to-leaf, mirroring the command-path order; a name that appears on
+  // both an ancestor and the leaf is recorded once.
+  const chain: Command[] = [];
+  for (let current: Command | null = command; current; current = current.parent) {
+    chain.unshift(current);
+  }
+
+  const seen = new Set<string>();
   const flags: string[] = [];
-  for (const option of command.options) {
-    if (command.getOptionValueSource(option.attributeName()) !== 'cli') continue;
-    flags.push(option.long ?? option.short ?? option.name());
+  for (const owner of chain) {
+    for (const option of owner.options) {
+      if (owner.getOptionValueSource(option.attributeName()) !== 'cli') continue;
+      const name = option.long ?? option.short ?? option.name();
+      if (seen.has(name)) continue;
+      seen.add(name);
+      flags.push(name);
+    }
   }
   return flags;
 }
