@@ -1,5 +1,29 @@
 # @sapiom/orchestration-core
 
+## 0.8.0
+
+### Minor Changes
+
+- 3dfbd10: Ship the `sapiom-agent-authoring` skill with every scaffold, and finish the MCP
+  instructions rename.
+
+  - New canonical skill (`agent-core/skills/sapiom-agent-authoring/SKILL.md`) with a
+    task-shape trigger ("automate a multi-step / scheduled / deployable task"), the full
+    authoring guide (`defineAgent`, directives, pause/resume, stubs), and a bootstrap
+    step for agents whose client doesn't have the sapiom-dev MCP yet.
+  - Both scaffold templates ship it at `.claude/skills/sapiom-agent-authoring/` (auto-loads
+    as a project skill in Claude Code) and `AGENTS.md` points to it, so every scaffolded
+    project self-documents. A sync test keeps template copies identical to the canonical.
+  - `@sapiom/mcp`'s bundled instructions fallback rewritten to the agents/models
+    vocabulary (the rename left it on the old text), thinned to lifecycle + canonical
+    rules + pointers — deep guidance lives in the skill/AGENTS.md/docs.
+
+### Patch Changes
+
+- 020139a: `check()` now recognizes workflow definitions authored against the pre-rename SDK: `@sapiom/agent` exports `isLegacyOrchestrationDefinition`/`LEGACY_ORCHESTRATION_DEFINITION_BRAND` (the `Symbol.for('sapiom.orchestration.definition')` brand the old `defineOrchestration` attached), and `@sapiom/agent-core`'s `check()` accepts either brand in its export detection — the definition shape is unchanged by the rename, so manifests build identically. `check()` also gains a `typecheck` option (default `true`): pass `typecheck: false` to skip the project's `tsc --noEmit` when only the manifest/graph is needed (esbuild still surfaces bundle-level breakage).
+- Updated dependencies [020139a]
+  - @sapiom/agent@0.6.1
+
 ## 0.7.0
 
 ### Minor Changes
