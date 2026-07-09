@@ -24,14 +24,17 @@ import {
 import { expandHome } from "./paths.js";
 import {
   AdapterNotFoundError,
+  ExternalHarnessError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
   UnknownSessionError,
 } from "./errors.js";
+import { listHarnessAdapters } from "./adapters/registry.js";
 
 export {
   AdapterNotFoundError,
+  ExternalHarnessError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
@@ -347,7 +350,17 @@ export class SessionManager {
 
   private getAdapter(harness: HarnessKind): HarnessAdapter {
     const adapter = this.adapters[harness];
-    if (!adapter) throw new AdapterNotFoundError(harness);
+    if (!adapter) {
+      // Before surfacing a generic "adapter not found", check whether this id
+      // belongs to a known external-mode adapter — if so, the 409 with a human
+      // message ("X sessions are managed by the X app") is far more actionable
+      // than "no adapter registered for harness X".  A sessions.json entry
+      // with harness="conductor" (written by an earlier build, hand-edited, or
+      // a future registration) hits this path on resume/submitInput.
+      const info = listHarnessAdapters().find((a) => a.id === harness);
+      if (info?.mode === "external") throw new ExternalHarnessError(harness, info.label);
+      throw new AdapterNotFoundError(harness);
+    }
     return adapter;
   }
 
@@ -617,11 +630,18 @@ export class SessionManager {
    * instead of the input just vanishing.
    */
   async submitInput(id: string, text: string, submit = true): Promise<boolean> {
-    const handle = this.ptys.get(id);
-    if (!handle) return false;
-
     const session = this.sessions.get(id);
     if (!session) return false;
+
+    // An external-harness session (e.g. conductor) never has a pty — surfacing
+    // HARNESS_EXTERNAL here gives a 409 "managed by the X app" instead of a
+    // misleading 404 "session not found or has no live pty".
+    const handle = this.ptys.get(id);
+    if (!handle) {
+      const info = listHarnessAdapters().find((a) => a.id === session.harness);
+      if (info?.mode === "external") throw new ExternalHarnessError(session.harness, info.label);
+      return false;
+    }
     if (!this.isReadyEnough(session, handle)) {
       const becameReady = await this.waitUntilReady(id, READY_GRACE_MS);
       if (!becameReady) throw new SessionNotReadyError(id);

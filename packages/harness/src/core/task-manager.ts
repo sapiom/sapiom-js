@@ -33,7 +33,8 @@ import {
 } from "../shared/types.js";
 import type { LaunchOptsBuilder } from "./session-manager.js";
 import { parseTaskStreamLine } from "./task-stream.js";
-import { AdapterNotFoundError } from "./errors.js";
+import { AdapterNotFoundError, ExternalHarnessError } from "./errors.js";
+import { listHarnessAdapters } from "./adapters/registry.js";
 
 /** Rolling status-line window kept per task — enough for the activity view's
  *  recent-history list without unbounded growth on a chatty run. */
@@ -225,7 +226,14 @@ export class TaskManager {
    */
   async run(req: RunTaskRequest): Promise<BackgroundTask> {
     const adapter = this.adapters[req.harness];
-    if (!adapter) throw new AdapterNotFoundError(req.harness);
+    if (!adapter) {
+      // Same external-mode check as SessionManager.getAdapter(): a persisted
+      // session with harness="conductor" must surface a 409 HARNESS_EXTERNAL,
+      // not a generic "adapter not found".
+      const info = listHarnessAdapters().find((a) => a.id === req.harness);
+      if (info?.mode === "external") throw new ExternalHarnessError(req.harness, info.label);
+      throw new AdapterNotFoundError(req.harness);
+    }
     if (!adapter.launchTask) throw new TaskNotSupportedError(req.harness, req.label);
 
     const reqWorkflowPath = req.workflowPath ?? null;

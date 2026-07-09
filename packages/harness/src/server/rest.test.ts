@@ -12,8 +12,8 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpHome };
 });
 
-import type { HarnessSession, MacroDef, WorkflowInfo } from "../shared/types.js";
-import { SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
+import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
+import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -512,6 +512,164 @@ describe("createRestRouter", () => {
       });
       // Old string-match would give 500 here; class dispatch gives 404.
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /harnesses", () => {
+    it("returns a list of adapter descriptors with id, label, mode, experimental, and installed", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Array<{
+        id: string;
+        label: string;
+        mode: string;
+        experimental: boolean;
+        installed: boolean;
+      }>;
+      expect(Array.isArray(body)).toBe(true);
+      expect(body.length).toBeGreaterThanOrEqual(5); // claude-code, codex, pi, opencode, conductor
+
+      // All entries have the required shape.
+      for (const entry of body) {
+        expect(typeof entry.id).toBe("string");
+        expect(typeof entry.label).toBe("string");
+        expect(["embedded", "external"]).toContain(entry.mode);
+        expect(typeof entry.experimental).toBe("boolean");
+        expect(typeof entry.installed).toBe("boolean");
+      }
+    });
+
+    it("includes both embedded and external adapters", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      const body = (await res.json()) as Array<{ id: string; mode: string }>;
+
+      const embeddedIds = body.filter((a) => a.mode === "embedded").map((a) => a.id);
+      const externalIds = body.filter((a) => a.mode === "external").map((a) => a.id);
+
+      expect(embeddedIds).toContain("claude-code");
+      expect(embeddedIds).toContain("codex");
+      expect(externalIds).toContain("conductor");
+    });
+
+    it("conductor appears as mode:external", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      const body = (await res.json()) as Array<{ id: string; mode: string }>;
+      const conductor = body.find((a) => a.id === "conductor");
+      expect(conductor).toBeDefined();
+      expect(conductor!.mode).toBe("external");
+    });
+
+    it("claude-code appears as mode:embedded and not experimental", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      const body = (await res.json()) as Array<{ id: string; mode: string; experimental: boolean }>;
+      const claudeCode = body.find((a) => a.id === "claude-code");
+      expect(claudeCode).toBeDefined();
+      expect(claudeCode!.mode).toBe("embedded");
+      expect(claudeCode!.experimental).toBe(false);
+    });
+  });
+
+  describe("ExternalHarnessError → 409 mapping (real-path, no mocks)", () => {
+    /**
+     * These tests use a real SessionManager (only claude-code adapter registered)
+     * with a session persisted at harness="conductor". Calling resume() or
+     * submitInput() on that session exercises the real getAdapter() / submitInput()
+     * code path that throws ExternalHarnessError — no mock-throw involved.
+     */
+    let smDir: string;
+
+    beforeEach(async () => {
+      smDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-rest-ext-test-"));
+    });
+
+    afterEach(async () => {
+      await fs.rm(smDir, { recursive: true, force: true });
+    });
+
+    function makeMinimalAdapter(): HarnessAdapter {
+      return {
+        id: "claude-code",
+        eventSource: "hooks" as const,
+        doctor: async () => [],
+        launch: (opts): SpawnSpec => ({
+          command: "fake-claude",
+          args: [],
+          env: {},
+          cwd: opts.cwd,
+        }),
+        resume: (agentSessionId, opts): SpawnSpec => ({
+          command: "fake-claude",
+          args: ["--resume", agentSessionId],
+          env: {},
+          cwd: opts.cwd,
+        }),
+        listPastSessions: async () => [],
+      };
+    }
+
+    function makeRealSessionManager(): SessionManager {
+      return new SessionManager({
+        adapters: { "claude-code": makeMinimalAdapter() },
+        ingestUrl: "http://127.0.0.1:4100",
+        ingestToken: "test-token",
+        sessionsPath: path.join(smDir, "sessions.json"),
+        // spawnPty not provided — tests only call resume/submitInput which
+        // throw before reaching spawn for external-harness sessions.
+      });
+    }
+
+    it("POST /sessions/:id/resume returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
+      const sessionManager = makeRealSessionManager();
+
+      // Simulate a session record written by an earlier build or hand-edited.
+      const session = sessionManager.registerHistorical({
+        agentSessionId: "agent-abc",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+
+      const res = await fetch(`${baseUrl}/sessions/${session.id}/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("HARNESS_EXTERNAL");
+      expect(body.error).toMatch(/Conductor/);
+    });
+
+    it("POST /sessions/:id/input returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
+      const sessionManager = makeRealSessionManager();
+
+      const session = sessionManager.registerHistorical({
+        agentSessionId: "agent-def",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+
+      const res = await fetch(`${baseUrl}/sessions/${session.id}/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "hello" }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("HARNESS_EXTERNAL");
+      expect(body.error).toMatch(/Conductor/);
     });
   });
 });

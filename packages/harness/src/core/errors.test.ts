@@ -17,6 +17,7 @@ import {
   SessionNotResumeableError,
   SessionAlreadyLiveError,
   AdapterNotFoundError,
+  ExternalHarnessError,
 } from "./errors.js";
 
 describe("HarnessError (base)", () => {
@@ -138,6 +139,33 @@ describe("AdapterNotFoundError", () => {
   });
 });
 
+describe("ExternalHarnessError", () => {
+  it("code is HARNESS_EXTERNAL", () => {
+    expect(new ExternalHarnessError("conductor", "Conductor").code).toBe("HARNESS_EXTERNAL");
+  });
+
+  it("instanceof HarnessError and Error", () => {
+    const err = new ExternalHarnessError("conductor", "Conductor");
+    expect(err instanceof HarnessError).toBe(true);
+    expect(err instanceof Error).toBe(true);
+  });
+
+  it("carries the harness id", () => {
+    const err = new ExternalHarnessError("conductor", "Conductor");
+    expect(err.harness).toBe("conductor");
+  });
+
+  it("message names the harness label", () => {
+    const err = new ExternalHarnessError("conductor", "Conductor");
+    expect(err.message).toMatch(/Conductor/);
+  });
+
+  it("message explains sessions are managed by the companion app", () => {
+    const err = new ExternalHarnessError("conductor", "Conductor");
+    expect(err.message).toMatch(/managed by/i);
+  });
+});
+
 describe("HTTP mapping contract (class → status)", () => {
   /**
    * These tests simulate the route handler dispatch table that replaced the
@@ -150,6 +178,7 @@ describe("HTTP mapping contract (class → status)", () => {
    *   SessionAlreadyLiveError   → 409
    *   SessionNotResumeableError → 409
    *   AdapterNotFoundError      → 400
+   *   ExternalHarnessError      → 409
    */
   function classToStatus(err: unknown): number {
     if (err instanceof UnknownSessionError) return 404;
@@ -157,6 +186,7 @@ describe("HTTP mapping contract (class → status)", () => {
     if (err instanceof SessionAlreadyLiveError) return 409;
     if (err instanceof SessionNotResumeableError) return 409;
     if (err instanceof AdapterNotFoundError) return 400;
+    if (err instanceof ExternalHarnessError) return 409;
     return 500;
   }
 
@@ -178,6 +208,10 @@ describe("HTTP mapping contract (class → status)", () => {
 
   it("AdapterNotFoundError → 400", () => {
     expect(classToStatus(new AdapterNotFoundError("codex"))).toBe(400);
+  });
+
+  it("ExternalHarnessError → 409", () => {
+    expect(classToStatus(new ExternalHarnessError("conductor", "Conductor"))).toBe(409);
   });
 
   it("plain Error → 500 (falls through — only typed harness errors are handled)", () => {

@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { HarnessAdapter, HarnessSession, SpawnSpec } from "../shared/types.js";
+import type { HarnessAdapter, HarnessKind, HarnessSession, SpawnSpec } from "../shared/types.js";
 import { SessionManager, type PtySpawnFn, type SessionManagerOptions } from "./session-manager.js";
+import { ExternalHarnessError } from "./errors.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -1187,6 +1188,95 @@ describe("SessionManager", () => {
 
       expect(await killPromise).toBe(true);
       expect(manager.get(session.id)?.status).toBe("exited");
+    });
+  });
+
+  describe("ExternalHarnessError — real-path (no mocks)", () => {
+    /**
+     * A sessions.json entry with harness="conductor" can appear via an earlier
+     * build, a hand-edited file, or a future import. These tests verify the
+     * real production code path: when getAdapter() / submitInput() encounter
+     * an external-mode harness id they surface HARNESS_EXTERNAL (409) rather
+     * than AdapterNotFoundError or a silent false.
+     *
+     * We cast "conductor" as HarnessKind in registerHistorical() to simulate
+     * a persisted record that predates the typed enum.
+     */
+
+    it("resume() throws ExternalHarnessError for a session persisted with harness='conductor'", async () => {
+      const { manager } = makeManager();
+
+      // Simulate a session record that arrived from disk or an earlier build.
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-session-abc",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      await expect(manager.resume(session.id)).rejects.toThrow(ExternalHarnessError);
+    });
+
+    it("resume() ExternalHarnessError has code HARNESS_EXTERNAL and names the harness label", async () => {
+      const { manager } = makeManager();
+
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-session-def",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      let caught: unknown;
+      try {
+        await manager.resume(session.id);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ExternalHarnessError);
+      const err = caught as ExternalHarnessError;
+      expect(err.code).toBe("HARNESS_EXTERNAL");
+      expect(err.message).toMatch(/Conductor/);
+      expect(err.harness).toBe("conductor");
+    });
+
+    it("submitInput() throws ExternalHarnessError for a session with harness='conductor' and no live pty", async () => {
+      const { manager } = makeManager();
+
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-session-ghi",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      await expect(manager.submitInput(session.id, "hello")).rejects.toThrow(ExternalHarnessError);
+    });
+
+    it("submitInput() ExternalHarnessError has code HARNESS_EXTERNAL", async () => {
+      const { manager } = makeManager();
+
+      const session = manager.registerHistorical({
+        agentSessionId: "agent-session-jkl",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      let caught: unknown;
+      try {
+        await manager.submitInput(session.id, "test input");
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ExternalHarnessError);
+      expect((caught as ExternalHarnessError).code).toBe("HARNESS_EXTERNAL");
     });
   });
 });

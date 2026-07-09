@@ -744,7 +744,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   }
 
   sessionManager.onStatusChange((session) => {
-    if (session.harness !== "codex") return;
+    // The codex tailer is only needed for harnesses whose analytics come
+    // from the rollout file (eventSource: "transcript-tail"). Harnesses with
+    // eventSource: "hooks" (claude-code) drive the same pipeline via real
+    // hook POSTs; no tailer needed. Routing through eventSource rather than
+    // a hardcoded "codex" string means adding a new transcript-tail harness
+    // is a registry line + adapter file, not a server-index change.
+    if (adapters[session.harness]?.eventSource !== "transcript-tail") return;
     if (session.status === "running") {
       startCodexTailerFor(session.id).catch((err: unknown) => {
         console.error("[harness] codex tailer startup failed:", err);
