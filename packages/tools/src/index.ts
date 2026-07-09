@@ -103,3 +103,6 @@ export { DomainsHttpError } from "./domains/index.js";
 
 export * as memory from "./memory/index.js";
 export { MemoryHttpError } from "./memory/index.js";
+
+export * as speech from "./speech/index.js";
+export { SpeechHttpError } from "./speech/index.js";

@@ -87,6 +87,7 @@ import type {
   Memory,
   MemoryCallOptions,
 } from "../memory/index.js";
+import type { SpeechResult, VoicesResult } from "../speech/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -1254,6 +1255,34 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         Promise.resolve(
           r("memory.forget", [id, options], () => undefined) as void,
         ),
+    },
+    speech: {
+      tts: {
+        create: (input) =>
+          Promise.resolve(
+            r("speech.tts.create", [input], () => ({
+              url: "https://cdn.example.com/stub-audio.mp3",
+              expiresAt: "2099-01-01T00:00:00Z",
+            })) as SpeechResult,
+          ),
+      },
+      soundEffects: {
+        create: (input) =>
+          Promise.resolve(
+            r("speech.soundEffects.create", [input], () => ({
+              url: "https://cdn.example.com/stub-sfx.mp3",
+              expiresAt: "2099-01-01T00:00:00Z",
+            })) as SpeechResult,
+          ),
+      },
+      voices: {
+        list: () =>
+          Promise.resolve(
+            r("speech.voices.list", [], () => ({
+              voices: [{ voiceId: "stub-voice", name: "Stub Voice" }],
+            })) as VoicesResult,
+          ),
+      },
     },
     withAttribution: () => client,
     // The stub makes no HTTP calls and creates no analytics emitter — nothing
