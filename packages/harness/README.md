@@ -46,3 +46,37 @@ pnpm --filter @sapiom/harness build      # server (tsc) + SPA (vite) → dist/
 Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
+
+## Testing
+
+Three tiers — run whatever fits your change:
+
+**Unit tier** (vitest, no browser, no agent): covers server logic, adapters,
+analytics, and canvas rendering. Runs in CI on every PR.
+
+```bash
+pnpm --filter @sapiom/harness test
+```
+
+**Playwright mock tier** (chromium, Vite dev server with `VITE_MOCK=1`, no
+harness server or agent process). The full `web/e2e/` suite against the SPA in
+mock mode. Runs in CI on every PR. For a fast watch loop locally, use UI mode:
+
+```bash
+# One-time browser install (not included in pnpm install):
+pnpm --filter @sapiom/harness exec playwright install chromium
+
+# Watch/UI mode — re-runs affected specs on save:
+pnpm --filter @sapiom/harness exec playwright test \
+  --config web/e2e/playwright.config.ts --ui
+
+# Or run the full suite once (same command CI uses):
+pnpm --filter @sapiom/harness test:ui
+```
+
+**E2E live tier** (real agent binaries, real pty, no CI). Requires Claude Code
+or Codex installed and a valid `SAPIOM_API_KEY` in your environment.
+
+```bash
+pnpm --filter @sapiom/harness e2e:live
+```

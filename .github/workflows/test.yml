@@ -39,3 +39,55 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  # Playwright mock-mode tier — harness web/e2e specs (VITE_MOCK=1, chromium only).
+  # The live/real-pty tiers (e2e:live, sim) are opt-in local only; nothing here
+  # invokes them — they require real agent binaries and credentials not in CI.
+  playwright-mock:
+    runs-on: ubuntu-latest
+    # Single Node version is enough — the mock tier tests browser behaviour,
+    # not Node version compat; that's covered by the matrix job above.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build harness and dependencies
+        run: pnpm --filter "@sapiom/harness..." build
+
+      # Cache Playwright browser binaries keyed on the package.json devDependency
+      # version so the cache invalidates on every @playwright/test bump.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('packages/harness/package.json') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @sapiom/harness exec playwright install chromium --with-deps
+
+      - name: Install Playwright system deps (cached hit path)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @sapiom/harness exec playwright install-deps chromium
+
+      - name: Run Playwright mock-mode suite
+        run: pnpm --filter @sapiom/harness test:ui
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: packages/harness/web/e2e/playwright-report/
+          retention-days: 7
