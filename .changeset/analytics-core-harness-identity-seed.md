@@ -8,6 +8,6 @@ Add `seedAnalyticsIdentity` export and `harness` to the `EventSource` union.
 
 `EventSource` now includes `"harness"` for events emitted by the harness server.
 
-`SapiomAnalytics` gains `discard()`: drop all buffered events without sending them. Complements `flush()`/`shutdown()` for hosts that must guarantee zero deliveries after a user opts out mid-process.
+`SapiomAnalytics` gains `discard()`: drop all buffered events without sending them. Complements `flush()`/`shutdown()` for hosts that must guarantee zero deliveries after a user opts out mid-process. Optional on the type (existing structural fakes keep compiling); every emitter `createAnalytics` returns implements it.
 
 All changes are additive; no existing API signatures are modified.

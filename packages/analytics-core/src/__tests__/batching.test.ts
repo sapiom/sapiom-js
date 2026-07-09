@@ -152,7 +152,10 @@ describe("batching", () => {
     analytics.track("event_two");
 
     // Discard without flushing
-    analytics.discard();
+    // The type marks discard() optional for structural fakes; every real
+    // emitter implements it.
+    expect(typeof analytics.discard).toBe("function");
+    analytics.discard!();
 
     // Flush afterwards — nothing should be sent
     await analytics.flush();
@@ -164,6 +167,7 @@ describe("batching", () => {
     const analytics = tracker.register(
       createAnalytics(baseConfig({ fetchImpl: createCapturingFetch().fetchImpl })),
     );
-    expect(() => analytics.discard()).not.toThrow();
+    expect(typeof analytics.discard).toBe("function");
+    expect(() => analytics.discard!()).not.toThrow();
   });
 });

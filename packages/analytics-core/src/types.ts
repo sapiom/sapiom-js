@@ -119,8 +119,11 @@ export interface SapiomAnalytics {
    * Silently drop all buffered events without sending them. In-flight sends
    * (already on the wire) complete normally. Call before {@link shutdown}
    * when consent has been revoked and buffered events must not be delivered.
+   *
+   * Optional on the type so pre-existing structural fakes keep compiling;
+   * every emitter `createAnalytics` returns implements it.
    */
-  discard(): void;
+  discard?(): void;
   /** `flush()` + stop timers and exit hooks. Never rejects. */
   shutdown(): Promise<void>;
   /**

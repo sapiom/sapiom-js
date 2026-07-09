@@ -142,7 +142,7 @@ export function createHarnessEmitter(
       // discard buffered events before shutdown so they are not delivered.
       // In-flight sends (already on the wire) still complete normally;
       // only the in-memory buffer is dropped.
-      prev.discard();
+      prev.discard?.();
     }
     // The void is intentional: callers don't await this path and
     // analytics-core guarantees shutdown() never rejects.
