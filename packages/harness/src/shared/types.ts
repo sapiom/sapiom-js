@@ -87,7 +87,19 @@ export const ENV = {
 // Sessions
 // ---------------------------------------------------------------------------
 
-export type HarnessKind = "claude-code" | "codex";
+/**
+ * Every harness kind that can be spawned as a session — i.e. has a full
+ * runtime adapter (launch/resume/doctor/listPastSessions) and a real e2e
+ * suite. Both `HarnessKind` and the zod enum in server/rest.ts are derived
+ * from this tuple so they can never drift from each other.
+ *
+ * External-mode adapters (conductor) and scaffold adapters that haven't
+ * earned an e2e suite yet (pi, opencode) are deliberately absent: the
+ * picker and POST /sessions reject them at the validation layer.
+ */
+export const SPAWNABLE_HARNESS_KINDS = ["claude-code", "codex"] as const;
+
+export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 

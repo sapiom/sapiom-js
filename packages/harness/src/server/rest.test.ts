@@ -12,9 +12,8 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpHome };
 });
 
-import type { HarnessSession, MacroDef, WorkflowInfo } from "../shared/types.js";
-import { SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
-import { ExternalHarnessError } from "../core/errors.js";
+import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
+import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -574,15 +573,94 @@ describe("createRestRouter", () => {
     });
   });
 
-  describe("ExternalHarnessError → 409 mapping", () => {
-    it("POST /sessions/:id/input returns 409 with HARNESS_EXTERNAL code when the session's harness is external", async () => {
-      const sessionManager = fakeSessionManager();
-      (sessionManager.submitInput as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new ExternalHarnessError("conductor", "Conductor"),
-      );
-      start({ sessionManager });
+  describe("ExternalHarnessError → 409 mapping (real-path, no mocks)", () => {
+    /**
+     * These tests use a real SessionManager (only claude-code adapter registered)
+     * with a session persisted at harness="conductor". Calling resume() or
+     * submitInput() on that session exercises the real getAdapter() / submitInput()
+     * code path that throws ExternalHarnessError — no mock-throw involved.
+     */
+    let smDir: string;
 
-      const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
+    beforeEach(async () => {
+      smDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-rest-ext-test-"));
+    });
+
+    afterEach(async () => {
+      await fs.rm(smDir, { recursive: true, force: true });
+    });
+
+    function makeMinimalAdapter(): HarnessAdapter {
+      return {
+        id: "claude-code",
+        eventSource: "hooks" as const,
+        doctor: async () => [],
+        launch: (opts): SpawnSpec => ({
+          command: "fake-claude",
+          args: [],
+          env: {},
+          cwd: opts.cwd,
+        }),
+        resume: (agentSessionId, opts): SpawnSpec => ({
+          command: "fake-claude",
+          args: ["--resume", agentSessionId],
+          env: {},
+          cwd: opts.cwd,
+        }),
+        listPastSessions: async () => [],
+      };
+    }
+
+    function makeRealSessionManager(): SessionManager {
+      return new SessionManager({
+        adapters: { "claude-code": makeMinimalAdapter() },
+        ingestUrl: "http://127.0.0.1:4100",
+        ingestToken: "test-token",
+        sessionsPath: path.join(smDir, "sessions.json"),
+        // spawnPty not provided — tests only call resume/submitInput which
+        // throw before reaching spawn for external-harness sessions.
+      });
+    }
+
+    it("POST /sessions/:id/resume returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
+      const sessionManager = makeRealSessionManager();
+
+      // Simulate a session record written by an earlier build or hand-edited.
+      const session = sessionManager.registerHistorical({
+        agentSessionId: "agent-abc",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+
+      const res = await fetch(`${baseUrl}/sessions/${session.id}/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("HARNESS_EXTERNAL");
+      expect(body.error).toMatch(/Conductor/);
+    });
+
+    it("POST /sessions/:id/input returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
+      const sessionManager = makeRealSessionManager();
+
+      const session = sessionManager.registerHistorical({
+        agentSessionId: "agent-def",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+
+      const res = await fetch(`${baseUrl}/sessions/${session.id}/input`, {
         method: "POST",
         headers: { ...TOKEN_HEADER, "content-type": "application/json" },
         body: JSON.stringify({ text: "hello" }),
@@ -592,23 +670,6 @@ describe("createRestRouter", () => {
       const body = (await res.json()) as { error: string; code: string };
       expect(body.code).toBe("HARNESS_EXTERNAL");
       expect(body.error).toMatch(/Conductor/);
-    });
-
-    it("POST /sessions/:id/resume returns 409 with HARNESS_EXTERNAL code for external harnesses", async () => {
-      const sessionManager = fakeSessionManager();
-      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new ExternalHarnessError("conductor", "Conductor"),
-      );
-      start({ sessionManager });
-
-      const res = await fetch(`${baseUrl}/sessions/sess-1/resume`, {
-        method: "POST",
-        headers: TOKEN_HEADER,
-      });
-
-      expect(res.status).toBe(409);
-      const body = (await res.json()) as { error: string; code: string };
-      expect(body.code).toBe("HARNESS_EXTERNAL");
     });
   });
 });

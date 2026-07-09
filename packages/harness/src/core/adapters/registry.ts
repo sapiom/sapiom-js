@@ -6,7 +6,10 @@
  * for what harnesses exist, their mode (embedded vs external), and their
  * per-harness metadata (installMcpPrompt, detectInstalled).
  *
- * Adding a harness = one adapter file + one line in HARNESS_ADAPTER_INFOS.
+ * Adding an external harness = one descriptor file + one HARNESS_ADAPTER_INFOS
+ * line. An embedded harness that can be spawned as a session additionally
+ * requires a runtime adapter and an entry in SPAWNABLE_HARNESS_KINDS
+ * (shared/types.ts) — see adapter.ts for the full checklist.
  */
 import { HarnessError } from "../errors.js";
 import type { HarnessAdapterInfo } from "./adapter.js";

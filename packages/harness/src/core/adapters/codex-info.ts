@@ -32,7 +32,6 @@ export const codexAdapterInfo: EmbeddedHarnessAdapterInfo = {
   id: "codex",
   label: "Codex CLI",
   mode: "embedded",
-  experimental: true,
   installMcpPrompt(): string {
     return INSTALL_MCP_PROMPT;
   },

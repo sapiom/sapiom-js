@@ -7,7 +7,12 @@
  * the type makes calling spawn/send on them a compile error, not just a
  * convention.
  *
- * Adding a harness = one adapter file + one registry line. No other changes.
+ * Adding an external harness = one descriptor file + one HARNESS_ADAPTER_INFOS
+ * line. An embedded harness that can be spawned as a session additionally
+ * requires: a runtime adapter (launch/resume/doctor/listPastSessions) in
+ * core/adapters/, a new id in SPAWNABLE_HARNESS_KINDS (shared/types.ts —
+ * which widens HarnessKind and the z.enum gate automatically), and a real
+ * e2e suite confirming the lifecycle works end-to-end.
  */
 
 /** Stable identifier for every harness the registry knows about. */

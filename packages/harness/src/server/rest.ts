@@ -22,14 +22,19 @@ import type {
   SessionSummary,
   WorkflowInfo,
 } from "../shared/types.js";
+import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
 import { ExternalHarnessError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
 import { listHarnessAdapters } from "../core/adapters/registry.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
+// Derived from SPAWNABLE_HARNESS_KINDS (shared/types.ts) so the zod
+// validation and the TypeScript type can never drift from each other.
+// Adding a new spawnable harness means updating that one constant; the
+// validator here and the HarnessKind type both pick up the change automatically.
 const createSessionSchema = z.object({
   cwd: z.string().min(1),
-  harness: z.enum(["claude-code", "codex"]),
+  harness: z.enum(SPAWNABLE_HARNESS_KINDS),
   profile: z.string().optional(),
 }) satisfies z.ZodType<CreateSessionRequest>;
 
@@ -319,7 +324,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
         return;
       }
       if (err instanceof ExternalHarnessError) {
-        res.status(409).json({ error: err.message, code: (err as { code: string }).code });
+        res.status(409).json({ error: err.message, code: err.code });
         return;
       }
       next(err);
@@ -352,7 +357,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.json({ ok: true });
     } catch (err) {
       if (err instanceof SessionNotReadyError || err instanceof ExternalHarnessError) {
-        res.status(409).json({ error: err.message, code: (err as { code: string }).code });
+        res.status(409).json({ error: err.message, code: err.code });
         return;
       }
       next(err);

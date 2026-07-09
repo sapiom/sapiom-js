@@ -11,6 +11,7 @@ import {
   UnknownHarnessAdapterError,
 } from "./registry.js";
 import { HarnessError } from "../errors.js";
+import { SPAWNABLE_HARNESS_KINDS } from "../../shared/types.js";
 import type { EmbeddedHarnessAdapterInfo, ExternalHarnessAdapterInfo, HarnessAdapterId } from "./adapter.js";
 
 const EXPECTED_IDS: HarnessAdapterId[] = [
@@ -156,12 +157,39 @@ describe("adapter contract — shape of every built-in entry", () => {
   });
 
   it("marks exactly the scaffold adapters as experimental", () => {
+    // codex has a full runtime adapter, z.enum membership, and an e2e
+    // lifecycle test — it is NOT experimental. Only pi and opencode are
+    // scaffold adapters without a hardened e2e suite.
     const experimentalIds = listHarnessAdapters()
       .filter((a) => a.experimental === true)
       .map((a) => a.id);
-    expect(experimentalIds).toEqual(["codex", "pi", "opencode"]);
+    expect(experimentalIds).toEqual(["pi", "opencode"]);
     expect(getHarnessAdapter("claude-code").experimental).toBeFalsy();
+    expect(getHarnessAdapter("codex").experimental).toBeFalsy();
     expect(getHarnessAdapter("conductor").experimental).toBeFalsy();
+  });
+});
+
+describe("SPAWNABLE_HARNESS_KINDS drift detection", () => {
+  /**
+   * SPAWNABLE_HARNESS_KINDS (shared/types.ts) is the single source of truth
+   * for which harness ids can be used in POST /sessions and are valid HarnessKind
+   * values. The registry's embedded non-experimental adapters must match it
+   * exactly — if they diverge, something was added to one place but not the other.
+   *
+   * When adding a new spawnable harness: update SPAWNABLE_HARNESS_KINDS,
+   * add a runtime adapter, and add a registry entry. All three change together
+   * or this test fails.
+   */
+  it("embedded non-experimental registry adapters exactly match SPAWNABLE_HARNESS_KINDS", () => {
+    const spawnableFromRegistry = listHarnessAdapters()
+      .filter((a) => a.mode === "embedded" && !a.experimental)
+      .map((a) => a.id)
+      .sort();
+
+    const spawnableFromTypes = [...SPAWNABLE_HARNESS_KINDS].sort();
+
+    expect(spawnableFromRegistry).toEqual(spawnableFromTypes);
   });
 });
 
