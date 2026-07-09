@@ -295,7 +295,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(404).json({ error: "session not found" });
       return;
     }
-    sessionManager.kill(req.params.id);
+    void sessionManager.kill(req.params.id);
     res.json({ ok: true });
   });
 

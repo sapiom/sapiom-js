@@ -832,27 +832,36 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   return {
     port: actualPort,
     sessionManager,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        clearInterval(workflowsCacheTimer);
-        clearInterval(sessionSweepTimer);
-        canvasWatcher.stopAll();
-        workspaceWatcher.stopAll();
-        for (const tailer of codexTailers.values()) tailer.stop();
-        codexTailers.clear();
-        // Closing the HTTP/WS server doesn't touch unrelated child processes
-        // on its own — without this, every live claude/codex pty outlives
-        // the harness server itself (e.g. after Ctrl+C or in a script that
-        // expects the process to actually exit once close() resolves).
-        sessionManager.killAll();
-        taskManager.killAll();
-        void batcher.close();
-        terminalWss.close();
-        eventsWss.close();
+    close: async () => {
+      clearInterval(workflowsCacheTimer);
+      clearInterval(sessionSweepTimer);
+      canvasWatcher.stopAll();
+      workspaceWatcher.stopAll();
+      for (const tailer of codexTailers.values()) tailer.stop();
+      codexTailers.clear();
+      // Closing the HTTP/WS server doesn't touch unrelated child processes
+      // on its own — without this, every live claude/codex pty outlives
+      // the harness server itself (e.g. after Ctrl+C or in a script that
+      // expects the process to actually exit once close() resolves).
+      // Await kills with a bounded timeout so shutdown never hangs: if a
+      // process somehow survives both SIGTERM and SIGKILL within the
+      // escalation window (shouldn't happen), we still resolve and let the
+      // HTTP server close proceed. The SIGKILL escalation inside each kill()
+      // itself is bounded (KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS
+      // = 2500ms); the outer timeout here is a final safety net above that.
+      const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
+      const killsSettled = Promise.all([sessionManager.killAll(), taskManager.killAll()]);
+      const shutdownTimeout = new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_KILL_TIMEOUT_MS));
+      await Promise.race([killsSettled, shutdownTimeout]);
+      void batcher.close();
+      terminalWss.close();
+      eventsWss.close();
+      await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => {
           if (err) reject(err);
           else resolve();
         });
-      }),
+      });
+    },
   };
 };

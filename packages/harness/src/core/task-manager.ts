@@ -43,6 +43,13 @@ const MAX_STDERR_CHARS = 2_000;
 /** Finished tasks retained (per whole manager) for late-mounting clients;
  *  running tasks are always retained regardless. */
 const MAX_FINISHED_TASKS = 20;
+/**
+ * How long killAll() waits for a graceful SIGTERM to take effect before
+ * escalating to SIGKILL. Mirrors SessionManager's KILL_ESCALATION_MS — tasks
+ * are headless child processes (claude -p) so they typically die faster than
+ * interactive ptys, but the same bounded escalation semantics apply.
+ */
+const TASK_KILL_ESCALATION_MS = 2_000;
 
 /**
  * The slice of node's ChildProcess a task actually uses — injectable so
@@ -153,6 +160,13 @@ export class TaskManager {
    *  as `resultText`, so a structured task's caller can parse the answer. */
   private readonly resultTexts = new Map<string, string>();
   private readonly statusEmitter = new EventEmitter();
+  /**
+   * Per-task exit promises: each resolves when `finish()` runs for that task
+   * (whether via a normal exit, an error event, or a killAll() escalation).
+   * `killAll()` awaits these to confirm actual death before resolving.
+   */
+  private readonly exitedPromises = new Map<string, Promise<void>>();
+  private readonly resolveExited = new Map<string, () => void>();
 
   constructor(options: TaskManagerOptions) {
     this.adapters = options.adapters;
@@ -289,6 +303,11 @@ export class TaskManager {
     // Registered — the running-task check owns dedupe from here.
     releasePending();
     this.processes.set(id, child);
+    // Set up the per-task exit promise so killAll() can await actual death.
+    const exited = new Promise<void>((resolve) => {
+      this.resolveExited.set(id, resolve);
+    });
+    this.exitedPromises.set(id, exited);
     this.trimFinished();
     this.emitStatus(task);
 
@@ -314,17 +333,52 @@ export class TaskManager {
     return task;
   }
 
-  /** Kills every still-running task process. Call on server shutdown, same
-   *  reason as SessionManager.killAll — child processes aren't torn down by
-   *  the HTTP server closing. */
-  killAll(): void {
+  /**
+   * Kills every still-running task process and returns a Promise that resolves
+   * when all of them have actually exited (or when the escalation window
+   * expires). Call on server shutdown so headless agent processes (claude -p)
+   * don't outlive the harness server.
+   *
+   * Escalation: sends SIGTERM to all running tasks, then waits
+   * `TASK_KILL_ESCALATION_MS`. Any still-alive task gets SIGKILL. The returned
+   * promise resolves once all tasks' `finish()` has run (real exit event or
+   * after SIGKILL), so it is bounded and never hangs.
+   */
+  async killAll(): Promise<void> {
+    const runningIds = [...this.processes.keys()];
+    if (runningIds.length === 0) return;
+
+    // Snapshot the exit promises before sending signals — `finish()` deletes
+    // them from the map, so we must capture them now while all are present.
+    const exitWaiters = runningIds
+      .map((id) => this.exitedPromises.get(id))
+      .filter((p): p is Promise<void> => p !== undefined);
+
+    // Phase 1: SIGTERM all running tasks.
     for (const child of this.processes.values()) {
       try {
         child.kill("SIGTERM");
       } catch {
+        // Already gone — finish() will handle it when the exit event arrives.
+      }
+    }
+
+    // Wait for all to die gracefully or escalate.
+    const allExited = Promise.all(exitWaiters);
+    const escalationTimer = new Promise<void>((resolve) => setTimeout(resolve, TASK_KILL_ESCALATION_MS));
+    await Promise.race([allExited, escalationTimer]);
+
+    // Phase 2: SIGKILL any still-alive processes after the grace window.
+    for (const child of this.processes.values()) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
         // Already gone.
       }
     }
+
+    // Final wait: after SIGKILL the processes should exit almost immediately.
+    await allExited;
   }
 
   private handleStdoutLine(id: string, line: string): void {
@@ -362,6 +416,13 @@ export class TaskManager {
     this.stderrTails.delete(id);
     this.resultErrors.delete(id);
     this.resultTexts.delete(id);
+    // Resolve the per-task exit promise so killAll() waiters unblock.
+    const resolve = this.resolveExited.get(id);
+    if (resolve) {
+      resolve();
+      this.resolveExited.delete(id);
+      this.exitedPromises.delete(id);
+    }
     this.emitStatus(task);
     this.onCleanup(id);
   }
