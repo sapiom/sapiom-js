@@ -31,7 +31,8 @@ import { createCodexAdapter } from "../core/adapters/codex.js";
 import { WorkflowRegistry, createWorkflowsRouter } from "../core/workflow-registry.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
-import { CollectorBatcher } from "../core/collector/batcher.js";
+import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
+import { migrateHarnessIdentity } from "../core/collector/identity-migration.js";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { createSeqCounter } from "../core/collector/seq.js";
@@ -217,6 +218,12 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const identity = options.identity ?? null;
   const statePaths = resolveStatePaths(options.stateRoot);
   const machineId = options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
+
+  // One-way identity migration: seed ~/.sapiom/analytics.json from the
+  // legacy harness machine-id so existing installs keep the same anonymous_id
+  // after the upgrade (longitudinal join key survives). No-op when analytics.json
+  // already exists or when HOME is unwritable.
+  await migrateHarnessIdentity(statePaths.machineId);
   const launchDir = options.launchDir ?? process.cwd();
   const adapters: Partial<Record<HarnessKind, HarnessAdapter>> =
     options.adapters ??
@@ -499,13 +506,15 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   });
 
   const eventStore = createEventStore(options.eventStorePath ?? statePaths.events);
-  const batcher = new CollectorBatcher({
-    machineId,
+  const harnessVersion = readVersion();
+  const batcher = createHarnessEmitter({
     telemetryOptIn: options.telemetryOptIn,
-    collectorUrl: options.collectorUrl,
+    sdkName: "@sapiom/harness",
+    sdkVersion: harnessVersion,
     apiKey: identity?.apiKey ?? null,
+    endpoint: options.collectorUrl,
     context: {
-      harnessVersion: readVersion(),
+      harnessVersion,
       os: process.platform,
       arch: process.arch,
       nodeVersion: process.version,

@@ -53,6 +53,7 @@
   "dependencies": {
     "@sapiom/agent": "workspace:^",
     "@sapiom/agent-core": "workspace:^",
+    "@sapiom/analytics-core": "workspace:^",
     "@sapiom/mcp": "workspace:^",
     "express": "^4.21.0",
     "node-pty": "^1.1.0",
