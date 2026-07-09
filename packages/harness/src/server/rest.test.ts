@@ -16,7 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
 import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
-import { SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
+import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -547,6 +547,24 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(409);
       const body = (await res.json()) as { error: string; code: string };
       expect(body.code).toBe("SESSION_NOT_RESUMEABLE");
+    });
+
+    it("400s when resume() throws AdapterNotFoundError (persisted session with unknown harness kind — C2)", async () => {
+      // Simulates a sessions.json entry with harness: "future-harness" that
+      // has no registered adapter — should be a 400 not a 500.
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new AdapterNotFoundError("future-harness"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-unknown-kind/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("ADAPTER_NOT_FOUND");
     });
   });
 

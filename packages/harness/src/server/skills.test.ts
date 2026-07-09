@@ -236,6 +236,23 @@ describe("GET /api/skills/:id", () => {
     expect(detail.source).toBe("package");
     expect(detail.body).toContain("Package content");
   });
+
+  it("detail works without a prior listing call (O(1) direct resolution, C5)", async () => {
+    // The O(1) detail path should resolve correctly without depending on any
+    // state built up by the list endpoint — stat/read by slug directly.
+    await writeSkill(
+      userRoot,
+      "standalone",
+      `---\nname: Standalone\ndescription: Direct detail access\n---\n\n# Standalone body`,
+    );
+    await start();
+    // Call detail directly — no prior GET /api/skills call.
+    const res = await fetch(`${baseUrl}/api/skills/standalone`);
+    expect(res.status).toBe(200);
+    const detail = (await res.json()) as SkillDetail;
+    expect(detail.id).toBe("standalone");
+    expect(detail.body).toContain("Standalone body");
+  });
 });
 
 // ---------------------------------------------------------------------------

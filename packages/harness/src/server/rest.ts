@@ -27,7 +27,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
-import { ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
+import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
 import { listHarnessAdapters } from "../core/adapters/registry.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
@@ -68,9 +68,21 @@ const UI_EVENT_NAMES: readonly UiEventName[] = [
   "mcp.install",
 ];
 
+/**
+ * Primitive-only value type for /api/track's `data` field — enforces that the
+ * payload is provably metadata-only (no nested objects or arrays that could
+ * carry arbitrary content). Keyed and value length-capped so the endpoint
+ * cannot be used as a vector to push large payloads through the remote batcher.
+ */
+const uiTrackDataValue = z.union([z.string().max(256), z.number(), z.boolean()]);
+const uiTrackDataSchema = z.record(z.string().max(64), uiTrackDataValue).refine(
+  (obj) => Object.keys(obj).length <= 20,
+  { message: "data must have at most 20 keys" },
+);
+
 const uiTrackSchema = z.object({
   event: z.enum(UI_EVENT_NAMES as [UiEventName, ...UiEventName[]]),
-  data: z.record(z.unknown()).optional(),
+  data: uiTrackDataSchema.optional(),
   harnessSessionId: z.string().optional(),
 }) satisfies z.ZodType<UiTrackRequest>;
 
@@ -280,6 +292,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(201).json(session);
       options.onSessionCreated?.(parsed.data.cwd, session.id);
     } catch (err) {
+      if (err instanceof AdapterNotFoundError) {
+        res.status(400).json({ error: err.message, code: err.code });
+        return;
+      }
       next(err);
     }
   });
@@ -367,6 +383,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
     } catch (err) {
       if (err instanceof UnknownSessionError) {
         res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof AdapterNotFoundError) {
+        // A persisted session with an unknown harness kind (e.g. from a future
+        // or removed harness type) cannot be resumed.
+        res.status(400).json({ error: err.message, code: err.code });
         return;
       }
       if (

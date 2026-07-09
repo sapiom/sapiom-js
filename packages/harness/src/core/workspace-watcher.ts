@@ -130,6 +130,8 @@ class SessionWorkspaceWatcher {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private lastSnapshot = "";
+  /** True while checkNowAsync() is running — prevents overlapping poll walks. */
+  private pollInFlight = false;
 
   constructor(
     private readonly cwd: string,
@@ -193,10 +195,19 @@ class SessionWorkspaceWatcher {
     this.watcher?.close();
     this.watcher = null;
     this.pollTimer = setInterval(() => {
-      this.checkNowAsync().catch(() => {
-        // Snapshot errors (permission denied, etc.) are benign — the next
-        // tick will retry, same as the sync path silently swallowing them.
-      });
+      // In-flight guard: skip this tick if a previous walk is still running.
+      // A slow/wide workspace walk could otherwise overlap with itself and
+      // double-fire onChange on a structural change detected by both walks.
+      if (this.pollInFlight) return;
+      this.pollInFlight = true;
+      this.checkNowAsync()
+        .catch(() => {
+          // Snapshot errors (permission denied, etc.) are benign — the next
+          // tick will retry, same as the sync path silently swallowing them.
+        })
+        .finally(() => {
+          this.pollInFlight = false;
+        });
     }, POLL_INTERVAL_MS);
   }
 

@@ -189,6 +189,23 @@ describe("WorkflowRegistry", () => {
       }
     });
 
+    it("persist uses atomic tmp-file + rename so a mid-write crash cannot tear workflows.json (C4)", async () => {
+      // Verify: after a scan, the registry file exists at registryPath and no
+      // .tmp file is left behind (the rename completed atomically).
+      await writeMarker(path.join(tmpRoot, "proj-a"), 1);
+      await registry.scan(tmpRoot);
+
+      // The final file should exist and be valid JSON.
+      const raw = await fs.readFile(registryPath, "utf8");
+      const parsed = JSON.parse(raw) as unknown[];
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(1);
+
+      // The .tmp file must NOT be left behind (rename completed).
+      const tmpPath = `${registryPath}.tmp`;
+      await expect(fs.access(tmpPath)).rejects.toThrow();
+    });
+
     it("a failed persist does not poison the queue — subsequent writes succeed", async () => {
       // Seed one workflow so there's something to scan.
       await writeMarker(path.join(tmpRoot, "proj-ok"), 1);

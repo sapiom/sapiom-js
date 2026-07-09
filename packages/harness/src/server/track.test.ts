@@ -199,6 +199,61 @@ describe("POST /api/track", () => {
     }
   });
 
+  // C1: schema enforcement — data must be primitives only (no nested objects/arrays)
+  it("rejects data with nested object values (C1: metadata-only enforcement)", async () => {
+    const res = await fetch(`${baseUrl}/track`, {
+      method: "POST",
+      headers: TOKEN_HEADER,
+      body: JSON.stringify({ event: "prompt.submitted", data: { nested: { foo: "bar" } } }),
+    });
+    expect(res.status).toBe(400);
+    expect(stored).toHaveLength(0);
+  });
+
+  it("rejects data with array values (C1)", async () => {
+    const res = await fetch(`${baseUrl}/track`, {
+      method: "POST",
+      headers: TOKEN_HEADER,
+      body: JSON.stringify({ event: "prompt.submitted", data: { tags: ["a", "b"] } }),
+    });
+    expect(res.status).toBe(400);
+    expect(stored).toHaveLength(0);
+  });
+
+  it("rejects data exceeding 20 keys (C1)", async () => {
+    const data: Record<string, number> = {};
+    for (let i = 0; i < 21; i++) data[`k${i}`] = i;
+    const res = await fetch(`${baseUrl}/track`, {
+      method: "POST",
+      headers: TOKEN_HEADER,
+      body: JSON.stringify({ event: "prompt.submitted", data }),
+    });
+    expect(res.status).toBe(400);
+    expect(stored).toHaveLength(0);
+  });
+
+  it("rejects data with a string value exceeding 256 chars (C1)", async () => {
+    const res = await fetch(`${baseUrl}/track`, {
+      method: "POST",
+      headers: TOKEN_HEADER,
+      body: JSON.stringify({ event: "prompt.submitted", data: { label: "x".repeat(257) } }),
+    });
+    expect(res.status).toBe(400);
+    expect(stored).toHaveLength(0);
+  });
+
+  it("accepts string, number, and boolean data values (C1 — all primitive types)", async () => {
+    const res = await fetch(`${baseUrl}/track`, {
+      method: "POST",
+      headers: TOKEN_HEADER,
+      body: JSON.stringify({
+        event: "prompt.submitted",
+        data: { length: 42, label: "test", active: true },
+      }),
+    });
+    expect(res.status).toBe(200);
+  });
+
   it("all UiEventName values are accepted", async () => {
     const events = [
       "prompt.submitted",

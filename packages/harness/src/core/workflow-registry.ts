@@ -119,8 +119,15 @@ export class WorkflowRegistry {
   }
 
   private async persist(): Promise<void> {
-    await fs.mkdir(path.dirname(this.registryPath), { recursive: true });
-    await fs.writeFile(this.registryPath, JSON.stringify(this.workflows, null, 2));
+    const dir = path.dirname(this.registryPath);
+    await fs.mkdir(dir, { recursive: true });
+    // Atomic write: write to a temp file in the same directory (so rename is
+    // same-filesystem and thus atomic on POSIX), then rename over the target.
+    // A crash mid-write leaves the .tmp file, not a torn workflows.json.
+    // Mirrors the pattern used by SessionManager.persist().
+    const tmpPath = `${this.registryPath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(this.workflows, null, 2));
+    await fs.rename(tmpPath, this.registryPath);
   }
 
   /** Chains `run` onto the write queue so concurrent mutations never

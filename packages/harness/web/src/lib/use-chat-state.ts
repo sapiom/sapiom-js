@@ -10,7 +10,7 @@
  * Privacy: chat events are UI-transport only — they never touch the analytics
  * store. This hook only reads from the bus; it never writes.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import type { BusMessage, ChatToolCall, ChatTurn } from "@shared/types";
 
@@ -101,16 +101,19 @@ export function useChatState(): UseChatStateReturn {
     } else if (message.type === "chat.history") {
       const sessionId = message.history.harnessSessionId;
       const state = getOrCreate(sessionId);
-      // History snapshot only applied when the session has no live turns yet
-      // (a mid-session reconnect has already been receiving live turns and
-      // shouldn't be overwritten with a potentially stale snapshot).
-      if (state.turns.length === 0) {
-        stateRef.current.set(sessionId, {
-          ...state,
-          turns: message.history.turns,
-        });
-        bump();
-      }
+      // Merge history with any live turns already accumulated, deduped by
+      // turnId (history wins on conflict; live turns not in history are
+      // appended in their original order). This handles the race where a
+      // chat.turn arrives before the chat.history snapshot on reconnect —
+      // both are preserved rather than the live turn being silently dropped.
+      const historyTurnIds = new Set(message.history.turns.map((t) => t.turnId));
+      const liveOnlyTurns = state.turns.filter((t) => !historyTurnIds.has(t.turnId));
+      const merged = [...message.history.turns, ...liveOnlyTurns];
+      stateRef.current.set(sessionId, {
+        ...state,
+        turns: merged,
+      });
+      bump();
     } else if (message.type === "chat.attention") {
       const state = getOrCreate(message.harnessSessionId);
       stateRef.current.set(message.harnessSessionId, {

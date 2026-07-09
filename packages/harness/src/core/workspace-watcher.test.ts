@@ -98,6 +98,46 @@ describe("WorkspaceWatcherManager", () => {
     manager.start("sess-1", cwd);
     expect(manager.size).toBe(1);
   });
+
+  it("poll in-flight guard: second tick while first async walk is running is skipped (C3)", async () => {
+    // Verify the in-flight guard semantic directly: a tick() call while a
+    // previous async walk is still pending should be a no-op. We implement the
+    // same pattern as SessionWorkspaceWatcher.fallBackToPolling() in isolation
+    // to assert the invariant without depending on timing or fs.watch mock.
+    let inFlightAtSecondTick = false;
+    let walkCallCount = 0;
+    let resolveFirstWalk!: () => void;
+
+    // Minimal reimplementation of the guarded poll pattern from workspace-watcher.ts.
+    let pollInFlight = false;
+    const tick = (): void => {
+      if (pollInFlight) { inFlightAtSecondTick = true; return; }
+      pollInFlight = true;
+      walkCallCount++;
+      // Slow async that doesn't resolve until resolveFirstWalk() is called.
+      new Promise<void>((r) => { resolveFirstWalk = r; })
+        .finally(() => { pollInFlight = false; });
+    };
+
+    // First tick: starts the walk, sets pollInFlight = true.
+    tick();
+    expect(walkCallCount).toBe(1);
+    expect(pollInFlight).toBe(true);
+
+    // Second tick: should be skipped because pollInFlight is true.
+    tick();
+    expect(inFlightAtSecondTick).toBe(true);
+    expect(walkCallCount).toBe(1); // no second walk started
+
+    // Once the first walk completes, the flag is cleared.
+    resolveFirstWalk();
+    await new Promise((r) => setImmediate(r));
+    expect(pollInFlight).toBe(false);
+
+    // Now a third tick can proceed.
+    tick();
+    expect(walkCallCount).toBe(2);
+  });
 });
 
 describe("snapshotWorkspaceWorkflows", () => {

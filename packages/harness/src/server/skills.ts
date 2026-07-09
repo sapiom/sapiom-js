@@ -8,10 +8,13 @@
  *      uses for project-specific skills).
  *
  * Path-traversal safety: skill ids are slug-shaped identifiers (letters,
- * digits, hyphens) — any id that cannot map to a known skill path is
- * rejected with a 404 before any filesystem access. The set of known paths
- * is built at list time and re-used by the detail endpoint to avoid walking
- * the filesystem on every request.
+ * digits, hyphens, underscores) — any id that fails the SAFE_SLUG regex is
+ * rejected with a 404 before any filesystem access.
+ *
+ * The list endpoint (GET /api/skills) does a full directory walk across both
+ * roots. The detail endpoint (GET /api/skills/:id) resolves in O(1) by
+ * constructing candidate paths directly from the slug (= directory name),
+ * without re-walking the tree.
  *
  * Markdown is served as-is — the SPA renders it client-side (no HTML
  * injection here). The frontmatter block is stripped before delivery so the
@@ -201,31 +204,59 @@ export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
 
   /**
    * GET /api/skills/:id — full detail (meta + markdown body) for a single
-   * skill. Path-traversal safe: the id must be a known slug, never a path.
+   * skill. Path-traversal safe: the id must be a safe slug (letters, digits,
+   * hyphens, underscores only) — the slug IS the directory name, so we can
+   * resolve it in O(1) by stat/reading `<root>/<slug>/SKILL.md` across the
+   * two roots (user first, per collision rule) without a full directory walk.
+   *
+   * The slug regex + containment guard (SAFE_SLUG + the two fixed roots)
+   * ensure no traversal is possible — a slug can never contain a path separator.
    */
   router.get("/api/skills/:id", async (req, res) => {
     const { id } = req.params;
 
-    // Reject anything that isn't a safe slug up front.
+    // Reject anything that isn't a safe slug up front — prevents any path-
+    // traversal attempt before filesystem access.
     if (!id || !SAFE_SLUG.test(id)) {
       res.status(404).json({ error: `Unknown skill '${id}'` });
       return;
     }
 
     try {
-      const [pkgSkills, userSkills] = await Promise.all([
-        scanPackageSkills(options.nodeModulesRoot),
-        options.userSkillsRoot
-          ? scanUserSkillsFromRoot(options.userSkillsRoot)
-          : scanUserSkills(),
-      ]);
+      // O(1) resolution: the id is the directory name, so build the candidate
+      // paths directly. User root first (user skills win on id collision).
+      const userRoot = options.userSkillsRoot ?? null;
+      const userSkillFile = userRoot
+        ? path.join(userRoot, id, "SKILL.md")
+        : path.join(os.homedir(), ".claude", "skills", id, "SKILL.md");
 
-      // User skills win on id collision (same convention as the list endpoint).
-      const all = [...pkgSkills, ...userSkills];
-      const byId = new Map<string, (typeof all)[0]>();
-      for (const skill of all) byId.set(skill.id, skill);
+      // Try user skill first; fall through to package skills on null result.
+      let found = await readSkillFile(userSkillFile, id, "user");
 
-      const found = byId.get(id);
+      if (!found) {
+        // Package skills: resolve the node_modules root and try each @sapiom
+        // package's skills directory for a matching id. Still O(packages) but
+        // avoids the full readdir of every skills subdirectory.
+        const nmRoot = options.nodeModulesRoot ?? findNodeModules();
+        const sapiomDir = path.join(nmRoot, "@sapiom");
+        let pkgDirs: string[];
+        try {
+          pkgDirs = await import("node:fs/promises").then((fsp) =>
+            fsp.readdir(sapiomDir),
+          );
+        } catch {
+          pkgDirs = [];
+        }
+        for (const pkg of pkgDirs) {
+          const candidate = path.join(sapiomDir, pkg, "skills", id, "SKILL.md");
+          const parsed = await readSkillFile(candidate, id, "package");
+          if (parsed) {
+            found = parsed;
+            break;
+          }
+        }
+      }
+
       if (!found) {
         res.status(404).json({ error: `Unknown skill '${id}'` });
         return;
