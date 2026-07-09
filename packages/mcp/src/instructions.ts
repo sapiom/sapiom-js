@@ -17,10 +17,11 @@
 export const AUTHORING_INSTRUCTIONS = `# Sapiom dev MCP (sapiom-dev)
 
 \`sapiom-dev\` is Sapiom's local developer MCP — the terminal surface for building and managing
-your Sapiom projects. Today it drives **agent authoring** (more dev/management tools will land
-here over time): build, test, and deploy a Sapiom agent — a \`defineAgent({ name, entry, steps })\`
-(from \`@sapiom/agent\`) where each step's \`run(input, ctx)\` does work and returns a directive.
-All from the terminal; no dashboard required.
+your Sapiom projects. Today it drives **agent authoring and sandbox app previews** (more
+dev/management tools will land here over time). Agent authoring: build, test, and deploy a
+Sapiom agent — a \`defineAgent({ name, entry, steps })\` (from \`@sapiom/agent\`) where each
+step's \`run(input, ctx)\` does work and returns a directive. All from the terminal; no
+dashboard required.
 
 ## Two ways to use Sapiom
 This server (\`sapiom-dev\`) is where you **author agents** — the \`sapiom_dev_agents_*\` tools
@@ -44,6 +45,12 @@ remote MCP or the SDK for a single action.
 3. Test for free: \`npm run typecheck\` → \`sapiom_dev_agents_check\` (validates the step graph,
    offline) → \`sapiom_dev_agents_run_local\` (capabilities are stubbed; zero spend).
 4. Ship: \`sapiom_dev_agents_link\` → \`_deploy\` → \`_run\` (real, billed) → \`_inspect\`.
+
+## Preview a web app
+From inside the project: \`sapiom_dev_sandbox_configure\` (writes the validated \`sapiom.json\`
+resource — start command, port, optional build/tier/ttl/env) → optionally
+\`sapiom_dev_sandbox_check\` → \`sapiom_dev_sandbox_preview\` (uploads, builds, starts, and
+returns a live URL; a \`failed\` status carries the build/start logs — fix and retry).
 
 ## Canonical rules (types are the source of truth — run \`npm run typecheck\`)
 - Import \`defineAgent\`, \`defineStep\`, and the directives
