@@ -421,7 +421,7 @@ describe("TaskManager", () => {
         const { manager, spawned } = makeManager();
         await manager.run(runRequest);
 
-        const _killAllPromise = manager.killAll();
+        void manager.killAll();
 
         // The spy captures handles for the escalation and confirm timers.
         const timerHandles = setTimeoutSpy.mock.results

@@ -49,7 +49,7 @@ function makeServer(): {
 }
 
 describe("bin.ts signal handler wiring", () => {
-  const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as (code?: number) => never);
+  const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
 
   afterEach(() => {
     exitSpy.mockClear();

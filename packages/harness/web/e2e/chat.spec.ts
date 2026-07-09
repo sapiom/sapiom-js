@@ -193,8 +193,8 @@ test("chat.history bus event populates the turn list for the active session", as
   await expect(page.getByTestId("chat-turn-assistant")).toContainText("History reply one");
 });
 
-test("chat.history is ignored when the session already has live turns", async ({ page }) => {
-  // First publish a live turn.
+test("chat.history merges with live turns when live turns already exist (C7)", async ({ page }) => {
+  // First publish a live turn that arrived before history was ready.
   await publishTurn(page, {
     sessionId: "sess-boot",
     role: "user",
@@ -203,15 +203,18 @@ test("chat.history is ignored when the session already has live turns", async ({
   });
   await expect(page.getByTestId("chat-turn-user")).toContainText("Live turn already here");
 
-  // Now publish history — should NOT overwrite the live turn.
+  // Publish history with a DIFFERENT turnId — simulates the server sending the
+  // historical snapshot after a reconnect where a live turn arrived first.
+  // The merge must preserve both: history turns first, then live-only turns.
   await publishHistory(page, {
     sessionId: "sess-boot",
-    turns: [{ role: "user", content: "History that should be ignored" }],
+    turns: [{ role: "user", content: "Historical message" }],
   });
 
-  // Still shows the live turn, not the history.
+  // Both turns visible — history did not overwrite the live turn.
   await expect(page.locator("[data-turn-id=live-1]")).toBeVisible();
-  await expect(page.locator(".chat-turn")).toHaveCount(1);
+  await expect(page.locator("[data-turn-id=hist-0]")).toBeVisible();
+  await expect(page.locator(".chat-turn")).toHaveCount(2);
 });
 
 // ---------------------------------------------------------------------------

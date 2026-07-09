@@ -9,7 +9,7 @@
  * every hook that should clear the banner. The client-side belt-and-braces
  * (clearing on chat.turn/chat.tool) is covered by the Playwright spec.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 /** Minimal re-creation of the onRawHookEvent handler from server/index.ts. */
 function makeOnRawHookEvent(): {
