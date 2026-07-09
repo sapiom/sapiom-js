@@ -4,6 +4,7 @@ import { registerAuthCommands } from './commands/auth/index.js';
 import { registerConfigCommands } from './commands/config/index.js';
 import { registerAgentsCommands } from './commands/agents/index.js';
 import { registerCommandAnalytics } from './lib/analytics.js';
+import { registerSandboxCommands } from './commands/sandbox/index.js';
 
 /**
  * Build the root `sapiom` program. Account-level commands (login/logout) sit at
@@ -20,6 +21,7 @@ export function buildProgram(): Command {
   registerAuthCommands(program);
   registerConfigCommands(program);
   registerAgentsCommands(program);
+  registerSandboxCommands(program);
 
   return program;
 }

@@ -37,6 +37,7 @@ const PACKAGES = [
   "agent-runtime",
   "agent-core",
   "sandbox",
+  "sandbox-preview",
   "cli",
   "mcp",
 ];

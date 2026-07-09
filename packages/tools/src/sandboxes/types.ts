@@ -43,6 +43,60 @@ export interface SandboxCreateOptions {
   baseUrl?: string;
 }
 
+/** Options for exposing a sandbox port at a public URL (the low-level primitive). */
+export interface PublicUrlOptions {
+  /** Sandbox port to expose. Must have been declared when the sandbox was created. */
+  port: number;
+  /** Public (no auth) or private (token-gated). @default true */
+  public?: boolean;
+  /** Name for the exposed URL. @default "default" */
+  name?: string;
+  /** Optional custom subdomain prefix. */
+  prefix?: string;
+}
+
+/** A created public URL exposing a sandbox port. */
+export interface PublicUrlInfo {
+  /** The public URL serving the exposed port. */
+  url: string;
+  /** The name of the exposed URL. */
+  name?: string;
+}
+
+/**
+ * Options for {@link Sandbox.deployPreview}. Builds and (re)starts the app in the
+ * sandbox and exposes it at a stable public URL. Source must already be in the
+ * sandbox (e.g. via {@link Sandbox.uploadDir}); `source` defaults to those files.
+ */
+export interface DeployPreviewOptions {
+  /** Where the app code comes from. Defaults to already-uploaded files. */
+  source?: { kind: "fs" };
+  /** Build command run before start (e.g. `npm install`). Skipped if omitted. */
+  build?: string;
+  /** Command that starts the long-running server. */
+  start: string;
+  /** Port the app listens on — exposed publicly (declared at sandbox create). */
+  port: number;
+  /** Extra environment variables injected into the app process. */
+  env?: Record<string, string>;
+}
+
+/** Result of {@link Sandbox.deployPreview}. */
+export interface DeployPreviewResult {
+  /** The public URL serving the app. Null when the deploy failed before exposure. */
+  url: string | null;
+  /** Deploy outcome: `deployed` (served 2xx), `unverified`, or `failed`. */
+  status: string;
+  /** Build/start log output (tail); populated especially on failure. */
+  logs: string;
+}
+
+/** Options for {@link Sandbox.uploadDir}. */
+export interface UploadDirOptions {
+  /** Extra path patterns to skip (in addition to node_modules, .git, dotfiles). */
+  ignore?: string[];
+}
+
 /** Options for executing a command (non-streaming). */
 export interface ExecOptions {
   /** Working directory, resolved relative to the sandbox workspace root. */

@@ -1,0 +1,8 @@
+{
+  "name": "sapiom-e2e-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
