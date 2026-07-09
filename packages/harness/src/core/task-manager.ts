@@ -43,6 +43,21 @@ const MAX_STDERR_CHARS = 2_000;
 /** Finished tasks retained (per whole manager) for late-mounting clients;
  *  running tasks are always retained regardless. */
 const MAX_FINISHED_TASKS = 20;
+/**
+ * How long killAll() waits for a graceful SIGTERM to take effect before
+ * escalating to SIGKILL. Mirrors SessionManager's KILL_ESCALATION_MS — tasks
+ * are headless child processes (claude -p) so they typically die faster than
+ * interactive ptys, but the same bounded escalation semantics apply.
+ */
+const TASK_KILL_ESCALATION_MS = 2_000;
+/**
+ * How long killAll() waits after sending SIGKILL before synthesizing finish()
+ * for any still-registered process. Mirrors SessionManager's
+ * KILL_ESCALATION_CONFIRM_MS. After this window the task is declared dead
+ * regardless — a zombie that never emits "exit" would otherwise leave
+ * allExited pending forever.
+ */
+const TASK_KILL_CONFIRM_MS = 500;
 
 /**
  * The slice of node's ChildProcess a task actually uses — injectable so
@@ -153,6 +168,13 @@ export class TaskManager {
    *  as `resultText`, so a structured task's caller can parse the answer. */
   private readonly resultTexts = new Map<string, string>();
   private readonly statusEmitter = new EventEmitter();
+  /**
+   * Per-task exit promises: each resolves when `finish()` runs for that task
+   * (whether via a normal exit, an error event, or a killAll() escalation).
+   * `killAll()` awaits these to confirm actual death before resolving.
+   */
+  private readonly exitedPromises = new Map<string, Promise<void>>();
+  private readonly resolveExited = new Map<string, () => void>();
 
   constructor(options: TaskManagerOptions) {
     this.adapters = options.adapters;
@@ -289,6 +311,11 @@ export class TaskManager {
     // Registered — the running-task check owns dedupe from here.
     releasePending();
     this.processes.set(id, child);
+    // Set up the per-task exit promise so killAll() can await actual death.
+    const exited = new Promise<void>((resolve) => {
+      this.resolveExited.set(id, resolve);
+    });
+    this.exitedPromises.set(id, exited);
     this.trimFinished();
     this.emitStatus(task);
 
@@ -314,16 +341,64 @@ export class TaskManager {
     return task;
   }
 
-  /** Kills every still-running task process. Call on server shutdown, same
-   *  reason as SessionManager.killAll — child processes aren't torn down by
-   *  the HTTP server closing. */
-  killAll(): void {
+  /**
+   * Kills every still-running task process and returns a Promise that resolves
+   * when all of them have actually exited. Bounded and never hangs:
+   *
+   * 1. SIGTERM all running tasks.
+   * 2. Wait up to `TASK_KILL_ESCALATION_MS` for graceful exits.
+   * 3. SIGKILL any survivors.
+   * 4. Wait up to `TASK_KILL_CONFIRM_MS` for SIGKILL exits.
+   * 5. Synthesize `finish(id, null)` for any still-registered processes —
+   *    a zombie that never emits "exit" would otherwise leave allExited
+   *    pending forever. finish()'s idempotence guard (status !== "running")
+   *    makes a double-call harmless if the exit event arrives concurrently.
+   */
+  async killAll(): Promise<void> {
+    const runningIds = [...this.processes.keys()];
+    if (runningIds.length === 0) return;
+
+    // Snapshot the exit promises before sending signals — `finish()` deletes
+    // them from the map, so we must capture them now while all are present.
+    const exitWaiters = runningIds
+      .map((id) => this.exitedPromises.get(id))
+      .filter((p): p is Promise<void> => p !== undefined);
+
+    // Phase 1: SIGTERM all running tasks.
     for (const child of this.processes.values()) {
       try {
         child.kill("SIGTERM");
       } catch {
+        // Already gone — finish() will handle it when the exit event arrives.
+      }
+    }
+
+    // Wait for graceful exits or escalation window.
+    const allExited = Promise.all(exitWaiters);
+    const escalationTimer = new Promise<void>((resolve) => setTimeout(resolve, TASK_KILL_ESCALATION_MS));
+    await Promise.race([allExited, escalationTimer]);
+
+    // Phase 2: SIGKILL any still-alive processes after the grace window.
+    for (const child of this.processes.values()) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
         // Already gone.
       }
+    }
+
+    // Wait for SIGKILL exits or the confirm window, then synthesize for zombies.
+    // Using a separate timer (not reusing escalationTimer which already fired)
+    // so the SIGKILL phase gets its own full window.
+    const confirmTimer = new Promise<void>((resolve) => setTimeout(resolve, TASK_KILL_CONFIRM_MS));
+    await Promise.race([allExited, confirmTimer]);
+
+    // Synthesize finish() for any process that still hasn't emitted an exit
+    // event — a zombie or a process whose exit event was lost. finish()'s
+    // idempotence guard (task.status !== "running") prevents a double-fire if
+    // the real exit event arrives concurrently or slightly later.
+    for (const id of [...this.processes.keys()]) {
+      this.finish(id, null);
     }
   }
 
@@ -362,6 +437,13 @@ export class TaskManager {
     this.stderrTails.delete(id);
     this.resultErrors.delete(id);
     this.resultTexts.delete(id);
+    // Resolve the per-task exit promise so killAll() waiters unblock.
+    const resolve = this.resolveExited.get(id);
+    if (resolve) {
+      resolve();
+      this.resolveExited.delete(id);
+      this.exitedPromises.delete(id);
+    }
     this.emitStatus(task);
     this.onCleanup(id);
   }

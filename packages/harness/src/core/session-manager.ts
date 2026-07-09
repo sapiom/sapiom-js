@@ -250,6 +250,21 @@ interface PtyHandle {
   emitter: EventEmitter;
   /** Epoch ms this pty was spawned — see `isReadyEnough`'s settle window. */
   spawnedAt: number;
+  /**
+   * Resolves when this specific pty handle's session has fully exited —
+   * either via node-pty's real `onExit` event OR a synthesized exit (kill()'s
+   * escalation fallback, sweepDeadSessions, or pre-pty failure reconciliation).
+   * `markExited()` is the single convergence point for all three paths, so
+   * awaiting `exited` never hangs regardless of which path fires first.
+   *
+   * Always tied to THIS handle instance: markExited() is idempotent on the
+   * handle identity, so a stale duplicate call (e.g. from a late liveness
+   * sweep after kill()'s own fallback already ran) is a silent no-op and
+   * never resolves a DIFFERENT session's promise.
+   */
+  exited: Promise<void>;
+  /** Internal resolver — called exactly once by markExited(). */
+  resolveExited: () => void;
 }
 
 export class SessionManager {
@@ -455,7 +470,31 @@ export class SessionManager {
     return session;
   }
 
-  kill(id: string): boolean {
+  /**
+   * Signals the session's pty to exit and returns a Promise that resolves
+   * once the process is **actually gone** — not fire-and-forget.
+   *
+   * Resolution source (either one unblocks the promise):
+   *   1. node-pty's own `onExit` event → markExited() → `handle.exited` resolves.
+   *   2. Synthesized exit: kill()'s escalation fallback (SIGTERM → SIGKILL →
+   *      pid liveness check) → markExited() → `handle.exited` resolves.
+   *   3. Synthesized exit from an external `sweepDeadSessions()` call that
+   *      happens to run during the escalation window → same path.
+   *
+   * The promise is bounded: after `KILL_ESCALATION_MS` the escalation sends
+   * SIGKILL; after a further `KILL_ESCALATION_CONFIRM_MS` it synthesizes the
+   * exit from an OS-level pid check regardless of node-pty's event. So the
+   * worst-case resolution time is `KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS`
+   * (2500 ms at current constants), never infinite.
+   *
+   * Existing fire-and-forget callers keep working: an unawaited Promise is
+   * fine and produces no floating-promise lint warnings when suppressed with
+   * `void`.
+   *
+   * Returns false (resolved immediately) when the session has no live pty.
+   * Returns true (resolved on actual death) when a pty was signalled.
+   */
+  kill(id: string): Promise<boolean> {
     const handle = this.ptys.get(id);
     if (!handle) {
       // A non-exited record with no pty behind it has nothing left to kill —
@@ -465,9 +504,9 @@ export class SessionManager {
       const session = this.sessions.get(id);
       if (session && session.status !== "exited") {
         void this.transitionExited(session, null);
-        return true;
+        return Promise.resolve(true);
       }
-      return false;
+      return Promise.resolve(false);
     }
     handle.pty.kill();
     // Root-caused via instrumented real-process runs: node-pty's `onExit`
@@ -487,19 +526,34 @@ export class SessionManager {
       const pid = handle.pty.pid;
       if (this.isPidAlive(pid)) handle.pty.kill("SIGKILL");
       setTimeout(() => {
-        if (this.ptys.get(id) === handle && !this.isPidAlive(pid)) this.markExited(id, handle, null);
+        // Synthesize unconditionally: SIGKILL was already sent; after the
+        // confirm window the session is over regardless of isPidAlive. An
+        // EPERM-alive zombie (a process that exists but can't be signalled)
+        // would leave handle.exited pending forever if we gated on liveness.
+        if (this.ptys.get(id) === handle) this.markExited(id, handle, null);
       }, KILL_ESCALATION_CONFIRM_MS).unref?.();
     }, KILL_ESCALATION_MS);
     escalate.unref?.();
-    return true;
+    // Return a promise that resolves on actual death — either the real onExit
+    // event or a synthesized exit from the escalation above or sweepDeadSessions.
+    // `handle.exited` is resolved by markExited(), which is the single
+    // convergence point for all three paths — it never hangs.
+    return handle.exited.then(() => true);
   }
 
-  /** Kills every currently-live pty. Call this on server shutdown — without
-   *  it, spawned agent processes (claude/codex) outlive the harness server
-   *  itself, e.g. after Ctrl+C, since closing the HTTP/WS server doesn't
-   *  touch unrelated child processes on its own. */
-  killAll(): void {
-    for (const id of [...this.ptys.keys()]) this.kill(id);
+  /**
+   * Kills every currently-live pty and returns a Promise that resolves when
+   * all of them have actually exited (real or synthesized). Bounded by the
+   * same escalation window as `kill()` — never hangs.
+   *
+   * Call this on server shutdown so the process actually exits instead of
+   * waiting on orphaned claude/codex children. A bounded timeout can be layered
+   * on top via `Promise.race` when callers need a hard deadline:
+   *   `await Promise.race([sessionManager.killAll(), sleep(5_000)])`
+   */
+  async killAll(): Promise<void> {
+    const kills = [...this.ptys.keys()].map((id) => this.kill(id));
+    await Promise.all(kills);
   }
 
   /**
@@ -776,7 +830,11 @@ export class SessionManager {
 
     const emitter = new EventEmitter();
     emitter.setMaxListeners(0);
-    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now() };
+    let resolveExited!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      resolveExited = resolve;
+    });
+    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now(), exited, resolveExited };
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -810,6 +868,9 @@ export class SessionManager {
     if (this.ptys.get(id) !== handle) return;
     this.ptys.delete(id);
     this.lastActivityBroadcast.delete(id);
+    // Resolve after the pty map is cleaned up. transitionExited runs
+    // synchronously to set status before any awaiting continuation resumes.
+    handle.resolveExited();
     const session = this.sessions.get(id);
     if (!session) return;
     void this.transitionExited(session, exitCode);

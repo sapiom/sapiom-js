@@ -130,7 +130,7 @@ describe("codex tailer lifecycle wiring", () => {
     // resolves once the HTTP server stops listening, independent of whether
     // this session's exit-triggered persist() has landed yet, which can
     // still be mid-write when the test's temp dir gets removed.
-    server.sessionManager.kill(session.id);
+    void server.sessionManager.kill(session.id);
     await vi.waitFor(() => {
       expect(server!.sessionManager.get(session.id)?.status).toBe("exited");
     }, PTY_EXIT_WAIT_OPTIONS);
@@ -168,7 +168,7 @@ describe("codex tailer lifecycle wiring", () => {
 
     // See the first test's comment: wait for the real spawned process to
     // actually exit rather than leaving that race to afterEach's close().
-    server.sessionManager.kill(resumed.id);
+    void server.sessionManager.kill(resumed.id);
     await vi.waitFor(() => {
       expect(server!.sessionManager.get(resumed.id)?.status).toBe("exited");
     }, PTY_EXIT_WAIT_OPTIONS);
@@ -209,7 +209,7 @@ describe("codex tailer lifecycle wiring", () => {
 
     // See the first test's comment: wait for the real spawned process to
     // actually exit rather than leaving that race to afterEach's close().
-    server.sessionManager.kill(session.id);
+    void server.sessionManager.kill(session.id);
     await vi.waitFor(() => {
       expect(server!.sessionManager.get(session.id)?.status).toBe("exited");
     }, PTY_EXIT_WAIT_OPTIONS);
@@ -230,7 +230,7 @@ describe("codex tailer lifecycle wiring", () => {
     const session = await server.sessionManager.create({ cwd, harness: "codex" });
     await vi.waitFor(() => expect(tailCodexRollout).toHaveBeenCalled());
 
-    server.sessionManager.kill(session.id);
+    void server.sessionManager.kill(session.id);
 
     // emitSessionEnd() only fires from the onStatusChange("exited") handler
     // — it's downstream of the same real pty-exit transition as the other

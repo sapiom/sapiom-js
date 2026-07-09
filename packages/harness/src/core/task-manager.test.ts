@@ -327,14 +327,121 @@ describe("TaskManager", () => {
     expect(manager.list()).toHaveLength(0);
   });
 
-  it("killAll signals every still-running task process", async () => {
+  it("killAll signals every still-running task process with SIGTERM", async () => {
     const { manager, spawned } = makeManager();
     await manager.run(runRequest);
     await manager.run({ ...runRequest, harnessSessionId: "sess-2" });
     spawned[1].proc.emit("exit", 0); // finished — no longer tracked
 
-    manager.killAll();
+    // killAll() is now async — drive the remaining task's exit so it resolves.
+    const killAllPromise = manager.killAll();
+    spawned[0].proc.emit("exit", 0);
+    await killAllPromise;
+
     expect(spawned[0].proc.killed).toBe("SIGTERM");
-    expect(spawned[1].proc.killed).toBeUndefined();
+    expect(spawned[1].proc.killed).toBeUndefined(); // already finished before killAll
+  });
+
+  describe("awaitable killAll — TaskManager", () => {
+    it("killAll() is a no-op and resolves immediately when no tasks are running", async () => {
+      const { manager } = makeManager();
+      await expect(manager.killAll()).resolves.toBeUndefined();
+    });
+
+    it("killAll() resolves when all running tasks exit after SIGTERM (real timers)", async () => {
+      const { manager, spawned } = makeManager();
+      await manager.run(runRequest);
+      await manager.run({ ...runRequest, harnessSessionId: "sess-2" });
+
+      // Drive both exits concurrently: killAll() awaits both, so emit
+      // both exits before awaiting the promise.
+      const killAllPromise = manager.killAll();
+      spawned[0].proc.emit("exit", 0);
+      spawned[1].proc.emit("exit", 0);
+      await tick();
+      await killAllPromise;
+
+      expect(spawned[0].proc.killed).toBe("SIGTERM");
+      expect(spawned[1].proc.killed).toBe("SIGTERM");
+    });
+
+    it("killAll() escalates to SIGKILL for stubborn tasks that ignore SIGTERM, then resolves", async () => {
+      // A task process that ignores SIGTERM — killAll() must escalate to
+      // SIGKILL after TASK_KILL_ESCALATION_MS and then resolve once dead.
+      // Use fake timers to control the escalation delay.
+      vi.useFakeTimers();
+      try {
+        const { manager, spawned } = makeManager();
+        await manager.run(runRequest);
+
+        const killAllPromise = manager.killAll();
+        expect(spawned[0].proc.killed).toBe("SIGTERM");
+
+        // Advance past TASK_KILL_ESCALATION_MS (2000ms): the process hasn't
+        // exited yet, so killAll() escalates to SIGKILL.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(spawned[0].proc.killed).toBe("SIGKILL");
+
+        // Now the process dies (SIGKILL takes effect) — simulate via exit event.
+        spawned[0].proc.emit("exit", 137);
+        // Let the Promise chain drain.
+        await vi.advanceTimersByTimeAsync(0);
+        await killAllPromise;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("killAll() resolves without blocking on already-finished tasks", async () => {
+      const { manager, spawned } = makeManager();
+      await manager.run(runRequest);
+      await manager.run({ ...runRequest, harnessSessionId: "sess-2" });
+
+      // Finish both before calling killAll.
+      spawned[0].proc.emit("exit", 0);
+      spawned[1].proc.emit("exit", 0);
+      await tick();
+
+      // No running tasks — should resolve immediately.
+      await expect(manager.killAll()).resolves.toBeUndefined();
+    });
+
+    it("REGRESSION: killAll() resolves and finalizes a zombie that never emits exit even after SIGKILL (synthesizes finish)", async () => {
+      // A process that swallows both SIGTERM and SIGKILL — its "exit" event
+      // never fires. Without the synthesis path in killAll(), allExited would
+      // hang forever. This test confirms killAll() resolves within the bounded
+      // window and that the task record is finalized (not left "running").
+      vi.useFakeTimers();
+      try {
+        const { manager, spawned, statuses } = makeManager();
+        const task = await manager.run(runRequest);
+        expect(task.status).toBe("running");
+
+        const killAllPromise = manager.killAll();
+
+        // Phase 1: SIGTERM sent, but the process ignores it — no exit event.
+        expect(spawned[0].proc.killed).toBe("SIGTERM");
+
+        // Advance past TASK_KILL_ESCALATION_MS — killAll escalates to SIGKILL.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(spawned[0].proc.killed).toBe("SIGKILL");
+
+        // The zombie never emits exit even after SIGKILL. Advance past
+        // TASK_KILL_CONFIRM_MS — killAll must synthesize finish() and resolve.
+        await vi.advanceTimersByTimeAsync(500);
+        // Drain any microtask ticks from the finish() synchronous chain.
+        await vi.advanceTimersByTimeAsync(0);
+
+        await killAllPromise;
+
+        // The task must be finalized — never left "running" — even without a
+        // real exit event.
+        const finished = manager.get(task.id);
+        expect(finished?.status).not.toBe("running");
+        expect(statuses.at(-1)?.status).not.toBe("running");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

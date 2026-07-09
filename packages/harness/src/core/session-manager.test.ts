@@ -487,22 +487,34 @@ describe("SessionManager", () => {
     expect(statuses).toEqual(["exited"]);
   });
 
-  it("kill() signals the pty for a running session and is a no-op otherwise", async () => {
+  it("kill() signals the pty for a running session and returns a Promise resolving true; returns Promise<false> otherwise", async () => {
     const { manager, spawns } = makeManager();
     const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
-    expect(manager.kill(session.id)).toBe(true);
+    // kill() now returns Promise<boolean> — fire-and-forget still works via void,
+    // but here we confirm the resolved value and that the signal was sent.
+    const killResult = manager.kill(session.id);
+    expect(killResult).toBeInstanceOf(Promise);
     expect(spawns[0]?.pty.kill).toHaveBeenCalled();
-    expect(manager.kill("unknown-id")).toBe(false);
+
+    // Let the exit propagate so the promise resolves.
+    spawns[0]?.emitExit(0);
+    expect(await killResult).toBe(true);
+
+    // Unknown session: resolves false immediately.
+    expect(await manager.kill("unknown-id")).toBe(false);
   });
 
-  it("killAll() signals every currently-live pty", async () => {
+  it("killAll() signals every currently-live pty and resolves when all exit", async () => {
     const { manager, spawns } = makeManager();
     const a = await manager.create({ cwd: "/tmp/a", harness: "claude-code" });
     const b = await manager.create({ cwd: "/tmp/b", harness: "claude-code" });
     spawns[0]?.emitExit(0); // a exits on its own before killAll() runs
 
-    manager.killAll();
+    // Drive the exit event on b so killAll() can resolve.
+    const killAllPromise = manager.killAll();
+    spawns[1]?.emitExit(0);
+    await killAllPromise;
 
     expect(spawns[0]?.pty.kill).not.toHaveBeenCalled(); // already gone — nothing to signal
     expect(spawns[1]?.pty.kill).toHaveBeenCalled();
@@ -510,9 +522,9 @@ describe("SessionManager", () => {
     void b;
   });
 
-  it("killAll() is a harmless no-op with no live sessions", () => {
+  it("killAll() is a harmless no-op with no live sessions", async () => {
     const { manager } = makeManager();
-    expect(() => manager.killAll()).not.toThrow();
+    await expect(manager.killAll()).resolves.toBeUndefined();
   });
 
   it("resume() requires a known agentSessionId and respawns via adapter.resume", async () => {
@@ -828,13 +840,14 @@ describe("SessionManager", () => {
 
       const statuses: string[] = [];
       manager.onStatusChange((s) => statuses.push(s.status));
-      expect(manager.kill(session.id)).toBe(true);
+      // kill() now returns Promise<boolean>; the ghost path resolves immediately.
+      expect(await manager.kill(session.id)).toBe(true);
       expect(manager.get(session.id)?.status).toBe("exited");
       expect(statuses).toEqual(["exited"]);
 
       // A genuinely exited record is still a no-op false, as before.
-      expect(manager.kill(session.id)).toBe(false);
-      expect(manager.kill("unknown-id")).toBe(false);
+      expect(await manager.kill(session.id)).toBe(false);
+      expect(await manager.kill("unknown-id")).toBe(false);
     });
 
     describe("sweepDeadSessions", () => {
@@ -1005,5 +1018,175 @@ describe("SessionManager", () => {
 
     expect(capturedEnvs[0]?.["HARNESS_TEST_UNSET_ME"]).toBeUndefined();
     delete process.env["HARNESS_TEST_UNSET_ME"];
+  });
+
+  describe("awaitable kill — liveness-fallback resolution", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("REGRESSION: kill() resolves via the synthesis/liveness path when node-pty's onExit never fires (missed-exit bug)", async () => {
+      // Simulate the node-pty missed-exit bug: the pty's kill() is called
+      // but its onExit listeners are never invoked — the OS process is gone
+      // (isPidAlive returns false) but the event never arrives. kill() must
+      // still resolve within the escalation window via the synthesized exit.
+      let pidAlive = true;
+      const { manager, spawns } = makeManager({
+        fakePid: 9999,
+        isPidAlive: () => pidAlive,
+      });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      expect(session.status).toBe("running");
+
+      // Confirm the pty exists and won't emit onExit on its own — the exit
+      // listeners on the fake pty exist, but we never call emitExit().
+      expect(spawns[0]?.pty.kill).not.toHaveBeenCalled();
+
+      const killPromise = manager.kill(session.id);
+      // kill() sent SIGTERM (the initial pty.kill() with no signal arg).
+      expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(1);
+
+      // The process is now "dead" at the OS level but node-pty hasn't fired.
+      pidAlive = false;
+
+      // Advance past KILL_ESCALATION_MS (2000ms): the escalation fires and
+      // checks isPidAlive. Since the process is already dead, it skips SIGKILL
+      // and schedules the KILL_ESCALATION_CONFIRM_MS (500ms) confirm window.
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      // Advance past KILL_ESCALATION_CONFIRM_MS: the confirm fires, sees
+      // isPidAlive=false, and calls markExited() → resolves handle.exited.
+      await vi.advanceTimersByTimeAsync(500);
+
+      // The promise must now be resolved — await it to confirm.
+      expect(await killPromise).toBe(true);
+      expect(manager.get(session.id)?.status).toBe("exited");
+    });
+
+    it("kill() resolves immediately via real onExit when node-pty fires before the escalation window", async () => {
+      const { manager, spawns } = makeManager({ fakePid: 8888, isPidAlive: () => false });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const killPromise = manager.kill(session.id);
+      // Drive the real onExit — this fires before the escalation timer.
+      spawns[0]?.emitExit(0);
+
+      // Promise should resolve immediately (the real path, not the synthesis path).
+      expect(await killPromise).toBe(true);
+      expect(manager.get(session.id)?.status).toBe("exited");
+      expect(manager.get(session.id)?.exitCode).toBe(0);
+    });
+
+    it("kill() escalates to SIGKILL when the process survives SIGTERM, then resolves once it dies", async () => {
+      // Process ignores SIGTERM (stubborn process), but dies after SIGKILL.
+      let pidAlive = true;
+      const { manager, spawns } = makeManager({
+        fakePid: 7777,
+        isPidAlive: () => pidAlive,
+      });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const killPromise = manager.kill(session.id);
+      expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(1); // initial SIGTERM (no arg)
+
+      // Advance to KILL_ESCALATION_MS: process is still alive → SIGKILL sent.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(2); // SIGKILL
+      expect(spawns[0]?.pty.kill).toHaveBeenLastCalledWith("SIGKILL");
+
+      // Now the process dies (SIGKILL lands) — simulate via emitExit.
+      pidAlive = false;
+      spawns[0]?.emitExit(137); // SIGKILL exit code
+
+      expect(await killPromise).toBe(true);
+      expect(manager.get(session.id)?.exitCode).toBe(137);
+    });
+
+    it("killAll() resolves once all sessions are confirmed dead, even when exits come at different times", async () => {
+      const { manager, spawns } = makeManager({ fakePid: 6666, isPidAlive: () => false });
+      const a = await manager.create({ cwd: "/tmp/a", harness: "claude-code" });
+      const b = await manager.create({ cwd: "/tmp/b", harness: "claude-code" });
+
+      const killAllPromise = manager.killAll();
+      let resolved = false;
+      void killAllPromise.then(() => {
+        resolved = true;
+      });
+
+      // Neither has exited yet — killAll() should not be resolved.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolved).toBe(false);
+
+      // First session exits.
+      spawns[0]?.emitExit(0);
+      await vi.advanceTimersByTimeAsync(0);
+      // Second session still alive — not resolved yet.
+      expect(resolved).toBe(false);
+
+      // Second session exits.
+      spawns[1]?.emitExit(0);
+      await killAllPromise;
+      expect(resolved).toBe(true);
+      expect(manager.get(a.id)?.status).toBe("exited");
+      expect(manager.get(b.id)?.status).toBe("exited");
+    });
+
+    it("killAll() resolves via liveness synthesis when node-pty misses exits for all sessions", async () => {
+      // Both ptys swallow their onExit events — killAll() must still resolve
+      // via the missed-exit synthesis path within the escalation window.
+      let pidAlive = true;
+      const { manager } = makeManager({ fakePid: 5555, isPidAlive: () => pidAlive });
+      await manager.create({ cwd: "/tmp/a", harness: "claude-code" });
+      await manager.create({ cwd: "/tmp/b", harness: "claude-code" });
+
+      const killAllPromise = manager.killAll();
+      let resolved = false;
+      void killAllPromise.then(() => {
+        resolved = true;
+      });
+
+      // Mark the OS processes as gone — liveness check will confirm this.
+      pidAlive = false;
+
+      // Advance past the full escalation window.
+      await vi.advanceTimersByTimeAsync(2_000 + 500);
+
+      await killAllPromise;
+      expect(resolved).toBe(true);
+    });
+
+    it("REGRESSION: kill() resolves unconditionally in the confirm window even when isPidAlive stays true (EPERM zombie after SIGKILL)", async () => {
+      // An EPERM zombie: process.kill(pid, 0) still returns true (EPERM means
+      // "exists but can't be signalled") even after SIGKILL. The old confirm-
+      // timer guarded on `!isPidAlive(pid)` — that would leave handle.exited
+      // pending forever. The fixed confirm callback synthesizes markExited()
+      // unconditionally (SIGKILL was already sent; the session is over).
+      const { manager, spawns } = makeManager({
+        fakePid: 4444,
+        // Always "alive" — simulates an EPERM zombie that survives all probes.
+        isPidAlive: () => true,
+      });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      const killPromise = manager.kill(session.id);
+      // Initial signal sent.
+      expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(1);
+
+      // Advance past KILL_ESCALATION_MS: isPidAlive returns true → SIGKILL sent.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(2);
+      expect(spawns[0]?.pty.kill).toHaveBeenLastCalledWith("SIGKILL");
+
+      // Advance past KILL_ESCALATION_CONFIRM_MS: the confirm callback fires.
+      // isPidAlive is still true (zombie) but the fix synthesizes unconditionally.
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(await killPromise).toBe(true);
+      expect(manager.get(session.id)?.status).toBe("exited");
+    });
   });
 });
