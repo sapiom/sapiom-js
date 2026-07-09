@@ -463,19 +463,38 @@ test("the composer PromptBar is inside the chat view (not standalone under the t
   await expect(promptBarInChat).toBeVisible();
 });
 
-test("when Terminal tab is active, the chat panel is hidden and the terminal panel is in the DOM", async ({
+test("when Terminal tab is active, the chat panel is aria-hidden and the terminal panel is in the DOM", async ({
   page,
 }) => {
   // Switch to terminal.
   await page.getByTestId("center-tab-terminal").click();
   await expect(page.getByTestId("center-tab-terminal")).toHaveAttribute("aria-selected", "true");
 
-  // Chat panel has the HTML `hidden` attribute (CSS keep-alive pattern).
-  await expect(page.getByTestId("center-panel-chat")).toHaveAttribute("hidden", "");
+  // Chat panel uses aria-hidden (not HTML hidden) so CSS keep-alive works:
+  // aria-hidden allows the CSS visibility/absolute/zero-size mechanism to
+  // keep the xterm terminal alive across tab flips. UA `display:none` (from
+  // the HTML hidden attribute) would force a 0x0 refit and degenerate it.
+  await expect(page.getByTestId("center-panel-chat")).toHaveAttribute("aria-hidden", "true");
+  await expect(page.getByTestId("center-panel-chat")).not.toHaveAttribute("hidden");
 
-  // Terminal panel is attached to the DOM and does NOT have `hidden`.
+  // Terminal panel is attached to the DOM, NOT aria-hidden, and its computed
+  // display must NOT be "none" (the key keep-alive correctness invariant).
   await expect(page.getByTestId("center-panel-terminal")).toBeAttached();
-  await expect(page.getByTestId("center-panel-terminal")).not.toHaveAttribute("hidden");
+  await expect(page.getByTestId("center-panel-terminal")).toHaveAttribute("aria-hidden", "false");
+  const terminalDisplay = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="center-panel-terminal"]');
+    return el ? window.getComputedStyle(el).display : "not-found";
+  });
+  expect(terminalDisplay, "terminal panel must not be display:none while Terminal tab is active").not.toBe("none");
+
+  // Chat panel: while Terminal tab is active, assert via getComputedStyle that
+  // the chat panel's terminal element has no UA display:none either — CSS keeps
+  // it alive with visibility/absolute/0-size, not display:none.
+  const chatDisplay = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="center-panel-chat"]');
+    return el ? window.getComputedStyle(el).display : "not-found";
+  });
+  expect(chatDisplay, "chat panel must not be display:none (CSS keep-alive requires it stays in flow)").not.toBe("none");
 });
 
 // ---------------------------------------------------------------------------
