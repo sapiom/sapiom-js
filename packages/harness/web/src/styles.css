@@ -1169,10 +1169,25 @@ input {
 
 /* Terminal slot ------------------------------------------------------ */
 
+/* The slot is a flex column: the terminal expands to fill all available
+   height, and the prompt bar sits flush at the bottom as a fixed-height
+   footer. No scrolling on this container — each child manages its own. */
 .terminal-slot {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-0);
+}
+
+/* The xterm.js container (.harness-terminal) is the flex-growing child;
+   PromptBar (.prompt-bar) is flex-shrink: 0 (see its own rules). When no
+   terminal is shown (welcome panel, dead-session pane), those components
+   occupy the full height naturally since they're not flex-children of this
+   layout — see their own `.height: 100%` / `flex: 1` declarations. */
+.terminal-slot > .harness-terminal {
+  flex: 1;
+  min-height: 0;
 }
 
 .terminal-placeholder,
@@ -2009,6 +2024,149 @@ input {
 .toast-dismiss:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Prompt bar ------------------------------------------------------------ */
+
+/* Flush-bottom tray beneath the terminal, separated by a hairline border that
+   matches every other intra-pane divider in the UI. The bar never steals focus
+   (no autoFocus attribute) — the terminal continues to own the cursor by
+   default; the bar activates on click or Tab. */
+.prompt-bar {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.prompt-bar-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 8px 10px;
+}
+
+/* Visually hidden label — present for accessibility (aria-labelledby +
+   explicit htmlFor) but not rendered in the chrome. The placeholder and the
+   aria-label on the textarea cover the sighted path. */
+.prompt-bar-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Row: textarea + submit button side-by-side. The textarea flex-grows; the
+   button is a fixed 30×30 square that never reflows regardless of draft length. */
+.prompt-bar-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.prompt-bar-textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  overflow-y: auto;
+  /* Single-line at rest, grows with content up to MAX_ROWS via JS.
+     line-height kept explicit so the JS row-height calculation is stable. */
+  line-height: 20px;
+  padding: 5px 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.prompt-bar-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Disabled: subdued but still legible — the placeholder carries the reason. */
+.prompt-bar-textarea:disabled {
+  background: var(--bg-1);
+  color: var(--text-faint);
+  cursor: not-allowed;
+  /* Keep the same box-shadow so the bar's visual weight doesn't collapse when
+     disabled — a sudden height change reads as a layout shift. */
+  box-shadow: var(--shadow-xs);
+}
+
+.prompt-bar-textarea::placeholder {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Submit button — inherits .btn-primary but sized as an icon-only square.
+   Vertically aligned to the bottom of the row so it always anchors to the
+   last line of a growing textarea (natural baseline for a "send" action). */
+.prompt-bar-submit.btn-primary {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  /* Transition opacity on disabled rather than just pointer-events — the
+     button reads as "not available" even when the textarea is focused. */
+  transition:
+    background-color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.prompt-bar-submit.btn-primary:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* Thin spinner arc for the in-flight state. Pure CSS — no animation library. */
+.prompt-bar-spinner {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: prompt-bar-spin 0.7s linear infinite;
+}
+
+@keyframes prompt-bar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Inline status line — shown below the row when the bar is disabled or after a
+   failed submit. Uses `role="status" aria-live="polite"` so screen readers
+   announce the reason without interrupting the user. Kept at the same small
+   muted type as the strip's .strip-item-reason. */
+.prompt-bar-status {
+  margin: 4px 0 0;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+/* When the reactive reason is a 409 / error (not just "starting"), give it a
+   muted red tint without shouting — this is informational, not an alarm. */
+.prompt-bar[data-disabled="true"] .prompt-bar-status {
+  color: var(--text-faint);
 }
 
 /* Scrollbars — thin thumb-only styling, matching the product's own

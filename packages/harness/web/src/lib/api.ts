@@ -275,8 +275,19 @@ class MockApi implements HarnessApi {
     );
   }
 
-  async injectInput(_id: string, _req: InjectInputRequest): Promise<void> {
+  async injectInput(id: string, req: InjectInputRequest): Promise<void> {
     await delay();
+    // Test-only escape hatch, mock mode only: PromptBar calls this with the
+    // user's draft text; Playwright reads it back to assert the right payload
+    // was POSTed — same pattern as runMacro's lastMacroRun and seedSampleProject's
+    // lastSampleSeed.
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        lastInjectInput: { id, req },
+      };
+    }
   }
 
   async listWorkflows(): Promise<WorkflowInfo[]> {

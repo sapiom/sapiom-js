@@ -15,6 +15,7 @@ import { BrandHeader } from "./components/BrandHeader";
 import { CanvasPane } from "./components/CanvasPane";
 import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
+import { PromptBar } from "./components/PromptBar";
 import { SessionBar } from "./components/SessionBar";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
@@ -202,7 +203,13 @@ export const App = (): JSX.Element => {
                 onClose={() => void harness.closeSession(activeSession.id)}
               />
             ) : harness.activeSessionId ? (
-              <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+              <>
+                <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+                <PromptBar
+                  session={activeSession ?? null}
+                  onSubmit={harness.injectInput}
+                />
+              </>
             ) : showWelcome ? (
               <WelcomePanel
                 recentDirs={harness.settings?.recentDirs ?? []}
@@ -215,7 +222,7 @@ export const App = (): JSX.Element => {
                 onDismiss={() => setWelcomeDismissed(true)}
               />
             ) : (
-              <div className="terminal-empty">No active session — click “+ new” to start one.</div>
+              <div className="terminal-empty">No active session — click "+ new" to start one.</div>
             )}
           </div>
         </div>

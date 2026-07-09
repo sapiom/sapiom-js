@@ -50,6 +50,12 @@ export interface HarnessStateHook {
   bindWorkflow: (sessionId: string, workflowPath: string | null) => Promise<void>;
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
+  /**
+   * Submits text to a session's pty via POST /api/sessions/:id/input.
+   * Throws `ApiError` on HTTP errors — callers (e.g. PromptBar) handle 409
+   * (session not ready) by showing the reason inline rather than as a toast.
+   */
+  injectInput: (sessionId: string, text: string) => Promise<void>;
   listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
   /** A user-facing message from the most recent failed action (e.g. a macro
@@ -316,6 +322,13 @@ export function useHarnessState(): HarnessStateHook {
 
   const dismissToast = useCallback(() => setToast(null), []);
 
+  // Unlike runMacro (which swallows errors into a toast), injectInput lets the
+  // error propagate so the PromptBar can handle 409 "not ready" inline without
+  // clobbering the user's draft text with a generic toast message.
+  const injectInput = useCallback(async (sessionId: string, text: string): Promise<void> => {
+    await api.injectInput(sessionId, { text, submit: true });
+  }, []);
+
   const listDir = useCallback((path?: string): Promise<FsListResponse> => api.listDir(path), []);
 
   return {
@@ -340,6 +353,7 @@ export function useHarnessState(): HarnessStateHook {
     bindWorkflow,
     updateSettings,
     runMacro,
+    injectInput,
     listDir,
     lastMessage,
     toast,
