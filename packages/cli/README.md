@@ -31,3 +31,15 @@ sapiom agents schedule cancel <scheduleId>
 
 Run `sapiom agents --help` for the full command set. Every command accepts
 `--json` for machine-readable output.
+
+## Usage analytics
+
+The CLI can emit anonymous usage events through
+[`@sapiom/analytics-core`](https://github.com/sapiom/sapiom-js/tree/main/packages/analytics-core):
+one `command.run` event per executed command, carrying the command name, the
+names of the flags used (never their values or arguments), the duration, and
+the exit status. Nothing is currently sent anywhere. When delivery is
+enabled, it is best-effort and can never fail a command: it never slows
+command execution, and on exit a final flush is bounded by the emitter's
+5-second request timeout — retries never hold the process open. Opt out at
+any time with `SAPIOM_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.

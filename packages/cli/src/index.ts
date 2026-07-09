@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { registerAuthCommands } from './commands/auth/index.js';
 import { registerConfigCommands } from './commands/config/index.js';
 import { registerAgentsCommands } from './commands/agents/index.js';
+import { registerCommandAnalytics } from './lib/analytics.js';
 
 /**
  * Build the root `sapiom` program. Account-level commands (login/logout) sit at
@@ -12,6 +13,9 @@ import { registerAgentsCommands } from './commands/agents/index.js';
  */
 export function buildProgram(): Command {
   const program = new Command('sapiom').description('The Sapiom command-line interface.');
+
+  // Program-level hooks cover every command group registered below.
+  registerCommandAnalytics(program);
 
   registerAuthCommands(program);
   registerConfigCommands(program);
