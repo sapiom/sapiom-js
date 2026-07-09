@@ -26,13 +26,26 @@ import { ensureConsent } from "./consent.js";
 import { hasStoredSettings, loadSettings } from "./settings.js";
 
 describe("ensureConsent", () => {
+  const OUTER_ENV_KEYS = ["SAPIOM_TELEMETRY_DISABLED", "DO_NOT_TRACK"] as const;
+  const outerSaved: Record<string, string | undefined> = {};
+
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-consent-"));
     questionCallCount = 0;
+    // Clear env opt-outs so tests that assert "default to ON" behavior see the
+    // unadulterated prompt/default path, not the global test guard.
+    for (const key of OUTER_ENV_KEYS) {
+      outerSaved[key] = process.env[key];
+      delete process.env[key];
+    }
   });
 
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
+    for (const key of OUTER_ENV_KEYS) {
+      if (outerSaved[key] === undefined) delete process.env[key];
+      else process.env[key] = outerSaved[key];
+    }
   });
 
   it("--no-telemetry forces false without prompting or persisting", async () => {

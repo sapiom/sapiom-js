@@ -28,6 +28,8 @@ export { FLUSH_INTERVAL_MS, MAX_BATCH_SIZE } from "./batch-queue.js";
 export { MAX_FIELD_LENGTH } from "./data.js";
 export { SCHEMA_VERSION } from "./envelope.js";
 export { SAPIOM_COLLECTOR_ENDPOINT } from "./http-sender.js";
+export { seedAnalyticsIdentity } from "./identity.js";
+export type { IdentityRecord } from "./identity.js";
 export type {
   AnalyticsConfig,
   DebugHook,

@@ -36,7 +36,7 @@ user has opted out (see the README's telemetry section).
       "anonymous_id": "b1a2c3d4-...",        // machine UUID — send whenever available
       "session_id": "5e6f7a8b-...",          // producer-defined session
       "event_timestamp": "2026-01-15T10:30:00.000Z", // ISO-8601, client clock — data.seq is authoritative for ordering when present
-      "source": "ui",                        // ui|mcp|tools|cli|agent|langchain|backend
+      "source": "ui",                        // ui|mcp|tools|cli|agent|langchain|backend|harness
       "event_type": "prompt.submitted",
       "user_id": "usr_123",                  // ONLY when signed in (real account identity)
       "sdk_name": "@sapiom/harness",
@@ -169,6 +169,7 @@ the collector stores `event_type` verbatim either way.
 | `cli` | `command.run`, `notice.shown`, `telemetry.opt_out` |
 | `agent` | `workflow.deploy`, `workflow.run`, `workflow.link`, `step.start`, `step.complete`, `step.error` |
 | `langchain` | `model.call`, `tool.call` |
+| `harness` | `session.start`, `prompt.submitted`, `tool.call`, `turn.completed`, `session.end` |
 
 New event types require no contract change — send them.
 
