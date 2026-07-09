@@ -1,5 +1,11 @@
 # @sapiom/sandbox
 
+## 0.8.3
+
+### Patch Changes
+
+- c0fef6d: Deprecate for new projects. `@sapiom/tools` now ships sandbox support built in (`sapiom.sandboxes.*`), which new projects should use instead. This standalone package remains published and supported for existing production use. Adds a deprecation notice to the README.
+
 ## 0.8.2
 
 ### Patch Changes

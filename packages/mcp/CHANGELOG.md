@@ -1,5 +1,37 @@
 # @sapiom/mcp
 
+## 0.10.0
+
+### Minor Changes
+
+- 020139a: Add a `./auth` subpath export (`@sapiom/mcp/auth`) re-exporting the browser-OAuth flow (`performBrowserAuth`) and the `~/.sapiom/credentials.json` store (`resolveEnvironment`, `readCredentials`, `writeCredentials`, `clearCredentials`) — for consumers (e.g. `@sapiom/harness`) that want Sapiom's login without importing the MCP server entrypoint, which starts an stdio server as a side effect on import.
+
+  The package now declares an `exports` map (`"."` and `"./auth"`); `main`/`types` are unchanged for non-exports-aware consumers, but this does mean a deep import like `@sapiom/mcp/dist/auth.js` is no longer resolvable — use `@sapiom/mcp/auth` instead.
+
+- 3dfbd10: Ship the `sapiom-agent-authoring` skill with every scaffold, and finish the MCP
+  instructions rename.
+
+  - New canonical skill (`agent-core/skills/sapiom-agent-authoring/SKILL.md`) with a
+    task-shape trigger ("automate a multi-step / scheduled / deployable task"), the full
+    authoring guide (`defineAgent`, directives, pause/resume, stubs), and a bootstrap
+    step for agents whose client doesn't have the sapiom-dev MCP yet.
+  - Both scaffold templates ship it at `.claude/skills/sapiom-agent-authoring/` (auto-loads
+    as a project skill in Claude Code) and `AGENTS.md` points to it, so every scaffolded
+    project self-documents. A sync test keeps template copies identical to the canonical.
+  - `@sapiom/mcp`'s bundled instructions fallback rewritten to the agents/models
+    vocabulary (the rename left it on the old text), thinned to lifecycle + canonical
+    rules + pointers — deep guidance lives in the skill/AGENTS.md/docs.
+
+### Patch Changes
+
+- c0fef6d: Remove dead capability tools and drop the legacy `@sapiom/core` + `@sapiom/fetch` dependencies.
+
+  The `sapiom_verify_*` and `sapiom_create_transaction_api_key` tools were never registered on the server and belong to the remote Sapiom capability MCP, not this local developer MCP. They were the only consumers of `@sapiom/core`/`@sapiom/fetch`, so both dependencies are now removed. No change to the tools this server actually exposes (`authenticate`, `status`, `agents`).
+
+- Updated dependencies [020139a]
+- Updated dependencies [3dfbd10]
+  - @sapiom/agent-core@0.8.0
+
 ## 0.9.1
 
 ### Patch Changes

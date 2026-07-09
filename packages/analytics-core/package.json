@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/analytics-core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Zero-dependency usage analytics emitter shared by Sapiom SDK packages — consent-aware, batched, and guaranteed to never throw or block the host application.",
   "license": "MIT",
   "author": "Sapiom",

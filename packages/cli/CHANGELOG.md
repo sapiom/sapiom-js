@@ -1,5 +1,14 @@
 # @sapiom/cli
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [020139a]
+- Updated dependencies [3dfbd10]
+  - @sapiom/agent@0.6.1
+  - @sapiom/agent-core@0.8.0
+
 ## 0.3.1
 
 ### Patch Changes
