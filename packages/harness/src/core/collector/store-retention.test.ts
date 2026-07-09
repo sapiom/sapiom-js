@@ -4,6 +4,7 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createEventStore } from "./store.js";
 import { sweepNdjson, DEFAULT_MAX_SIZE_BYTES, DEFAULT_MAX_AGE_MS } from "./store-retention.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -171,5 +172,91 @@ describe("sweepNdjson", () => {
     // Should rewrite without throwing on missing parent.
     const result = await sweepNdjson(deepPath, { maxSizeBytes: DEFAULT_MAX_SIZE_BYTES, maxAgeMs: 30 * DAY_MS });
     expect(result.rewritten).toBe(true);
+  });
+});
+
+describe("EventStore.runExclusive — sweep/append concurrency safety", () => {
+  // Verifies that appends and sweeps run through EventStore.runExclusive() are
+  // strictly serialized — no append can sneak into the file between a sweep's
+  // readFile and its rename, which would cause the renamed file to be missing
+  // that line. The queue ensures: sweep reads file → sweep writes temp → rename
+  // is one uninterrupted slot; any append enqueued after the sweep waits until
+  // rename completes.
+
+  let tmpDir: string;
+  let filePath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-store-concurrency-"));
+    filePath = path.join(tmpDir, "events.ndjson");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("appends enqueued after a sweep contain exactly what the queue dictates — no lines lost to rename races", async () => {
+    const ts = new Date().toISOString();
+    const store = createEventStore(filePath);
+
+    // Write 10 seed events through the store's queue.
+    const seedLines = Array.from({ length: 10 }, (_, i) => makeEvent({ eventId: `seed-${i}`, ts }));
+    const seedEvents = seedLines.map((l) => JSON.parse(l) as Parameters<typeof store.append>[0]);
+    for (const event of seedEvents) {
+      await store.append(event);
+    }
+
+    // Each line is ~227 bytes; cap = 3 lines so the sweep will keep only the
+    // 3 newest seed events (seed-7, seed-8, seed-9) and drop seed-0..6.
+    const singleLineBytes = Buffer.byteLength(seedLines[0] + "\n", "utf8");
+    const cap = singleLineBytes * 3;
+
+    // Enqueue the sweep, then immediately enqueue 5 more appends.
+    // Queue order: sweep → post-0 → post-1 → ... → post-4 → final-read.
+    // The sweep sees exactly the 10 seed events; the 5 post-appends wait
+    // until after the rename. Crucially, none of the 5 post-appends can
+    // slip between the sweep's readFile and its rename — that window is
+    // an uninterrupted queue slot.
+    const sweepP = store.runExclusive(() =>
+      sweepNdjson(filePath, { maxSizeBytes: cap, maxAgeMs: DEFAULT_MAX_AGE_MS }),
+    );
+
+    const POST_IDS = ["post-0", "post-1", "post-2", "post-3", "post-4"];
+    const postEvents = POST_IDS.map((id) => JSON.parse(makeEvent({ eventId: id, ts })) as Parameters<typeof store.append>[0]);
+    const postAppends = postEvents.map((event) => store.append(event));
+
+    const [sweepResult] = await Promise.all([sweepP, ...postAppends]);
+
+    // Sweep ran first (cap of 3 seed events) — should have rewritten.
+    expect(sweepResult.rewritten).toBe(true);
+    expect(sweepResult.linesBefore).toBe(10);
+    expect(sweepResult.linesAfter).toBe(3);
+
+    // Read final file through the queue to see the complete post-sweep state.
+    const finalContent = await store.runExclusive(async () => fs.readFile(filePath, "utf8"));
+    const finalIds = finalContent
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => (JSON.parse(l) as { eventId: string }).eventId);
+
+    // The 3 kept seed events must be there (sweep result).
+    expect(finalIds).toContain("seed-7");
+    expect(finalIds).toContain("seed-8");
+    expect(finalIds).toContain("seed-9");
+
+    // All 5 post-sweep appends must be there — they ran AFTER the rename,
+    // so the rename could not have silently dropped them.
+    for (const id of POST_IDS) {
+      expect(finalIds, `"${id}" was appended after sweep but is missing`).toContain(id);
+    }
+
+    // Total: 3 kept seeds + 5 post-appends = 8 lines.
+    expect(finalIds).toHaveLength(8);
+
+    // Every line must parse cleanly — no corruption.
+    for (const line of finalContent.trim().split("\n").filter(Boolean)) {
+      expect(() => JSON.parse(line), `line is corrupt: ${line}`).not.toThrow();
+    }
   });
 });

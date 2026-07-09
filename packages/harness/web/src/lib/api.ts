@@ -209,11 +209,20 @@ const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(r
 class MockApi implements HarnessApi {
   // `?mockState=fresh` = brand-new install: nothing yet, firstRun set — see isFreshMockState().
   private readonly fresh = isFreshMockState();
+  // `?mockConsentSource=prompted` mirrors a user who answered yes at the TTY prompt:
+  // telemetryOptIn starts true so the chip shows "analytics on" from the first render.
+  private readonly promptedConsent =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("mockConsentSource") === "prompted";
   private sessions = this.fresh ? [] : MOCK_SESSIONS.map((session) => ({ ...session }));
   private workflows = this.fresh ? [] : MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
   private settings: HarnessSettings = this.fresh
     ? { ...MOCK_SETTINGS, recentDirs: [] }
-    : { ...MOCK_SETTINGS, recentDirs: [...MOCK_SETTINGS.recentDirs] };
+    : {
+        ...MOCK_SETTINGS,
+        recentDirs: [...MOCK_SETTINGS.recentDirs],
+        ...(this.promptedConsent ? { telemetryOptIn: true } : {}),
+      };
 
   async getState(): Promise<AppState> {
     await delay();
@@ -228,12 +237,16 @@ class MockApi implements HarnessApi {
     const mockEnvReason = typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("mockEnvReason") ?? null
       : null;
+    // When consent was answered via a TTY prompt ("prompted"), the user
+    // necessarily said yes — mirror that in the mock so the chip shows "on".
+    const telemetryOptIn =
+      mockConsentSource === "prompted" ? true : this.settings.telemetryOptIn;
     return {
       version: "0.0.1-mock",
       authenticated: true,
       userId: "user_mock",
       organizationName: "Acme (mock)",
-      telemetryOptIn: this.settings.telemetryOptIn,
+      telemetryOptIn,
       sessions: this.sessions,
       workflows: this.workflows,
       macros: MOCK_MACROS,

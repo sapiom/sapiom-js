@@ -12,17 +12,14 @@
  * the same directory (same filesystem partition) as the target so rename()
  * is atomic.
  *
- * Concurrency: store.ts serializes appends via a promise queue. Retention
- * sweeps call sweepNdjson() between appends (never concurrently with one)
- * — callers are responsible for not overlapping sweeps with each other or
- * with active appends. In practice, sweeps run on boot (before the first
- * append) and on a periodic timer (see server/index.ts's wiring).
+ * Concurrency: callers MUST run sweepNdjson() through EventStore.runExclusive()
+ * so the sweep's read→filter→rename window never races a concurrent append.
+ * The store serializes all appends through a promise queue; runExclusive()
+ * chains the sweep onto that same queue, guaranteeing mutual exclusion.
+ * See store.ts and server/index.ts for the wiring.
  *
- * Corruption tolerance: lines that fail JSON.parse are silently dropped
- * rather than aborting the sweep — a single bad line never blocks retention.
- *
- * Documented in CONTRIBUTING.md (not README) per the project owner's
- * constraint that the README's --no-telemetry wording stays as shipped.
+ * Corruption tolerance: lines that fail JSON.parse are silently kept rather
+ * than aborting the sweep — a single bad line never blocks retention.
  */
 
 import * as fs from "node:fs/promises";
@@ -53,6 +50,9 @@ export interface SweepResult {
  * Returns a SweepResult describing what happened. Never throws on ENOENT
  * (the file doesn't exist yet — that's fine). Propagates other I/O errors
  * to the caller.
+ *
+ * IMPORTANT: callers must run this through EventStore.runExclusive() to
+ * prevent races with concurrent appends (see module-level docstring).
  */
 export async function sweepNdjson(
   filePath: string,
@@ -91,14 +91,28 @@ export async function sweepNdjson(
     }
   });
 
-  // Size cap: drop oldest lines (front) until the remaining content fits.
-  // Each line is measured with its trailing newline appended.
-  let kept = ageFiltered;
-  while (kept.length > 0) {
-    const byteLength = Buffer.byteLength(kept.join("\n") + "\n", "utf8");
-    if (byteLength <= maxSizeBytes) break;
-    kept = kept.slice(1); // drop oldest
+  // Size cap: O(n) cumulative-bytes pass — compute the byte length of each
+  // line (with its trailing newline), accumulate from the BACK (newest first),
+  // and find the earliest index that still fits in maxSizeBytes. Avoids the
+  // O(n²) cost of re-joining the entire array on each iteration.
+  let dropCount = 0;
+  if (ageFiltered.length > 0) {
+    // Total byte count of all age-filtered lines.
+    const lineLengths = ageFiltered.map((line) => Buffer.byteLength(line + "\n", "utf8"));
+    const total = lineLengths.reduce((sum, n) => sum + n, 0);
+
+    if (total > maxSizeBytes) {
+      // Walk from the front, accumulating bytes to drop until the remaining
+      // content (total − dropped) fits within the cap.
+      let dropped = 0;
+      for (let i = 0; i < ageFiltered.length; i++) {
+        if (total - dropped <= maxSizeBytes) break;
+        dropped += lineLengths[i];
+        dropCount = i + 1;
+      }
+    }
   }
+  const kept = dropCount > 0 ? ageFiltered.slice(dropCount) : ageFiltered;
 
   const linesAfter = kept.length;
   const nothingChanged = linesAfter === linesBefore;

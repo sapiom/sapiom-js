@@ -358,7 +358,13 @@ export type AnalyticsEventType =
   | "prompt.submitted"
   | "tool.call"
   | "turn.completed"
-  | "session.end";
+  | "session.end"
+  // UI-interaction analytics (surface: "ui" in payload — see UiEventName):
+  | "session.switched"
+  | "macro.invoked"
+  | "visualize.triggered"
+  | "consent.changed"
+  | "session.created";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the

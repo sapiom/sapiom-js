@@ -64,6 +64,16 @@ test.describe("telemetry chip in BrandHeader", () => {
     await expect(chip.locator(".telemetry-chip-label")).toHaveText("analytics off (env)");
   });
 
+  test("shows 'analytics on' chip when consentSource is prompted (user said yes)", async ({ page }) => {
+    // "prompted" sets telemetryOptIn:true in the mock — mirrors a user who answered yes at the CLI.
+    await page.goto("/?mockConsentSource=prompted");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    const chip = page.getByTestId("telemetry-chip");
+    await expect(chip).toHaveAttribute("data-state", "on");
+    await expect(chip.locator(".telemetry-chip-label")).toHaveText("analytics on");
+  });
+
   test("chip click opens the settings popover", async ({ page }) => {
     await page.goto("/?mockConsentSource=stored-explicit");
     await expect(page.locator(".rail-workflows")).toBeVisible();

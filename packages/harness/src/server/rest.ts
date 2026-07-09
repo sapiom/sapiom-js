@@ -451,7 +451,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       harnessSessionId: sessionId,
       agentSessionId: null,
       harness: "claude-code", // ui events have no harness kind; use canonical placeholder
-      type: event as AnalyticsEvent["type"],
+      type: event,
       payload: {
         ...(data ?? {}),
         surface: "ui",

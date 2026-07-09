@@ -526,10 +526,11 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const eventStore = createEventStore(eventStorePath);
 
   // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
-  // caps even on long-lived installs. Runs fire-and-forget — a slow FS is no
-  // reason to delay the rest of server startup. Also scheduled periodically.
+  // caps even on long-lived installs. Runs through the store's exclusive queue
+  // so the sweep's read→filter→rename window never races a concurrent append.
+  // Fire-and-forget — a slow FS is no reason to delay server startup.
   const runNdjsonSweep = (): void => {
-    void sweepNdjson(eventStorePath).catch((err: unknown) => {
+    void eventStore.runExclusive(() => sweepNdjson(eventStorePath)).catch((err: unknown) => {
       console.error("[harness] events.ndjson retention sweep failed:", err);
     });
   };
