@@ -38,8 +38,13 @@ import { extractActualTokens } from "./token-estimation.js";
 /** Emitting package, reported in every envelope. */
 const ANALYTICS_SDK_NAME = "@sapiom/langchain-classic";
 
-/** SDK version for envelopes. TODO: Read from package.json */
-const ANALYTICS_SDK_VERSION = "1.0.0";
+/**
+ * SDK version for envelopes. Keep in sync with package.json on release.
+ * TODO: Read from package.json at build time (a plain resolveJsonModule
+ * import is not viable here: package.json sits outside rootDir and would
+ * reshape the dist/ layout).
+ */
+const ANALYTICS_SDK_VERSION = "0.4.1";
 
 /** Canonical event name for one underlying model invocation. */
 export const MODEL_CALL_EVENT = "model.call";

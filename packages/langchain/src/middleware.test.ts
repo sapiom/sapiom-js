@@ -315,6 +315,12 @@ describe("createSapiomMiddleware", () => {
   });
 
   describe("wrapToolCall", () => {
+    // The `request as any` casts below bridge this file's minimal mock shape
+    // to langchain 1.5's branded ToolCallRequest generics (whose `state`
+    // requires the full built-in agent state, e.g. `messages`). The hooks
+    // only read the fields the mocks provide, so the behavioral assertions
+    // are unaffected; replacing the local mock types with fully-typed
+    // langchain fixtures is tracked as a follow-up.
     const createMockToolRequest = (
       overrides: Partial<ToolCallRequest> = {},
     ): ToolCallRequest => ({

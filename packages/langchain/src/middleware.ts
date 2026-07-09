@@ -30,7 +30,12 @@ import {
 } from "@sapiom/core";
 
 import { createMiddleware } from "langchain";
-import type { AgentMiddleware, ToolCallRequest } from "langchain";
+import type {
+  AgentMiddleware,
+  BuiltInState,
+  MiddlewareResult,
+  ToolCallRequest,
+} from "langchain";
 
 import type {
   SapiomMiddlewareConfig,
@@ -144,14 +149,15 @@ function withToolCallAnalytics<TRequest, TResult>(
 }
 
 /**
- * The middleware keeps its trace/transaction bookkeeping on the agent state
- * under `__sapiom*` keys (see {@link SapiomMiddlewareState}). langchain 1.5
- * types middleware state updates against the built-in channels only, so the
- * custom keys are threaded through an opaque cast — runtime behavior (state
- * merging) is unchanged.
+ * langchain 1.5 types `beforeAgent` state updates against the built-in
+ * channels only; the middleware's custom `__sapiom*` bookkeeping keys (see
+ * {@link SapiomMiddlewareState}) pass through unchanged at runtime, so they
+ * are threaded through an opaque `unknown` cast into the hook's update type.
  */
-function asSapiomStateUpdate(update: Record<string, unknown>): never {
-  return update as never;
+function asSapiomStateUpdate(
+  update: Record<string, unknown>,
+): MiddlewareResult<Partial<BuiltInState>> {
+  return update as unknown as MiddlewareResult<Partial<BuiltInState>>;
 }
 
 /**

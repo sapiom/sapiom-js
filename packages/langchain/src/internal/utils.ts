@@ -69,10 +69,12 @@ export function isAuthorizationDenied(
 }
 
 /**
- * SDK version constant
- * TODO: Read from package.json at build time
+ * SDK version constant. Keep in sync with package.json on release.
+ * TODO: Read from package.json at build time (a plain resolveJsonModule
+ * import is not viable here: package.json sits outside rootDir and would
+ * reshape the dist/ layout).
  */
-export const SDK_VERSION = "0.1.0";
+export const SDK_VERSION = "0.4.1";
 
 /**
  * SDK package name
