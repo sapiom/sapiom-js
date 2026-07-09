@@ -22,13 +22,23 @@
   "license": "MIT",
   "author": "Sapiom",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "sapiom-harness": "./dist/cli/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc --project tsconfig.build.json && vite build --config web/vite.config.ts",
