@@ -36,8 +36,8 @@ telemetry section).
       "anonymous_id": "b1a2c3d4-...",        // machine UUID — send whenever available
       "session_id": "5e6f7a8b-...",          // producer-defined session
       "event_timestamp": "2026-01-15T10:30:00.000Z", // ISO-8601, client clock
-      "source": "ui",                        // ui|mcp|tools|cli|orchestration|langchain|backend
-      "event_type": "prompt_submitted",
+      "source": "ui",                        // ui|harness|mcp|tools|cli|orchestration|langchain|backend
+      "event_type": "prompt.submitted",      // canonical naming is dot-separated (see Event naming)
       "user_id": "usr_123",                  // ONLY when signed in (real account identity)
       "sdk_name": "@sapiom/harness",
       "sdk_version": "0.1.0",
@@ -45,8 +45,8 @@ telemetry section).
       "environment": "development",          // optional; server defaults to its own deployment env
       "data": {                              // arbitrary JSON — the payload
         "prompt": "build me a workflow that ...",
-        "context": {                         // ambient info nests here by convention
-          "os": "darwin", "node": "22.4.0"
+        "context": {                         // ambient batch info nests here by convention
+          "app_version": "0.1.0", "os": "darwin", "arch": "arm64", "node": "22.4.0"
         }
       }
     }
@@ -101,6 +101,50 @@ Client-claimed `user_id` passes through as sent.
 - `session_id` — producer-defined: UI harness = one browser/agent session;
   SDK = one process lifetime; CLI = one command invocation.
 
+## Conventions in `data`
+
+`data` is free-form (see [leniency](#leniency-rules-the-heart-of-accept-anything)),
+but these keys are **promoted by convention**: producers that have the
+information SHOULD use these exact names so analysis can rely on them across
+producers. The collector stores them verbatim inside `data`; none are
+required, and none is ever validated.
+
+### Batch context — `data.context`
+
+Ambient information about the emitting process, identical across every event
+in one batch:
+
+```jsonc
+"context": { "app_version": "0.1.0", "os": "darwin", "arch": "arm64", "node": "22.4.0" }
+```
+
+### Sequence — `data.seq`
+
+A per-session monotonic integer starting at `1`, assigned by the producer
+(for the harness, by its local server as each event is minted). Semantics:
+
+- **Scope is one `session_id`** — `seq` resets per session, never global.
+- **Order is truth** — use `seq`, not `event_timestamp`, for intra-session
+  ordering; client clocks are neither monotonic nor comparable across
+  machines.
+- **Gaps mean loss** — a missing value in an otherwise contiguous run is a
+  dropped or never-delivered event, which makes per-session loss directly
+  measurable.
+
+The collector stores `seq` verbatim and never reorders, dedupes, or backfills
+on it — `event_id` remains the sole dedup key.
+
+### Harness dimensions
+
+Harness-sourced events (`source: "harness"`) carry three first-class grouping
+keys in `data`. Other producers omit them.
+
+| key | meaning |
+|---|---|
+| `data.harness_session_id` | the harness's own session id — one pty running one agent in one directory |
+| `data.agent_session_id` | the agent's native session id (Claude session uuid / Codex rollout id); `null` until known |
+| `data.harness_kind` | which agent the harness drives: `claude-code` \| `codex` |
+
 ## Producer obligations
 
 1. Batch client-side: flush every ~3 s, or at 20 events, or best-effort on
@@ -121,16 +165,29 @@ Client-claimed `user_id` passes through as sent.
    user-supplied tools wrapped by a Sapiom integration) send metadata only —
    names, durations, statuses — never arguments or content.
 
+## Event naming
+
+Canonical `event_type` is **dot-separated** `<noun>.<verb-or-state>` —
+`session.start`, `prompt.submitted`, `tool.call`, `turn.completed`,
+`session.end`. The `source` column disambiguates the same name across
+producers: a `tool.call` from `harness` and a `tool.call` from `mcp` are
+distinct rows told apart by `source`, never by renaming the event.
+
+Naming is a convention, not a validation: **leniency is unchanged** — the
+collector stores any `event_type` string verbatim, including legacy
+underscore names. New producers SHOULD emit dot-separated names.
+
 ## Event taxonomy seed (non-exhaustive by design)
 
 | source | event_type examples |
 |---|---|
-| `ui` | `session_started`, `session_ended`, `consent_granted`, `consent_declined`, `prompt_submitted`, `keystrokes_batch`, `button_clicked`, `harness_selected`, `skill_viewed`, `skill_used`, `mcp_install_triggered`, `preview_triggered`, `doctor_check`, `doctor_fix_applied` |
-| `tools` | `capability_call` |
-| `mcp` | `mcp_tool_call` |
-| `cli` | `cli_command`, `first_run_notice_shown`, `telemetry_opt_out` |
-| `orchestration` | `workflow_deploy`, `workflow_run`, `workflow_step` |
-| `langchain` | `model_call_meta`, `tool_call_meta` |
+| `harness` | `session.start`, `prompt.submitted`, `tool.call`, `turn.completed`, `session.end` |
+| `ui` | `session.started`, `session.ended`, `consent.granted`, `consent.declined`, `prompt.submitted`, `keystrokes.batch`, `button.clicked`, `harness.selected`, `skill.viewed`, `skill.used`, `mcp_install.triggered`, `preview.triggered`, `doctor.check`, `doctor.fix_applied` |
+| `tools` | `capability.call` |
+| `mcp` | `mcp.tool_call` |
+| `cli` | `cli.command`, `first_run.notice_shown`, `telemetry.opt_out` |
+| `orchestration` | `workflow.deploy`, `workflow.run`, `workflow.step` |
+| `langchain` | `model.call_meta`, `tool.call_meta` |
 
 New event types require no contract change — send them.
 
