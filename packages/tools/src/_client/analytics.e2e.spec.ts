@@ -22,6 +22,7 @@ import {
 
 import { Transport, type TransportConfig } from "./index.js";
 import type { AnalyticsHolder } from "./analytics.js";
+import { createClient } from "../client.js";
 import { scrape, SearchHttpError, type ScrapeResult } from "../search/index.js";
 import { Sandbox } from "../sandboxes/index.js";
 import { Repository } from "../repositories/index.js";
@@ -246,6 +247,23 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     expect(events[0]!.data.method).toBe("POST");
   });
 
+  it("never records query strings — a direct transport.fetch with a secret query stores a query-free url", async () => {
+    enableTelemetry();
+    const { transport } = makeTransport(() => jsonResponse({ ok: true }));
+
+    const res = await transport.fetch(
+      "https://files.test/v1/files?token=SECRET&prefix=logs/#frag",
+    );
+    expect(res.status).toBe(200);
+
+    const events = await flushedEvents(transport);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.url).toBe("https://files.test/v1/files");
+    expect(events[0]!.data.capability).toBe("/v1/files");
+    // Nothing anywhere in the envelope carries the query string.
+    expect(JSON.stringify(events[0])).not.toContain("SECRET");
+  });
+
   it("captures the HTTP status on a failed call — and the typed error is unchanged", async () => {
     enableTelemetry();
     const { transport } = makeTransport(
@@ -299,6 +317,32 @@ describe("capability.call analytics (e2e, mock collector)", () => {
     expect(events[0]!.data.agent_name).toBe("researcher");
     expect(events[0]!.data.trace_id).toBe("tr_42");
     expect(events[0]!.data.attribution_metadata).toEqual({ runId: "r-1" });
+  });
+
+  // -------------------------------------------------------------------------
+  // shutdown() — per-execution clients must not accumulate exit hooks
+  // -------------------------------------------------------------------------
+
+  it("N sequential clients with shutdown() leave process exit listeners at baseline", async () => {
+    enableTelemetry();
+    const baseline = process.listenerCount("beforeExit");
+
+    // Above Node's default 10-listener warning threshold: without shutdown()
+    // this loop would hit MaxListenersExceededWarning territory.
+    for (let i = 0; i < 12; i++) {
+      const client = createClient({
+        apiKey: "test-key",
+        fetch: (async () => jsonResponse(SCRAPE_RAW)) as typeof globalThis.fetch,
+      });
+      await client.search.scrape({ url: "https://example.com" });
+      // The lazily-created emitter registered exactly one exit hook…
+      expect(process.listenerCount("beforeExit")).toBe(baseline + 1);
+      await client.shutdown();
+      // …and shutdown released it.
+      expect(process.listenerCount("beforeExit")).toBe(baseline);
+    }
+
+    expect(process.listenerCount("beforeExit")).toBe(baseline);
   });
 
   // -------------------------------------------------------------------------
@@ -371,6 +415,12 @@ describe("capability.call analytics (e2e, mock collector)", () => {
         analyticsOf(transport)?.flush() ?? Promise.resolve(),
       ).resolves.toBeUndefined();
       expect(collector.requests.length).toBeGreaterThan(0);
+      // The captured attempt is a genuine collector POST (headers arrive even
+      // in `down` mode, where the socket is destroyed before any response) —
+      // not a stray socket touch.
+      const attempt = collector.requests[0]!;
+      expect(attempt.headers["content-type"]).toBe("application/json");
+      expect(attempt.headers["x-sapiom-api-key"]).toBe("test-key");
     });
   }
 

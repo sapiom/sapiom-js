@@ -85,16 +85,17 @@
     "@sapiom/analytics-core": "workspace:^"
   },
   "scripts": {
-    "build": "npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
+    "build": "npm run gen:version && npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:esm": "tsc --project tsconfig.esm.json",
     "build:esm-pkg": "echo '{\"type\": \"module\"}' > dist/esm/package.json",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "dev": "tsc --watch --project tsconfig.cjs.json",
-    "test": "jest",
-    "test:coverage": "jest --coverage",
-    "test:watch": "jest --watch",
-    "typecheck": "tsc --noEmit",
+    "dev": "npm run gen:version && tsc --watch --project tsconfig.cjs.json",
+    "gen:version": "node scripts/generate-version.mjs",
+    "test": "npm run gen:version && jest",
+    "test:coverage": "npm run gen:version && jest --coverage",
+    "test:watch": "npm run gen:version && jest --watch",
+    "typecheck": "npm run gen:version && tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "prepublishOnly": "pnpm build"

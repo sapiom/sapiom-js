@@ -157,6 +157,23 @@ export class Transport {
   }
 
   /**
+   * Flush and shut down this client's usage-analytics emitter: buffered events
+   * are delivered best-effort and the emitter's `beforeExit` hook is detached.
+   * Resolves immediately when no emitter was ever created (no calls made, or
+   * analytics dark/disabled); idempotent; never rejects. One call covers every
+   * transport derived via {@link withAttribution} (they share the emitter).
+   *
+   * Call this once per client in hosts that construct MANY clients in one
+   * process — e.g. an engine worker building a per-execution client — so exit
+   * hooks don't accumulate across executions. One-shot processes don't need
+   * it: the emitter flushes on process exit by itself. Capability calls made
+   * after shutdown still work; they just no longer emit analytics.
+   */
+  async shutdown(): Promise<void> {
+    await this.analyticsHolder.instance?.shutdown();
+  }
+
+  /**
    * Authenticated raw fetch — capabilities that need streaming or custom
    * response handling (filesystem, log streams) use this and inspect the
    * `Response` themselves. Injects the tenant credential + attribution headers;

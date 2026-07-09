@@ -12,9 +12,12 @@ import {
   capabilityCallData,
   capabilityFromUrl,
   resolveSdkVersion,
+  urlWithoutQuery,
   type AnalyticsHolder,
 } from "./analytics.js";
+import { VERSION } from "../_generated/version.js";
 import { Transport } from "./index.js";
+import { createClient } from "../client.js";
 
 describe("CAPABILITY_CALL_EVENT", () => {
   it("is the canonical dot-form event name", () => {
@@ -145,15 +148,45 @@ describe("capabilityCallData()", () => {
     expect(data.agent_id).toBeUndefined();
     expect(data.trace_external_id).toBeUndefined();
   });
+
+  it("strips query strings and fragments from the recorded url", () => {
+    const data = capabilityCallData({
+      ...base,
+      url: "https://files.test/v1/files?token=SECRET&prefix=a#frag",
+    });
+    expect(data.url).toBe("https://files.test/v1/files");
+    expect(JSON.stringify(data)).not.toContain("SECRET");
+  });
+});
+
+describe("urlWithoutQuery()", () => {
+  it("returns origin + pathname, dropping query and fragment", () => {
+    expect(
+      urlWithoutQuery("https://api.test/v1/things?secret=abc&x=1#frag"),
+    ).toBe("https://api.test/v1/things");
+    expect(urlWithoutQuery("https://api.test/v1/things")).toBe(
+      "https://api.test/v1/things",
+    );
+  });
+
+  it("strips at the first ? or # even when the URL is unparseable", () => {
+    expect(urlWithoutQuery("not a url?secret=abc")).toBe("not a url");
+    expect(urlWithoutQuery("not a url#frag")).toBe("not a url");
+  });
 });
 
 describe("resolveSdkVersion()", () => {
-  it("reads this package's own version from package.json", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(__dirname, "../../package.json"), "utf8"),
-    ) as { name: string; version: string };
-    expect(manifest.name).toBe("@sapiom/tools"); // walk-up found the right file
-    expect(resolveSdkVersion()).toBe(manifest.version);
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "../../package.json"), "utf8"),
+  ) as { name: string; version: string };
+
+  it("the generated VERSION constant matches package.json", () => {
+    expect(manifest.name).toBe("@sapiom/tools"); // reading the right manifest
+    expect(VERSION).toBe(manifest.version);
+  });
+
+  it("resolves to the generated constant (primary source)", () => {
+    expect(resolveSdkVersion()).toBe(VERSION);
   });
 });
 
@@ -173,5 +206,22 @@ describe("Transport analytics holder", () => {
     expect(holderOf(new Transport({ apiKey: "k" }))).not.toBe(
       holderOf(new Transport({ apiKey: "k" })),
     );
+  });
+});
+
+describe("shutdown()", () => {
+  it("Transport.shutdown resolves immediately when no emitter was created, and is idempotent", async () => {
+    const transport = new Transport({ apiKey: "k" });
+    await expect(transport.shutdown()).resolves.toBeUndefined();
+    await expect(transport.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("is wired through the public client (and derived clients share it)", async () => {
+    const client = createClient({ apiKey: "k" });
+    expect(typeof client.shutdown).toBe("function");
+    await expect(client.shutdown()).resolves.toBeUndefined();
+    await expect(
+      client.withAttribution({ traceId: "t" }).shutdown(),
+    ).resolves.toBeUndefined();
   });
 });
