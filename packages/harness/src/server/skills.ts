@@ -25,6 +25,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 
 export interface SkillMeta {
   /** Stable identifier: directory name of the skill folder. */
@@ -196,6 +197,21 @@ export interface SkillsRouterOptions {
 
 export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
   const router = Router();
+
+  // These routes touch the filesystem (skill discovery + detail reads). The
+  // harness server is localhost-only and boot-token-gated (a single local
+  // user), so this ceiling is far above any real interactive flow and never
+  // fires in practice — it's a backstop that bounds a runaway/buggy client
+  // from hammering the FS, and the explicit rate-limit control on an
+  // FS-backed route surface.
+  router.use(
+    rateLimit({
+      windowMs: 60_000,
+      limit: 240,
+      standardHeaders: true,
+      legacyHeaders: false,
+    }),
+  );
 
   /**
    * GET /api/skills — list all discoverable skills with id, name, description,
