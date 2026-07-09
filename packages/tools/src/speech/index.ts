@@ -13,12 +13,12 @@
  * Or via an explicit client: `createClient({ apiKey }).speech.tts.create(...)`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, SpeechHttpError } from "./errors.js";
 
 export { SpeechHttpError };
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_SPEECH_URL || "https://elevenlabs.services.sapiom.ai";
+const DEFAULT_BASE_URL = resolveServiceUrl("elevenlabs", process.env.SAPIOM_SPEECH_URL);
 
 /** Default voice used when none is specified. */
 export const DEFAULT_VOICE = "Rachel";
@@ -132,7 +132,7 @@ function mapSpeechResult(raw: RawSpeechResponse): SpeechResult {
 function mapVoice(raw: RawVoice): Voice {
   const { voice_id, voiceId, name, ...rest } = raw;
   return {
-    voiceId: voiceId ?? voice_id ?? "",
+    voiceId: voiceId ?? voice_id ?? "", // benign fallback — `voice` is optional at call sites
     ...(name !== undefined && { name }),
     ...rest,
   };
@@ -165,9 +165,10 @@ export async function createSpeech(
   assertText(input.text);
 
   const voice = input.voice ?? DEFAULT_VOICE;
+  // `params` is spread first so it can't override the guard-validated `text` (or `storage`).
   const body: Record<string, unknown> = {
-    text: input.text,
     ...input.params,
+    text: input.text,
     ...(input.storage ? { storage: input.storage } : {}),
   };
 
@@ -200,12 +201,13 @@ export async function createSoundEffect(
 ): Promise<SpeechResult> {
   assertText(input.text);
 
+  // `params` is spread first so it can't override the guard-validated `text` (or duration/storage).
   const body: Record<string, unknown> = {
+    ...input.params,
     text: input.text,
     ...(input.durationSeconds != null
       ? { duration_seconds: input.durationSeconds }
       : {}),
-    ...input.params,
     ...(input.storage ? { storage: input.storage } : {}),
   };
 

@@ -492,15 +492,28 @@ describe("speech — client wiring + credential", () => {
     for (const c of calls) {
       expect(headerOf(c, "x-sapiom-api-key")).toBe("my-key");
     }
-    expect(calls[0]!.url).toContain(
-      "elevenlabs.services.sapiom.ai/v1/text-to-speech/",
-    );
-    expect(calls[1]!.url).toContain(
-      "elevenlabs.services.sapiom.ai/v1/sound-generation",
-    );
-    expect(calls[2]!.url).toContain(
-      "elevenlabs.services.sapiom.ai/v2/voices",
-    );
+    // Assert the capability path only — avoid embedding the backing subdomain in public test output.
+    expect(calls[0]!.url).toContain("/v1/text-to-speech/");
+    expect(calls[1]!.url).toContain("/v1/sound-generation");
+    expect(calls[2]!.url).toContain("/v2/voices");
+  });
+
+  it("params cannot override the guard-validated text on the wire", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : (input as URL).toString();
+      calls.push({ url, init });
+      return jsonResponse({ file_id: "f1" });
+    }) as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch: fetchMock });
+
+    await sapiom.speech.tts.create({ text: "REAL", params: { text: "INJECTED" } });
+
+    const body = JSON.parse(String(calls[0]!.init.body)) as { text: string };
+    expect(body.text).toBe("REAL");
   });
 
   it("throws a clear error when no tenant credential is configured", async () => {
