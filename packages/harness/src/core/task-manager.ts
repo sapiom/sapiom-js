@@ -29,6 +29,7 @@ import {
   type HarnessAdapter,
   type HarnessKind,
   type LaunchOpts,
+  type SpawnSpec,
 } from "../shared/types.js";
 import type { LaunchOptsBuilder } from "./session-manager.js";
 import { parseTaskStreamLine } from "./task-stream.js";
@@ -137,6 +138,11 @@ export class TaskManager {
   private readonly generateId: () => string;
 
   private readonly tasks = new Map<string, BackgroundTask>();
+  /** Runs admitted past the dedupe check but not yet registered in `tasks`
+   *  — the check→register window contains an await (buildLaunchOpts), so
+   *  without this reservation two near-simultaneous run() calls for the
+   *  same target both pass the check and both spawn. */
+  private readonly pendingRuns: Array<{ macroId: string; harnessSessionId: string; workflowPath: string | null }> = [];
   private readonly processes = new Map<string, TaskProcess>();
   private readonly stderrTails = new Map<string, string>();
   /** The final result event's error text, when the stream produced one —
@@ -188,28 +194,43 @@ export class TaskManager {
     if (!adapter.launchTask) throw new TaskNotSupportedError(req.harness, req.label);
 
     const reqWorkflowPath = req.workflowPath ?? null;
+    // Workflow-targeted tasks dedupe on the workflow (never two enrichments
+    // of one workflow, from any session); workflow-less tasks keep the old
+    // per-session key. Checked against running tasks AND runs still being
+    // admitted (pendingRuns — see its comment).
+    const sameTarget = (other: { macroId: string; harnessSessionId: string; workflowPath: string | null }): boolean =>
+      other.macroId === req.macroId &&
+      (other.workflowPath !== null && reqWorkflowPath !== null
+        ? other.workflowPath === reqWorkflowPath
+        : other.harnessSessionId === req.harnessSessionId);
     for (const task of this.tasks.values()) {
-      if (task.status !== "running" || task.macroId !== req.macroId) continue;
-      // Workflow-targeted tasks dedupe on the workflow (never two enrichments
-      // of one workflow, from any session); workflow-less tasks keep the old
-      // per-session key.
-      const sameTarget =
-        task.workflowPath !== null && reqWorkflowPath !== null
-          ? task.workflowPath === reqWorkflowPath
-          : task.harnessSessionId === req.harnessSessionId;
-      if (sameTarget) throw new TaskAlreadyRunningError(req.label);
+      if (task.status === "running" && sameTarget(task)) throw new TaskAlreadyRunningError(req.label);
     }
+    if (this.pendingRuns.some(sameTarget)) throw new TaskAlreadyRunningError(req.label);
+
+    const pending = { macroId: req.macroId, harnessSessionId: req.harnessSessionId, workflowPath: reqWorkflowPath };
+    this.pendingRuns.push(pending);
+    const releasePending = (): void => {
+      const index = this.pendingRuns.indexOf(pending);
+      if (index !== -1) this.pendingRuns.splice(index, 1);
+    };
 
     const id = this.generateId();
-    const opts: LaunchOpts = {
-      harnessSessionId: id,
-      cwd: req.cwd,
-      prompt: req.prompt,
-      ...(req.model !== undefined ? { model: req.model } : {}),
-      ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
-      ...(await this.buildLaunchOpts(id, { cwd: req.cwd, harness: req.harness })),
-    };
-    const spec = adapter.launchTask(opts);
+    let spec: SpawnSpec;
+    try {
+      const opts: LaunchOpts = {
+        harnessSessionId: id,
+        cwd: req.cwd,
+        prompt: req.prompt,
+        ...(req.model !== undefined ? { model: req.model } : {}),
+        ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
+        ...(await this.buildLaunchOpts(id, { cwd: req.cwd, harness: req.harness })),
+      };
+      spec = adapter.launchTask(opts);
+    } catch (err) {
+      releasePending();
+      throw err;
+    }
 
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
@@ -246,11 +267,14 @@ export class TaskManager {
     } catch (err) {
       // Never launched — nothing to track, but the generated config files
       // buildLaunchOpts just wrote still need their exit-time cleanup.
+      releasePending();
       this.onCleanup(id);
       throw err;
     }
 
     this.tasks.set(id, task);
+    // Registered — the running-task check owns dedupe from here.
+    releasePending();
     this.processes.set(id, child);
     this.trimFinished();
     this.emitStatus(task);

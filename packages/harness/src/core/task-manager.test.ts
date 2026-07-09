@@ -275,6 +275,40 @@ describe("TaskManager", () => {
     await expect(manager.run(wfA)).resolves.toBeDefined();
   });
 
+  it("dedupes two CONCURRENT run() calls for the same target — the check→register window contains an await", async () => {
+    // Real buildLaunchOpts writes config files (async). Two near-simultaneous
+    // spawns for one workflow (observed live: the bind path and the
+    // session-create scan racing) must not both pass the dedupe check.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spawned: Spawned[] = [];
+    const manager = new TaskManager({
+      adapters: { "claude-code": makeAdapter() },
+      ingestUrl: "http://127.0.0.1:4100",
+      ingestToken: "tok",
+      spawnProcess: (command, args, options) => {
+        const proc = new FakeProcess();
+        spawned.push({ command, args, options, proc });
+        return proc;
+      },
+      buildLaunchOpts: async () => {
+        await gate;
+        return {};
+      },
+    });
+
+    const wfA = { ...runRequest, workflowPath: "/tmp/proj/wf-a" };
+    const first = manager.run(wfA);
+    const second = manager.run({ ...wfA, harnessSessionId: "sess-2" });
+    release();
+
+    await expect(first).resolves.toBeDefined();
+    await expect(second).rejects.toBeInstanceOf(TaskAlreadyRunningError);
+    expect(spawned).toHaveLength(1);
+  });
+
   it("runs cleanup even when spawning itself throws (generated config files already exist)", async () => {
     const onCleanup = vi.fn();
     const spawnProcess: TaskSpawnFn = () => {
