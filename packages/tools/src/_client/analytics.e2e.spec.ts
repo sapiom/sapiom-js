@@ -346,7 +346,7 @@ describe("capability.call analytics (e2e, mock collector)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Consent + ship-dark
+  // Consent + live-default
   // -------------------------------------------------------------------------
 
   it("SAPIOM_TELEMETRY_DISABLED=1 → zero collector requests, identical result", async () => {
