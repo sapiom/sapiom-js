@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { getOrchestrationAnalytics, telemetryErrorCode } from './analytics.js';
 import { bundleForDeploy } from './bundle.js';
 import { GatewayClient } from './client.js';
 import { AgentOperationError } from './errors.js';
@@ -49,8 +50,38 @@ export interface DeployResult {
  * build, and polls until the build reaches a terminal status.
  *
  * Throws `AgentOperationError` on git, network, or build failures.
+ *
+ * Emits one `workflow.deploy` usage-analytics event (metadata only: ids,
+ * status, duration). Ships dark — see ./analytics.ts; telemetry never
+ * changes the operation's behavior.
  */
 export async function deploy(opts: DeployOptions, client: GatewayClient): Promise<DeployResult> {
+  const startedAt = Date.now();
+  try {
+    const result = await deployOperation(opts, client);
+    getOrchestrationAnalytics().track('workflow.deploy', {
+      workflow_id: opts.definitionId,
+      branch: opts.branch ?? 'main',
+      build_run_id: result.buildRunId,
+      build_status: result.status,
+      status: 'success',
+      duration_ms: Date.now() - startedAt,
+    });
+    return result;
+  } catch (err) {
+    getOrchestrationAnalytics().track('workflow.deploy', {
+      workflow_id: opts.definitionId,
+      branch: opts.branch ?? 'main',
+      status: 'error',
+      error_code: telemetryErrorCode(err),
+      duration_ms: Date.now() - startedAt,
+    });
+    throw err;
+  }
+}
+
+/** The operation body — unchanged from before the analytics wrapper. */
+async function deployOperation(opts: DeployOptions, client: GatewayClient): Promise<DeployResult> {
   const { projectDir, definitionId, branch = 'main' } = opts;
 
   assertDeployable(projectDir);

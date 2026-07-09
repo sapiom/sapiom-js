@@ -75,6 +75,9 @@ importers:
       '@sapiom/agent-runtime':
         specifier: workspace:^
         version: link:../agent-runtime
+      '@sapiom/analytics-core':
+        specifier: workspace:^
+        version: link:../analytics-core
       '@sapiom/tools':
         specifier: workspace:^
         version: link:../tools

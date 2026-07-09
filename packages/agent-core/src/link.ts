@@ -5,6 +5,7 @@
  * Networked operation: requires a GatewayClient. Does NOT write sapiom.json
  * itself — that is the CLI command's responsibility, keeping I/O at the edges.
  */
+import { getOrchestrationAnalytics, telemetryErrorCode } from './analytics.js';
 import { GatewayClient } from './client.js';
 import { AgentOperationError } from './errors.js';
 
@@ -31,8 +32,35 @@ export interface LinkResult {
  *
  * Throws `AgentOperationError` (code `NOT_FOUND` | `HTTP_*` | `NETWORK`) on
  * failures.
+ *
+ * Emits one `workflow.link` usage-analytics event (metadata only: name, id,
+ * status, duration). Ships dark — see ./analytics.ts; telemetry never
+ * changes the operation's behavior.
  */
 export async function link(opts: LinkOptions, client: GatewayClient): Promise<LinkResult> {
+  const startedAt = Date.now();
+  try {
+    const result = await linkOperation(opts, client);
+    getOrchestrationAnalytics().track('workflow.link', {
+      workflow_id: result.definitionId,
+      workflow_name: result.name,
+      status: 'success',
+      duration_ms: Date.now() - startedAt,
+    });
+    return result;
+  } catch (err) {
+    getOrchestrationAnalytics().track('workflow.link', {
+      workflow_name: opts.name,
+      status: 'error',
+      error_code: telemetryErrorCode(err),
+      duration_ms: Date.now() - startedAt,
+    });
+    throw err;
+  }
+}
+
+/** The operation body — unchanged from before the analytics wrapper. */
+async function linkOperation(opts: LinkOptions, client: GatewayClient): Promise<LinkResult> {
   const list = await client.get<DefinitionSummary[]>('/definitions');
   let def = list.find((d) => d.name === opts.name || d.slug === opts.name);
 

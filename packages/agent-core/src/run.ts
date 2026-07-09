@@ -7,6 +7,7 @@
  * The backend route is `POST /v1/workflows/executions` and takes the definition
  * id in the body alongside the execution input (not as a path segment).
  */
+import { getOrchestrationAnalytics, telemetryErrorCode } from './analytics.js';
 import { GatewayClient } from './client.js';
 import { AgentOperationError } from './errors.js';
 
@@ -30,8 +31,35 @@ export interface RunResult {
  * Start an execution of the named agent definition.
  *
  * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
+ *
+ * Emits one `workflow.run` usage-analytics event (metadata only: ids,
+ * status, duration — never the execution input). Ships dark — see
+ * ./analytics.ts; telemetry never changes the operation's behavior.
  */
 export async function run(opts: RunOptions, client: GatewayClient): Promise<RunResult> {
+  const startedAt = Date.now();
+  try {
+    const result = await runOperation(opts, client);
+    getOrchestrationAnalytics().track('workflow.run', {
+      workflow_id: opts.definitionId,
+      execution_id: result.executionId,
+      status: 'success',
+      duration_ms: Date.now() - startedAt,
+    });
+    return result;
+  } catch (err) {
+    getOrchestrationAnalytics().track('workflow.run', {
+      workflow_id: opts.definitionId,
+      status: 'error',
+      error_code: telemetryErrorCode(err),
+      duration_ms: Date.now() - startedAt,
+    });
+    throw err;
+  }
+}
+
+/** The operation body — unchanged from before the analytics wrapper. */
+async function runOperation(opts: RunOptions, client: GatewayClient): Promise<RunResult> {
   const { definitionId, input = {} } = opts;
 
   // Backend route: POST /v1/workflows/executions — definition id is in the body,
