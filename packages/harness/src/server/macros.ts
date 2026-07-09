@@ -36,9 +36,12 @@ export interface MacrosRouterDeps {
   runBackgroundTask(harnessSessionId: string, macro: MacroDef, prompt: string): Promise<void>;
   /** Opens a URL in the user's default browser (the `open` package). */
   openUrl(url: string): Promise<void>;
-  /** Runs the deterministic canvas render for a session (the "visualize"
-   *  macro's `render-canvas` action) — never throws (core/canvas-render.ts's
-   *  contract), so this has no error path of its own to report. */
+  /** The "visualize" macro's `render-canvas` action: force refresh of the
+   *  session's bound canvas — deterministic re-render plus an enrichment
+   *  task re-spawn (see core/canvas-enrich.ts). May throw
+   *  TaskAlreadyRunningError (an enrichment for this workflow is already in
+   *  flight → 409) or TaskNotSupportedError (the session's harness has no
+   *  headless mode → 400), same as any other background-task launch. */
   renderCanvas(harnessSessionId: string): Promise<void>;
 }
 

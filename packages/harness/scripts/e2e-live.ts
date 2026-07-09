@@ -59,8 +59,8 @@
  *      source) and index.html (live canvas, same initial content) are
  *      already on disk the moment a session is created — before any
  *      visualize run — and POST /api/macros/visualize/run succeeds both
- *      with no workflow bound (requiresWorkflow: false — workspace-overview
- *      mode) and after one is bound.
+ *      with no workflow bound (requiresWorkflow: false — a cheap no-op) and
+ *      after one is bound.
  *  14. Deterministic canvas render (zero LLM): bound to a real @sapiom/agent
  *      project, POST /api/canvas/:id/render extracts its actual step graph
  *      and writes real step names + SVG node markup to the workflow's own
@@ -71,7 +71,10 @@
  *      default path never touches the pty. A second render of the unchanged
  *      workflow is served from the extraction cache (no child process), and
  *      unbinding flips GET /canvas/:id/ back to the agent-authored
- *      index.html untouched.
+ *      index.html untouched. Binding that cleanly-extracting workflow also
+ *      auto-spawns ONE bounded AI enrichment task (--model sonnet,
+ *      --max-turns 8, graph-inline JSON-only prompt), reported in
+ *      AppState.tasks scoped to the session + workflow (item 14a).
  *  15. State isolation + registry hygiene: `stateRoot` alone (no per-file
  *      overrides, no machineId) roots every piece of persistent state under
  *      the scratch dir — machine-id included — and a pre-seeded registry
@@ -545,8 +548,8 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json embeds the session's own {id, cwd, harness}",
     );
 
-    // --- 10a. visualize with nothing bound yet — the canvas kit macro is unbound-friendly
-    // (requiresWorkflow: false), unlike every other action-rail macro. ---
+    // --- 10a. visualize with nothing bound yet — the force-refresh macro is unbound-friendly
+    // (requiresWorkflow: false, a cheap no-op), unlike every other action-rail macro. ---
     const unboundMacroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers,
@@ -583,9 +586,10 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json reflects the bound workflow's {name, path, definitionId}",
     );
 
-    // --- 11a-2. also run visualize now that a workflow IS bound — same static prompt
-    // either way (the agent branches on harness-context.json's boundWorkflow at run
-    // time), so this just proves the request still succeeds once bound. ---
+    // --- 11a-2. also run visualize now that a workflow IS bound — here it's a
+    // force refresh of the bound canvas (this workflow is a bare marker, so
+    // its extraction honestly fails and no enrichment task spawns), proving
+    // the request still succeeds once bound. ---
     const macroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers,
@@ -635,6 +639,47 @@ async function testCoreFlow(): Promise<void> {
       body: JSON.stringify({ workflowPath: workflowDir }),
     });
     assert(renderBindRes.status === 200, "binds the session to the real order-triage workflow");
+
+    // --- 14a. binding a cleanly-extracting workflow with no fresh enrichment
+    // cached auto-spawns ONE bounded enrichment task: a headless fake-claude
+    // run pinned to the enrichment model and turn cap, carrying the
+    // extracted graph inline and the JSON-only contract. The task's capture
+    // overwrites the interactive session's — every argv/env assertion on
+    // that one already ran above. (The fixture never completes its "turn",
+    // so no enrichment is ever persisted here; server.close() reaps it.) ---
+    const enrichmentCapture = await waitFor<FakeClaudeCapture>(async () => {
+      try {
+        const capture = JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
+        return capture.argv.includes("--max-turns") ? capture : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+    assert(
+      enrichmentCapture.argv[enrichmentCapture.argv.indexOf("--model") + 1] === "sonnet",
+      "the auto-spawned enrichment task pins --model sonnet",
+    );
+    assert(
+      enrichmentCapture.argv[enrichmentCapture.argv.indexOf("--max-turns") + 1] === "8",
+      "the auto-spawned enrichment task caps --max-turns at 8",
+    );
+    const enrichmentPrompt = enrichmentCapture.argv[enrichmentCapture.argv.indexOf("-p") + 1] ?? "";
+    assert(enrichmentPrompt.includes("RETURN ONLY a JSON object"), "enrichment prompt demands JSON-only output");
+    assert(
+      enrichmentPrompt.includes('"manifestName": "order-triage"'),
+      "enrichment prompt carries the extracted graph inline",
+    );
+    // The fixture exits as soon as its (ignored) stdin drains, so the task
+    // may already be finished here — what matters is the SCOPING it was
+    // launched with: the pane filters its activity by exactly these fields.
+    const stateWithTask = (await (await fetch(`${baseUrl}/api/state`, { headers })).json()) as {
+      tasks?: Array<{ macroId: string; workflowPath: string | null; harnessSessionId: string; status: string }>;
+    };
+    const enrichmentTask = stateWithTask.tasks?.find((t) => t.workflowPath === workflowDir);
+    assert(
+      enrichmentTask?.macroId === "visualize" && enrichmentTask.harnessSessionId === sessionId,
+      "AppState.tasks reports the enrichment task scoped to this session + workflow",
+    );
 
     const reloadFramesBefore = wsMessages.filter(
       (m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId,

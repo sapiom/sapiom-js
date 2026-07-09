@@ -48,7 +48,8 @@ import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import { writeHarnessContext, harnessContextFileExists } from "../core/workspace-context.js";
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
-import { renderCanvasForSession } from "../core/canvas-render.js";
+import { renderCanvasForSession, renderWorkflowRenderFile } from "../core/canvas-render.js";
+import { CanvasEnrichmentCoordinator } from "../core/canvas-enrich.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -325,8 +326,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const sessionSweepTimer = setInterval(() => sessionManager.sweepDeadSessions(), SESSION_LIVENESS_SWEEP_MS);
   sessionSweepTimer.unref?.();
 
-  // Background tasks ("background" macros, ai-visualize today): headless
-  // one-shot agent runs that never touch a user's interactive session. They
+  // Background tasks (canvas enrichment today): headless one-shot agent
+  // runs that never touch a user's interactive session. They
   // reuse the exact same per-id config generation as sessions — a task's
   // generated/<taskId> dir gets the same exit-time removal below, and (via
   // sweepGeneratedDirs above; a task id is never a live session id, so the
@@ -418,20 +419,35 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     return found;
   };
 
+  // The AI enrichment layer over the deterministic renders: one bounded
+  // headless task per workflow (spawned on bind when no fresh cache exists,
+  // or by the visualize macro's force refresh), whose validated JSON output
+  // is persisted per-workflow and merged into the render on completion —
+  // the render write alone hot-reloads any open pane via the canvas watcher.
+  const enrichment = new CanvasEnrichmentCoordinator({
+    tasks: taskManager,
+    rerender: async (cwd, workflow) => {
+      await renderWorkflowRenderFile(cwd, workflow);
+    },
+  });
+
   // Renders a session's bound workflow via the deterministic pipeline —
-  // always against the live workflowsCache, never an LLM; a cheap no-op for
-  // an unbound session (the canvas router serves the empty state on its
-  // own). Never throws (see core/canvas-render.ts); best-effort, like every
-  // other canvas write here. Explicit user-invoked renders (the Visualize
-  // macro, POST /canvas/:id/render) use this as-is; the UNPROMPTED call
-  // sites (session-create/boot auto-render) use autoRenderCanvas below,
-  // which won't replace a workflow's existing render with an error panel
-  // when its extraction fails.
+  // always against the live workflowsCache, never an LLM in the render
+  // itself; a cheap no-op for an unbound session (the canvas router serves
+  // the empty state on its own). Never throws (see core/canvas-render.ts);
+  // best-effort, like every other canvas write here. The bind path
+  // (PATCH /sessions/:id/workflow → rest.ts) and the UNPROMPTED call sites
+  // (session-create/boot auto-render, via autoRenderCanvas — which won't
+  // replace a workflow's existing render with an error panel when its
+  // extraction fails) also kick the enrichment freshness check afterwards:
+  // instant base diagram now, annotations merged in when the task lands.
   const renderCanvas = async (session: HarnessSession): Promise<void> => {
     await renderCanvasForSession(session, workflowsCache);
+    await enrichment.ensureFresh(session, workflowsCache);
   };
   const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
     await renderCanvasForSession(session, workflowsCache, { preserveExistingOnFailure: true });
+    await enrichment.ensureFresh(session, workflowsCache);
   };
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
@@ -528,9 +544,14 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       getSessionCwd: (harnessSessionId) => sessionManager.get(harnessSessionId)?.cwd ?? null,
       getBoundWorkflowPath: (harnessSessionId) => sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
+      // The visualize macro is a FORCE refresh, not a plain re-render:
+      // invalidate the extraction + enrichment caches, re-render the base
+      // instantly, re-spawn the enrichment task. Its refusals map to the
+      // router's existing error handling (already running → 409, codex
+      // session → 400).
       renderCanvas: async (harnessSessionId) => {
         const session = sessionManager.get(harnessSessionId);
-        if (session) await renderCanvas(session);
+        if (session) await enrichment.forceRefresh(session, workflowsCache);
       },
       injectInput: async (harnessSessionId, text, submit) => {
         // Two-phase write: a combined text+\r lands in Claude Code as a

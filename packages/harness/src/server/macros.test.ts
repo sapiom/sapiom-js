@@ -187,7 +187,7 @@ describe("macros router", () => {
     expect(res.status).toBe(400);
   });
 
-  it("runs visualize with no workflow bound at all — renders server-side, never touches the pty", async () => {
+  it("runs visualize with no workflow bound at all — refreshes server-side, never touches the pty", async () => {
     const deps = makeDeps(); // getBoundWorkflowPath defaults to () => null
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
@@ -201,7 +201,7 @@ describe("macros router", () => {
     expect(deps.injectInput).not.toHaveBeenCalled();
   });
 
-  it("also runs visualize when a workflow IS bound — same deterministic render either way", async () => {
+  it("also runs visualize when a workflow IS bound — same server-side refresh either way", async () => {
     const deps = makeDeps({ getBoundWorkflowPath: (id) => (id === "sess-1" ? workflow.path : null) });
     await start(deps);
     const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
@@ -214,10 +214,17 @@ describe("macros router", () => {
     expect(deps.injectInput).not.toHaveBeenCalled();
   });
 
-  it("ai-visualize runs as a background task with the canvas-kit prompt — never touches the session's pty", async () => {
-    const deps = makeDeps();
+  it("routes an inject macro marked execution: 'background' to runBackgroundTask, never the pty", async () => {
+    const backgroundMacro = {
+      id: "bg-macro",
+      label: "Background macro",
+      icon: "Wand2",
+      execution: "background" as const,
+      action: { kind: "inject" as const, text: "do something in {{session.cwd}}", submit: true },
+    };
+    const deps = makeDeps({ listMacros: () => [...DEFAULT_MACROS, backgroundMacro] });
     await start(deps);
-    const res = await fetch(`${baseUrl}/api/macros/ai-visualize/run`, {
+    const res = await fetch(`${baseUrl}/api/macros/bg-macro/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
@@ -229,22 +236,17 @@ describe("macros router", () => {
       string,
     ];
     expect(sessionId).toBe("sess-1");
-    expect(macro.id).toBe("ai-visualize");
-    expect(prompt).toContain("/Users/demo/acme-app/.sapiom/canvas/index.html"); // {{canvas.path}} substituted
-    // The Write tool refuses blind overwrites of unread files — the prompt
-    // must tell the agent to read the existing index.html before writing it.
-    expect(prompt).toMatch(/read BOTH \.sapiom\/canvas\/_template\.html and the existing \.sapiom\/canvas\/index\.html/);
-    expect(prompt).toContain("canvas-patterns");
-    expect(deps.renderCanvas).not.toHaveBeenCalled();
+    expect(macro.id).toBe("bg-macro");
+    expect(prompt).toBe("do something in /Users/demo/acme-app"); // {{session.cwd}} substituted
     expect(deps.injectInput).not.toHaveBeenCalled();
   });
 
-  it("400s a background macro on a harness with no headless mode (TaskNotSupportedError)", async () => {
+  it("400s visualize on a harness with no headless mode (TaskNotSupportedError from the enrichment spawn)", async () => {
     const deps = makeDeps({
-      runBackgroundTask: vi.fn().mockRejectedValue(new TaskNotSupportedError("codex", "AI Visualize")),
+      renderCanvas: vi.fn().mockRejectedValue(new TaskNotSupportedError("codex", "Visualize")),
     });
     await start(deps);
-    const res = await fetch(`${baseUrl}/api/macros/ai-visualize/run`, {
+    const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
@@ -254,12 +256,12 @@ describe("macros router", () => {
     expect(body.error).toMatch(/don't support/i);
   });
 
-  it("409s a background macro that's already running for the session (TaskAlreadyRunningError)", async () => {
+  it("409s visualize when this workflow's enrichment is already running (TaskAlreadyRunningError)", async () => {
     const deps = makeDeps({
-      runBackgroundTask: vi.fn().mockRejectedValue(new TaskAlreadyRunningError("AI Visualize")),
+      renderCanvas: vi.fn().mockRejectedValue(new TaskAlreadyRunningError("Visualize")),
     });
     await start(deps);
-    const res = await fetch(`${baseUrl}/api/macros/ai-visualize/run`, {
+    const res = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ harnessSessionId: "sess-1" }),

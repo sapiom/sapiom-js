@@ -173,28 +173,13 @@ export const MOCK_MACROS: MacroDef[] = [
     requiresWorkflow: true,
   },
   {
-    // One-click, unbound-friendly deterministic render — no LLM, no pty
+    // One-click force refresh: deterministic re-render + AI enrichment task
+    // re-spawn, all server-side — no LLM in the render itself, no pty
     // involved. Matches the real DEFAULT_MACROS contract (src/core/macros.ts).
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
     action: { kind: "render-canvas" },
-    requiresWorkflow: false,
-  },
-  {
-    // The LLM-authored fallback for custom/narrative views — runs as a
-    // headless background task, never in the user's own session. Matches the
-    // real DEFAULT_MACROS contract (src/core/macros.ts); the mock text is
-    // abbreviated, only the shape matters here.
-    id: "ai-visualize",
-    label: "AI Visualize",
-    icon: "Wand2",
-    execution: "background",
-    action: {
-      kind: "inject",
-      text: "Recreate {{canvas.path}} from the canvas kit template (read both files first, then overwrite index.html).",
-      submit: true,
-    },
     requiresWorkflow: false,
   },
 ];

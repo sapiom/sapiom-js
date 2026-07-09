@@ -63,11 +63,11 @@ describe("CANVAS_STYLE_GUIDELINES injection sites", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain(CANVAS_STYLE_GUIDELINES);
   });
 
-  it("is NOT embedded in the ai-visualize macro's inject text — the canvas kit's prebuilt template already carries the style, so the macro path only ever asks for a data edit", () => {
-    const macro = DEFAULT_MACROS.find((m) => m.id === "ai-visualize")!;
-    expect(macro.action.kind).toBe("inject");
-    if (macro.action.kind === "inject") {
-      expect(macro.action.text).not.toContain(CANVAS_STYLE_GUIDELINES);
+  it("is NOT embedded in any macro's inject text — no macro asks an agent to write canvas HTML anymore", () => {
+    for (const macro of DEFAULT_MACROS) {
+      if (macro.action.kind === "inject") {
+        expect(macro.action.text).not.toContain(CANVAS_STYLE_GUIDELINES);
+      }
     }
   });
 

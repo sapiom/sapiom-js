@@ -9,6 +9,8 @@
  * new-session directory picker.
  */
 import { expect, test } from "@playwright/test";
+import { buildWorkflowPanelHtml } from "../../src/core/canvas-body.js";
+import { renderCanvasDocument } from "../../src/core/canvas-template.js";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -432,6 +434,10 @@ test.describe("docked workflow action strip", () => {
     await expect(strip.getByTestId("macro-prod_run")).toBeVisible();
     await expect(strip.getByTestId("macro-open_prod")).toBeVisible();
     await expect(strip.getByTestId("macro-visualize")).toBeVisible();
+    // ONE canvas macro: the old two-button visualize / ai-visualize split is
+    // gone — Visualize alone covers structure + AI enrichment server-side.
+    await expect(strip.getByTestId("macro-ai-visualize")).toHaveCount(0);
+    await expect(strip.locator(".strip-item")).toHaveCount(5);
 
     await page.screenshot({ path: "web/e2e/screenshots/app-shell-docked-strip.png", fullPage: true });
   });
@@ -450,8 +456,6 @@ test.describe("docked workflow action strip", () => {
     }).toPass({ timeout: 1000 });
     await expect(page.locator(".strip-item-label").first()).toBeVisible();
     await expect(strip.getByText("Run local")).toBeVisible();
-    // getByText("Visualize") would also match "AI Visualize" — use the
-    // macro's own test id to target the deterministic-render macro exactly.
     await expect(strip.getByTestId("macro-visualize")).toBeVisible();
 
     // Expanded, the panel floats directly over the terminal — its
@@ -634,6 +638,42 @@ test("a canvas.reload bus message swaps the empty state for the generated iframe
   await expect(page.locator(".canvas-iframe")).toHaveAttribute("src", /^\/canvas\/sess-boot\/\?theme=(light|dark)$/);
 });
 
+test("a stale enrichment renders with the 'stale — Refresh' chip in the served canvas document", async ({ page }) => {
+  // The chip is server-rendered (core/canvas-render.ts marks an enrichment
+  // whose fingerprint no longer matches the sources) — serve the REAL
+  // renderer's output for that state into the pane's iframe and assert the
+  // chip actually displays through the sandboxed-iframe pipeline.
+  const staleDocument = renderCanvasDocument(
+    buildWorkflowPanelHtml(
+      {
+        manifestName: "leasing",
+        entry: "intake",
+        warnings: [],
+        nodes: [{ id: "intake", kind: "entry", label: "intake" }],
+        edges: [],
+      },
+      { title: "leasing", badges: ["local only"] },
+      { enrichment: { summary: "Handles lease applications end to end" }, stale: true },
+    ),
+  );
+  await page.route("**/canvas/sess-boot/**", async (route) => {
+    await route.fulfill({ contentType: "text/html", body: staleDocument });
+  });
+
+  await page.evaluate(() => {
+    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+      type: "canvas.reload",
+      harnessSessionId: "sess-boot",
+    });
+  });
+
+  const frame = page.frameLocator(".canvas-iframe");
+  await expect(frame.locator(".canvas-badge--stale")).toHaveText("stale — Refresh");
+  // The stale enrichment stays DISPLAYED — the chip marks it, never hides it.
+  await expect(frame.locator(".canvas-subtitle")).toHaveText("Handles lease applications end to end");
+  await page.screenshot({ path: "web/e2e/screenshots/canvas-stale-chip.png" });
+});
+
 test("a pending canvas load shows a skeleton over the iframe — never a blank pane", async ({ page }) => {
   // Stall the canvas document so the load stays pending long enough to assert
   // on the skeleton deterministically.
@@ -692,14 +732,18 @@ test("switching the bound workflow refetches the canvas immediately — the serv
 test.describe("background-task canvas states", () => {
   const baseTask = {
     id: "task-1",
-    macroId: "ai-visualize",
-    label: "AI Visualize",
+    macroId: "visualize",
+    label: "Visualize",
     harnessSessionId: "sess-boot",
     cwd: "/Users/demo/acme-app",
+    // The mock boot session's bound workflow (MOCK_WORKFLOWS "leasing") —
+    // enrichment tasks always carry the workflow they target.
+    workflowPath: "/Users/demo/acme-app/leasing" as string | null,
     startedAt: new Date().toISOString(),
     endedAt: null as string | null,
     exitCode: null as number | null,
     statusLines: [] as string[],
+    resultText: null as string | null,
     errorTail: null as string | null,
   };
 
@@ -716,15 +760,15 @@ test.describe("background-task canvas states", () => {
 
     const activity = page.getByTestId("canvas-task-activity");
     await expect(activity).toBeVisible();
-    await expect(activity).toContainText("AI Visualize is running");
+    await expect(activity).toContainText("Visualize is running");
     await expect(activity.locator(".canvas-task-spinner")).toBeVisible();
 
     await publish(page, {
       ...baseTask,
       status: "running",
-      statusLines: ["Agent started", "Read .sapiom/canvas/_template.html"],
+      statusLines: ["Agent started", "Read steps/route.ts"],
     });
-    await expect(page.getByTestId("canvas-task-lines")).toContainText("Read .sapiom/canvas/_template.html");
+    await expect(page.getByTestId("canvas-task-lines")).toContainText("Read steps/route.ts");
 
     await page.screenshot({ path: "web/e2e/screenshots/canvas-task-activity.png" });
 
@@ -749,6 +793,26 @@ test.describe("background-task canvas states", () => {
     await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
   });
 
+  test("activity is scoped to the BOUND WORKFLOW — another workflow's task never bleeds into this pane", async ({
+    page,
+  }) => {
+    // Same session, but the task targets a workflow that is NOT the pane's
+    // current binding (sess-boot is bound to leasing) — hidden.
+    await publish(page, { ...baseTask, workflowPath: "/Users/demo/onboarding-flow", status: "running" });
+    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
+    await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+
+    // The bound workflow's own task shows...
+    await publish(page, { ...baseTask, id: "task-2", status: "running" });
+    await expect(page.getByTestId("canvas-task-activity")).toBeVisible();
+
+    // ...and switching the binding mid-run hides it again: the rfq pane must
+    // not show leasing's enrichment progress.
+    await page.getByTestId("workflow-rfq").click();
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
+    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
+  });
+
   test("a failed task shows the error tail with retry and dismiss affordances", async ({ page }) => {
     await publish(page, {
       ...baseTask,
@@ -760,11 +824,12 @@ test.describe("background-task canvas states", () => {
 
     const failed = page.getByTestId("canvas-task-failed");
     await expect(failed).toBeVisible();
-    await expect(failed).toContainText("AI Visualize failed");
+    await expect(failed).toContainText("Visualize failed");
     await expect(failed).toContainText("API connection lost");
     await page.screenshot({ path: "web/e2e/screenshots/canvas-task-failed.png" });
 
-    // Retry re-fires the same macro (MockApi records it for us to read back).
+    // Retry re-fires the same macro (MockApi records it for us to read back)
+    // — for an enrichment task that's the visualize force refresh.
     await page.getByTestId("canvas-task-retry").click();
     await page.waitForFunction(
       () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
@@ -773,7 +838,7 @@ test.describe("background-task canvas states", () => {
       () =>
         (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string } } }).__HARNESS_TEST__.lastMacroRun,
     );
-    expect(lastRun?.id).toBe("ai-visualize");
+    expect(lastRun?.id).toBe("visualize");
 
     // Dismiss hides the failure panel and returns the pane to its usual state.
     await page.getByTestId("canvas-task-dismiss").click();

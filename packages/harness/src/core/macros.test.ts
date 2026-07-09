@@ -2,14 +2,13 @@ import { describe, it, expect } from "vitest";
 import { DEFAULT_MACROS } from "./macros.js";
 
 describe("DEFAULT_MACROS", () => {
-  it("defines exactly the 6 action-rail macros, matching the SPA's MOCK_MACROS ids", () => {
+  it("defines exactly the 5 action-rail macros, matching the SPA's MOCK_MACROS ids", () => {
     expect(DEFAULT_MACROS.map((m) => m.id)).toEqual([
       "run_local",
       "deploy",
       "prod_run",
       "open_prod",
       "visualize",
-      "ai-visualize",
     ]);
   });
 
@@ -33,30 +32,17 @@ describe("DEFAULT_MACROS", () => {
     });
   });
 
-  it("visualize is a one-click, unbound-friendly deterministic render — no LLM, no pty involved", () => {
+  it("visualize is the ONE canvas macro — a server-side force refresh, unbound-friendly, no pty involved", () => {
     const macro = DEFAULT_MACROS.find((m) => m.id === "visualize")!;
-    // Works whether or not a workflow is bound — the render pipeline reads
+    // Works whether or not a workflow is bound — the refresh pipeline reads
     // the session's actual binding server-side, so there's no prompt text
     // (and therefore no {{workflow.path}} to throw on when unbound).
     expect(macro.requiresWorkflow).toBeFalsy();
     expect(macro.action).toEqual({ kind: "render-canvas" });
   });
 
-  it("ai-visualize is the LLM fallback — same unbound-friendly template-clone prompt visualize used to run", () => {
-    const macro = DEFAULT_MACROS.find((m) => m.id === "ai-visualize")!;
-    expect(macro.requiresWorkflow).toBeFalsy();
-    expect(macro.action.kind).toBe("inject");
-    if (macro.action.kind === "inject") {
-      expect(macro.action.text).toContain("{{canvas.path}}");
-      expect(macro.action.text).not.toContain("{{workflow.path}}");
-      expect(macro.action.text).not.toContain("{{subject}}");
-      // Clone-and-fill, not a JSON data edit and not "write HTML from
-      // scratch" — the whole point of the template-clone canvas kit.
-      expect(macro.action.text).toMatch(/_template\.html/);
-      expect(macro.action.text).toMatch(/canvas-patterns/);
-      expect(macro.action.text).toMatch(/harness-context\.json/);
-      expect(macro.action.text).toMatch(/do not write new css/i);
-    }
+  it("the old ai-visualize macro (LLM writes the whole HTML page) is gone — enrichment replaced it", () => {
+    expect(DEFAULT_MACROS.find((m) => m.id === "ai-visualize")).toBeUndefined();
   });
 
   it("every macro has a non-empty label and icon", () => {
