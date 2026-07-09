@@ -9,7 +9,7 @@ resumes once the run finishes — authored as code against
 prepare → kickoff ──pause(models.coding.result)──▶ finalize
 ```
 
-- **kickoff** calls `agent.coding.launch(...)` (which returns a handle, *not* a
+- **kickoff** calls `models.coding.launch(...)` (which returns a handle, *not* a
   result) and returns `pauseUntilSignal(handle, { resumeStep: "finalize" })`. The
   workflow suspends — a long run holds no worker.
 - **finalize** is resumed by the engine when the run reaches a terminal state.
@@ -22,7 +22,7 @@ branch locally, stub a failed result under the *launching* step in
 `.sapiom-dev/stubs.json` — that value is also the resume payload:
 
 ```jsonc
-{ "version": 1, "steps": { "kickoff": { "agent.coding.launch": { "status": "failed", "result": { "success": false }, "error": { "stage": "run", "message": "…" } } } } }
+{ "version": 1, "steps": { "kickoff": { "models.coding.launch": { "status": "failed", "result": { "success": false }, "error": { "stage": "run", "message": "…" } } } } }
 ```
 
 ## Getting started
