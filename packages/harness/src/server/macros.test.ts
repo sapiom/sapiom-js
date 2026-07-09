@@ -73,7 +73,7 @@ describe("macros router", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      'cd "/Users/demo/acme-app/leasing" && sapiom agents deploy',
+      "cd '/Users/demo/acme-app/leasing' && sapiom agents deploy",
       true,
     );
     expect(deps.openUrl).not.toHaveBeenCalled();
@@ -149,7 +149,7 @@ describe("macros router", () => {
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      'cd "/Users/demo/acme-app/leasing" && sapiom agents deploy',
+      "cd '/Users/demo/acme-app/leasing' && sapiom agents deploy",
       true,
     );
   });
@@ -171,9 +171,111 @@ describe("macros router", () => {
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      'cd "/Users/demo/acme-app/leasing" && sapiom agents deploy',
+      "cd '/Users/demo/acme-app/leasing' && sapiom agents deploy",
       true,
     );
+  });
+
+  describe("shell injection hardening — workflow.path is POSIX single-quoted", () => {
+    /**
+     * Each test registers a workflow whose path contains a shell metacharacter
+     * that double-quoting does NOT neutralise (subshell, backtick, embedded
+     * quote). The resolved cd argument must be wrapped in single quotes so
+     * the injected text is inert — the subshell can never actually execute.
+     */
+    function makeWithPath(p: string) {
+      const evil: WorkflowInfo = { name: "evil", path: p, definitionId: null, source: "scan" };
+      return makeDeps({
+        findWorkflow: (wp) => (wp === p ? evil : null),
+        getBoundWorkflowPath: () => p,
+      });
+    }
+
+    it("wraps a path containing spaces in single quotes (not word-split)", async () => {
+      const deps = makeWithPath("/Users/demo/my workflow");
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: "/Users/demo/my workflow" }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/my workflow' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("neutralises a path containing a subshell expansion — $(evil) cannot run", async () => {
+      const p = "/Users/demo/$(evil)";
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/$(evil)' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("neutralises a path containing backtick expansion — backtick subshell cannot run", async () => {
+      const p = "/Users/demo/`evil`";
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/`evil`' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("neutralises a path containing an embedded double-quote — cannot break out of double-quoting", async () => {
+      const p = '/Users/demo/path"with"quotes';
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/path\"with\"quotes' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("escapes an embedded single-quote via POSIX close-escape-reopen", async () => {
+      // Path: /Users/demo/it's here
+      // Expected: cd '/Users/demo/it'\''s here' && ...
+      const p = "/Users/demo/it's here";
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/it'\\''s here' && sapiom agents deploy",
+        true,
+      );
+    });
   });
 
   it("400s a workflow-required macro when both the request and the session binding lack a workflow", async () => {

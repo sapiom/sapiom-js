@@ -243,21 +243,22 @@ describe("GET /api/skills/:id", () => {
 // ---------------------------------------------------------------------------
 
 describe("macro path quoting", () => {
-  it("deploy macro wraps {{workflow.path}} in double-quotes (path with spaces)", async () => {
-    // Inline test of the template string itself — the real resolution
-    // happens in core/macro-runner.ts, but we just want to verify the
-    // template in DEFAULT_MACROS uses quoted substitution.
+  it("deploy macro uses the unquoted {{workflow.path}} placeholder (quoting applied at resolution time)", async () => {
+    // The template itself stores the raw placeholder; POSIX single-quote
+    // escaping is applied by shellQuote() in macro-runner.ts at resolution
+    // time — so the template must NOT contain outer quotes around the token.
     const { DEFAULT_MACROS } = await import("../core/macros.js");
     const deploy = DEFAULT_MACROS.find((m) => m.id === "deploy");
     expect(deploy).toBeDefined();
     expect(deploy?.action.kind).toBe("inject");
     if (deploy?.action.kind === "inject") {
-      // The template must wrap the path in double-quotes.
-      expect(deploy.action.text).toMatch(/"{{workflow\.path}}"/);
+      // Template stores the bare placeholder — no surrounding quotes.
+      expect(deploy.action.text).toContain("{{workflow.path}}");
+      expect(deploy.action.text).not.toMatch(/"{{workflow\.path}}"/);
     }
   });
 
-  it("resolving deploy against a path with spaces produces a quoted cd command", async () => {
+  it("resolving deploy against a path with spaces produces a POSIX single-quoted cd command", async () => {
     const { resolveMacro } = await import("../core/macro-runner.js");
     const { DEFAULT_MACROS } = await import("../core/macros.js");
     const deploy = DEFAULT_MACROS.find((m) => m.id === "deploy")!;
@@ -275,8 +276,9 @@ describe("macro path quoting", () => {
 
     expect(resolved.kind).toBe("inject");
     if (resolved.kind === "inject") {
-      // The path must be double-quoted so the shell doesn't split on the space.
-      expect(resolved.text).toBe('cd "/Users/demo/my workflow" && sapiom agents deploy');
+      // POSIX single-quoting stops spaces and metacharacters — the shell
+      // sees a single token even with spaces or dollar signs in the path.
+      expect(resolved.text).toBe("cd '/Users/demo/my workflow' && sapiom agents deploy");
     }
   });
 });

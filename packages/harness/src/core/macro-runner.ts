@@ -30,6 +30,21 @@ export class MacroValidationError extends Error {
 
 const PLACEHOLDER_PATTERN = /\{\{[a-zA-Z.]+\}\}/g;
 
+/**
+ * POSIX single-quote escaping for shell arguments.
+ *
+ * Single-quoting is the only quoting form that stops ALL special characters
+ * (dollar signs, backticks, backslashes, embedded double-quotes, etc.).
+ * Double-quotes DO NOT protect against `$(...)` or backtick expansion, which
+ * makes them unsafe for untrusted, user-supplied paths.
+ *
+ * The only character that cannot appear inside single quotes is `'` itself;
+ * we close the quote, insert `'\''`, and reopen: `a'b` → `'a'\''b'`.
+ */
+function shellQuote(p: string): string {
+  return "'" + p.replace(/'/g, "'\\''") + "'";
+}
+
 interface PlaceholderEntry {
   /** False when the context has no real value for this token (e.g. no
    *  workflow selected, or an empty subject) — substituting it anyway would
@@ -40,7 +55,12 @@ interface PlaceholderEntry {
 
 function placeholderTable(ctx: MacroContext): Record<string, PlaceholderEntry> {
   return {
-    "{{workflow.path}}": { available: ctx.workflow != null, value: ctx.workflow?.path ?? "" },
+    // Shell-quoted so that paths with spaces, dollar signs, backticks, or
+    // embedded quotes cannot execute arbitrary commands in the agent's shell.
+    "{{workflow.path}}": {
+      available: ctx.workflow != null,
+      value: ctx.workflow != null ? shellQuote(ctx.workflow.path) : "",
+    },
     "{{workflow.name}}": { available: ctx.workflow != null, value: ctx.workflow?.name ?? "" },
     "{{workflow.definitionId}}": {
       available: ctx.workflow?.definitionId != null,

@@ -16,9 +16,10 @@ export const DEFAULT_MACROS: MacroDef[] = [
     action: {
       kind: "inject",
       submit: true,
-      // Quoted path so workflow directories with spaces in the name (e.g.
-      // "my workflow") don't split into separate shell words.
-      text: 'cd "{{workflow.path}}" && sapiom agents run --target local',
+      // {{workflow.path}} is POSIX single-quoted at resolution time (macro-runner.ts
+      // shellQuote), which stops spaces, dollar signs, backticks, and embedded
+      // double-quotes from being interpreted by the shell.
+      text: "cd {{workflow.path}} && sapiom agents run --target local",
     },
   },
   {
@@ -29,7 +30,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     action: {
       kind: "inject",
       submit: true,
-      text: 'cd "{{workflow.path}}" && sapiom agents deploy',
+      text: "cd {{workflow.path}} && sapiom agents deploy",
     },
   },
   {
@@ -40,7 +41,7 @@ export const DEFAULT_MACROS: MacroDef[] = [
     action: {
       kind: "inject",
       submit: true,
-      text: 'cd "{{workflow.path}}" && sapiom agents run --target prod',
+      text: "cd {{workflow.path}} && sapiom agents run --target prod",
     },
   },
   {

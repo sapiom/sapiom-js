@@ -3,7 +3,7 @@
  * running harness server (see MockApi in ./api).
  */
 import type { HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
-import type { SkillMeta } from "./api";
+import type { HarnessEntry, SkillMeta } from "./api";
 
 const now = Date.now();
 const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
@@ -149,21 +149,21 @@ export const MOCK_MACROS: MacroDef[] = [
     id: "run_local",
     label: "Run local",
     icon: "Play",
-    action: { kind: "inject", text: 'cd "{{workflow.path}}" && sapiom agents run --target local', submit: true },
+    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target local", submit: true },
     requiresWorkflow: true,
   },
   {
     id: "deploy",
     label: "Deploy",
     icon: "Cloud",
-    action: { kind: "inject", text: 'cd "{{workflow.path}}" && sapiom agents deploy', submit: true },
+    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents deploy", submit: true },
     requiresWorkflow: true,
   },
   {
     id: "prod_run",
     label: "Prod run",
     icon: "Zap",
-    action: { kind: "inject", text: 'cd "{{workflow.path}}" && sapiom agents run --target prod', submit: true },
+    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target prod", submit: true },
     requiresWorkflow: true,
   },
   {
@@ -189,6 +189,62 @@ export const MOCK_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
   recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-workflows", "/Users/demo/onboarding-flow"],
 };
+
+/**
+ * Mock harness adapter list — mirrors what GET /api/harnesses returns with the
+ * real adapter registry (installMcpPrompt sourced from the adapter info files).
+ * Only claude-code and codex are included here since they are the only embedded
+ * adapters with MCP install guidance.
+ */
+export const MOCK_HARNESSES: HarnessEntry[] = [
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    mode: "embedded",
+    experimental: false,
+    installed: true,
+    installMcpPrompt: [
+      "Set up the Sapiom MCP server for Claude Code.",
+      "",
+      "1. Register it under the server name `sapiom-dev`:",
+      "",
+      "   claude mcp add sapiom-dev -- npx -y @sapiom/mcp",
+      "",
+      "   The `@sapiom/mcp` npm package ships the `sapiom-mcp` binary, a local",
+      "   MCP server that speaks stdio — no global install or daemon needed.",
+      "2. Verify the registration: `claude mcp list` should show `sapiom-dev`.",
+      "3. Restart Claude Code (or start a new session) so the server is loaded.",
+      "4. Networked Sapiom tools need an API key: run the `sapiom_authenticate`",
+      "   tool once and complete the browser login it opens.",
+    ].join("\n"),
+  },
+  {
+    id: "codex",
+    label: "Codex CLI",
+    mode: "embedded",
+    experimental: false,
+    installed: false,
+    installMcpPrompt: [
+      "Set up the Sapiom MCP server for the Codex CLI.",
+      "",
+      "1. Register it under the server name `sapiom-dev`. Recent Codex versions",
+      "   support:",
+      "",
+      "   codex mcp add sapiom-dev -- npx -y @sapiom/mcp",
+      "",
+      "   Otherwise add it to `~/.codex/config.toml` yourself:",
+      "",
+      "   [mcp_servers.sapiom-dev]",
+      '   command = "npx"',
+      '   args = ["-y", "@sapiom/mcp"]',
+      "",
+      "   The `@sapiom/mcp` npm package ships the `sapiom-mcp` binary, a local",
+      "   MCP server that speaks stdio.",
+      "2. Restart Codex so the server is loaded, then confirm the Sapiom tools",
+      "   are listed.",
+    ].join("\n"),
+  },
+];
 
 export const MOCK_SKILLS: SkillMeta[] = [
   {
