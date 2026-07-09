@@ -1026,13 +1026,6 @@ test.describe("prompt bar", () => {
               ready: true,
             },
           });
-          // Activate the new session by setting it as the active tab.
-          await page.evaluate(() => {
-            // We navigate to the codex session by publishing another status that
-            // makes it the running session the SPA auto-selects as active.
-            // The SPA auto-selects the first running session on load, and once
-            // the session exists in state, click the tab to activate it.
-          });
           // The SPA adds the session to state via session.status — click the tab.
           const codexTab = page.getByTestId("session-tab-sess-codex-test");
           await expect(codexTab).toBeVisible({ timeout: 3_000 });
@@ -1081,15 +1074,16 @@ test.describe("prompt bar", () => {
     await textarea.fill("Line one");
     await textarea.press("Shift+Enter");
 
-    // No submission recorded.
+    // No submission recorded — Enter alone submits, Shift+Enter must not.
     const captured = await page.evaluate(
       () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput,
     );
     expect(captured).toBeUndefined();
 
-    // The textarea still contains text (draft preserved, not cleared).
+    // The textarea value must contain a literal newline after the original text.
     const value = await textarea.inputValue();
     expect(value).toContain("Line one");
+    expect(value).toContain("\n");
   });
 
   test("not-ready session: bar is disabled with reason text, draft is preserved", async ({ page }) => {
@@ -1119,6 +1113,39 @@ test.describe("prompt bar", () => {
     await page.screenshot({ path: "web/e2e/screenshots/prompt-bar-not-ready.png" });
   });
 
+  test("per-session drafts: switching tabs preserves each session's own draft, no cross-leakage", async ({
+    page,
+  }) => {
+    // Ensure a second ready session exists and is visible in the tab strip.
+    // sess-bg is already in the mock fixtures as a running session.
+    const bootTab = page.getByTestId("session-tab-sess-boot");
+    const bgTab = page.getByTestId("session-tab-sess-bg");
+
+    // Type in session A (boot).
+    await expect(bootTab).toHaveClass(/is-active/);
+    const textarea = page.locator(".prompt-bar-textarea");
+    await textarea.click();
+    await textarea.fill("draft for session A");
+
+    // Switch to session B (bg) — bar must be empty.
+    await bgTab.click();
+    await expect(bgTab).toHaveClass(/is-active/);
+    await expect(textarea).toHaveValue("");
+
+    // Type in session B.
+    await textarea.click();
+    await textarea.fill("draft for session B");
+
+    // Switch back to session A — A's draft must be restored.
+    await bootTab.click();
+    await expect(bootTab).toHaveClass(/is-active/);
+    await expect(textarea).toHaveValue("draft for session A");
+
+    // Switch back to B — B's draft also intact.
+    await bgTab.click();
+    await expect(textarea).toHaveValue("draft for session B");
+  });
+
   test("bar re-enables when the session becomes ready again", async ({ page }) => {
     await setSessionNotReady(page);
     const textarea = page.locator(".prompt-bar-textarea");
@@ -1131,56 +1158,57 @@ test.describe("prompt bar", () => {
     await expect(page.getByTestId("prompt-bar-status")).toHaveCount(0);
   });
 
-  test("409-on-submit: reactive reason shown, draft intact, bar re-enables when ready", async ({ page }) => {
-    // Configure MockApi to throw a 409 for the next injectInput call.
+  test("409-on-submit: reactive reason shown, stays visible, draft intact, clears on ready transition", async ({
+    page,
+  }) => {
+    // Arm the MockApi 409 simulation — consumed exactly once on the next injectInput call.
     await page.evaluate(() => {
-      const win = window as unknown as {
-        __HARNESS_TEST__?: Record<string, unknown>;
-        __MOCK_INJECT_FAIL_ONCE__?: boolean;
-      };
-      win.__MOCK_INJECT_FAIL_ONCE__ = true;
+      (window as unknown as { __MOCK_INJECT_FAIL_ONCE__?: boolean }).__MOCK_INJECT_FAIL_ONCE__ = true;
     });
 
-    // Patch MockApi's injectInput at runtime to simulate a 409 once.
-    // We do this by intercepting via the test-escape-hatch flag: any call
-    // while __MOCK_INJECT_FAIL_ONCE__ is set throws an ApiError-shaped object.
-    // The PromptBar catches ApiError (status 409) and shows the reason.
-    //
-    // Because we can't hot-patch the class from outside, we instead publish a
-    // session.status that makes the session not-ready BETWEEN the user pressing
-    // Enter and MockApi resolving — but MockApi currently always resolves ok.
-    //
-    // Instead of fighting the class boundary, drive the 409 path via the bus:
-    // 1. User types and presses Enter.
-    // 2. We publish session.status(ready: false) before MockApi resolves.
-    //    The proactive check catches it BEFORE the submit, so the bar is
-    //    already disabled — we can't easily test the reactive path this way.
-    //
-    // The cleanest approach: temporarily override the global api instance's
-    // injectInput to throw a synthetic ApiError. Since api is a module-local
-    // singleton in api.ts, we expose a test-only override on __HARNESS_TEST__.
-
-    // Expose an override for the prompt-bar-409 test scenario by publishing a
-    // special synthetic session.status that signals the MockApi should simulate
-    // a 409 response — this is what the __MOCK_INJECT_FAIL_ONCE__ flag is for.
-    // Since we can't easily intercept the module's class, we test the 409 path
-    // by verifying the reactive path works: the bar shows its status text.
-
-    // Practical test: drive the not-ready state to verify the status element
-    // appears and the draft is preserved (the reactive path from 409 behaves
-    // identically to the proactive not-ready path from the PromptBar's POV).
     const textarea = page.locator(".prompt-bar-textarea");
+    const status = page.getByTestId("prompt-bar-status");
+
+    // Session starts ready — bar is enabled.
+    await expect(textarea).toBeEnabled();
+
+    // Type and submit — MockApi throws 409 once.
+    await textarea.click();
     await textarea.fill("my draft text");
+    await textarea.press("Enter");
 
+    // Reactive reason must appear and the draft must be intact.
+    await expect(status).toBeVisible({ timeout: 3_000 });
+    await expect(status).toContainText(/initialising/i);
+    await expect(textarea).toHaveValue("my draft text");
+
+    // PINS BUG 1 FIX: the reason must stay visible even though the session
+    // is still proactively ready (no session.status frame was published).
+    // Before the fix, the clearing effect would fire in the same tick and
+    // the status element would vanish immediately.
+    await expect(status).toBeVisible();
+
+    // Now simulate the session recovering via a not-ready→ready transition,
+    // which is the defined trigger for clearing the reactive reason.
     await setSessionNotReady(page);
-    await expect(textarea).toBeDisabled({ timeout: 3_000 });
-    await expect(textarea).toHaveValue("my draft text");
-    await expect(page.getByTestId("prompt-bar-status")).toBeVisible();
-
-    // Restore ready → bar works again with the draft preserved.
     await setSessionReady(page);
-    await expect(textarea).toBeEnabled({ timeout: 3_000 });
+    await expect(status).toHaveCount(0, { timeout: 3_000 });
+
+    // Bar is re-enabled with the draft still intact — user can retry.
+    await expect(textarea).toBeEnabled();
     await expect(textarea).toHaveValue("my draft text");
+
+    // Resubmit succeeds (flag was consumed; MockApi behaves normally now).
+    await textarea.press("Enter");
+    await page.waitForFunction(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__?.lastInjectInput?.req.text === "my draft text",
+    );
+    const captured = await page.evaluate(
+      () => (window as unknown as TestHarness).__HARNESS_TEST__.lastInjectInput,
+    );
+    expect(captured?.req.text).toBe("my draft text");
+
+    await page.screenshot({ path: "web/e2e/screenshots/prompt-bar-409-reactive.png" });
   });
 
   test("bar does not steal focus from the terminal on initial load", async ({ page }) => {

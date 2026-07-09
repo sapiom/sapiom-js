@@ -277,12 +277,20 @@ class MockApi implements HarnessApi {
 
   async injectInput(id: string, req: InjectInputRequest): Promise<void> {
     await delay();
-    // Test-only escape hatch, mock mode only: PromptBar calls this with the
-    // user's draft text; Playwright reads it back to assert the right payload
-    // was POSTed — same pattern as runMacro's lastMacroRun and seedSampleProject's
-    // lastSampleSeed.
     if (typeof window !== "undefined") {
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+        __MOCK_INJECT_FAIL_ONCE__?: boolean;
+      };
+      // Test-only 409 simulation: Playwright sets this flag before a submit to
+      // exercise the reactive 409 path in PromptBar (reason shown, draft intact).
+      // Consumed exactly once — cleared immediately so the next submit succeeds.
+      if (win.__MOCK_INJECT_FAIL_ONCE__) {
+        win.__MOCK_INJECT_FAIL_ONCE__ = false;
+        throw new ApiError(409, `POST /api/sessions/${id}/input → 409: Session is still initialising`, "Session is still initialising");
+      }
+      // Record the submission for Playwright to assert on — same pattern as
+      // runMacro's lastMacroRun and seedSampleProject's lastSampleSeed.
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
         lastInjectInput: { id, req },

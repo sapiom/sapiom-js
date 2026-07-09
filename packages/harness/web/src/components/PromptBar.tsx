@@ -53,18 +53,56 @@ const MAX_ROWS = 6;
 
 export const PromptBar = ({ session, onSubmit }: PromptBarProps): JSX.Element => {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [draft, setDraft] = useState("");
+
+  // Per-session draft storage: switching tabs preserves each session's own
+  // half-typed text without leaking into neighbouring sessions.
+  const draftsRef = useRef<Map<string, string>>(new Map());
+  const prevSessionIdRef = useRef<string | null>(session?.id ?? null);
+  const [draft, setDraft] = useState<string>(() => {
+    // Initialise from whatever the session already had stored (empty on first mount).
+    return session ? (draftsRef.current.get(session.id) ?? "") : "";
+  });
+
+  // When the active session changes: persist the outgoing draft and restore
+  // the incoming session's own draft (empty if never typed in).
+  useEffect(() => {
+    const incoming = session?.id ?? null;
+    const outgoing = prevSessionIdRef.current;
+    if (incoming === outgoing) return;
+    // Save the current draft under the outgoing session id.
+    if (outgoing !== null) {
+      draftsRef.current.set(outgoing, draft);
+    }
+    // Restore (or start fresh) for the incoming session.
+    prevSessionIdRef.current = incoming;
+    setDraft(incoming !== null ? (draftsRef.current.get(incoming) ?? "") : "");
+  // `draft` must be in deps so the save captures the latest value, but we
+  // only want to run on session changes — the `incoming === outgoing` guard
+  // exits early on all other renders.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
+
   const [submitting, setSubmitting] = useState(false);
   const [reactiveReason, setReactiveReason] = useState<DisabledReason | null>(null);
 
   // Proactive readiness gate from the session's own `ready` flag.
   const proactiveReason = readinessReason(session);
 
-  // Reactive reason (from a 409 response) clears as soon as the session
-  // becomes ready again so the user can retry without reloading.
+  // Track the previous proactive value so we can detect the not-ready→ready
+  // TRANSITION. We must NOT include `reactiveReason` in deps here — doing so
+  // causes an immediate self-clear: setReactiveReason → re-render →
+  // proactiveReason === null again → effect fires → cleared before the user
+  // sees it.
+  const prevProactiveRef = useRef<DisabledReason | null>(proactiveReason);
   useEffect(() => {
-    if (proactiveReason === null && reactiveReason !== null) setReactiveReason(null);
-  }, [proactiveReason, reactiveReason]);
+    const prev = prevProactiveRef.current;
+    prevProactiveRef.current = proactiveReason;
+    // Only clear the reactive reason when transitioning FROM not-ready TO ready.
+    if (prev !== null && proactiveReason === null) {
+      setReactiveReason(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proactiveReason]);
 
   const disabledReason: DisabledReason | null = proactiveReason ?? reactiveReason;
   const isDisabled = disabledReason !== null || submitting;
@@ -117,7 +155,10 @@ export const PromptBar = ({ session, onSubmit }: PromptBarProps): JSX.Element =>
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      // Guard against CJK/IME composition: isComposing is true while the user is
+      // still mid-composition (e.g. selecting a kanji candidate). Submitting at
+      // that point would swallow the in-progress text rather than the intended prompt.
+      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
         void handleSubmit();
       }
