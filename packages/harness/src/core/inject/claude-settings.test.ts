@@ -17,7 +17,7 @@ describe("generateClaudeSettings", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("writes settings.json registering all six hooks pointed at emit.cjs", async () => {
+  it("writes settings.json registering all hooks pointed at emit.cjs", async () => {
     const { settingsPath, emitScriptPath } = await generateClaudeSettings({
       harnessSessionId: "session-abc",
       generatedRoot: tmpDir,
@@ -27,7 +27,8 @@ describe("generateClaudeSettings", () => {
     expect(emitScriptPath).toBe(path.join(tmpDir, "session-abc", "emit.cjs"));
 
     const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
-    const events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"];
+    // Notification added so the chat attention banner can fire on permission prompts.
+    const events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd", "Notification"];
     expect(Object.keys(settings.hooks).sort()).toEqual([...events].sort());
 
     for (const event of events) {
@@ -63,6 +64,7 @@ describe("generateClaudeSettings", () => {
     });
     expect(second.settingsPath).toBe(first.settingsPath);
     const settings = JSON.parse(await fs.readFile(second.settingsPath, "utf8"));
-    expect(Object.keys(settings.hooks)).toHaveLength(6);
+    // 7 hooks: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd, Notification.
+    expect(Object.keys(settings.hooks)).toHaveLength(7);
   });
 });
