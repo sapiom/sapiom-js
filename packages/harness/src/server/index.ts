@@ -610,7 +610,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         // bracketed paste and never submits.
         await sessionManager.submitInput(harnessSessionId, text, submit);
       },
-      runBackgroundTask: async (harnessSessionId, macro, prompt) => {
+      runBackgroundTask: async (harnessSessionId, macro, prompt, workflowPath) => {
         // The router already 404'd on an unknown session (getSessionCwd),
         // so the session is present here; its harness kind decides whether
         // a headless run is even possible (TaskNotSupportedError → 400).
@@ -623,6 +623,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
           harness: session.harness,
           cwd: session.cwd,
           prompt,
+          workflowPath,
         });
       },
       openUrl: async (url) => {

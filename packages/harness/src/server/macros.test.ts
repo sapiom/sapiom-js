@@ -230,15 +230,44 @@ describe("macros router", () => {
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
     });
     expect(res.status).toBe(200);
-    const [sessionId, macro, prompt] = (deps.runBackgroundTask as ReturnType<typeof vi.fn>).mock.calls[0] as [
-      string,
-      { id: string },
-      string,
-    ];
+    const [sessionId, macro, prompt, passedWorkflowPath] = (
+      deps.runBackgroundTask as ReturnType<typeof vi.fn>
+    ).mock.calls[0] as [string, { id: string }, string, string | null];
     expect(sessionId).toBe("sess-1");
     expect(macro.id).toBe("bg-macro");
     expect(prompt).toBe("do something in /Users/demo/acme-app"); // {{session.cwd}} substituted
+    // No workflowPath on the request and no bound workflow — must be null (not omitted)
+    // so TaskManager can apply its per-session dedupe key (not per-workflow).
+    expect(passedWorkflowPath).toBeNull();
     expect(deps.injectInput).not.toHaveBeenCalled();
+  });
+
+  it("passes the resolved workflowPath into runBackgroundTask so TaskManager can dedupe per-workflow", async () => {
+    const backgroundMacro = {
+      id: "bg-wf-macro",
+      label: "Background workflow macro",
+      icon: "Wand2",
+      execution: "background" as const,
+      action: { kind: "inject" as const, text: "enrich {{workflow.path}}", submit: true },
+    };
+    const deps = makeDeps({ listMacros: () => [...DEFAULT_MACROS, backgroundMacro] });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/bg-wf-macro/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path }),
+    });
+    expect(res.status).toBe(200);
+    const [, , , passedWorkflowPath] = (deps.runBackgroundTask as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { id: string },
+      string,
+      string | null,
+    ];
+    // workflowPath must be threaded through so TaskManager can reject a
+    // second session running the same macro against the same workflow.
+    expect(passedWorkflowPath).toBe(workflow.path);
   });
 
   it("400s visualize on a harness with no headless mode (TaskNotSupportedError from the enrichment spawn)", async () => {
