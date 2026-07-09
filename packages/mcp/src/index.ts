@@ -7,6 +7,7 @@ import { resolveEnvironment } from "./credentials.js";
 import { register as registerAuthenticate } from "./tools/authenticate.js";
 import { register as registerStatus } from "./tools/status.js";
 import { register as registerAgents } from "./tools/agents.js";
+import { register as registerSandbox } from "./tools/sandbox.js";
 import { fetchInstructions } from "./instructions-fetch.js";
 
 async function main(): Promise<void> {
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   registerAuthenticate(server, env);
   registerStatus(server, env);
   registerAgents(server, env);
+  registerSandbox(server, env);
 
   // Connect via stdio transport
   const transport = new StdioServerTransport();
