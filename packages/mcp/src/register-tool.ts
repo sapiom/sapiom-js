@@ -36,6 +36,11 @@ type AnyToolHandler = (
  * Register one MCP tool. Wire-identical to calling
  * `server.tool(name, description, schema, handler)` directly, plus one
  * `tool.call` analytics event per invocation.
+ *
+ * A zero-argument tool passes `{}` as `schema`: the SDK accepts it as an
+ * empty ZodRawShape, and the handler just ignores its (empty) `args`. This is
+ * the pre-existing convention of the direct `server.tool` call sites this
+ * seam replaced, preserved as-is; no schema-less overload is needed.
  */
 export function registerTool<Args extends ZodRawShape>(
   server: McpServer,
