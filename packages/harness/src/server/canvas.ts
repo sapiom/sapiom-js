@@ -5,9 +5,13 @@
  * `GET /canvas/:harnessSessionId/*`. The root request resolves by binding:
  * a session bound to a workflow gets that workflow's deterministic render
  * (`renders/<slug>.html` — resolved at request time, so switching the
- * binding is instant, no file rewrite involved); an unbound session gets the
- * legacy agent-authored `index.html` (custom canvases, the seeded template)
- * exactly as before. The SPA's CanvasPane embeds this in a sandboxed iframe
+ * binding is instant, no file rewrite involved); an unbound session gets its
+ * agent-authored `index.html` custom canvas — but ONLY when the file is a
+ * genuine custom canvas. A machine-generated `index.html` (the seeded
+ * template, or a stale legacy deterministic overview a pre-split server wrote
+ * there) is NOT served: the unbound session gets the clean empty state
+ * instead, so it never opens to a wall of unrelated "render failed" panels
+ * (see core/canvas-index-classify.ts). The SPA's CanvasPane embeds this in a sandboxed iframe
  * and probes it with a HEAD request (`fetch('/canvas/<id>/', { method:
  * 'HEAD' })`), so this stays intentionally simple and unauthenticated — the
  * server binds 127.0.0.1 only, and an iframe `src` / HEAD probe can't carry
@@ -19,6 +23,7 @@ import * as path from "node:path";
 import { Router, type Router as ExpressRouter, type Request, type Response } from "express";
 import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { slugForWorkflowPath } from "../core/canvas-render.js";
+import { isMachineGeneratedCanvas } from "../core/canvas-index-classify.js";
 
 const INDEX_FILENAME = path.basename(CANVAS_INDEX);
 
@@ -59,7 +64,7 @@ const EMPTY_STATE_HTML = `<!doctype html>
 <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #444; text-align: center; padding: 0 2rem;">
   <div>
     <h1 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Nothing rendered yet</h1>
-    <p style="margin: 0;">Bind a workflow to see its diagram here, or ask your agent to write HTML to
+    <p style="margin: 0;">Select a workflow in the rail to visualize it, or ask your agent to write HTML to
     <code>.sapiom/canvas/index.html</code> in this project — this pane hot-reloads whenever it changes.</p>
   </div>
 </body>
@@ -110,6 +115,10 @@ function serveCanvas(getSession: CanvasSessionLookup, req: Request, res: Respons
       ? path.join("renders", `${slugForWorkflowPath(bound)}.html`)
       : INDEX_FILENAME
     : relative;
+  // The unbound canvas root serves index.html ONLY when it's a genuine
+  // agent-authored custom canvas; a machine-generated one (seeded template or
+  // stale legacy overview) is shadowed by the empty state (see below).
+  const unboundRoot = isRoot && !bound;
 
   const canvasRoot = path.resolve(session.cwd, CANVAS_DIR);
   const filePath = path.resolve(canvasRoot, resolved);
@@ -119,6 +128,14 @@ function serveCanvas(getSession: CanvasSessionLookup, req: Request, res: Respons
     res.status(400).end();
     return;
   }
+
+  // A friendly explainer, served as a NON-ok 404 so the CanvasPane's HEAD
+  // probe reads "no content" and shows its own empty state rather than
+  // framing this page — while a direct browser visit still gets the hint.
+  const sendEmptyState = (): void => {
+    res.status(404).setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end(EMPTY_STATE_HTML);
+  };
 
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
@@ -133,11 +150,27 @@ function serveCanvas(getSession: CanvasSessionLookup, req: Request, res: Respons
       // (useful when this URL is opened directly, e.g. in a new tab during a
       // demo); any other missing file (a referenced asset) stays a plain 404.
       if (resolved === INDEX_FILENAME) {
-        res.status(404).setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(EMPTY_STATE_HTML);
+        sendEmptyState();
         return;
       }
       res.status(404).end();
+      return;
+    }
+    // Unbound root: only serve index.html when it's a genuine custom canvas.
+    // A stale machine-generated file (seeded template, or a legacy
+    // deterministic overview a pre-split server wrote to index.html) shows the
+    // empty state instead — an unbound session must never open to a wall of
+    // unrelated "render failed" panels.
+    if (unboundRoot) {
+      fs.readFile(filePath, "utf8", (readErr, content) => {
+        if (readErr || isMachineGeneratedCanvas(content)) {
+          sendEmptyState();
+          return;
+        }
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store");
+        res.end(content);
+      });
       return;
     }
     res.setHeader("Content-Type", contentTypeFor(filePath));

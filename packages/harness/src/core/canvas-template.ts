@@ -17,6 +17,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
+import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
 
 /** Lives alongside index.html, in the same CANVAS_DIR — a pristine copy of
  *  the template, written once and never touched again, so "clone the
@@ -333,6 +334,33 @@ async function writeIfMissing(filePath: string, content: string): Promise<void> 
  * that must never fail session creation itself.
  */
 export async function ensureCanvasTemplate(cwd: string): Promise<void> {
+  await removeLegacyOverviewIndex(path.join(cwd, CANVAS_INDEX));
   await writeIfMissing(path.join(cwd, CANVAS_TEMPLATE_FILE), TEMPLATE_HTML);
   await writeIfMissing(path.join(cwd, CANVAS_INDEX), TEMPLATE_HTML);
+}
+
+/**
+ * Deletes `index.html` iff it's a legacy deterministic overview a pre-split
+ * server wrote there (detected by signature — see canvas-index-classify.ts).
+ * Such a file is a stale stacked all-workflows page with baked-in "render
+ * failed" panels; left in place it keeps getting served (or, at minimum,
+ * skipped by `writeIfMissing` so a fresh seed never replaces it). An
+ * agent-authored custom canvas and the seeded template are both left
+ * untouched. Best-effort — a read/unlink failure must never fail session
+ * creation. Once removed, the `writeIfMissing` below reseeds the clean
+ * template.
+ */
+async function removeLegacyOverviewIndex(indexPath: string): Promise<void> {
+  let content: string;
+  try {
+    content = await fs.readFile(indexPath, "utf8");
+  } catch {
+    return; // Missing (the common case) or unreadable — nothing to clean up.
+  }
+  if (!isLegacyDeterministicCanvas(content)) return;
+  try {
+    await fs.rm(indexPath, { force: true });
+  } catch (err) {
+    console.error(`[harness] failed to remove legacy canvas overview ${indexPath}:`, err);
+  }
 }
