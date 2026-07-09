@@ -20,6 +20,7 @@ import { TransactionAuthorizer } from "@sapiom/core";
 import { SapiomClient } from "@sapiom/core";
 import { captureUserCallSite, getRuntimeInfo } from "@sapiom/core";
 import { initializeSapiomClient } from "@sapiom/core";
+import { withModelCallAnalytics } from "../internal/analytics.js";
 import {
   collectDependencyVersions,
   detectEntryMethod,
@@ -132,6 +133,15 @@ export class SapiomChatAnthropic<
       return await super.generate(messages, options, callbacks);
     }
 
+    // Metadata-only usage analytics around the actual model invocation
+    // (never prompts or completions — see internal/analytics.ts)
+    const modelId: string =
+      (this as any).model || (this as any).modelName || "unknown";
+    const callUnderlying = () =>
+      withModelCallAnalytics({ model: modelId, provider: "anthropic" }, () =>
+        super.generate(messages, options, callbacks),
+      );
+
     // Resolve trace ID with priority order
     const traceId: string =
       (parsedOptions?.metadata?.__sapiomTraceId as string | undefined) || // Per-invoke override
@@ -189,7 +199,7 @@ export class SapiomChatAnthropic<
     const requestFacts: LangChainLLMRequestFacts = {
       framework: "langchain",
       modelClass: this.constructor.name,
-      modelId: (this as any).model || (this as any).modelName || "unknown",
+      modelId,
 
       entryMethod,
       isStreaming: false,
@@ -304,7 +314,7 @@ export class SapiomChatAnthropic<
         error,
       );
       // Continue without Sapiom tracking
-      return await super.generate(messages, options, callbacks);
+      return await callUnderlying();
     }
 
     // Update current trace ID from transaction response
@@ -315,7 +325,7 @@ export class SapiomChatAnthropic<
     // ============================================
     // STEP 3: Execute the actual LLM call
     // ============================================
-    const result = await super.generate(messages, options, callbacks);
+    const result = await callUnderlying();
     const duration = Date.now() - startTime;
 
     // ============================================

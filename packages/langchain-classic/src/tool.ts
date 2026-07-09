@@ -20,6 +20,7 @@ import {
   isMCPPaymentError,
 } from "./internal/payment-detection.js";
 import { captureUserCallSite } from "@sapiom/core";
+import { withToolCallAnalytics } from "./internal/analytics.js";
 import type { SapiomToolConfig } from "./internal/types.js";
 import { isAuthorizationDenied } from "./internal/utils.js";
 import type { LangChainToolRequestFacts } from "./schemas/langchain-tool-v1.js";
@@ -101,6 +102,11 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
   // STORE ORIGINAL func
   // ============================================
   const originalFunc = (tool as any).func.bind(tool);
+
+  // Metadata-only usage analytics around each actual tool execution
+  // (tool NAME only — never args or results; see internal/analytics.ts).
+  // The explicitly-disabled path below keeps calling originalFunc directly.
+  const instrumentedFunc = withToolCallAnalytics(tool.name, originalFunc);
 
   // ============================================
   // REPLACE func PROPERTY
@@ -199,12 +205,12 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
         error,
       );
       // Continue without Sapiom tracking
-      return await originalFunc(args, runManager, parentConfig);
+      return await instrumentedFunc(args, runManager, parentConfig);
     }
 
     try {
       // Call original tool func
-      const result = await originalFunc(args, runManager, parentConfig);
+      const result = await instrumentedFunc(args, runManager, parentConfig);
       const duration = Date.now() - startTime;
 
       // Complete transaction with response facts (fire-and-forget)
@@ -262,7 +268,11 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
         };
 
         // Retry original func with payment
-        return await originalFunc(argsWithPayment, runManager, parentConfig);
+        return await instrumentedFunc(
+          argsWithPayment,
+          runManager,
+          parentConfig,
+        );
       }
 
       // Complete transaction with error facts (fire-and-forget)
@@ -337,6 +347,11 @@ export class SapiomDynamicTool<
 
     // Store original func
     const originalFunc = fields.func;
+
+    // Metadata-only usage analytics around each actual tool execution
+    // (tool NAME only — never args or results; see internal/analytics.ts).
+    // The explicitly-disabled path below keeps calling originalFunc directly.
+    const instrumentedFunc = withToolCallAnalytics(fields.name, originalFunc);
 
     // Create wrapped func with Sapiom tracking
     const wrappedFunc = async (
@@ -434,12 +449,12 @@ export class SapiomDynamicTool<
           error,
         );
         // Continue without Sapiom tracking
-        return await originalFunc(args, parentConfig);
+        return await instrumentedFunc(args, parentConfig);
       }
 
       try {
         // Call original func
-        const result = await originalFunc(args, parentConfig);
+        const result = await instrumentedFunc(args, parentConfig);
         const duration = Date.now() - startTime;
 
         // Complete transaction with response facts (fire-and-forget)
@@ -497,7 +512,7 @@ export class SapiomDynamicTool<
             },
           } as SchemaOutputT;
 
-          return await originalFunc(argsWithPayment, parentConfig);
+          return await instrumentedFunc(argsWithPayment, parentConfig);
         }
 
         // Complete transaction with error facts (fire-and-forget)

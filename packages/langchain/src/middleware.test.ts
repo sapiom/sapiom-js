@@ -315,6 +315,12 @@ describe("createSapiomMiddleware", () => {
   });
 
   describe("wrapToolCall", () => {
+    // The `request as any` casts below bridge this file's minimal mock shape
+    // to langchain 1.5's branded ToolCallRequest generics (whose `state`
+    // requires the full built-in agent state, e.g. `messages`). The hooks
+    // only read the fields the mocks provide, so the behavioral assertions
+    // are unaffected; replacing the local mock types with fully-typed
+    // langchain fixtures is tracked as a follow-up.
     const createMockToolRequest = (
       overrides: Partial<ToolCallRequest> = {},
     ): ToolCallRequest => ({
@@ -337,7 +343,7 @@ describe("createSapiomMiddleware", () => {
       const request = createMockToolRequest();
       const handler = jest.fn().mockResolvedValue("Sunny, 25C");
 
-      await middleware.wrapToolCall!(request, handler);
+      await middleware.wrapToolCall!(request as any, handler);
 
       expect(mockAuthorizer.createAndAuthorize).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -358,7 +364,7 @@ describe("createSapiomMiddleware", () => {
       const request = createMockToolRequest();
       const handler = jest.fn().mockResolvedValue("Result");
 
-      await middleware.wrapToolCall!(request, handler);
+      await middleware.wrapToolCall!(request as any, handler);
 
       expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
@@ -379,9 +385,9 @@ describe("createSapiomMiddleware", () => {
       const request = createMockToolRequest();
       const handler = jest.fn().mockRejectedValue(new Error("Tool failed"));
 
-      await expect(middleware.wrapToolCall!(request, handler)).rejects.toThrow(
-        "Tool failed",
-      );
+      await expect(
+        middleware.wrapToolCall!(request as any, handler),
+      ).rejects.toThrow("Tool failed");
 
       expect(mockSapiomClient.transactions.complete).toHaveBeenCalledWith(
         "tx-123",
@@ -423,7 +429,7 @@ describe("createSapiomMiddleware", () => {
           payment: { authorizationPayload: "auth-token" },
         });
 
-      const result = await middleware.wrapToolCall!(request, handler);
+      const result = await middleware.wrapToolCall!(request as any, handler);
 
       expect(result).toBe("Success after payment");
       expect(handler).toHaveBeenCalledTimes(2);

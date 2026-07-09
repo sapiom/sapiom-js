@@ -55,23 +55,25 @@
     "prepublishOnly": "pnpm build && pnpm test"
   },
   "devDependencies": {
+    "@langchain/core": "~1.2.1",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.11.30",
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
     "jest": "^29.7.0",
-    "langchain": "^1.0.0",
+    "langchain": "~1.5.3",
     "prettier": "^3.2.5",
     "ts-jest": "^29.1.2",
     "typescript": "^5.4.2",
     "zod": "^3.23.0"
   },
   "dependencies": {
+    "@sapiom/analytics-core": "workspace:*",
     "@sapiom/core": "workspace:*"
   },
   "peerDependencies": {
-    "langchain": ">=1.0.0"
+    "langchain": ">=1.5.0"
   },
   "peerDependenciesMeta": {
     "langchain": {

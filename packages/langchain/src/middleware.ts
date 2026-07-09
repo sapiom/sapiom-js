@@ -29,12 +29,24 @@ import {
   type SapiomClient,
 } from "@sapiom/core";
 
-import type { AgentMiddleware, ToolCallRequest } from "langchain";
+import { createMiddleware } from "langchain";
+import type {
+  AgentMiddleware,
+  BuiltInState,
+  MiddlewareResult,
+  ToolCallRequest,
+} from "langchain";
 
 import type {
   SapiomMiddlewareConfig,
   SapiomMiddlewareContext,
 } from "./internal/types.js";
+import {
+  errorClassName,
+  providerFromModelClass,
+  trackModelCall,
+  trackToolCall,
+} from "./internal/analytics.js";
 import {
   generateSDKTraceId,
   isAuthorizationDeniedOrTimeout,
@@ -59,6 +71,94 @@ import {
   getRuntimeInfo,
   extractModelParameters,
 } from "./internal/telemetry.js";
+
+/**
+ * Wrap a model handler with metadata-only analytics (`model.call`).
+ *
+ * PRIVACY: only scalar metadata (model id, provider, duration, token counts,
+ * status, error class) crosses into the event — the allow-list builder in
+ * `internal/analytics.ts` is the sole payload constructor. Prompts,
+ * completions, and messages never do. Emission is a synchronous enqueue that
+ * never throws; the wrapped handler's result and errors pass through
+ * untouched.
+ */
+function withModelCallAnalytics<TRequest, TResult>(
+  handler: (request: TRequest) => TResult | Promise<TResult>,
+  meta: { model?: string; provider?: string },
+): (request: TRequest) => Promise<TResult> {
+  return async (request: TRequest): Promise<TResult> => {
+    const startedAt = Date.now();
+    try {
+      const result = await handler(request);
+      const tokens = extractActualTokens(result);
+      trackModelCall({
+        status: "success",
+        durationMs: Date.now() - startedAt,
+        model: meta.model,
+        provider: meta.provider,
+        inputTokens: tokens?.promptTokens,
+        outputTokens: tokens?.completionTokens,
+        totalTokens: tokens?.totalTokens,
+      });
+      return result;
+    } catch (error) {
+      trackModelCall({
+        status: "error",
+        durationMs: Date.now() - startedAt,
+        model: meta.model,
+        provider: meta.provider,
+        errorClass: errorClassName(error),
+      });
+      throw error;
+    }
+  };
+}
+
+/**
+ * Wrap a tool handler with metadata-only analytics (`tool.call`).
+ *
+ * PRIVACY: only the tool NAME, duration, status, and error class cross into
+ * the event — never arguments, results, schemas, or descriptions. Emission
+ * is a synchronous enqueue that never throws; the wrapped handler's result
+ * and errors pass through untouched.
+ */
+function withToolCallAnalytics<TRequest, TResult>(
+  handler: (request: TRequest) => TResult | Promise<TResult>,
+  toolName: string | undefined,
+): (request: TRequest) => Promise<TResult> {
+  return async (request: TRequest): Promise<TResult> => {
+    const startedAt = Date.now();
+    try {
+      const result = await handler(request);
+      trackToolCall({
+        status: "success",
+        durationMs: Date.now() - startedAt,
+        toolName,
+      });
+      return result;
+    } catch (error) {
+      trackToolCall({
+        status: "error",
+        durationMs: Date.now() - startedAt,
+        toolName,
+        errorClass: errorClassName(error),
+      });
+      throw error;
+    }
+  };
+}
+
+/**
+ * langchain 1.5 types `beforeAgent` state updates against the built-in
+ * channels only; the middleware's custom `__sapiom*` bookkeeping keys (see
+ * {@link SapiomMiddlewareState}) pass through unchanged at runtime, so they
+ * are threaded through an opaque `unknown` cast into the hook's update type.
+ */
+function asSapiomStateUpdate(
+  update: Record<string, unknown>,
+): MiddlewareResult<Partial<BuiltInState>> {
+  return update as unknown as MiddlewareResult<Partial<BuiltInState>>;
+}
 
 /**
  * Create Sapiom middleware for LangChain v1.x agents
@@ -116,7 +216,7 @@ export function createSapiomMiddleware(
   // (e.g., direct model/tool usage without agent wrapper)
   const fallbackTraceId = config.traceId ?? generateSDKTraceId();
 
-  return {
+  return createMiddleware({
     name: "SapiomMiddleware",
 
     // ================================================================
@@ -128,16 +228,16 @@ export function createSapiomMiddleware(
       }
 
       const startTime = Date.now();
+      const context = ((runtime as { context?: unknown }).context ??
+        {}) as SapiomMiddlewareContext;
 
       // Resolve trace ID: context override > config > auto-generate
       const traceId =
-        runtime.context?.sapiomTraceId ??
-        config.traceId ??
-        generateSDKTraceId();
+        context.sapiomTraceId ?? config.traceId ?? generateSDKTraceId();
 
       // Resolve agent identity
-      const agentId = runtime.context?.sapiomAgentId ?? config.agentId;
-      const agentName = runtime.context?.sapiomAgentName ?? config.agentName;
+      const agentId = context.sapiomAgentId ?? config.agentId;
+      const agentName = context.sapiomAgentName ?? config.agentName;
 
       try {
         const agentTx = await authorizer.createAndAuthorize({
@@ -159,13 +259,13 @@ export function createSapiomMiddleware(
           agentName,
         } as unknown as Parameters<typeof authorizer.createAndAuthorize>[0]);
 
-        return {
+        return asSapiomStateUpdate({
           __sapiomTraceId: traceId,
           __sapiomAgentTxId: agentTx.id,
           __sapiomStartTime: startTime,
           __sapiomAgentId: agentId,
           __sapiomAgentName: agentName,
-        };
+        });
       } catch (error) {
         // Always throw authorization denials
         if (isAuthorizationDeniedOrTimeout(error)) {
@@ -181,12 +281,12 @@ export function createSapiomMiddleware(
           "[Sapiom] Agent transaction failed, continuing without tracking:",
           error,
         );
-        return {
+        return asSapiomStateUpdate({
           __sapiomTraceId: traceId,
           __sapiomStartTime: startTime,
           __sapiomAgentId: agentId,
           __sapiomAgentName: agentName,
-        };
+        });
       }
     },
 
@@ -194,18 +294,19 @@ export function createSapiomMiddleware(
     // AGENT LIFECYCLE: afterAgent
     // ================================================================
     afterAgent: async (state, _runtime) => {
-      if (!isEnabled || !state.__sapiomAgentTxId) {
+      const sapiomState = state as Record<string, unknown>;
+      if (!isEnabled || !sapiomState.__sapiomAgentTxId) {
         return;
       }
 
-      const txId = state.__sapiomAgentTxId as string;
+      const txId = sapiomState.__sapiomAgentTxId as string;
 
       // Clear the transaction ID immediately to prevent double-completion
       // (ReAct agents may loop and call afterAgent multiple times)
-      delete (state as Record<string, unknown>).__sapiomAgentTxId;
+      delete sapiomState.__sapiomAgentTxId;
 
-      const duration = state.__sapiomStartTime
-        ? Date.now() - (state.__sapiomStartTime as number)
+      const duration = sapiomState.__sapiomStartTime
+        ? Date.now() - (sapiomState.__sapiomStartTime as number)
         : 0;
 
       // Complete transaction with response facts (fire-and-forget)
@@ -237,21 +338,28 @@ export function createSapiomMiddleware(
         return handler(request);
       }
 
+      // Metadata-only usage analytics around the actual model invocation
+      // (never prompts, completions, or messages — see internal/analytics.ts)
+      const modelId = getModelId(request.model);
+      const modelClass = getModelClass(request.model);
+      const callModel = withModelCallAnalytics(handler, {
+        model: modelId,
+        provider: providerFromModelClass(modelClass),
+      });
+
       const startTime = Date.now();
+      const sapiomState = request.state as Record<string, unknown>;
       // Use state trace ID if available, otherwise fall back to middleware-level ID
       const traceId =
-        (request.state.__sapiomTraceId as string | undefined) ??
-        fallbackTraceId;
+        (sapiomState.__sapiomTraceId as string | undefined) ?? fallbackTraceId;
       const agentId =
-        (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
+        (sapiomState.__sapiomAgentId as string | undefined) ?? config.agentId;
       const agentName =
-        (request.state.__sapiomAgentName as string | undefined) ??
+        (sapiomState.__sapiomAgentName as string | undefined) ??
         config.agentName;
 
       // Collect telemetry
       const estimatedTokens = estimateInputTokens(request.messages);
-      const modelId = getModelId(request.model);
-      const modelClass = getModelClass(request.model);
       const callSite = captureUserCallSite();
       const messageContext = collectMessageContext(request.messages);
       const toolUsage = collectToolUsage(request.tools);
@@ -333,11 +441,11 @@ export function createSapiomMiddleware(
           "[Sapiom] LLM transaction failed, continuing without tracking:",
           error,
         );
-        return handler(request);
+        return callModel(request);
       }
 
       // Execute model call
-      const result = await handler(request);
+      const result = await callModel(request);
       const duration = Date.now() - startTime;
 
       // Complete transaction with response facts (fire-and-forget)
@@ -380,14 +488,14 @@ export function createSapiomMiddleware(
       }
 
       const startTime = Date.now();
+      const sapiomState = request.state as Record<string, unknown>;
       // Use state trace ID if available, otherwise fall back to middleware-level ID
       const traceId =
-        (request.state.__sapiomTraceId as string | undefined) ??
-        fallbackTraceId;
+        (sapiomState.__sapiomTraceId as string | undefined) ?? fallbackTraceId;
       const agentId =
-        (request.state.__sapiomAgentId as string | undefined) ?? config.agentId;
+        (sapiomState.__sapiomAgentId as string | undefined) ?? config.agentId;
       const agentName =
-        (request.state.__sapiomAgentName as string | undefined) ??
+        (sapiomState.__sapiomAgentName as string | undefined) ??
         config.agentName;
       const args = request.toolCall.args ?? {};
 
@@ -396,6 +504,10 @@ export function createSapiomMiddleware(
         (request.tool as { name?: string }).name ?? request.toolCall.name;
       const toolDescription = (request.tool as { description?: string })
         .description;
+
+      // Metadata-only usage analytics around each actual tool invocation
+      // (tool NAME only — never args or results; see internal/analytics.ts)
+      const callTool = withToolCallAnalytics(handler, toolName);
 
       // Create and authorize tool transaction
       let toolTx: { id: string } | undefined;
@@ -428,12 +540,12 @@ export function createSapiomMiddleware(
           "[Sapiom] Tool transaction failed, continuing without tracking:",
           error,
         );
-        return handler(request);
+        return callTool(request);
       }
 
       // Execute tool call with payment retry handling
       try {
-        const result = await handler(request);
+        const result = await callTool(request);
         const duration = Date.now() - startTime;
 
         // Complete transaction with response facts (fire-and-forget)
@@ -492,7 +604,7 @@ export function createSapiomMiddleware(
             },
           };
 
-          return handler(retryRequest as typeof request);
+          return callTool(retryRequest as typeof request);
         }
 
         // Complete transaction with error facts (fire-and-forget)
@@ -524,7 +636,7 @@ export function createSapiomMiddleware(
         throw error;
       }
     },
-  };
+  }) as AgentMiddleware;
 }
 
 // Re-export types

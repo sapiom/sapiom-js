@@ -58,7 +58,7 @@
     "@langchain/anthropic": "^0.3.30",
     "@langchain/core": "^0.3.78",
     "@langchain/langgraph": "^0.2.74",
-    "@langchain/openai": "^1.0.0",
+    "@langchain/openai": "~1.1.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.11.30",
     "@typescript-eslint/eslint-plugin": "^7.3.1",
@@ -71,11 +71,22 @@
     "zod": "^4.1.12"
   },
   "dependencies": {
+    "@sapiom/analytics-core": "workspace:*",
     "@sapiom/core": "workspace:*"
   },
   "peerDependencies": {
+    "@langchain/anthropic": "^0.3.30",
     "@langchain/core": ">=0.3.0 <1.0.0",
-    "@langchain/langgraph": ">=0.2.0 <1.0.0"
+    "@langchain/langgraph": ">=0.2.0 <1.0.0",
+    "@langchain/openai": "~1.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/anthropic": {
+      "optional": true
+    },
+    "@langchain/openai": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=18.0.0"
