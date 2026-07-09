@@ -272,7 +272,7 @@ export const App = (): JSX.Element => {
                 {/* Chat view — default */}
                 <div
                   className={`center-panel center-panel-chat${centerTab === "chat" ? " is-visible" : ""}`}
-                  hidden={centerTab !== "chat"}
+                  aria-hidden={centerTab !== "chat"}
                   data-testid="center-panel-chat"
                 >
                   {(() => {
@@ -292,10 +292,13 @@ export const App = (): JSX.Element => {
                   })()}
                 </div>
 
-                {/* Terminal — kept MOUNTED (CSS-hidden) so xterm connection survives tab flips */}
+                {/* Terminal — kept MOUNTED via CSS keep-alive (.center-panel:not(.is-visible) uses
+                    visibility+absolute+zero-size) so the xterm connection survives tab flips.
+                    aria-hidden (not HTML hidden) avoids UA display:none which would force xterm to
+                    a 0×0 viewport and degenerate the terminal on refit. */}
                 <div
                   className={`center-panel center-panel-terminal${centerTab === "terminal" ? " is-visible" : ""}`}
-                  hidden={centerTab !== "terminal"}
+                  aria-hidden={centerTab !== "terminal"}
                   data-testid="center-panel-terminal"
                 >
                   <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />

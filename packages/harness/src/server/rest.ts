@@ -27,7 +27,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
-import { ExternalHarnessError } from "../core/errors.js";
+import { ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
 import { listHarnessAdapters } from "../core/adapters/registry.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
@@ -366,8 +366,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
         res.status(404).json({ error: err.message });
         return;
       }
-      if (err instanceof ExternalHarnessError) {
-        res.status(409).json({ error: err.message, code: err.code });
+      if (
+        err instanceof ExternalHarnessError ||
+        err instanceof SessionAlreadyLiveError ||
+        err instanceof SessionNotResumeableError
+      ) {
+        res.status(409).json({ error: err.message, code: (err as { code: string }).code });
         return;
       }
       next(err);

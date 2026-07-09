@@ -3,6 +3,7 @@ import express from "express";
 import type { Server } from "node:http";
 import { createMacrosRouter, type MacrosRouterDeps } from "./macros.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
+import { ExternalHarnessError } from "../core/errors.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
 import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
 import type { WorkflowInfo } from "../shared/types.js";
@@ -418,5 +419,47 @@ describe("macros router", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toMatch(/not ready yet/i);
     expect(body.error).toMatch(/trust the folder/i);
+  });
+
+  it("409s when injectInput throws ExternalHarnessError (conductor session — inject not supported)", async () => {
+    const deps = makeDeps({
+      injectInput: vi.fn().mockRejectedValue(new ExternalHarnessError("conductor", "Conductor")),
+    });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/conductor/i);
+  });
+
+  it("409s when runBackgroundTask throws ExternalHarnessError (background task on external harness)", async () => {
+    const backgroundMacro = {
+      id: "bg-ext-macro",
+      label: "Background macro",
+      icon: "Wand2",
+      execution: "background" as const,
+      action: { kind: "inject" as const, text: "do something in {{session.cwd}}", submit: true },
+    };
+    const deps = makeDeps({
+      listMacros: () => [...DEFAULT_MACROS, backgroundMacro],
+      runBackgroundTask: vi.fn().mockRejectedValue(new ExternalHarnessError("conductor", "Conductor")),
+    });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/bg-ext-macro/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/conductor/i);
   });
 });

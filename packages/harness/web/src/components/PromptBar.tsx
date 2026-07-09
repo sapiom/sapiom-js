@@ -1,5 +1,5 @@
 /**
- * PromptBar — chat-style text input beneath the terminal pane.
+ * PromptBar — the prompt composer rendered inside ChatView.
  *
  * Submits via POST /api/sessions/:id/input (the existing injectInput path).
  *
@@ -186,7 +186,7 @@ export const PromptBar = ({ session, onSubmit, sessionId: sessionIdProp, onSlash
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, draft, onSubmit, session]);
+  }, [canSubmit, draft, onSubmit, session, sessionIdProp]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {

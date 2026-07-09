@@ -12,6 +12,7 @@
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 import { CANVAS_INDEX, type MacroDef, type RunMacroRequest, type WorkflowInfo } from "../shared/types.js";
+import { ExternalHarnessError } from "../core/errors.js";
 import { MacroValidationError, resolveMacro } from "../core/macro-runner.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
 import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
@@ -102,7 +103,11 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
         res.status(400).json({ error: err.message });
         return;
       }
-      if (err instanceof SessionNotReadyError || err instanceof TaskAlreadyRunningError) {
+      if (
+        err instanceof SessionNotReadyError ||
+        err instanceof TaskAlreadyRunningError ||
+        err instanceof ExternalHarnessError
+      ) {
         res.status(409).json({ error: err.message });
         return;
       }

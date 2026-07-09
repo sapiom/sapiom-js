@@ -16,6 +16,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
 import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
+import { SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -514,6 +515,38 @@ describe("createRestRouter", () => {
       });
       // Old string-match would give 500 here; class dispatch gives 404.
       expect(res.status).toBe(404);
+    });
+
+    it("409s when resume() throws SessionAlreadyLiveError (double-resume guard)", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SessionAlreadyLiveError("sess-live"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-live/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("SESSION_ALREADY_LIVE");
+    });
+
+    it("409s when resume() throws SessionNotResumeableError (no agentSessionId to resume from)", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SessionNotResumeableError("sess-no-agent"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-no-agent/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("SESSION_NOT_RESUMEABLE");
     });
   });
 
