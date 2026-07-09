@@ -4,9 +4,11 @@ import {
   clearCredentials,
   type ResolvedEnvironment,
 } from "../credentials.js";
+import { registerTool } from "../register-tool.js";
 
 export function register(server: McpServer, env: ResolvedEnvironment): void {
-  server.tool(
+  registerTool(
+    server,
     "sapiom_status",
     "Check authentication status for this local Sapiom developer MCP (sapiom-dev). Returns whether you're authenticated and which organization.",
     {},
@@ -35,7 +37,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_logout",
     "Log out of Sapiom by removing cached credentials for the current environment.",
     {},

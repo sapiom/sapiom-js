@@ -43,6 +43,7 @@ import {
   type StubFile,
 } from "@sapiom/agent-core";
 import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
+import { registerTool } from "../register-tool.js";
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -177,7 +178,8 @@ function scheduleHint(schedule: ScheduleDetail): string | undefined {
 export function register(server: McpServer, env: ResolvedEnvironment): void {
   // ── Local tools (no network) ──────────────────────────────────────────────
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_scaffold",
     "Scaffold a new Sapiom agent project into <dir>. Produces an npm-install-ready TypeScript project with a starter agent in index.ts. After scaffolding, the author writes step definitions and uses sapiom_dev_agents_run_local to test them.",
     {
@@ -209,7 +211,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_check",
     "Validate an agent locally: bundle index.ts, derive the manifest, and check the step graph. Offline and instant. Returns the agent name, step count, the manifest (which contains the full step graph for visualization), and any graph warnings.",
     {
@@ -229,7 +232,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_run_local",
     [
       "Execute an agent entirely on the local machine, running the author's actual step code with every ctx.sapiom.* capability call resolved from stubs (no real capability calls, no cost, instant).",
@@ -281,7 +285,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
 
   // ── Networked tools (require authentication) ───────────────────────────────
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_link",
     "Resolve a hosted agent by name (or create it with create:true) and cache its id in the project's sapiom.json. Run this before deploy.",
     {
@@ -339,7 +344,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_clone",
     [
       "Materialize a Sapiom workflow template as a local project — the 'use this template' handoff. Given a template id (from the gallery) it forks the template into a repo you own; given an existing fork id it re-clones that fork. Either way it mints a short-lived, repo-scoped clone credential, git-clones the repo into <dir>, and writes sapiom.json recording the fork.",
@@ -384,7 +390,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_deploy",
     "Deploy the linked agent: push the current git commit, trigger a build, and wait for it to finish. The project must be linked (sapiom.json) and a git repo with at least one commit.",
     {
@@ -417,7 +424,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_run",
     "Start a real (cloud) execution of the linked agent. Use sapiom_dev_agents_inspect to follow it.",
     {
@@ -453,7 +461,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_inspect",
     "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local.\n\nReads are a fresh point-in-time snapshot. To wait for a still-running execution to finish, set wait:true (the tool polls until it settles or the wait window elapses) — do NOT sleep-and-poll this tool yourself. If a wait returns waiting:true, just call inspect again with wait:true.",
     {
@@ -530,7 +539,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_signal",
     "Resume a paused cloud execution by delivering a named signal (matched by name + correlationId).",
     {
@@ -557,7 +567,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
 
   // ── Schedules (triggers) ──────────────────────────────────────────────────
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_schedule",
     "Create a schedule for a deployed agent: a recurring cron schedule (kind 'schedule_cron' + cron + timezone) or a one-off delayed run (kind 'schedule_once' + at). Returns the schedule with its next fire time. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
     {
@@ -613,7 +624,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_schedule_inspect",
     "Inspect schedules. With scheduleId: returns one schedule's config, next fire time, and recent fire history (each with the run's executionId) — use this to debug a misbehaving schedule, then inspect a failed run's executionId with sapiom_dev_agents_inspect. With definition (slug) and no scheduleId: lists that agent's schedules.",
     {
@@ -651,7 +663,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_schedule_cancel",
     "Cancel a schedule by id. Stops all future fires (a recurring schedule won't re-arm; a pending one-off won't run). Irreversible — recreate to reschedule.",
     {
@@ -668,7 +681,8 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  server.tool(
+  registerTool(
+    server,
     "sapiom_dev_agents_cron_preview",
     "Validate a cron expression and preview its next occurrences, creating nothing. Use before sapiom_dev_agents_schedule to confirm a cron + timezone fire when you expect (cron syntax is easy to get subtly wrong).",
     {
