@@ -6,7 +6,24 @@ import * as path from "node:path";
 import express from "express";
 import type { Server } from "node:http";
 import { renderFileFor } from "../core/canvas-render.js";
+import { assembleCanvasBody, buildErrorPanelHtml } from "../core/canvas-body.js";
+import { renderCanvasDocument, TEMPLATE_HTML } from "../core/canvas-template.js";
 import { createCanvasRouter, type CanvasSession } from "./canvas.js";
+
+/** A stale legacy overview of the exact shape a pre-split server wrote to
+ *  index.html: stacked "render failed" panels + the deterministic footer note. */
+const LEGACY_OVERVIEW_HTML = renderCanvasDocument(
+  assembleCanvasBody({
+    panels: [buildErrorPanelHtml("text-to-image", "No agent was exported")],
+    legend: "",
+    note: "Static preview — regenerate after a workflow changes (1 workflow failed to build).",
+  }),
+);
+
+async function writeIndex(dir: string, html: string): Promise<void> {
+  await fs.mkdir(path.join(dir, ".sapiom", "canvas"), { recursive: true });
+  await fs.writeFile(path.join(dir, ".sapiom", "canvas", "index.html"), html);
+}
 
 let projectDir: string;
 let server: Server;
@@ -103,12 +120,49 @@ describe("canvas router", () => {
     expect(await res.text()).toContain("Rendering workflow diagram");
   });
 
-  it("an unbound session keeps the legacy behavior: the canvas root serves index.html", async () => {
-    await fs.mkdir(path.join(projectDir, ".sapiom", "canvas"), { recursive: true });
-    await fs.writeFile(path.join(projectDir, ".sapiom", "canvas", "index.html"), "<html><body>custom</body></html>");
+  it("an unbound session serves a genuine agent-authored custom canvas at the root", async () => {
+    await writeIndex(projectDir, "<html><body>custom</body></html>");
     const res = await fetch(`${baseUrl}/canvas/sess-1/`);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("custom");
+  });
+
+  it("an unbound session with a STALE legacy overview index.html serves the empty state, not the overview", async () => {
+    await writeIndex(projectDir, LEGACY_OVERVIEW_HTML);
+
+    // The HEAD probe must read as "no content" (non-ok) so the CanvasPane
+    // shows its own empty state rather than framing the stale overview.
+    const head = await fetch(`${baseUrl}/canvas/sess-1/`, { method: "HEAD" });
+    expect(head.ok).toBe(false);
+    expect(head.status).toBe(404);
+
+    const res = await fetch(`${baseUrl}/canvas/sess-1/`);
+    const body = await res.text();
+    expect(body).not.toContain("render failed");
+    expect(body).not.toContain("Static preview");
+    expect(body).toContain("Nothing rendered yet");
+  });
+
+  it("an unbound session with the seeded template index.html serves the empty state (not the template)", async () => {
+    await writeIndex(projectDir, TEMPLATE_HTML);
+    const res = await fetch(`${baseUrl}/canvas/sess-1/`);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("Nothing rendered yet");
+  });
+
+  it("a BOUND session serves its render even when a stale legacy overview index.html exists", async () => {
+    const workflowPath = "/registered/workflows/logo-flow";
+    sessions.set("sess-1", { cwd: projectDir, boundWorkflowPath: workflowPath });
+    const renderPath = renderFileFor(projectDir, workflowPath);
+    await fs.mkdir(path.dirname(renderPath), { recursive: true });
+    await fs.writeFile(renderPath, "<html><body>real graph</body></html>");
+    await writeIndex(projectDir, LEGACY_OVERVIEW_HTML);
+
+    const res = await fetch(`${baseUrl}/canvas/sess-1/`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("real graph");
+    expect(body).not.toContain("render failed");
   });
 
   it("serves index.html at the session's canvas root", async () => {

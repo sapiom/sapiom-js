@@ -6,6 +6,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CANVAS_INDEX } from "../shared/types.js";
 import { CANVAS_TEMPLATE_FILE, TEMPLATE_HTML, ensureCanvasTemplate, renderCanvasDocument } from "./canvas-template.js";
+import { assembleCanvasBody, buildErrorPanelHtml } from "./canvas-body.js";
+
+/** The stale legacy overview a pre-split server wrote to index.html. */
+const LEGACY_OVERVIEW_HTML = renderCanvasDocument(
+  assembleCanvasBody({
+    panels: [buildErrorPanelHtml("text-to-image", "No agent was exported")],
+    legend: "",
+    note: "Static preview — regenerate after a workflow changes (1 workflow failed to build).",
+  }),
+);
 
 describe("renderCanvasDocument", () => {
   it("produces a single self-contained document: no external stylesheets, scripts, or fetches", () => {
@@ -145,5 +155,30 @@ describe("ensureCanvasTemplate", () => {
     const blockedFile = path.join(cwd, "blocked");
     await fs.writeFile(blockedFile, "x");
     await expect(ensureCanvasTemplate(blockedFile)).resolves.toBeUndefined();
+  });
+
+  it("deletes a stale legacy deterministic overview and reseeds the pristine template", async () => {
+    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), { recursive: true });
+    await fs.writeFile(path.join(cwd, CANVAS_INDEX), LEGACY_OVERVIEW_HTML, "utf8");
+
+    await ensureCanvasTemplate(cwd);
+
+    // The stale overview is gone — replaced by the clean seed, never left to
+    // resurface as a wall of unrelated "render failed" panels.
+    const index = await readIndex();
+    expect(index).not.toContain("render failed");
+    expect(index).toBe(TEMPLATE_HTML);
+  });
+
+  it("never deletes an agent-authored custom canvas", async () => {
+    const custom = renderCanvasDocument(
+      `<section class="canvas-panel"><h1 class="canvas-title">Hand-built</h1><p>bespoke</p></section>`,
+    );
+    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), { recursive: true });
+    await fs.writeFile(path.join(cwd, CANVAS_INDEX), custom, "utf8");
+
+    await ensureCanvasTemplate(cwd);
+
+    expect(await readIndex()).toBe(custom);
   });
 });
