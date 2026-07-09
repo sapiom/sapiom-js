@@ -24,16 +24,18 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CANVAS_RENDERS_DIR } from "../shared/types.js";
+import { CANVAS_CACHE_DIR, CANVAS_RENDERS_DIR } from "../shared/types.js";
 import { renderCanvasDocument } from "./canvas-template.js";
 import { extractWorkflowGraphCached } from "./canvas-cache.js";
 import type { CanvasGraph } from "./canvas-graph.js";
+import { readEnrichmentCacheFile } from "./canvas-enrichment.js";
 import { usedKinds } from "./canvas-svg.js";
 import {
   assembleCanvasBody,
   buildErrorPanelHtml,
   buildLegendHtml,
   buildWorkflowPanelHtml,
+  type PanelEnrichment,
 } from "./canvas-body.js";
 
 export interface RenderableSession {
@@ -69,6 +71,12 @@ export function renderFileFor(cwd: string, workflowPath: string): string {
   return path.join(cwd, CANVAS_RENDERS_DIR, `${slugForWorkflowPath(workflowPath)}.html`);
 }
 
+/** Absolute path of `workflowPath`'s enrichment cache file under `cwd`'s
+ *  canvas dir — same slug scheme as the render file. */
+export function enrichmentCacheFileFor(cwd: string, workflowPath: string): string {
+  return path.join(cwd, CANVAS_CACHE_DIR, `${slugForWorkflowPath(workflowPath)}.json`);
+}
+
 export interface CanvasRenderOutcome {
   /** "single": a bound workflow was rendered to its render file. "empty":
    *  the session is unbound (or bound to an unknown path) — nothing was
@@ -81,6 +89,12 @@ export interface CanvasRenderOutcome {
   extractionFailed: string[];
   /** True when the graph came from the extraction cache — no child process ran. */
   cachedExtraction?: boolean;
+  /** True when a cached enrichment was merged into the render (mode "single",
+   *  successful extraction only). */
+  enrichmentApplied?: boolean;
+  /** True when the merged enrichment's fingerprint no longer matches the
+   *  current sources — rendered with the "stale" chip. */
+  enrichmentStale?: boolean;
   /** Set only when writing the file itself failed (e.g. an unwritable cwd) — extraction success/failure above is unaffected. */
   writeError?: string;
   /** True when `preserveExistingOnFailure` kept the existing render instead of writing an error panel over it. */
@@ -103,7 +117,12 @@ function badgesFor(workflow: RenderableWorkflow): string[] {
   return [workflow.definitionId != null ? "deployed" : "local only"];
 }
 
-function buildSingleBody(workflow: RenderableWorkflow, graph: CanvasGraph | null, reason: string | null): string {
+function buildSingleBody(
+  workflow: RenderableWorkflow,
+  graph: CanvasGraph | null,
+  reason: string | null,
+  panelEnrichment: PanelEnrichment | null,
+): string {
   if (!graph) {
     return assembleCanvasBody({
       panels: [buildErrorPanelHtml(workflow.name, reason ?? "unknown extraction failure")],
@@ -113,9 +132,13 @@ function buildSingleBody(workflow: RenderableWorkflow, graph: CanvasGraph | null
   }
   const used = usedKinds(graph);
   return assembleCanvasBody({
-    panels: [buildWorkflowPanelHtml(graph, { title: workflow.name, badges: badgesFor(workflow) })],
+    panels: [buildWorkflowPanelHtml(graph, { title: workflow.name, badges: badgesFor(workflow) }, panelEnrichment)],
     legend: buildLegendHtml(used.nodeKinds, used.edgeKinds),
     note: "Static preview — re-renders automatically when the workflow changes.",
+    ...(panelEnrichment?.enrichment.notes ? { notes: panelEnrichment.enrichment.notes } : {}),
+    ...(panelEnrichment?.enrichment.crossWorkflow
+      ? { crossWorkflow: panelEnrichment.enrichment.crossWorkflow }
+      : {}),
   });
 }
 
@@ -134,18 +157,46 @@ export async function renderCanvasForSession(
   if (!bound) {
     return { mode: "empty", extractionFailed: [] };
   }
+  return renderWorkflowRenderFile(session.cwd, bound, options);
+}
 
-  const { result, cached } = await extractWorkflowGraphCached(bound.path);
+/**
+ * Renders ONE workflow to its render file under `cwd`, merging in any cached
+ * enrichment (fresh or stale — stale gets the chip; the base structure is
+ * always freshly extracted either way). This is the write path shared by
+ * bind/create/macro renders (via `renderCanvasForSession`) and by the
+ * enrichment task's own completion re-render (core/canvas-enrich.ts), which
+ * targets a workflow directly — the session may have switched bindings while
+ * the task ran, and the render file is per-workflow anyway.
+ */
+export async function renderWorkflowRenderFile(
+  cwd: string,
+  bound: RenderableWorkflow,
+  options: RenderCanvasOptions = {},
+): Promise<CanvasRenderOutcome> {
+  const { result, cached, fingerprint } = await extractWorkflowGraphCached(bound.path);
   const failed = !result.ok;
-  const body = buildSingleBody(bound, result.ok ? result.graph : null, result.ok ? null : result.reason);
 
-  const renderPath = renderFileFor(session.cwd, bound.path);
+  // The enrichment cache only ever decorates a successful extraction — an
+  // error panel with AI annotations for steps it can't show would be noise.
+  let panelEnrichment: PanelEnrichment | null = null;
+  if (result.ok) {
+    const entry = await readEnrichmentCacheFile(enrichmentCacheFileFor(cwd, bound.path));
+    if (entry) {
+      panelEnrichment = { enrichment: entry.enrichment, stale: entry.sourceFingerprint !== fingerprint };
+    }
+  }
+
+  const body = buildSingleBody(bound, result.ok ? result.graph : null, result.ok ? null : result.reason, panelEnrichment);
+
+  const renderPath = renderFileFor(cwd, bound.path);
   const outcome: CanvasRenderOutcome = {
     mode: "single",
     workflowPath: bound.path,
     renderPath,
     extractionFailed: failed ? [bound.name] : [],
     cachedExtraction: cached,
+    ...(panelEnrichment ? { enrichmentApplied: true, enrichmentStale: panelEnrichment.stale } : {}),
   };
 
   // An unprompted render that failed to extract must not destroy an existing

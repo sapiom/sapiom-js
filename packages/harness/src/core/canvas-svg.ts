@@ -14,12 +14,15 @@
  * geometry is unchanged, only where it runs (server, not browser).
  */
 import type { CanvasEdge, CanvasEdgeKind, CanvasGraph, CanvasNode, CanvasNodeKind } from "./canvas-graph.js";
+import type { CanvasEnrichment, CanvasLayoutHints } from "./canvas-enrichment.js";
 
 export const NODE_W = 176;
 export const NODE_H = 56;
 const LAYER_GAP = 96;
 const COL_GAP = 32;
 const MARGIN = 40;
+/** How far a group band extends past its member nodes' boxes. */
+const GROUP_PAD = 10;
 
 export interface GraphLayout {
   pos: Record<string, { x: number; y: number }>;
@@ -71,8 +74,10 @@ export function computeLayers(nodes: readonly CanvasNode[], edges: readonly Canv
 }
 
 /** Computes (x, y) for every node and the overall canvas size. Nodes in the
- *  same layer are centered as a row; layers stack top to bottom. */
-export function layoutGraph(graph: CanvasGraph): GraphLayout {
+ *  same layer are centered as a row; layers stack top to bottom. An
+ *  enrichment's `laneOrder` hint reorders nodes WITHIN their computed layer
+ *  only — layer assignment itself stays purely structural. */
+export function layoutGraph(graph: CanvasGraph, laneOrder?: CanvasLayoutHints["laneOrder"]): GraphLayout {
   const layer = computeLayers(graph.nodes, graph.edges);
   const byLayer = new Map<number, string[]>();
   for (const n of graph.nodes) {
@@ -81,6 +86,7 @@ export function layoutGraph(graph: CanvasGraph): GraphLayout {
     arr.push(n.id);
     byLayer.set(l, arr);
   }
+  applyLaneOrder(byLayer, graph, laneOrder);
   const layers = [...byLayer.keys()].sort((a, b) => a - b);
   const maxCols = layers.reduce((m, l) => Math.max(m, byLayer.get(l)!.length), 1);
   const width = MARGIN * 2 + maxCols * NODE_W + (maxCols - 1) * COL_GAP;
@@ -96,6 +102,31 @@ export function layoutGraph(graph: CanvasGraph): GraphLayout {
   }
   const height = MARGIN * 2 + (layers.length - 1) * (NODE_H + LAYER_GAP) + NODE_H;
   return { pos, width, height: Math.max(height, MARGIN * 2 + NODE_H) };
+}
+
+/**
+ * Reorders each hinted layer's nodes in place. A hint entry is applied only
+ * when every node id it lists exists in the graph (the schema's contract —
+ * a stale enrichment must degrade to "no hint", never to a broken layout);
+ * listed ids that live in a DIFFERENT layer are simply not in this layer's
+ * row and are ignored, since laneOrder can never move a node between layers.
+ */
+function applyLaneOrder(
+  byLayer: Map<number, string[]>,
+  graph: CanvasGraph,
+  laneOrder: CanvasLayoutHints["laneOrder"],
+): void {
+  if (!laneOrder) return;
+  const nodeIds = new Set(graph.nodes.map((n) => n.id));
+  for (const [layerKey, order] of Object.entries(laneOrder)) {
+    const layerIndex = Number(layerKey);
+    const row = byLayer.get(layerIndex);
+    if (!row || !order.every((id) => nodeIds.has(id))) continue;
+    const inRow = new Set(row);
+    const ordered = order.filter((id) => inRow.has(id));
+    const rest = row.filter((id) => !ordered.includes(id));
+    byLayer.set(layerIndex, [...ordered, ...rest]);
+  }
 }
 
 function esc(s: string): string {
@@ -123,12 +154,47 @@ function edgePath(kind: CanvasEdgeKind, x1: number, y1: number, x2: number, y2: 
   return `M${x1},${y1} L${x2},${y2}`;
 }
 
-/** Renders one graph's `<svg>` diagram. Assumes the shared `<defs>` (glow
- *  filter + arrow markers) are already present once at the document level —
- *  see `renderCanvasDocument`'s `SVG_DEFS` — so this never emits its own. */
-export function renderGraphSvg(graph: CanvasGraph): string {
-  const layout = layoutGraph(graph);
+/**
+ * Group-hint background bands: one subtle rect per group whose member nodes
+ * ALL exist, sized to their bounding box, labeled at its top-left. Rendered
+ * before edges/nodes so it sits behind everything.
+ */
+function groupBandMarkup(
+  groups: CanvasLayoutHints["groups"],
+  graph: CanvasGraph,
+  layout: GraphLayout,
+): string {
+  if (!groups || groups.length === 0) return "";
+  const nodeIds = new Set(graph.nodes.map((n) => n.id));
+  return groups
+    .map((group) => {
+      if (!group.nodeIds.every((id) => nodeIds.has(id))) return "";
+      const positions = group.nodeIds.map((id) => layout.pos[id]).filter(Boolean);
+      if (positions.length === 0) return "";
+      const minX = Math.min(...positions.map((p) => p.x)) - GROUP_PAD;
+      const minY = Math.min(...positions.map((p) => p.y)) - GROUP_PAD;
+      const maxX = Math.max(...positions.map((p) => p.x + NODE_W)) + GROUP_PAD;
+      const maxY = Math.max(...positions.map((p) => p.y + NODE_H)) + GROUP_PAD;
+      return (
+        `<rect class="canvas-group-band" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="18" />` +
+        `<text class="canvas-group-label" x="${minX + 8}" y="${minY - 4}">${esc(group.label)}</text>`
+      );
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Renders one graph's `<svg>` diagram, merging in any enrichment content
+ *  (node sublabels/descriptions, edge labels, group bands, lane order) — all
+ *  of it pre-bounded plain strings (core/canvas-enrichment.ts), escaped here
+ *  like every other text. Assumes the shared `<defs>` (glow filter + arrow
+ *  markers) are already present once at the document level — see
+ *  `renderCanvasDocument`'s `SVG_DEFS` — so this never emits its own. */
+export function renderGraphSvg(graph: CanvasGraph, enrichment?: CanvasEnrichment | null): string {
+  const layout = layoutGraph(graph, enrichment?.layoutHints?.laneOrder);
   const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
+
+  const bandMarkup = groupBandMarkup(enrichment?.layoutHints?.groups, graph, layout);
 
   const edgeMarkup = graph.edges
     .map((edge) => {
@@ -150,11 +216,14 @@ export function renderGraphSvg(graph: CanvasGraph): string {
       const d = edgePath(edge.kind, x1, y1, x2, y2);
       const marker = dashedClass ? "url(#canvas-arrow)" : arrowMarker(colorSuffix);
       const path = `<path class="${classes}" d="${d}" marker-end="${marker}" />`;
-      if (!edge.label) return path;
+      // An enriched label (an intent/condition name the AI read out of the
+      // step body) wins over the structural default (e.g. "launch()").
+      const labelText = enrichment?.edgeLabels?.[`${edge.from}->${edge.to}`] ?? edge.label;
+      if (!labelText) return path;
       const dx = x2 - x1;
       const anchor = dx > 4 ? "start" : dx < -4 ? "end" : "middle";
       const labelX = x1 + (dx > 0 ? 10 : dx < 0 ? -10 : 0);
-      const label = `<text class="canvas-edge-label" x="${labelX}" y="${y1 + 20}" text-anchor="${anchor}">${esc(edge.label)}</text>`;
+      const label = `<text class="canvas-edge-label" x="${labelX}" y="${y1 + 20}" text-anchor="${anchor}">${esc(labelText)}</text>`;
       return path + label;
     })
     .join("\n");
@@ -163,12 +232,18 @@ export function renderGraphSvg(graph: CanvasGraph): string {
     .map((node) => {
       const p = layout.pos[node.id];
       if (!p) return "";
-      const titleY = node.sublabel ? 22 : NODE_H / 2;
-      const sub = node.sublabel
-        ? `<text class="canvas-node-sub" x="${NODE_W / 2}" y="40">${esc(node.sublabel)}</text>`
+      const details = enrichment?.nodeDetails?.[node.id];
+      const sublabel = details?.sublabel ?? node.sublabel;
+      const titleY = sublabel ? 22 : NODE_H / 2;
+      const sub = sublabel
+        ? `<text class="canvas-node-sub" x="${NODE_W / 2}" y="40">${esc(sublabel)}</text>`
         : "";
+      // SVG <title> = native hover tooltip; the only enrichment slot with
+      // room for a full sentence.
+      const description = details?.description ? `<title>${esc(details.description)}</title>` : "";
       return (
         `<g class="canvas-node node--${node.kind}" filter="url(#canvas-glow)" transform="translate(${p.x},${p.y})">` +
+        description +
         `<rect class="canvas-node-rect" width="${NODE_W}" height="${NODE_H}" rx="14" />` +
         `<text class="canvas-node-title" x="${NODE_W / 2}" y="${titleY}">${esc(node.label)}</text>` +
         sub +
@@ -179,6 +254,7 @@ export function renderGraphSvg(graph: CanvasGraph): string {
 
   return (
     `<svg viewBox="0 0 ${layout.width} ${layout.height}" class="canvas-graph-svg">\n` +
+    (bandMarkup ? bandMarkup + "\n" : "") +
     edgeMarkup +
     "\n" +
     nodeMarkup +

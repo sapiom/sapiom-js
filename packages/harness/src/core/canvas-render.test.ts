@@ -4,8 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CANVAS_DIR } from "../shared/types.js";
-import { clearExtractionCache } from "./canvas-cache.js";
+import { clearExtractionCache, fingerprintWorkflowSources } from "./canvas-cache.js";
+import { writeEnrichmentCacheFile } from "./canvas-enrichment.js";
 import {
+  enrichmentCacheFileFor,
   renderCanvasForSession,
   renderFileFor,
   slugForWorkflowPath,
@@ -181,5 +183,79 @@ describe("renderCanvasForSession", () => {
       expect(outcome.preservedExisting).toBeUndefined();
       expect(await readRender(cwd, NO_DEFINITION)).toContain("render failed");
     });
+  });
+});
+
+describe("enrichment merge in renders", () => {
+  const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
+
+  async function seedEnrichmentCache(cwd: string, sourceFingerprint: string): Promise<void> {
+    await writeEnrichmentCacheFile(enrichmentCacheFileFor(cwd, ORDER_TRIAGE), {
+      graph: { manifestName: "order-triage", entry: "intake", warnings: [], nodes: [], edges: [] },
+      enrichment: {
+        summary: "Triage incoming orders and route them",
+        nodeDetails: { intake: { sublabel: "receives the order" } },
+        notes: ["Orders above $10k always escalate"],
+        crossWorkflow: "Escalations hand off to the support workflow",
+      },
+      sourceFingerprint,
+      enrichedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+
+  it("merges a FRESH cached enrichment into the render — summary, sublabels, footer notes, no stale chip", async () => {
+    const cwd = await tmpCwd();
+    await seedEnrichmentCache(cwd, await fingerprintWorkflowSources(ORDER_TRIAGE));
+
+    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    expect(outcome.enrichmentApplied).toBe(true);
+    expect(outcome.enrichmentStale).toBe(false);
+
+    const html = await readRender(cwd, ORDER_TRIAGE);
+    expect(html).toContain("Triage incoming orders and route them");
+    expect(html).toContain("receives the order");
+    expect(html).toContain("Orders above $10k always escalate");
+    expect(html).toContain("Escalations hand off to the support workflow");
+    expect(html).not.toContain("stale — Refresh");
+  });
+
+  it("keeps a STALE enrichment displayed with the stale chip — the base structure is freshly extracted either way", async () => {
+    const cwd = await tmpCwd();
+    await seedEnrichmentCache(cwd, "0:0"); // never matches the real sources
+
+    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    expect(outcome.enrichmentApplied).toBe(true);
+    expect(outcome.enrichmentStale).toBe(true);
+
+    const html = await readRender(cwd, ORDER_TRIAGE);
+    expect(html).toContain("stale — Refresh");
+    expect(html).toContain("Triage incoming orders and route them"); // kept, not dropped
+    expect(html).toContain(">intake<"); // fresh base extraction still present
+  });
+
+  it("renders the plain base when no enrichment cache exists", async () => {
+    const cwd = await tmpCwd();
+    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, workflows);
+    expect(outcome.enrichmentApplied).toBeUndefined();
+    const html = await readRender(cwd, ORDER_TRIAGE);
+    expect(html).not.toContain("stale — Refresh");
+    expect(html).toContain(">intake<");
+  });
+
+  it("ignores the enrichment cache entirely when extraction fails — the error panel carries no annotations", async () => {
+    const cwd = await tmpCwd();
+    await writeEnrichmentCacheFile(enrichmentCacheFileFor(cwd, NO_DEFINITION), {
+      graph: { manifestName: "broken-flow", entry: "x", warnings: [], nodes: [], edges: [] },
+      enrichment: { summary: "should never appear on an error panel" },
+      sourceFingerprint: "any",
+      enrichedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const broken: RenderableWorkflow[] = [{ path: NO_DEFINITION, name: "broken-flow", definitionId: null }];
+
+    const outcome = await renderCanvasForSession({ cwd, boundWorkflowPath: NO_DEFINITION }, broken);
+    expect(outcome.enrichmentApplied).toBeUndefined();
+    const html = await readRender(cwd, NO_DEFINITION);
+    expect(html).toContain("render failed");
+    expect(html).not.toContain("should never appear");
   });
 });

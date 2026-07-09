@@ -45,6 +45,10 @@ export interface CachedExtraction {
   result: ExtractionResult;
   /** True when the result came from cache — no child process ran. */
   cached: boolean;
+  /** The source fingerprint the result corresponds to — the same value the
+   *  enrichment cache stores as `sourceFingerprint`, so freshness checks
+   *  compare like with like. */
+  fingerprint: string;
 }
 
 /**
@@ -58,12 +62,18 @@ export async function extractWorkflowGraphCached(
   const key = path.resolve(sourceDir);
   const fingerprint = await fingerprintWorkflowSources(key);
   const hit = cache.get(key);
-  if (hit && hit.fingerprint === fingerprint) return { result: hit.result, cached: true };
+  if (hit && hit.fingerprint === fingerprint) return { result: hit.result, cached: true, fingerprint };
 
   const result = await extract(key);
   if (result.ok) cache.set(key, { fingerprint, result });
   else cache.delete(key);
-  return { result, cached: false };
+  return { result, cached: false, fingerprint };
+}
+
+/** Drops one workflow's cached extraction — the visualize macro's force
+ *  refresh, which must re-run the child process even for unchanged sources. */
+export function invalidateExtractionCache(sourceDir: string): void {
+  cache.delete(path.resolve(sourceDir));
 }
 
 /** Test hook — the cache is module-level state shared across a process. */
