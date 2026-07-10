@@ -2,6 +2,7 @@ import type { CSSProperties, JSX } from "react";
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 
 import { macroDisabledReason } from "../lib/macro-gating";
+import { track } from "../lib/track";
 import { Icon } from "./Icon";
 
 interface WorkflowActionStripProps {
@@ -51,7 +52,10 @@ export function WorkflowActionStrip({
               data-testid={`macro-${macro.id}`}
               aria-label={disabledReason ? `${macro.label}: ${disabledReason}` : macro.label}
               disabled={Boolean(disabledReason)}
-              onClick={() => onRunMacro(macro)}
+              onClick={() => {
+                onRunMacro(macro);
+                track("macro.invoked", { macroId: macro.id });
+              }}
             >
               <span className="strip-item-icon">
                 <Icon name={macro.icon} size={15} />

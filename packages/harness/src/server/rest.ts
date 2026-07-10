@@ -7,7 +7,9 @@
 import express, { Router } from "express";
 import { z } from "zod";
 
+import { randomUUID } from "node:crypto";
 import type {
+  AnalyticsEvent,
   AppState,
   BackgroundTask,
   BindWorkflowRequest,
@@ -20,14 +22,23 @@ import type {
   MacroDef,
   SampleProjectSeedResponse,
   SessionSummary,
+  UiEventName,
+  UiTrackRequest,
   WorkflowInfo,
 } from "../shared/types.js";
-import { SessionNotReadyError, type SessionManager } from "../core/session-manager.js";
+import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
+import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
+import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
+import { listHarnessAdapters } from "../core/adapters/registry.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
+// Derived from SPAWNABLE_HARNESS_KINDS (shared/types.ts) so the zod
+// validation and the TypeScript type can never drift from each other.
+// Adding a new spawnable harness means updating that one constant; the
+// validator here and the HarnessKind type both pick up the change automatically.
 const createSessionSchema = z.object({
   cwd: z.string().min(1),
-  harness: z.enum(["claude-code", "codex"]),
+  harness: z.enum(SPAWNABLE_HARNESS_KINDS),
   profile: z.string().optional(),
 }) satisfies z.ZodType<CreateSessionRequest>;
 
@@ -44,6 +55,36 @@ const settingsPatchSchema = z.object({
   telemetryOptIn: z.boolean().optional(),
   recentDirs: z.array(z.string()).optional(),
 }) satisfies z.ZodType<Partial<HarnessSettings>>;
+
+const UI_EVENT_NAMES: readonly UiEventName[] = [
+  "prompt.submitted",
+  "session.switched",
+  "macro.invoked",
+  "visualize.triggered",
+  "consent.changed",
+  "session.created",
+  "skill.viewed",
+  "skill.used",
+  "mcp.install",
+];
+
+/**
+ * Primitive-only value type for /api/track's `data` field — enforces that the
+ * payload is provably metadata-only (no nested objects or arrays that could
+ * carry arbitrary content). Keyed and value length-capped so the endpoint
+ * cannot be used as a vector to push large payloads through the remote batcher.
+ */
+const uiTrackDataValue = z.union([z.string().max(256), z.number(), z.boolean()]);
+const uiTrackDataSchema = z.record(z.string().max(64), uiTrackDataValue).refine(
+  (obj) => Object.keys(obj).length <= 20,
+  { message: "data must have at most 20 keys" },
+);
+
+const uiTrackSchema = z.object({
+  event: z.enum(UI_EVENT_NAMES as [UiEventName, ...UiEventName[]]),
+  data: uiTrackDataSchema.optional(),
+  harnessSessionId: z.string().optional(),
+}) satisfies z.ZodType<UiTrackRequest>;
 
 export interface RestRouterOptions {
   sessionManager: SessionManager;
@@ -96,6 +137,13 @@ export interface RestRouterOptions {
    * mutated any state, surfaced verbatim in AppState.firstRun. Omitted when
    * the caller doesn't supply it (tests), leaving AppState.firstRun absent. */
   firstRun?: boolean;
+  /** How telemetry consent was determined at boot — surfaced in AppState so the
+   * UI can show the first-run notice when the user never explicitly answered.
+   * Omitted when the caller didn't run the consent flow (tests). */
+  consentSource?: AppState["consentSource"];
+  /** Which env var forced telemetry off — surfaced in AppState for the
+   * tracking indicator's "off (env)" label. Null/absent otherwise. */
+  consentEnvReason?: string | null;
   /** Seeds (or reuses) the bundled example project and returns where it
    * landed — backs POST /api/sample-project (the welcome panel's "Run the
    * sample project"). Optional so callers without the real seeder (tests)
@@ -106,6 +154,20 @@ export interface RestRouterOptions {
    * (server/index.ts) passes the path under its resolved state root so an
    * isolated boot never reads or writes the developer's real settings. */
   settingsPath?: string;
+  /**
+   * Dependencies for POST /api/track (UI-interaction analytics).
+   * Optional: when omitted, /api/track returns 501 (tests that don't care
+   * about UI analytics don't need to stub these).
+   */
+  uiTrack?: {
+    store: { append(event: import("../shared/types.js").AnalyticsEvent): Promise<void> };
+    batcher: { enqueue(event: import("../shared/types.js").AnalyticsEvent): void };
+    /** Per-boot seq counter shared with the ingest pipeline. */
+    nextSeq: (sessionId: string) => number;
+    machineId: string;
+    userId: string | null;
+    tenantId: string | null;
+  };
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
@@ -129,6 +191,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
         ...(options.availableHarnesses ? { availableHarnesses: options.availableHarnesses } : {}),
         ...(options.listTasks ? { tasks: options.listTasks() } : {}),
         ...(options.firstRun !== undefined ? { firstRun: options.firstRun } : {}),
+        ...(options.consentSource !== undefined ? { consentSource: options.consentSource } : {}),
+        ...(options.consentEnvReason !== undefined ? { consentEnvReason: options.consentEnvReason } : {}),
       };
       res.json(state);
     } catch (err) {
@@ -182,6 +246,38 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
+  /**
+   * GET /api/harnesses — registry-driven listing of all known harness
+   * adapters with their mode (embedded vs external), label, and whether
+   * the binary is installed on this machine.
+   *
+   * Embedded adapters can be used in POST /sessions (harness field).
+   * External adapters expose mode:"external" so the UI can render them
+   * differently (e.g. a "companion app" chip) without being selectable
+   * as session targets.
+   *
+   * `installed` is best-effort and never throws — it may lag PATH changes
+   * by at most one request cycle since it probes the filesystem per request.
+   */
+  router.get("/harnesses", async (_req, res, next) => {
+    try {
+      const adapters = listHarnessAdapters();
+      const entries = await Promise.all(
+        adapters.map(async (adapter) => ({
+          id: adapter.id,
+          label: adapter.label,
+          mode: adapter.mode,
+          experimental: adapter.experimental ?? false,
+          installed: await adapter.detectInstalled(),
+          installMcpPrompt: adapter.installMcpPrompt(),
+        })),
+      );
+      res.json(entries);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.post("/sessions", async (req, res, next) => {
     const parsed = createSessionSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -196,6 +292,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(201).json(session);
       options.onSessionCreated?.(parsed.data.cwd, session.id);
     } catch (err) {
+      if (err instanceof AdapterNotFoundError) {
+        res.status(400).json({ error: err.message, code: err.code });
+        return;
+      }
       next(err);
     }
   });
@@ -281,8 +381,22 @@ export function createRestRouter(options: RestRouterOptions): Router {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith("Unknown session")) {
+      if (err instanceof UnknownSessionError) {
         res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof AdapterNotFoundError) {
+        // A persisted session with an unknown harness kind (e.g. from a future
+        // or removed harness type) cannot be resumed.
+        res.status(400).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (
+        err instanceof ExternalHarnessError ||
+        err instanceof SessionAlreadyLiveError ||
+        err instanceof SessionNotResumeableError
+      ) {
+        res.status(409).json({ error: err.message, code: (err as { code: string }).code });
         return;
       }
       next(err);
@@ -295,7 +409,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(404).json({ error: "session not found" });
       return;
     }
-    sessionManager.kill(req.params.id);
+    void sessionManager.kill(req.params.id);
     res.json({ ok: true });
   });
 
@@ -314,12 +428,71 @@ export function createRestRouter(options: RestRouterOptions): Router {
       }
       res.json({ ok: true });
     } catch (err) {
-      if (err instanceof SessionNotReadyError) {
-        res.status(409).json({ error: err.message });
+      if (err instanceof SessionNotReadyError || err instanceof ExternalHarnessError) {
+        res.status(409).json({ error: err.message, code: err.code });
         return;
       }
       next(err);
     }
+  });
+
+  /**
+   * POST /api/track — UI-interaction analytics.
+   *
+   * Feeds the same store + batcher pipeline as hook events from /ingest, so
+   * ui.* events get the same local ndjson write (always) and remote delivery
+   * (per consent) that agent hook events do.  The client fires fire-and-forget
+   * — we always respond 200 fast, then process.
+   *
+   * Consent semantics: store.append always; batcher.enqueue only when opted in
+   * (batcher.enqueue is gated by the HarnessEmitter's disabled flag, which
+   * mirrors the live consent state — same as hook events).
+   */
+  router.post("/track", (req, res) => {
+    if (!options.uiTrack) {
+      // Not wired in this server instance (tests without UI analytics deps).
+      res.status(501).json({ error: "ui tracking not available" });
+      return;
+    }
+
+    // Validate before responding — bad shape gets a 400 synchronously.
+    const parsed = uiTrackSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    // Respond immediately — fire-and-forget from the client's perspective.
+    res.json({ ok: true });
+
+    const { store, batcher, nextSeq, machineId, userId, tenantId } = options.uiTrack;
+    const { event, data, harnessSessionId } = parsed.data;
+    // Use the provided session id for seq tracking; fall back to a synthetic
+    // one-use id so ui events without a session still get a valid seq.
+    const sessionId = harnessSessionId ?? `ui-${randomUUID()}`;
+
+    const analyticsEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: nextSeq(sessionId),
+      ts: new Date().toISOString(),
+      userId,
+      tenantId,
+      machineId,
+      harnessSessionId: sessionId,
+      agentSessionId: null,
+      harness: "claude-code", // ui events have no harness kind; use canonical placeholder
+      type: event,
+      payload: {
+        ...(data ?? {}),
+        surface: "ui",
+      },
+    };
+
+    void store.append(analyticsEvent).catch((err: unknown) => {
+      // Non-fatal: local write failure should never surface to the user.
+      void err;
+    });
+    batcher.enqueue(analyticsEvent);
   });
 
   return router;

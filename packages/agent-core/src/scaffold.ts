@@ -76,8 +76,8 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
 /** Offline fallbacks — bump alongside notable releases. */
 const VERSION_FALLBACK = {
-  agent: "0.1.1",
-  tools: "0.1.1",
+  agent: "0.6.2",
+  tools: "0.17.1",
 };
 
 /** The zod major the authoring SDK is built against. */

@@ -7,5 +7,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
+    // Guard: analytics-core is live-by-default — an unconfigured emitter
+    // delivers to the real production collector. The setup file sets
+    // SAPIOM_TELEMETRY_DISABLED=1 globally; tests that assert delivery opt
+    // back in via SAPIOM_ANALYTICS_ENDPOINT pointing at startMockCollector().
+    setupFiles: ["src/test-setup.ts"],
   },
 });

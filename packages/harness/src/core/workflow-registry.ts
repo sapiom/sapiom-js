@@ -100,6 +100,10 @@ async function scanDir(root: string, dir: string, depth: number, found: Workflow
 export class WorkflowRegistry {
   private workflows: WorkflowInfo[] = [];
   private loaded = false;
+  /** Serializes mutations so concurrent prune/scan/connectPath calls can't
+   *  interleave and drop entries from the persisted file. Mirrors the pattern
+   *  used by SessionManager.persist() (session-manager.ts:278,851-853). */
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly registryPath: string = expandHome(HARNESS_PATHS.workflows)) {}
 
@@ -115,8 +119,26 @@ export class WorkflowRegistry {
   }
 
   private async persist(): Promise<void> {
-    await fs.mkdir(path.dirname(this.registryPath), { recursive: true });
-    await fs.writeFile(this.registryPath, JSON.stringify(this.workflows, null, 2));
+    const dir = path.dirname(this.registryPath);
+    await fs.mkdir(dir, { recursive: true });
+    // Atomic write: write to a temp file in the same directory (so rename is
+    // same-filesystem and thus atomic on POSIX), then rename over the target.
+    // A crash mid-write leaves the .tmp file, not a torn workflows.json.
+    // Mirrors the pattern used by SessionManager.persist().
+    const tmpPath = `${this.registryPath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(this.workflows, null, 2));
+    await fs.rename(tmpPath, this.registryPath);
+  }
+
+  /** Chains `run` onto the write queue so concurrent mutations never
+   *  interleave — a failed run never poisons later ones. */
+  private enqueue<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.writeQueue.catch(() => {}).then(run);
+    this.writeQueue = next.then(
+      () => {},
+      () => {},
+    );
+    return next;
   }
 
   async list(): Promise<WorkflowInfo[]> {
@@ -133,60 +155,66 @@ export class WorkflowRegistry {
    * stays registered. Returns what was pruned so the caller can log it.
    */
   async prune(): Promise<WorkflowInfo[]> {
-    await this.ensureLoaded();
-    const kept: WorkflowInfo[] = [];
-    const pruned: WorkflowInfo[] = [];
-    for (const workflow of this.workflows) {
-      try {
-        await fs.stat(workflow.path);
-        kept.push(workflow);
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === "ENOENT" || code === "ENOTDIR") pruned.push(workflow);
-        else kept.push(workflow);
+    return this.enqueue(async () => {
+      await this.ensureLoaded();
+      const kept: WorkflowInfo[] = [];
+      const pruned: WorkflowInfo[] = [];
+      for (const workflow of this.workflows) {
+        try {
+          await fs.stat(workflow.path);
+          kept.push(workflow);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "ENOENT" || code === "ENOTDIR") pruned.push(workflow);
+          else kept.push(workflow);
+        }
       }
-    }
-    if (pruned.length > 0) {
-      this.workflows = kept;
-      await this.persist();
-    }
-    return pruned;
+      if (pruned.length > 0) {
+        this.workflows = kept;
+        await this.persist();
+      }
+      return pruned;
+    });
   }
 
   /** Scans `root` and merges discovered projects into the persisted registry. */
   async scan(root: string): Promise<WorkflowInfo[]> {
-    await this.ensureLoaded();
-    const absoluteRoot = path.resolve(expandHome(root));
-    const found: WorkflowInfo[] = [];
-    await scanDir(absoluteRoot, absoluteRoot, 0, found);
+    return this.enqueue(async () => {
+      await this.ensureLoaded();
+      const absoluteRoot = path.resolve(expandHome(root));
+      const found: WorkflowInfo[] = [];
+      await scanDir(absoluteRoot, absoluteRoot, 0, found);
 
-    const byPath = new Map(this.workflows.map((workflow) => [workflow.path, workflow]));
-    for (const workflow of found) {
-      const existing = byPath.get(workflow.path);
-      // A manually-connected entry keeps its `source`; a scan only refreshes name/definitionId.
-      byPath.set(workflow.path, existing ? { ...existing, ...workflow, source: existing.source } : workflow);
-    }
-    this.workflows = Array.from(byPath.values());
-    await this.persist();
-    return found;
+      const byPath = new Map(this.workflows.map((workflow) => [workflow.path, workflow]));
+      for (const workflow of found) {
+        const existing = byPath.get(workflow.path);
+        // A manually-connected entry keeps its `source`; a scan only refreshes name/definitionId.
+        byPath.set(workflow.path, existing ? { ...existing, ...workflow, source: existing.source } : workflow);
+      }
+      this.workflows = Array.from(byPath.values());
+      await this.persist();
+      return found;
+    });
   }
 
   /** Registers an arbitrary path (the "+ Connect" flow); marker is optional at connect time. */
   async connectPath(inputPath: string): Promise<WorkflowInfo> {
-    await this.ensureLoaded();
-    const absolutePath = path.resolve(expandHome(inputPath));
-    const marker = await readMarker(absolutePath);
-    const info: WorkflowInfo = {
-      name: await nameFor(absolutePath),
-      path: absolutePath,
-      definitionId: marker?.definitionId ?? null,
-      source: "connect",
-    };
-    const idx = this.workflows.findIndex((workflow) => workflow.path === absolutePath);
-    if (idx >= 0) this.workflows[idx] = info;
-    else this.workflows.push(info);
-    await this.persist();
-    return info;
+    return this.enqueue(async () => {
+      await this.ensureLoaded();
+      const absolutePath = path.resolve(expandHome(inputPath));
+      const marker = await readMarker(absolutePath);
+      const info: WorkflowInfo = {
+        name: await nameFor(absolutePath),
+        path: absolutePath,
+        definitionId: marker?.definitionId ?? null,
+        source: "connect",
+      };
+      const idx = this.workflows.findIndex((workflow) => workflow.path === absolutePath);
+      if (idx >= 0) this.workflows[idx] = info;
+      else this.workflows.push(info);
+      await this.persist();
+      return info;
+    });
   }
 }
 

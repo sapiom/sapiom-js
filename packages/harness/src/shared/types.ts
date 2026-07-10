@@ -87,7 +87,19 @@ export const ENV = {
 // Sessions
 // ---------------------------------------------------------------------------
 
-export type HarnessKind = "claude-code" | "codex";
+/**
+ * Every harness kind that can be spawned as a session — i.e. has a full
+ * runtime adapter (launch/resume/doctor/listPastSessions) and a real e2e
+ * suite. Both `HarnessKind` and the zod enum in server/rest.ts are derived
+ * from this tuple so they can never drift from each other.
+ *
+ * External-mode adapters (conductor) and scaffold adapters that haven't
+ * earned an e2e suite yet (pi, opencode) are deliberately absent: the
+ * picker and POST /sessions reject them at the validation layer.
+ */
+export const SPAWNABLE_HARNESS_KINDS = ["claude-code", "codex"] as const;
+
+export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 
@@ -166,6 +178,13 @@ export interface LaunchOpts {
   mcpConfigFile?: string;
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
+  /**
+   * Absolute path to a generated --plugin-dir directory. Currently used to
+   * inject Sapiom's bundled skills as session-scoped slash commands via
+   * claude-code's `--plugin-dir` flag. Adapters that don't support
+   * --plugin-dir (e.g. codex) silently ignore this field.
+   */
+  pluginDir?: string;
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;
@@ -304,8 +323,62 @@ export type BusMessage =
   | { type: "session.activity"; harnessSessionId: string; at: string };
 
 // ---------------------------------------------------------------------------
+// Adapter registry (GET /api/harnesses)
+// ---------------------------------------------------------------------------
+
+/** One entry in the adapter registry, as the SPA sees it (GET /api/harnesses). */
+export interface HarnessEntry {
+  /** Stable adapter identifier — one of the known HarnessAdapterId values (e.g. "claude-code", "codex", "conductor"). */
+  id: string;
+  label: string;
+  /** Whether the harness is spawned by the harness server ("embedded") or managed by its own companion app ("external"). */
+  mode: "embedded" | "external";
+  /** True for adapters whose launch behaviour is not yet hardened by an end-to-end suite. */
+  experimental: boolean;
+  /** True when the adapter's binary is detected on PATH at request time. */
+  installed: boolean;
+  /** Per-agent copy-paste instructions for installing and configuring the Sapiom MCP server. */
+  installMcpPrompt: string;
+}
+
+// ---------------------------------------------------------------------------
 // Analytics events
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// UI-interaction analytics  (POST /api/track)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical UI event names.  Dot-separated, source "harness", surface marker
+ * data.surface: "ui".  These ride the same collector pipeline as hook events
+ * (local ndjson always; remote only when opted in), so seq/session dimensions
+ * and the analytics-core envelope are added server-side, not client-side.
+ * See the collector README section in packages/harness/src/core/collector/
+ * for the full surface-"ui" contract.
+ */
+export type UiEventName =
+  | "prompt.submitted"
+  | "session.switched"
+  | "macro.invoked"
+  | "visualize.triggered"
+  | "consent.changed"
+  | "session.created"
+  | "skill.viewed"
+  | "skill.used"
+  | "mcp.install";
+
+export interface UiTrackRequest {
+  /** Dot-canonical event name — one of the UiEventName literals. */
+  event: UiEventName;
+  /** Arbitrary data payload; server stamps data.surface: "ui" automatically.
+   *  Never include prompt text — this is UI-interaction metadata only. */
+  data?: Record<string, unknown>;
+  /** harnessSessionId to associate this event with (for seq/session dims).
+   *  Optional: when omitted, the event gets a synthetic single-use session id.
+   */
+  harnessSessionId?: string;
+}
 
 export const ANALYTICS_SCHEMA_VERSION = 1;
 
@@ -314,7 +387,16 @@ export type AnalyticsEventType =
   | "prompt.submitted"
   | "tool.call"
   | "turn.completed"
-  | "session.end";
+  | "session.end"
+  // UI-interaction analytics (surface: "ui" in payload — see UiEventName):
+  | "session.switched"
+  | "macro.invoked"
+  | "visualize.triggered"
+  | "consent.changed"
+  | "session.created"
+  | "skill.viewed"
+  | "skill.used"
+  | "mcp.install";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -384,6 +466,7 @@ export interface CollectorBatch {
 // PATCH  /api/settings                  Partial<HarnessSettings> → HarnessSettings
 // POST   /api/sample-project            → SampleProjectSeedResponse (seed/reuse the bundled example)
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
+// POST   /api/track                     UiTrackRequest → { ok: true }  (UI-interaction analytics)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
 
 export interface CreateSessionRequest {
@@ -439,6 +522,21 @@ export interface AppState {
   userId: string | null;
   organizationName: string | null;
   telemetryOptIn: boolean;
+  /**
+   * How telemetry consent was determined at CLI boot. The UI uses this to
+   * decide whether to show the first-run notice: "default-silent" means the
+   * user never explicitly answered the Y/n prompt (e.g. non-TTY / CI), so
+   * we surface a gentle one-time indicator. Optional: omitted by callers that
+   * don't run the consent flow (tests, mocks — treated as "stored-explicit"
+   * by the UI, i.e. no notice).
+   */
+  consentSource?: "env-forced-off" | "stored-explicit" | "prompted" | "default-silent";
+  /**
+   * When consentSource === "env-forced-off", which env var forced it off —
+   * rendered in the tracking indicator as "off (env)" with the var name.
+   * Null/absent otherwise.
+   */
+  consentEnvReason?: string | null;
   sessions: HarnessSession[];
   workflows: WorkflowInfo[];
   macros: MacroDef[];
@@ -480,6 +578,12 @@ export interface HarnessSettings {
   telemetryOptIn: boolean;
   /** Most-recently-used project directories, newest first. */
   recentDirs: string[];
+  /**
+   * True once the user has dismissed the first-run telemetry notice
+   * (shown when consent was determined silently in a non-TTY environment).
+   * Persisted so the notice never appears again after the first dismiss.
+   */
+  telemetryNoticeDismissed?: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -23,10 +23,12 @@
       "types": "./dist/cjs/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/cjs/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "skills",
     "templates",
     "README.md",
     "LICENSE",

@@ -26,18 +26,32 @@ import { ensureConsent } from "./consent.js";
 import { hasStoredSettings, loadSettings } from "./settings.js";
 
 describe("ensureConsent", () => {
+  const OUTER_ENV_KEYS = ["SAPIOM_TELEMETRY_DISABLED", "DO_NOT_TRACK"] as const;
+  const outerSaved: Record<string, string | undefined> = {};
+
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-consent-"));
     questionCallCount = 0;
+    // Clear env opt-outs so tests that assert "default to ON" behavior see the
+    // unadulterated prompt/default path, not the global test guard.
+    for (const key of OUTER_ENV_KEYS) {
+      outerSaved[key] = process.env[key];
+      delete process.env[key];
+    }
   });
 
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
+    for (const key of OUTER_ENV_KEYS) {
+      if (outerSaved[key] === undefined) delete process.env[key];
+      else process.env[key] = outerSaved[key];
+    }
   });
 
   it("--no-telemetry forces false without prompting or persisting", async () => {
-    const optIn = await ensureConsent({ noTelemetry: true });
-    expect(optIn).toBe(false);
+    const result = await ensureConsent({ noTelemetry: true });
+    expect(result.telemetryOptIn).toBe(false);
+    expect(result.source).toBe("env-forced-off");
 
     const settings = await loadSettings();
     expect(settings.telemetryOptIn).toBe(false);
@@ -48,8 +62,9 @@ describe("ensureConsent", () => {
     Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 
     try {
-      const optIn = await ensureConsent({ noTelemetry: false });
-      expect(optIn).toBe(true);
+      const result = await ensureConsent({ noTelemetry: false });
+      expect(result.telemetryOptIn).toBe(true);
+      expect(result.source).toBe("default-silent");
 
       const settings = await loadSettings();
       expect(settings.telemetryOptIn).toBe(true);
@@ -72,8 +87,9 @@ describe("ensureConsent", () => {
         JSON.stringify({ ...settings, telemetryOptIn: false }),
       );
 
-      const optIn = await ensureConsent({ noTelemetry: false });
-      expect(optIn).toBe(false);
+      const result = await ensureConsent({ noTelemetry: false });
+      expect(result.telemetryOptIn).toBe(false);
+      expect(result.source).toBe("stored-explicit");
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
     }
@@ -85,7 +101,9 @@ describe("ensureConsent", () => {
     nextAnswer = "";
 
     try {
-      expect(await ensureConsent({ noTelemetry: false })).toBe(true);
+      const result = await ensureConsent({ noTelemetry: false });
+      expect(result.telemetryOptIn).toBe(true);
+      expect(result.source).toBe("prompted");
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
     }
@@ -97,7 +115,9 @@ describe("ensureConsent", () => {
     nextAnswer = "n";
 
     try {
-      expect(await ensureConsent({ noTelemetry: false })).toBe(false);
+      const result = await ensureConsent({ noTelemetry: false });
+      expect(result.telemetryOptIn).toBe(false);
+      expect(result.source).toBe("prompted");
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
     }
@@ -109,7 +129,9 @@ describe("ensureConsent", () => {
     nextAnswer = "y";
 
     try {
-      expect(await ensureConsent({ noTelemetry: false })).toBe(true);
+      const result = await ensureConsent({ noTelemetry: false });
+      expect(result.telemetryOptIn).toBe(true);
+      expect(result.source).toBe("prompted");
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
     }
@@ -142,9 +164,11 @@ describe("ensureConsent", () => {
     ])("%s=%s forces telemetry off without prompting, on a first run", async (envVar, value) => {
       process.env[envVar] = value;
 
-      const optIn = await ensureConsent({ noTelemetry: false });
+      const result = await ensureConsent({ noTelemetry: false });
 
-      expect(optIn).toBe(false);
+      expect(result.telemetryOptIn).toBe(false);
+      expect(result.source).toBe("env-forced-off");
+      expect(result.envReason).toBe(envVar);
       expect(questionCallCount).toBe(0);
       // Nothing persisted: hasStoredSettings() must still say "no" so a
       // later run without the env var gets a genuine first-run prompt,
@@ -157,16 +181,18 @@ describe("ensureConsent", () => {
       const wasTTY = process.stdin.isTTY;
       Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
       try {
-        expect(await ensureConsent({ noTelemetry: false })).toBe(true);
+        const firstResult = await ensureConsent({ noTelemetry: false });
+        expect(firstResult.telemetryOptIn).toBe(true);
       } finally {
         Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
       }
       expect((await loadSettings()).telemetryOptIn).toBe(true);
 
       process.env.DO_NOT_TRACK = "1";
-      const optIn = await ensureConsent({ noTelemetry: false });
+      const result = await ensureConsent({ noTelemetry: false });
 
-      expect(optIn).toBe(false);
+      expect(result.telemetryOptIn).toBe(false);
+      expect(result.source).toBe("env-forced-off");
       expect(questionCallCount).toBe(0);
       // The stored preference is untouched — a run without DO_NOT_TRACK set
       // still honors what the user actually answered.
@@ -184,14 +210,19 @@ describe("ensureConsent", () => {
       Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 
       try {
-        expect(await ensureConsent({ noTelemetry: false })).toBe(true);
+        const result = await ensureConsent({ noTelemetry: false });
+        expect(result.telemetryOptIn).toBe(true);
+        // env var present but not an opt-out value → "default-silent" (non-TTY)
+        expect(result.source).toBe("default-silent");
       } finally {
         Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
       }
     });
 
     it("--no-telemetry still wins even without any env var set", async () => {
-      expect(await ensureConsent({ noTelemetry: true })).toBe(false);
+      const result = await ensureConsent({ noTelemetry: true });
+      expect(result.telemetryOptIn).toBe(false);
+      expect(result.source).toBe("env-forced-off");
       expect(questionCallCount).toBe(0);
     });
   });

@@ -22,6 +22,24 @@ import {
   type SpawnSpec,
 } from "../shared/types.js";
 import { expandHome } from "./paths.js";
+import {
+  AdapterNotFoundError,
+  ExternalHarnessError,
+  SessionAlreadyLiveError,
+  SessionNotReadyError,
+  SessionNotResumeableError,
+  UnknownSessionError,
+} from "./errors.js";
+import { listHarnessAdapters } from "./adapters/registry.js";
+
+export {
+  AdapterNotFoundError,
+  ExternalHarnessError,
+  SessionAlreadyLiveError,
+  SessionNotReadyError,
+  SessionNotResumeableError,
+  UnknownSessionError,
+} from "./errors.js";
 
 // node-pty is a native module. Load it lazily so a missing/broken prebuild on
 // an unsupported platform surfaces as a spawn-time error instead of crashing
@@ -148,23 +166,6 @@ const defaultIsPidAlive = (pid: number): boolean => {
   }
 };
 
-/**
- * Thrown by `submitInput()` when a session's pty is alive but never became
- * ready (see `HarnessSession.ready`) within `READY_GRACE_MS` — the trust-
- * dialog race this whole readiness mechanism exists to catch. Callers
- * (rest.ts, macros.ts) catch this specifically and surface it as a 409 with
- * a UI-visible reason, rather than letting it fall into a generic 500 or
- * (worse, the bug this fixes) silently writing into a non-interactive TUI.
- */
-export class SessionNotReadyError extends Error {
-  constructor(id: string) {
-    super(
-      `Session "${id}" is not ready yet — check the terminal, it may be asking to trust the folder.`,
-    );
-    this.name = "SessionNotReadyError";
-  }
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -252,6 +253,21 @@ interface PtyHandle {
   emitter: EventEmitter;
   /** Epoch ms this pty was spawned — see `isReadyEnough`'s settle window. */
   spawnedAt: number;
+  /**
+   * Resolves when this specific pty handle's session has fully exited —
+   * either via node-pty's real `onExit` event OR a synthesized exit (kill()'s
+   * escalation fallback, sweepDeadSessions, or pre-pty failure reconciliation).
+   * `markExited()` is the single convergence point for all three paths, so
+   * awaiting `exited` never hangs regardless of which path fires first.
+   *
+   * Always tied to THIS handle instance: markExited() is idempotent on the
+   * handle identity, so a stale duplicate call (e.g. from a late liveness
+   * sweep after kill()'s own fallback already ran) is a silent no-op and
+   * never resolves a DIFFERENT session's promise.
+   */
+  exited: Promise<void>;
+  /** Internal resolver — called exactly once by markExited(). */
+  resolveExited: () => void;
 }
 
 export class SessionManager {
@@ -334,7 +350,17 @@ export class SessionManager {
 
   private getAdapter(harness: HarnessKind): HarnessAdapter {
     const adapter = this.adapters[harness];
-    if (!adapter) throw new Error(`No adapter registered for harness "${harness}"`);
+    if (!adapter) {
+      // Before surfacing a generic "adapter not found", check whether this id
+      // belongs to a known external-mode adapter — if so, the 409 with a human
+      // message ("X sessions are managed by the X app") is far more actionable
+      // than "no adapter registered for harness X".  A sessions.json entry
+      // with harness="conductor" (written by an earlier build, hand-edited, or
+      // a future registration) hits this path on resume/submitInput.
+      const info = listHarnessAdapters().find((a) => a.id === harness);
+      if (info?.mode === "external") throw new ExternalHarnessError(harness, info.label);
+      throw new AdapterNotFoundError(harness);
+    }
     return adapter;
   }
 
@@ -415,12 +441,12 @@ export class SessionManager {
 
   async resume(id: string): Promise<HarnessSession> {
     const session = this.sessions.get(id);
-    if (!session) throw new Error(`Unknown session "${id}"`);
+    if (!session) throw new UnknownSessionError(id);
     if (!session.agentSessionId) {
-      throw new Error(`Session "${id}" has no agentSessionId to resume from`);
+      throw new SessionNotResumeableError(id);
     }
     if (this.ptys.has(id)) {
-      throw new Error(`Session "${id}" already has a live pty`);
+      throw new SessionAlreadyLiveError(id);
     }
     const adapter = this.getAdapter(session.harness);
     const opts: LaunchOpts = {
@@ -457,7 +483,31 @@ export class SessionManager {
     return session;
   }
 
-  kill(id: string): boolean {
+  /**
+   * Signals the session's pty to exit and returns a Promise that resolves
+   * once the process is **actually gone** — not fire-and-forget.
+   *
+   * Resolution source (either one unblocks the promise):
+   *   1. node-pty's own `onExit` event → markExited() → `handle.exited` resolves.
+   *   2. Synthesized exit: kill()'s escalation fallback (SIGTERM → SIGKILL →
+   *      pid liveness check) → markExited() → `handle.exited` resolves.
+   *   3. Synthesized exit from an external `sweepDeadSessions()` call that
+   *      happens to run during the escalation window → same path.
+   *
+   * The promise is bounded: after `KILL_ESCALATION_MS` the escalation sends
+   * SIGKILL; after a further `KILL_ESCALATION_CONFIRM_MS` it synthesizes the
+   * exit from an OS-level pid check regardless of node-pty's event. So the
+   * worst-case resolution time is `KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS`
+   * (2500 ms at current constants), never infinite.
+   *
+   * Existing fire-and-forget callers keep working: an unawaited Promise is
+   * fine and produces no floating-promise lint warnings when suppressed with
+   * `void`.
+   *
+   * Returns false (resolved immediately) when the session has no live pty.
+   * Returns true (resolved on actual death) when a pty was signalled.
+   */
+  kill(id: string): Promise<boolean> {
     const handle = this.ptys.get(id);
     if (!handle) {
       // A non-exited record with no pty behind it has nothing left to kill —
@@ -467,9 +517,9 @@ export class SessionManager {
       const session = this.sessions.get(id);
       if (session && session.status !== "exited") {
         void this.transitionExited(session, null);
-        return true;
+        return Promise.resolve(true);
       }
-      return false;
+      return Promise.resolve(false);
     }
     handle.pty.kill();
     // Root-caused via instrumented real-process runs: node-pty's `onExit`
@@ -489,19 +539,34 @@ export class SessionManager {
       const pid = handle.pty.pid;
       if (this.isPidAlive(pid)) handle.pty.kill("SIGKILL");
       setTimeout(() => {
-        if (this.ptys.get(id) === handle && !this.isPidAlive(pid)) this.markExited(id, handle, null);
+        // Synthesize unconditionally: SIGKILL was already sent; after the
+        // confirm window the session is over regardless of isPidAlive. An
+        // EPERM-alive zombie (a process that exists but can't be signalled)
+        // would leave handle.exited pending forever if we gated on liveness.
+        if (this.ptys.get(id) === handle) this.markExited(id, handle, null);
       }, KILL_ESCALATION_CONFIRM_MS).unref?.();
     }, KILL_ESCALATION_MS);
     escalate.unref?.();
-    return true;
+    // Return a promise that resolves on actual death — either the real onExit
+    // event or a synthesized exit from the escalation above or sweepDeadSessions.
+    // `handle.exited` is resolved by markExited(), which is the single
+    // convergence point for all three paths — it never hangs.
+    return handle.exited.then(() => true);
   }
 
-  /** Kills every currently-live pty. Call this on server shutdown — without
-   *  it, spawned agent processes (claude/codex) outlive the harness server
-   *  itself, e.g. after Ctrl+C, since closing the HTTP/WS server doesn't
-   *  touch unrelated child processes on its own. */
-  killAll(): void {
-    for (const id of [...this.ptys.keys()]) this.kill(id);
+  /**
+   * Kills every currently-live pty and returns a Promise that resolves when
+   * all of them have actually exited (real or synthesized). Bounded by the
+   * same escalation window as `kill()` — never hangs.
+   *
+   * Call this on server shutdown so the process actually exits instead of
+   * waiting on orphaned claude/codex children. A bounded timeout can be layered
+   * on top via `Promise.race` when callers need a hard deadline:
+   *   `await Promise.race([sessionManager.killAll(), sleep(5_000)])`
+   */
+  async killAll(): Promise<void> {
+    const kills = [...this.ptys.keys()].map((id) => this.kill(id));
+    await Promise.all(kills);
   }
 
   /**
@@ -565,11 +630,18 @@ export class SessionManager {
    * instead of the input just vanishing.
    */
   async submitInput(id: string, text: string, submit = true): Promise<boolean> {
-    const handle = this.ptys.get(id);
-    if (!handle) return false;
-
     const session = this.sessions.get(id);
     if (!session) return false;
+
+    // An external-harness session (e.g. conductor) never has a pty — surfacing
+    // HARNESS_EXTERNAL here gives a 409 "managed by the X app" instead of a
+    // misleading 404 "session not found or has no live pty".
+    const handle = this.ptys.get(id);
+    if (!handle) {
+      const info = listHarnessAdapters().find((a) => a.id === session.harness);
+      if (info?.mode === "external") throw new ExternalHarnessError(session.harness, info.label);
+      return false;
+    }
     if (!this.isReadyEnough(session, handle)) {
       const becameReady = await this.waitUntilReady(id, READY_GRACE_MS);
       if (!becameReady) throw new SessionNotReadyError(id);
@@ -778,7 +850,11 @@ export class SessionManager {
 
     const emitter = new EventEmitter();
     emitter.setMaxListeners(0);
-    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now() };
+    let resolveExited!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      resolveExited = resolve;
+    });
+    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now(), exited, resolveExited };
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -812,6 +888,9 @@ export class SessionManager {
     if (this.ptys.get(id) !== handle) return;
     this.ptys.delete(id);
     this.lastActivityBroadcast.delete(id);
+    // Resolve after the pty map is cleaned up. transitionExited runs
+    // synchronously to set status before any awaiting continuation resumes.
+    handle.resolveExited();
     const session = this.sessions.get(id);
     if (!session) return;
     void this.transitionExited(session, exitCode);

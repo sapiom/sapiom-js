@@ -157,7 +157,7 @@ describe("codex session lifecycle (real files, no mocking)", () => {
     });
 
     // --- session end: killing the pty should synthesize a SessionEnd ---
-    server.sessionManager.kill(session.id);
+    void server.sessionManager.kill(session.id);
     await vi.waitFor(
       async () => {
         const finalEvents = await readEvents(eventStorePath);

@@ -813,6 +813,80 @@ test.describe("background-task canvas states", () => {
     await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
   });
 
+  test("enrichment running after content exists: iframe stays visible with the activity strip overlaid", async ({
+    page,
+  }) => {
+    // Bring up the canvas iframe first — simulates the deterministic render
+    // that fires immediately when the user clicks Visualize.
+    await page.route("**/canvas/sess-boot/**", async (route) => {
+      await route.fulfill({ contentType: "text/html", body: "<html><body>diagram</body></html>" });
+    });
+    await page.evaluate(() => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "canvas.reload",
+        harnessSessionId: "sess-boot",
+      });
+    });
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+
+    // Now the enrichment task starts (LLM annotating the diagram in the
+    // background). The iframe must stay in the DOM — the activity strip
+    // overlays it, not replaces it.
+    await publish(page, { ...baseTask, status: "running" });
+
+    const activity = page.getByTestId("canvas-task-activity");
+    await expect(activity).toBeVisible();
+    await expect(activity).toContainText("Visualize is running");
+    // Headline feature: the iframe is NOT hidden while enrichment runs.
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+    // The overlay class is applied so the strip sits on top of the iframe.
+    await expect(activity).toHaveClass(/canvas-task-activity--overlay/);
+
+    await page.screenshot({ path: "web/e2e/screenshots/canvas-enrichment-overlay.png" });
+
+    // Status lines stream through normally.
+    await publish(page, {
+      ...baseTask,
+      status: "running",
+      statusLines: ["Reading steps/intake.ts"],
+    });
+    await expect(page.getByTestId("canvas-task-lines")).toContainText("Reading steps/intake.ts");
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+
+    // Task completes: activity strip disappears, iframe stays.
+    await publish(page, { ...baseTask, status: "completed", endedAt: new Date().toISOString(), exitCode: 0 });
+    await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+  });
+
+  test("failure view is full-screen (no iframe behind it) — unchanged from before", async ({ page }) => {
+    // Get an iframe up first, then trigger a failure.
+    await page.route("**/canvas/sess-boot/**", async (route) => {
+      await route.fulfill({ contentType: "text/html", body: "<html><body>diagram</body></html>" });
+    });
+    await page.evaluate(() => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "canvas.reload",
+        harnessSessionId: "sess-boot",
+      });
+    });
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+
+    await publish(page, {
+      ...baseTask,
+      status: "failed",
+      endedAt: new Date().toISOString(),
+      exitCode: 1,
+      errorTail: "Connection lost",
+    });
+
+    // Failure state replaces everything — iframe gone, failure panel shown.
+    await expect(page.getByTestId("canvas-task-failed")).toBeVisible();
+    await expect(page.locator(".canvas-iframe")).toHaveCount(0);
+
+    await page.screenshot({ path: "web/e2e/screenshots/canvas-failure-fullscreen.png" });
+  });
+
   test("a failed task shows the error tail with retry and dismiss affordances", async ({ page }) => {
     await publish(page, {
       ...baseTask,
@@ -940,3 +1014,4 @@ test("the canvas iframe carries the app's theme and flips on toggle", async ({ p
   await page.getByTestId("theme-toggle").click();
   await expect(iframe).toHaveAttribute("src", /theme=dark/);
 });
+

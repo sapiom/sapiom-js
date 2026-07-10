@@ -129,6 +129,14 @@ function buildAnalytics(config: AnalyticsConfig): SapiomAnalytics {
       }
     },
 
+    discard(): void {
+      try {
+        queue.discard();
+      } catch (error) {
+        debug("discard failed", error);
+      }
+    },
+
     async shutdown(): Promise<void> {
       try {
         stopped = true;
@@ -159,6 +167,9 @@ function createDisabledInstance(sessionId: string): SapiomAnalytics {
     },
     flush(): Promise<void> {
       return Promise.resolve();
+    },
+    discard(): void {
+      // Nothing buffered in a disabled instance.
     },
     shutdown(): Promise<void> {
       return Promise.resolve();

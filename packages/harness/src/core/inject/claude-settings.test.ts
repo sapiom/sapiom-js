@@ -17,7 +17,7 @@ describe("generateClaudeSettings", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("writes settings.json registering all six hooks pointed at emit.cjs", async () => {
+  it("writes settings.json registering all hooks pointed at emit.cjs", async () => {
     const { settingsPath, emitScriptPath } = await generateClaudeSettings({
       harnessSessionId: "session-abc",
       generatedRoot: tmpDir,
@@ -63,6 +63,7 @@ describe("generateClaudeSettings", () => {
     });
     expect(second.settingsPath).toBe(first.settingsPath);
     const settings = JSON.parse(await fs.readFile(second.settingsPath, "utf8"));
+    // 6 hooks: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd.
     expect(Object.keys(settings.hooks)).toHaveLength(6);
   });
 });

@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { registerAuthCommands } from './commands/auth/index.js';
 import { registerConfigCommands } from './commands/config/index.js';
 import { registerAgentsCommands } from './commands/agents/index.js';
+import { registerDevCommand } from './commands/dev-register.js';
 import { registerCommandAnalytics } from './lib/analytics.js';
 import { registerSandboxCommands } from './commands/sandbox/index.js';
 
@@ -21,6 +22,7 @@ export function buildProgram(): Command {
   registerAuthCommands(program);
   registerConfigCommands(program);
   registerAgentsCommands(program);
+  registerDevCommand(program);
   registerSandboxCommands(program);
 
   return program;
