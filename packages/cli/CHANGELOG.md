@@ -1,5 +1,36 @@
 # @sapiom/cli
 
+## 0.4.2
+
+### Patch Changes
+
+- 1ff8d3c: Add `sapiom dev [dir]` command that launches the Sapiom Harness.
+
+  Spawns `sapiom-harness` asynchronously with `stdio: 'inherit'` so the terminal is handed to the harness cleanly. SIGTERM and SIGHUP are forwarded to the child process; SIGINT is intentionally not re-sent (the TTY process group delivers it to both parent and child). If the child exits via a signal the parent exits with 128+signum per POSIX convention; non-zero exit codes are propagated via `process.exitCode`. Unknown flags (future harness flags) pass through verbatim without a CLI update.
+
+  `@sapiom/harness` is an optional peer dependency (declared `>=0.1.1 <2`). When absent, a clear install hint is printed. The harness bin is located via `createRequire` bound to `process.argv[1]` so resolution is correct in ESM production; a `__filename` fallback covers the CJS test environment. The `[dir]` positional is never included in analytics payloads.
+
+- Updated dependencies [696f111]
+- Updated dependencies [48fb35c]
+- Updated dependencies [95bfcd1]
+- Updated dependencies [bf44229]
+- Updated dependencies [dab6d44]
+- Updated dependencies [ebfa0bc]
+- Updated dependencies [0cc7cd5]
+- Updated dependencies [a318f0b]
+- Updated dependencies [c8c4746]
+- Updated dependencies [97e8259]
+- Updated dependencies [1ff8d3c]
+- Updated dependencies [6d7ccd8]
+- Updated dependencies [e0334ca]
+- Updated dependencies [6c64501]
+- Updated dependencies [58ec57f]
+- Updated dependencies [1b355a4]
+- Updated dependencies [a686143]
+  - @sapiom/agent-core@0.9.2
+  - @sapiom/analytics-core@0.2.1
+  - @sapiom/harness@0.1.2
+
 ## 0.4.1
 
 ### Patch Changes
