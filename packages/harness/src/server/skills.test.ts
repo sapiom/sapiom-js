@@ -32,12 +32,15 @@ async function writeSkill(
   await fs.writeFile(path.join(dir, "SKILL.md"), content, "utf-8");
 }
 
-function start(nmOverride?: string, userOverride?: string): Promise<void> {
+function start(nmOverride?: string, userOverride?: string, showUserSkills = true): Promise<void> {
   const app = express();
   app.use(
     createSkillsRouter({
       nodeModulesRoot: nmOverride ?? nmRoot,
       userSkillsRoot: userOverride ?? userRoot,
+      // Default to true here so the existing user-skill cases exercise the
+      // opt-in path; the product default (off) is covered by its own test.
+      showUserSkills,
     }),
   );
   return new Promise<void>((resolve) => {
@@ -119,6 +122,24 @@ describe("GET /api/skills", () => {
     const ids = skills.map((s) => s.id);
     expect(ids).toContain("pkg-a");
     expect(ids).toContain("user-b");
+  });
+
+  it("by default lists only Sapiom package skills, not personal user skills", async () => {
+    // The product default: showUserSkills off. A package skill appears; a
+    // personal ~/.claude/skills entry (e.g. frontend-design) does NOT.
+    const sapiomPkgSkills = path.join(nmRoot, "@sapiom", "agent-core", "skills");
+    await writeSkill(
+      sapiomPkgSkills,
+      "sapiom-agent-authoring",
+      `---\nname: Agent Authoring\ndescription: Sapiom skill\n---\n`,
+    );
+    await writeSkill(userRoot, "frontend-design", `---\nname: Frontend Design\ndescription: personal\n---\n`);
+    await start(undefined, undefined, false); // default product behavior
+    const res = await fetch(`${baseUrl}/api/skills`);
+    const skills = (await res.json()) as SkillMeta[];
+    const ids = skills.map((s) => s.id);
+    expect(ids).toContain("sapiom-agent-authoring");
+    expect(ids).not.toContain("frontend-design");
   });
 
   it("user skill wins on id collision with a package skill", async () => {

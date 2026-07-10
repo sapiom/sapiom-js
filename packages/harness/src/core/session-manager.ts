@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdir, readFile, rename, writeFile, chmod } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 
 import {
@@ -334,6 +334,20 @@ export class SessionManager {
         session.status = "exited";
         session.exitCode = session.exitCode ?? null;
         dirty = true;
+      }
+      // Drop a persisted binding that points outside this session's own
+      // workspace. A stale carryover from an earlier session in a different
+      // directory would otherwise render a FOREIGN workflow onto the canvas
+      // (observed: a session in one workspace showing a workflow from
+      // ~/harness-playground). Cleared here, the session simply starts unbound
+      // and its own workspace scan re-binds a local workflow.
+      if (session.boundWorkflowPath) {
+        const root = resolve(session.cwd);
+        const target = resolve(session.boundWorkflowPath);
+        if (target !== root && !target.startsWith(root + sep)) {
+          session.boundWorkflowPath = null;
+          dirty = true;
+        }
       }
       this.sessions.set(session.id, session);
     }

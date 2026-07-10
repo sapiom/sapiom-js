@@ -22,8 +22,10 @@
  */
 
 import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { createRequire } from "node:module";
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 
@@ -149,17 +151,34 @@ async function scanPackageSkills(
 }
 
 /**
- * Resolve the node_modules directory for production use.
- * The compiled module lives at dist/server/skills.js — going up three levels
- * (dist/server → dist → package-root) lands at node_modules alongside the
- * package's own package.json. Falls back to process.cwd() when import.meta.url
- * is unavailable (non-ESM build).
+ * Resolve the node_modules directory that actually holds the installed
+ * @sapiom packages, robust to install layout.
+ *
+ * The naive "walk up from dist/server/skills.js to my own package-root's
+ * node_modules" breaks under npm/npx HOISTING: `npx @sapiom/harness` installs
+ * agent-core as a SIBLING in a shared node_modules (…/@sapiom/agent-core),
+ * NOT nested under …/@sapiom/harness/node_modules — so the naive path reads an
+ * empty (or absent) @sapiom dir and finds zero package skills.
+ *
+ * Use Node's own module search list (`require.resolve.paths`) for the scope
+ * package — the node_modules dirs walking up from this file — and return the
+ * first that actually contains `@sapiom/agent-core`. This is symlink-aware (it
+ * stats the entry, not its realpath), so it works for BOTH npm/npx hoisting AND
+ * pnpm workspace symlinks (where agent-core is linked under
+ * packages/harness/node_modules, and resolving to its realpath would wrongly
+ * point outside any node_modules). Falls back to the old relative guess, then cwd.
  */
 function findNodeModules(): string {
   try {
-    // import.meta.url is the compiled file's own URL:
-    //   file:///…/packages/harness/dist/server/skills.js
-    // Three dirname calls: dist/server → dist → package-root.
+    const require = createRequire(import.meta.url);
+    for (const p of require.resolve.paths("@sapiom/agent-core") ?? []) {
+      if (existsSync(path.join(p, "@sapiom", "agent-core"))) return p;
+    }
+  } catch {
+    // agent-core unresolvable — fall through to the relative guess.
+  }
+  try {
+    // Legacy fallback: dist/server/skills.js → dist/server → dist → package-root.
     const here = new URL(import.meta.url).pathname;
     return path.join(path.dirname(path.dirname(path.dirname(here))), "node_modules");
   } catch {
@@ -193,6 +212,12 @@ export interface SkillsRouterOptions {
   nodeModulesRoot?: string;
   /** Override the user skills root (default: ~/.claude/skills). */
   userSkillsRoot?: string;
+  /**
+   * Include the user's personal ~/.claude/skills in the LIST response.
+   * Off by default — the panel shows only Sapiom package skills so a
+   * developer's own skills don't clutter the product's skill list.
+   */
+  showUserSkills?: boolean;
 }
 
 export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
@@ -219,14 +244,19 @@ export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
    */
   router.get("/api/skills", async (_req, res) => {
     try {
+      // Personal user skills (~/.claude/skills) are OPT-IN, off by default: the
+      // panel surfaces what Sapiom ships (e.g. sapiom-agent-authoring), not the
+      // developer's own skills. Flip showUserSkills for a bring-your-own view.
       const [pkgSkills, userSkills] = await Promise.all([
         scanPackageSkills(options.nodeModulesRoot),
-        options.userSkillsRoot
-          ? scanUserSkillsFromRoot(options.userSkillsRoot)
-          : scanUserSkills(),
+        options.showUserSkills
+          ? options.userSkillsRoot
+            ? scanUserSkillsFromRoot(options.userSkillsRoot)
+            : scanUserSkills()
+          : Promise.resolve([] as Array<SkillMeta & { body: string; filePath: string }>),
       ]);
 
-      // Dedupe by id: user skills win over package skills (same id).
+      // Dedupe by id: user skills (when enabled) win over package skills.
       const byId = new Map<string, SkillMeta>();
       for (const skill of [...pkgSkills, ...userSkills]) {
         byId.set(skill.id, { id: skill.id, name: skill.name, description: skill.description, source: skill.source });
