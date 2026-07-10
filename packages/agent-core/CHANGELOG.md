@@ -1,5 +1,35 @@
 # @sapiom/orchestration-core
 
+## 0.9.2
+
+### Patch Changes
+
+- 696f111: Ship the skills/ directory in the published package so the bundled sapiom-agent-authoring skill is available after a real install.
+- 48fb35c: Correct stub capability path in template docs (models.coding.\*); refresh offline scaffold version fallback.
+
+  - Replace stale `agent.coding.run` / `agent.coding.launch` references with the
+    correct `models.coding.run` / `models.coding.launch` in all template docs
+    (`templates/default/AGENTS.md`, `templates/coding-pause/AGENTS.md`,
+    `templates/coding-pause/README.md`). The old path matched no stub, causing
+    silent no-ops in local runs.
+  - Bump `VERSION_FALLBACK` in `scaffold.ts` from `{ agent: "0.1.1", tools: "0.1.1" }`
+    to `{ agent: "0.6.2", tools: "0.17.1" }` to match current package versions.
+    Only affects offline scaffolds (the online path still resolves npm-latest).
+
+- 58ec57f: Fix Sapiom skill registration in harness sessions. `@sapiom/agent-core` now
+  exposes its `package.json` through the `exports` map so consumers can resolve
+  its bundled `skills/` directory; previously `require.resolve` threw
+  `ERR_PACKAGE_PATH_NOT_EXPORTED` and the skill silently never loaded. The harness
+  skill-plugin resolver also gains a fallback that locates the skills directory by
+  resolving the package's main entry when the `package.json` subpath isn't
+  exported. Skills register under the `sapiom` plugin namespace, so the
+  agent-authoring skill is available as `/sapiom:sapiom-agent-authoring`.
+- Updated dependencies [95bfcd1]
+- Updated dependencies [bf44229]
+- Updated dependencies [dab6d44]
+- Updated dependencies [ebfa0bc]
+  - @sapiom/analytics-core@0.2.1
+
 ## 0.9.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/cli",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "The Sapiom command-line interface — scaffold, validate, and ship Sapiom orchestrations.",
   "license": "MIT",
   "author": "Sapiom",
@@ -46,7 +46,7 @@
     "zod": "^3.25.76"
   },
   "peerDependencies": {
-    "@sapiom/harness": ">=0.1.1 <2"
+    "@sapiom/harness": ">=0.1.2"
   },
   "peerDependenciesMeta": {
     "@sapiom/harness": {
