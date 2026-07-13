@@ -17,6 +17,7 @@ import open from "open";
 
 import type {
   AnalyticsEvent,
+  AppState,
   HarnessAdapter,
   HarnessKind,
   HarnessSession,
@@ -31,7 +32,8 @@ import { createCodexAdapter } from "../core/adapters/codex.js";
 import { WorkflowRegistry, createWorkflowsRouter } from "../core/workflow-registry.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
-import { CollectorBatcher } from "../core/collector/batcher.js";
+import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
+import { migrateHarnessIdentity } from "../core/collector/identity-migration.js";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { createSeqCounter } from "../core/collector/seq.js";
@@ -42,6 +44,7 @@ import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
+import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
 import { removeGeneratedSessionDir, sweepGeneratedDirs } from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { WorkspaceWatcherManager } from "../core/workspace-watcher.js";
@@ -51,6 +54,7 @@ import { writeHarnessContext, harnessContextFileExists } from "../core/workspace
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
 import { renderCanvasForSession, renderWorkflowRenderFile } from "../core/canvas-render.js";
 import { CanvasEnrichmentCoordinator } from "../core/canvas-enrich.js";
+import { sweepNdjson } from "../core/collector/store-retention.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -62,6 +66,7 @@ import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
+import { createSkillsRouter } from "./skills.js";
 
 /**
  * Codex has no hook system — its rollout file is polled into existence
@@ -86,6 +91,10 @@ const WORKFLOWS_CACHE_REFRESH_MS = 3_000;
  * in the tab strip until the server restarts. The sweep is a cheap in-memory
  * walk plus a signal-0 probe per live pty. */
 const SESSION_LIVENESS_SWEEP_MS = 10_000;
+
+/** events.ndjson retention: sweeps once at boot and then periodically.
+ * Keeps the local sink from growing unbounded on long-lived installs. */
+const NDJSON_RETENTION_SWEEP_MS = 6 * 60 * 60 * 1_000; // every 6 hours
 
 export interface HarnessServerOptions {
   port: number;
@@ -125,6 +134,10 @@ export interface HarnessServerOptions {
    * (`<home>/.codex/sessions/...`). Defaults to the real OS home dir; tests
    * point this at a fixture tree instead of touching `~/.codex` for real. */
   codexHomeDir?: string;
+  /** Overrides the home directory Claude Code transcript discovery scans
+   * (`<home>/.claude/projects/...`). Defaults to the real OS home dir; tests
+   * point this at a fixture tree instead of touching `~/.claude` for real. */
+  claudeHomeDir?: string;
   /** Directory the built SPA lives in. Defaults to dist/web next to this module. */
   webDir?: string;
   /** The directory the CLI was launched against — scanned for workflows at
@@ -148,6 +161,17 @@ export interface HarnessServerOptions {
    *  the CLI before it records the launch dir, surfaced verbatim in
    *  AppState.firstRun (see its doc comment). Omitted → absent there too. */
   firstRun?: boolean;
+  /**
+   * How telemetry consent was determined — passed through verbatim into
+   * AppState.consentSource. Omitted when the caller didn't run the consent
+   * flow (tests, mocks).
+   */
+  consentSource?: AppState["consentSource"];
+  /**
+   * Which env var forced telemetry off (when consentSource === "env-forced-off").
+   * Passed through into AppState.consentEnvReason.
+   */
+  consentEnvReason?: string | null;
   /** Where POST /api/sample-project seeds the bundled example. Defaults to
    *  `<stateRoot>/sample-project`. */
   sampleProjectRoot?: string;
@@ -199,15 +223,17 @@ function readVersion(): string {
  */
 function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: string): LaunchOptsBuilder {
   return async (harnessSessionId) => {
-    const [settings, mcpConfigFile, systemPromptFile] = await Promise.all([
+    const [settings, mcpConfigFile, systemPromptFile, pluginDir] = await Promise.all([
       generateClaudeSettings({ harnessSessionId, generatedRoot }),
       generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey, generatedRoot }),
       generateSystemPromptFile(harnessSessionId, { generatedRoot }),
+      generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
     return {
       settingsFile: settings.settingsPath,
       mcpConfigFile,
       systemPromptFile,
+      ...(pluginDir ? { pluginDir } : {}),
     };
   };
 }
@@ -217,6 +243,12 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const identity = options.identity ?? null;
   const statePaths = resolveStatePaths(options.stateRoot);
   const machineId = options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
+
+  // One-way identity migration: seed ~/.sapiom/analytics.json from the
+  // legacy harness machine-id so existing installs keep the same anonymous_id
+  // after the upgrade (longitudinal join key survives). No-op when analytics.json
+  // already exists or when HOME is unwritable.
+  await migrateHarnessIdentity(statePaths.machineId);
   const launchDir = options.launchDir ?? process.cwd();
   const adapters: Partial<Record<HarnessKind, HarnessAdapter>> =
     options.adapters ??
@@ -498,14 +530,31 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     return [] as WorkflowInfo[];
   });
 
-  const eventStore = createEventStore(options.eventStorePath ?? statePaths.events);
-  const batcher = new CollectorBatcher({
-    machineId,
+  const eventStorePath = options.eventStorePath ?? statePaths.events;
+  const eventStore = createEventStore(eventStorePath);
+
+  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
+  // caps even on long-lived installs. Runs through the store's exclusive queue
+  // so the sweep's read→filter→rename window never races a concurrent append.
+  // Fire-and-forget — a slow FS is no reason to delay server startup.
+  const runNdjsonSweep = (): void => {
+    void eventStore.runExclusive(() => sweepNdjson(eventStorePath)).catch((err: unknown) => {
+      console.error("[harness] events.ndjson retention sweep failed:", err);
+    });
+  };
+  runNdjsonSweep();
+  const ndjsonRetentionTimer = setInterval(runNdjsonSweep, NDJSON_RETENTION_SWEEP_MS);
+  ndjsonRetentionTimer.unref?.();
+
+  const harnessVersion = readVersion();
+  const batcher = createHarnessEmitter({
     telemetryOptIn: options.telemetryOptIn,
-    collectorUrl: options.collectorUrl,
+    sdkName: "@sapiom/harness",
+    sdkVersion: harnessVersion,
     apiKey: identity?.apiKey ?? null,
+    endpoint: options.collectorUrl,
     context: {
-      harnessVersion: readVersion(),
+      harnessVersion,
       os: process.platform,
       arch: process.arch,
       nodeVersion: process.version,
@@ -523,6 +572,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       agentSessionId: session.agentSessionId,
     };
   };
+
+  // Shared by the ingest pipeline, the Codex transcript tailer, and the UI
+  // track endpoint — all three sources feed the same seq namespace so a given
+  // harnessSessionId gets one consistent, gap-detectable seq space regardless
+  // of which source produced the event. Declared here (before createRestRouter
+  // and createIngestRouter) so the uiTrack closure can reference it lazily.
+  const seqCounter = createSeqCounter();
 
   const app: Express = express();
   app.disable("x-powered-by");
@@ -563,6 +619,16 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       availableHarnesses: options.availableHarnesses,
       listTasks: () => taskManager.list(),
       firstRun: options.firstRun,
+      consentSource: options.consentSource,
+      consentEnvReason: options.consentEnvReason,
+      uiTrack: {
+        store: eventStore,
+        batcher,
+        nextSeq: (sessionId) => seqCounter.next(sessionId),
+        machineId,
+        userId: identity?.userId ?? null,
+        tenantId: identity?.tenantId ?? null,
+      },
       seedSampleProject: async () => {
         const { root, projectDir, created } = await seedExampleProject({
           targetRoot: options.sampleProjectRoot ?? statePaths.sampleProject,
@@ -582,6 +648,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   app.use(
     createWorkflowsRouter(workflowRegistry),
     createFsRouter(),
+    createSkillsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
@@ -601,7 +668,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         // bracketed paste and never submits.
         await sessionManager.submitInput(harnessSessionId, text, submit);
       },
-      runBackgroundTask: async (harnessSessionId, macro, prompt) => {
+      runBackgroundTask: async (harnessSessionId, macro, prompt, workflowPath) => {
         // The router already 404'd on an unknown session (getSessionCwd),
         // so the session is present here; its harness kind decides whether
         // a headless run is even possible (TaskNotSupportedError → 400).
@@ -614,6 +681,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
           harness: session.harness,
           cwd: session.cwd,
           prompt,
+          workflowPath,
         });
       },
       openUrl: async (url) => {
@@ -622,17 +690,16 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     }),
   );
 
-  // Shared by both event sources feeding the analytics pipeline: real hook
-  // POSTs (via the /ingest router below) and the Codex transcript tailer
-  // (in-process, no HTTP round-trip — see startCodexTailerFor). One
-  // seqCounter so a given harnessSessionId gets one consistent seq space
-  // regardless of which source produced the event.
-  const seqCounter = createSeqCounter();
+  // Feeds the same seqCounter declared above — both hook POSTs and the Codex
+  // transcript tailer run through processIngest(), which shares the counter.
   const ingestDeps: IngestDeps = {
     ingestToken: options.bootToken,
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
     onAgentSessionResolved: (harnessSessionId, agentSessionId) => {
+      // Record the agent session id — used by session-manager for resume
+      // (agentSessionId feeds the --resume flag) and by the codex tailer for
+      // exact-match rollout discovery.
       sessionManager.setAgentSessionId(harnessSessionId, agentSessionId);
     },
     onSessionReady: (harnessSessionId) => {
@@ -734,7 +801,13 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   }
 
   sessionManager.onStatusChange((session) => {
-    if (session.harness !== "codex") return;
+    // The codex tailer is only needed for harnesses whose analytics come
+    // from the rollout file (eventSource: "transcript-tail"). Harnesses with
+    // eventSource: "hooks" (claude-code) drive the same pipeline via real
+    // hook POSTs; no tailer needed. Routing through eventSource rather than
+    // a hardcoded "codex" string means adding a new transcript-tail harness
+    // is a registry line + adapter file, not a server-index change.
+    if (adapters[session.harness]?.eventSource !== "transcript-tail") return;
     if (session.status === "running") {
       startCodexTailerFor(session.id).catch((err: unknown) => {
         console.error("[harness] codex tailer startup failed:", err);
@@ -822,27 +895,46 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   return {
     port: actualPort,
     sessionManager,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        clearInterval(workflowsCacheTimer);
-        clearInterval(sessionSweepTimer);
-        canvasWatcher.stopAll();
-        workspaceWatcher.stopAll();
-        for (const tailer of codexTailers.values()) tailer.stop();
-        codexTailers.clear();
-        // Closing the HTTP/WS server doesn't touch unrelated child processes
-        // on its own — without this, every live claude/codex pty outlives
-        // the harness server itself (e.g. after Ctrl+C or in a script that
-        // expects the process to actually exit once close() resolves).
-        sessionManager.killAll();
-        taskManager.killAll();
-        void batcher.close();
-        terminalWss.close();
-        eventsWss.close();
+    close: async () => {
+      clearInterval(workflowsCacheTimer);
+      clearInterval(sessionSweepTimer);
+      clearInterval(ndjsonRetentionTimer);
+      canvasWatcher.stopAll();
+      workspaceWatcher.stopAll();
+      for (const tailer of codexTailers.values()) tailer.stop();
+      codexTailers.clear();
+      // Closing the HTTP/WS server doesn't touch unrelated child processes
+      // on its own — without this, every live claude/codex pty outlives
+      // the harness server itself (e.g. after Ctrl+C or in a script that
+      // expects the process to actually exit once close() resolves).
+      // Await kills with a bounded timeout so shutdown never hangs: if a
+      // process somehow survives both SIGTERM and SIGKILL within the
+      // escalation window (shouldn't happen), we still resolve and let the
+      // HTTP server close proceed. The SIGKILL escalation inside each kill()
+      // itself is bounded (KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS
+      // = 2500ms); the outer timeout here is a final safety net above that.
+      const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
+      const killsSettled = Promise.all([sessionManager.killAll(), taskManager.killAll()]);
+      let shutdownTimerHandle: ReturnType<typeof setTimeout> | undefined;
+      const shutdownTimeout = new Promise<void>((resolve) => {
+        shutdownTimerHandle = setTimeout(resolve, SHUTDOWN_KILL_TIMEOUT_MS);
+        // Unref so the timer never keeps the event loop alive when the kill
+        // path wins — mirrors SessionManager.kill()'s escalation timer pattern.
+        shutdownTimerHandle.unref();
+      });
+      await Promise.race([killsSettled, shutdownTimeout]);
+      // Clear the timer when the kill path wins (common case) so it doesn't
+      // linger ref'd in the background after shutdown completes.
+      if (shutdownTimerHandle !== undefined) clearTimeout(shutdownTimerHandle);
+      void batcher.close();
+      terminalWss.close();
+      eventsWss.close();
+      await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => {
           if (err) reject(err);
           else resolve();
         });
-      }),
+      });
+    },
   };
 };

@@ -56,6 +56,14 @@ export interface IngestDeps {
    *  enrichment), before it's persisted — e.g. to feed a tool.call event's
    *  command/output text to dev-server port detection. */
   onNormalizedEvent?: (event: AnalyticsEvent) => void;
+  /**
+   * Called for every raw hook event BEFORE normalization — fired even for
+   * hook events that don't produce an analytics event. A UI-transport-only
+   * passthrough seam (bypasses the analytics normalize/store pipeline) for
+   * consumers that need to observe raw hook activity. Currently unused;
+   * retained as an extension point.
+   */
+  onRawHookEvent?: (hookEvent: string, harnessSessionId: string, payload: Record<string, unknown>) => void;
   onError?: (err: unknown) => void;
   /** Injectable for tests; defaults to a fresh per-router counter. */
   seqCounter?: SeqCounter;
@@ -96,6 +104,12 @@ export async function processIngest(
   if (!session) return;
 
   const hookPayload = body.payload ?? {};
+
+  // Fire before normalization so a consumer can observe raw hook events,
+  // including ones that produce no analytics event. UI-transport-only seam;
+  // no consumer today.
+  deps.onRawHookEvent?.(hookEvent, harnessSessionId, hookPayload);
+
   const event = deps.normalize(hookEvent, hookPayload, {
     userId: session.userId,
     tenantId: session.tenantId,

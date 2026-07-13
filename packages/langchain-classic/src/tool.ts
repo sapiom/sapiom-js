@@ -20,7 +20,11 @@ import {
   isMCPPaymentError,
 } from "./internal/payment-detection.js";
 import { captureUserCallSite } from "@sapiom/core";
-import { withToolCallAnalytics } from "./internal/analytics.js";
+import {
+  errorClassName,
+  trackToolCall,
+  withToolCallAnalytics,
+} from "./internal/analytics.js";
 import type { SapiomToolConfig } from "./internal/types.js";
 import { isAuthorizationDenied } from "./internal/utils.js";
 import type { LangChainToolRequestFacts } from "./schemas/langchain-tool-v1.js";
@@ -208,10 +212,21 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
       return await instrumentedFunc(args, runManager, parentConfig);
     }
 
+    // ONE-EVENT semantics: a pay-gated call emits exactly one tool.call
+    // event for the logical call. The expected-402 bounce is suppressed;
+    // the final outcome carries payment_retried: true when a retry happened.
+    // We call originalFunc directly (not instrumentedFunc) and emit once below.
     try {
-      // Call original tool func
-      const result = await instrumentedFunc(args, runManager, parentConfig);
+      // Call original tool func directly — no analytics wrapping yet.
+      const result = await originalFunc(args, runManager, parentConfig);
       const duration = Date.now() - startTime;
+
+      // Emit ONE success event.
+      trackToolCall({
+        status: "success",
+        durationMs: duration,
+        toolName: tool.name,
+      });
 
       // Complete transaction with response facts (fire-and-forget)
       sessionClient.transactions
@@ -236,6 +251,8 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
     } catch (error) {
       // ============================================
       // HANDLE MCP PAYMENT ERRORS
+      // The expected-402 bounce is NOT emitted as an event. We retry and
+      // emit ONE event for the final outcome with payment_retried: true.
       // ============================================
       if (isMCPPaymentError(error)) {
         const paymentData = extractPaymentFromMCPError(error);
@@ -267,16 +284,80 @@ export function wrapSapiomTool<T extends StructuredToolInterface>(
           },
         };
 
-        // Retry original func with payment
-        return await instrumentedFunc(
-          argsWithPayment,
-          runManager,
-          parentConfig,
-        );
+        // Retry and emit ONE event for the final outcome.
+        try {
+          const retryResult = await originalFunc(
+            argsWithPayment,
+            runManager,
+            parentConfig,
+          );
+          const duration = Date.now() - startTime;
+          trackToolCall({
+            status: "success",
+            durationMs: duration,
+            toolName: tool.name,
+            paymentRetried: true,
+          });
+          sessionClient.transactions
+            .complete(toolTx.id, {
+              outcome: "success",
+              responseFacts: {
+                source: "langchain-tool",
+                version: "v1",
+                facts: {
+                  success: true,
+                  durationMs: duration,
+                  hasResult: retryResult !== null && retryResult !== undefined,
+                  resultType: typeof retryResult,
+                },
+              },
+            })
+            .catch((err) => {
+              console.error("Failed to complete tool transaction:", err);
+            });
+          return retryResult;
+        } catch (retryError) {
+          // Retry also failed — ONE error event with payment_retried: true.
+          const duration = Date.now() - startTime;
+          trackToolCall({
+            status: "error",
+            durationMs: duration,
+            toolName: tool.name,
+            errorClass: errorClassName(retryError),
+            paymentRetried: true,
+          });
+          sessionClient.transactions
+            .complete(toolTx.id, {
+              outcome: "error",
+              responseFacts: {
+                source: "langchain-tool",
+                version: "v1",
+                facts: {
+                  errorType:
+                    (retryError as any).constructor?.name || "Error",
+                  errorMessage: (retryError as Error).message,
+                  isMCPPaymentError: false,
+                  elapsedMs: duration,
+                },
+              },
+            })
+            .catch((err) => {
+              console.error("Failed to complete tool transaction:", err);
+            });
+          throw retryError;
+        }
       }
 
-      // Complete transaction with error facts (fire-and-forget)
+      // Non-payment error — emit ONE error event, no payment_retried flag.
       const duration = Date.now() - startTime;
+      trackToolCall({
+        status: "error",
+        durationMs: duration,
+        toolName: tool.name,
+        errorClass: errorClassName(error),
+      });
+
+      // Complete transaction with error facts (fire-and-forget)
       sessionClient.transactions
         .complete(toolTx.id, {
           outcome: "error",
@@ -452,10 +533,21 @@ export class SapiomDynamicTool<
         return await instrumentedFunc(args, parentConfig);
       }
 
+      // ONE-EVENT semantics: a pay-gated call emits exactly one tool.call
+      // event for the logical call. The expected-402 bounce is suppressed;
+      // the final outcome carries payment_retried: true when a retry happened.
+      // We call originalFunc directly (not instrumentedFunc) and emit once.
       try {
-        // Call original func
-        const result = await instrumentedFunc(args, parentConfig);
+        // Call original func directly — no analytics wrapping yet.
+        const result = await originalFunc(args, parentConfig);
         const duration = Date.now() - startTime;
+
+        // Emit ONE success event.
+        trackToolCall({
+          status: "success",
+          durationMs: duration,
+          toolName: fields.name,
+        });
 
         // Complete transaction with response facts (fire-and-forget)
         sessionClient.transactions
@@ -480,6 +572,8 @@ export class SapiomDynamicTool<
       } catch (error) {
         // ============================================
         // HANDLE MCP PAYMENT ERRORS
+        // The expected-402 bounce is NOT emitted as an event. We retry and
+        // emit ONE event for the final outcome with payment_retried: true.
         // ============================================
         if (isMCPPaymentError(error)) {
           const paymentData = extractPaymentFromMCPError(error);
@@ -512,11 +606,76 @@ export class SapiomDynamicTool<
             },
           } as SchemaOutputT;
 
-          return await instrumentedFunc(argsWithPayment, parentConfig);
+          // Retry and emit ONE event for the final outcome.
+          try {
+            const retryResult = await originalFunc(argsWithPayment, parentConfig);
+            const duration = Date.now() - startTime;
+            trackToolCall({
+              status: "success",
+              durationMs: duration,
+              toolName: fields.name,
+              paymentRetried: true,
+            });
+            sessionClient.transactions
+              .complete(toolTx.id, {
+                outcome: "success",
+                responseFacts: {
+                  source: "langchain-tool",
+                  version: "v1",
+                  facts: {
+                    success: true,
+                    durationMs: duration,
+                    hasResult: retryResult !== null && retryResult !== undefined,
+                    resultType: typeof retryResult,
+                  },
+                },
+              })
+              .catch((err) => {
+                console.error("Failed to complete tool transaction:", err);
+              });
+            return retryResult;
+          } catch (retryError) {
+            // Retry also failed — ONE error event with payment_retried: true.
+            const duration = Date.now() - startTime;
+            trackToolCall({
+              status: "error",
+              durationMs: duration,
+              toolName: fields.name,
+              errorClass: errorClassName(retryError),
+              paymentRetried: true,
+            });
+            sessionClient.transactions
+              .complete(toolTx.id, {
+                outcome: "error",
+                responseFacts: {
+                  source: "langchain-tool",
+                  version: "v1",
+                  facts: {
+                    errorType:
+                      (retryError as any).constructor?.name || "Error",
+                    errorMessage: (retryError as Error).message,
+                    isMCPPaymentError: false,
+                    elapsedMs: duration,
+                  },
+                },
+              })
+              .catch((err) => {
+                console.error("Failed to complete tool transaction:", err);
+              });
+            throw retryError;
+          }
         }
 
-        // Complete transaction with error facts (fire-and-forget)
+        // Non-payment error — emit ONE error event, no payment_retried flag.
         const duration = Date.now() - startTime;
+        trackToolCall({
+          status: "error",
+          durationMs: duration,
+          toolName: fields.name,
+          errorClass: errorClassName(error),
+        });
+
+        // Complete transaction with error facts (fire-and-forget)
         sessionClient.transactions
           .complete(toolTx.id, {
             outcome: "error",

@@ -20,7 +20,20 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
+// Skill types (matched to the server-side SkillMeta/SkillDetail in
+// src/server/skills.ts — kept here rather than in shared/types.ts since they
+// are only consumed by the SPA, never by CLI or server logic).
+export interface SkillMeta {
+  id: string;
+  name: string;
+  description: string;
+  source: "package" | "user";
+}
+export interface SkillDetail extends SkillMeta {
+  body: string;
+}
+
+import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
 
 export type { FsDirEntry, FsListResponse };
 
@@ -90,6 +103,10 @@ export interface HarnessApi {
   /** Seeds (or reuses) the bundled example project; the caller follows up
    *  with a normal createSession against the returned root. */
   seedSampleProject(): Promise<SampleProjectSeedResponse>;
+  /** List all discoverable skills (package + user). */
+  listSkills(): Promise<SkillMeta[]>;
+  /** Fetch the full detail (including markdown body) for a single skill. */
+  getSkill(id: string): Promise<SkillDetail>;
 }
 
 class RealApi implements HarnessApi {
@@ -201,6 +218,14 @@ class RealApi implements HarnessApi {
   seedSampleProject(): Promise<SampleProjectSeedResponse> {
     return this.request<SampleProjectSeedResponse>("/api/sample-project", { method: "POST" });
   }
+
+  listSkills(): Promise<SkillMeta[]> {
+    return this.request<SkillMeta[]>("/api/skills");
+  }
+
+  getSkill(id: string): Promise<SkillDetail> {
+    return this.request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`);
+  }
 }
 
 const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -209,24 +234,50 @@ const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(r
 class MockApi implements HarnessApi {
   // `?mockState=fresh` = brand-new install: nothing yet, firstRun set — see isFreshMockState().
   private readonly fresh = isFreshMockState();
+  // `?mockConsentSource=prompted` mirrors a user who answered yes at the TTY prompt:
+  // telemetryOptIn starts true so the chip shows "analytics on" from the first render.
+  private readonly promptedConsent =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("mockConsentSource") === "prompted";
   private sessions = this.fresh ? [] : MOCK_SESSIONS.map((session) => ({ ...session }));
   private workflows = this.fresh ? [] : MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
   private settings: HarnessSettings = this.fresh
     ? { ...MOCK_SETTINGS, recentDirs: [] }
-    : { ...MOCK_SETTINGS, recentDirs: [...MOCK_SETTINGS.recentDirs] };
+    : {
+        ...MOCK_SETTINGS,
+        recentDirs: [...MOCK_SETTINGS.recentDirs],
+        ...(this.promptedConsent ? { telemetryOptIn: true } : {}),
+      };
 
   async getState(): Promise<AppState> {
     await delay();
+    // mockConsentSource query param lets Playwright exercise all chip states:
+    //   ?mockConsentSource=env-forced-off  → "analytics off (env)" chip
+    //   ?mockConsentSource=default-silent  → shows TelemetryNotice
+    //   ?mockConsentSource=stored-explicit → off chip (telemetryOptIn=false)
+    //   ?mockConsentSource=prompted        → on chip (telemetryOptIn=true in mock)
+    const mockConsentSource = typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("mockConsentSource") as AppState["consentSource"] ?? "stored-explicit"
+      : "stored-explicit";
+    const mockEnvReason = typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("mockEnvReason") ?? null
+      : null;
+    // When consent was answered via a TTY prompt ("prompted"), the user
+    // necessarily said yes — mirror that in the mock so the chip shows "on".
+    const telemetryOptIn =
+      mockConsentSource === "prompted" ? true : this.settings.telemetryOptIn;
     return {
       version: "0.0.1-mock",
       authenticated: true,
       userId: "user_mock",
       organizationName: "Acme (mock)",
-      telemetryOptIn: this.settings.telemetryOptIn,
+      telemetryOptIn,
       sessions: this.sessions,
       workflows: this.workflows,
       macros: MOCK_MACROS,
       launchDir: MOCK_LAUNCH_DIR,
+      consentSource: mockConsentSource,
+      ...(mockEnvReason ? { consentEnvReason: mockEnvReason } : {}),
       ...(this.fresh ? { firstRun: true } : {}),
     };
   }
@@ -275,8 +326,27 @@ class MockApi implements HarnessApi {
     );
   }
 
-  async injectInput(_id: string, _req: InjectInputRequest): Promise<void> {
+  async injectInput(id: string, req: InjectInputRequest): Promise<void> {
     await delay();
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+        __MOCK_INJECT_FAIL_ONCE__?: boolean;
+      };
+      // Test-only 409 simulation: Playwright sets this flag before a submit to
+      // exercise the reactive 409 path (reason shown, caller retains draft).
+      // Consumed exactly once — cleared immediately so the next submit succeeds.
+      if (win.__MOCK_INJECT_FAIL_ONCE__) {
+        win.__MOCK_INJECT_FAIL_ONCE__ = false;
+        throw new ApiError(409, `POST /api/sessions/${id}/input → 409: Session is still initialising`, "Session is still initialising");
+      }
+      // Record the submission for Playwright to assert on — same pattern as
+      // runMacro's lastMacroRun and seedSampleProject's lastSampleSeed.
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        lastInjectInput: { id, req },
+      };
+    }
   }
 
   async listWorkflows(): Promise<WorkflowInfo[]> {
@@ -377,6 +447,50 @@ class MockApi implements HarnessApi {
     }
     return response;
   }
+
+  async listSkills(): Promise<SkillMeta[]> {
+    await delay(150);
+    // Test-only escape hatch: record the call count for Playwright assertions.
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      const prev = (win.__HARNESS_TEST__?.listSkillsCallCount as number) ?? 0;
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), listSkillsCallCount: prev + 1 };
+    }
+    return MOCK_SKILLS;
+  }
+
+  async getSkill(id: string): Promise<SkillDetail> {
+    await delay(100);
+    const found = MOCK_SKILLS.find((s) => s.id === id);
+    if (!found) throw new ApiError(404, `GET /api/skills/${id} → 404`, `Unknown skill '${id}'`);
+    return { ...found, body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}` };
+  }
+}
+
+/**
+ * Intercepts fetch("/api/track") in mock mode so Playwright can assert that
+ * track() calls fire without a real server. Attach BEFORE the app mounts.
+ * Accumulated events are available on window.__HARNESS_TEST__.trackEvents.
+ */
+export function interceptMockTrack(): void {
+  if (!isMockMode()) return;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === "/api/track" && init?.method === "POST") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      let body: unknown;
+      try {
+        body = JSON.parse(typeof init.body === "string" ? init.body : "{}");
+      } catch {
+        body = {};
+      }
+      const prev = (win.__HARNESS_TEST__?.trackEvents as unknown[]) ?? [];
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), trackEvents: [...prev, body] };
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  };
 }
 
 export function createApi(): HarnessApi {

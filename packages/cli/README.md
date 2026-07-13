@@ -8,6 +8,23 @@ npm install -g @sapiom/cli
 npx @sapiom/cli <command>
 ```
 
+## Harness
+
+Launch a local coding environment with MCP pre-wired and your agent running in
+an embedded terminal:
+
+```sh
+sapiom dev [dir]          # open the harness in the current (or given) directory
+sapiom dev --port 4200    # use a custom port
+sapiom dev --no-open      # skip opening the browser automatically
+```
+
+`sapiom dev` requires `@sapiom/harness` to be installed. Install it once with:
+
+```sh
+npm install -g @sapiom/harness
+```
+
 ## Agents
 
 ```sh

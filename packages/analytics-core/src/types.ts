@@ -10,7 +10,8 @@ export type EventSource =
   | "cli"
   | "agent"
   | "langchain"
-  | "backend";
+  | "backend"
+  | "harness";
 
 /** Minimal response shape the sender needs — structurally satisfied by `Response`. */
 export interface FetchResponseLike {
@@ -114,6 +115,15 @@ export interface SapiomAnalytics {
   ): void;
   /** Send everything buffered. Best-effort; never rejects. */
   flush(): Promise<void>;
+  /**
+   * Silently drop all buffered events without sending them. In-flight sends
+   * (already on the wire) complete normally. Call before {@link shutdown}
+   * when consent has been revoked and buffered events must not be delivered.
+   *
+   * Optional on the type so pre-existing structural fakes keep compiling;
+   * every emitter `createAnalytics` returns implements it.
+   */
+  discard?(): void;
   /** `flush()` + stop timers and exit hooks. Never rejects. */
   shutdown(): Promise<void>;
   /**

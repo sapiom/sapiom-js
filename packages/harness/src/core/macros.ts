@@ -16,6 +16,9 @@ export const DEFAULT_MACROS: MacroDef[] = [
     action: {
       kind: "inject",
       submit: true,
+      // {{workflow.path}} is POSIX single-quoted at resolution time (macro-runner.ts
+      // shellQuote), which stops spaces, dollar signs, backticks, and embedded
+      // double-quotes from being interpreted by the shell.
       text: "cd {{workflow.path}} && sapiom agents run --target local",
     },
   },

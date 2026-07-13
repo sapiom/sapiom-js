@@ -6,6 +6,38 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeCodeAdapter } from "./claude-code.js";
 
 describe("ClaudeCodeAdapter", () => {
+  describe("launch/resume — pluginDir flag", () => {
+    it("includes --plugin-dir in launch args when pluginDir is set", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launch({
+        harnessSessionId: "h-plugin",
+        cwd: "/tmp/proj",
+        pluginDir: "/tmp/generated/h-plugin/skills-plugin",
+      });
+      expect(spec.args).toContain("--plugin-dir");
+      const idx = spec.args.indexOf("--plugin-dir");
+      expect(spec.args[idx + 1]).toBe("/tmp/generated/h-plugin/skills-plugin");
+    });
+
+    it("includes --plugin-dir in resume args when pluginDir is set", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.resume("agent-uuid-456", {
+        harnessSessionId: "h-plugin",
+        cwd: "/tmp/proj",
+        pluginDir: "/tmp/generated/h-plugin/skills-plugin",
+      });
+      expect(spec.args).toContain("--plugin-dir");
+      const idx = spec.args.indexOf("--plugin-dir");
+      expect(spec.args[idx + 1]).toBe("/tmp/generated/h-plugin/skills-plugin");
+    });
+
+    it("omits --plugin-dir from args when pluginDir is not set", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launch({ harnessSessionId: "h-no-plugin", cwd: "/tmp/proj" });
+      expect(spec.args).not.toContain("--plugin-dir");
+    });
+  });
+
   describe("launch/resume", () => {
     it("builds a launch SpawnSpec with settings/mcp-config/system-prompt flags and unsets CLAUDECODE", async () => {
       const promptDir = await mkdtemp(join(tmpdir(), "harness-claude-test-"));

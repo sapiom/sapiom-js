@@ -3,6 +3,7 @@ import type { JSX, RefObject } from "react";
 import type { HarnessKind } from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
+import { track } from "../lib/track";
 import { useDismissable } from "../lib/use-dismissable";
 import { DirectoryPicker } from "./DirectoryPicker";
 
@@ -44,6 +45,7 @@ export function NewSessionModal({
     setError(null);
     try {
       await onCreate(trimmed, harness);
+      track("session.created");
       onClose();
     } catch (err) {
       setError((err as Error).message);

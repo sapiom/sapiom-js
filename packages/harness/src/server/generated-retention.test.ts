@@ -103,7 +103,7 @@ describe("generated-dir retention wiring", () => {
     expect(await exists(join(sessionDir, "settings.json"))).toBe(true);
     expect(await exists(join(sessionDir, "emit.cjs"))).toBe(true);
 
-    server.sessionManager.kill(session.id);
+    void server.sessionManager.kill(session.id);
     await vi.waitFor(
       async () => {
         expect(server!.sessionManager.get(session.id)?.status).toBe("exited");

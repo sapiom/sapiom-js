@@ -29,6 +29,6 @@ await box.destroy();
 
 ## Reference
 
-`create` · `attach` · `get` · `list` · `exec` · `execStream` · `readFile` · `writeFile` · `uploadFile` · `getProcess` · `waitForProcess` · `destroy`
+`create` · `attach` · `get` · `list` · `exec` · `execStream` · `readFile` · `writeFile` · `uploadFile` · `uploadDir` · `createPublicUrl` · `deployPreview` · `getProcess` · `waitForProcess` · `destroy`
 
 See the exported types for full signatures and options.

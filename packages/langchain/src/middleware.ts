@@ -505,10 +505,6 @@ export function createSapiomMiddleware(
       const toolDescription = (request.tool as { description?: string })
         .description;
 
-      // Metadata-only usage analytics around each actual tool invocation
-      // (tool NAME only — never args or results; see internal/analytics.ts)
-      const callTool = withToolCallAnalytics(handler, toolName);
-
       // Create and authorize tool transaction
       let toolTx: { id: string } | undefined;
       try {
@@ -540,13 +536,28 @@ export function createSapiomMiddleware(
           "[Sapiom] Tool transaction failed, continuing without tracking:",
           error,
         );
-        return callTool(request);
+        // No transaction context — fall through to direct call with analytics
+        // wrapping (no payment-retry path possible without a toolTx).
+        return withToolCallAnalytics(handler, toolName)(request);
       }
+
+      // ONE-EVENT semantics: a pay-gated call emits exactly one tool.call
+      // event for the logical call. The expected-402 bounce is suppressed;
+      // the final outcome carries payment_retried: true when a retry happened.
+      // We therefore do NOT use withToolCallAnalytics here — instead we call
+      // the handler directly and emit exactly once below.
 
       // Execute tool call with payment retry handling
       try {
-        const result = await callTool(request);
+        const result = await handler(request);
         const duration = Date.now() - startTime;
+
+        // Emit ONE success event (metadata only — tool NAME, duration, status).
+        trackToolCall({
+          status: "success",
+          durationMs: duration,
+          toolName,
+        });
 
         // Complete transaction with response facts (fire-and-forget)
         if (toolTx) {
@@ -572,7 +583,8 @@ export function createSapiomMiddleware(
 
         return result;
       } catch (error) {
-        // Handle MCP 402 Payment Required
+        // Handle MCP 402 Payment Required — the expected-402 bounce is NOT
+        // emitted as an event; we retry and emit ONE event for the outcome.
         if (isMCPPaymentError(error)) {
           const paymentData = extractPaymentFromMCPError(
             error as Record<string, unknown>,
@@ -604,11 +616,83 @@ export function createSapiomMiddleware(
             },
           };
 
-          return callTool(retryRequest as typeof request);
+          // Retry and emit ONE event for the final outcome.
+          try {
+            const retryResult = await handler(retryRequest as typeof request);
+            const duration = Date.now() - startTime;
+            trackToolCall({
+              status: "success",
+              durationMs: duration,
+              toolName,
+              paymentRetried: true,
+            });
+            if (toolTx) {
+              sapiomClient.transactions
+                .complete(toolTx.id, {
+                  outcome: "success",
+                  responseFacts: {
+                    source: "langchain-tool",
+                    version: "v1",
+                    facts: { success: true, durationMs: duration },
+                  },
+                })
+                .catch((err) => {
+                  console.error(
+                    "[Sapiom] Failed to complete tool transaction:",
+                    err,
+                  );
+                });
+            }
+            return retryResult;
+          } catch (retryError) {
+            // Retry also failed — ONE error event with payment_retried: true.
+            const duration = Date.now() - startTime;
+            trackToolCall({
+              status: "error",
+              durationMs: duration,
+              toolName,
+              errorClass: errorClassName(retryError),
+              paymentRetried: true,
+            });
+            if (toolTx) {
+              sapiomClient.transactions
+                .complete(toolTx.id, {
+                  outcome: "error",
+                  responseFacts: {
+                    source: "langchain-tool",
+                    version: "v1",
+                    facts: {
+                      errorType:
+                        (retryError as Error)?.constructor?.name ??
+                        "UnknownError",
+                      errorMessage:
+                        (retryError as Error)?.message ?? String(retryError),
+                      durationMs: duration,
+                      isMCPPaymentError: false,
+                    },
+                  },
+                })
+                .catch((err) => {
+                  console.error(
+                    "[Sapiom] Failed to complete tool transaction:",
+                    err,
+                  );
+                });
+            }
+            throw retryError;
+          }
         }
 
-        // Complete transaction with error facts (fire-and-forget)
+        // Non-payment error — emit ONE error event, no payment_retried flag.
         const duration = Date.now() - startTime;
+        trackToolCall({
+          status: "error",
+          durationMs: duration,
+          toolName,
+          errorClass: errorClassName(error),
+        });
+
+        // Complete transaction with error facts (fire-and-forget)
         if (toolTx) {
           sapiomClient.transactions
             .complete(toolTx.id, {

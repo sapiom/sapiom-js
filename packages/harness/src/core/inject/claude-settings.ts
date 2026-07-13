@@ -13,7 +13,9 @@ import * as path from "node:path";
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../paths.js";
 
-/** The six Claude Code hook events the harness listens for. */
+/**
+ * The Claude Code hook events the harness listens for.
+ */
 const HOOK_EVENTS = [
   "SessionStart",
   "UserPromptSubmit",

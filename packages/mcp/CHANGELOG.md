@@ -1,5 +1,37 @@
 # @sapiom/mcp
 
+## 0.11.2
+
+### Patch Changes
+
+- 5e9659a: Instructions now cover the sandbox-preview lifecycle: sapiom-dev drives agent
+  authoring **and sandbox app previews** — `sapiom_dev_sandbox_configure` →
+  `sapiom_dev_sandbox_check` → `sapiom_dev_sandbox_preview` (live URL; a `failed`
+  status carries build/start logs). A new `sapiom-sandbox-preview` skill ships in
+  the plugin so agents route "preview this app" asks correctly.
+- Updated dependencies [696f111]
+- Updated dependencies [48fb35c]
+- Updated dependencies [95bfcd1]
+- Updated dependencies [bf44229]
+- Updated dependencies [dab6d44]
+- Updated dependencies [ebfa0bc]
+- Updated dependencies [58ec57f]
+  - @sapiom/agent-core@0.9.2
+  - @sapiom/analytics-core@0.2.1
+
+## 0.11.1
+
+### Patch Changes
+
+- 41e9ecd: Add sandbox preview tools to the `sapiom-dev` MCP so a coding agent can build and ship a web app from a local checkout:
+
+  - `sapiom_dev_sandbox_configure` — write a validated `type: "sandbox"` resource into `sapiom.json` from typed arguments (the agent fills a schema instead of hand-writing JSON, which it tends to get wrong).
+  - `sapiom_dev_sandbox_check` — validate the project's sandbox resources without deploying; returns actionable issues.
+  - `sapiom_dev_sandbox_preview` — provision the sandbox if needed, upload the local code, build, start, and expose a live URL. Returns `{ name, url, status, logs }`.
+
+- Updated dependencies [41e9ecd]
+  - @sapiom/sandbox-preview@0.1.2
+
 ## 0.11.0
 
 ### Minor Changes

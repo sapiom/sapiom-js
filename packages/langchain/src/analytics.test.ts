@@ -235,7 +235,7 @@ describe("langchain middleware usage analytics", () => {
       ]);
     });
 
-    it("emits one event per underlying invocation on payment retry", async () => {
+    it("emits ONE success event with payment_retried:true on successful payment retry", async () => {
       const middleware = createSapiomMiddleware();
       const paymentError = new Error(
         JSON.stringify({
@@ -262,8 +262,84 @@ describe("langchain middleware usage analytics", () => {
       expect(result).toBe("Success after payment");
       await getAnalytics().flush();
 
-      const statuses = collector.events().map((event) => event.data.status);
-      expect(statuses).toEqual(["error", "success"]);
+      const events = collector.events();
+      // ONE event — the expected-402 bounce never emits.
+      expect(events).toHaveLength(1);
+      expect(events[0].data.status).toBe("success");
+      expect(events[0].data.payment_retried).toBe(true);
+      expect(Object.keys(events[0].data).sort()).toEqual([
+        "duration_ms",
+        "payment_retried",
+        "status",
+        "tool_name",
+      ]);
+    });
+
+    it("emits ONE error event with payment_retried:true when retry also fails", async () => {
+      class RetryFailedError extends Error {}
+      const middleware = createSapiomMiddleware();
+      const paymentError = new Error(
+        JSON.stringify({
+          x402Version: 1,
+          accepts: [{ scheme: "exact", amount: "100", unit: "sats" }],
+        }),
+      );
+      const handler = jest
+        .fn()
+        .mockRejectedValueOnce(paymentError)
+        .mockRejectedValueOnce(new RetryFailedError("server still refused"));
+      mockAuthorizer.createAndAuthorize
+        .mockResolvedValueOnce({ id: "tx-tool" })
+        .mockResolvedValueOnce({
+          id: "tx-payment",
+          payment: { authorizationPayload: "auth-token" },
+        });
+
+      await expect(
+        middleware.wrapToolCall!(toolRequest() as any, handler),
+      ).rejects.toThrow("server still refused");
+
+      await getAnalytics().flush();
+
+      const events = collector.events();
+      // ONE event — the expected-402 bounce is suppressed; retry outcome wins.
+      expect(events).toHaveLength(1);
+      expect(events[0].data.status).toBe("error");
+      expect(events[0].data.error_class).toBe("RetryFailedError");
+      expect(events[0].data.payment_retried).toBe(true);
+      expect(Object.keys(events[0].data).sort()).toEqual([
+        "duration_ms",
+        "error_class",
+        "payment_retried",
+        "status",
+        "tool_name",
+      ]);
+    });
+
+    it("non-payment errors emit ONE error event without payment_retried", async () => {
+      class DatabaseError extends Error {}
+      const middleware = createSapiomMiddleware();
+      const handler = jest
+        .fn()
+        .mockRejectedValue(new DatabaseError("connection refused"));
+
+      await expect(
+        middleware.wrapToolCall!(toolRequest() as any, handler),
+      ).rejects.toThrow("connection refused");
+
+      await getAnalytics().flush();
+
+      const events = collector.events();
+      expect(events).toHaveLength(1);
+      expect(events[0].data.status).toBe("error");
+      expect(events[0].data.error_class).toBe("DatabaseError");
+      expect(events[0].data.payment_retried).toBeUndefined();
+      expect(Object.keys(events[0].data).sort()).toEqual([
+        "duration_ms",
+        "error_class",
+        "status",
+        "tool_name",
+      ]);
     });
   });
 

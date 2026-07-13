@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/harness",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Sapiom Harness — a CLI-launched local web app that runs your coding agent (Claude Code, Codex) in a Sapiom-configured environment: MCP pre-wired, workflows tracked, one-click deploy/run, and a live canvas for previews.",
   "keywords": [
     "sapiom",
@@ -22,13 +22,23 @@
   "license": "MIT",
   "author": "Sapiom",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "sapiom-harness": "./dist/cli/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc --project tsconfig.build.json && vite build --config web/vite.config.ts",
@@ -42,7 +52,7 @@
     "test:watch": "vitest",
     "test:ui": "playwright test --config web/e2e/playwright.config.ts",
     "test:canvas": "playwright test --config e2e/playwright.config.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "pnpm build",
     "mock-collector": "node scripts/mock-collector.mjs",
@@ -53,8 +63,10 @@
   "dependencies": {
     "@sapiom/agent": "workspace:^",
     "@sapiom/agent-core": "workspace:^",
+    "@sapiom/analytics-core": "workspace:^",
     "@sapiom/mcp": "workspace:^",
     "express": "^4.21.0",
+    "express-rate-limit": "^7.4.0",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
     "ws": "^8.18.0",

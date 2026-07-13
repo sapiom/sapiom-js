@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { JSX } from "react";
 import { HARNESS_PATHS } from "@shared/types";
 
+import { track } from "../lib/track";
+
 interface SettingsPopoverProps {
   authenticated: boolean;
   organizationName: string | null;
@@ -20,9 +22,11 @@ export function SettingsPopover({
   const [busy, setBusy] = useState(false);
 
   const handleToggle = async (): Promise<void> => {
+    const next = !telemetryOptIn;
     setBusy(true);
     try {
-      await onToggleTelemetry(!telemetryOptIn);
+      await onToggleTelemetry(next);
+      track("consent.changed", { optIn: next });
     } finally {
       setBusy(false);
     }

@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBootTokenMiddleware } from "./auth.js";
+import { createSkillsRouter } from "./skills.js";
 
 let tmpHome: string;
 
@@ -12,8 +14,9 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpHome };
 });
 
-import type { HarnessSession, MacroDef, WorkflowInfo } from "../shared/types.js";
-import { SessionNotReadyError } from "../core/session-manager.js";
+import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
+import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
+import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -478,5 +481,336 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
     });
 
+  });
+
+  describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
+    it("404s when resume() throws UnknownSessionError (class-based dispatch, not string match)", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new UnknownSessionError("does-not-exist"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/does-not-exist/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("404s even when UnknownSessionError carries a reworded message — proves class dispatch, not string-match", async () => {
+      // This is the point of the port: the old code did
+      //   err.message.startsWith("Unknown session")
+      // so any rewording would silently fall to a 500. Now that the route
+      // checks instanceof, the message can say anything.
+      const sessionManager = fakeSessionManager();
+      const err = new UnknownSessionError("xyz");
+      Object.defineProperty(err, "message", { value: "session xyz could not be located" });
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(err);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/xyz/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      // Old string-match would give 500 here; class dispatch gives 404.
+      expect(res.status).toBe(404);
+    });
+
+    it("409s when resume() throws SessionAlreadyLiveError (double-resume guard)", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SessionAlreadyLiveError("sess-live"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-live/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("SESSION_ALREADY_LIVE");
+    });
+
+    it("409s when resume() throws SessionNotResumeableError (no agentSessionId to resume from)", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SessionNotResumeableError("sess-no-agent"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-no-agent/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("SESSION_NOT_RESUMEABLE");
+    });
+
+    it("400s when resume() throws AdapterNotFoundError (persisted session with unknown harness kind — C2)", async () => {
+      // Simulates a sessions.json entry with harness: "future-harness" that
+      // has no registered adapter — should be a 400 not a 500.
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new AdapterNotFoundError("future-harness"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-unknown-kind/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("ADAPTER_NOT_FOUND");
+    });
+  });
+
+  describe("GET /harnesses", () => {
+    it("returns a list of adapter descriptors with id, label, mode, experimental, installed, and installMcpPrompt", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Array<{
+        id: string;
+        label: string;
+        mode: string;
+        experimental: boolean;
+        installed: boolean;
+        installMcpPrompt: string;
+      }>;
+      expect(Array.isArray(body)).toBe(true);
+      expect(body.length).toBeGreaterThanOrEqual(5); // claude-code, codex, pi, opencode, conductor
+
+      // All entries have the required shape.
+      for (const entry of body) {
+        expect(typeof entry.id).toBe("string");
+        expect(typeof entry.label).toBe("string");
+        expect(["embedded", "external"]).toContain(entry.mode);
+        expect(typeof entry.experimental).toBe("boolean");
+        expect(typeof entry.installed).toBe("boolean");
+        // installMcpPrompt must be a non-empty string — it's the copy that
+        // the SkillsPanel renders in the Install MCP modal.
+        expect(typeof entry.installMcpPrompt).toBe("string");
+        expect(entry.installMcpPrompt.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("includes both embedded and external adapters", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      const body = (await res.json()) as Array<{ id: string; mode: string }>;
+
+      const embeddedIds = body.filter((a) => a.mode === "embedded").map((a) => a.id);
+      const externalIds = body.filter((a) => a.mode === "external").map((a) => a.id);
+
+      expect(embeddedIds).toContain("claude-code");
+      expect(embeddedIds).toContain("codex");
+      expect(externalIds).toContain("conductor");
+    });
+
+    it("conductor appears as mode:external", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      const body = (await res.json()) as Array<{ id: string; mode: string }>;
+      const conductor = body.find((a) => a.id === "conductor");
+      expect(conductor).toBeDefined();
+      expect(conductor!.mode).toBe("external");
+    });
+
+    it("claude-code appears as mode:embedded and not experimental", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      const body = (await res.json()) as Array<{ id: string; mode: string; experimental: boolean }>;
+      const claudeCode = body.find((a) => a.id === "claude-code");
+      expect(claudeCode).toBeDefined();
+      expect(claudeCode!.mode).toBe("embedded");
+      expect(claudeCode!.experimental).toBe(false);
+    });
+  });
+
+  describe("ExternalHarnessError → 409 mapping (real-path, no mocks)", () => {
+    /**
+     * These tests use a real SessionManager (only claude-code adapter registered)
+     * with a session persisted at harness="conductor". Calling resume() or
+     * submitInput() on that session exercises the real getAdapter() / submitInput()
+     * code path that throws ExternalHarnessError — no mock-throw involved.
+     */
+    let smDir: string;
+    const liveManagers: SessionManager[] = [];
+
+    beforeEach(async () => {
+      smDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-rest-ext-test-"));
+    });
+
+    afterEach(async () => {
+      // Settle every manager's queued sessions.json write before removing the
+      // dir — a write landing mid-rm walk races into ENOTEMPTY on slower CI.
+      await Promise.all(liveManagers.map((m) => m.flush().catch(() => {})));
+      liveManagers.length = 0;
+      try {
+        await fs.rm(smDir, { recursive: true, force: true });
+      } catch {
+        // One straggler retry: any writer that lost the flush race is done now.
+        await new Promise((r) => setTimeout(r, 150));
+        await fs.rm(smDir, { recursive: true, force: true });
+      }
+    });
+
+    function makeMinimalAdapter(): HarnessAdapter {
+      return {
+        id: "claude-code",
+        eventSource: "hooks" as const,
+        doctor: async () => [],
+        launch: (opts): SpawnSpec => ({
+          command: "fake-claude",
+          args: [],
+          env: {},
+          cwd: opts.cwd,
+        }),
+        resume: (agentSessionId, opts): SpawnSpec => ({
+          command: "fake-claude",
+          args: ["--resume", agentSessionId],
+          env: {},
+          cwd: opts.cwd,
+        }),
+        listPastSessions: async () => [],
+      };
+    }
+
+    function makeRealSessionManager(): SessionManager {
+      const manager = new SessionManager({
+        adapters: { "claude-code": makeMinimalAdapter() },
+        ingestUrl: "http://127.0.0.1:4100",
+        ingestToken: "test-token",
+        sessionsPath: path.join(smDir, "sessions.json"),
+        // spawnPty not provided — tests only call resume/submitInput which
+        // throw before reaching spawn for external-harness sessions.
+      });
+      liveManagers.push(manager);
+      return manager;
+    }
+
+    it("POST /sessions/:id/resume returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
+      const sessionManager = makeRealSessionManager();
+
+      // Simulate a session record written by an earlier build or hand-edited.
+      const session = sessionManager.registerHistorical({
+        agentSessionId: "agent-abc",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+
+      const res = await fetch(`${baseUrl}/sessions/${session.id}/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("HARNESS_EXTERNAL");
+      expect(body.error).toMatch(/Conductor/);
+    });
+
+    it("POST /sessions/:id/input returns 409 HARNESS_EXTERNAL for a session persisted with harness='conductor'", async () => {
+      const sessionManager = makeRealSessionManager();
+
+      const session = sessionManager.registerHistorical({
+        agentSessionId: "agent-def",
+        harness: "conductor" as HarnessKind,
+        cwd: "/tmp/conductor-proj",
+        title: "conductor-proj",
+        lastActiveAt: new Date().toISOString(),
+      });
+
+      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+
+      const res = await fetch(`${baseUrl}/sessions/${session.id}/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "hello" }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; code: string };
+      expect(body.code).toBe("HARNESS_EXTERNAL");
+      expect(body.error).toMatch(/Conductor/);
+    });
+  });
+});
+
+/**
+ * Proof that the skills router is mounted in the real server wiring, not just
+ * unit-tested in isolation. This suite boots a minimal Express app that mirrors
+ * the real server/index.ts mount order (boot-token middleware + skills router)
+ * and asserts the authentication contract end-to-end.
+ */
+describe("skills router — real server mount proof", () => {
+  const BOOT_TOKEN = "skills-integration-test-token";
+  const TOKEN_HEADER = { "X-Harness-Token": BOOT_TOKEN };
+
+  let server: ReturnType<express.Express["listen"]>;
+  let baseUrl: string;
+  let skillsRoot: string;
+
+  beforeEach(async () => {
+    skillsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-skills-mount-"));
+
+    // Mirror the real server/index.ts mount: boot-token middleware on /api,
+    // then the skills router (which declares /api/skills internally).
+    const app = express();
+    app.use("/api", createBootTokenMiddleware(BOOT_TOKEN));
+    app.use(createSkillsRouter({ userSkillsRoot: skillsRoot }));
+
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.rm(skillsRoot, { recursive: true, force: true });
+  });
+
+  it("returns 200 with a valid boot token", async () => {
+    const res = await fetch(`${baseUrl}/api/skills`, { headers: TOKEN_HEADER });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  it("returns 401 without any token — skills are not public", async () => {
+    const res = await fetch(`${baseUrl}/api/skills`);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 with the wrong token", async () => {
+    const res = await fetch(`${baseUrl}/api/skills`, {
+      headers: { "X-Harness-Token": "wrong-token" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("serves user skills from the configured root after auth passes", async () => {
+    // Create a minimal skill file.
+    const skillDir = path.join(skillsRoot, "my-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: My Skill\ndescription: Test skill\n---\n\nBody here.",
+    );
+
+    const res = await fetch(`${baseUrl}/api/skills`, { headers: TOKEN_HEADER });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ id: string; source: string }>;
+    expect(body.some((s) => s.id === "my-skill" && s.source === "user")).toBe(true);
   });
 });

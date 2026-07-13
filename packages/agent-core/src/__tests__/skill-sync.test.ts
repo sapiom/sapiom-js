@@ -66,3 +66,37 @@ describe("plugin skill copy (when present)", () => {
     expect(readFileSync(pluginCopy, "utf8")).toBe(canonical);
   });
 });
+
+// Second skill: sapiom-sandbox-preview — canonical + plugin copy only (NOT in the
+// scaffold templates: agent projects are not web apps).
+describe("sapiom-sandbox-preview skill sync", () => {
+  const canonicalPreview = path.join(
+    PKG_ROOT,
+    "skills",
+    "sapiom-sandbox-preview",
+    "SKILL.md",
+  );
+
+  it("has a canonical source with the preview trigger frontmatter", () => {
+    const content = readFileSync(canonicalPreview, "utf8");
+    expect(content.startsWith("---\nname: sapiom-sandbox-preview")).toBe(true);
+    expect(content).toContain("description:");
+  });
+
+  it("plugin copy matches the canonical (when present)", () => {
+    const pluginCopy = path.resolve(
+      PKG_ROOT,
+      "..",
+      "..",
+      "plugins",
+      "sapiom",
+      "skills",
+      "sapiom-sandbox-preview",
+      "SKILL.md",
+    );
+    if (!existsSync(pluginCopy)) return;
+    expect(readFileSync(pluginCopy, "utf8")).toBe(
+      readFileSync(canonicalPreview, "utf8"),
+    );
+  });
+});

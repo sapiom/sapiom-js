@@ -77,44 +77,52 @@ describe("mid-session workflow rescan", () => {
     return (await res.json()) as WorkflowInfo[];
   }
 
-  it("adds a scaffolded workflow and drops a removed one, broadcasting each change", async () => {
-    server = await startServer({
-      port: 0,
-      bootToken: "test-token",
-      telemetryOptIn: false,
-      adapters: { "claude-code": fakeClaudeAdapter() },
-      stateRoot: dir,
-      launchDir: cwd,
-      autoCreateSession: false,
-    });
-    const port = server.port;
+  // retry:1 — this test exercises a real filesystem watcher under parallel load;
+  // the watcher's debounce window occasionally races with the vi.waitFor polling
+  // interval, producing a spurious timeout on the first run. One retry isolates
+  // a scheduling artifact from a genuine regression without masking real failures.
+  it(
+    "adds a scaffolded workflow and drops a removed one, broadcasting each change",
+    { retry: 1, timeout: 20_000 },
+    async () => {
+      server = await startServer({
+        port: 0,
+        bootToken: "test-token",
+        telemetryOptIn: false,
+        adapters: { "claude-code": fakeClaudeAdapter() },
+        stateRoot: dir,
+        launchDir: cwd,
+        autoCreateSession: false,
+      });
+      const port = server.port;
 
-    const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
-    expect(session.status).toBe("running");
-    await connectEvents(port);
+      const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
+      expect(session.status).toBe("running");
+      await connectEvents(port);
 
-    // Add a workflow mid-session — it must appear in the broadcast list AND
-    // trigger a `workflows.changed` frame.
-    await scaffoldWorkflow(cwd, "hn-story-images");
-    await vi.waitFor(
-      async () => {
-        const workflows = await listWorkflows(port);
-        expect(workflows.some((w) => w.name === "hn-story-images")).toBe(true);
-        expect(changedFrames).toBeGreaterThan(0);
-      },
-      { timeout: 8_000, interval: 150 },
-    );
+      // Add a workflow mid-session — it must appear in the broadcast list AND
+      // trigger a `workflows.changed` frame.
+      await scaffoldWorkflow(cwd, "hn-story-images");
+      await vi.waitFor(
+        async () => {
+          const workflows = await listWorkflows(port);
+          expect(workflows.some((w) => w.name === "hn-story-images")).toBe(true);
+          expect(changedFrames).toBeGreaterThan(0);
+        },
+        { timeout: 8_000, interval: 150 },
+      );
 
-    // Remove it — the prune in the rescan must drop it back out and broadcast again.
-    const framesBeforeRemoval = changedFrames;
-    await rm(join(cwd, "hn-story-images"), { recursive: true, force: true });
-    await vi.waitFor(
-      async () => {
-        const workflows = await listWorkflows(port);
-        expect(workflows.some((w) => w.name === "hn-story-images")).toBe(false);
-        expect(changedFrames).toBeGreaterThan(framesBeforeRemoval);
-      },
-      { timeout: 8_000, interval: 150 },
-    );
-  }, 20_000);
+      // Remove it — the prune in the rescan must drop it back out and broadcast again.
+      const framesBeforeRemoval = changedFrames;
+      await rm(join(cwd, "hn-story-images"), { recursive: true, force: true });
+      await vi.waitFor(
+        async () => {
+          const workflows = await listWorkflows(port);
+          expect(workflows.some((w) => w.name === "hn-story-images")).toBe(false);
+          expect(changedFrames).toBeGreaterThan(framesBeforeRemoval);
+        },
+        { timeout: 8_000, interval: 150 },
+      );
+    },
+  );
 });

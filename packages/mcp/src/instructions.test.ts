@@ -29,6 +29,7 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_scaffold");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_clone");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_agents_run_local");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_sandbox_preview");
     // Canonical naming (and the stale names it must steer away from)
     expect(AUTHORING_INSTRUCTIONS).toContain("@sapiom/agent");
     expect(AUTHORING_INSTRUCTIONS).toContain("defineAgent");
