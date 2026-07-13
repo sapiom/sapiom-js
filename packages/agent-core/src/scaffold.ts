@@ -74,10 +74,17 @@ const DOTFILE_NAMES = new Set(["_gitignore", "_npmrc"]);
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
-/** Offline fallbacks — bump alongside notable releases. */
+/**
+ * Offline fallbacks, used only when the live npm lookup below fails or times
+ * out. MUST be a version that's actually published — a stale value here fails
+ * every offline/registry-hiccup scaffold with a silent ETARGET, and nothing
+ * else catches that (see the "fallback matches the workspace version" test
+ * in scaffold.test.ts, which fails a PR that bumps @sapiom/agent or
+ * @sapiom/tools without updating this). Bump alongside notable releases.
+ */
 const VERSION_FALLBACK = {
   agent: "0.6.2",
-  tools: "0.17.1",
+  tools: "0.17.2",
 };
 
 /** The zod major the authoring SDK is built against. */
