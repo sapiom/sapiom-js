@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/agent-core",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "Pure, stateless core functions for scaffolding, validating, and operating Sapiom agents — shared by the CLI and MCP packages.",
   "license": "MIT",
   "author": "Sapiom",

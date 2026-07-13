@@ -1,5 +1,12 @@
 # @sapiom/orchestration
 
+## 0.6.3
+
+### Patch Changes
+
+- Updated dependencies [afc77e3]
+  - @sapiom/tools@0.18.0
+
 ## 0.6.2
 
 ### Patch Changes
