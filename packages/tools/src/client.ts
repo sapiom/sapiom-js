@@ -124,10 +124,7 @@ import type {
   AppendResult,
   RecallInput,
   RecallResponse,
-  SweepInput,
-  MemorySweepResponse,
-  Memory,
-  MemoryCallOptions,
+  ForgetInput,
 } from "./memory/index.js";
 import * as vault from "./vault/index.js";
 
@@ -332,17 +329,20 @@ export interface Sapiom {
     };
   };
   /**
-   * Tenant-scoped long-term memory. `append` writes (or no-ops on a duplicate),
-   * `recall` searches by cosine vector similarity or Neon keyword strategy, `get`
-   * fetches one by id; prune with Neon `sweep` (LRU/oldest eviction) or `forget`
-   * (hard-delete a single id).
+   * Tenant-scoped long-term memory. `append` writes one memory into a
+   * `namespace`, `recall` searches one namespace by relevance (semantic, keyword,
+   * or hybrid), `forget` hard-deletes ids, and `drop` deletes a whole namespace.
+   *
+   * Partition with a namespace per agent / per user / per project by default;
+   * co-locate subsets in one namespace (via `metadata` + recall `filter`) only
+   * when a single recall must span them. Memory is not chat history — `recall`
+   * ranks by relevance, never recency.
    */
   readonly memory: {
     append(input: AppendInput): Promise<AppendResult>;
     recall(input: RecallInput): Promise<RecallResponse>;
-    sweep(input?: SweepInput): Promise<MemorySweepResponse>;
-    get(id: string, options?: MemoryCallOptions): Promise<Memory>;
-    forget(id: string, options?: MemoryCallOptions): Promise<void>;
+    forget(input: ForgetInput): Promise<void>;
+    drop(namespace: string): Promise<void>;
   };
   /**
    * READ-ONLY tenant vault secrets (SAP-1471): `list` returns key names, `get`
@@ -490,9 +490,8 @@ function bind(transport: Transport): Sapiom {
     memory: {
       append: (input) => memory.append(input, transport),
       recall: (input) => memory.recall(input, transport),
-      sweep: (input) => memory.sweep(input, transport),
-      get: (id, options) => memory.get(id, transport, undefined, options),
-      forget: (id, options) => memory.forget(id, transport, undefined, options),
+      forget: (input) => memory.forget(input, transport),
+      drop: (namespace) => memory.drop(namespace, transport),
     },
     vault: {
       list: (ref) => vault.list(ref, transport),
