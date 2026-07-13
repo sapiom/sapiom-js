@@ -1,5 +1,14 @@
 # @sapiom/mcp
 
+## 0.11.3
+
+### Patch Changes
+
+- 771b337: Name email, domains, and memory in the `AUTHORING_INSTRUCTIONS` capability list and note that schedules are a top-level `@sapiom/tools` import — kept byte-identical with the backend's served copy (SAP-1467).
+- Updated dependencies [0c6bcb4]
+  - @sapiom/agent-core@0.9.3
+  - @sapiom/sandbox-preview@0.1.4
+
 ## 0.11.2
 
 ### Patch Changes
