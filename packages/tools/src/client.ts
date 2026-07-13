@@ -129,6 +129,7 @@ import type {
   Memory,
   MemoryCallOptions,
 } from "./memory/index.js";
+import * as vault from "./vault/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -344,6 +345,18 @@ export interface Sapiom {
     forget(id: string, options?: MemoryCallOptions): Promise<void>;
   };
   /**
+   * READ-ONLY tenant vault secrets (SAP-1471): `list` returns key names, `get`
+   * one value (or null when absent), `getMany`/`getAll` a key→value map. No
+   * set/delete by decision — write secrets from the dashboard or `@sapiom/core`'s
+   * `VaultAPI`. Values are credentials: use them, don't persist or echo them.
+   */
+  readonly vault: {
+    list(ref: string): Promise<string[]>;
+    get(ref: string, key: string): Promise<string | null>;
+    getMany(ref: string, keys: string[]): Promise<Record<string, string>>;
+    getAll(ref: string): Promise<Record<string, string>>;
+  };
+  /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
    * need this — attribution is set once when the client is constructed.
@@ -480,6 +493,12 @@ function bind(transport: Transport): Sapiom {
       sweep: (input) => memory.sweep(input, transport),
       get: (id, options) => memory.get(id, transport, undefined, options),
       forget: (id, options) => memory.forget(id, transport, undefined, options),
+    },
+    vault: {
+      list: (ref) => vault.list(ref, transport),
+      get: (ref, key) => vault.get(ref, key, transport),
+      getMany: (ref, keys) => vault.getMany(ref, keys, transport),
+      getAll: (ref) => vault.getAll(ref, transport),
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),
