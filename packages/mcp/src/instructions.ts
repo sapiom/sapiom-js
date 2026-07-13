@@ -61,8 +61,9 @@ and returns a live URL; a \`failed\` status carries the build/start logs — fix
   target must be listed in \`next[]\`. TypeScript enforces all of these.
 - Cross-step state: \`ctx.shared\` — the entry input reaches only the entry step.
 - Capabilities run via the typed \`ctx.sapiom.*\` client (sandboxes, repositories,
-  models.coding, fileStorage, search, database, and more) — don't memorize the catalog;
-  use autocomplete/typecheck.
+  models.coding, fileStorage, search, database, email, domains, memory, and more) —
+  don't memorize the catalog; use autocomplete/typecheck. Schedules (cron triggers) are
+  a top-level \`@sapiom/tools\` import, not under \`ctx.sapiom\`.
 
 Full reference: https://docs.sapiom.ai/agents/quick-start (authoring · capabilities ·
 reference · examples), plus the \`AGENTS.md\` and \`sapiom-agent-authoring\` skill inside
