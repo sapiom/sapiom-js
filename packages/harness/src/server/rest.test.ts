@@ -766,7 +766,7 @@ describe("skills router — real server mount proof", () => {
     // then the skills router (which declares /api/skills internally).
     const app = express();
     app.use("/api", createBootTokenMiddleware(BOOT_TOKEN));
-    app.use(createSkillsRouter({ userSkillsRoot: skillsRoot }));
+    app.use(createSkillsRouter({ userSkillsRoot: skillsRoot, showUserSkills: true }));
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, "127.0.0.1", resolve);
