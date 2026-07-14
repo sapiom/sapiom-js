@@ -15,6 +15,7 @@ import { buildManifest } from "./build-manifest.js";
 import { goto, pauseUntilSignal, terminate } from "./directives.js";
 import {
   MANIFEST_PROTOCOL,
+  SECRET_BINDING_LIMITS,
   type AgentManifest,
   agentManifestSchema,
 } from "./manifest.js";
@@ -78,6 +79,148 @@ describe("agentManifestSchema", () => {
     expect(parsed.steps["step-a"].transitions).toEqual([
       { kind: "continue", target: "step-b" },
     ]);
+    expect(parsed.secrets).toEqual([]);
+  });
+
+  it("accepts secret bindings containing names only", () => {
+    const parsed = agentManifestSchema.parse({
+      protocol: 1,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      steps: {},
+      secrets: [
+        { ref: "billing:prod", keys: ["STRIPE_KEY"] },
+        { ref: "analytics", keys: ["POSTHOG_KEY"] },
+      ],
+    });
+    expect(parsed.secrets).toEqual([
+      { ref: "billing:prod", keys: ["STRIPE_KEY"] },
+      { ref: "analytics", keys: ["POSTHOG_KEY"] },
+    ]);
+  });
+
+  it.each(["PATH", "SAPIOM_API_KEY", "WORKFLOWS_EXECUTION_ID"])(
+    "rejects protected environment key %s",
+    (key) => {
+      expect(() =>
+        agentManifestSchema.parse({
+          protocol: 1,
+          name: "wf",
+          entry: "a",
+          sdkVersion: "0.1.0",
+          artifact: { sha256: "x", entryFile: "f.mjs" },
+          steps: {},
+          secrets: [{ ref: "billing", keys: [key] }],
+        }),
+      ).toThrow("Protected environment key is not allowed");
+    },
+  );
+
+  it("rejects duplicate key names across secret-set refs", () => {
+    expect(() =>
+      agentManifestSchema.parse({
+        protocol: 1,
+        name: "wf",
+        entry: "a",
+        sdkVersion: "0.1.0",
+        artifact: { sha256: "x", entryFile: "f.mjs" },
+        steps: {},
+        secrets: [
+          { ref: "billing", keys: ["API_KEY"] },
+          { ref: "analytics", keys: ["API_KEY"] },
+        ],
+      }),
+    ).toThrow("Secret key names must be unique across bindings");
+  });
+
+  it("rejects bindings beyond collection limits", () => {
+    const tooManyBindings = Array.from(
+      { length: SECRET_BINDING_LIMITS.maxBindings + 1 },
+      (_, index) => ({ ref: `ref-${index}`, keys: [`KEY_${index}`] }),
+    );
+    expect(() =>
+      agentManifestSchema.parse({
+        protocol: 1,
+        name: "wf",
+        entry: "a",
+        sdkVersion: "0.1.0",
+        artifact: { sha256: "x", entryFile: "f.mjs" },
+        steps: {},
+        secrets: tooManyBindings,
+      }),
+    ).toThrow();
+  });
+
+  it.each([
+    [
+      "an overlong ref",
+      [
+        {
+          ref: "r".repeat(SECRET_BINDING_LIMITS.maxRefLength + 1),
+          keys: ["API_KEY"],
+        },
+      ],
+    ],
+    [
+      "an overlong key",
+      [{ ref: "billing", keys: ["K".repeat(SECRET_BINDING_LIMITS.maxKeyLength + 1)] }],
+    ],
+    [
+      "too many keys in one binding",
+      [
+        {
+          ref: "billing",
+          keys: Array.from(
+            { length: SECRET_BINDING_LIMITS.maxKeysPerBinding + 1 },
+            (_, index) => `KEY_${index}`,
+          ),
+        },
+      ],
+    ],
+    [
+      "too many total keys",
+      Array.from({ length: 5 }, (_, bindingIndex) => ({
+        ref: `ref-${bindingIndex}`,
+        keys: Array.from(
+          { length: SECRET_BINDING_LIMITS.maxKeysPerBinding },
+          (_, keyIndex) => `KEY_${bindingIndex}_${keyIndex}`,
+        ),
+      })),
+    ],
+  ])("rejects %s", (_label, secrets) => {
+    expect(() =>
+      agentManifestSchema.parse({
+        protocol: 1,
+        name: "wf",
+        entry: "a",
+        sdkVersion: "0.1.0",
+        artifact: { sha256: "x", entryFile: "f.mjs" },
+        steps: {},
+        secrets,
+      }),
+    ).toThrow();
+  });
+
+  it("strictly rejects fields that could carry secret values without echoing them", () => {
+    const sentinel = "DO_NOT_LEAK_THIS_SECRET_VALUE";
+    let thrown: unknown;
+    try {
+      agentManifestSchema.parse({
+        protocol: 1,
+        name: "wf",
+        entry: "a",
+        sdkVersion: "0.1.0",
+        artifact: { sha256: "x", entryFile: "f.mjs" },
+        steps: {},
+        secrets: [{ ref: "billing", keys: ["API_KEY"], value: sentinel }],
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).not.toContain(sentinel);
   });
 
   it("rejects a manifest with wrong protocol", () => {
@@ -174,6 +317,57 @@ describe("buildManifest", () => {
     expect(manifest.protocol).toBe(1);
     expect(manifest.sdkVersion).toBe(DUMMY_SDK_VERSION);
     expect(manifest.artifact).toEqual(DUMMY_ARTIFACT);
+    expect(manifest.secrets).toEqual([]);
+  });
+
+  it("emits validated secret bindings and preserves only refs and key names", () => {
+    const def = defineAgent({
+      name: "secret-agent",
+      entry: "start",
+      steps: { start: makeStep("start") },
+      secrets: [
+        { ref: "billing", keys: ["STRIPE_KEY"] },
+        { ref: "analytics", keys: ["POSTHOG_KEY"] },
+      ],
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    expect(manifest.secrets).toEqual([
+      { ref: "billing", keys: ["STRIPE_KEY"] },
+      { ref: "analytics", keys: ["POSTHOG_KEY"] },
+    ]);
+    expect(agentManifestSchema.parse(manifest).secrets).toEqual(
+      manifest.secrets,
+    );
+  });
+
+  it("revalidates bindings at build time and never serializes a late-added value", () => {
+    const sentinel = "DO_NOT_LEAK_THIS_SECRET_VALUE";
+    const binding: { ref: string; keys: string[]; value?: string } = {
+      ref: "billing",
+      keys: ["API_KEY"],
+    };
+    const def = defineAgent({
+      name: "mutated-after-definition",
+      entry: "start",
+      steps: { start: makeStep("start") },
+      secrets: [binding],
+    });
+    binding.value = sentinel;
+
+    let thrown: unknown;
+    try {
+      buildManifest(def, {
+        sdkVersion: DUMMY_SDK_VERSION,
+        artifact: DUMMY_ARTIFACT,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).not.toContain(sentinel);
   });
 
   it("carries name and entry from the definition", () => {

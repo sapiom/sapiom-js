@@ -1,6 +1,7 @@
 import { zodToJsonSchema } from "./introspection.js";
 import {
   MANIFEST_PROTOCOL,
+  secretBindingsSchema,
   type ManifestTransition,
   type AgentManifest,
 } from "./manifest.js";
@@ -60,6 +61,9 @@ export function buildManifest(
     sdkVersion: opts.sdkVersion,
     artifact: opts.artifact,
     steps,
+    // Parsing validates and deep-clones only { ref, keys }, so an untyped caller
+    // cannot smuggle secret values or other undeclared fields into the manifest.
+    secrets: secretBindingsSchema.parse(def.secrets ?? []),
   };
 }
 

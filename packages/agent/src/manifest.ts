@@ -22,6 +22,94 @@ export type ManifestTransition =
   | { readonly kind: 'pause'; readonly signal: string; readonly resumeStep: string };
 
 /**
+ * A vault secret binding declares which named environment variables an agent
+ * needs from one tenant vault secret-set. It never carries secret values.
+ */
+export interface SecretBinding {
+  /** Vault secret-set reference. */
+  readonly ref: string;
+  /** Environment-variable names to inject from that secret-set. */
+  readonly keys: readonly string[];
+}
+
+// Identifier limits and character sets mirror Vault v2. Collection bounds keep
+// manifests and dispatch-time vault requests finite.
+export const SECRET_BINDING_LIMITS = {
+  maxBindings: 32,
+  maxKeysPerBinding: 64,
+  maxTotalKeys: 256,
+  maxRefLength: 256,
+  maxKeyLength: 256,
+} as const;
+
+const SECRET_REF_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const SECRET_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
+const RESERVED_SECRET_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isProtectedEnvironmentKey(key: string): boolean {
+  return key === 'PATH' || key.startsWith('SAPIOM_') || key.startsWith('WORKFLOWS_');
+}
+
+const secretKeySchema = z
+  .string()
+  .min(1)
+  .max(SECRET_BINDING_LIMITS.maxKeyLength)
+  .regex(SECRET_KEY_PATTERN)
+  .refine((key) => !RESERVED_SECRET_KEYS.has(key), 'Reserved object key is not allowed')
+  .refine((key) => !isProtectedEnvironmentKey(key), 'Protected environment key is not allowed');
+
+export const secretBindingSchema = z
+  .object({
+    ref: z.string().min(1).max(SECRET_BINDING_LIMITS.maxRefLength).regex(SECRET_REF_PATTERN),
+    keys: z.array(secretKeySchema).min(1).max(SECRET_BINDING_LIMITS.maxKeysPerBinding),
+  })
+  .strict();
+
+/**
+ * Runtime schema shared by defineAgent, buildManifest, and AgentManifest.
+ * A key may have exactly one source so sandbox env collision behavior never
+ * depends on declaration order.
+ */
+export const secretBindingsSchema = z
+  .array(secretBindingSchema)
+  .max(SECRET_BINDING_LIMITS.maxBindings)
+  .superRefine((bindings, ctx) => {
+    const refs = new Set<string>();
+    const keys = new Set<string>();
+    let totalKeys = 0;
+
+    for (const [bindingIndex, binding] of bindings.entries()) {
+      if (refs.has(binding.ref)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [bindingIndex, 'ref'],
+          message: 'Secret-set refs must be unique',
+        });
+      }
+      refs.add(binding.ref);
+
+      for (const [keyIndex, key] of binding.keys.entries()) {
+        totalKeys += 1;
+        if (keys.has(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [bindingIndex, 'keys', keyIndex],
+            message: 'Secret key names must be unique across bindings',
+          });
+        }
+        keys.add(key);
+      }
+    }
+
+    if (totalKeys > SECRET_BINDING_LIMITS.maxTotalKeys) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `Secret bindings may declare at most ${SECRET_BINDING_LIMITS.maxTotalKeys} keys total`,
+      });
+    }
+  });
+
+/**
  * Per-step metadata emitted by the build phase and consumed by the engine.
  * The engine uses this to pre-validate inputs and enforce dispatch deadlines
  * without importing any customer definition code.
@@ -70,6 +158,11 @@ export interface AgentManifest {
   };
   /** Per-step metadata map (keyed by step name). */
   readonly steps: Readonly<Record<string, AgentStepManifest>>;
+  /**
+   * Vault secret key-name bindings to inject at dispatch. Optional for legacy
+   * manifests; the runtime schema defaults it to an empty array.
+   */
+  readonly secrets?: readonly SecretBinding[];
 }
 
 // ---------------------------------------------------------------------------
@@ -103,4 +196,5 @@ export const agentManifestSchema = z.object({
     entryFile: z.string().min(1),
   }),
   steps: z.record(z.string(), workflowStepManifestSchema),
+  secrets: secretBindingsSchema.default([]),
 });

@@ -61,7 +61,7 @@ export type { StepInputContract, AgentInputContract } from './introspection.js';
 
 // Manifest types, Zod schema, and generator — the build→engine contract.
 export { MANIFEST_PROTOCOL, agentManifestSchema } from './manifest.js';
-export type { AgentManifest, AgentStepManifest, ManifestTransition } from './manifest.js';
+export type { AgentManifest, AgentStepManifest, ManifestTransition, SecretBinding } from './manifest.js';
 
 // Manifest generator + graph validation — called by the build phase.
 export { buildManifest, validateGraph, assertValidGraph } from './build-manifest.js';

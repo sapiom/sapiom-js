@@ -35,6 +35,7 @@ import type {
   NextStepDirective,
   PauseUntilSignalDirective,
   RetryDirective,
+  SecretBinding,
   StepLogger,
   TerminateDirective,
 } from './index.js';
@@ -130,6 +131,99 @@ describe('defineAgent', () => {
       steps: { a: makeStep('a'), b: makeStep('b'), c: makeStep('c') },
     });
     expect(Object.keys(def.steps)).toHaveLength(3);
+  });
+
+  it('accepts valid vault secret bindings through the public SecretBinding type', () => {
+    const secrets: readonly SecretBinding[] = [
+      { ref: 'billing:prod', keys: ['STRIPE_KEY'] },
+      { ref: 'analytics', keys: ['POSTHOG_KEY'] },
+    ];
+    const def = defineAgent({
+      name: 'with-secrets',
+      entry: 'start',
+      steps: { start: makeStep('start') },
+      secrets,
+    });
+    expect(def.secrets).toBe(secrets);
+  });
+
+  it.each([
+    { label: 'an invalid ref', secrets: [{ ref: 'bad ref!', keys: ['API_KEY'] }] },
+    { label: 'an invalid key', secrets: [{ ref: 'billing', keys: ['BAD KEY!'] }] },
+    { label: 'no keys', secrets: [{ ref: 'billing', keys: [] }] },
+    { label: 'a reserved object key', secrets: [{ ref: 'billing', keys: ['__proto__'] }] },
+    { label: 'PATH', secrets: [{ ref: 'billing', keys: ['PATH'] }] },
+    { label: 'a SAPIOM_ control key', secrets: [{ ref: 'billing', keys: ['SAPIOM_API_KEY'] }] },
+    {
+      label: 'a WORKFLOWS_ control key',
+      secrets: [{ ref: 'billing', keys: ['WORKFLOWS_EXECUTION_ID'] }],
+    },
+  ])('rejects secret bindings containing $label', ({ secrets }) => {
+    expect(() =>
+      defineAgent({
+        name: 'invalid-secrets',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+        secrets,
+      }),
+    ).toThrow('invalid secret bindings');
+  });
+
+  it('rejects duplicate refs', () => {
+    expect(() =>
+      defineAgent({
+        name: 'duplicate-refs',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+        secrets: [
+          { ref: 'shared', keys: ['FIRST_KEY'] },
+          { ref: 'shared', keys: ['SECOND_KEY'] },
+        ],
+      }),
+    ).toThrow('Secret-set refs must be unique');
+  });
+
+  it('rejects duplicate environment key names across bindings', () => {
+    expect(() =>
+      defineAgent({
+        name: 'duplicate-keys',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+        secrets: [
+          { ref: 'billing', keys: ['API_KEY'] },
+          { ref: 'analytics', keys: ['API_KEY'] },
+        ],
+      }),
+    ).toThrow('Secret key names must be unique across bindings');
+  });
+
+  it('rejects missing keys from untyped callers', () => {
+    expect(() =>
+      defineAgent({
+        name: 'missing-keys',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+        secrets: [{ ref: 'billing' }] as unknown as SecretBinding[],
+      }),
+    ).toThrow('invalid secret bindings');
+  });
+
+  it('rejects undeclared binding fields without echoing a possible secret value', () => {
+    const sentinel = 'DO_NOT_LEAK_THIS_SECRET_VALUE';
+    let thrown: unknown;
+    try {
+      defineAgent({
+        name: 'value-in-definition',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+        secrets: [{ ref: 'billing', keys: ['API_KEY'], value: sentinel }] as unknown as SecretBinding[],
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toContain('invalid secret bindings');
+    expect(String(thrown)).not.toContain(sentinel);
   });
 
   it('attaches a non-enumerable AGENT_DEFINITION_BRAND symbol to the returned object', () => {

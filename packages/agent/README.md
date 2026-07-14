@@ -56,6 +56,27 @@ A step declares the transitions it may take (`next` / `terminal` / `canFail` /
 undeclared transition is a compile error. The build reads those same declarations
 to render the orchestration graph without executing anything.
 
+## Declaring injected secrets
+
+Declare only the vault secret-set reference and the environment-variable names
+the agent requires. Secret values stay in Vault and are resolved by the workflow
+engine when it dispatches a sandbox step:
+
+```ts
+export const billing = defineAgent({
+  name: "billing",
+  entry: "start",
+  steps: { start },
+  secrets: [
+    { ref: "billing-production", keys: ["STRIPE_SECRET_KEY"] },
+  ],
+});
+```
+
+Every declared key is required. A dispatch fails without exposing values when a
+binding cannot be resolved. Keys must be unique across bindings and cannot use
+engine-owned names (`PATH`, `SAPIOM_*`, or `WORKFLOWS_*`).
+
 ## Pausing on a long-running capability
 
 Some `ctx.sapiom` capabilities are **dispatched**: you launch them, they run far

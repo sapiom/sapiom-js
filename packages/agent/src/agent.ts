@@ -1,4 +1,5 @@
 import { UnknownStepError } from './errors.js';
+import { secretBindingsSchema, type SecretBinding } from './manifest.js';
 import type { StepDefinition } from './step.js';
 
 /**
@@ -48,6 +49,11 @@ export interface AgentDefinition<
   readonly entry: string;
   readonly steps: Readonly<Record<string, StepDefinition<TShared>>>;
   /**
+   * Vault secret-set refs and environment-variable names needed by this agent.
+   * Bindings contain names only; secret values must never appear here.
+   */
+  readonly secrets?: readonly SecretBinding[];
+  /**
    * Phantom marker that carries the entry-step input type so `runner.run(def, input)`
    * can infer it (see TInput in the doc above). The steps map is deliberately
    * type-erased, leaving TInput no structural home — this is its anchor. Never
@@ -91,6 +97,19 @@ export function isLegacyOrchestrationDefinition(val: unknown): val is AgentDefin
   return (val as Record<symbol, unknown>)[LEGACY_ORCHESTRATION_DEFINITION_BRAND] === 1;
 }
 
+function validateSecretsDeclaration(def: { name: string; secrets?: readonly SecretBinding[] }): void {
+  if (def.secrets === undefined) return;
+
+  const parsed = secretBindingsSchema.safeParse(def.secrets);
+  if (parsed.success) return;
+
+  const issue = parsed.error.issues[0];
+  const location = issue?.path.length ? ` at secrets.${issue.path.join('.')}` : '';
+  throw new Error(
+    `Agent '${def.name}' has invalid secret bindings${location}: ${issue?.message ?? 'invalid value'}`,
+  );
+}
+
 /**
  * Validate and return a workflow definition. Checks done here:
  *   1. `name` is non-empty
@@ -125,6 +144,7 @@ export function defineAgent<TInput = unknown, TShared extends Record<string, unk
       throw new Error(`Agent '${def.name}' step name mismatch at key '${key}': step.name='${step.name}'`);
     }
   }
+  validateSecretsDeclaration(def);
   // Attach the brand as a non-enumerable property so it:
   //   - survives esbuild bundling (symbol properties pass through)
   //   - survives dynamic import (the imported object is the same reference)
