@@ -9,22 +9,26 @@ function makeDetector() {
 }
 
 describe("parseExecutionIds", () => {
-  it("extracts the id from the CLI's start line (ignoring the ✓ prefix)", () => {
+  it("extracts the id from the CLI's start line (ignoring the check-mark prefix)", () => {
     expect(parseExecutionIds("✓ Started execution exec_0001")).toEqual(["exec_0001"]);
   });
 
   it("extracts the id when embedded in surrounding output", () => {
-    const line = "some log\n✓ Started execution exec_abc-123\n  inspect: sapiom agents logs exec_abc-123";
+    const line =
+      "some log\nStarted execution exec_abc-123\n  inspect: sapiom agents logs exec_abc-123";
     // Only the "Started execution" announcement is a match — the inspect hint is not.
     expect(parseExecutionIds(line)).toEqual(["exec_abc-123"]);
   });
 
-  it("stops the id at the first non-id character (trailing punctuation/ANSI)", () => {
-    expect(parseExecutionIds("Started execution exec_9[0m done")).toEqual(["exec_9"]);
+  it("stops the id at the first non-id char (bracket, ANSI reset, whitespace, ...)", () => {
+    // Anything outside [A-Za-z0-9_-] terminates the id, so a colored CLI's
+    // reset sequence (ESC + "[0m") after the id still yields just exec_9.
+    expect(parseExecutionIds("Started execution exec_9[0m done")).toEqual(["exec_9"]);
+    expect(parseExecutionIds("Started execution exec_9 done")).toEqual(["exec_9"]);
   });
 
   it("finds multiple distinct announcements in order", () => {
-    expect(parseExecutionIds("Started execution exec_a … Started execution exec_b")).toEqual([
+    expect(parseExecutionIds("Started execution exec_a then Started execution exec_b")).toEqual([
       "exec_a",
       "exec_b",
     ]);
@@ -42,7 +46,7 @@ describe("parseExecutionIds", () => {
 describe("ExecutionDetector.feed", () => {
   it("emits once for an id in a single chunk, tagged prod", () => {
     const { detector, onExecution } = makeDetector();
-    detector.feed("some noise\n✓ Started execution exec_0001\nnext line\n", "sess-1");
+    detector.feed("some noise\nStarted execution exec_0001\nnext line\n", "sess-1");
     expect(onExecution).toHaveBeenCalledWith("sess-1", "exec_0001", "prod");
   });
 
@@ -54,7 +58,7 @@ describe("ExecutionDetector.feed", () => {
 
   it("detects an id split across two chunks", () => {
     const { detector, onExecution } = makeDetector();
-    detector.feed("...✓ Started execu", "sess-1");
+    detector.feed("...Started execu", "sess-1");
     expect(onExecution).not.toHaveBeenCalled();
     detector.feed("tion exec_5150\n", "sess-1");
     expect(onExecution).toHaveBeenCalledWith("sess-1", "exec_5150", "prod");
@@ -85,9 +89,9 @@ describe("ExecutionDetector.feed", () => {
 
   it("holds back an id that lands exactly at the end of a chunk, without flush()", () => {
     // A discrete tool.call payload commonly ends *exactly* on the id — the CLI
-    // shape "✓ Started execution exec_123" with no trailing character.
+    // shape "Started execution exec_123" with no trailing character.
     const { detector, onExecution } = makeDetector();
-    detector.feed("✓ Started execution exec_123", "sess-1");
+    detector.feed("Started execution exec_123", "sess-1");
     expect(onExecution).not.toHaveBeenCalled();
   });
 });
@@ -95,7 +99,7 @@ describe("ExecutionDetector.feed", () => {
 describe("ExecutionDetector.flush", () => {
   it("finalizes an id held back at the end of a discrete, complete string", () => {
     const { detector, onExecution } = makeDetector();
-    detector.feed("✓ Started execution exec_123", "sess-1");
+    detector.feed("Started execution exec_123", "sess-1");
     expect(onExecution).not.toHaveBeenCalled();
 
     detector.flush("sess-1");
@@ -117,9 +121,9 @@ describe("ExecutionDetector.flush", () => {
 
   it("still respects per-(session,id) dedupe across feed+flush calls", () => {
     const { detector, onExecution } = makeDetector();
-    detector.feed("✓ Started execution exec_1", "sess-1");
+    detector.feed("Started execution exec_1", "sess-1");
     detector.flush("sess-1");
-    detector.feed("✓ Started execution exec_1", "sess-1");
+    detector.feed("Started execution exec_1", "sess-1");
     detector.flush("sess-1");
     expect(onExecution).toHaveBeenCalledTimes(1);
   });
@@ -137,7 +141,7 @@ describe("ExecutionDetector.reset", () => {
 
   it("clears a pending (held-back) match too", () => {
     const { detector, onExecution } = makeDetector();
-    detector.feed("✓ Started execution exec_9", "sess-1");
+    detector.feed("Started execution exec_9", "sess-1");
     detector.reset("sess-1");
     detector.flush("sess-1");
     expect(onExecution).not.toHaveBeenCalled();

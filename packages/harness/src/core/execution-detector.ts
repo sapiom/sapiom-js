@@ -91,6 +91,8 @@ export class ExecutionDetector {
   flush(harnessSessionId: string): void {
     const pending = this.buffers.get(harnessSessionId);
     if (!pending) return;
+    // Re-parse the whole pending buffer (vs an inline loop) — same result, and
+    // tryEmit dedupes so a match already emitted by feed() is a harmless no-op.
     for (const id of parseExecutionIds(pending)) this.tryEmit(harnessSessionId, id);
     this.buffers.delete(harnessSessionId);
   }
