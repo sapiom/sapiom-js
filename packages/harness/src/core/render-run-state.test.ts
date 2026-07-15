@@ -119,6 +119,17 @@ describe("renderRunState — latency", () => {
     expect(view.steps[0].latencyMs).toBe(45_000);
   });
 
+  it("keeps a genuine zero-duration step as 0 (not absent)", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [
+        step({ startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:00.000Z" }),
+      ],
+    });
+    expect(view.steps[0].latencyMs).toBe(0);
+  });
+
   it("omits latency while the step is still running (no finishedAt)", () => {
     const view = render({
       id: "e1",
@@ -227,6 +238,15 @@ describe("renderRunState — whole run", () => {
   it("emits only the derived keys for a minimal step (honest absence everywhere)", () => {
     const view = render({ id: "e1", status: "running", steps: [step({ spanId: "s0" })] });
     expect(view.steps[0]).toEqual({ id: "s0", name: "s", status: "passed" });
+  });
+
+  it("emits only the derived keys for a minimal RUNNING step too", () => {
+    const view = render({
+      id: "e1",
+      status: "running",
+      steps: [step({ spanId: "s1", status: "running" })],
+    });
+    expect(view.steps[0]).toEqual({ id: "s1", name: "s", status: "running" });
   });
 
   it("maps a realistic cost-bearing completed run end to end", () => {

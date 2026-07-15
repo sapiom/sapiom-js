@@ -22,8 +22,8 @@ import type { RunView, StepStatus, StepView } from "../shared/types.js";
 /**
  * Cap on the characters of a step's executor log buffer surfaced in `logSlice`.
  * The TAIL is kept (most recent lines) because failures surface at the end of a
- * log. This is a payload guard on the poll response; the debug-macro extractor
- * (C2) does the final, smaller trim for prompt injection.
+ * log. This is a payload guard on the poll response; the debug-macro context
+ * extractor does the final, smaller trim for prompt injection.
  */
 const LOG_SLICE_MAX = 4000;
 

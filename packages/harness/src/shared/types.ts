@@ -357,8 +357,8 @@ export interface StepView {
   latencyMs?: number;
   /** Terminal error message; present only for a failed step that recorded one. */
   error?: string;
-  /** Trimmed, tail-preserving executor log lines — the debug-macro context
-   *  source (C2 further trims/combines for injection). Absent when no logs. */
+  /** Tail-preserving, character-capped executor log text — the debug-macro
+   *  context source (trimmed further before injection). Absent when no logs. */
   logSlice?: string;
 }
 
