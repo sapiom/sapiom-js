@@ -305,6 +305,18 @@ export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
   | { type: "canvas.reload"; harnessSessionId: string }
   | { type: "port.detected"; harnessSessionId: string; port: number; url: string }
+  /**
+   * A run just started (the CLI printed `✓ Started execution <id>`, caught by
+   * the ExecutionDetector). The SPA starts polling `/api/runs/:id/state` on
+   * receipt. `target` is `"prod"` today — local runs render from their final
+   * result rather than polling.
+   */
+  | {
+      type: "execution.started";
+      harnessSessionId: string;
+      executionId: string;
+      target: "prod" | "local";
+    }
   | { type: "workflows.changed" }
   /**
    * Full snapshot of one background task, re-broadcast on every change
