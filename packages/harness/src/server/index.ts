@@ -48,6 +48,7 @@ import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
 import { removeGeneratedSessionDir, sweepGeneratedDirs } from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { WorkspaceWatcherManager } from "../core/workspace-watcher.js";
+import { ExecutionDetector } from "../core/execution-detector.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import { writeHarnessContext, harnessContextFileExists } from "../core/workspace-context.js";
@@ -280,6 +281,14 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const portDetector = new PortDetector({
     onPort: (harnessSessionId, port, url) => bus.publish({ type: "port.detected", harnessSessionId, port, url }),
     excludedPorts,
+  });
+  // Same tool.call output feed as portDetector: catch `✓ Started execution
+  // <id>` so the SPA can start polling that run's live state (see
+  // core/execution-detector.ts). Local runs are rendered from their final
+  // result, not polled, so only prod-run announcements flow through here.
+  const executionDetector = new ExecutionDetector({
+    onExecution: (harnessSessionId, executionId, target) =>
+      bus.publish({ type: "execution.started", harnessSessionId, executionId, target }),
   });
 
   // Declared before sessionManager: writeSessionContext (sessionManager's
@@ -721,10 +730,14 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       if (typeof toolInput === "string") {
         portDetector.feed(toolInput, event.harnessSessionId);
         portDetector.flush(event.harnessSessionId);
+        executionDetector.feed(toolInput, event.harnessSessionId);
+        executionDetector.flush(event.harnessSessionId);
       }
       if (typeof toolResponseSummary === "string") {
         portDetector.feed(toolResponseSummary, event.harnessSessionId);
         portDetector.flush(event.harnessSessionId);
+        executionDetector.feed(toolResponseSummary, event.harnessSessionId);
+        executionDetector.flush(event.harnessSessionId);
       }
     },
     onError: (err) => console.error("[harness] ingest processing error:", err),
