@@ -323,6 +323,54 @@ export type BusMessage =
   | { type: "session.activity"; harnessSessionId: string; at: string };
 
 // ---------------------------------------------------------------------------
+// Runtime analytics — live run render state (see core/render-run-state.ts)
+// ---------------------------------------------------------------------------
+//
+// The transport-agnostic shape the canvas renders a run from. The server
+// produces it (GET /api/runs/:id/state = inspect → decode → renderRunState);
+// the web poll loop and canvas consume it. Deliberately DERIVED, never raw:
+// every field is computed deterministically from the decoded
+// ExecutionProjection — no LLM, no I/O — so the same RunView drives both the
+// polling path today and a future WebSocket push (only the source swaps).
+
+/**
+ * A step's render status, folded from the raw projection step status into the
+ * four states the canvas draws. `cancelled`/`failed` both fold to `failed`
+ * (a cancelled step did not pass — mirrors run-local.ts); anything not yet
+ * `running`/`passed`/`failed` is `pending`.
+ */
+export type StepStatus = "pending" | "running" | "passed" | "failed";
+
+/** One step as the canvas renders it — status plus the deterministically
+ *  derived cost/latency/error/log slice. Optional fields are ABSENT (not
+ *  `undefined`/`0`) when the decoded projection carries no value — honest
+ *  absence, matching the SDK's cost-is-nullable philosophy. */
+export interface StepView {
+  /** Stable id for keyed rendering — the OTel span id, else a step-order key. */
+  id: string;
+  /** Human step label (the projection's stepName). */
+  name: string;
+  status: StepStatus;
+  /** Captured USD for this step; absent when the read carries no cost. */
+  costUsd?: number;
+  /** finishedAt − startedAt in ms; absent while running or on bad timestamps. */
+  latencyMs?: number;
+  /** Terminal error message; present only for a failed step that recorded one. */
+  error?: string;
+  /** Trimmed, tail-preserving executor log lines — the debug-macro context
+   *  source (C2 further trims/combines for injection). Absent when no logs. */
+  logSlice?: string;
+}
+
+/** A whole run as the canvas renders it. `status` is the run lifecycle folded
+ *  to the four states the UI distinguishes; `steps` is order-preserving. */
+export interface RunView {
+  executionId: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  steps: StepView[];
+}
+
+// ---------------------------------------------------------------------------
 // Adapter registry (GET /api/harnesses)
 // ---------------------------------------------------------------------------
 
