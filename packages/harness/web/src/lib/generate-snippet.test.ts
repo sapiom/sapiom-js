@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   API_KEY_PLACEHOLDER,
+  AUTH_HEADER,
   DEFAULT_BASE_URL,
   generateSnippet,
 } from "./generate-snippet.js";
@@ -44,6 +45,15 @@ if (result.status === "completed") {
       'definition: "my-agent",',
     );
   });
+
+  it("re-indents a nested sample so it stays valid TypeScript", () => {
+    expect(generateSnippet({ definition: "x", inputSample: { a: { b: "c" } } }).typescript)
+      .toContain(`  input: {
+    "a": {
+      "b": "c"
+    }
+  },`);
+  });
 });
 
 describe("generateSnippet — cURL", () => {
@@ -52,8 +62,8 @@ describe("generateSnippet — cURL", () => {
       definition: "daily-digest",
       inputSample: { topic: "weekly-summary" },
     });
-    expect(curl).toBe(`curl -X POST https://api.sapiom.ai/agents/v1/definitions/daily-digest/executions \\
-  -H "x-api-key: YOUR_SAPIOM_API_KEY" \\
+    expect(curl).toBe(`curl -X POST https://tools.sapiom.ai/agents/v1/definitions/daily-digest/executions \\
+  -H "x-sapiom-api-key: YOUR_SAPIOM_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{ "input": {"topic":"weekly-summary"} }'
 `);
@@ -74,30 +84,35 @@ describe("generateSnippet — cURL", () => {
       "/agents/v1/definitions/lead-enrich/executions",
     );
   });
+
+  it("POSIX-escapes an apostrophe in a string value so the -d '…' body stays valid shell", () => {
+    const { curl } = generateSnippet({ definition: "x", inputSample: { name: "O'Brien" } });
+    // Each ' becomes '\'' (close, escaped-quote, reopen) — the exact POSIX-safe
+    // form, so no raw apostrophe survives inside the single-quoted -d arg.
+    expect(curl).toContain(`-d '{ "input": {"name":"O'\\''Brien"} }'`);
+  });
 });
 
 describe("generateSnippet — verified constants (guard against drift)", () => {
-  it("exports the ground-truth base URL and key placeholder", () => {
-    expect(DEFAULT_BASE_URL).toBe("https://api.sapiom.ai");
+  it("exports the ground-truth base URL, auth header, and key placeholder", () => {
+    expect(DEFAULT_BASE_URL).toBe("https://tools.sapiom.ai");
+    expect(AUTH_HEADER).toBe("x-sapiom-api-key");
     expect(API_KEY_PLACEHOLDER).toBe("YOUR_SAPIOM_API_KEY");
   });
 
-  it("uses the x-api-key header and the /executions endpoint", () => {
+  it("uses the x-sapiom-api-key header, the executions endpoint, and an input body", () => {
     const { curl } = generateSnippet({ definition: "x" });
-    expect(curl).toContain("x-api-key: YOUR_SAPIOM_API_KEY");
-    expect(curl).toContain("/executions");
+    expect(curl).toContain("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
+    expect(curl).toContain("/agents/v1/definitions/x/executions");
+    expect(curl).toContain('"input":');
   });
 
   it.each([
     ["Authorization:", "wrong auth scheme"],
-    ["Bearer", "bearer token, not x-api-key"],
-    ["tools.sapiom.ai", "wrong host"],
+    ["Bearer", "bearer token, not the api-key header"],
     ["/triggers", "scheduling endpoint, out of scope"],
   ])("never emits %s (%s) in either snippet", (forbidden) => {
-    const { typescript, curl } = generateSnippet({
-      definition: "x",
-      inputSample: { a: 1 },
-    });
+    const { typescript, curl } = generateSnippet({ definition: "x", inputSample: { a: 1 } });
     expect(typescript).not.toContain(forbidden);
     expect(curl).not.toContain(forbidden);
   });
@@ -108,6 +123,6 @@ describe("generateSnippet — verified constants (guard against drift)", () => {
     // must only ever carry the literal placeholder.
     expect(curl).not.toMatch(/sk_[A-Za-z0-9]/);
     // Capture up to the closing quote of the -H "…" argument.
-    expect(curl.match(/x-api-key: ([^"]+)"/)?.[1]).toBe(API_KEY_PLACEHOLDER);
+    expect(curl.match(/x-sapiom-api-key: ([^"]+)"/)?.[1]).toBe(API_KEY_PLACEHOLDER);
   });
 });

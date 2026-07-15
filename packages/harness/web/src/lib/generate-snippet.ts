@@ -3,20 +3,21 @@
  * after a deploy (the F1 panel). No I/O, no React — just strings — so it is
  * unit- and mutation-testable in isolation.
  *
- * Every entry point (the harness Prod Run button, the SDK, and this cURL) hits
- * the SAME executions API, so the two snippets are just the two code doorways to
- * it. The constants below are ground-truth-verified and must not drift:
- *   - auth header is `x-api-key` (NOT `Authorization: Bearer` — the /v1 guard
- *     reads x-api-key)
- *   - base is `https://api.sapiom.ai`
- *   - path is `/agents/v1/definitions/{definition}/executions` with body
- *     `{ "input": … }` (NOT `/triggers` — that's scheduling, out of scope)
- *   - the key is ALWAYS the literal placeholder `YOUR_SAPIOM_API_KEY`, never a
- *     real key.
+ * Both snippets are two doorways to the SAME endpoint: the SDK's
+ * `agents.run({ definition, input })` and the raw cURL below both POST to
+ * `{base}/agents/v1/definitions/{definition}/executions` with the tenant
+ * credential in `x-sapiom-api-key` — verified against `@sapiom/tools`' own
+ * `agents.launch` (the base defaults to {@link DEFAULT_BASE_URL} and is
+ * overridable via `SAPIOM_AGENTS_URL` / `SAPIOM_TOOLS_BASE`). The key is ALWAYS
+ * the literal placeholder `YOUR_SAPIOM_API_KEY`, never a real key.
  */
 
-/** Default gateway base — the executions API lives here. */
-export const DEFAULT_BASE_URL = "https://api.sapiom.ai";
+/** Default base for the executions endpoint — matches `@sapiom/tools`' own
+ *  default, so the cURL and the SDK snippet hit the same host. */
+export const DEFAULT_BASE_URL = "https://tools.sapiom.ai";
+
+/** Header carrying the tenant credential — the SDK transport's default. */
+export const AUTH_HEADER = "x-sapiom-api-key";
 
 /** The placeholder rendered in place of a real API key — never a real secret. */
 export const API_KEY_PLACEHOLDER = "YOUR_SAPIOM_API_KEY";
@@ -26,7 +27,7 @@ export interface GenerateSnippetArgs {
   definition: string;
   /** A best-effort sample input; `undefined`/`null` renders a placeholder. */
   inputSample?: unknown;
-  /** Gateway base URL; defaults to {@link DEFAULT_BASE_URL}. */
+  /** Base URL; defaults to {@link DEFAULT_BASE_URL}. */
   baseUrl?: string;
 }
 
@@ -52,6 +53,14 @@ function curlInput(sample: unknown): string {
   return JSON.stringify(sample);
 }
 
+/** POSIX-escape a value for inclusion inside single quotes: every `'` becomes
+ *  `'\''` (close, escaped-quote, reopen). Without this, an apostrophe in a
+ *  string input value (e.g. `"O'Brien"`) would terminate the `-d '…'` argument
+ *  and silently corrupt the request body. */
+function shellSingleQuote(value: string): string {
+  return value.replace(/'/g, "'\\''");
+}
+
 function typescriptSnippet(definition: string, inputSample: unknown): string {
   return `import { agents } from "@sapiom/tools";
 
@@ -67,16 +76,18 @@ if (result.status === "completed") {
 }
 
 function curlSnippet(definition: string, inputSample: unknown, baseUrl: string): string {
+  const body = shellSingleQuote(`{ "input": ${curlInput(inputSample)} }`);
   return `curl -X POST ${baseUrl}/agents/v1/definitions/${definition}/executions \\
-  -H "x-api-key: ${API_KEY_PLACEHOLDER}" \\
+  -H "${AUTH_HEADER}: ${API_KEY_PLACEHOLDER}" \\
   -H "Content-Type: application/json" \\
-  -d '{ "input": ${curlInput(inputSample)} }'
+  -d '${body}'
 `;
 }
 
 /**
  * Build the copy-paste trigger snippets (TypeScript SDK + cURL) for a deployed
- * agent. Both call the same executions API; the API key is always a placeholder.
+ * agent. Both call the same executions endpoint; the API key is always a
+ * placeholder.
  */
 export function generateSnippet(args: GenerateSnippetArgs): SnippetBundle {
   const { definition, inputSample, baseUrl = DEFAULT_BASE_URL } = args;
