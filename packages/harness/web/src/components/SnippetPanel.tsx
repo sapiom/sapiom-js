@@ -8,7 +8,7 @@ import { generateSnippet } from "../lib/generate-snippet";
  *  snippet's `YOUR_SAPIOM_API_KEY` placeholder stands in for. Needed to run a
  *  deployed agent from outside the harness (the harness's own session key is
  *  not a copy-pasteable credential for a user's code). */
-const SAPIOM_API_KEYS_URL = "https://app.sapiom.ai/settings";
+const SAPIOM_API_KEYS_URL = "https://app.sapiom.ai/settings?tab=api-keys";
 
 interface SnippetPanelProps {
   /** The workflow currently bound to the active session. */

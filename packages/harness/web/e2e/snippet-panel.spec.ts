@@ -186,7 +186,7 @@ test.describe("panel structure", () => {
   }) => {
     const link = page.getByTestId("snippet-api-key-link");
     await expect(link).toBeVisible();
-    await expect(link).toHaveAttribute("href", "https://app.sapiom.ai/settings");
+    await expect(link).toHaveAttribute("href", "https://app.sapiom.ai/settings?tab=api-keys");
     await expect(link).toHaveAttribute("target", "_blank");
     await expect(link).toHaveAttribute("rel", /noreferrer/);
     await expect(page.getByTestId("snippet-panel")).toContainText("YOUR_SAPIOM_API_KEY");
