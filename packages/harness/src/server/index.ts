@@ -29,7 +29,7 @@ import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.
 import { TaskManager } from "../core/task-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
-import { WorkflowRegistry, createWorkflowsRouter } from "../core/workflow-registry.js";
+import { WorkflowRegistry, type WorkflowRegistryLike, createWorkflowsRouter } from "../core/workflow-registry.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
 import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
@@ -55,6 +55,7 @@ import { ensureCanvasTemplate } from "../core/canvas-template.js";
 import { renderCanvasForSession, renderWorkflowRenderFile } from "../core/canvas-render.js";
 import { CanvasEnrichmentCoordinator } from "../core/canvas-enrich.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
+import { createDefinitionSlugResolver, resolveAgentsBaseUrl } from "../core/definition-slug-resolver.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
@@ -250,6 +251,33 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // already exists or when HOME is unwritable.
   await migrateHarnessIdentity(statePaths.machineId);
   const launchDir = options.launchDir ?? process.cwd();
+
+  // Serve-time slug enrichment: resolves each workflow's definitionSlug from
+  // the Sapiom Agents API when it's absent (deployed sapiom.json files carry
+  // only { "definitionId": "188" }, not the slug). Constructed once per server
+  // boot; caches successful id→slug resolutions in-memory (ids are stable).
+  // Never throws — a failed resolution leaves definitionSlug as-is.
+  const slugResolver = createDefinitionSlugResolver({
+    apiKey: identity?.apiKey ?? null,
+    baseUrl: resolveAgentsBaseUrl(),
+  });
+
+  /** Returns a copy of the workflow list with definitionSlug filled in from
+   *  the Agents API for any workflow that has a definitionId but no slug.
+   *  Resolves all lookups in parallel. Never mutates the registry. */
+  const enrichWorkflows = async (workflows: WorkflowInfo[]): Promise<WorkflowInfo[]> => {
+    return Promise.all(
+      workflows.map(async (workflow) => {
+        if (workflow.definitionId == null || (workflow.definitionSlug != null && workflow.definitionSlug !== "")) {
+          return workflow;
+        }
+        const resolved = await slugResolver.resolve(String(workflow.definitionId));
+        if (resolved == null) return workflow;
+        return { ...workflow, definitionSlug: resolved };
+      }),
+    );
+  };
+
   const adapters: Partial<Record<HarnessKind, HarnessAdapter>> =
     options.adapters ??
     ({
@@ -594,7 +622,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       adapters,
       version: readVersion(),
       identity: identity ? { userId: identity.userId, organizationName: identity.organizationName } : null,
-      listWorkflows: () => workflowRegistry.list(),
+      listWorkflows: () => workflowRegistry.list().then(enrichWorkflows),
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
       writeWorkspaceContext: writeSessionContext,
@@ -645,8 +673,17 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       listWorkflows: () => workflowsCache,
     }),
   );
+  // Wrap the registry so GET /api/workflows also returns enriched slugs —
+  // the same enrichWorkflows pass that /api/state uses above. Only `list()` is
+  // wrapped; scan/connect write through to the real registry untouched. Typed
+  // as WorkflowRegistryLike so this wrapper needs no unsafe cast.
+  const enrichedWorkflowRegistry: WorkflowRegistryLike = {
+    list: () => workflowRegistry.list().then(enrichWorkflows),
+    scan: (root: string) => workflowRegistry.scan(root),
+    connectPath: (inputPath: string) => workflowRegistry.connectPath(inputPath),
+  };
   app.use(
-    createWorkflowsRouter(workflowRegistry),
+    createWorkflowsRouter(enrichedWorkflowRegistry),
     createFsRouter(),
     createSkillsRouter(),
     createMacrosRouter({
