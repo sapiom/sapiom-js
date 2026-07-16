@@ -91,40 +91,27 @@ test.describe("cURL tab", () => {
   });
 });
 
-test.describe("slug input", () => {
-  test("slug input is pre-filled with the workflow's definitionSlug", async ({ page }) => {
-    const input = page.getByTestId("snippet-slug-input");
-    await expect(input).toHaveValue("ic-diligence-orchestrator");
+test.describe("slug (read-only)", () => {
+  test("shows the deployed agent's slug", async ({ page }) => {
+    await expect(page.getByTestId("snippet-slug")).toHaveText("ic-diligence-orchestrator");
   });
 
-  test("switching to a second deployed workflow updates the slug (no stale value)", async ({
+  test("the slug is read-only — not an editable input (it's the agent's identity, not a rename field)", async ({
     page,
   }) => {
-    await expect(page.getByTestId("snippet-slug-input")).toHaveValue("ic-diligence-orchestrator");
-    // onboarding-flow is a second DEPLOYED fixture — the panel must re-init to
-    // its slug, not keep leasing's (regression guard for the remount fix).
+    await expect(page.getByTestId("snippet-slug-input")).toHaveCount(0);
+    await expect(page.locator(".snippet-panel input")).toHaveCount(0);
+  });
+
+  test("switching to a second deployed workflow shows the new slug (no stale value)", async ({
+    page,
+  }) => {
+    await expect(page.getByTestId("snippet-slug")).toHaveText("ic-diligence-orchestrator");
+    // onboarding-flow is a second DEPLOYED fixture — the panel must reflect its
+    // slug, not keep leasing's.
     await page.getByTestId("workflow-onboarding-flow").click();
-    await expect(page.getByTestId("snippet-slug-input")).toHaveValue("onboarding-flow");
-  });
-
-  test("editing the slug updates the snippet code live", async ({ page }) => {
-    const input = page.getByTestId("snippet-slug-input");
-    await input.fill("my-custom-agent");
-
-    const code = page.getByTestId("snippet-code");
-    await expect(code).toContainText('definition: "my-custom-agent"');
-  });
-
-  test("clearing the slug falls back to the placeholder in the snippet", async ({ page }) => {
-    const input = page.getByTestId("snippet-slug-input");
-    await input.fill("");
-
-    const code = page.getByTestId("snippet-code");
-    await expect(code).toContainText('definition: "your-agent-slug"');
-  });
-
-  test("slug input has the correct placeholder attribute", async ({ page }) => {
-    await expect(page.getByTestId("snippet-slug-input")).toHaveAttribute("placeholder", "your-agent-slug");
+    await expect(page.getByTestId("snippet-slug")).toHaveText("onboarding-flow");
+    await expect(page.getByTestId("snippet-code")).toContainText('definition: "onboarding-flow"');
   });
 });
 
