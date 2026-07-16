@@ -51,6 +51,53 @@ test("viewport-locked shell: the page never scrolls even when terminal content o
   expect(root.scrollHeight).toBe(root.clientHeight);
 });
 
+test("workspace rail stays inside the viewport and scrolls internally on first paint (SAP-1645)", async ({
+  page,
+}) => {
+  // Regression: .rail lacked `min-height: 0`, so as a grid/flex item it grew to
+  // its content height instead of the grid row's — the nav clipped below the
+  // fold and .rail-list's overflow-y:auto never engaged until a reflow (only a
+  // hard refresh "fixed" it). Verified at 900px and a shorter window, without
+  // any reload — this asserts correct containment on the initial paint.
+  for (const height of [900, 600]) {
+    await page.setViewportSize({ width: 1280, height });
+
+    // Stress the rail with far more nav content than the viewport can show,
+    // injected into the real .rail-list so the whole containment chain
+    // (.app grid → .rail → .rail-list) is exercised, not a synthetic node.
+    await page.evaluate(() => {
+      const existing = document.querySelector('[data-testid="rail-overflow-filler"]');
+      if (existing) existing.remove();
+      const list = document.querySelector(".rail-list");
+      const filler = document.createElement("div");
+      filler.setAttribute("data-testid", "rail-overflow-filler");
+      filler.style.height = "4000px";
+      filler.style.flex = "0 0 auto";
+      list?.appendChild(filler);
+    });
+
+    const rail = page.locator(".rail-workflows");
+    const railBox = await rail.boundingBox();
+    // The rail must be constrained to the viewport, not expanded to its content.
+    expect(railBox).not.toBeNull();
+    expect(railBox!.y + railBox!.height).toBeLessThanOrEqual(height + 1);
+
+    // The overflow now lives on .rail-list, which actually scrolls.
+    const list = await page.locator(".rail-list").evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+
+    // No full-page scroll was introduced by the overflowing rail.
+    const root = await page.evaluate(() => {
+      const el = document.scrollingElement as HTMLElement;
+      return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    });
+    expect(root.scrollHeight).toBe(root.clientHeight);
+  }
+});
+
 test("theme: defaults to light, toggles to dark, and the choice persists across reload", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.screenshot({ path: "web/e2e/screenshots/theme-light.png", fullPage: true });

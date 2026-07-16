@@ -591,6 +591,11 @@ input {
   flex-direction: column;
   background: var(--bg-1);
   min-width: 0;
+  /* Grid/flex items default to min-height:auto, so without this the rail grows
+     to its content height instead of the grid row's — clipping the nav below
+     the fold and stopping .rail-list's overflow-y:auto from ever engaging until
+     a reflow (the "a refresh fixes it" bug). Mirrors .center-pane above. */
+  min-height: 0;
 }
 
 .rail-workflows {
