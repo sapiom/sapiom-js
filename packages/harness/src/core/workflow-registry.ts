@@ -28,6 +28,8 @@ function expandHome(inputPath: string): string {
 
 interface SapiomMarker {
   definitionId?: number | null;
+  /** The agent's `defineAgent({ name })`, cached by `link` — the executions-API slug. */
+  name?: string;
 }
 
 // `dir` reaching these sinks is always a resolved absolute path (from
@@ -79,6 +81,7 @@ async function scanDir(root: string, dir: string, depth: number, found: Workflow
       name: await nameFor(safeDir),
       path: safeDir,
       definitionId: marker.definitionId ?? null,
+      definitionSlug: marker.name ?? null,
       source: "scan",
     });
     return;
@@ -207,6 +210,7 @@ export class WorkflowRegistry {
         name: await nameFor(absolutePath),
         path: absolutePath,
         definitionId: marker?.definitionId ?? null,
+        definitionSlug: marker?.name ?? null,
         source: "connect",
       };
       const idx = this.workflows.findIndex((workflow) => workflow.path === absolutePath);

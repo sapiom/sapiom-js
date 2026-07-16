@@ -7,6 +7,7 @@ import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { track } from "../lib/track";
 import { Icon } from "./Icon";
+import { SnippetPanel } from "./SnippetPanel";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
 /** How many of a running task's trailing status lines the activity view shows. */
@@ -131,6 +132,13 @@ export function CanvasPane({
           onReVisualize={handleReVisualize}
           reVisualizeDisabledReason={visualizeDisabledReason}
         />
+      )}
+
+      {boundWorkflow?.definitionId != null && (
+        // key on the workflow path so switching between two *deployed* workflows
+        // remounts the panel — resetting the editable slug/tab to the new agent.
+        // A bare prop change would not re-init the slug useState → stale snippet.
+        <SnippetPanel key={boundWorkflow.path} boundWorkflow={boundWorkflow} />
       )}
 
       {!sessionId ? (

@@ -306,6 +306,7 @@ describe("macro path quoting", () => {
         name: "my workflow",
         path: "/Users/demo/my workflow",
         definitionId: null,
+        definitionSlug: null,
         source: "scan",
       },
       sessionCwd: "/Users/demo",
