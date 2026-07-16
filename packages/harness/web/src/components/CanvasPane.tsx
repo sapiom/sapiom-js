@@ -7,6 +7,7 @@ import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { track } from "../lib/track";
 import { Icon } from "./Icon";
+import { SnippetPanel } from "./SnippetPanel";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
 /** How many of a running task's trailing status lines the activity view shows. */
@@ -131,6 +132,10 @@ export function CanvasPane({
           onReVisualize={handleReVisualize}
           reVisualizeDisabledReason={visualizeDisabledReason}
         />
+      )}
+
+      {boundWorkflow?.definitionId != null && (
+        <SnippetPanel boundWorkflow={boundWorkflow} />
       )}
 
       {!sessionId ? (

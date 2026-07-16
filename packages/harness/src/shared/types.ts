@@ -619,6 +619,10 @@ export interface WorkflowInfo {
   path: string;
   /** From sapiom.json once linked; null before first link. */
   definitionId: number | null;
+  /** The deployed agent's slug — the `defineAgent({ name })` that sapiom.json
+   *  caches as `name`, used as the executions-API handle
+   *  (`/agents/v1/definitions/{slug}/executions`). Null before first link. */
+  definitionSlug: string | null;
   /** How it entered the registry. */
   source: "scan" | "connect";
 }

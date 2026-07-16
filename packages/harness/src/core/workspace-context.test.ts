@@ -11,6 +11,7 @@ const workflow: WorkflowInfo = {
   name: "leasing",
   path: "/Users/demo/acme-app/leasing",
   definitionId: 4821,
+  definitionSlug: "leasing",
   source: "scan",
 };
 
@@ -18,6 +19,7 @@ const otherWorkflow: WorkflowInfo = {
   name: "billing",
   path: "/Users/demo/acme-app/billing",
   definitionId: 4822,
+  definitionSlug: "billing",
   source: "scan",
 };
 

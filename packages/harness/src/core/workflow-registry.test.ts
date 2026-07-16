@@ -53,12 +53,14 @@ describe("WorkflowRegistry", () => {
       name: "@acme/proj-a",
       path: path.join(tmpRoot, "proj-a"),
       definitionId: 42,
+      definitionSlug: null,
       source: "scan",
     });
     expect(byPath.get(path.join(tmpRoot, "proj-b"))).toEqual({
       name: "proj-b",
       path: path.join(tmpRoot, "proj-b"),
       definitionId: null,
+      definitionSlug: null,
       source: "scan",
     });
     expect(byPath.has(path.join(tmpRoot, "a", "b", "c"))).toBe(true);
@@ -88,6 +90,7 @@ describe("WorkflowRegistry", () => {
       name: "not-yet-linked",
       path: projectDir,
       definitionId: null,
+      definitionSlug: null,
       source: "connect",
     });
     expect(await registry.list()).toEqual([info]);

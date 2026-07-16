@@ -15,6 +15,7 @@ const workflow: WorkflowInfo = {
   name: "leasing",
   path: "/Users/demo/acme-app/leasing",
   definitionId: 4821,
+  definitionSlug: "leasing",
   source: "scan",
 };
 
@@ -156,7 +157,7 @@ describe("macros router", () => {
   });
 
   it("prefers an explicit workflowPath on the request over the session's bound workflow", async () => {
-    const otherWorkflow: WorkflowInfo = { name: "rfq", path: "/Users/demo/acme-app/rfq", definitionId: 7, source: "scan" };
+    const otherWorkflow: WorkflowInfo = { name: "rfq", path: "/Users/demo/acme-app/rfq", definitionId: 7, definitionSlug: "rfq", source: "scan" };
     const deps = makeDeps({
       findWorkflow: (p) => (p === workflow.path ? workflow : p === otherWorkflow.path ? otherWorkflow : null),
       getBoundWorkflowPath: (id) => (id === "sess-1" ? otherWorkflow.path : null),
@@ -185,7 +186,7 @@ describe("macros router", () => {
      * the injected text is inert — the subshell can never actually execute.
      */
     function makeWithPath(p: string) {
-      const evil: WorkflowInfo = { name: "evil", path: p, definitionId: null, source: "scan" };
+      const evil: WorkflowInfo = { name: "evil", path: p, definitionId: null, definitionSlug: null, source: "scan" };
       return makeDeps({
         findWorkflow: (wp) => (wp === p ? evil : null),
         getBoundWorkflowPath: () => p,

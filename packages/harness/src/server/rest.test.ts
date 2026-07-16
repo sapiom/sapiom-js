@@ -143,7 +143,7 @@ describe("createRestRouter", () => {
         boundWorkflowPath: null,
         ready: true,
       };
-      const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
+      const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, definitionSlug: "leasing", source: "scan" };
       const macro: MacroDef = { id: "run_local", label: "Run local", icon: "Play", action: { kind: "inject", text: "x" } };
 
       start({
@@ -389,7 +389,7 @@ describe("createRestRouter", () => {
   });
 
   describe("PATCH /sessions/:id/workflow", () => {
-    const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
+    const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, definitionSlug: "leasing", source: "scan" };
     const baseSession: HarnessSession = {
       id: "sess-1",
       agentSessionId: null,
