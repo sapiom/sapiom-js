@@ -12,7 +12,7 @@ export const RAIL_MIN = 180;
 export const RAIL_MAX = 480;
 export const RAIL_DEFAULT = 220;
 export const CANVAS_MIN = 280;
-export const CANVAS_MAX = 720;
+export const CANVAS_MAX = 1440;
 export const CANVAS_DEFAULT = 420;
 
 function clamp(value: number, min: number, max: number): number {

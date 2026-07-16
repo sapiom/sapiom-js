@@ -74,7 +74,7 @@ html, body {
   margin: 0; min-height: 100%; background: var(--canvas-bg); color: var(--canvas-text);
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
-#canvas-root { max-width: 1100px; margin: 0 auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 18px; }
+#canvas-root { width: 100%; max-width: 1600px; margin: 0 auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 18px; }
 
 /* --- structural classes: keep these, and their names, untouched --- */
 .canvas-panel { background: var(--canvas-panel); border: 1px solid var(--canvas-border); border-radius: 16px; padding: 20px; }

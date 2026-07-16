@@ -960,6 +960,22 @@ test.describe("resizable panes", () => {
     expect((canvasAfter?.width ?? 0) - canvasBefore.width).toBeGreaterThan(60);
   });
 
+  test("the canvas pane can grow beyond the old 720px ceiling on a wide viewport", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 720 });
+    const handle = page.getByTestId("resize-handle-canvas");
+    const handleBox = await handle.boundingBox();
+    if (!handleBox) throw new Error("expected canvas handle bounding box");
+
+    const y = handleBox.y + handleBox.height / 2;
+    await page.mouse.move(handleBox.x + handleBox.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2 - 600, y, { steps: 8 });
+    await page.mouse.up();
+
+    const canvasWidth = (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasWidth).toBeGreaterThan(900);
+  });
+
   test("rail and canvas widths cannot be dragged past their min-width floors", async ({ page }) => {
     const railHandle = page.getByTestId("resize-handle-rail");
     let box = await railHandle.boundingBox();
@@ -1014,4 +1030,3 @@ test("the canvas iframe carries the app's theme and flips on toggle", async ({ p
   await page.getByTestId("theme-toggle").click();
   await expect(iframe).toHaveAttribute("src", /theme=dark/);
 });
-

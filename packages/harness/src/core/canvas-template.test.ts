@@ -50,6 +50,12 @@ describe("renderCanvasDocument", () => {
     expect(html).toMatch(/params\.get\("theme"\)/);
   });
 
+  it("allows wide previews to use a large canvas pane", () => {
+    const html = renderCanvasDocument("");
+    expect(html).toContain("width: 100%; max-width: 1600px");
+    expect(html).not.toContain("max-width: 1100px");
+  });
+
   it("ships the SVG defs (glow filter, arrow markers) every node/edge pattern references", () => {
     const html = renderCanvasDocument("");
     expect(html).toContain('id="canvas-glow"');
