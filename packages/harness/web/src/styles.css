@@ -2641,6 +2641,16 @@ input {
   color: var(--text-dim);
 }
 
+.snippet-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.snippet-link:hover {
+  text-decoration: underline;
+}
+
 /* Scrollbars — thin thumb-only styling, matching the product's own
    (rgba(161, 161, 170, 0.75), 8px, no visible track) in both themes. */
 ::-webkit-scrollbar {

@@ -4,6 +4,12 @@ import type { WorkflowInfo } from "@shared/types";
 
 import { generateSnippet } from "../lib/generate-snippet";
 
+/** Sapiom dashboard page where a user mints/manages the tenant API key that the
+ *  snippet's `YOUR_SAPIOM_API_KEY` placeholder stands in for. Needed to run a
+ *  deployed agent from outside the harness (the harness's own session key is
+ *  not a copy-pasteable credential for a user's code). */
+const SAPIOM_API_KEYS_URL = "https://app.sapiom.ai/settings?tab=api-keys";
+
 interface SnippetPanelProps {
   /** The workflow currently bound to the active session. */
   boundWorkflow: WorkflowInfo;
@@ -105,6 +111,18 @@ function SnippetPanelInner({ boundWorkflow }: SnippetPanelProps): JSX.Element {
         </button>
       </div>
 
+      <p className="snippet-hint">
+        Replace <code>YOUR_SAPIOM_API_KEY</code> with a key from your{" "}
+        <a
+          className="snippet-link"
+          data-testid="snippet-api-key-link"
+          href={SAPIOM_API_KEYS_URL}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Sapiom dashboard →
+        </a>
+      </p>
       <p className="snippet-hint">
         Optionally add <code>idempotencyKey</code> to the body to deduplicate retries.
       </p>
