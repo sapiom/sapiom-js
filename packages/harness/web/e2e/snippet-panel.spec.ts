@@ -180,4 +180,15 @@ test.describe("panel structure", () => {
   test("panel includes the idempotencyKey helper hint", async ({ page }) => {
     await expect(page.getByTestId("snippet-panel")).toContainText("idempotencyKey");
   });
+
+  test("links to the dashboard where users get an API key (for use outside the harness)", async ({
+    page,
+  }) => {
+    const link = page.getByTestId("snippet-api-key-link");
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", "https://app.sapiom.ai/settings");
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", /noreferrer/);
+    await expect(page.getByTestId("snippet-panel")).toContainText("YOUR_SAPIOM_API_KEY");
+  });
 });
