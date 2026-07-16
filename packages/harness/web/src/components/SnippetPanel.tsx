@@ -14,9 +14,13 @@ type SnippetTab = "typescript" | "curl";
 /**
  * "Trigger from your code" panel — shown below the canvas header whenever the
  * bound workflow is deployed (definitionId != null). Provides copy-paste
- * TypeScript SDK and cURL snippets pre-filled with the deployed agent's slug.
- * The slug is editable so users can correct it if it differs from what's in
- * sapiom.json, or fill it in manually when the slug is not yet known.
+ * TypeScript SDK and cURL snippets for the deployed agent.
+ *
+ * The slug is READ-ONLY: it is the deployed agent's stable handle
+ * (`defineAgent({ name })`, cached in sapiom.json) and the executions-API
+ * identity — NOT something you rename here. Editing it would only make the
+ * snippet call a non-existent agent (404). To rename an agent, change its
+ * `defineAgent` name in code and redeploy.
  */
 export function SnippetPanel({ boundWorkflow }: SnippetPanelProps): JSX.Element | null {
   // Guard: only render when the workflow is deployed.
@@ -29,13 +33,13 @@ export function SnippetPanel({ boundWorkflow }: SnippetPanelProps): JSX.Element 
 // without the React-hooks-in-conditionals lint error.
 function SnippetPanelInner({ boundWorkflow }: SnippetPanelProps): JSX.Element {
   const [activeTab, setActiveTab] = useState<SnippetTab>("typescript");
-  const [slug, setSlug] = useState<string>(boundWorkflow.definitionSlug ?? "");
   const [copied, setCopied] = useState(false);
 
-  // Effective slug: prefer what the user typed; fall back to placeholder string
-  // in the generated output so there's always something meaningful to copy.
-  const effectiveSlug = slug.trim() || "your-agent-slug";
-  const { typescript, curl } = generateSnippet({ definition: effectiveSlug });
+  // The slug is read straight from the deployed workflow — never user-edited, so
+  // the snippet can only ever reference the real agent. Falls back to a clear
+  // placeholder only if a deployed agent somehow has no cached name.
+  const slug = boundWorkflow.definitionSlug ?? "your-agent-slug";
+  const { typescript, curl } = generateSnippet({ definition: slug });
   const activeSnippet = activeTab === "typescript" ? typescript : curl;
 
   const handleCopy = (): void => {
@@ -58,19 +62,10 @@ function SnippetPanelInner({ boundWorkflow }: SnippetPanelProps): JSX.Element {
       </div>
 
       <div className="snippet-slug-row">
-        <label className="snippet-slug-label" htmlFor="snippet-slug-input">
-          Agent slug
-        </label>
-        <input
-          id="snippet-slug-input"
-          className="snippet-slug-input"
-          data-testid="snippet-slug-input"
-          type="text"
-          value={slug}
-          placeholder="your-agent-slug"
-          onChange={(e) => setSlug(e.target.value)}
-          spellCheck={false}
-        />
+        <span className="snippet-slug-label">Agent</span>
+        <code className="snippet-slug" data-testid="snippet-slug">
+          {slug}
+        </code>
       </div>
 
       <div className="snippet-tabs" role="tablist" aria-label="Snippet language">
