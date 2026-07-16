@@ -77,6 +77,7 @@ function SnippetPanelInner({ boundWorkflow }: SnippetPanelProps): JSX.Element {
         <button
           role="tab"
           aria-selected={activeTab === "typescript"}
+          aria-controls="snippet-code-panel"
           className={"snippet-tab" + (activeTab === "typescript" ? " is-active" : "")}
           data-testid="snippet-tab-ts"
           onClick={() => setActiveTab("typescript")}
@@ -86,6 +87,7 @@ function SnippetPanelInner({ boundWorkflow }: SnippetPanelProps): JSX.Element {
         <button
           role="tab"
           aria-selected={activeTab === "curl"}
+          aria-controls="snippet-code-panel"
           className={"snippet-tab" + (activeTab === "curl" ? " is-active" : "")}
           data-testid="snippet-tab-curl"
           onClick={() => setActiveTab("curl")}
@@ -94,7 +96,7 @@ function SnippetPanelInner({ boundWorkflow }: SnippetPanelProps): JSX.Element {
         </button>
       </div>
 
-      <div className="snippet-code-wrap">
+      <div className="snippet-code-wrap" role="tabpanel" id="snippet-code-panel">
         <pre className="snippet-code" data-testid="snippet-code">
           <code>{activeSnippet}</code>
         </pre>

@@ -135,7 +135,10 @@ export function CanvasPane({
       )}
 
       {boundWorkflow?.definitionId != null && (
-        <SnippetPanel boundWorkflow={boundWorkflow} />
+        // key on the workflow path so switching between two *deployed* workflows
+        // remounts the panel — resetting the editable slug/tab to the new agent.
+        // A bare prop change would not re-init the slug useState → stale snippet.
+        <SnippetPanel key={boundWorkflow.path} boundWorkflow={boundWorkflow} />
       )}
 
       {!sessionId ? (
