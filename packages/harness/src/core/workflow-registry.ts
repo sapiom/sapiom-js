@@ -222,7 +222,19 @@ export class WorkflowRegistry {
   }
 }
 
-export function createWorkflowsRouter(registry: WorkflowRegistry): ExpressRouter {
+/**
+ * The subset of {@link WorkflowRegistry} the workflows router depends on. Typed
+ * structurally so a caller can pass a wrapper (e.g. one that enriches `list()`
+ * with resolved slugs) without an unsafe cast — a missing method is then a
+ * compile error, not a runtime crash.
+ */
+export interface WorkflowRegistryLike {
+  list(): Promise<WorkflowInfo[]>;
+  scan(root: string): Promise<WorkflowInfo[]>;
+  connectPath(inputPath: string): Promise<WorkflowInfo>;
+}
+
+export function createWorkflowsRouter(registry: WorkflowRegistryLike): ExpressRouter {
   const router = Router();
 
   router.get("/api/workflows", async (_req, res) => {
