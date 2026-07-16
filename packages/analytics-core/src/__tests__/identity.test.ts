@@ -165,6 +165,51 @@ describe("identity store + first-run notice", () => {
     expect(noticeCount()).toBe(1); // once per instance, not per event
   });
 
+  it("eagerFirstRunNotice prints at creation, stamps the marker, and track() never reprints", () => {
+    const analytics = tracker.register(
+      createAnalytics(baseConfig({ eagerFirstRunNotice: true })),
+    );
+    // Printed before any track() — the whole point of the eager path.
+    expect(noticeCount()).toBe(1);
+
+    const record = JSON.parse(fs.readFileSync(home.identityPath, "utf8"));
+    expect(typeof record.first_run_notice_at).toBe("string");
+
+    analytics.track("event");
+    expect(noticeCount()).toBe(1);
+
+    // A later non-eager instance (a later process) is suppressed by the
+    // persisted marker, exactly as if track() had printed it.
+    const second = tracker.register(createAnalytics(baseConfig()));
+    second.track("event");
+    expect(noticeCount()).toBe(1);
+  });
+
+  it("eagerFirstRunNotice is consent-gated: a disabled instance prints nothing", () => {
+    process.env.SAPIOM_TELEMETRY_DISABLED = "1";
+    tracker.register(createAnalytics(baseConfig({ eagerFirstRunNotice: true })));
+    expect(noticeCount()).toBe(0);
+    expect(fs.existsSync(home.identityPath)).toBe(false);
+  });
+
+  it("eagerFirstRunNotice + unwritable HOME: prints once at creation, not again on track()", () => {
+    // Without the eager path this is the worst case: the marker can't
+    // persist, so track() would print on the first event of every process —
+    // for a terminal-handoff host, into the child's UI.
+    const blocker = path.join(home.dir, "blocker");
+    fs.writeFileSync(blocker, "i am a file");
+    process.env.HOME = path.join(blocker, "nested");
+    process.env.USERPROFILE = process.env.HOME;
+
+    const analytics = tracker.register(
+      createAnalytics(baseConfig({ eagerFirstRunNotice: true })),
+    );
+    expect(noticeCount()).toBe(1);
+
+    analytics.track("event");
+    expect(noticeCount()).toBe(1);
+  });
+
   it("shares one session id per process and exposes it as uuid4", () => {
     const first = tracker.register(createAnalytics(baseConfig()));
     const second = tracker.register(createAnalytics(baseConfig()));

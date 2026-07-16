@@ -64,6 +64,15 @@ export interface IngestDeps {
    * retained as an extension point.
    */
   onRawHookEvent?: (hookEvent: string, harnessSessionId: string, payload: Record<string, unknown>) => void;
+  /**
+   * Observes every fire-and-forget processIngest promise the router
+   * schedules (already error-handled via `onError` — it never rejects).
+   * Purely observational: the router never awaits it, so responses stay
+   * fast. A short-lived host (CLI passthrough) uses this to await all
+   * in-flight processing at teardown — the long-lived server, which can
+   * always catch up later, doesn't need it.
+   */
+  onIngestScheduled?: (processing: Promise<void>) => void;
   onError?: (err: unknown) => void;
   /** Injectable for tests; defaults to a fresh per-router counter. */
   seqCounter?: SeqCounter;
@@ -159,9 +168,10 @@ export function createIngestRouter(deps: IngestDeps): Router {
     // agent's hook pipeline. Processing happens after the response is sent.
     res.status(200).json({ ok: true });
 
-    void processIngest(req.body as IngestRequestBody, deps, seqCounter).catch((err) => {
+    const processing = processIngest(req.body as IngestRequestBody, deps, seqCounter).catch((err) => {
       deps.onError?.(err);
     });
+    deps.onIngestScheduled?.(processing);
   });
 
   return router;

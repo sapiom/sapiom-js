@@ -8,13 +8,19 @@
 import type { EmbeddedHarnessAdapterInfo } from "./adapter.js";
 import { isExecutableOnPath } from "./detect.js";
 
+/** The one-liner that registers the Sapiom MCP server globally with Codex.
+ *  Shared by the Install MCP prompt below and the CLI passthrough mode's
+ *  pre-spawn hint (Codex has no per-session --mcp-config equivalent, so the
+ *  harness can't inject it — the user has to run this once themselves). */
+export const CODEX_MCP_ADD_COMMAND = "codex mcp add sapiom-dev -- npx -y @sapiom/mcp";
+
 const INSTALL_MCP_PROMPT = [
   "Set up the Sapiom MCP server for the Codex CLI.",
   "",
   "1. Register it under the server name `sapiom-dev`. Recent Codex versions",
   "   support:",
   "",
-  "   codex mcp add sapiom-dev -- npx -y @sapiom/mcp",
+  `   ${CODEX_MCP_ADD_COMMAND}`,
   "",
   "   Otherwise add it to `~/.codex/config.toml` yourself:",
   "",

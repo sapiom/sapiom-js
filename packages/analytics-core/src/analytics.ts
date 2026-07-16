@@ -79,6 +79,31 @@ function buildAnalytics(config: AnalyticsConfig): SapiomAnalytics {
   let noticeAttempted = false;
   let stopped = false;
 
+  // First-ever tracked event across all packages on this machine prints a
+  // one-line notice (marker lives in the identity file). When identity
+  // storage is unavailable the marker cannot persist: print unconditionally
+  // rather than collect silently — repeating the notice every process start
+  // in that edge case is acceptable, silent delivery is not.
+  const maybePrintFirstRunNotice = (): void => {
+    if (noticeAttempted) return;
+    noticeAttempted = true;
+    const identity = identityStore.load();
+    if (identity === null || identityStore.markFirstRunNoticeShown()) {
+      try {
+        process.stderr.write(FIRST_RUN_NOTICE + "\n");
+      } catch {
+        // Best effort.
+      }
+    }
+  };
+
+  // Hosts that hand the terminal to a child process right after startup opt
+  // into printing the notice NOW, at creation — an enabled instance would
+  // otherwise print it on the first track(), potentially into the middle of
+  // the child's UI. Disabled instances never reach this line (consent was
+  // resolved above), so consent still gates the notice.
+  if (config.eagerFirstRunNotice) maybePrintFirstRunNotice();
+
   return {
     track(
       eventType: string,
@@ -88,23 +113,7 @@ function buildAnalytics(config: AnalyticsConfig): SapiomAnalytics {
       try {
         if (stopped) return;
         const identity = identityStore.load();
-
-        // First-ever tracked event across all packages on this machine
-        // prints a one-line notice (marker lives in the identity file).
-        // When identity storage is unavailable the marker cannot persist:
-        // print unconditionally rather than collect silently — repeating
-        // the notice every process start in that edge case is acceptable,
-        // silent delivery is not.
-        if (!noticeAttempted) {
-          noticeAttempted = true;
-          if (identity === null || identityStore.markFirstRunNoticeShown()) {
-            try {
-              process.stderr.write(FIRST_RUN_NOTICE + "\n");
-            } catch {
-              // Best effort.
-            }
-          }
-        }
+        maybePrintFirstRunNotice();
 
         queue.enqueue(
           buildEnvelope({

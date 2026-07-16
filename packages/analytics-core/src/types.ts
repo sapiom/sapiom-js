@@ -70,6 +70,15 @@ export interface AnalyticsConfig {
    * to disable; do not use `undefined` as a "not decided yet" sentinel.
    */
   consentProvider?: () => boolean | undefined;
+  /**
+   * Print (and persist the shown-marker for) the once-per-machine first-run
+   * notice at instance creation instead of on the first `track()`. For hosts
+   * that hand the terminal to another process right after startup (e.g. a
+   * CLI that spawns a full-screen TUI): the notice must reach stderr while
+   * the host still owns the terminal, not later in the middle of the child's
+   * UI. Consent still gates it — a disabled instance never prints.
+   */
+  eagerFirstRunNotice?: boolean;
   /** Custom fetch implementation (dependency injection, primarily for tests). */
   fetchImpl?: FetchLike;
   /** See {@link DebugHook}. */

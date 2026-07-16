@@ -7,7 +7,14 @@
  *
  * Flags: [dir] (default cwd), --port, --no-auth, --no-telemetry, --no-open,
  * --no-session, --dev.
+ *
+ * Passthrough mode: `sapiom-harness [harness-flags] -- <agent> [args...]`
+ * (agent: `claude` | `claude-code` | `codex`) routes the whole invocation to
+ * cli/passthrough.ts instead — the agent runs in this terminal with the
+ * harness's config injection + analytics attached. The `--` separator is
+ * mandatory; see cli/passthrough-args.ts for the grammar.
  */
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import open from "open";
@@ -23,10 +30,15 @@ import { ensureAuthenticated, type HarnessIdentity } from "./auth.js";
 import { ensureConsent } from "./consent.js";
 import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
+import { parsePassthroughArgv, suggestPassthroughHint } from "./passthrough-args.js";
+import { runPassthrough } from "./passthrough.js";
 import { startServer, type HarnessServer } from "../server/index.js";
 
 interface CliOptions {
   dir: string;
+  /** The dir positional exactly as typed (undefined when defaulted to cwd) —
+   *  drives the passthrough "did you mean" hint for agent-named dirs. */
+  rawDir: string | undefined;
   port: number;
   noAuth: boolean;
   noTelemetry: boolean;
@@ -83,6 +95,7 @@ function parseArgs(argv: string[]): CliOptions {
 
   return {
     dir: path.resolve(dir ?? process.cwd()),
+    rawDir: dir,
     port,
     noAuth,
     noTelemetry,
@@ -124,7 +137,28 @@ function printBanner(opts: {
 }
 
 const main = async (): Promise<void> => {
+  // CLI passthrough mode: `sapiom-harness -- claude [args...]` runs the agent
+  // in this terminal instead of booting the web UI. A null return means no
+  // `--` was present — the web path below owns the argv unchanged.
+  const passthrough = parsePassthroughArgv(process.argv.slice(2));
+  if (passthrough) {
+    process.exitCode = await runPassthrough(passthrough);
+    return;
+  }
+
   const options = parseArgs(process.argv.slice(2));
+
+  // The dir positional shares its spot with what LOOKS like a passthrough
+  // invocation missing its `--` (`sapiom-harness claude`). When an
+  // agent-named dir doesn't actually exist the user almost certainly meant
+  // passthrough — fail fast with the pointer instead of booting the web UI
+  // against a nonexistent launch dir. An agent-named dir that DOES exist is
+  // served as a normal directory, and non-agent positionals keep their
+  // existing (unvalidated) behavior.
+  const passthroughHint = options.rawDir === undefined ? null : suggestPassthroughHint(options.rawDir);
+  if (passthroughHint && !existsSync(options.dir)) {
+    throw new Error(`Directory not found: ${options.dir}\n${passthroughHint}`);
+  }
 
   const doctorReport = await runDoctor();
   printDoctorReport(doctorReport);

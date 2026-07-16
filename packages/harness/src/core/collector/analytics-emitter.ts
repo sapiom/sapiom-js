@@ -47,6 +47,15 @@ export interface HarnessAnalyticsEmitterOptions {
    * analytics-core uses that instead (allows tests to redirect to a mock).
    */
   endpoint?: string;
+  /**
+   * Forwarded to analytics-core: print the once-per-machine first-run notice
+   * at emitter creation (while the host still owns the terminal) instead of
+   * on the first tracked event. Used by CLI passthrough mode, where the
+   * spawned agent owns stdout/stderr from spawn until exit and a mid-session
+   * notice would corrupt its TUI. Consent-gated as always — a disabled
+   * instance never prints.
+   */
+  eagerFirstRunNotice?: boolean;
   /** Injectable fetch for tests. */
   fetchImpl?: FetchLike;
   onDebug?: (message: string) => void;
@@ -107,6 +116,7 @@ function buildConfig(
     // (used in tests) takes precedence inside analytics-core's resolveEndpoint.
     endpoint: options.endpoint ?? SAPIOM_COLLECTOR_ENDPOINT,
     apiKey: apiKey ?? undefined,
+    eagerFirstRunNotice: options.eagerFirstRunNotice,
     fetchImpl: options.fetchImpl,
     debug: options.onDebug
       ? (message, detail) => {

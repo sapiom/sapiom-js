@@ -41,10 +41,7 @@ import { findRolloutFile, tailCodexRollout, type CodexTailerHandle } from "../co
 import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
-import { generateClaudeSettings } from "../core/inject/claude-settings.js";
-import { generateMcpConfig } from "../core/inject/mcp-config.js";
-import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
-import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
+import { createDefaultBuildLaunchOpts } from "../core/inject/launch-opts.js";
 import { removeGeneratedSessionDir, sweepGeneratedDirs } from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { WorkspaceWatcherManager } from "../core/workspace-watcher.js";
@@ -211,33 +208,6 @@ function readVersion(): string {
   }
 }
 
-/**
- * Real launch-opts wiring: generates the per-session --settings, --mcp-config,
- * and --append-system-prompt source files. Generated uniformly for every
- * harness kind — an adapter that doesn't use one of these fields (codex,
- * today) simply ignores it, same as the claude-code adapter already does for
- * whichever of the three a given launch doesn't set. `apiKey` (from CLI auth,
- * null when unauthenticated / --no-auth) flows into the generated mcp-config
- * so the remote `sapiom` MCP is actually authenticated — a factory rather
- * than a plain function since it's per-server-instance state.
- */
-function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: string): LaunchOptsBuilder {
-  return async (harnessSessionId) => {
-    const [settings, mcpConfigFile, systemPromptFile, pluginDir] = await Promise.all([
-      generateClaudeSettings({ harnessSessionId, generatedRoot }),
-      generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey, generatedRoot }),
-      generateSystemPromptFile(harnessSessionId, { generatedRoot }),
-      generateSkillsPlugin(harnessSessionId, { generatedRoot }),
-    ]);
-    return {
-      settingsFile: settings.settingsPath,
-      mcpConfigFile,
-      systemPromptFile,
-      ...(pluginDir ? { pluginDir } : {}),
-    };
-  };
-}
-
 export const startServer = async (options: HarnessServerOptions): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
   const identity = options.identity ?? null;
@@ -345,7 +315,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const generatedRoot = options.generatedRoot ?? statePaths.generated;
   const pendingGeneratedRemovals = new Map<string, Promise<void>>();
   const innerBuildLaunchOpts =
-    options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot);
+    options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null, { generatedRoot });
   const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
     return innerBuildLaunchOpts(harnessSessionId, req);

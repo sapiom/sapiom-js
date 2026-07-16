@@ -12,7 +12,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FIRST_RUN_NOTICE } from "@sapiom/analytics-core";
 import { startMockCollector, type MockCollector } from "@sapiom/analytics-core/testing";
 
 import {
@@ -392,6 +393,55 @@ describe("createHarnessEmitter", () => {
     }).not.toThrow();
 
     await expect(emitter.flush()).resolves.toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Eager first-run notice (CLI passthrough: print pre-spawn, never mid-TUI)
+  // -------------------------------------------------------------------------
+
+  it("eagerFirstRunNotice: prints at creation and never again on tracked events; disabled emitter stays silent", async () => {
+    const writes: string[] = [];
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    const noticeCount = (): number => writes.filter((w) => w.includes(FIRST_RUN_NOTICE)).length;
+    try {
+      emitter = createHarnessEmitter({
+        telemetryOptIn: true,
+        context: TEST_CONTEXT,
+        sdkName: "@sapiom/harness",
+        sdkVersion: "0.1.0",
+        endpoint: collector.url,
+        eagerFirstRunNotice: true,
+      });
+      // Printed at creation — before any event is tracked.
+      expect(noticeCount()).toBe(1);
+
+      // And the shown-marker is persisted, so nothing reprints later.
+      const record = JSON.parse(
+        fs.readFileSync(path.join(home.dir, ".sapiom", "analytics.json"), "utf8"),
+      ) as { first_run_notice_at: string | null };
+      expect(typeof record.first_run_notice_at).toBe("string");
+
+      emitter.enqueue(makeEvent({ type: "session.start", seq: 1 }));
+      await emitter.flush();
+      expect(noticeCount()).toBe(1);
+      await emitter.close();
+
+      // Consent gates the eager path too: a disabled emitter must not print.
+      emitter = createHarnessEmitter({
+        telemetryOptIn: false,
+        context: TEST_CONTEXT,
+        sdkName: "@sapiom/harness",
+        sdkVersion: "0.1.0",
+        endpoint: collector.url,
+        eagerFirstRunNotice: true,
+      });
+      expect(noticeCount()).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 
   // -------------------------------------------------------------------------

@@ -204,6 +204,44 @@ describe("createIngestRouter", () => {
     expect(stored[0].payload.model).toBe("claude-sonnet-5");
   });
 
+  it("onIngestScheduled observes the fire-and-forget processing promise, settling only after processing completes", async () => {
+    // The seam a short-lived host (CLI passthrough) uses as a teardown
+    // barrier: the promise must cover the WHOLE pipeline — including slow
+    // transcript enrichment — not just the fast 200 response.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scheduled: Array<Promise<void>> = [];
+    start({
+      enrichFromTranscript: async (event: AnalyticsEvent) => {
+        await gate;
+        return event;
+      },
+      onIngestScheduled: (processing) => scheduled.push(processing),
+    });
+
+    const res = await postIngest(baseUrl, {
+      hookEvent: "Stop",
+      harnessSessionId: "session-1",
+      payload: { session_id: "agent-1" },
+    });
+    expect(res.status).toBe(200); // responded before processing finished
+
+    await vi.waitFor(() => expect(scheduled).toHaveLength(1));
+    let settled = false;
+    void scheduled[0]!.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false); // still blocked inside enrichment
+    expect(stored).toHaveLength(0);
+
+    release();
+    await scheduled[0];
+    expect(stored).toHaveLength(1);
+  });
+
   it("calls onNormalizedEvent for every successfully normalized event", async () => {
     const onNormalizedEvent = vi.fn();
     start({ onNormalizedEvent });
