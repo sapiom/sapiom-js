@@ -304,7 +304,12 @@ export type TerminalControlMessage = TerminalResizeMessage;
 export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
   | { type: "canvas.reload"; harnessSessionId: string }
-  | { type: "port.detected"; harnessSessionId: string; port: number; url: string }
+  | {
+      type: "port.detected";
+      harnessSessionId: string;
+      port: number;
+      url: string;
+    }
   | { type: "workflows.changed" }
   /**
    * Full snapshot of one background task, re-broadcast on every change
@@ -530,7 +535,11 @@ export interface AppState {
    * don't run the consent flow (tests, mocks — treated as "stored-explicit"
    * by the UI, i.e. no notice).
    */
-  consentSource?: "env-forced-off" | "stored-explicit" | "prompted" | "default-silent";
+  consentSource?:
+    | "env-forced-off"
+    | "stored-explicit"
+    | "prompted"
+    | "default-silent";
   /**
    * When consentSource === "env-forced-off", which env var forced it off —
    * rendered in the tracking indicator as "off (env)" with the var name.
@@ -562,6 +571,14 @@ export interface AppState {
    *  terminal. Optional so AppState constructed without the CLI (tests,
    *  mocks) reads as a returning user by default. */
   firstRun?: boolean;
+  /** The Agents API base URL this harness resolves and triggers against — the
+   *  same env-configurable base the server uses to resolve deployed-agent slugs
+   *  (`SAPIOM_AGENTS_URL` / `SAPIOM_TOOLS_BASE`, else the prod default). The
+   *  snippet panel renders it as the executions host so the copy-paste cURL/SDK
+   *  call hits the same environment the agent was deployed to. Optional: omitted
+   *  by callers that construct AppState without the CLI (tests, mocks); the SPA
+   *  then falls back to the SDK's own default host. */
+  agentsBaseUrl?: string;
 }
 
 /** `POST /api/sample-project` response — the seeded (or reused) example. */

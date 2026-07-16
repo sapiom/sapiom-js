@@ -39,7 +39,9 @@ export const App = (): JSX.Element => {
   // Lifted so the telemetry chip in BrandHeader can open the settings popover
   // from outside SessionBar (which owns the popover's render).
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(null);
+  const [selectedRowEl, setSelectedRowEl] = useState<HTMLDivElement | null>(
+    null,
+  );
   const [stripColEl, setStripColEl] = useState<HTMLDivElement | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("canvas");
   // Tracks whether Skills has ever been shown — once true, SkillsPanel stays
@@ -52,9 +54,16 @@ export const App = (): JSX.Element => {
   // session state updates) since `api.listSkills.bind(api)` produces a new
   // function object on each render. Must be before any early return (React
   // hooks must be called unconditionally).
-  const listSkills = useMemo(() => harness.api.listSkills.bind(harness.api), [harness.api]);
-  const getSkill = useMemo(() => harness.api.getSkill.bind(harness.api), [harness.api]);
-  const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
+  const listSkills = useMemo(
+    () => harness.api.listSkills.bind(harness.api),
+    [harness.api],
+  );
+  const getSkill = useMemo(
+    () => harness.api.getSkill.bind(harness.api),
+    [harness.api],
+  );
+  const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } =
+    usePaneWidths();
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // preventDefault so it doesn't fall through to the browser's print/search dialogs.
@@ -89,23 +98,38 @@ export const App = (): JSX.Element => {
     return <div className="app-status">Loading Sapiom Harness…</div>;
   }
   if (harness.error || !harness.state) {
-    return <div className="app-status app-status-error">Failed to load: {harness.error}</div>;
+    return (
+      <div className="app-status app-status-error">
+        Failed to load: {harness.error}
+      </div>
+    );
   }
 
   const { state } = harness;
-  const activeSession = state.sessions.find((session) => session.id === harness.activeSessionId) ?? null;
+  const activeSession =
+    state.sessions.find((session) => session.id === harness.activeSessionId) ??
+    null;
   const boundWorkflowPath = boundWorkflowPathOf(activeSession);
-  const boundWorkflow = state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
-  const selectedWorkflow = state.workflows.find((w) => w.path === harness.selectedWorkflowPath) ?? null;
+  const boundWorkflow =
+    state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
+  const selectedWorkflow =
+    state.workflows.find((w) => w.path === harness.selectedWorkflowPath) ??
+    null;
 
   // First-run welcome: this install has never been used (firstRun — the CLI
   // also skips the auto boot session then) and nothing is live yet. Taking
   // either welcome action creates a session, which hides it; a returning
   // user (firstRun absent/false) never sees it at all.
-  const hasLiveSession = state.sessions.some((session) => session.status !== "exited");
-  const showWelcome = state.firstRun === true && !hasLiveSession && !welcomeDismissed;
+  const hasLiveSession = state.sessions.some(
+    (session) => session.status !== "exited",
+  );
+  const showWelcome =
+    state.firstRun === true && !hasLiveSession && !welcomeDismissed;
 
-  const handleCreateSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
+  const handleCreateSession = async (
+    cwd: string,
+    agentHarness: HarnessKind,
+  ): Promise<void> => {
     await harness.createSession({ cwd, harness: agentHarness });
   };
 
@@ -113,7 +137,8 @@ export const App = (): JSX.Element => {
     harness.setSelectedWorkflowPath(path);
     // Selecting a workflow IS "what I'm working on" — bind it to whichever
     // session is currently active so the chip and the agent's context stay in sync.
-    if (harness.activeSessionId) void harness.bindWorkflow(harness.activeSessionId, path);
+    if (harness.activeSessionId)
+      void harness.bindWorkflow(harness.activeSessionId, path);
   };
 
   // Shared by the docked workflow action strip, the canvas empty-state's
@@ -123,10 +148,17 @@ export const App = (): JSX.Element => {
   // nullable for macros that don't require one when nothing's bound yet.
   // Every macro is one click — there's no subject/free-text step on this
   // side; the agent is the interface for anything more specific.
-  const handleRunMacroForWorkflow = (workflow: WorkflowInfo | null, macro: MacroDef): void => {
+  const handleRunMacroForWorkflow = (
+    workflow: WorkflowInfo | null,
+    macro: MacroDef,
+  ): void => {
     if (workflow) handleSelectWorkflow(workflow.path);
     if (macro.action.kind === "open-url") {
-      window.open(resolveMacroUrl(macro.action.url, workflow), "_blank", "noopener,noreferrer");
+      window.open(
+        resolveMacroUrl(macro.action.url, workflow),
+        "_blank",
+        "noopener,noreferrer",
+      );
       return;
     }
     if (!harness.activeSessionId) return;
@@ -142,20 +174,23 @@ export const App = (): JSX.Element => {
         authenticated={state.authenticated}
         organizationName={state.organizationName}
         onOpenPalette={() => setPaletteOpen(true)}
-        telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+        telemetryOptIn={
+          harness.settings?.telemetryOptIn ?? state.telemetryOptIn
+        }
         consentSource={state.consentSource}
         consentEnvReason={state.consentEnvReason}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      {state.consentSource === "default-silent" && !harness.settings?.telemetryNoticeDismissed && (
-        <TelemetryNotice
-          onDismiss={() => {
-            void harness.updateSettings({ telemetryNoticeDismissed: true });
-          }}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
-      )}
+      {state.consentSource === "default-silent" &&
+        !harness.settings?.telemetryNoticeDismissed && (
+          <TelemetryNotice
+            onDismiss={() => {
+              void harness.updateSettings({ telemetryNoticeDismissed: true });
+            }}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        )}
 
       <div
         className="app"
@@ -189,7 +224,9 @@ export const App = (): JSX.Element => {
               height={rowAnchor.height}
               activeSessionId={harness.activeSessionId}
               macros={state.macros}
-              onRunMacro={(macro) => handleRunMacroForWorkflow(selectedWorkflow, macro)}
+              onRunMacro={(macro) =>
+                handleRunMacroForWorkflow(selectedWorkflow, macro)
+              }
             />
           )}
         </div>
@@ -210,7 +247,9 @@ export const App = (): JSX.Element => {
             sessions={state.sessions}
             activeSessionId={harness.activeSessionId}
             onSelectSession={harness.setActiveSessionId}
-            onResumeHistory={(summary) => void harness.resumeFromHistory(summary)}
+            onResumeHistory={(summary) =>
+              void harness.resumeFromHistory(summary)
+            }
             history={harness.history}
             historyLoading={harness.historyLoading}
             onOpenHistory={(cwd) => void harness.loadHistory(cwd)}
@@ -221,7 +260,9 @@ export const App = (): JSX.Element => {
             boundWorkflowName={boundWorkflow?.name ?? null}
             authenticated={state.authenticated}
             organizationName={state.organizationName}
-            telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+            telemetryOptIn={
+              harness.settings?.telemetryOptIn ?? state.telemetryOptIn
+            }
             onToggleTelemetry={async (next) => {
               await harness.updateSettings({ telemetryOptIn: next });
             }}
@@ -237,7 +278,10 @@ export const App = (): JSX.Element => {
                 onClose={() => void harness.closeSession(activeSession.id)}
               />
             ) : harness.activeSessionId ? (
-              <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+              <Terminal
+                sessionId={harness.activeSessionId}
+                token={harness.bootToken}
+              />
             ) : showWelcome ? (
               <WelcomePanel
                 recentDirs={harness.settings?.recentDirs ?? []}
@@ -250,7 +294,9 @@ export const App = (): JSX.Element => {
                 onDismiss={() => setWelcomeDismissed(true)}
               />
             ) : (
-              <div className="terminal-empty">No active session — click "+ new" to start one.</div>
+              <div className="terminal-empty">
+                No active session — click "+ new" to start one.
+              </div>
             )}
           </div>
         </div>
@@ -268,11 +314,17 @@ export const App = (): JSX.Element => {
 
         {/* Right pane: Canvas | Skills segmented switch + panels */}
         <div className="right-pane">
-          <div className="right-pane-tabs" role="tablist" aria-label="Right pane">
+          <div
+            className="right-pane-tabs"
+            role="tablist"
+            aria-label="Right pane"
+          >
             <button
               role="tab"
               aria-selected={rightTab === "canvas"}
-              className={"right-pane-tab" + (rightTab === "canvas" ? " is-active" : "")}
+              className={
+                "right-pane-tab" + (rightTab === "canvas" ? " is-active" : "")
+              }
               onClick={() => setRightTab("canvas")}
               data-testid="right-tab-canvas"
             >
@@ -281,8 +333,13 @@ export const App = (): JSX.Element => {
             <button
               role="tab"
               aria-selected={rightTab === "skills"}
-              className={"right-pane-tab" + (rightTab === "skills" ? " is-active" : "")}
-              onClick={() => { setRightTab("skills"); setSkillsPanelEverShown(true); }}
+              className={
+                "right-pane-tab" + (rightTab === "skills" ? " is-active" : "")
+              }
+              onClick={() => {
+                setRightTab("skills");
+                setSkillsPanelEverShown(true);
+              }}
               data-testid="right-tab-skills"
             >
               Skills
@@ -291,7 +348,12 @@ export const App = (): JSX.Element => {
 
           {/* Canvas: always mounted so a running Visualize enrichment is never
               disturbed when the user flips to Skills — hidden via CSS only. */}
-          <div className={"right-pane-panel" + (rightTab === "canvas" ? "" : " is-hidden")} data-testid="right-panel-canvas">
+          <div
+            className={
+              "right-pane-panel" + (rightTab === "canvas" ? "" : " is-hidden")
+            }
+            data-testid="right-panel-canvas"
+          >
             <CanvasPane
               sessionId={harness.activeSessionId}
               lastMessage={harness.lastMessage}
@@ -299,7 +361,10 @@ export const App = (): JSX.Element => {
               activeSessionId={harness.activeSessionId}
               macros={state.macros}
               tasks={harness.tasks}
-              onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
+              onRunMacro={(macro) =>
+                handleRunMacroForWorkflow(boundWorkflow, macro)
+              }
+              agentsBaseUrl={state.agentsBaseUrl}
             />
           </div>
 
@@ -310,7 +375,9 @@ export const App = (): JSX.Element => {
               state and scroll position survive tab flips. */}
           {(rightTab === "skills" || skillsPanelEverShown) && (
             <div
-              className={"right-pane-panel" + (rightTab === "skills" ? "" : " is-hidden")}
+              className={
+                "right-pane-panel" + (rightTab === "skills" ? "" : " is-hidden")
+              }
               data-testid="right-panel-skills"
             >
               <SkillsPanel
@@ -318,7 +385,9 @@ export const App = (): JSX.Element => {
                 getSkill={getSkill}
                 isActive={rightTab === "skills"}
                 activeSession={activeSession}
-                onUseSkill={(sessionId, text) => void harness.useSkill(sessionId, text)}
+                onUseSkill={(sessionId, text) =>
+                  void harness.useSkill(sessionId, text)
+                }
               />
             </div>
           )}
@@ -337,7 +406,9 @@ export const App = (): JSX.Element => {
         />
       )}
 
-      {harness.toast && <Toast message={harness.toast} onDismiss={harness.dismissToast} />}
+      {harness.toast && (
+        <Toast message={harness.toast} onDismiss={harness.dismissToast} />
+      )}
     </div>
   );
 };

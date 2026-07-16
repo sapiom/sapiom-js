@@ -5,6 +5,8 @@
  *   - "leasing"  → deployed (definitionId: 4821, definitionSlug: "ic-diligence-orchestrator")
  *   - "rfq"      → undeployed (definitionId: null, definitionSlug: null)
  *   - "onboarding-flow" → deployed (definitionId: 9001, definitionSlug: "onboarding-flow")
+ *   - "claims-triage" → deployed but slug unresolved (definitionId: 7314,
+ *     definitionSlug: null) — exercises the project-name fallback + "inferred" note
  *
  * On initial load, "leasing" is pre-bound and pre-selected (the boot session's
  * boundWorkflowPath is "/Users/demo/acme-app/leasing"). The snippet panel
@@ -20,18 +22,24 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("snippet panel visibility", () => {
-  test("shows the snippet panel when a deployed workflow is bound", async ({ page }) => {
+  test("shows the snippet panel when a deployed workflow is bound", async ({
+    page,
+  }) => {
     // leasing is deployed — the panel should be visible on initial load.
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
   });
 
-  test("hides the snippet panel when an undeployed workflow is selected", async ({ page }) => {
+  test("hides the snippet panel when an undeployed workflow is selected", async ({
+    page,
+  }) => {
     // Click rfq (no definitionId) — panel must disappear.
     await page.getByTestId("workflow-rfq").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
   });
 
-  test("shows the panel again after switching from undeployed back to deployed", async ({ page }) => {
+  test("shows the panel again after switching from undeployed back to deployed", async ({
+    page,
+  }) => {
     await page.getByTestId("workflow-rfq").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
 
@@ -41,20 +49,26 @@ test.describe("snippet panel visibility", () => {
 });
 
 test.describe("TypeScript tab (default)", () => {
-  test("default tab is TypeScript and contains the SDK call with the correct slug", async ({ page }) => {
+  test("default tab is TypeScript and contains the SDK call with the correct slug", async ({
+    page,
+  }) => {
     const panel = page.getByTestId("snippet-panel");
     const code = panel.getByTestId("snippet-code");
 
     // TS tab is active by default.
     await expect(panel.getByTestId("snippet-tab-ts")).toHaveClass(/is-active/);
-    await expect(panel.getByTestId("snippet-tab-curl")).not.toHaveClass(/is-active/);
+    await expect(panel.getByTestId("snippet-tab-curl")).not.toHaveClass(
+      /is-active/,
+    );
 
     // Content assertions.
-    await expect(code).toContainText('agents.run({');
+    await expect(code).toContainText("agents.run({");
     await expect(code).toContainText('definition: "ic-diligence-orchestrator"');
   });
 
-  test("TypeScript snippet does NOT contain forbidden patterns", async ({ page }) => {
+  test("TypeScript snippet does NOT contain forbidden patterns", async ({
+    page,
+  }) => {
     const code = page.getByTestId("snippet-code");
     const text = await code.textContent();
     expect(text).not.toContain("Authorization");
@@ -66,15 +80,23 @@ test.describe("TypeScript tab (default)", () => {
 });
 
 test.describe("cURL tab", () => {
-  test("switching to the cURL tab shows the HTTP snippet with the correct endpoint and header", async ({ page }) => {
+  test("switching to the cURL tab shows the HTTP snippet with the correct endpoint and header", async ({
+    page,
+  }) => {
     const panel = page.getByTestId("snippet-panel");
     await panel.getByTestId("snippet-tab-curl").click();
 
-    await expect(panel.getByTestId("snippet-tab-curl")).toHaveClass(/is-active/);
-    await expect(panel.getByTestId("snippet-tab-ts")).not.toHaveClass(/is-active/);
+    await expect(panel.getByTestId("snippet-tab-curl")).toHaveClass(
+      /is-active/,
+    );
+    await expect(panel.getByTestId("snippet-tab-ts")).not.toHaveClass(
+      /is-active/,
+    );
 
     const code = panel.getByTestId("snippet-code");
-    await expect(code).toContainText("POST https://tools.sapiom.ai/agents/v1/definitions/ic-diligence-orchestrator/executions");
+    await expect(code).toContainText(
+      "POST https://tools.sapiom.ai/agents/v1/definitions/ic-diligence-orchestrator/executions",
+    );
     await expect(code).toContainText("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
   });
 
@@ -93,7 +115,9 @@ test.describe("cURL tab", () => {
 
 test.describe("slug (read-only)", () => {
   test("shows the deployed agent's slug", async ({ page }) => {
-    await expect(page.getByTestId("snippet-slug")).toHaveText("ic-diligence-orchestrator");
+    await expect(page.getByTestId("snippet-slug")).toHaveText(
+      "ic-diligence-orchestrator",
+    );
   });
 
   test("the slug is read-only — not an editable input (it's the agent's identity, not a rename field)", async ({
@@ -106,12 +130,18 @@ test.describe("slug (read-only)", () => {
   test("switching to a second deployed workflow shows the new slug (no stale value)", async ({
     page,
   }) => {
-    await expect(page.getByTestId("snippet-slug")).toHaveText("ic-diligence-orchestrator");
+    await expect(page.getByTestId("snippet-slug")).toHaveText(
+      "ic-diligence-orchestrator",
+    );
     // onboarding-flow is a second DEPLOYED fixture — the panel must reflect its
     // slug, not keep leasing's.
     await page.getByTestId("workflow-onboarding-flow").click();
-    await expect(page.getByTestId("snippet-slug")).toHaveText("onboarding-flow");
-    await expect(page.getByTestId("snippet-code")).toContainText('definition: "onboarding-flow"');
+    await expect(page.getByTestId("snippet-slug")).toHaveText(
+      "onboarding-flow",
+    );
+    await expect(page.getByTestId("snippet-code")).toContainText(
+      'definition: "onboarding-flow"',
+    );
   });
 });
 
@@ -148,7 +178,9 @@ test.describe("copy button", () => {
     await panel.getByTestId("snippet-copy").click();
     await expect(panel.getByTestId("snippet-copy")).toHaveText("Copied");
 
-    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    const clipboardText = await page.evaluate(() =>
+      navigator.clipboard.readText(),
+    );
     expect(clipboardText).toContain("agents.run");
     expect(clipboardText).toContain("ic-diligence-orchestrator");
   });
@@ -165,20 +197,70 @@ test.describe("copy button", () => {
     await panel.getByTestId("snippet-copy").click();
     await expect(panel.getByTestId("snippet-copy")).toHaveText("Copied");
 
-    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    const clipboardText = await page.evaluate(() =>
+      navigator.clipboard.readText(),
+    );
     expect(clipboardText).toContain("curl -X POST");
     expect(clipboardText).toContain("ic-diligence-orchestrator");
     expect(clipboardText).toContain("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
   });
 });
 
+test.describe("slug fallback when the deployment slug is unresolved", () => {
+  test("shows the project name as the slug (deployed but slug unresolved)", async ({
+    page,
+  }) => {
+    await page.getByTestId("workflow-claims-triage").click();
+    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+    await expect(page.getByTestId("snippet-slug")).toHaveText("claims-triage");
+    await expect(page.getByTestId("snippet-code")).toContainText(
+      'definition: "claims-triage"',
+    );
+  });
+
+  test("shows the 'inferred from the project name' note only in the fallback case", async ({
+    page,
+  }) => {
+    // Resolved slug (leasing, the default binding) — no note.
+    await expect(page.getByTestId("snippet-slug")).toHaveText(
+      "ic-diligence-orchestrator",
+    );
+    await expect(page.getByTestId("snippet-slug-inferred")).toHaveCount(0);
+
+    // Unresolved slug (claims-triage) — the note appears.
+    await page.getByTestId("workflow-claims-triage").click();
+    await expect(page.getByTestId("snippet-slug-inferred")).toBeVisible();
+    await expect(page.getByTestId("snippet-slug-inferred")).toContainText(
+      "Inferred from the project name",
+    );
+  });
+
+  test("the 'your-agent-slug' placeholder never appears — resolved or fallback", async ({
+    page,
+  }) => {
+    // Resolved case (leasing).
+    await expect(page.getByTestId("snippet-panel")).not.toContainText(
+      "your-agent-slug",
+    );
+    // Fallback case (claims-triage).
+    await page.getByTestId("workflow-claims-triage").click();
+    await expect(page.getByTestId("snippet-panel")).not.toContainText(
+      "your-agent-slug",
+    );
+  });
+});
+
 test.describe("panel structure", () => {
   test("panel has the expected title", async ({ page }) => {
-    await expect(page.getByTestId("snippet-panel")).toContainText("Trigger from your code");
+    await expect(page.getByTestId("snippet-panel")).toContainText(
+      "Trigger from your code",
+    );
   });
 
   test("panel includes the idempotencyKey helper hint", async ({ page }) => {
-    await expect(page.getByTestId("snippet-panel")).toContainText("idempotencyKey");
+    await expect(page.getByTestId("snippet-panel")).toContainText(
+      "idempotencyKey",
+    );
   });
 
   test("links to the dashboard where users get an API key (for use outside the harness)", async ({
@@ -186,9 +268,14 @@ test.describe("panel structure", () => {
   }) => {
     const link = page.getByTestId("snippet-api-key-link");
     await expect(link).toBeVisible();
-    await expect(link).toHaveAttribute("href", "https://app.sapiom.ai/settings?tab=api-keys");
+    await expect(link).toHaveAttribute(
+      "href",
+      "https://app.sapiom.ai/settings?tab=api-keys",
+    );
     await expect(link).toHaveAttribute("target", "_blank");
     await expect(link).toHaveAttribute("rel", /noreferrer/);
-    await expect(page.getByTestId("snippet-panel")).toContainText("YOUR_SAPIOM_API_KEY");
+    await expect(page.getByTestId("snippet-panel")).toContainText(
+      "YOUR_SAPIOM_API_KEY",
+    );
   });
 });
