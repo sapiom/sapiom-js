@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type {
   BackgroundTask,
@@ -13,7 +13,6 @@ import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { track } from "../lib/track";
 import { Icon } from "./Icon";
-import { RunStatePanel } from "./RunStatePanel";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
 /** How many of a running task's trailing status lines the activity view shows. */
@@ -30,6 +29,8 @@ interface CanvasPaneProps {
   onRunMacro: (macro: MacroDef) => void;
   /** Live run state for the active session's current execution, if any. */
   runView?: RunView;
+  /** Execution target — governs the badge label ("running" vs "testing"). */
+  target?: "prod" | "local";
 }
 
 export function CanvasPane({
@@ -41,10 +42,15 @@ export function CanvasPane({
   tasks,
   onRunMacro,
   runView,
+  target,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  // Keep the latest runView in a ref so the iframe onLoad handler can read it
+  // without closing over a stale value.
+  const runViewRef = useRef<RunView | undefined>(runView);
   // True while the initial HEAD probe for this session is still in flight —
   // the pane shows a loading state instead of flashing "Nothing generated
   // yet" at content that's about to appear.
@@ -57,6 +63,39 @@ export function CanvasPane({
   const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(
     new Set(),
   );
+
+  // Keep the ref current on every render so onLoad (which captures it by ref)
+  // always reads the freshest value.
+  runViewRef.current = runView;
+
+  // Post the current run state into the iframe. Called both from the iframe's
+  // onLoad (so freshly-loaded frames get the current state) and from a runView
+  // effect (so state updates reach an already-loaded frame). Posts to "*"
+  // because the sandboxed iframe is opaque-origin — no other origin can be
+  // specified. The iframe listener validates `data.type` as its guard.
+  function postRunState(): void {
+    const rv = runViewRef.current;
+    if (!rv) return;
+    iframeRef.current?.contentWindow?.postMessage(
+      {
+        type: "sapiom:run-state",
+        steps: rv.steps.map((s) => ({
+          name: s.name,
+          status: s.status,
+          latencyMs: s.latencyMs,
+        })),
+        status: rv.status,
+        target: target ?? "prod",
+      },
+      "*",
+    );
+  }
+
+  // Re-post whenever runView changes — the iframe may already be loaded.
+  useEffect(() => {
+    postRunState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runView]);
 
   // Passed through to the served canvas so a kit-based template can match the
   // app's current theme instead of always rendering dark. Legacy canvases
@@ -152,8 +191,6 @@ export function CanvasPane({
           reVisualizeDisabledReason={visualizeDisabledReason}
         />
       )}
-
-      {runView && <RunStatePanel runView={runView} />}
 
       {!sessionId ? (
         <div className="canvas-empty">
@@ -283,10 +320,14 @@ export function CanvasPane({
           )}
           <iframe
             key={`${sessionId}:${reloadKey}`}
+            ref={iframeRef}
             className="canvas-iframe"
             src={`/canvas/${sessionId}/?theme=${theme}`}
             sandbox="allow-scripts"
-            onLoad={() => setFrameLoading(false)}
+            onLoad={() => {
+              setFrameLoading(false);
+              postRunState();
+            }}
           />
         </div>
       )}

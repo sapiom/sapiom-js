@@ -72,10 +72,13 @@ export const App = (): JSX.Element => {
   // Map: sessionId → latest executionId seen for that session. Updated when
   // an execution.started bus message arrives with target "prod".
   const sessionExecRef = useRef<Map<string, string>>(new Map());
+  // Map: sessionId → latest run target seen for that session.
+  const sessionTargetRef = useRef<Map<string, "prod" | "local">>(new Map());
   useEffect(() => {
     const msg = harness.lastMessage;
     if (msg?.type === "execution.started" && msg.target === "prod") {
       sessionExecRef.current.set(msg.harnessSessionId, msg.executionId);
+      sessionTargetRef.current.set(msg.harnessSessionId, msg.target);
     }
   }, [harness.lastMessage]);
 
@@ -88,6 +91,9 @@ export const App = (): JSX.Element => {
     ? sessionExecRef.current.get(harness.activeSessionId)
     : undefined;
   const activeRunView = activeExecId ? runViews.get(activeExecId) : undefined;
+  const activeTarget = harness.activeSessionId
+    ? sessionTargetRef.current.get(harness.activeSessionId)
+    : undefined;
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // preventDefault so it doesn't fall through to the browser's print/search dialogs.
@@ -389,6 +395,7 @@ export const App = (): JSX.Element => {
                 handleRunMacroForWorkflow(boundWorkflow, macro)
               }
               runView={activeRunView}
+              target={activeTarget}
             />
           </div>
 

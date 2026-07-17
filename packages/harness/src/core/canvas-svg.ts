@@ -13,8 +13,17 @@
  * canvas-template.ts, commit "canvas kit — LLM writes data, not HTML") — the
  * geometry is unchanged, only where it runs (server, not browser).
  */
-import type { CanvasEdge, CanvasEdgeKind, CanvasGraph, CanvasNode, CanvasNodeKind } from "./canvas-graph.js";
-import type { CanvasEnrichment, CanvasLayoutHints } from "./canvas-enrichment.js";
+import type {
+  CanvasEdge,
+  CanvasEdgeKind,
+  CanvasGraph,
+  CanvasNode,
+  CanvasNodeKind,
+} from "./canvas-graph.js";
+import type {
+  CanvasEnrichment,
+  CanvasLayoutHints,
+} from "./canvas-enrichment.js";
 
 export const NODE_W = 176;
 export const NODE_H = 64;
@@ -34,7 +43,10 @@ export interface GraphLayout {
  *  in-degree-0 node). Nodes never reached by a root (only possible on a
  *  disconnected/cyclic fragment) fall to the layer just past the deepest
  *  known one, so they still render instead of vanishing. */
-export function computeLayers(nodes: readonly CanvasNode[], edges: readonly CanvasEdge[]): Map<string, number> {
+export function computeLayers(
+  nodes: readonly CanvasNode[],
+  edges: readonly CanvasEdge[],
+): Map<string, number> {
   const ids = nodes.map((n) => n.id);
   const idSet = new Set(ids);
   const indeg = new Map<string, number>(ids.map((id) => [id, 0]));
@@ -57,7 +69,8 @@ export function computeLayers(nodes: readonly CanvasNode[], edges: readonly Canv
     for (const id of queue) {
       for (const child of adj.get(id) ?? []) {
         const candidate = (layer.get(id) ?? 0) + 1;
-        if (!layer.has(child) || candidate > layer.get(child)!) layer.set(child, candidate);
+        if (!layer.has(child) || candidate > layer.get(child)!)
+          layer.set(child, candidate);
         if (!seen.has(child)) {
           seen.add(child);
           next.push(child);
@@ -77,7 +90,10 @@ export function computeLayers(nodes: readonly CanvasNode[], edges: readonly Canv
  *  same layer are centered as a row; layers stack top to bottom. An
  *  enrichment's `laneOrder` hint reorders nodes WITHIN their computed layer
  *  only — layer assignment itself stays purely structural. */
-export function layoutGraph(graph: CanvasGraph, laneOrder?: CanvasLayoutHints["laneOrder"]): GraphLayout {
+export function layoutGraph(
+  graph: CanvasGraph,
+  laneOrder?: CanvasLayoutHints["laneOrder"],
+): GraphLayout {
   const layer = computeLayers(graph.nodes, graph.edges);
   const byLayer = new Map<number, string[]>();
   for (const n of graph.nodes) {
@@ -88,19 +104,27 @@ export function layoutGraph(graph: CanvasGraph, laneOrder?: CanvasLayoutHints["l
   }
   applyLaneOrder(byLayer, graph, laneOrder);
   const layers = [...byLayer.keys()].sort((a, b) => a - b);
-  const maxCols = layers.reduce((m, l) => Math.max(m, byLayer.get(l)!.length), 1);
+  const maxCols = layers.reduce(
+    (m, l) => Math.max(m, byLayer.get(l)!.length),
+    1,
+  );
   const width = MARGIN * 2 + maxCols * NODE_W + (maxCols - 1) * COL_GAP;
 
   const pos: Record<string, { x: number; y: number }> = {};
   for (const l of layers) {
     const idsInLayer = byLayer.get(l)!;
-    const rowWidth = idsInLayer.length * NODE_W + (idsInLayer.length - 1) * COL_GAP;
+    const rowWidth =
+      idsInLayer.length * NODE_W + (idsInLayer.length - 1) * COL_GAP;
     const startX = (width - rowWidth) / 2;
     idsInLayer.forEach((id, i) => {
-      pos[id] = { x: startX + i * (NODE_W + COL_GAP), y: MARGIN + l * (NODE_H + LAYER_GAP) };
+      pos[id] = {
+        x: startX + i * (NODE_W + COL_GAP),
+        y: MARGIN + l * (NODE_H + LAYER_GAP),
+      };
     });
   }
-  const height = MARGIN * 2 + (layers.length - 1) * (NODE_H + LAYER_GAP) + NODE_H;
+  const height =
+    MARGIN * 2 + (layers.length - 1) * (NODE_H + LAYER_GAP) + NODE_H;
   return { pos, width, height: Math.max(height, MARGIN * 2 + NODE_H) };
 }
 
@@ -130,10 +154,17 @@ function applyLaneOrder(
 }
 
 function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-function edgeColorClass(nodesById: Map<string, CanvasNode>, edge: CanvasEdge): "" | "--success" | "--warn" {
+function edgeColorClass(
+  nodesById: Map<string, CanvasNode>,
+  edge: CanvasEdge,
+): "" | "--success" | "--warn" {
   const target = nodesById.get(edge.to);
   if (target?.kind === "terminal-success") return "--success";
   if (target?.kind === "terminal-warn") return "--warn";
@@ -146,7 +177,13 @@ function arrowMarker(colorSuffix: "" | "--success" | "--warn"): string {
   return "url(#canvas-arrow)";
 }
 
-function edgePath(kind: CanvasEdgeKind, x1: number, y1: number, x2: number, y2: number): string {
+function edgePath(
+  kind: CanvasEdgeKind,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): string {
   if (kind === "branching") {
     const midY = (y1 + y2) / 2;
     return `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
@@ -169,7 +206,9 @@ function groupBandMarkup(
   return groups
     .map((group) => {
       if (!group.nodeIds.every((id) => nodeIds.has(id))) return "";
-      const positions = group.nodeIds.map((id) => layout.pos[id]).filter(Boolean);
+      const positions = group.nodeIds
+        .map((id) => layout.pos[id])
+        .filter(Boolean);
       if (positions.length === 0) return "";
       const minX = Math.min(...positions.map((p) => p.x)) - GROUP_PAD;
       const minY = Math.min(...positions.map((p) => p.y)) - GROUP_PAD;
@@ -190,11 +229,18 @@ function groupBandMarkup(
  *  like every other text. Assumes the shared `<defs>` (glow filter + arrow
  *  markers) are already present once at the document level — see
  *  `renderCanvasDocument`'s `SVG_DEFS` — so this never emits its own. */
-export function renderGraphSvg(graph: CanvasGraph, enrichment?: CanvasEnrichment | null): string {
+export function renderGraphSvg(
+  graph: CanvasGraph,
+  enrichment?: CanvasEnrichment | null,
+): string {
   const layout = layoutGraph(graph, enrichment?.layoutHints?.laneOrder);
   const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
 
-  const bandMarkup = groupBandMarkup(enrichment?.layoutHints?.groups, graph, layout);
+  const bandMarkup = groupBandMarkup(
+    enrichment?.layoutHints?.groups,
+    graph,
+    layout,
+  );
 
   const edgeMarkup = graph.edges
     .map((edge) => {
@@ -208,17 +254,27 @@ export function renderGraphSvg(graph: CanvasGraph, enrichment?: CanvasEnrichment
       // Cross (signal/handoff) and launch edges are always dashed-neutral,
       // never colored by their destination.
       const dashedClass =
-        edge.kind === "cross" ? "canvas-edge--cross" : edge.kind === "launch" ? "canvas-edge--launch" : null;
+        edge.kind === "cross"
+          ? "canvas-edge--cross"
+          : edge.kind === "launch"
+            ? "canvas-edge--launch"
+            : null;
       const colorSuffix = dashedClass ? "" : edgeColorClass(nodesById, edge);
-      const classes = ["canvas-edge", dashedClass ?? (colorSuffix && `canvas-edge${colorSuffix}`)]
+      const classes = [
+        "canvas-edge",
+        dashedClass ?? (colorSuffix && `canvas-edge${colorSuffix}`),
+      ]
         .filter(Boolean)
         .join(" ");
       const d = edgePath(edge.kind, x1, y1, x2, y2);
-      const marker = dashedClass ? "url(#canvas-arrow)" : arrowMarker(colorSuffix);
+      const marker = dashedClass
+        ? "url(#canvas-arrow)"
+        : arrowMarker(colorSuffix);
       const path = `<path class="${classes}" d="${d}" marker-end="${marker}" />`;
       // An enriched label (an intent/condition name the AI read out of the
       // step body) wins over the structural default (e.g. "launch()").
-      const labelText = enrichment?.edgeLabels?.[`${edge.from}->${edge.to}`] ?? edge.label;
+      const labelText =
+        enrichment?.edgeLabels?.[`${edge.from}->${edge.to}`] ?? edge.label;
       if (!labelText) return path;
       const dx = x2 - x1;
       const anchor = dx > 4 ? "start" : dx < -4 ? "end" : "middle";
@@ -240,9 +296,11 @@ export function renderGraphSvg(graph: CanvasGraph, enrichment?: CanvasEnrichment
         : "";
       // SVG <title> = native hover tooltip; the only enrichment slot with
       // room for a full sentence.
-      const description = details?.description ? `<title>${esc(details.description)}</title>` : "";
+      const description = details?.description
+        ? `<title>${esc(details.description)}</title>`
+        : "";
       return (
-        `<g class="canvas-node node--${node.kind}" filter="url(#canvas-glow)" transform="translate(${p.x},${p.y})">` +
+        `<g class="canvas-node node--${node.kind}" filter="url(#canvas-glow)" transform="translate(${p.x},${p.y})" data-step-name="${esc(node.label)}" data-step-id="${esc(node.id)}">` +
         description +
         `<rect class="canvas-node-rect" width="${NODE_W}" height="${NODE_H}" rx="14" />` +
         `<text class="canvas-node-title" x="${NODE_W / 2}" y="${titleY}">${esc(node.label)}</text>` +
@@ -269,7 +327,10 @@ export function renderGraphSvg(graph: CanvasGraph, enrichment?: CanvasEnrichment
 }
 
 /** Every node/edge kind actually used, for the shared legend footer. */
-export function usedKinds(graph: CanvasGraph): { nodeKinds: Set<CanvasNodeKind>; edgeKinds: Set<CanvasEdgeKind> } {
+export function usedKinds(graph: CanvasGraph): {
+  nodeKinds: Set<CanvasNodeKind>;
+  edgeKinds: Set<CanvasEdgeKind>;
+} {
   return {
     nodeKinds: new Set(graph.nodes.map((n) => n.kind)),
     edgeKinds: new Set(graph.edges.map((e) => e.kind)),

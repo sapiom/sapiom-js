@@ -18,6 +18,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
+import {
+  applyRunStateToCanvas,
+  bootCanvasRunState,
+  runStateNodeClass,
+} from "./canvas-run-state.js";
 
 /** Lives alongside index.html, in the same CANVAS_DIR — a pristine copy of
  *  the template, written once and never touched again, so "clone the
@@ -147,6 +152,49 @@ html, body {
 .canvas-notes { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--canvas-text-dim); }
 .canvas-cross-workflow { margin: 0; font-size: 11.5px; color: var(--canvas-text-dim); }
 template { display: none; }
+
+/* --- live run-state node lighting ---------------------------------------- */
+/* Applied by the postMessage listener (canvas-run-state.ts) while a run is
+   active. Each step's <g class="canvas-node"> gains one of is-running /
+   is-passed / is-failed / is-pending, lighting up its rect in place. */
+
+@keyframes canvas-node-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50%       { stroke-opacity: 0.45; }
+}
+
+.canvas-node.is-running .canvas-node-rect {
+  stroke: var(--canvas-accent);
+  stroke-width: 2.5;
+  animation: canvas-node-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-node.is-running .canvas-node-rect {
+    animation: none;
+  }
+}
+
+.canvas-node.is-passed .canvas-node-rect {
+  stroke: var(--canvas-success);
+  stroke-width: 2;
+  fill-opacity: 0.08;
+}
+
+.canvas-node.is-failed .canvas-node-rect {
+  stroke: var(--canvas-failure);
+  stroke-width: 2;
+  fill-opacity: 0.08;
+}
+
+/* is-pending: leave the node at its default appearance — no extra rules. */
+
+/* Active-run header badge — accent background signals a live run. */
+.canvas-badge.canvas-badge--active {
+  color: var(--canvas-bg);
+  background: var(--canvas-accent);
+  border-color: var(--canvas-accent);
+}
 `.trim();
 }
 
@@ -247,11 +295,19 @@ const SVG_DEFS = `
 </svg>
 `.trim();
 
+/** Stringified run-state listener injected into every canvas document so nodes
+ *  light up in place when a run-state postMessage arrives from the parent. The
+ *  three functions must be stringified together because `bootCanvasRunState`
+ *  calls `applyRunStateToCanvas`, which calls `runStateNodeClass` — they must
+ *  all be in scope at the same time in the iframe's plain-JS context. */
+const RUN_STATE_SCRIPT = `${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();`;
+
 /**
  * Wraps `bodyHtml` in the shared canvas document shell: doctype, the theme
- * switch script, and every CSS class an agent's markup can use. This is the
- * single source both the pristine template and `scripts/seed-example.mjs`'s
- * prefilled instance render through, so they can't drift from each other.
+ * switch script, the run-state listener, and every CSS class an agent's markup
+ * can use. This is the single source both the pristine template and
+ * `scripts/seed-example.mjs`'s prefilled instance render through, so they
+ * can't drift from each other.
  */
 export function renderCanvasDocument(bodyHtml: string): string {
   return `<!DOCTYPE html>
@@ -262,6 +318,9 @@ export function renderCanvasDocument(bodyHtml: string): string {
 <title>Sapiom workflow canvas</title>
 <script>
 ${THEME_SCRIPT}
+</script>
+<script>
+${RUN_STATE_SCRIPT}
 </script>
 <style>
 ${themeStyleBlock()}
@@ -311,7 +370,10 @@ ${PATTERNS_TEMPLATE}
  *  `index.html` — a friendly empty state plus the patterns reference. */
 export const TEMPLATE_HTML = renderCanvasDocument(TEMPLATE_BODY);
 
-async function writeIfMissing(filePath: string, content: string): Promise<void> {
+async function writeIfMissing(
+  filePath: string,
+  content: string,
+): Promise<void> {
   try {
     await fs.access(filePath);
     return;
@@ -366,6 +428,9 @@ async function removeLegacyOverviewIndex(indexPath: string): Promise<void> {
   try {
     await fs.rm(indexPath, { force: true });
   } catch (err) {
-    console.error(`[harness] failed to remove legacy canvas overview ${indexPath}:`, err);
+    console.error(
+      `[harness] failed to remove legacy canvas overview ${indexPath}:`,
+      err,
+    );
   }
 }
