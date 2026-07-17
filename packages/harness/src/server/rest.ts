@@ -5,6 +5,7 @@
  */
 
 import express, { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 
 import { randomUUID } from "node:crypto";
@@ -51,6 +52,13 @@ import { loadSettings, saveSettings } from "../cli/settings.js";
  * every other route validates its own (much smaller) shape via zod.
  */
 const JSON_BODY_LIMIT = `${Math.ceil((MAX_IMAGE_UPLOAD_BYTES * 4) / 3 / (1024 * 1024)) + 2}mb`;
+
+const imageUploadRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 /** File extension to store an accepted image under, keyed by media type. */
 const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
@@ -485,7 +493,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
    * whose adapter declares `imageInput`, so an image never gets relayed to an
    * agent that can't consume it.
    */
-  router.post("/sessions/:id/image", async (req, res, next) => {
+  router.post("/sessions/:id/image", imageUploadRateLimiter, async (req, res, next) => {
     const parsed = attachImageSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
