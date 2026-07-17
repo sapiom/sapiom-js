@@ -575,6 +575,24 @@ input {
   text-align: left;
 }
 
+/* The "Work on this" bind control sits above the macros as the primary action
+   for the selected workflow — a hairline separates it from the action set so
+   it reads as a distinct decision ("what am I working on") rather than one more
+   macro. */
+.strip-item-bind {
+  padding-bottom: 7px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+}
+
+/* Once it IS the active session's binding, the control shows the accent so the
+   strip echoes what the canvas and the "working on" chip already say. */
+.strip-item-bind.is-bound,
+.strip-item-bind.is-bound:disabled {
+  color: var(--accent);
+}
+
 .center-pane {
   display: flex;
   flex-direction: column;

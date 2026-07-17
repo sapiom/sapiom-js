@@ -240,9 +240,25 @@ test.describe("workspace binding", () => {
     await expect(chip).toContainText("working on leasing");
   });
 
-  test("selecting a different workflow re-binds it and updates the chip", async ({ page }) => {
+  test("inspecting a workflow highlights it WITHOUT rebinding — binding changes only on 'Work on this'", async ({
+    page,
+  }) => {
+    // Clicking rfq in the rail inspects it: the row highlights and the strip
+    // docks to it, but the active session stays bound to leasing (no clobber).
     await page.getByTestId("workflow-rfq").click();
+    await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-selected/);
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("working on leasing");
+
+    // The strip offers to make it the binding; taking that explicit action is
+    // what rebinds and updates the chip.
+    const bind = page.getByTestId("workflow-bind");
+    await expect(bind).toBeEnabled();
+    await bind.click();
     await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
+
+    // Now that it IS the binding, the control reflects that and stops offering.
+    await expect(bind).toHaveAttribute("aria-pressed", "true");
+    await expect(bind).toBeDisabled();
   });
 
   test("the binding is per-session: switching sessions shows that session's own binding", async ({ page }) => {
@@ -252,6 +268,27 @@ test.describe("workspace binding", () => {
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f").click();
     await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
+  });
+
+  test("switching tabs keeps the rail highlight in sync with the active session's binding (SAP-1631)", async ({
+    page,
+  }) => {
+    // Boot session is bound to leasing → that row is highlighted on load.
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-selected/);
+
+    // The "scratch" background session has no binding. Switching to its tab
+    // must CLEAR the highlight (and leave the canvas empty) rather than
+    // stranding the rail on leasing while the canvas shows nothing — the
+    // rail↔canvas divergence this fixes.
+    await page.getByTestId("session-tab-sess-bg").click();
+    await expect(page.getByTestId("session-tab-sess-bg")).toHaveClass(/is-active/);
+    await expect(page.locator(".workflow-item.is-selected")).toHaveCount(0);
+    await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
+    await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+
+    // Switching back restores that session's own binding highlight.
+    await page.getByTestId("session-tab-sess-boot").click();
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-selected/);
   });
 });
 
@@ -484,7 +521,10 @@ test.describe("docked workflow action strip", () => {
     // ONE canvas macro: the old two-button visualize / ai-visualize split is
     // gone — Visualize alone covers structure + AI enrichment server-side.
     await expect(strip.getByTestId("macro-ai-visualize")).toHaveCount(0);
-    await expect(strip.locator(".strip-item")).toHaveCount(5);
+    // Five macros — counted apart from the "Work on this" bind control, which
+    // shares the .strip-item layout but is not one of the workflow's macros.
+    await expect(strip.locator(".strip-item:not(.strip-item-bind)")).toHaveCount(5);
+    await expect(strip.getByTestId("workflow-bind")).toBeVisible();
 
     await page.screenshot({ path: "web/e2e/screenshots/app-shell-docked-strip.png", fullPage: true });
   });
@@ -586,7 +626,10 @@ test.describe("docked workflow action strip", () => {
     const leasingBox = await dot.boundingBox();
     expect(leasingBox).not.toBeNull();
 
+    // The canvas header names the BOUND workflow, so bind onboarding-flow
+    // (inspect it, then "Work on this") to bring its long name into the header.
     await page.getByTestId("workflow-onboarding-flow").locator(".workflow-item-trigger").click();
+    await page.getByTestId("workflow-bind").click();
     await expect(page.getByTestId("workflow-actions-header")).toContainText("onboarding-flow");
     const onboardingBox = await dot.boundingBox();
     expect(onboardingBox).not.toBeNull();
@@ -768,10 +811,11 @@ test("switching the bound workflow refetches the canvas immediately — the serv
   await expect.poll(() => canvasRequests).toBeGreaterThan(0);
   const requestsBeforeBind = canvasRequests;
 
-  // Re-bind to a different workflow: the pane must refetch the same URL on
-  // its own (the served document changes with the binding) — no canvas.reload
-  // round-trip required first.
+  // Re-bind to a different workflow (inspect it, then "Work on this"): the pane
+  // must refetch the same URL on its own (the served document changes with the
+  // binding) — no canvas.reload round-trip required first.
   await page.getByTestId("workflow-rfq").click();
+  await page.getByTestId("workflow-bind").click();
   await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
   await expect.poll(() => canvasRequests).toBeGreaterThan(requestsBeforeBind);
 });
@@ -856,6 +900,7 @@ test.describe("background-task canvas states", () => {
     // ...and switching the binding mid-run hides it again: the rfq pane must
     // not show leasing's enrichment progress.
     await page.getByTestId("workflow-rfq").click();
+    await page.getByTestId("workflow-bind").click();
     await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
     await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
   });
