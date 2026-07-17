@@ -15,6 +15,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
+import { MAX_IMAGE_UPLOAD_BYTES } from "../shared/types.js";
 import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
 import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
@@ -388,6 +389,149 @@ describe("createRestRouter", () => {
     });
   });
 
+  describe("POST /sessions/:id/image", () => {
+    // 1×1 transparent PNG.
+    const PNG_BASE64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const PNG_DATA_URL = `data:image/png;base64,${PNG_BASE64}`;
+
+    function seededSession(cwd: string, harness: HarnessKind = "claude-code"): HarnessSession {
+      return {
+        id: "sess-img",
+        agentSessionId: null,
+        harness,
+        cwd,
+        title: "img",
+        status: "running",
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        boundWorkflowPath: null,
+        ready: true,
+      };
+    }
+
+    it("writes the image under the session cwd and relays its path into the pty", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
+      const sessionManager = fakeSessionManager([seededSession(cwd)]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl: PNG_DATA_URL, filename: "shot.png" }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { path: string; mediaType: string; bytes: number };
+      expect(body.mediaType).toBe("image/png");
+      expect(body.bytes).toBeGreaterThan(0);
+      expect(body.path.startsWith(path.join(cwd, ".sapiom", "uploads"))).toBe(true);
+      expect(body.path.endsWith(".png")).toBe(true);
+      // The file really exists and the path (with a trailing space) was injected
+      // into the pty without submitting, so the user can add a message.
+      await expect(fs.stat(body.path)).resolves.toBeDefined();
+      expect(sessionManager.submitInput).toHaveBeenCalledWith("sess-img", `${body.path} `, false);
+
+      await fs.rm(cwd, { recursive: true, force: true });
+    });
+
+    it("404s an unknown session", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/sessions/nope/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl: PNG_DATA_URL }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("400s a harness that doesn't support image input", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
+      // `pi` is a real registry id with imageInput:false — persist a session as
+      // that harness to exercise the capability gate. (fakeSessionManager's get
+      // just echoes whatever we seed, so the harness kind need not be spawnable.)
+      const session = { ...seededSession(cwd), harness: "pi" as HarnessKind };
+      const sessionManager = fakeSessionManager([session]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl: PNG_DATA_URL }),
+      });
+      expect(res.status).toBe(400);
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+
+      await fs.rm(cwd, { recursive: true, force: true });
+    });
+
+    it("400s an unsupported image media type", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
+      const sessionManager = fakeSessionManager([seededSession(cwd)]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl: "data:image/svg+xml;base64,PHN2Zy8+" }),
+      });
+      expect(res.status).toBe(400);
+
+      await fs.rm(cwd, { recursive: true, force: true });
+    });
+
+    it("400s a body that isn't a base64 data URL", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
+      const sessionManager = fakeSessionManager([seededSession(cwd)]);
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl: "https://example.com/cat.png" }),
+      });
+      expect(res.status).toBe(400);
+
+      await fs.rm(cwd, { recursive: true, force: true });
+    });
+
+    it("413s an image over the size limit", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
+      const sessionManager = fakeSessionManager([seededSession(cwd)]);
+      start({ sessionManager });
+
+      // A base64 payload just over MAX_IMAGE_UPLOAD_BYTES once decoded.
+      const bigBytes = Buffer.alloc(MAX_IMAGE_UPLOAD_BYTES + 16, 0x41);
+      const dataUrl = `data:image/png;base64,${bigBytes.toString("base64")}`;
+      const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl }),
+      });
+      expect(res.status).toBe(413);
+
+      await fs.rm(cwd, { recursive: true, force: true });
+    });
+
+    it("409s when the session isn't ready yet (SessionNotReadyError)", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
+      const sessionManager = fakeSessionManager([seededSession(cwd)]);
+      (sessionManager.submitInput as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SessionNotReadyError("sess-img"),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl: PNG_DATA_URL }),
+      });
+      expect(res.status).toBe(409);
+
+      await fs.rm(cwd, { recursive: true, force: true });
+    });
+  });
+
   describe("PATCH /sessions/:id/workflow", () => {
     const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
     const baseSession: HarnessSession = {
@@ -596,6 +740,18 @@ describe("createRestRouter", () => {
         expect(typeof entry.installMcpPrompt).toBe("string");
         expect(entry.installMcpPrompt.length).toBeGreaterThan(0);
       }
+    });
+
+    it("surfaces each adapter's imageInput capability", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/harnesses`);
+      const body = (await res.json()) as Array<{ id: string; imageInput: boolean }>;
+      for (const entry of body) {
+        expect(typeof entry.imageInput).toBe("boolean");
+      }
+      expect(body.find((a) => a.id === "claude-code")!.imageInput).toBe(true);
+      expect(body.find((a) => a.id === "codex")!.imageInput).toBe(true);
+      expect(body.find((a) => a.id === "conductor")!.imageInput).toBe(false);
     });
 
     it("includes both embedded and external adapters", async () => {

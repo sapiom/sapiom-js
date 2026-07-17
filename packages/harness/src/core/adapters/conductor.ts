@@ -46,6 +46,8 @@ export const conductorAdapterInfo: ExternalHarnessAdapterInfo = {
   id: "conductor",
   label: "Conductor",
   mode: "external",
+  // External companion app — no pty to relay an image into.
+  imageInput: false,
   installMcpPrompt(): string {
     return INSTALL_MCP_PROMPT;
   },

@@ -16,6 +16,7 @@ import { BrandHeader } from "./components/BrandHeader";
 import { CanvasPane } from "./components/CanvasPane";
 import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
+import { ImageComposer } from "./components/ImageComposer";
 import { SessionBar } from "./components/SessionBar";
 import { SkillsPanel } from "./components/SkillsPanel";
 import { TelemetryNotice } from "./components/TelemetryNotice";
@@ -237,7 +238,14 @@ export const App = (): JSX.Element => {
                 onClose={() => void harness.closeSession(activeSession.id)}
               />
             ) : harness.activeSessionId ? (
-              <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+              <ImageComposer
+                sessionId={harness.activeSessionId}
+                harness={activeSession?.harness ?? "claude-code"}
+                api={harness.api}
+                showToast={harness.showToast}
+              >
+                <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+              </ImageComposer>
             ) : showWelcome ? (
               <WelcomePanel
                 recentDirs={harness.settings?.recentDirs ?? []}

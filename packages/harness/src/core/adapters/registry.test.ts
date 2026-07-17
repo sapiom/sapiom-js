@@ -97,6 +97,7 @@ describe("createHarnessAdapterRegistry — custom registries", () => {
       label: "Fictional Harness",
       mode: "embedded",
       experimental: true,
+      imageInput: false,
       installMcpPrompt: () => "Install @sapiom/mcp for Fictional Harness.",
       detectInstalled: async () => false,
     };
@@ -127,6 +128,9 @@ describe("adapter contract — shape of every built-in entry", () => {
       if (adapter.experimental !== undefined) {
         expect(typeof adapter.experimental).toBe("boolean");
       }
+
+      // Image-input support is a required, explicit boolean on every adapter.
+      expect(typeof adapter.imageInput).toBe("boolean");
 
       const prompt = adapter.installMcpPrompt();
       expect(typeof prompt).toBe("string");
