@@ -204,8 +204,8 @@ export function SessionBar({
                   }}
                 >
                   <span className="session-item-title">{summary.title}</span>
-                  <span className="session-item-meta">
-                    {summary.harness} · {new Date(summary.lastActiveAt).toLocaleString()}
+                  <span className="session-item-meta" data-testid={`history-meta-${summary.agentSessionId}`}>
+                    {historyRowMeta(summary)}
                   </span>
                 </button>
               ))}
@@ -246,4 +246,35 @@ export function SessionBar({
       )}
     </div>
   );
+}
+
+/**
+ * The meta line under a history row's title — the differentiators that let a
+ * user tell otherwise-similar rows apart (branch, turn count, when it was last
+ * active). Falls back to the harness name so the line is never empty.
+ */
+function historyRowMeta(summary: SessionSummary): string {
+  const parts: string[] = [];
+  if (summary.gitBranch) parts.push(summary.gitBranch);
+  if (typeof summary.messageCount === "number") {
+    parts.push(`${summary.messageCount} ${summary.messageCount === 1 ? "turn" : "turns"}`);
+  }
+  parts.push(formatRelativeTime(summary.lastActiveAt));
+  if (parts.length === 1) parts.unshift(summary.harness);
+  return parts.join(" · ");
+}
+
+/** Compact "time ago" for last-active timestamps, falling back to a locale
+ * date string for anything a day or more old (or an unparseable value). */
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const seconds = Math.round((Date.now() - then) / 1000);
+  if (seconds < 45) return "just now";
+  if (seconds < 90) return "1 min ago";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(iso).toLocaleDateString();
 }

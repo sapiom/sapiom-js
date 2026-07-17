@@ -31,20 +31,43 @@ function encodeProjectPath(cwd: string): string {
 
 const execFileAsync = promisify(execFile);
 
-/** Bytes read from the tail of a transcript file. Files can be 100MB+; the
- * summary/title we need is always near the end. */
-const TRANSCRIPT_TAIL_BYTES = 65_536;
+/** Bytes read from each end of a transcript that's too large to fully scan.
+ * The head holds the first prompt (a title fallback); the tail holds the
+ * latest ai-title/summary and the most recent git branch. */
+const TRANSCRIPT_WINDOW_BYTES = 65_536;
+
+/**
+ * Transcripts at or below this size are read in full, which yields an exact
+ * turn count and a title drawn from the whole session. Larger transcripts
+ * (Claude's JSONL can reach 100MB+) are read only at head+tail — scanning them
+ * on every history-dropdown open would be prohibitively slow — so their turn
+ * count is reported as unknown rather than a wrong partial count.
+ */
+const DEFAULT_FULL_SCAN_MAX_BYTES = 5_242_880; // 5 MiB
 
 export interface ClaudeCodeAdapterOptions {
   /** Overridable for tests (e.g. spawn `bash` instead of a real, auth-gated `claude`). */
   binary?: string;
   /** Overridable for tests. Defaults to the real home directory. */
   homeDir?: string;
+  /** Overridable for tests. Max transcript size (bytes) to read in full for an
+   *  exact turn count; larger files are read only at head+tail. */
+  fullScanMaxBytes?: number;
 }
 
 interface TranscriptEntry {
   type?: string;
+  /** Older-format compaction summary (`type: "summary"`). */
   summary?: string;
+  /** Claude's own generated session title (`type: "ai-title"`). */
+  aiTitle?: string;
+  /** Git branch recorded on user/assistant entries. */
+  gitBranch?: string;
+  /** True on internal sub-agent entries — never a real user turn. */
+  isSidechain?: boolean;
+  /** Present on user entries; `kind: "human"` marks a typed prompt (vs a
+   *  tool-result echoed back with role "user"). */
+  origin?: { kind?: string };
   message?: { role?: string; content?: unknown };
 }
 
@@ -64,40 +87,20 @@ function extractTextFromContent(content: unknown): string | undefined {
   return undefined;
 }
 
-/** Read only the tail of a (possibly huge) JSONL transcript file. */
-async function readTranscriptTail(
-  filePath: string,
-  maxBytes = TRANSCRIPT_TAIL_BYTES,
-): Promise<TranscriptEntry[]> {
-  let content: string;
-  let startedMidFile = false;
-  try {
-    const { size } = await stat(filePath);
-    if (size <= maxBytes) {
-      content = await readFile(filePath, "utf8");
-    } else {
-      const offset = size - maxBytes;
-      const handle = await open(filePath, "r");
-      try {
-        const buffer = Buffer.allocUnsafe(maxBytes);
-        await handle.read(buffer, 0, maxBytes, offset);
-        content = buffer.toString("utf8");
-        startedMidFile = true;
-      } finally {
-        await handle.close();
-      }
-    }
-  } catch {
-    return [];
-  }
-
-  // A tail read may start mid-line; drop the (possibly truncated) first line.
-  const firstNewline = content.indexOf("\n");
-  const safeContent = startedMidFile && firstNewline >= 0 ? content.slice(firstNewline + 1) : content;
-
+/** Parse the JSONL lines of a transcript slice into entries, skipping blank or
+ * malformed lines. `dropFirst`/`dropLast` discard a possibly-truncated edge
+ * line when the slice was cut mid-file (tail starts mid-line; head ends
+ * mid-line). */
+function parseTranscriptLines(
+  text: string,
+  { dropFirst = false, dropLast = false }: { dropFirst?: boolean; dropLast?: boolean } = {},
+): TranscriptEntry[] {
+  const lines = text.split("\n");
+  const start = dropFirst ? 1 : 0;
+  const end = dropLast ? lines.length - 1 : lines.length;
   const entries: TranscriptEntry[] = [];
-  for (const line of safeContent.split("\n")) {
-    const trimmed = line.trim();
+  for (let i = start; i < end; i++) {
+    const trimmed = lines[i]?.trim();
     if (!trimmed) continue;
     try {
       const parsed: unknown = JSON.parse(trimmed);
@@ -105,25 +108,141 @@ async function readTranscriptTail(
         entries.push(parsed as TranscriptEntry);
       }
     } catch {
-      // Skip malformed/truncated lines (expected at the start of a tail read).
+      // Skip malformed/truncated lines (expected at a sliced file boundary).
     }
   }
   return entries;
 }
 
-function extractTitle(entries: TranscriptEntry[], fallback: string): string {
+interface TranscriptScan {
+  /** Chronological head-window entries (or all entries when fully scanned). */
+  head: TranscriptEntry[];
+  /** Chronological tail-window entries (or all entries when fully scanned). */
+  tail: TranscriptEntry[];
+  /** Exact human-turn count when the file was small enough to scan in full;
+   *  undefined otherwise. */
+  messageCount?: number;
+}
+
+/**
+ * Read a transcript for summarization. Small files are read in full (exact
+ * turn count, title from the whole session); large files are read only at
+ * head+tail windows so the history dropdown never has to parse a 100MB file.
+ */
+async function scanTranscript(
+  filePath: string,
+  size: number,
+  fullScanMaxBytes: number,
+): Promise<TranscriptScan> {
+  if (size <= fullScanMaxBytes) {
+    let content: string;
+    try {
+      content = await readFile(filePath, "utf8");
+    } catch {
+      return { head: [], tail: [] };
+    }
+    const all = parseTranscriptLines(content);
+    return { head: all, tail: all, messageCount: countUserTurns(all) };
+  }
+
+  const window = TRANSCRIPT_WINDOW_BYTES;
+  let head: TranscriptEntry[] = [];
+  let tail: TranscriptEntry[] = [];
+  try {
+    const handle = await open(filePath, "r");
+    try {
+      const headBuf = Buffer.allocUnsafe(window);
+      await handle.read(headBuf, 0, window, 0);
+      // The head window likely ends mid-line — drop that partial last line.
+      head = parseTranscriptLines(headBuf.toString("utf8"), { dropLast: true });
+
+      const tailBuf = Buffer.allocUnsafe(window);
+      await handle.read(tailBuf, 0, window, size - window);
+      // The tail window likely starts mid-line — drop that partial first line.
+      tail = parseTranscriptLines(tailBuf.toString("utf8"), { dropFirst: true });
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return { head: [], tail: [] };
+  }
+  return { head, tail };
+}
+
+/** A user entry that represents a real human prompt — not an internal
+ * sub-agent turn and not a tool-result echoed back with role "user". */
+function isHumanTurn(entry: TranscriptEntry): boolean {
+  if (entry?.type !== "user" || entry.isSidechain === true) return false;
+  // Newer transcripts tag typed prompts with origin.kind === "human"; older
+  // ones omit origin entirely, so accept a missing origin too.
+  if (entry.origin?.kind && entry.origin.kind !== "human") return false;
+  // Tool results carry no plain text (their content is tool_result blocks);
+  // requiring extractable text excludes them.
+  return Boolean(extractTextFromContent(entry.message?.content)?.trim());
+}
+
+function countUserTurns(entries: TranscriptEntry[]): number {
+  return entries.reduce((n, entry) => (isHumanTurn(entry) ? n + 1 : n), 0);
+}
+
+/** Latest non-empty value of `field` on entries of type `type`, scanning
+ * newest-first. Used for ai-title / summary (title candidates). */
+function latestValue(
+  entries: TranscriptEntry[],
+  type: string,
+  field: "aiTitle" | "summary",
+): string | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry?.type === "summary" && typeof entry.summary === "string" && entry.summary.trim()) {
-      return entry.summary.trim();
+    if (entry?.type === type && typeof entry[field] === "string" && entry[field]!.trim()) {
+      return entry[field]!.trim();
     }
   }
-  for (const entry of entries) {
-    if (entry?.type !== "user") continue;
+  return undefined;
+}
+
+function truncateTitle(text: string): string {
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+}
+
+/**
+ * A human-readable title for a resumable session — never a bare UUID. In
+ * preference order: Claude's own generated title (`ai-title`), the older
+ * compaction `summary`, then the first human prompt. The latest ai-title /
+ * summary is preferred, and it lands in the tail window on long sessions
+ * (that's why we scan the tail); the first prompt is a head-window fallback
+ * for transcripts that have neither. Only when a session has no title, no
+ * summary, and no human prompt at all do we use `fallback`.
+ */
+function extractTitle(
+  head: TranscriptEntry[],
+  tail: TranscriptEntry[],
+  fallback: string,
+): string {
+  const aiTitle = latestValue(tail, "ai-title", "aiTitle") ?? latestValue(head, "ai-title", "aiTitle");
+  if (aiTitle) return truncateTitle(aiTitle);
+
+  const summary = latestValue(tail, "summary", "summary") ?? latestValue(head, "summary", "summary");
+  if (summary) return truncateTitle(summary);
+
+  for (const entry of head) {
+    if (!isHumanTurn(entry)) continue;
     const text = extractTextFromContent(entry.message?.content)?.trim();
-    if (text) return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+    if (text) return truncateTitle(text);
   }
   return fallback;
+}
+
+/** Most recent git branch recorded on a message entry, newest-first (tail then
+ * head), or undefined when the transcript records none. */
+function extractGitBranch(head: TranscriptEntry[], tail: TranscriptEntry[]): string | undefined {
+  for (const entries of [tail, head]) {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const branch = entries[i]?.gitBranch;
+      if (typeof branch === "string" && branch.trim()) return branch.trim();
+    }
+  }
+  return undefined;
 }
 
 function buildConfigArgs(opts: LaunchOpts): string[] {
@@ -139,10 +258,12 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   readonly eventSource = "hooks" as const;
   private readonly binary: string;
   private readonly homeDir: string;
+  private readonly fullScanMaxBytes: number;
 
   constructor(options: ClaudeCodeAdapterOptions = {}) {
     this.binary = options.binary ?? "claude";
     this.homeDir = options.homeDir ?? homedir();
+    this.fullScanMaxBytes = options.fullScanMaxBytes ?? DEFAULT_FULL_SCAN_MAX_BYTES;
   }
 
   async doctor(): Promise<DoctorCheck[]> {
@@ -236,17 +357,25 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       if (!file.endsWith(".jsonl")) continue;
       const filePath = join(projectDir, file);
       const agentSessionId = basename(file, ".jsonl");
-      const transcript = await readTranscriptTail(filePath);
-      if (transcript.length === 0) continue;
       const fileStat = await stat(filePath).catch(() => undefined);
-      const lastActiveAt = fileStat ? fileStat.mtime.toISOString() : new Date(0).toISOString();
+      if (!fileStat) continue;
+      const { head, tail, messageCount } = await scanTranscript(
+        filePath,
+        fileStat.size,
+        this.fullScanMaxBytes,
+      );
+      if (head.length === 0 && tail.length === 0) continue;
       summaries.push({
         agentSessionId,
         harness: "claude-code",
         cwd,
-        title: extractTitle(transcript, agentSessionId),
-        lastActiveAt,
+        // Never a bare UUID: falls back to the directory basename, not the
+        // session id, when a session has no title/summary/prompt at all.
+        title: extractTitle(head, tail, basename(cwd) || agentSessionId),
+        lastActiveAt: fileStat.mtime.toISOString(),
         source: "transcript",
+        gitBranch: extractGitBranch(head, tail),
+        messageCount,
       });
     }
 
