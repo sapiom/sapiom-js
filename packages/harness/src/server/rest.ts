@@ -35,6 +35,7 @@ import type {
 import {
   ALLOWED_IMAGE_MEDIA_TYPES,
   HARNESS_UPLOADS_DIR,
+  JSON_BODY_LIMIT_BYTES,
   MAX_IMAGE_UPLOAD_BYTES,
   SPAWNABLE_HARNESS_KINDS,
 } from "../shared/types.js";
@@ -44,15 +45,9 @@ import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registr
 import { resolveWithinRoot } from "../core/path-safety.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
-/**
- * express.json()'s default 100 KiB limit is far below a base64-encoded image
- * (an N-byte image is ~1.37·N once base64'd). Raise the JSON body ceiling to
- * comfortably clear MAX_IMAGE_UPLOAD_BYTES so the image route can parse; the
- * real per-image byte cap is still enforced after decode in the handler, and
- * every other route validates its own (much smaller) shape via zod.
- */
-const JSON_BODY_LIMIT = `${Math.ceil((MAX_IMAGE_UPLOAD_BYTES * 4) / 3 / (1024 * 1024)) + 2}mb`;
-
+// Cap image attaches per client so a runaway paste/drop loop can't fill the
+// disk or wedge the pty — the route is otherwise unauthenticated beyond the
+// boot token. (Added by CodeQL's rate-limiting finding.)
 const imageUploadRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
@@ -217,7 +212,7 @@ export interface RestRouterOptions {
 export function createRestRouter(options: RestRouterOptions): Router {
   const { sessionManager, adapters, version, identity, listWorkflows, listMacros } = options;
   const router = Router();
-  router.use(express.json({ limit: JSON_BODY_LIMIT }));
+  router.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
   router.get("/state", async (_req, res, next) => {
     try {

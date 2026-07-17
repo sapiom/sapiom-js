@@ -88,6 +88,16 @@ export type ImageMediaType = (typeof ALLOWED_IMAGE_MEDIA_TYPES)[number];
 export const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 /**
+ * Body-parser byte limit for JSON `/api` routes. express.json defaults to
+ * 100 KiB — far below a base64-encoded image (~1.37× the decoded size). Sized
+ * to clear MAX_IMAGE_UPLOAD_BYTES base64'd plus 1 MiB of envelope overhead, and
+ * shared by the app-level `/api` parser (server/index.ts) and the rest router
+ * so the two can't disagree. The real per-image cap is still enforced (after
+ * decode) in the image handler; other routes validate their own small shapes.
+ */
+export const JSON_BODY_LIMIT_BYTES = Math.ceil((MAX_IMAGE_UPLOAD_BYTES * 4) / 3) + 1024 * 1024;
+
+/**
  * Workspace-state convention: the harness mirrors this session's binding,
  * the full workflow registry, and its own identity here, relative to the
  * session cwd, so the agent has an always-current, agent-legible answer to

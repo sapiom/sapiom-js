@@ -435,6 +435,25 @@ describe("createRestRouter", () => {
       await fs.rm(cwd, { recursive: true, force: true });
     });
 
+    it("accepts an image body larger than express's 100 KiB JSON default", async () => {
+      // Regression: the JSON parser must be raised above express's 100 KiB
+      // default or any real screenshot 413s before the handler runs.
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
+      const sessionManager = fakeSessionManager([seededSession(cwd)]);
+      start({ sessionManager });
+
+      const payload = Buffer.alloc(300 * 1024, 0x42); // 300 KiB decoded — well over 100 KiB
+      const dataUrl = `data:image/png;base64,${payload.toString("base64")}`;
+      const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl }),
+      });
+      expect(res.status).toBe(200);
+
+      await fs.rm(cwd, { recursive: true, force: true });
+    });
+
     it("404s an unknown session", async () => {
       start();
       const res = await fetch(`${baseUrl}/sessions/nope/image`, {
