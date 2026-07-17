@@ -109,22 +109,33 @@ export const App = (): JSX.Element => {
     await harness.createSession({ cwd, harness: agentHarness });
   };
 
+  // Pure inspection: highlight a workflow in the rail and dock its action strip
+  // WITHOUT touching the active session's binding. Clicking around the rail to
+  // look at workflows must never clobber "what I'm working on" — rebinding is
+  // its own explicit action (handleBindWorkflow / the strip's "Work on this").
   const handleSelectWorkflow = (path: string): void => {
     harness.setSelectedWorkflowPath(path);
-    // Selecting a workflow IS "what I'm working on" — bind it to whichever
-    // session is currently active so the chip and the agent's context stay in sync.
+  };
+
+  // Explicitly makes a workflow the active session's binding ("what I'm working
+  // on"): selects it too so the highlight, the strip, the chip, and the canvas
+  // all land on the same workflow. This is the ONLY path that changes a
+  // session's binding from the rail side.
+  const handleBindWorkflow = (path: string): void => {
+    harness.setSelectedWorkflowPath(path);
     if (harness.activeSessionId) void harness.bindWorkflow(harness.activeSessionId, path);
   };
 
   // Shared by the docked workflow action strip, the canvas empty-state's
   // Visualize CTA, and anything else that fires a macro. Running a macro
-  // against a workflow also (re-)binds it, so acting on a workflow that isn't
-  // the current binding switches "what I'm working on" too. `workflow` is
+  // against a workflow is an explicit action on it, so it (re-)binds too — the
+  // canvas is served from the session's binding, so a render-canvas macro on
+  // an unbound workflow would otherwise draw into the wrong root. `workflow` is
   // nullable for macros that don't require one when nothing's bound yet.
   // Every macro is one click — there's no subject/free-text step on this
   // side; the agent is the interface for anything more specific.
   const handleRunMacroForWorkflow = (workflow: WorkflowInfo | null, macro: MacroDef): void => {
-    if (workflow) handleSelectWorkflow(workflow.path);
+    if (workflow) handleBindWorkflow(workflow.path);
     if (macro.action.kind === "open-url") {
       window.open(resolveMacroUrl(macro.action.url, workflow), "_blank", "noopener,noreferrer");
       return;
@@ -188,7 +199,9 @@ export const App = (): JSX.Element => {
               top={rowAnchor.top}
               height={rowAnchor.height}
               activeSessionId={harness.activeSessionId}
+              boundWorkflowPath={boundWorkflowPath}
               macros={state.macros}
+              onBind={() => handleBindWorkflow(selectedWorkflow.path)}
               onRunMacro={(macro) => handleRunMacroForWorkflow(selectedWorkflow, macro)}
             />
           )}

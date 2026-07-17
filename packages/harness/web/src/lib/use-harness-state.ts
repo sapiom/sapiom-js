@@ -130,13 +130,16 @@ export function useHarnessState(): HarnessStateHook {
     };
   }, []);
 
-  // Switching sessions follows that session's own binding (if any) rather than
-  // leaving the rail highlighted on whatever the previous session had selected.
+  // Switching sessions snaps the rail/strip selection to that session's own
+  // binding so the highlight always matches the canvas (which is driven by the
+  // active session's binding). Crucially this also CLEARS the selection when
+  // the new session has no binding — otherwise the rail stayed highlighted on
+  // the previous session's workflow while the canvas showed nothing, the
+  // rail↔canvas divergence users hit on every tab switch to an unbound session.
   useEffect(() => {
     if (!activeSessionId) return;
     const session = state?.sessions.find((s) => s.id === activeSessionId);
-    const bound = boundWorkflowPathOf(session);
-    if (bound) setSelectedWorkflowPath(bound);
+    setSelectedWorkflowPath(boundWorkflowPathOf(session));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
