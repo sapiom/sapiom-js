@@ -12,7 +12,13 @@ function render(raw: Record<string, unknown>): RunView {
 
 /** A single step's raw body, spread over decode's defaults. */
 function step(raw: Record<string, unknown>): Record<string, unknown> {
-  return { stepName: "s", stepOrder: 0, attempt: 1, status: "completed", ...raw };
+  return {
+    stepName: "s",
+    stepOrder: 0,
+    attempt: 1,
+    status: "completed",
+    ...raw,
+  };
 }
 
 describe("renderRunState — run status", () => {
@@ -33,28 +39,40 @@ describe("renderRunState — run status", () => {
   );
 
   it("carries the execution id through", () => {
-    expect(render({ id: "exec_42", status: "running" }).executionId).toBe("exec_42");
+    expect(render({ id: "exec_42", status: "running" }).executionId).toBe(
+      "exec_42",
+    );
   });
 });
 
 describe("renderRunState — step status folding", () => {
   it.each([
     ["completed", "passed"],
+    ["succeeded", "passed"], // real prod engine vocabulary for a passed step
     ["failed", "failed"],
+    ["threw", "failed"], // real prod engine vocabulary for an error'd step
     ["cancelled", "failed"], // a cancelled step did not pass
     ["canceled", "failed"],
     ["running", "running"],
     ["", "pending"],
     ["queued", "pending"],
   ] as const)("folds step status %s → %s", (raw, expected) => {
-    const view = render({ id: "e1", status: "running", steps: [step({ status: raw })] });
+    const view = render({
+      id: "e1",
+      status: "running",
+      steps: [step({ status: raw })],
+    });
     expect(view.steps[0].status).toBe(expected);
   });
 });
 
 describe("renderRunState — step id + name", () => {
   it("uses the span id as the stable step id when present", () => {
-    const view = render({ id: "e1", status: "running", steps: [step({ spanId: "span_9" })] });
+    const view = render({
+      id: "e1",
+      status: "running",
+      steps: [step({ spanId: "span_9" })],
+    });
     expect(view.steps[0].id).toBe("span_9");
   });
 
@@ -68,7 +86,11 @@ describe("renderRunState — step id + name", () => {
   });
 
   it("passes the step name through", () => {
-    const view = render({ id: "e1", status: "running", steps: [step({ stepName: "gather" })] });
+    const view = render({
+      id: "e1",
+      status: "running",
+      steps: [step({ stepName: "gather" })],
+    });
     expect(view.steps[0].name).toBe("gather");
   });
 });
@@ -78,7 +100,15 @@ describe("renderRunState — cost", () => {
     const view = render({
       id: "e1",
       status: "completed",
-      steps: [step({ cost: { authorizedUsd: "9.99", capturedUsd: "1.20", settleState: "final" } })],
+      steps: [
+        step({
+          cost: {
+            authorizedUsd: "9.99",
+            capturedUsd: "1.20",
+            settleState: "final",
+          },
+        }),
+      ],
     });
     expect(view.steps[0].costUsd).toBe(1.2);
   });
@@ -92,7 +122,15 @@ describe("renderRunState — cost", () => {
     const view = render({
       id: "e1",
       status: "completed",
-      steps: [step({ cost: { authorizedUsd: "0", capturedUsd: "n/a", settleState: "final" } })],
+      steps: [
+        step({
+          cost: {
+            authorizedUsd: "0",
+            capturedUsd: "n/a",
+            settleState: "final",
+          },
+        }),
+      ],
     });
     expect(view.steps[0]).not.toHaveProperty("costUsd");
   });
@@ -101,7 +139,15 @@ describe("renderRunState — cost", () => {
     const view = render({
       id: "e1",
       status: "completed",
-      steps: [step({ cost: { authorizedUsd: "1.00", capturedUsd: "0", settleState: "pending" } })],
+      steps: [
+        step({
+          cost: {
+            authorizedUsd: "1.00",
+            capturedUsd: "0",
+            settleState: "pending",
+          },
+        }),
+      ],
     });
     expect(view.steps[0].costUsd).toBe(0);
   });
@@ -113,7 +159,10 @@ describe("renderRunState — latency", () => {
       id: "e1",
       status: "completed",
       steps: [
-        step({ startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:45.000Z" }),
+        step({
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:00:45.000Z",
+        }),
       ],
     });
     expect(view.steps[0].latencyMs).toBe(45_000);
@@ -124,7 +173,10 @@ describe("renderRunState — latency", () => {
       id: "e1",
       status: "completed",
       steps: [
-        step({ startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:00.000Z" }),
+        step({
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:00:00.000Z",
+        }),
       ],
     });
     expect(view.steps[0].latencyMs).toBe(0);
@@ -134,7 +186,13 @@ describe("renderRunState — latency", () => {
     const view = render({
       id: "e1",
       status: "running",
-      steps: [step({ status: "running", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: null })],
+      steps: [
+        step({
+          status: "running",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: null,
+        }),
+      ],
     });
     expect(view.steps[0]).not.toHaveProperty("latencyMs");
   });
@@ -143,7 +201,12 @@ describe("renderRunState — latency", () => {
     const view = render({
       id: "e1",
       status: "completed",
-      steps: [step({ startedAt: "not-a-date", finishedAt: "2026-01-01T00:00:45.000Z" })],
+      steps: [
+        step({
+          startedAt: "not-a-date",
+          finishedAt: "2026-01-01T00:00:45.000Z",
+        }),
+      ],
     });
     expect(view.steps[0]).not.toHaveProperty("latencyMs");
   });
@@ -153,7 +216,10 @@ describe("renderRunState — latency", () => {
       id: "e1",
       status: "completed",
       steps: [
-        step({ startedAt: "2026-01-01T00:00:45.000Z", finishedAt: "2026-01-01T00:00:00.000Z" }),
+        step({
+          startedAt: "2026-01-01T00:00:45.000Z",
+          finishedAt: "2026-01-01T00:00:00.000Z",
+        }),
       ],
     });
     expect(view.steps[0]).not.toHaveProperty("latencyMs");
@@ -203,18 +269,30 @@ describe("renderRunState — log slice", () => {
   });
 
   it("omits logSlice when there are no logs", () => {
-    const view = render({ id: "e1", status: "completed", steps: [step({ logs: null })] });
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ logs: null })],
+    });
     expect(view.steps[0]).not.toHaveProperty("logSlice");
   });
 
   it("omits logSlice for an empty log array", () => {
-    const view = render({ id: "e1", status: "completed", steps: [step({ logs: [] })] });
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ logs: [] })],
+    });
     expect(view.steps[0]).not.toHaveProperty("logSlice");
   });
 
   it("keeps the TAIL when the buffer exceeds the cap", () => {
     const long = Array.from({ length: 500 }, (_, i) => `line-${i}`);
-    const view = render({ id: "e1", status: "completed", steps: [step({ logs: long })] });
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ logs: long })],
+    });
     const slice = view.steps[0].logSlice as string;
     expect(slice.length).toBe(4000);
     expect(slice.endsWith("line-499")).toBe(true); // most-recent line survives
@@ -229,14 +307,23 @@ describe("renderRunState — whole run", () => {
       status: "running",
       steps: [
         step({ stepName: "first", stepOrder: 0, spanId: "a" }),
-        step({ stepName: "second", stepOrder: 1, spanId: "b", status: "running" }),
+        step({
+          stepName: "second",
+          stepOrder: 1,
+          spanId: "b",
+          status: "running",
+        }),
       ],
     });
     expect(view.steps.map((s) => s.name)).toEqual(["first", "second"]);
   });
 
   it("emits only the derived keys for a minimal step (honest absence everywhere)", () => {
-    const view = render({ id: "e1", status: "running", steps: [step({ spanId: "s0" })] });
+    const view = render({
+      id: "e1",
+      status: "running",
+      steps: [step({ spanId: "s0" })],
+    });
     expect(view.steps[0]).toEqual({ id: "s0", name: "s", status: "passed" });
   });
 
@@ -262,7 +349,11 @@ describe("renderRunState — whole run", () => {
           spanId: "span_0001",
           startedAt: "2026-01-01T00:00:00.000Z",
           finishedAt: "2026-01-01T00:00:45.000Z",
-          cost: { authorizedUsd: "0.50", capturedUsd: "0.50", settleState: "final" },
+          cost: {
+            authorizedUsd: "0.50",
+            capturedUsd: "0.50",
+            settleState: "final",
+          },
         },
       ],
     });
@@ -270,7 +361,13 @@ describe("renderRunState — whole run", () => {
       executionId: "exec_0001",
       status: "completed",
       steps: [
-        { id: "span_0001", name: "gather", status: "passed", costUsd: 0.5, latencyMs: 45_000 },
+        {
+          id: "span_0001",
+          name: "gather",
+          status: "passed",
+          costUsd: 0.5,
+          latencyMs: 45_000,
+        },
       ],
     });
   });

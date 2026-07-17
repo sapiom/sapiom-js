@@ -15,7 +15,11 @@
  * absence, never a fabricated $0" contract.
  */
 import { isExecutionTerminal } from "@sapiom/agent-core";
-import type { CostNode, ExecutionProjection, StepProjection } from "@sapiom/agent-core";
+import type {
+  CostNode,
+  ExecutionProjection,
+  StepProjection,
+} from "@sapiom/agent-core";
 
 import type { RunView, StepStatus, StepView } from "../shared/types.js";
 
@@ -42,14 +46,21 @@ function toRunStatus(raw: string): RunView["status"] {
 }
 
 /**
- * Fold a step's raw status into a {@link StepStatus}. A cancelled step folds to
- * `failed` (it did not pass — mirrors run-local.ts folding the unreachable
- * 'cancelled' into 'failed'); anything not yet running/passed/failed is
- * `pending` (unstarted, queued, or an unknown value).
+ * Fold a step's raw status into a {@link StepStatus}. Handles the real engine
+ * vocabulary (`succeeded`/`threw` from prod agents surface) plus the earlier
+ * values (`completed`/`failed`/`cancelled`/`canceled`). A cancelled or threw
+ * step folds to `failed` (it did not pass — mirrors run-local.ts); anything
+ * not yet running/passed/failed is `pending` (unstarted, queued, or unknown).
  */
 function toStepStatus(raw: string): StepStatus {
-  if (raw === "completed") return "passed";
-  if (raw === "failed" || raw === "cancelled" || raw === "canceled") return "failed";
+  if (raw === "completed" || raw === "succeeded") return "passed";
+  if (
+    raw === "failed" ||
+    raw === "threw" ||
+    raw === "cancelled" ||
+    raw === "canceled"
+  )
+    return "failed";
   if (raw === "running") return "running";
   return "pending";
 }
@@ -65,7 +76,10 @@ function toCostUsd(cost: CostNode | null): number | undefined {
 /** `finishedAt − startedAt` in ms; `undefined` while still running (no finish)
  *  or when either timestamp is unparseable. A negative delta (clock skew) is
  *  dropped rather than shown as a misleading negative latency. */
-function toLatencyMs(startedAt: string | null, finishedAt: string | null): number | undefined {
+function toLatencyMs(
+  startedAt: string | null,
+  finishedAt: string | null,
+): number | undefined {
   if (!startedAt || !finishedAt) return undefined;
   const start = Date.parse(startedAt);
   const end = Date.parse(finishedAt);
@@ -79,9 +93,15 @@ function toLatencyMs(startedAt: string | null, finishedAt: string | null): numbe
 function formatLogEntry(entry: unknown): string {
   if (typeof entry === "string") return entry;
   if (entry !== null && typeof entry === "object") {
-    const e = entry as { ts?: unknown; level?: unknown; msg?: unknown; message?: unknown };
+    const e = entry as {
+      ts?: unknown;
+      level?: unknown;
+      msg?: unknown;
+      message?: unknown;
+    };
     const parts = [e.ts, e.level, e.msg ?? e.message].filter(
-      (p): p is string | number => typeof p === "string" || typeof p === "number",
+      (p): p is string | number =>
+        typeof p === "string" || typeof p === "number",
     );
     if (parts.length > 0) return parts.map(String).join(" ");
   }
@@ -94,7 +114,9 @@ function toLogSlice(logs: unknown): string | undefined {
   if (!Array.isArray(logs) || logs.length === 0) return undefined;
   const text = logs.map(formatLogEntry).join("\n").trim();
   if (text === "") return undefined;
-  return text.length > LOG_SLICE_MAX ? text.slice(text.length - LOG_SLICE_MAX) : text;
+  return text.length > LOG_SLICE_MAX
+    ? text.slice(text.length - LOG_SLICE_MAX)
+    : text;
 }
 
 /** Map one projection step to its render view. Optional fields are assigned only
