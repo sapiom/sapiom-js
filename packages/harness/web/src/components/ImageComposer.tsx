@@ -158,24 +158,20 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
   const sendQueued = useCallback(async (): Promise<void> => {
     if (queued.length === 0 || sending) return;
     setSending(true);
-    let sent = 0;
     let failure: string | null = null;
     for (const img of queued) {
       try {
         await api.attachImage(sessionId, { dataUrl: img.dataUrl, filename: img.filename });
         setQueued((prev) => prev.filter((q) => q.id !== img.id));
-        sent += 1;
       } catch (err) {
         failure = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
         break; // stop on first failure; unsent images stay queued for retry
       }
     }
     setSending(false);
-    if (failure) {
-      showToast(failure);
-    } else if (sent > 0) {
-      showToast(`Attached ${sent} image${sent === 1 ? "" : "s"} — add a message and press Enter.`);
-    }
+    // Only surface a toast on failure — a successful send is self-evident: the
+    // paths land in the terminal input and the thumbnails clear.
+    if (failure) showToast(failure);
   }, [queued, sending, api, sessionId, showToast]);
 
   const onDragEnter = useCallback((e: DragEvent<HTMLDivElement>): void => {
