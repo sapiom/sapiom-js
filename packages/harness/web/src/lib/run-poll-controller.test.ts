@@ -229,4 +229,43 @@ describe("createRunPollController", () => {
 
     controller.stopAll();
   });
+
+  it("gives up after too many consecutive failures (a bad/404 id can't poll forever)", async () => {
+    const fetch = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunView>>()
+      .mockRejectedValue(new Error("404"));
+    const { controller, onUpdate } = setup(fetch);
+
+    controller.start("exec-bad");
+    // Immediate fetch = failure #1, then drive far past the cap.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(POLL_MS * 20);
+
+    // MAX_CONSECUTIVE_FAILURES is 5 → it stops after the 5th failure, forever.
+    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a successful read resets the failure streak (intermittent errors don't trip the cap)", async () => {
+    let n = 0;
+    const fetch = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunView>>()
+      .mockImplementation(() => {
+        n += 1;
+        // Fail 4×, succeed on the 5th (resets streak), then fail forever.
+        if (n === 5) return Promise.resolve(makeRunView("running"));
+        return Promise.reject(new Error("transient"));
+      });
+    const { controller } = setup(fetch);
+
+    controller.start("exec-1");
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(POLL_MS * 20);
+
+    // The success at call 5 resets the streak, so it survives past 5 and only
+    // stops after 5 MORE consecutive fails (calls 6–10) → 10 total.
+    expect(fetch).toHaveBeenCalledTimes(10);
+
+    controller.stopAll();
+  });
 });

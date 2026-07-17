@@ -1,13 +1,16 @@
 /**
  * Execution detection — mirrors {@link PortDetector} (core/port-detector.ts).
  *
- * When the coding agent runs `sapiom agents run`, the CLI prints
- * `✓ Started execution <executionId>`. This detector is fed the SAME tool.call
- * output PortDetector is (server/index.ts `onNormalizedEvent`) and fires
- * `onExecution` once per distinct (session, executionId) it finds — so the SPA
- * can start polling that run's live state without changing how runs are
- * triggered. The integrator wires `onExecution` to broadcast
- * `{ type: "execution.started", … }` on /ws/events.
+ * A run can start two ways in the harness, and this catches both:
+ *  1. The CLI prints `✓ Started execution <executionId>` (`sapiom agents run`).
+ *  2. The coding agent starts the run via the MCP run tool — the common path —
+ *     whose result carries the id as an `executionId` field
+ *     (`"executionId":"<id>"` / `executionId: <id>`).
+ * The detector is fed the SAME tool.call output PortDetector is (server/index.ts
+ * `onNormalizedEvent`, including the tool RESPONSE summary), so an MCP-triggered
+ * run is caught without changing how runs are triggered. It fires `onExecution`
+ * once per distinct (session, executionId); the integrator wires that to
+ * broadcast `{ type: "execution.started", … }` on /ws/events.
  *
  * Same streaming-safe design as PortDetector: a match touching the very end of
  * the buffered text is held back (the id may still be growing in the next
@@ -19,10 +22,14 @@
  *  `exec_ab12…`). Id-safe characters only, so a trailing space, newline, or
  *  ANSI reset ends the match rather than being captured into the id. */
 const EXECUTION_ID = String.raw`[A-Za-z0-9_-]+`;
-const EXECUTION_PATTERN_SOURCE = String.raw`Started execution (${EXECUTION_ID})`;
+/** Two anchors, one capture group: the CLI's `Started execution <id>` line, or
+ *  the `executionId` field from the run tool's structured result (quote/colon/
+ *  space/equals between the key and the id). Both are start-time signals tied to
+ *  a real run, so a match always refers to a run the user is actually driving. */
+const EXECUTION_PATTERN_SOURCE = String.raw`(?:Started execution |executionId["'\s:=]+)(${EXECUTION_ID})`;
 
-/** Long enough to hold the literal "Started execution " anchor split across a
- *  chunk boundary, plus a few id characters either side. */
+/** Long enough to hold either anchor ("Started execution " / `executionId":"`)
+ *  split across a chunk boundary, plus a few id characters either side. */
 const TAIL_SAFETY = 48;
 
 /**
@@ -45,7 +52,11 @@ export function parseExecutionIds(text: string): string[] {
 export type ExecutionTarget = "prod" | "local";
 
 export interface ExecutionDetectorDeps {
-  onExecution(harnessSessionId: string, executionId: string, target: ExecutionTarget): void;
+  onExecution(
+    harnessSessionId: string,
+    executionId: string,
+    target: ExecutionTarget,
+  ): void;
 }
 
 /**
@@ -77,7 +88,8 @@ export class ExecutionDetector {
       this.tryEmit(harnessSessionId, match[1]);
     }
 
-    const retainFrom = pendingFrom ?? Math.max(0, combined.length - TAIL_SAFETY);
+    const retainFrom =
+      pendingFrom ?? Math.max(0, combined.length - TAIL_SAFETY);
     this.buffers.set(harnessSessionId, combined.slice(retainFrom));
   }
 
@@ -93,7 +105,8 @@ export class ExecutionDetector {
     if (!pending) return;
     // Re-parse the whole pending buffer (vs an inline loop) — same result, and
     // tryEmit dedupes so a match already emitted by feed() is a harmless no-op.
-    for (const id of parseExecutionIds(pending)) this.tryEmit(harnessSessionId, id);
+    for (const id of parseExecutionIds(pending))
+      this.tryEmit(harnessSessionId, id);
     this.buffers.delete(harnessSessionId);
   }
 

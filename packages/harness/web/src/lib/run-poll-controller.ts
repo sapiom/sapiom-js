@@ -28,9 +28,16 @@ export interface RunPollController {
   setPaused(paused: boolean): void;
 }
 
+/** Consecutive failed fetches (non-2xx / network / mangled id) after which an
+ *  id stops polling — so a bad or truncated id can't 404 forever. Set above the
+ *  brief enqueued→queryable window (a real run becomes queryable within a poll
+ *  or two), so a genuine run is never dropped. */
+const MAX_CONSECUTIVE_FAILURES = 5;
+
 interface PerIdState {
   intervalId: ReturnType<typeof setInterval>;
   inFlight: AbortController | null;
+  failures: number;
 }
 
 export function createRunPollController(deps: RunPollDeps): RunPollController {
@@ -56,7 +63,10 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
       // Clear in-flight marker before acting on the result so that `stop`
       // called inside `onUpdate` or on terminal detection sees a clean state.
       const still = tracked.get(executionId);
-      if (still) still.inFlight = null;
+      if (still) {
+        still.inFlight = null;
+        still.failures = 0; // a good read clears the failure streak
+      }
 
       onUpdate(executionId, runView);
 
@@ -64,10 +74,16 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
         stop(executionId);
       }
     } catch {
-      // Aborts (from stop/stopAll) and transient network errors are both
-      // silently swallowed — the interval will retry on the next tick.
+      // Aborts (from stop/stopAll) and transient errors both land here. Clear
+      // the in-flight marker and count the failure; after too many in a row we
+      // give up on this id so a bad/truncated id can't poll forever. (An abort
+      // from stop() already deleted the entry, so it never counts here.)
       const still = tracked.get(executionId);
-      if (still) still.inFlight = null;
+      if (still) {
+        still.inFlight = null;
+        still.failures += 1;
+        if (still.failures >= MAX_CONSECUTIVE_FAILURES) stop(executionId);
+      }
     }
   }
 
@@ -79,6 +95,7 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
         void poll(executionId);
       }, pollMs),
       inFlight: null,
+      failures: 0,
     };
     tracked.set(executionId, entry);
 
