@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
-import type { BackgroundTask, BusMessage, MacroDef, WorkflowInfo } from "@shared/types";
+import type {
+  BackgroundTask,
+  BusMessage,
+  MacroDef,
+  RunView,
+  WorkflowInfo,
+} from "@shared/types";
 
 import { isMockMode } from "../lib/api";
 import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { track } from "../lib/track";
 import { Icon } from "./Icon";
+import { RunStatePanel } from "./RunStatePanel";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 
 /** How many of a running task's trailing status lines the activity view shows. */
@@ -21,6 +28,8 @@ interface CanvasPaneProps {
   /** All background tasks (any session) — filtered to `sessionId` here. */
   tasks: BackgroundTask[];
   onRunMacro: (macro: MacroDef) => void;
+  /** Live run state for the active session's current execution, if any. */
+  runView?: RunView;
 }
 
 export function CanvasPane({
@@ -31,6 +40,7 @@ export function CanvasPane({
   macros,
   tasks,
   onRunMacro,
+  runView,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -44,7 +54,9 @@ export function CanvasPane({
   const [frameLoading, setFrameLoading] = useState(true);
   // Failed-task panels the user has explicitly dismissed (client-side only —
   // the task record itself stays in the server's list).
-  const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(new Set());
+  const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   // Passed through to the served canvas so a kit-based template can match the
   // app's current theme instead of always rendering dark. Legacy canvases
@@ -70,7 +82,10 @@ export function CanvasPane({
 
   useEffect(() => {
     if (!lastMessage || !sessionId) return;
-    if (lastMessage.type === "canvas.reload" && lastMessage.harnessSessionId === sessionId) {
+    if (
+      lastMessage.type === "canvas.reload" &&
+      lastMessage.harnessSessionId === sessionId
+    ) {
       setHasGeneratedContent(true);
       setFrameLoading(true);
       setReloadKey((key) => key + 1);
@@ -104,15 +119,20 @@ export function CanvasPane({
       task.harnessSessionId === sessionId &&
       (task.workflowPath == null || task.workflowPath === boundWorkflowPath),
   );
-  const runningTask = sessionTasks.find((task) => task.status === "running") ?? null;
+  const runningTask =
+    sessionTasks.find((task) => task.status === "running") ?? null;
   const latestFinished = sessionTasks
     .filter((task) => task.status !== "running")
     .sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""))[0];
   const failedTask =
-    !runningTask && latestFinished?.status === "failed" && !dismissedTaskIds.has(latestFinished.id)
+    !runningTask &&
+    latestFinished?.status === "failed" &&
+    !dismissedTaskIds.has(latestFinished.id)
       ? latestFinished
       : null;
-  const retryMacro = failedTask ? (macros.find((macro) => macro.id === failedTask.macroId) ?? null) : null;
+  const retryMacro = failedTask
+    ? (macros.find((macro) => macro.id === failedTask.macroId) ?? null)
+    : null;
 
   // The header's action IS Visualize now — one click re-fires the same macro
   // that generated what's already on screen; the pane itself swaps in the
@@ -133,14 +153,20 @@ export function CanvasPane({
         />
       )}
 
+      {runView && <RunStatePanel runView={runView} />}
+
       {!sessionId ? (
-        <div className="canvas-empty">Start a session to see its canvas here.</div>
+        <div className="canvas-empty">
+          Start a session to see its canvas here.
+        </div>
       ) : failedTask ? (
         <div className="canvas-task-failed" data-testid="canvas-task-failed">
           <p className="canvas-task-title">
             <Icon name="TriangleAlert" size={14} /> {failedTask.label} failed.
           </p>
-          {failedTask.errorTail && <pre className="canvas-task-error">{failedTask.errorTail}</pre>}
+          {failedTask.errorTail && (
+            <pre className="canvas-task-error">{failedTask.errorTail}</pre>
+          )}
           <div className="canvas-task-actions">
             {retryMacro && (
               <button
@@ -167,20 +193,26 @@ export function CanvasPane({
           </div>
         </div>
       ) : runningTask && !hasGeneratedContent ? (
-        <div className="canvas-task-activity" data-testid="canvas-task-activity">
+        <div
+          className="canvas-task-activity"
+          data-testid="canvas-task-activity"
+        >
           <div className="canvas-task-title">
             <span className="canvas-task-spinner" aria-hidden="true" />
             <span>{runningTask.label} is running…</span>
           </div>
           {runningTask.statusLines.length > 0 && (
             <ul className="canvas-task-lines" data-testid="canvas-task-lines">
-              {runningTask.statusLines.slice(-ACTIVITY_LINES_SHOWN).map((line, index) => (
-                <li key={`${index}-${line}`}>{line}</li>
-              ))}
+              {runningTask.statusLines
+                .slice(-ACTIVITY_LINES_SHOWN)
+                .map((line, index) => (
+                  <li key={`${index}-${line}`}>{line}</li>
+                ))}
             </ul>
           )}
           <p className="canvas-empty-hint">
-            Running as a background task — your session stays free. The canvas reloads here when it finishes.
+            Running as a background task — your session stays free. The canvas
+            reloads here when it finishes.
           </p>
         </div>
       ) : probing ? (
@@ -206,14 +238,18 @@ export function CanvasPane({
             </button>
           )}
           <p className="canvas-empty-hint">
-            Ask your agent to visualize, or write HTML directly to <code>.sapiom/canvas/index.html</code> — this pane
-            hot-reloads whenever it changes.
+            Ask your agent to visualize, or write HTML directly to{" "}
+            <code>.sapiom/canvas/index.html</code> — this pane hot-reloads
+            whenever it changes.
           </p>
         </div>
       ) : (
         <div className="canvas-frame-wrap">
           {frameLoading && (
-            <div className="canvas-loading canvas-loading--overlay" data-testid="canvas-loading">
+            <div
+              className="canvas-loading canvas-loading--overlay"
+              data-testid="canvas-loading"
+            >
               <span className="canvas-task-spinner" aria-hidden="true" />
               <p className="canvas-empty-hint">Rendering diagram…</p>
             </div>
@@ -228,14 +264,20 @@ export function CanvasPane({
                 <span>{runningTask.label} is running…</span>
               </div>
               {runningTask.statusLines.length > 0 && (
-                <ul className="canvas-task-lines" data-testid="canvas-task-lines">
-                  {runningTask.statusLines.slice(-ACTIVITY_LINES_SHOWN).map((line, index) => (
-                    <li key={`${index}-${line}`}>{line}</li>
-                  ))}
+                <ul
+                  className="canvas-task-lines"
+                  data-testid="canvas-task-lines"
+                >
+                  {runningTask.statusLines
+                    .slice(-ACTIVITY_LINES_SHOWN)
+                    .map((line, index) => (
+                      <li key={`${index}-${line}`}>{line}</li>
+                    ))}
                 </ul>
               )}
               <p className="canvas-empty-hint">
-                Running as a background task — your session stays free. The canvas reloads here when it finishes.
+                Running as a background task — your session stays free. The
+                canvas reloads here when it finishes.
               </p>
             </div>
           )}

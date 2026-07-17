@@ -303,6 +303,8 @@ const delay = (ms = 180): Promise<void> =>
 class MockApi implements HarnessApi {
   // `?mockState=fresh` = brand-new install: nothing yet, firstRun set — see isFreshMockState().
   private readonly fresh = isFreshMockState();
+  // Per-executionId call counter — drives the scripted poll sequence for demos/e2e.
+  private readonly runStateCallCounts = new Map<string, number>();
   // `?mockConsentSource=prompted` mirrors a user who answered yes at the TTY prompt:
   // telemetryOptIn starts true so the chip shows "analytics on" from the first render.
   private readonly promptedConsent =
@@ -606,12 +608,36 @@ class MockApi implements HarnessApi {
     _signal?: AbortSignal,
   ): Promise<RunView> {
     await delay(100);
+    const callCount = (this.runStateCallCounts.get(executionId) ?? 0) + 1;
+    this.runStateCallCounts.set(executionId, callCount);
+
+    // 1st poll: show a run in progress with one completed step and one running.
+    if (callCount === 1) {
+      return {
+        executionId,
+        status: "running",
+        steps: [
+          { id: "s1", name: "fetchData", status: "passed", latencyMs: 1400 },
+          { id: "s2", name: "processResult", status: "running" },
+          { id: "s3", name: "finalize", status: "pending" },
+        ],
+      };
+    }
+
+    // 2nd+ poll: the second step failed, run is terminal.
     return {
       executionId,
-      status: "completed",
+      status: "failed",
       steps: [
-        { id: "step-1", name: "fetchData", status: "passed" },
-        { id: "step-2", name: "processResult", status: "passed" },
+        { id: "s1", name: "fetchData", status: "passed", latencyMs: 1400 },
+        {
+          id: "s2",
+          name: "processResult",
+          status: "failed",
+          latencyMs: 3000,
+          error: "Upstream timed out",
+        },
+        { id: "s3", name: "finalize", status: "pending" },
       ],
     };
   }
