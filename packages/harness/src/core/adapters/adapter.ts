@@ -53,6 +53,15 @@ export interface HarnessAdapterBase {
    * supported harnesses.
    */
   experimental?: boolean;
+  /**
+   * Whether this harness can consume an image the composer attaches. The
+   * harness relays an image by writing it to disk (see HARNESS_UPLOADS_DIR)
+   * and injecting its path into the agent's prompt, so this is true exactly
+   * for harnesses whose CLI reads image files referenced by path. The upload
+   * endpoint rejects attaches to a harness where this is false, and the SPA
+   * hides the attach affordance for it.
+   */
+  imageInput: boolean;
 }
 
 /**

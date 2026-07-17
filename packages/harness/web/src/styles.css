@@ -1338,6 +1338,122 @@ input {
   min-height: 0;
 }
 
+/* Image composer (wraps the terminal pane) --------------------------- */
+
+/* Mirrors `.terminal-slot > .harness-terminal` sizing: the composer is now the
+   flex-growing child, and the terminal grows inside it. */
+.terminal-slot > .image-composer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.image-composer-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.image-composer-pane > .harness-terminal {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Drag overlay — covers the terminal pane while a file is dragged over it. */
+.image-composer-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 2px dashed var(--accent-border);
+  border-radius: var(--radius-lg);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.image-composer-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.image-composer-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.image-composer-thumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.image-composer-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+}
+
+.image-composer-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.image-composer-thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--bg-0);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.image-composer-thumb-remove:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.image-composer-send {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
 .terminal-placeholder,
 .terminal-empty {
   height: 100%;

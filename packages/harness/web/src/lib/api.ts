@@ -6,10 +6,13 @@
  */
 import type {
   AppState,
+  AttachImageRequest,
+  AttachImageResponse,
   BindWorkflowRequest,
   CreateSessionRequest,
   FsDirEntry,
   FsListResponse,
+  HarnessEntry,
   HarnessSession,
   HarnessSettings,
   InjectInputRequest,
@@ -91,6 +94,12 @@ export interface HarnessApi {
   resumeSession(id: string): Promise<HarnessSession>;
   killSession(id: string): Promise<void>;
   injectInput(id: string, req: InjectInputRequest): Promise<void>;
+  /** Attach an image (composer picker/paste/drop) to a session: the server
+   *  writes it into the project dir and relays its path into the agent's pty. */
+  attachImage(id: string, req: AttachImageRequest): Promise<AttachImageResponse>;
+  /** The adapter registry (GET /api/harnesses) — carries per-harness
+   *  capabilities like `imageInput` the composer gates its affordances on. */
+  listHarnesses(): Promise<HarnessEntry[]>;
   listWorkflows(): Promise<WorkflowInfo[]>;
   connectWorkflow(path: string): Promise<WorkflowInfo>;
   scanWorkflows(root: string): Promise<WorkflowInfo[]>;
@@ -169,6 +178,17 @@ class RealApi implements HarnessApi {
       method: "POST",
       body: JSON.stringify(req),
     });
+  }
+
+  attachImage(id: string, req: AttachImageRequest): Promise<AttachImageResponse> {
+    return this.request<AttachImageResponse>(`/api/sessions/${encodeURIComponent(id)}/image`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
+  }
+
+  listHarnesses(): Promise<HarnessEntry[]> {
+    return this.request<HarnessEntry[]>("/api/harnesses");
   }
 
   listWorkflows(): Promise<WorkflowInfo[]> {
@@ -347,6 +367,36 @@ class MockApi implements HarnessApi {
         lastInjectInput: { id, req },
       };
     }
+  }
+
+  async attachImage(id: string, req: AttachImageRequest): Promise<AttachImageResponse> {
+    await delay();
+    const mediaType = /^data:([^;]+);/.exec(req.dataUrl)?.[1] ?? "image/png";
+    const bytes = Math.max(0, Math.floor((req.dataUrl.split(",")[1]?.length ?? 0) * 0.75));
+    const response: AttachImageResponse = {
+      path: `/mock/cwd/.sapiom/uploads/${id}-${req.filename ?? "image"}`,
+      mediaType: mediaType as AttachImageResponse["mediaType"],
+      bytes,
+    };
+    // Test-only escape hatch, mock mode only — same pattern as lastInjectInput:
+    // Playwright reads this back to assert an attach actually fired.
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      const prev = (win.__HARNESS_TEST__?.attachImageCalls as unknown[]) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        attachImageCalls: [...prev, { id, filename: req.filename, mediaType }],
+      };
+    }
+    return response;
+  }
+
+  async listHarnesses(): Promise<HarnessEntry[]> {
+    await delay();
+    return [
+      { id: "claude-code", label: "Claude Code", mode: "embedded", experimental: false, installed: true, installMcpPrompt: "", imageInput: true },
+      { id: "codex", label: "Codex CLI", mode: "embedded", experimental: false, installed: true, installMcpPrompt: "", imageInput: true },
+    ];
   }
 
   async listWorkflows(): Promise<WorkflowInfo[]> {

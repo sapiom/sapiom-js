@@ -5,12 +5,17 @@
  */
 
 import express, { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type {
   AnalyticsEvent,
   AppState,
+  AttachImageRequest,
+  AttachImageResponse,
   BackgroundTask,
   BindWorkflowRequest,
   CreateSessionRequest,
@@ -18,6 +23,7 @@ import type {
   HarnessKind,
   HarnessSession,
   HarnessSettings,
+  ImageMediaType,
   InjectInputRequest,
   MacroDef,
   SampleProjectSeedResponse,
@@ -26,11 +32,39 @@ import type {
   UiTrackRequest,
   WorkflowInfo,
 } from "../shared/types.js";
-import { SPAWNABLE_HARNESS_KINDS } from "../shared/types.js";
+import {
+  ALLOWED_IMAGE_MEDIA_TYPES,
+  HARNESS_UPLOADS_DIR,
+  JSON_BODY_LIMIT_BYTES,
+  MAX_IMAGE_UPLOAD_BYTES,
+  SPAWNABLE_HARNESS_KINDS,
+} from "../shared/types.js";
 import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
-import { listHarnessAdapters } from "../core/adapters/registry.js";
+import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registry.js";
+import { resolveWithinRoot } from "../core/path-safety.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
+
+// Cap image attaches per client so a runaway paste/drop loop can't fill the
+// disk or wedge the pty — the route is otherwise unauthenticated beyond the
+// boot token. (Added by CodeQL's rate-limiting finding.)
+const imageUploadRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/** File extension to store an accepted image under, keyed by media type. */
+const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+/** `data:<mediaType>;base64,<payload>` — captures the media type and payload. */
+const DATA_URL_RE = /^data:([a-z0-9.+/-]+);base64,([\s\S]+)$/i;
 
 // Derived from SPAWNABLE_HARNESS_KINDS (shared/types.ts) so the zod
 // validation and the TypeScript type can never drift from each other.
@@ -46,6 +80,11 @@ const injectInputSchema = z.object({
   text: z.string(),
   submit: z.boolean().optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
+
+const attachImageSchema = z.object({
+  dataUrl: z.string().min(1),
+  filename: z.string().optional(),
+}) satisfies z.ZodType<AttachImageRequest>;
 
 const bindWorkflowSchema = z.object({
   workflowPath: z.string().min(1).nullable(),
@@ -173,7 +212,7 @@ export interface RestRouterOptions {
 export function createRestRouter(options: RestRouterOptions): Router {
   const { sessionManager, adapters, version, identity, listWorkflows, listMacros } = options;
   const router = Router();
-  router.use(express.json());
+  router.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
   router.get("/state", async (_req, res, next) => {
     try {
@@ -270,6 +309,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
           experimental: adapter.experimental ?? false,
           installed: await adapter.detectInstalled(),
           installMcpPrompt: adapter.installMcpPrompt(),
+          imageInput: adapter.imageInput,
         })),
       );
       res.json(entries);
@@ -427,6 +467,97 @@ export function createRestRouter(options: RestRouterOptions): Router {
         return;
       }
       res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof SessionNotReadyError || err instanceof ExternalHarnessError) {
+        res.status(409).json({ error: err.message, code: err.code });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/sessions/:id/image — attach an image (composer file picker,
+   * paste, or drag-drop) and relay it to the agent.
+   *
+   * The harness has no direct image-content-block channel to a CLI agent, so
+   * "relay as an image" means: write the decoded image into the session's
+   * project directory (under HARNESS_UPLOADS_DIR) and inject its absolute path
+   * into the pty (submit:false) — the supported agents read an image referenced
+   * by path in their prompt. The attach is only offered/accepted for harnesses
+   * whose adapter declares `imageInput`, so an image never gets relayed to an
+   * agent that can't consume it.
+   */
+  router.post("/sessions/:id/image", imageUploadRateLimiter, async (req, res, next) => {
+    const parsed = attachImageSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    const session = sessionManager.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "session not found" });
+      return;
+    }
+
+    // Respect the adapter's declared image support — reject rather than write a
+    // file the agent will never look at.
+    if (!getHarnessAdapter(session.harness).imageInput) {
+      res.status(400).json({ error: `Harness '${session.harness}' does not support image input` });
+      return;
+    }
+
+    const match = DATA_URL_RE.exec(parsed.data.dataUrl);
+    if (!match) {
+      res.status(400).json({ error: "dataUrl must be a base64 data: URL" });
+      return;
+    }
+    const mediaType = match[1].toLowerCase();
+    if (!(ALLOWED_IMAGE_MEDIA_TYPES as readonly string[]).includes(mediaType)) {
+      res.status(400).json({
+        error: `Unsupported image type '${mediaType}' — allowed: ${ALLOWED_IMAGE_MEDIA_TYPES.join(", ")}`,
+      });
+      return;
+    }
+    const buffer = Buffer.from(match[2], "base64");
+    if (buffer.byteLength === 0) {
+      res.status(400).json({ error: "image payload is empty" });
+      return;
+    }
+    if (buffer.byteLength > MAX_IMAGE_UPLOAD_BYTES) {
+      res.status(413).json({
+        error: `Image is ${buffer.byteLength} bytes; the limit is ${MAX_IMAGE_UPLOAD_BYTES} bytes`,
+      });
+      return;
+    }
+
+    // Confine the write to the session cwd; the stored name is a fresh uuid
+    // (never the client-supplied filename) so an image can't be written outside
+    // the uploads directory regardless of what the browser reported.
+    const uploadsDir = resolveWithinRoot(session.cwd, HARNESS_UPLOADS_DIR);
+    if (!uploadsDir) {
+      res.status(500).json({ error: "could not resolve the uploads directory" });
+      return;
+    }
+    const ext = IMAGE_EXTENSIONS[mediaType as ImageMediaType];
+    const filePath = path.join(uploadsDir, `${randomUUID()}.${ext}`);
+
+    try {
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(filePath, buffer);
+      // A trailing space so the user's own message doesn't run into the path.
+      const injected = await sessionManager.submitInput(req.params.id, `${filePath} `, false);
+      if (!injected) {
+        res.status(404).json({ error: "session not found or has no live pty" });
+        return;
+      }
+      const response: AttachImageResponse = {
+        path: filePath,
+        mediaType: mediaType as ImageMediaType,
+        bytes: buffer.byteLength,
+      };
+      res.json(response);
     } catch (err) {
       if (err instanceof SessionNotReadyError || err instanceof ExternalHarnessError) {
         res.status(409).json({ error: err.message, code: err.code });

@@ -32,6 +32,8 @@ export const codexAdapterInfo: EmbeddedHarnessAdapterInfo = {
   id: "codex",
   label: "Codex CLI",
   mode: "embedded",
+  // Codex reads images referenced by path in a prompt.
+  imageInput: true,
   installMcpPrompt(): string {
     return INSTALL_MCP_PROMPT;
   },
