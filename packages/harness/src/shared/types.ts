@@ -149,6 +149,19 @@ export interface SessionSummary {
   title: string;
   lastActiveAt: string;
   source: "registry" | "transcript";
+  /**
+   * Git branch the session was last active on, when the transcript records it.
+   * The strongest within-directory differentiator between otherwise-similar
+   * rows (many sessions in one repo often differ only by branch). Undefined
+   * for harnesses/transcripts that don't record a branch.
+   */
+  gitBranch?: string;
+  /**
+   * Number of human prompts (turns) in the session, when cheaply knowable.
+   * Undefined for transcripts too large to scan for an exact count without a
+   * full read (see the claude-code adapter's full-scan size cap).
+   */
+  messageCount?: number;
 }
 
 // ---------------------------------------------------------------------------
