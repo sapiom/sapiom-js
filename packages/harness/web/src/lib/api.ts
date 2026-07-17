@@ -15,6 +15,7 @@ import type {
   InjectInputRequest,
   MacroDef,
   RunMacroRequest,
+  RunView,
   SampleProjectSeedResponse,
   SessionSummary,
   WorkflowInfo,
@@ -33,7 +34,18 @@ export interface SkillDetail extends SkillMeta {
   body: string;
 }
 
-import { MOCK_FS_TREE, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
+import {
+  MOCK_FS_TREE,
+  MOCK_HISTORY,
+  MOCK_LAUNCH_DIR,
+  MOCK_MACROS,
+  MOCK_SAMPLE_PROJECT_ROOT,
+  MOCK_SESSIONS,
+  MOCK_SETTINGS,
+  MOCK_SKILLS,
+  MOCK_SKILL_BODIES,
+  MOCK_WORKFLOWS,
+} from "./mock-data";
 
 export type { FsDirEntry, FsListResponse };
 
@@ -48,11 +60,16 @@ export function isMockMode(): boolean {
  * welcome panel without a real server.
  */
 export function isFreshMockState(): boolean {
-  return isMockMode() && new URLSearchParams(window.location.search).get("mockState") === "fresh";
+  return (
+    isMockMode() &&
+    new URLSearchParams(window.location.search).get("mockState") === "fresh"
+  );
 }
 
 /** `session.boundWorkflowPath` is nullable already, but keeps callers safe against a missing session. */
-export function boundWorkflowPathOf(session: HarnessSession | null | undefined): string | null {
+export function boundWorkflowPathOf(
+  session: HarnessSession | null | undefined,
+): string | null {
   return session?.boundWorkflowPath ?? null;
 }
 
@@ -78,7 +95,8 @@ export class ApiError extends Error {
 
 /** Read once at module load: `window.__HARNESS__ = {token}` (baked in by the server), falling back to `?token=`. */
 export function getBootToken(): string {
-  const injected = (window as unknown as { __HARNESS__?: { token?: string } }).__HARNESS__;
+  const injected = (window as unknown as { __HARNESS__?: { token?: string } })
+    .__HARNESS__;
   if (injected?.token) return injected.token;
   return new URLSearchParams(window.location.search).get("token") ?? "";
 }
@@ -99,7 +117,10 @@ export interface HarnessApi {
   getSettings(): Promise<HarnessSettings>;
   updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings>;
   listDir(path?: string): Promise<FsListResponse>;
-  bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession>;
+  bindWorkflow(
+    sessionId: string,
+    workflowPath: string | null,
+  ): Promise<HarnessSession>;
   /** Seeds (or reuses) the bundled example project; the caller follows up
    *  with a normal createSession against the returned root. */
   seedSampleProject(): Promise<SampleProjectSeedResponse>;
@@ -107,6 +128,8 @@ export interface HarnessApi {
   listSkills(): Promise<SkillMeta[]>;
   /** Fetch the full detail (including markdown body) for a single skill. */
   getSkill(id: string): Promise<SkillDetail>;
+  /** Fetch the current live render state for a run (polled during execution). */
+  getRunState(executionId: string, signal?: AbortSignal): Promise<RunView>;
 }
 
 class RealApi implements HarnessApi {
@@ -124,7 +147,11 @@ class RealApi implements HarnessApi {
       let reason: string | undefined;
       try {
         const parsed: unknown = body ? JSON.parse(body) : undefined;
-        if (parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string") {
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          typeof (parsed as { error?: unknown }).error === "string"
+        ) {
           reason = (parsed as { error: string }).error;
         }
       } catch {
@@ -145,7 +172,10 @@ class RealApi implements HarnessApi {
   }
 
   createSession(req: CreateSessionRequest): Promise<HarnessSession> {
-    return this.request<HarnessSession>("/api/sessions", { method: "POST", body: JSON.stringify(req) });
+    return this.request<HarnessSession>("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
   }
 
   listSessions(): Promise<HarnessSession[]> {
@@ -153,22 +183,33 @@ class RealApi implements HarnessApi {
   }
 
   sessionHistory(cwd: string): Promise<SessionSummary[]> {
-    return this.request<SessionSummary[]>(`/api/sessions/history?cwd=${encodeURIComponent(cwd)}`);
+    return this.request<SessionSummary[]>(
+      `/api/sessions/history?cwd=${encodeURIComponent(cwd)}`,
+    );
   }
 
   resumeSession(id: string): Promise<HarnessSession> {
-    return this.request<HarnessSession>(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: "POST" });
+    return this.request<HarnessSession>(
+      `/api/sessions/${encodeURIComponent(id)}/resume`,
+      { method: "POST" },
+    );
   }
 
   async killSession(id: string): Promise<void> {
-    await this.request<{ ok: true }>(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await this.request<{ ok: true }>(
+      `/api/sessions/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   }
 
   async injectInput(id: string, req: InjectInputRequest): Promise<void> {
-    await this.request<{ ok: true }>(`/api/sessions/${encodeURIComponent(id)}/input`, {
-      method: "POST",
-      body: JSON.stringify(req),
-    });
+    await this.request<{ ok: true }>(
+      `/api/sessions/${encodeURIComponent(id)}/input`,
+      {
+        method: "POST",
+        body: JSON.stringify(req),
+      },
+    );
   }
 
   listWorkflows(): Promise<WorkflowInfo[]> {
@@ -176,11 +217,17 @@ class RealApi implements HarnessApi {
   }
 
   connectWorkflow(path: string): Promise<WorkflowInfo> {
-    return this.request<WorkflowInfo>("/api/workflows/connect", { method: "POST", body: JSON.stringify({ path }) });
+    return this.request<WorkflowInfo>("/api/workflows/connect", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
   }
 
   scanWorkflows(root: string): Promise<WorkflowInfo[]> {
-    return this.request<WorkflowInfo[]>("/api/workflows/scan", { method: "POST", body: JSON.stringify({ root }) });
+    return this.request<WorkflowInfo[]>("/api/workflows/scan", {
+      method: "POST",
+      body: JSON.stringify({ root }),
+    });
   }
 
   listMacros(): Promise<MacroDef[]> {
@@ -188,10 +235,13 @@ class RealApi implements HarnessApi {
   }
 
   async runMacro(id: string, req: RunMacroRequest): Promise<void> {
-    await this.request<{ ok: true }>(`/api/macros/${encodeURIComponent(id)}/run`, {
-      method: "POST",
-      body: JSON.stringify(req),
-    });
+    await this.request<{ ok: true }>(
+      `/api/macros/${encodeURIComponent(id)}/run`,
+      {
+        method: "POST",
+        body: JSON.stringify(req),
+      },
+    );
   }
 
   getSettings(): Promise<HarnessSettings> {
@@ -199,7 +249,10 @@ class RealApi implements HarnessApi {
   }
 
   updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings> {
-    return this.request<HarnessSettings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
+    return this.request<HarnessSettings>("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
   }
 
   listDir(path?: string): Promise<FsListResponse> {
@@ -207,16 +260,24 @@ class RealApi implements HarnessApi {
     return this.request<FsListResponse>(`/api/fs/list${query}`);
   }
 
-  bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession> {
+  bindWorkflow(
+    sessionId: string,
+    workflowPath: string | null,
+  ): Promise<HarnessSession> {
     const body: BindWorkflowRequest = { workflowPath };
-    return this.request<HarnessSession>(`/api/sessions/${encodeURIComponent(sessionId)}/workflow`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    });
+    return this.request<HarnessSession>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/workflow`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      },
+    );
   }
 
   seedSampleProject(): Promise<SampleProjectSeedResponse> {
-    return this.request<SampleProjectSeedResponse>("/api/sample-project", { method: "POST" });
+    return this.request<SampleProjectSeedResponse>("/api/sample-project", {
+      method: "POST",
+    });
   }
 
   listSkills(): Promise<SkillMeta[]> {
@@ -226,9 +287,17 @@ class RealApi implements HarnessApi {
   getSkill(id: string): Promise<SkillDetail> {
     return this.request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`);
   }
+
+  getRunState(executionId: string, signal?: AbortSignal): Promise<RunView> {
+    return this.request<RunView>(
+      `/api/runs/${encodeURIComponent(executionId)}/state`,
+      { signal },
+    );
+  }
 }
 
-const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms = 180): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
 class MockApi implements HarnessApi {
@@ -238,9 +307,14 @@ class MockApi implements HarnessApi {
   // telemetryOptIn starts true so the chip shows "analytics on" from the first render.
   private readonly promptedConsent =
     typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("mockConsentSource") === "prompted";
-  private sessions = this.fresh ? [] : MOCK_SESSIONS.map((session) => ({ ...session }));
-  private workflows = this.fresh ? [] : MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
+    new URLSearchParams(window.location.search).get("mockConsentSource") ===
+      "prompted";
+  private sessions = this.fresh
+    ? []
+    : MOCK_SESSIONS.map((session) => ({ ...session }));
+  private workflows = this.fresh
+    ? []
+    : MOCK_WORKFLOWS.map((workflow) => ({ ...workflow }));
   private settings: HarnessSettings = this.fresh
     ? { ...MOCK_SETTINGS, recentDirs: [] }
     : {
@@ -256,12 +330,17 @@ class MockApi implements HarnessApi {
     //   ?mockConsentSource=default-silent  → shows TelemetryNotice
     //   ?mockConsentSource=stored-explicit → off chip (telemetryOptIn=false)
     //   ?mockConsentSource=prompted        → on chip (telemetryOptIn=true in mock)
-    const mockConsentSource = typeof window !== "undefined"
-      ? new URLSearchParams(window.location.search).get("mockConsentSource") as AppState["consentSource"] ?? "stored-explicit"
-      : "stored-explicit";
-    const mockEnvReason = typeof window !== "undefined"
-      ? new URLSearchParams(window.location.search).get("mockEnvReason") ?? null
-      : null;
+    const mockConsentSource =
+      typeof window !== "undefined"
+        ? ((new URLSearchParams(window.location.search).get(
+            "mockConsentSource",
+          ) as AppState["consentSource"]) ?? "stored-explicit")
+        : "stored-explicit";
+    const mockEnvReason =
+      typeof window !== "undefined"
+        ? (new URLSearchParams(window.location.search).get("mockEnvReason") ??
+          null)
+        : null;
     // When consent was answered via a TTY prompt ("prompted"), the user
     // necessarily said yes — mirror that in the mock so the chip shows "on".
     const telemetryOptIn =
@@ -312,17 +391,27 @@ class MockApi implements HarnessApi {
 
   async resumeSession(id: string): Promise<HarnessSession> {
     await delay(300);
-    const existing = this.sessions.find((session) => session.agentSessionId === id || session.id === id);
+    const existing = this.sessions.find(
+      (session) => session.agentSessionId === id || session.id === id,
+    );
     if (!existing) throw new Error(`mock: no session to resume for ${id}`);
-    const resumed = { ...existing, status: "running" as const, lastActiveAt: new Date().toISOString() };
-    this.sessions = this.sessions.map((session) => (session.id === resumed.id ? resumed : session));
+    const resumed = {
+      ...existing,
+      status: "running" as const,
+      lastActiveAt: new Date().toISOString(),
+    };
+    this.sessions = this.sessions.map((session) =>
+      session.id === resumed.id ? resumed : session,
+    );
     return resumed;
   }
 
   async killSession(id: string): Promise<void> {
     await delay();
     this.sessions = this.sessions.map((session) =>
-      session.id === id ? { ...session, status: "exited" as const, exitCode: 0 } : session,
+      session.id === id
+        ? { ...session, status: "exited" as const, exitCode: 0 }
+        : session,
     );
   }
 
@@ -338,7 +427,11 @@ class MockApi implements HarnessApi {
       // Consumed exactly once — cleared immediately so the next submit succeeds.
       if (win.__MOCK_INJECT_FAIL_ONCE__) {
         win.__MOCK_INJECT_FAIL_ONCE__ = false;
-        throw new ApiError(409, `POST /api/sessions/${id}/input → 409: Session is still initialising`, "Session is still initialising");
+        throw new ApiError(
+          409,
+          `POST /api/sessions/${id}/input → 409: Session is still initialising`,
+          "Session is still initialising",
+        );
       }
       // Record the submission for Playwright to assert on — same pattern as
       // runMacro's lastMacroRun and seedSampleProject's lastSampleSeed.
@@ -382,8 +475,13 @@ class MockApi implements HarnessApi {
     // effect, so Playwright reads this back to assert what a click actually
     // sent (e.g. that Visualize fires with no subject — it's one-click now).
     if (typeof window !== "undefined") {
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
-      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastMacroRun: { id, req } };
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        lastMacroRun: { id, req },
+      };
     }
   }
 
@@ -392,7 +490,9 @@ class MockApi implements HarnessApi {
     return this.settings;
   }
 
-  async updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings> {
+  async updateSettings(
+    patch: Partial<HarnessSettings>,
+  ): Promise<HarnessSettings> {
     await delay();
     this.settings = { ...this.settings, ...patch };
     return this.settings;
@@ -407,27 +507,44 @@ class MockApi implements HarnessApi {
     let normalized = requested;
     while (!(normalized in MOCK_FS_TREE) && normalized !== "/") {
       const segments = normalized.split("/").filter(Boolean);
-      normalized = segments.length <= 1 ? "/" : "/" + segments.slice(0, -1).join("/");
+      normalized =
+        segments.length <= 1 ? "/" : "/" + segments.slice(0, -1).join("/");
     }
     if (!(normalized in MOCK_FS_TREE)) normalized = MOCK_LAUNCH_DIR;
 
     const names = MOCK_FS_TREE[normalized] ?? [];
     const segments = normalized.split("/").filter(Boolean);
     // Matches path.dirname("/") === "/" — root's own parent is itself, never null.
-    const parent = normalized === "/" ? "/" : segments.length <= 1 ? "/" : "/" + segments.slice(0, -1).join("/");
+    const parent =
+      normalized === "/"
+        ? "/"
+        : segments.length <= 1
+          ? "/"
+          : "/" + segments.slice(0, -1).join("/");
     return {
       path: normalized,
       parent,
-      dirs: names.map((name) => ({ name, path: normalized === "/" ? `/${name}` : `${normalized}/${name}` })),
+      dirs: names.map((name) => ({
+        name,
+        path: normalized === "/" ? `/${name}` : `${normalized}/${name}`,
+      })),
     };
   }
 
-  async bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession> {
+  async bindWorkflow(
+    sessionId: string,
+    workflowPath: string | null,
+  ): Promise<HarnessSession> {
     await delay(150);
     const existing = this.sessions.find((session) => session.id === sessionId);
     if (!existing) throw new Error(`mock: no session to bind for ${sessionId}`);
-    const bound: HarnessSession = { ...existing, boundWorkflowPath: workflowPath };
-    this.sessions = this.sessions.map((session) => (session.id === sessionId ? bound : session));
+    const bound: HarnessSession = {
+      ...existing,
+      boundWorkflowPath: workflowPath,
+    };
+    this.sessions = this.sessions.map((session) =>
+      session.id === sessionId ? bound : session,
+    );
     return bound;
   }
 
@@ -442,8 +559,13 @@ class MockApi implements HarnessApi {
     // lastMacroRun: seeding has no other observable effect in mock mode, so
     // Playwright reads this back to assert the click actually seeded.
     if (typeof window !== "undefined") {
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
-      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastSampleSeed: response };
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        lastSampleSeed: response,
+      };
     }
     return response;
   }
@@ -452,9 +574,14 @@ class MockApi implements HarnessApi {
     await delay(150);
     // Test-only escape hatch: record the call count for Playwright assertions.
     if (typeof window !== "undefined") {
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
       const prev = (win.__HARNESS_TEST__?.listSkillsCallCount as number) ?? 0;
-      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), listSkillsCallCount: prev + 1 };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        listSkillsCallCount: prev + 1,
+      };
     }
     return MOCK_SKILLS;
   }
@@ -462,8 +589,31 @@ class MockApi implements HarnessApi {
   async getSkill(id: string): Promise<SkillDetail> {
     await delay(100);
     const found = MOCK_SKILLS.find((s) => s.id === id);
-    if (!found) throw new ApiError(404, `GET /api/skills/${id} → 404`, `Unknown skill '${id}'`);
-    return { ...found, body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}` };
+    if (!found)
+      throw new ApiError(
+        404,
+        `GET /api/skills/${id} → 404`,
+        `Unknown skill '${id}'`,
+      );
+    return {
+      ...found,
+      body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}`,
+    };
+  }
+
+  async getRunState(
+    executionId: string,
+    _signal?: AbortSignal,
+  ): Promise<RunView> {
+    await delay(100);
+    return {
+      executionId,
+      status: "completed",
+      steps: [
+        { id: "step-1", name: "fetchData", status: "passed" },
+        { id: "step-2", name: "processResult", status: "passed" },
+      ],
+    };
   }
 }
 
@@ -475,10 +625,20 @@ class MockApi implements HarnessApi {
 export function interceptMockTrack(): void {
   if (!isMockMode()) return;
   const originalFetch = window.fetch.bind(window);
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  window.fetch = async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
     if (url === "/api/track" && init?.method === "POST") {
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
       let body: unknown;
       try {
         body = JSON.parse(typeof init.body === "string" ? init.body : "{}");
@@ -486,8 +646,14 @@ export function interceptMockTrack(): void {
         body = {};
       }
       const prev = (win.__HARNESS_TEST__?.trackEvents as unknown[]) ?? [];
-      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), trackEvents: [...prev, body] };
-      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        trackEvents: [...prev, body],
+      };
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     return originalFetch(input, init);
   };
