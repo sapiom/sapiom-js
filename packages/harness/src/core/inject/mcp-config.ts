@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { resolveEnvironment } from "@sapiom/mcp/auth";
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../../cli/paths.js";
 
@@ -40,11 +41,13 @@ export async function generateMcpConfig(
     ? { SAPIOM_ENVIRONMENT: sapiomEnvironment }
     : undefined;
 
+  const { apiURL } = await resolveEnvironment(sapiomEnvironment);
+
   const config = {
     mcpServers: {
       sapiom: {
         type: "http",
-        url: "https://api.sapiom.ai/v1/mcp",
+        url: `${apiURL}/v1/mcp`,
         ...(options.apiKey ? { headers: { "x-api-key": options.apiKey } } : {}),
       },
       "sapiom-dev": {

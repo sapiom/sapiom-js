@@ -52,6 +52,29 @@ describe("generateMcpConfig", () => {
     expect(config.mcpServers["sapiom-dev"].env).toEqual({ SAPIOM_ENVIRONMENT: "staging" });
   });
 
+  it("points the remote sapiom URL at the resolved environment", async () => {
+    const staging = JSON.parse(
+      await fs.readFile(await generateMcpConfig("session-staging", { environment: "staging" }), "utf-8"),
+    );
+    expect(staging.mcpServers.sapiom.url).toBe("https://api.sapiom.dev/v1/mcp");
+
+    const dev = JSON.parse(
+      await fs.readFile(await generateMcpConfig("session-dev", { environment: "dev" }), "utf-8"),
+    );
+    expect(dev.mcpServers.sapiom.url).toBe("https://api.sapiom.dev/v1/mcp");
+  });
+
+  it("reads SAPIOM_ENVIRONMENT from the process env for the remote URL", async () => {
+    process.env.SAPIOM_ENVIRONMENT = "staging";
+    const config = JSON.parse(await fs.readFile(await generateMcpConfig("session-env"), "utf-8"));
+    expect(config.mcpServers.sapiom.url).toBe("https://api.sapiom.dev/v1/mcp");
+  });
+
+  it("defaults the remote URL to production when no environment is set", async () => {
+    const config = JSON.parse(await fs.readFile(await generateMcpConfig("session-prod"), "utf-8"));
+    expect(config.mcpServers.sapiom.url).toBe("https://api.sapiom.ai/v1/mcp");
+  });
+
   it("isolates sessions into separate directories", async () => {
     const a = await generateMcpConfig("session-a");
     const b = await generateMcpConfig("session-b");
