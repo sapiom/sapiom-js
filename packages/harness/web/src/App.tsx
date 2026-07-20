@@ -18,6 +18,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { SessionBar } from "./components/SessionBar";
 import { SkillsPanel } from "./components/SkillsPanel";
+import { SnippetPanel } from "./components/SnippetPanel";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
@@ -31,7 +32,7 @@ import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState } from "./lib/use-harness-state";
 import { useRunPolling } from "./lib/use-run-polling";
 
-type RightTab = "canvas" | "skills";
+type RightTab = "canvas" | "skills" | "snippet";
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
@@ -48,6 +49,8 @@ export const App = (): JSX.Element => {
   // Tracks whether Skills has ever been shown — once true, SkillsPanel stays
   // mounted (hidden via CSS) so re-opening never triggers a refetch.
   const [skillsPanelEverShown, setSkillsPanelEverShown] = useState(false);
+  // Same lazy-mount tracking for the Snippet tab.
+  const [snippetPanelEverShown, setSnippetPanelEverShown] = useState(false);
   const rowAnchor = useElementTopOffset(selectedRowEl, stripColEl);
 
   // Stable function references for SkillsPanel props — prevents the panel's
@@ -379,6 +382,20 @@ export const App = (): JSX.Element => {
             >
               Skills
             </button>
+            <button
+              role="tab"
+              aria-selected={rightTab === "snippet"}
+              className={
+                "right-pane-tab" + (rightTab === "snippet" ? " is-active" : "")
+              }
+              onClick={() => {
+                setRightTab("snippet");
+                setSnippetPanelEverShown(true);
+              }}
+              data-testid="right-tab-snippet"
+            >
+              Snippet
+            </button>
           </div>
 
           {/* Canvas: always mounted so a running Visualize enrichment is never
@@ -426,6 +443,33 @@ export const App = (): JSX.Element => {
                   void harness.useSkill(sessionId, text)
                 }
               />
+            </div>
+          )}
+
+          {/* Snippet: importable code snippet for the deployed bound workflow.
+              Off the canvas, on its own tab. Lazy-mount on first open, then kept
+              alive hidden via CSS — same pattern as Skills. */}
+          {(rightTab === "snippet" || snippetPanelEverShown) && (
+            <div
+              className={
+                "right-pane-panel" + (rightTab === "snippet" ? "" : " is-hidden")
+              }
+              data-testid="right-panel-snippet"
+            >
+              {boundWorkflow && boundWorkflow.definitionId != null ? (
+                <SnippetPanel
+                  boundWorkflow={boundWorkflow}
+                  agentsBaseUrl={state.agentsBaseUrl}
+                />
+              ) : (
+                <div className="canvas-empty">
+                  <p>No snippet yet.</p>
+                  <p className="canvas-empty-hint">
+                    Deploy a workflow and bind it to this session to get a
+                    copy-paste snippet that triggers your agent from code.
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>

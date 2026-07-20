@@ -165,7 +165,10 @@ export function CanvasPane({
         }
       })
       .catch(() => {
-        /* best-effort: leave the breakdown empty on failure */
+        // Suppress retries for this run — mark it fetched so a failing
+        // transactions endpoint can't refire on every step re-selection
+        // (unbounded requests). The breakdown just stays empty (best-effort).
+        if (!cancelled) setRunCallsExec(executionId);
       });
     return () => {
       cancelled = true;

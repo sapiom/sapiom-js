@@ -2,19 +2,28 @@
  * Fixture data for `VITE_MOCK=1` — lets the SPA render fully without a
  * running harness server (see MockApi in ./api).
  */
-import type { HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
+import type {
+  HarnessSession,
+  HarnessSettings,
+  MacroDef,
+  SessionSummary,
+  WorkflowInfo,
+} from "@shared/types";
 import type { SkillMeta } from "./api";
 
 const now = Date.now();
-const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
-const daysAgo = (n: number): string => new Date(now - n * 24 * 60 * 60_000).toISOString();
+const minutesAgo = (n: number): string =>
+  new Date(now - n * 60_000).toISOString();
+const daysAgo = (n: number): string =>
+  new Date(now - n * 24 * 60 * 60_000).toISOString();
 
 /** The directory the harness itself was launched from (`npx @sapiom/harness [dir]`). */
 export const MOCK_LAUNCH_DIR = "/Users/demo/acme-app";
 
 /** Where MockApi.seedSampleProject pretends the example project landed —
  *  mirrors the real HARNESS_PATHS.sampleProject location. */
-export const MOCK_SAMPLE_PROJECT_ROOT = "/Users/demo/.sapiom/harness/sample-project";
+export const MOCK_SAMPLE_PROJECT_ROOT =
+  "/Users/demo/.sapiom/harness/sample-project";
 
 export const MOCK_SESSIONS: HarnessSession[] = [
   {
@@ -91,7 +100,13 @@ export const MOCK_ACTIVITY_SESSION_ID = "sess-bg";
 export const MOCK_FS_TREE: Record<string, string[]> = {
   "/": ["Users"],
   "/Users": ["demo"],
-  "/Users/demo": ["acme-app", "rfq-workflows", "onboarding-flow", "scratch"],
+  "/Users/demo": [
+    "acme-app",
+    "rfq-workflows",
+    "onboarding-flow",
+    "claims-triage",
+    "scratch",
+  ],
   "/Users/demo/acme-app": ["leasing", "src", "docs"],
   "/Users/demo/acme-app/leasing": [],
   "/Users/demo/acme-app/src": [],
@@ -100,6 +115,7 @@ export const MOCK_FS_TREE: Record<string, string[]> = {
   "/Users/demo/rfq-workflows/src": [],
   "/Users/demo/rfq-workflows/tests": [],
   "/Users/demo/onboarding-flow": [],
+  "/Users/demo/claims-triage": [],
   "/Users/demo/scratch": [],
 };
 
@@ -137,11 +153,40 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
 };
 
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
-  { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821, source: "scan" },
-  { name: "rfq", path: "/Users/demo/rfq-workflows", definitionId: null, source: "scan" },
+  {
+    name: "leasing",
+    path: "/Users/demo/acme-app/leasing",
+    definitionId: 4821,
+    definitionSlug: "ic-diligence-orchestrator",
+    source: "scan",
+  },
+  {
+    name: "rfq",
+    path: "/Users/demo/rfq-workflows",
+    definitionId: null,
+    definitionSlug: null,
+    source: "scan",
+  },
   // Deployed like "leasing" but with a much longer name — exercises the
   // canvas header's deployed-dot staying pinned regardless of name length.
-  { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: 9001, source: "connect" },
+  {
+    name: "onboarding-flow",
+    path: "/Users/demo/onboarding-flow",
+    definitionId: 9001,
+    definitionSlug: "onboarding-flow",
+    source: "connect",
+  },
+  // Deployed (has a definitionId) but its slug hasn't resolved — e.g. the
+  // harness isn't signed into the account that owns it. The snippet panel must
+  // fall back to the project name (this `name`) and show the "inferred" note,
+  // never a fill-in placeholder in the read-only slug field.
+  {
+    name: "claims-triage",
+    path: "/Users/demo/claims-triage",
+    definitionId: 7314,
+    definitionSlug: null,
+    source: "connect",
+  },
 ];
 
 export const MOCK_MACROS: MacroDef[] = [
@@ -149,28 +194,43 @@ export const MOCK_MACROS: MacroDef[] = [
     id: "run_local",
     label: "Run local",
     icon: "Play",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target local", submit: true },
+    action: {
+      kind: "inject",
+      text: "cd {{workflow.path}} && sapiom agents run --target local",
+      submit: true,
+    },
     requiresWorkflow: true,
   },
   {
     id: "deploy",
     label: "Deploy",
     icon: "Cloud",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents deploy", submit: true },
+    action: {
+      kind: "inject",
+      text: "cd {{workflow.path}} && sapiom agents deploy",
+      submit: true,
+    },
     requiresWorkflow: true,
   },
   {
     id: "prod_run",
     label: "Prod run",
     icon: "Zap",
-    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target prod", submit: true },
+    action: {
+      kind: "inject",
+      text: "cd {{workflow.path}} && sapiom agents run --target prod",
+      submit: true,
+    },
     requiresWorkflow: true,
   },
   {
     id: "open_prod",
     label: "Open prod",
     icon: "ExternalLink",
-    action: { kind: "open-url", url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}" },
+    action: {
+      kind: "open-url",
+      url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}",
+    },
     requiresWorkflow: true,
   },
   {
@@ -187,26 +247,33 @@ export const MOCK_MACROS: MacroDef[] = [
 
 export const MOCK_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
-  recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-workflows", "/Users/demo/onboarding-flow"],
+  recentDirs: [
+    "/Users/demo/acme-app",
+    "/Users/demo/rfq-workflows",
+    "/Users/demo/onboarding-flow",
+  ],
 };
 
 export const MOCK_SKILLS: SkillMeta[] = [
   {
     id: "sapiom-agent-authoring",
     name: "Agent Authoring",
-    description: "Build, test, and deploy a Sapiom agent — a controlled, multi-step, deployable automation.",
+    description:
+      "Build, test, and deploy a Sapiom agent — a controlled, multi-step, deployable automation.",
     source: "package",
   },
   {
     id: "frontend-design",
     name: "Frontend Design",
-    description: "Create distinctive, production-grade frontend interfaces with high design quality.",
+    description:
+      "Create distinctive, production-grade frontend interfaces with high design quality.",
     source: "user",
   },
   {
     id: "code-review",
     name: "Code Review",
-    description: "Systematic review of code changes for correctness, style, and security.",
+    description:
+      "Systematic review of code changes for correctness, style, and security.",
     source: "user",
   },
 ];
@@ -262,4 +329,3 @@ Systematic review of code changes for correctness, style, and security.
 - [ ] Tests cover the happy path and key error cases
 `,
 };
-

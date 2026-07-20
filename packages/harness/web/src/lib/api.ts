@@ -483,6 +483,7 @@ class MockApi implements HarnessApi {
       name: path.split("/").filter(Boolean).pop() ?? path,
       path,
       definitionId: null,
+      definitionSlug: null,
       source: "connect",
     };
     this.workflows = [...this.workflows.filter((w) => w.path !== path), info];

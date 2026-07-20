@@ -6,6 +6,7 @@ const workflow: WorkflowInfo = {
   name: "leasing",
   path: "/Users/demo/acme-app/leasing",
   definitionId: 4821,
+  definitionSlug: "leasing",
   source: "scan",
 };
 

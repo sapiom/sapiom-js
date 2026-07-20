@@ -14,9 +14,24 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpHome };
 });
 
-import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
-import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
-import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
+import type {
+  HarnessAdapter,
+  HarnessKind,
+  HarnessSession,
+  MacroDef,
+  SpawnSpec,
+  WorkflowInfo,
+} from "../shared/types.js";
+import {
+  SessionManager,
+  SessionNotReadyError,
+  UnknownSessionError,
+} from "../core/session-manager.js";
+import {
+  AdapterNotFoundError,
+  SessionAlreadyLiveError,
+  SessionNotResumeableError,
+} from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -129,6 +144,20 @@ describe("createRestRouter", () => {
       expect(body.firstRun).toBe(false);
     });
 
+    it("omits agentsBaseUrl when the caller doesn't supply it", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/state`);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect("agentsBaseUrl" in body).toBe(false);
+    });
+
+    it("surfaces agentsBaseUrl when supplied", async () => {
+      start({ agentsBaseUrl: "https://tools.sapiom.ai" });
+      const res = await fetch(`${baseUrl}/state`);
+      const body = (await res.json()) as { agentsBaseUrl: string };
+      expect(body.agentsBaseUrl).toBe("https://tools.sapiom.ai");
+    });
+
     it("reflects identity, sessions, workflows, and macros from their sources", async () => {
       const session: HarnessSession = {
         id: "s1",
@@ -143,8 +172,19 @@ describe("createRestRouter", () => {
         boundWorkflowPath: null,
         ready: true,
       };
-      const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
-      const macro: MacroDef = { id: "run_local", label: "Run local", icon: "Play", action: { kind: "inject", text: "x" } };
+      const workflow: WorkflowInfo = {
+        name: "leasing",
+        path: "/tmp/leasing",
+        definitionId: 1,
+        definitionSlug: "leasing",
+        source: "scan",
+      };
+      const macro: MacroDef = {
+        id: "run_local",
+        label: "Run local",
+        icon: "Play",
+        action: { kind: "inject", text: "x" },
+      };
 
       start({
         sessionManager: fakeSessionManager([session]),
@@ -180,7 +220,10 @@ describe("createRestRouter", () => {
     it("returns defaults before anything is persisted", async () => {
       start();
       const res = await fetch(`${baseUrl}/settings`);
-      expect(await res.json()).toEqual({ telemetryOptIn: false, recentDirs: [] });
+      expect(await res.json()).toEqual({
+        telemetryOptIn: false,
+        recentDirs: [],
+      });
     });
 
     it("persists a patch and returns the merged result", async () => {
@@ -190,10 +233,16 @@ describe("createRestRouter", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ telemetryOptIn: true }),
       });
-      expect(await res.json()).toEqual({ telemetryOptIn: true, recentDirs: [] });
+      expect(await res.json()).toEqual({
+        telemetryOptIn: true,
+        recentDirs: [],
+      });
 
       const reread = await fetch(`${baseUrl}/settings`);
-      expect(await reread.json()).toEqual({ telemetryOptIn: true, recentDirs: [] });
+      expect(await reread.json()).toEqual({
+        telemetryOptIn: true,
+        recentDirs: [],
+      });
     });
 
     it("calls onTelemetryOptInChange only when telemetryOptIn actually changes", async () => {
@@ -243,24 +292,39 @@ describe("createRestRouter", () => {
   describe("POST /sample-project", () => {
     it("501s when no seeder is wired up", async () => {
       start();
-      const res = await fetch(`${baseUrl}/sample-project`, { method: "POST", headers: TOKEN_HEADER });
+      const res = await fetch(`${baseUrl}/sample-project`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
       expect(res.status).toBe(501);
     });
 
     it("returns the seeder's result", async () => {
-      const seeded = { root: "/tmp/sample", projectDir: "/tmp/sample/order-triage", created: true };
+      const seeded = {
+        root: "/tmp/sample",
+        projectDir: "/tmp/sample/order-triage",
+        created: true,
+      };
       const seedSampleProject = vi.fn().mockResolvedValue(seeded);
       start({ seedSampleProject });
 
-      const res = await fetch(`${baseUrl}/sample-project`, { method: "POST", headers: TOKEN_HEADER });
+      const res = await fetch(`${baseUrl}/sample-project`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual(seeded);
       expect(seedSampleProject).toHaveBeenCalledOnce();
     });
 
     it("propagates a seeding failure as a server error, not a hang", async () => {
-      start({ seedSampleProject: vi.fn().mockRejectedValue(new Error("disk full")) });
-      const res = await fetch(`${baseUrl}/sample-project`, { method: "POST", headers: TOKEN_HEADER });
+      start({
+        seedSampleProject: vi.fn().mockRejectedValue(new Error("disk full")),
+      });
+      const res = await fetch(`${baseUrl}/sample-project`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
       expect(res.status).toBe(500);
     });
   });
@@ -342,7 +406,11 @@ describe("createRestRouter", () => {
 
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true });
-      expect(sessionManager.submitInput).toHaveBeenCalledWith("sess-1", "hello", true);
+      expect(sessionManager.submitInput).toHaveBeenCalledWith(
+        "sess-1",
+        "hello",
+        true,
+      );
     });
 
     it("400s a malformed body (missing text)", async () => {
@@ -357,7 +425,9 @@ describe("createRestRouter", () => {
 
     it("404s when submitInput reports no live pty for the session", async () => {
       const sessionManager = fakeSessionManager();
-      (sessionManager.submitInput as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+      (
+        sessionManager.submitInput as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(false);
       start({ sessionManager });
 
       const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
@@ -370,9 +440,9 @@ describe("createRestRouter", () => {
 
     it("409s with a UI-visible reason when the session isn't ready yet (SessionNotReadyError) — never silently swallows the input", async () => {
       const sessionManager = fakeSessionManager();
-      (sessionManager.submitInput as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new SessionNotReadyError("sess-1"),
-      );
+      (
+        sessionManager.submitInput as ReturnType<typeof vi.fn>
+      ).mockRejectedValue(new SessionNotReadyError("sess-1"));
       start({ sessionManager });
 
       const res = await fetch(`${baseUrl}/sessions/sess-1/input`, {
@@ -389,7 +459,13 @@ describe("createRestRouter", () => {
   });
 
   describe("PATCH /sessions/:id/workflow", () => {
-    const workflow: WorkflowInfo = { name: "leasing", path: "/tmp/leasing", definitionId: 1, source: "scan" };
+    const workflow: WorkflowInfo = {
+      name: "leasing",
+      path: "/tmp/leasing",
+      definitionId: 1,
+      definitionSlug: "leasing",
+      source: "scan",
+    };
     const baseSession: HarnessSession = {
       id: "sess-1",
       agentSessionId: null,
@@ -406,30 +482,49 @@ describe("createRestRouter", () => {
 
     it("binds a known workflow: validates it, updates the session, and writes the context file", async () => {
       const sessionManager = fakeSessionManager([baseSession]);
-      start({ sessionManager, findWorkflow: (p) => (p === workflow.path ? workflow : null) });
-
-      const res = await fetch(`${baseUrl}/sessions/${baseSession.id}/workflow`, {
-        method: "PATCH",
-        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-        body: JSON.stringify({ workflowPath: workflow.path }),
+      start({
+        sessionManager,
+        findWorkflow: (p) => (p === workflow.path ? workflow : null),
       });
+
+      const res = await fetch(
+        `${baseUrl}/sessions/${baseSession.id}/workflow`,
+        {
+          method: "PATCH",
+          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+          body: JSON.stringify({ workflowPath: workflow.path }),
+        },
+      );
 
       expect(res.status).toBe(200);
       const body = (await res.json()) as HarnessSession;
       expect(body.boundWorkflowPath).toBe(workflow.path);
-      expect(sessionManager.setBoundWorkflowPath).toHaveBeenCalledWith(baseSession.id, workflow.path);
+      expect(sessionManager.setBoundWorkflowPath).toHaveBeenCalledWith(
+        baseSession.id,
+        workflow.path,
+      );
       // setBoundWorkflowPath() mutates the fake manager's session in place —
       // the route hands the whole (already-updated) session to the callee,
       // which resolves the bound workflow against the live registry itself.
       expect(writeWorkspaceContext).toHaveBeenCalledWith(
-        expect.objectContaining({ id: baseSession.id, cwd: "/tmp/proj", boundWorkflowPath: workflow.path }),
+        expect.objectContaining({
+          id: baseSession.id,
+          cwd: "/tmp/proj",
+          boundWorkflowPath: workflow.path,
+        }),
       );
     });
 
     it("unbinds with workflowPath: null, writing boundWorkflow: null to the context file", async () => {
-      const bound: HarnessSession = { ...baseSession, boundWorkflowPath: workflow.path };
+      const bound: HarnessSession = {
+        ...baseSession,
+        boundWorkflowPath: workflow.path,
+      };
       const sessionManager = fakeSessionManager([bound]);
-      start({ sessionManager, findWorkflow: (p) => (p === workflow.path ? workflow : null) });
+      start({
+        sessionManager,
+        findWorkflow: (p) => (p === workflow.path ? workflow : null),
+      });
 
       const res = await fetch(`${baseUrl}/sessions/${bound.id}/workflow`, {
         method: "PATCH",
@@ -441,7 +536,11 @@ describe("createRestRouter", () => {
       const body = (await res.json()) as HarnessSession;
       expect(body.boundWorkflowPath).toBeNull();
       expect(writeWorkspaceContext).toHaveBeenCalledWith(
-        expect.objectContaining({ id: bound.id, cwd: "/tmp/proj", boundWorkflowPath: null }),
+        expect.objectContaining({
+          id: bound.id,
+          cwd: "/tmp/proj",
+          boundWorkflowPath: null,
+        }),
       );
     });
 
@@ -449,11 +548,14 @@ describe("createRestRouter", () => {
       const sessionManager = fakeSessionManager([baseSession]);
       start({ sessionManager, findWorkflow: () => null });
 
-      const res = await fetch(`${baseUrl}/sessions/${baseSession.id}/workflow`, {
-        method: "PATCH",
-        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-        body: JSON.stringify({ workflowPath: "/not/registered" }),
-      });
+      const res = await fetch(
+        `${baseUrl}/sessions/${baseSession.id}/workflow`,
+        {
+          method: "PATCH",
+          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+          body: JSON.stringify({ workflowPath: "/not/registered" }),
+        },
+      );
 
       expect(res.status).toBe(400);
       expect(sessionManager.setBoundWorkflowPath).not.toHaveBeenCalled();
@@ -473,14 +575,16 @@ describe("createRestRouter", () => {
     it("400s a malformed body (missing workflowPath)", async () => {
       const sessionManager = fakeSessionManager([baseSession]);
       start({ sessionManager });
-      const res = await fetch(`${baseUrl}/sessions/${baseSession.id}/workflow`, {
-        method: "PATCH",
-        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-        body: JSON.stringify({}),
-      });
+      const res = await fetch(
+        `${baseUrl}/sessions/${baseSession.id}/workflow`,
+        {
+          method: "PATCH",
+          headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
       expect(res.status).toBe(400);
     });
-
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
@@ -505,8 +609,12 @@ describe("createRestRouter", () => {
       // checks instanceof, the message can say anything.
       const sessionManager = fakeSessionManager();
       const err = new UnknownSessionError("xyz");
-      Object.defineProperty(err, "message", { value: "session xyz could not be located" });
-      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(err);
+      Object.defineProperty(err, "message", {
+        value: "session xyz could not be located",
+      });
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        err,
+      );
       start({ sessionManager });
 
       const res = await fetch(`${baseUrl}/sessions/xyz/resume`, {
@@ -603,8 +711,12 @@ describe("createRestRouter", () => {
       const res = await fetch(`${baseUrl}/harnesses`);
       const body = (await res.json()) as Array<{ id: string; mode: string }>;
 
-      const embeddedIds = body.filter((a) => a.mode === "embedded").map((a) => a.id);
-      const externalIds = body.filter((a) => a.mode === "external").map((a) => a.id);
+      const embeddedIds = body
+        .filter((a) => a.mode === "embedded")
+        .map((a) => a.id);
+      const externalIds = body
+        .filter((a) => a.mode === "external")
+        .map((a) => a.id);
 
       expect(embeddedIds).toContain("claude-code");
       expect(embeddedIds).toContain("codex");
@@ -623,7 +735,11 @@ describe("createRestRouter", () => {
     it("claude-code appears as mode:embedded and not experimental", async () => {
       start();
       const res = await fetch(`${baseUrl}/harnesses`);
-      const body = (await res.json()) as Array<{ id: string; mode: string; experimental: boolean }>;
+      const body = (await res.json()) as Array<{
+        id: string;
+        mode: string;
+        experimental: boolean;
+      }>;
       const claudeCode = body.find((a) => a.id === "claude-code");
       expect(claudeCode).toBeDefined();
       expect(claudeCode!.mode).toBe("embedded");
@@ -642,7 +758,9 @@ describe("createRestRouter", () => {
     const liveManagers: SessionManager[] = [];
 
     beforeEach(async () => {
-      smDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-rest-ext-test-"));
+      smDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "harness-rest-ext-test-"),
+      );
     });
 
     afterEach(async () => {
@@ -705,7 +823,10 @@ describe("createRestRouter", () => {
         lastActiveAt: new Date().toISOString(),
       });
 
-      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+      start({
+        sessionManager:
+          sessionManager as unknown as RestRouterOptions["sessionManager"],
+      });
 
       const res = await fetch(`${baseUrl}/sessions/${session.id}/resume`, {
         method: "POST",
@@ -729,7 +850,10 @@ describe("createRestRouter", () => {
         lastActiveAt: new Date().toISOString(),
       });
 
-      start({ sessionManager: sessionManager as unknown as RestRouterOptions["sessionManager"] });
+      start({
+        sessionManager:
+          sessionManager as unknown as RestRouterOptions["sessionManager"],
+      });
 
       const res = await fetch(`${baseUrl}/sessions/${session.id}/input`, {
         method: "POST",
@@ -760,7 +884,9 @@ describe("skills router — real server mount proof", () => {
   let skillsRoot: string;
 
   beforeEach(async () => {
-    skillsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-skills-mount-"));
+    skillsRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-skills-mount-"),
+    );
 
     // Mirror the real server/index.ts mount: boot-token middleware on /api,
     // then the skills router (which declares /api/skills internally).
@@ -811,6 +937,8 @@ describe("skills router — real server mount proof", () => {
     const res = await fetch(`${baseUrl}/api/skills`, { headers: TOKEN_HEADER });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<{ id: string; source: string }>;
-    expect(body.some((s) => s.id === "my-skill" && s.source === "user")).toBe(true);
+    expect(body.some((s) => s.id === "my-skill" && s.source === "user")).toBe(
+      true,
+    );
   });
 });

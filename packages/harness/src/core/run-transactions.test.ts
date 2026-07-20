@@ -52,7 +52,7 @@ const TXNS_BODY = {
     {
       actionName: "generate",
       resourceName: "messages",
-      serviceName: "sapiom_litellm",
+      serviceName: "sapiom_llm_provider",
       metadata: {},
       costs: [
         { isActive: false, isEstimate: false, fiatAmount: "0.275000" },
@@ -62,14 +62,14 @@ const TXNS_BODY = {
     {
       actionName: "create",
       resourceName: "sandbox",
-      serviceName: "sapiom_blaxel",
+      serviceName: "sapiom_sandbox_provider",
       metadata: { workflowStepName: "renderPdfs" },
       costs: [{ isActive: true, isEstimate: false, fiatAmount: "7.948800" }],
     },
     {
       actionName: "execute",
       resourceName: "/v1/search",
-      serviceName: "sapiom_linkup",
+      serviceName: "sapiom_search_provider",
       metadata: { workflowStepName: "resolveTargets" },
       costs: [{ isActive: true, isEstimate: false, fiatAmount: "0.055000" }],
     },
@@ -135,9 +135,9 @@ describe("createRunTransactionsFetcher", () => {
     const f = createRunTransactionsFetcher({ apiKey: "sk_test", fetchImpl });
     const res = await f.fetch("60248");
     if (!res.ok) throw new Error("expected ok");
-    // litellm generate had no workflowStepName → falls back to op "generate".
+    // LLM call had no workflowStepName → falls back to op "generate".
     expect(res.calls[0].stepName).toBe("generate");
-    // blaxel carried workflowStepName → "renderPdfs".
+    // sandbox call carried workflowStepName → "renderPdfs".
     expect(res.calls[1].stepName).toBe("renderPdfs");
   });
 
