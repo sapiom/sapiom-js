@@ -7,10 +7,14 @@
  * no change to the controller's public API or the hook that consumes it.
  *
  * Optional spend polling: when `fetchSpend` is provided, the controller also
- * fetches spend data on each run-state tick.  When the run reaches a terminal
- * status the controller continues spend-only polling for `spendSettleCycles`
- * more ticks (cost settles just after a run finishes) before stopping
- * everything.  Spend errors are best-effort and never interrupt run-state.
+ * fetches spend data on each run-state tick.  Billing settles ASYNCHRONOUSLY —
+ * a run's cost is typically `$0` / `pending` for up to a minute or two after
+ * the run finishes, then flips to its `final` settled value.  So when the run
+ * reaches a terminal status the controller keeps spend-only polling until the
+ * spend's `settleState` is `"final"` (cost has landed), or until the
+ * `maxSettleCycles` safety cap is hit (so a run whose billing never settles
+ * can't poll forever).  Spend errors are best-effort and never interrupt
+ * run-state.
  */
 import type { RunSpend, RunView } from "@shared/types";
 
@@ -27,11 +31,14 @@ export interface RunPollDeps {
   /** Optional: called when spend data is successfully fetched. */
   onSpend?: (executionId: string, spend: RunSpend) => void;
   /**
-   * How many additional spend-only poll cycles to run after the run reaches
-   * a terminal status.  Default 3.  Cost settles just after a run finishes,
-   * so we keep polling spend for a few more ticks to capture the settled value.
+   * Safety cap: the maximum number of spend-only poll cycles to run after the
+   * run reaches a terminal status.  Settle-polling normally stops as soon as
+   * spend `settleState` becomes `"final"`; this cap only bites when billing
+   * never settles (e.g. a zero-cost run whose spend stays `pending`), so it
+   * can't poll forever.  Default {@link DEFAULT_MAX_SETTLE_CYCLES}
+   * (≈5 min at the 2 s cadence).
    */
-  spendSettleCycles?: number;
+  maxSettleCycles?: number;
 }
 
 export interface RunPollController {
@@ -53,14 +60,20 @@ export interface RunPollController {
  *  or two), so a genuine run is never dropped. */
 const MAX_CONSECUTIVE_FAILURES = 5;
 
+/** Default safety cap on post-terminal spend-only cycles (~5 min at 2 s). Real
+ *  runs stop far earlier — as soon as `settleState` is `"final"`. */
+export const DEFAULT_MAX_SETTLE_CYCLES = 150;
+
 interface PerIdState {
   intervalId: ReturnType<typeof setInterval>;
   inFlight: AbortController | null;
   failures: number;
   /** Whether the run has reached terminal status (triggers settle mode). */
   terminal: boolean;
-  /** How many spend-only settle cycles remain after terminal status. */
+  /** Remaining spend-only settle cycles before the safety cap forces a stop. */
   settleRemaining: number;
+  /** Whether spend has settled (`settleState === "final"`) — stops settle mode. */
+  spendSettled: boolean;
   /** In-flight AbortController for the parallel spend fetch (if any). */
   spendInFlight: AbortController | null;
 }
@@ -72,7 +85,7 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
     pollMs = 2000,
     fetchSpend,
     onSpend,
-    spendSettleCycles = 3,
+    maxSettleCycles = DEFAULT_MAX_SETTLE_CYCLES,
   } = deps;
 
   const tracked = new Map<string, PerIdState>();
@@ -93,8 +106,11 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
     try {
       const spend = await fetchSpend(executionId, ac.signal);
       // Check the entry still exists (stop() might have fired while awaiting).
-      if (tracked.get(executionId)) {
+      const live = tracked.get(executionId);
+      if (live) {
         onSpend(executionId, spend);
+        // Cost has landed — let settle mode stop on the next tick.
+        if (spend.settleState === "final") live.spendSettled = true;
       }
     } catch {
       // Best-effort: spend errors are swallowed entirely.
@@ -114,10 +130,11 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
     if (!entry) return;
 
     // -----------------------------------------------------------------------
-    // Settle-mode: run is terminal — only poll spend for a few more cycles.
+    // Settle-mode: run is terminal — keep polling spend only, until cost has
+    // settled (settleState "final") or the safety cap is exhausted.
     // -----------------------------------------------------------------------
     if (entry.terminal) {
-      if (entry.settleRemaining <= 0) {
+      if (entry.spendSettled || entry.settleRemaining <= 0) {
         stop(executionId);
         return;
       }
@@ -158,7 +175,7 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
         if (afterTerminal) {
           if (fetchSpend && onSpend) {
             afterTerminal.terminal = true;
-            afterTerminal.settleRemaining = spendSettleCycles;
+            afterTerminal.settleRemaining = maxSettleCycles;
           } else {
             stop(executionId);
           }
@@ -189,6 +206,7 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
       failures: 0,
       terminal: false,
       settleRemaining: 0,
+      spendSettled: false,
       spendInFlight: null,
     };
     tracked.set(executionId, entry);
