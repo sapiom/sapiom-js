@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 /**
- * Canvas run-state: live step lighting for the sandboxed iframe.
+ * Canvas run-state: live step lighting for the sandboxed iframe, plus the
+ * reverse click channel (iframe → parent).
  *
  * HOW IT WORKS — the stringify-into-iframe pattern
  * ─────────────────────────────────────────────────
@@ -11,21 +12,28 @@
  * To apply live run state to the SVG nodes, we need code that runs INSIDE the
  * iframe's document. We cannot bundle a separate script for it (no fetch
  * inside a sandboxed iframe, no src="" script). Instead, `canvas-template.ts`
- * stringifies the three functions below with `.toString()` and injects them
+ * stringifies the functions below with `.toString()` and injects them
  * directly into the `<script>` block that `renderCanvasDocument` emits.
+ *
+ * REVERSE CHANNEL (iframe → parent)
+ * ───────────────────────────────────
+ * `bootCanvasNodeClicks` adds a single delegated click listener on
+ * `document`. When a click lands inside a `.canvas-node[data-step-name]`
+ * element, it posts `{ type: "sapiom:node-click", stepName }` to the parent
+ * via `window.parent.postMessage`. The parent listens for this and opens the
+ * step-detail panel.
  *
  * CONSTRAINTS on these functions
  * ────────────────────────────────
  * • No TypeScript-only syntax inside the function bodies (they are stringified
  *   as-is and executed in a plain-JS browser context with no transpiler).
  * • No imports or module-level references (same reason).
- * • All three must be top-level `function` declarations (not arrow functions,
- *   not const lambdas) so they are mutually referenceable by name after
- *   stringification. `bootCanvasRunState` calls `applyRunStateToCanvas`, which
- *   calls `runStateNodeClass` — the names must resolve at call time.
+ * • All functions must be top-level `function` declarations (not arrow
+ *   functions, not const lambdas) so they are referenceable by name after
+ *   stringification.
  * • `runStateNodeClass` is the one pure piece (no DOM); it is also exported and
- *   unit-tested in `canvas-run-state.test.ts`. The other two are DOM-only and
- *   not unit-testable in a Node/Vitest environment.
+ *   unit-tested in `canvas-run-state.test.ts`. The other functions are DOM-only
+ *   and not unit-testable in a Node/Vitest environment.
  */
 
 export type RunStepStatus = "pending" | "running" | "passed" | "failed";
@@ -58,7 +66,12 @@ export function runStateNodeClass(status: string): string {
 export function applyRunStateToCanvas(
   doc: Document,
   msg: {
-    steps: Array<{ name: string; status: string; latencyMs?: number }>;
+    steps: Array<{
+      name: string;
+      id?: string;
+      status: string;
+      latencyMs?: number;
+    }>;
     status: string;
     target: string;
   },
@@ -67,9 +80,19 @@ export function applyRunStateToCanvas(
 
   for (let i = 0; i < msg.steps.length; i++) {
     const step = msg.steps[i];
-    const node =
-      doc.querySelector('[data-step-name="' + step.name + '"]') ||
-      doc.querySelector('[data-step-id="' + step.name + '"]');
+    // Match by step name (the node's data-step-name), falling back to the
+    // step id. Wrapped in try/catch: a step name with a quote/bracket would
+    // make an invalid selector throw, which must not abort the whole loop.
+    let node = null;
+    try {
+      node =
+        doc.querySelector('[data-step-name="' + step.name + '"]') ||
+        (step.id
+          ? doc.querySelector('[data-step-id="' + step.id + '"]')
+          : null);
+    } catch {
+      node = null;
+    }
     if (!node) continue;
     for (let j = 0; j < stateClasses.length; j++) {
       node.classList.remove(stateClasses[j]);
@@ -117,5 +140,36 @@ export function bootCanvasRunState(): void {
     const d = e && e.data;
     if (!d || d.type !== "sapiom:run-state") return;
     applyRunStateToCanvas(document, d);
+  });
+}
+
+/**
+ * Wires the reverse click channel: iframe → parent.
+ *
+ * Adds ONE delegated click listener on `document`. When the click target is
+ * inside a `.canvas-node[data-step-name]` element, reads the `data-step-name`
+ * attribute and posts `{ type: "sapiom:node-click", stepName }` to the parent
+ * window. The parent validates the message type and maps the step name to the
+ * current RunView to open the step-detail panel.
+ *
+ * Uses a delegated listener (one listener on document) rather than per-node
+ * listeners so it works even when the SVG is replaced (e.g. after a
+ * canvas.reload), without needing to re-wire.
+ *
+ * Stringified into the iframe template by `canvas-template.ts`.
+ */
+export function bootCanvasNodeClicks(): void {
+  document.addEventListener("click", function (e) {
+    if (!e || !e.target) return;
+    const node = /** @type {Element} */ (e.target as Element).closest(
+      ".canvas-node[data-step-name]",
+    );
+    if (!node) return;
+    const stepName = node.getAttribute("data-step-name");
+    if (!stepName) return;
+    window.parent.postMessage(
+      { type: "sapiom:node-click", stepName: stepName },
+      "*",
+    );
   });
 }

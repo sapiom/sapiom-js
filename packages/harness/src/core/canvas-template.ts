@@ -20,6 +20,7 @@ import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
 import {
   applyRunStateToCanvas,
+  bootCanvasNodeClicks,
   bootCanvasRunState,
   runStateNodeClass,
 } from "./canvas-run-state.js";
@@ -110,6 +111,10 @@ html, body {
 .canvas-graph-svg { display: block; margin: 0 auto; }
 
 /* --- node kinds: entry | step | pause | terminal-success | terminal-warn | launched-workflow --- */
+/* Nodes are clickable — pointer cursor signals this, and a subtle stroke-width bump on hover
+   makes the affordance visible without requiring external JS to track hover state. */
+.canvas-node { cursor: pointer; }
+.canvas-node:hover .canvas-node-rect { stroke-width: 2.5; }
 .canvas-node .canvas-node-rect { fill: var(--canvas-panel); stroke-width: 1.5; stroke: var(--canvas-border-strong); }
 .node--entry .canvas-node-rect { stroke: var(--canvas-accent); }
 .node--pause .canvas-node-rect { stroke: var(--canvas-text-dim); stroke-dasharray: 5 4; }
@@ -309,12 +314,12 @@ const SVG_DEFS = `
 </svg>
 `.trim();
 
-/** Stringified run-state listener injected into every canvas document so nodes
- *  light up in place when a run-state postMessage arrives from the parent. The
- *  three functions must be stringified together because `bootCanvasRunState`
- *  calls `applyRunStateToCanvas`, which calls `runStateNodeClass` — they must
- *  all be in scope at the same time in the iframe's plain-JS context. */
-const RUN_STATE_SCRIPT = `${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();`;
+/** Stringified run-state listener and node-click channel injected into every
+ *  canvas document. The run-state functions must all be in scope together
+ *  because `bootCanvasRunState` calls `applyRunStateToCanvas`, which calls
+ *  `runStateNodeClass`. `bootCanvasNodeClicks` adds the reverse click channel
+ *  (iframe → parent) using the same stringify pattern. */
+const RUN_STATE_SCRIPT = `${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();`;
 
 /**
  * Wraps `bodyHtml` in the shared canvas document shell: doctype, the theme

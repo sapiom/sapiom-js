@@ -76,8 +76,12 @@ export const App = (): JSX.Element => {
   const sessionTargetRef = useRef<Map<string, "prod" | "local">>(new Map());
   useEffect(() => {
     const msg = harness.lastMessage;
-    if (msg?.type === "execution.started" && msg.target === "prod") {
-      sessionExecRef.current.set(msg.harnessSessionId, msg.executionId);
+    if (msg?.type === "execution.started") {
+      // Polling is prod-only, so exec-id tracking stays gated on prod; the
+      // target is tracked for every run so the badge can show running/testing.
+      if (msg.target === "prod") {
+        sessionExecRef.current.set(msg.harnessSessionId, msg.executionId);
+      }
       sessionTargetRef.current.set(msg.harnessSessionId, msg.target);
     }
   }, [harness.lastMessage]);

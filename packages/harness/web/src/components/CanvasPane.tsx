@@ -8,12 +8,16 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { isMockMode } from "../lib/api";
+import { createApi, isMockMode } from "../lib/api";
 import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { track } from "../lib/track";
 import { Icon } from "./Icon";
+import { StepDetailPanel } from "./StepDetailPanel";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
+
+// Module-level singleton — same pattern as use-run-polling.ts.
+const api = createApi();
 
 /** How many of a running task's trailing status lines the activity view shows. */
 const ACTIVITY_LINES_SHOWN = 8;
@@ -47,10 +51,15 @@ export function CanvasPane({
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(getTheme());
+  // The name of the step node the user last clicked in the canvas iframe.
+  // Null when no node is selected or the panel has been closed.
+  const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // Keep the latest runView in a ref so the iframe onLoad handler can read it
   // without closing over a stale value.
   const runViewRef = useRef<RunView | undefined>(runView);
+  // Same for target, so a posted message never carries a stale target label.
+  const targetRef = useRef<"prod" | "local">(target ?? "prod");
   // True while the initial HEAD probe for this session is still in flight —
   // the pane shows a loading state instead of flashing "Nothing generated
   // yet" at content that's about to appear.
@@ -67,6 +76,7 @@ export function CanvasPane({
   // Keep the ref current on every render so onLoad (which captures it by ref)
   // always reads the freshest value.
   runViewRef.current = runView;
+  targetRef.current = target ?? "prod";
 
   // Post the current run state into the iframe. Called both from the iframe's
   // onLoad (so freshly-loaded frames get the current state) and from a runView
@@ -81,11 +91,12 @@ export function CanvasPane({
         type: "sapiom:run-state",
         steps: rv.steps.map((s) => ({
           name: s.name,
+          id: s.id,
           status: s.status,
           latencyMs: s.latencyMs,
         })),
         status: rv.status,
-        target: target ?? "prod",
+        target: targetRef.current,
       },
       "*",
     );
@@ -101,6 +112,28 @@ export function CanvasPane({
   // app's current theme instead of always rendering dark. Legacy canvases
   // that don't read the param are unaffected.
   useEffect(() => subscribeTheme(setTheme), []);
+
+  // Listen for node-click messages from the sandboxed canvas iframe. When a
+  // `sapiom:node-click` message arrives, record the clicked step name so the
+  // step-detail panel can be shown. The type guard is the only security check
+  // needed — the iframe is opaque-origin, so no other page can post to us.
+  useEffect(() => {
+    function handleMessage(e: MessageEvent): void {
+      const d = e.data as { type?: string; stepName?: string } | null;
+      if (!d || d.type !== "sapiom:node-click") return;
+      if (typeof d.stepName === "string") {
+        setSelectedStepName(d.stepName);
+      }
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
+
+  // Clear the selected step when the session or bound workflow changes — a
+  // selection from a previous context must not bleed into the new one.
+  useEffect(() => {
+    setSelectedStepName(null);
+  }, [sessionId, boundWorkflow]);
 
   // Probe once per session for pre-existing content — the agent may have written
   // it in an earlier turn, before this pane was around to catch a reload event.
@@ -181,6 +214,14 @@ export function CanvasPane({
     onRunMacro(visualizeMacro);
     track("visualize.triggered");
   };
+
+  // Derive the selected StepView from the current runView. Only show the panel
+  // when both a step is selected and a session is active — the inject callback
+  // needs a valid sessionId to send to.
+  const selectedStep =
+    selectedStepName != null
+      ? (runView?.steps.find((s) => s.name === selectedStepName) ?? null)
+      : null;
 
   return (
     <aside className="canvas-pane">
@@ -329,6 +370,15 @@ export function CanvasPane({
               postRunState();
             }}
           />
+          {selectedStep && sessionId && (
+            <StepDetailPanel
+              step={selectedStep}
+              onClose={() => setSelectedStepName(null)}
+              onInject={(text, submit) =>
+                api.injectInput(sessionId, { text, submit })
+              }
+            />
+          )}
         </div>
       )}
     </aside>

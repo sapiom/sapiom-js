@@ -2460,6 +2460,213 @@ input {
 
 /* Skills footer */
 
+/* Step-detail panel ------------------------------------------------------ */
+
+/* Overlay drawer inside the canvas frame wrap — positioned at the bottom of
+   the pane, above the iframe. It does NOT block the canvas itself from being
+   visible, only covers the lower portion. Uses `position: absolute` so the
+   iframe keeps its full layout area while the panel layers on top.
+   `z-index: 2` sits above the frame-loading overlay (z-index: 1). */
+.step-detail-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 60%;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -4px 16px rgb(0 0 0 / 0.12);
+  animation: pop-in var(--transition-fast) ease-out;
+  overflow: hidden;
+}
+
+.step-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-1);
+}
+
+.step-detail-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status chip — inherits pill shape from canvas-badge but uses app theme tokens. */
+.step-detail-chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-strong);
+  flex-shrink: 0;
+}
+
+.step-detail-chip--running {
+  color: #2563eb;
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+[data-theme="dark"] .step-detail-chip--running {
+  color: #60a5fa;
+  border-color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.step-detail-chip--passed {
+  color: #16a34a;
+  border-color: #16a34a;
+  background: rgba(22, 163, 74, 0.08);
+}
+
+[data-theme="dark"] .step-detail-chip--passed {
+  color: #4ade80;
+  border-color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.step-detail-chip--failed {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+[data-theme="dark"] .step-detail-chip--failed {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.step-detail-chip--pending {
+  color: var(--text-faint);
+  border-color: var(--border-strong);
+}
+
+/* Latency badge — quiet monospace number right of the status chip. */
+.step-detail-latency {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.step-detail-close {
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Error message — red-tinted, monospace, constrained height. */
+.step-detail-error {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--red);
+  background: rgba(239, 68, 68, 0.06);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+[data-theme="dark"] .step-detail-error {
+  background: rgba(248, 113, 113, 0.08);
+}
+
+/* Log slice — scrollable pre block with monospace type. */
+.step-detail-logs-wrap {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 4px 0;
+}
+
+.step-detail-logs {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.step-detail-no-logs {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Debug macro buttons — a compact horizontal strip above the freeform area. */
+.step-detail-macros {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 4px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+}
+
+.step-detail-macro-btn {
+  font-size: 11.5px;
+  padding: 4px 9px;
+}
+
+/* Free-form ask area — textarea + Ask button. */
+.step-detail-freeform {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  padding: 6px 10px 8px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+
+.step-detail-freeform-input {
+  flex: 1;
+  resize: none;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  padding: 6px 8px;
+  color: var(--text);
+  line-height: 1.45;
+  transition: border-color var(--transition-fast);
+}
+
+.step-detail-freeform-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.step-detail-freeform-ask {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  align-self: flex-end;
+}
+
 /* Scrollbars — thin thumb-only styling, matching the product's own
    (rgba(161, 161, 170, 0.75), 8px, no visible track) in both themes. */
 ::-webkit-scrollbar {

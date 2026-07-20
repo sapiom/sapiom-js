@@ -44,6 +44,21 @@ describe("renderCanvasDocument", () => {
     expect(html).toContain("bootCanvasRunState");
   });
 
+  it("injects the node-click reverse channel so clicking a canvas node notifies the parent", () => {
+    const html = renderCanvasDocument("<p>x</p>");
+    // The reverse message type — proves the click channel is wired.
+    expect(html).toContain("sapiom:node-click");
+    // The boot call — proves the listener is activated, not just defined.
+    expect(html).toContain("bootCanvasNodeClicks()");
+    // The function body itself must be present.
+    expect(html).toContain("bootCanvasNodeClicks");
+  });
+
+  it("makes canvas nodes read as clickable via cursor: pointer CSS", () => {
+    const html = renderCanvasDocument("<p>x</p>");
+    expect(html).toContain("cursor: pointer");
+  });
+
   it("includes is-running / is-passed / is-failed CSS rules for node live-state lighting", () => {
     const html = renderCanvasDocument("");
     expect(html).toContain("is-running");
