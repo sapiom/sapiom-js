@@ -45,6 +45,8 @@ function themeStyleBlock(): string {
   --canvas-text-dim: #737373;
   --canvas-accent: #05a9bc;
   --canvas-success: #05a9bc;
+  --canvas-running: #2563eb;
+  --canvas-passed: #16a34a;
   --canvas-escalation: #b45309;
   --canvas-failure: #ef4444;
 }
@@ -57,6 +59,8 @@ function themeStyleBlock(): string {
   --canvas-text-dim: #a1a1aa;
   --canvas-accent: #6be195;
   --canvas-success: #6be195;
+  --canvas-running: #60a5fa;
+  --canvas-passed: #4ade80;
   --canvas-escalation: #f59e0b;
   --canvas-failure: #f87171;
 }
@@ -163,8 +167,11 @@ template { display: none; }
   50%       { stroke-opacity: 0.45; }
 }
 
+/* running/in-flight: blue, tinted fill, and a pulse so you SEE it working. */
 .canvas-node.is-running .canvas-node-rect {
-  stroke: var(--canvas-accent);
+  fill: var(--canvas-running);
+  fill-opacity: 0.12;
+  stroke: var(--canvas-running);
   stroke-width: 2.5;
   animation: canvas-node-pulse 1.4s ease-in-out infinite;
 }
@@ -175,19 +182,26 @@ template { display: none; }
   }
 }
 
+/* passed: green box. */
 .canvas-node.is-passed .canvas-node-rect {
-  stroke: var(--canvas-success);
-  stroke-width: 2;
-  fill-opacity: 0.08;
+  fill: var(--canvas-passed);
+  fill-opacity: 0.14;
+  stroke: var(--canvas-passed);
+  stroke-width: 2.5;
 }
 
+/* failed: red box. */
 .canvas-node.is-failed .canvas-node-rect {
+  fill: var(--canvas-failure);
+  fill-opacity: 0.14;
   stroke: var(--canvas-failure);
-  stroke-width: 2;
-  fill-opacity: 0.08;
+  stroke-width: 2.5;
 }
 
-/* is-pending: leave the node at its default appearance — no extra rules. */
+/* pending: dim, so not-yet-run steps read as inactive. */
+.canvas-node.is-pending {
+  opacity: 0.5;
+}
 
 /* Active-run header badge — accent background signals a live run. */
 .canvas-badge.canvas-badge--active {
