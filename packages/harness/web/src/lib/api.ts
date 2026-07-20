@@ -15,11 +15,14 @@ import type {
   InjectInputRequest,
   MacroDef,
   RunMacroRequest,
+  RunSpend,
   RunView,
   SampleProjectSeedResponse,
   SessionSummary,
   WorkflowInfo,
 } from "@shared/types";
+
+export type { RunSpend };
 
 // Skill types (matched to the server-side SkillMeta/SkillDetail in
 // src/server/skills.ts — kept here rather than in shared/types.ts since they
@@ -130,6 +133,8 @@ export interface HarnessApi {
   getSkill(id: string): Promise<SkillDetail>;
   /** Fetch the current live render state for a run (polled during execution). */
   getRunState(executionId: string, signal?: AbortSignal): Promise<RunView>;
+  /** Fetch the cost/spend summary for a run (polled during and after execution). */
+  getRunSpend(executionId: string, signal?: AbortSignal): Promise<RunSpend>;
 }
 
 class RealApi implements HarnessApi {
@@ -291,6 +296,13 @@ class RealApi implements HarnessApi {
   getRunState(executionId: string, signal?: AbortSignal): Promise<RunView> {
     return this.request<RunView>(
       `/api/runs/${encodeURIComponent(executionId)}/state`,
+      { signal },
+    );
+  }
+
+  getRunSpend(executionId: string, signal?: AbortSignal): Promise<RunSpend> {
+    return this.request<RunSpend>(
+      `/api/runs/${encodeURIComponent(executionId)}/spend`,
       { signal },
     );
   }
@@ -600,6 +612,22 @@ class MockApi implements HarnessApi {
     return {
       ...found,
       body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}`,
+    };
+  }
+
+  async getRunSpend(
+    executionId: string,
+    _signal?: AbortSignal,
+  ): Promise<RunSpend> {
+    await delay(80);
+    return {
+      executionId,
+      totalUsd: "0.42",
+      settleState: "final",
+      byStep: [
+        { name: "fetchData", totalUsd: "0.05", entryCount: 1 },
+        { name: "processResult", totalUsd: "0.37", entryCount: 2 },
+      ],
     };
   }
 

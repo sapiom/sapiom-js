@@ -98,6 +98,7 @@ import { createFsRouter } from "./fs.js";
 import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
 import { resolveAgentsBaseUrl } from "../core/run-state.js";
+import { resolveCoreBaseUrl } from "../core/run-spend.js";
 
 /**
  * Codex has no hook system — its rollout file is polled into existence
@@ -756,6 +757,7 @@ export const startServer = async (
     createRunsRouter({
       apiKey: identity?.apiKey ?? null,
       baseUrl: resolveAgentsBaseUrl(),
+      coreBaseUrl: resolveCoreBaseUrl(),
     }),
   );
   app.use(

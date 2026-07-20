@@ -2460,6 +2460,49 @@ input {
 
 /* Skills footer */
 
+/* Run-cost total chip — shown just below the workflow header when spend data
+   is available. Monospace value, subtle border, dim settle hint. */
+.run-cost-total {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.run-cost-total-label {
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.run-cost-total-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.run-cost-total-settling {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Step-detail cost line — shown below latency in the step panel. */
+.step-detail-cost {
+  padding: 3px 10px 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
 /* Step-detail panel ------------------------------------------------------ */
 
 /* Overlay drawer inside the canvas frame wrap — positioned at the bottom of
@@ -2585,6 +2628,27 @@ input {
 
 [data-theme="dark"] .step-detail-error {
   background: rgba(248, 113, 113, 0.08);
+}
+
+/* Links a step produced (preview/deploy URL, download link) — clickable, open
+   in a new tab. Prominent so a generated preview URL is easy to reach. */
+.step-detail-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.step-detail-link {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.step-detail-link:hover {
+  text-decoration: underline;
 }
 
 /* Log slice — scrollable pre block with monospace type. */

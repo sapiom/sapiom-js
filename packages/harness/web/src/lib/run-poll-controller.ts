@@ -5,14 +5,33 @@
  * reaches a terminal status. The `fetchRunState` dependency is the only seam
  * that couples this to HTTP — swapping it for a WebSocket push source requires
  * no change to the controller's public API or the hook that consumes it.
+ *
+ * Optional spend polling: when `fetchSpend` is provided, the controller also
+ * fetches spend data on each run-state tick.  When the run reaches a terminal
+ * status the controller continues spend-only polling for `spendSettleCycles`
+ * more ticks (cost settles just after a run finishes) before stopping
+ * everything.  Spend errors are best-effort and never interrupt run-state.
  */
-import type { RunView } from "@shared/types";
+import type { RunSpend, RunView } from "@shared/types";
 
 export interface RunPollDeps {
   fetchRunState: (executionId: string, signal: AbortSignal) => Promise<RunView>;
   onUpdate: (executionId: string, runView: RunView) => void;
   /** Interval between fetches in milliseconds. Default 2000. */
   pollMs?: number;
+  /** Optional: fetch spend data alongside run-state. Best-effort. */
+  fetchSpend?: (
+    executionId: string,
+    signal: AbortSignal,
+  ) => Promise<RunSpend>;
+  /** Optional: called when spend data is successfully fetched. */
+  onSpend?: (executionId: string, spend: RunSpend) => void;
+  /**
+   * How many additional spend-only poll cycles to run after the run reaches
+   * a terminal status.  Default 3.  Cost settles just after a run finishes,
+   * so we keep polling spend for a few more ticks to capture the settled value.
+   */
+  spendSettleCycles?: number;
 }
 
 export interface RunPollController {
@@ -38,13 +57,55 @@ interface PerIdState {
   intervalId: ReturnType<typeof setInterval>;
   inFlight: AbortController | null;
   failures: number;
+  /** Whether the run has reached terminal status (triggers settle mode). */
+  terminal: boolean;
+  /** How many spend-only settle cycles remain after terminal status. */
+  settleRemaining: number;
+  /** In-flight AbortController for the parallel spend fetch (if any). */
+  spendInFlight: AbortController | null;
 }
 
 export function createRunPollController(deps: RunPollDeps): RunPollController {
-  const { fetchRunState, onUpdate, pollMs = 2000 } = deps;
+  const {
+    fetchRunState,
+    onUpdate,
+    pollMs = 2000,
+    fetchSpend,
+    onSpend,
+    spendSettleCycles = 3,
+  } = deps;
 
   const tracked = new Map<string, PerIdState>();
   let paused = false;
+
+  /** Best-effort spend fetch — errors are silently swallowed; a spend failure
+   *  must NEVER stop run-state polling or throw to the caller. */
+  async function pollSpend(
+    executionId: string,
+    entry: PerIdState,
+  ): Promise<void> {
+    if (!fetchSpend || !onSpend) return;
+    // Guard against overlap: if a spend fetch is still in flight, skip.
+    if (entry.spendInFlight !== null) return;
+
+    const ac = new AbortController();
+    entry.spendInFlight = ac;
+    try {
+      const spend = await fetchSpend(executionId, ac.signal);
+      // Check the entry still exists (stop() might have fired while awaiting).
+      if (tracked.get(executionId)) {
+        onSpend(executionId, spend);
+      }
+    } catch {
+      // Best-effort: spend errors are swallowed entirely.
+    } finally {
+      // Only clear when the entry still has OUR controller (stop sets it null).
+      const still = tracked.get(executionId);
+      if (still && still.spendInFlight === ac) {
+        still.spendInFlight = null;
+      }
+    }
+  }
 
   async function poll(executionId: string): Promise<void> {
     if (paused) return;
@@ -52,11 +113,31 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
     const entry = tracked.get(executionId);
     if (!entry) return;
 
-    // Skip if a fetch for this id is still in flight — no overlap.
+    // -----------------------------------------------------------------------
+    // Settle-mode: run is terminal — only poll spend for a few more cycles.
+    // -----------------------------------------------------------------------
+    if (entry.terminal) {
+      if (entry.settleRemaining <= 0) {
+        stop(executionId);
+        return;
+      }
+      entry.settleRemaining -= 1;
+      void pollSpend(executionId, entry);
+      return;
+    }
+
+    // -----------------------------------------------------------------------
+    // Normal mode: fetch run-state (and spend in parallel, best-effort).
+    // -----------------------------------------------------------------------
+
+    // Skip if a run-state fetch for this id is still in flight — no overlap.
     if (entry.inFlight !== null) return;
 
     const ac = new AbortController();
     entry.inFlight = ac;
+
+    // Kick off spend in parallel — best-effort, does not block run-state.
+    void pollSpend(executionId, entry);
 
     try {
       const runView = await fetchRunState(executionId, ac.signal);
@@ -71,7 +152,17 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
       onUpdate(executionId, runView);
 
       if (runView.status !== "running") {
-        stop(executionId);
+        // Run reached terminal — switch to settle mode (or stop immediately
+        // if no spend fetching is configured).
+        const afterTerminal = tracked.get(executionId);
+        if (afterTerminal) {
+          if (fetchSpend && onSpend) {
+            afterTerminal.terminal = true;
+            afterTerminal.settleRemaining = spendSettleCycles;
+          } else {
+            stop(executionId);
+          }
+        }
       }
     } catch {
       // Aborts (from stop/stopAll) and transient errors both land here. Clear
@@ -96,6 +187,9 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
       }, pollMs),
       inFlight: null,
       failures: 0,
+      terminal: false,
+      settleRemaining: 0,
+      spendInFlight: null,
     };
     tracked.set(executionId, entry);
 
@@ -109,6 +203,7 @@ export function createRunPollController(deps: RunPollDeps): RunPollController {
 
     clearInterval(entry.intervalId);
     entry.inFlight?.abort();
+    entry.spendInFlight?.abort();
     tracked.delete(executionId);
   }
 

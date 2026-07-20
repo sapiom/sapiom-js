@@ -4,11 +4,13 @@ import type {
   BackgroundTask,
   BusMessage,
   MacroDef,
+  RunSpend,
   RunView,
   WorkflowInfo,
 } from "@shared/types";
 
 import { createApi, isMockMode } from "../lib/api";
+import { formatUsd } from "../lib/format-usd";
 import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { track } from "../lib/track";
@@ -33,6 +35,8 @@ interface CanvasPaneProps {
   onRunMacro: (macro: MacroDef) => void;
   /** Live run state for the active session's current execution, if any. */
   runView?: RunView;
+  /** Live spend/cost data for the active session's current execution, if any. */
+  runSpend?: RunSpend;
   /** Execution target — governs the badge label ("running" vs "testing"). */
   target?: "prod" | "local";
 }
@@ -46,6 +50,7 @@ export function CanvasPane({
   tasks,
   onRunMacro,
   runView,
+  runSpend,
   target,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
@@ -233,6 +238,18 @@ export function CanvasPane({
         />
       )}
 
+      {runSpend && (
+        <div className="run-cost-total" data-testid="run-cost-total">
+          <span className="run-cost-total-label">Run cost:</span>
+          <span className="run-cost-total-value">
+            {formatUsd(runSpend.totalUsd)}
+          </span>
+          {runSpend.settleState !== "final" && (
+            <span className="run-cost-total-settling">· settling</span>
+          )}
+        </div>
+      )}
+
       {!sessionId ? (
         <div className="canvas-empty">
           Start a session to see its canvas here.
@@ -373,6 +390,9 @@ export function CanvasPane({
           {selectedStep && sessionId && (
             <StepDetailPanel
               step={selectedStep}
+              spend={runSpend?.byStep.find(
+                (s) => s.name === selectedStep.name,
+              )}
               onClose={() => setSelectedStepName(null)}
               onInject={(text, submit) =>
                 api.injectInput(sessionId, { text, submit })

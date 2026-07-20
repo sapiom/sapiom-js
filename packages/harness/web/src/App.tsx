@@ -66,8 +66,8 @@ export const App = (): JSX.Element => {
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } =
     usePaneWidths();
 
-  // Live run polling — tracks deployed run state per executionId.
-  const runViews = useRunPolling(harness.lastMessage);
+  // Live run polling — tracks deployed run state and spend per executionId.
+  const { runViews, runSpends } = useRunPolling(harness.lastMessage);
 
   // Map: sessionId → latest executionId seen for that session. Updated when
   // an execution.started bus message arrives with target "prod".
@@ -95,6 +95,7 @@ export const App = (): JSX.Element => {
     ? sessionExecRef.current.get(harness.activeSessionId)
     : undefined;
   const activeRunView = activeExecId ? runViews.get(activeExecId) : undefined;
+  const activeRunSpend = activeExecId ? runSpends.get(activeExecId) : undefined;
   const activeTarget = harness.activeSessionId
     ? sessionTargetRef.current.get(harness.activeSessionId)
     : undefined;
@@ -399,6 +400,7 @@ export const App = (): JSX.Element => {
                 handleRunMacroForWorkflow(boundWorkflow, macro)
               }
               runView={activeRunView}
+              runSpend={activeRunSpend}
               target={activeTarget}
             />
           </div>

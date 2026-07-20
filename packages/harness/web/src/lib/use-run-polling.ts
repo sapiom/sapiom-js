@@ -2,16 +2,15 @@
  * Thin React hook that drives the run-poll controller from the event bus.
  *
  * When an `execution.started` bus message arrives with `target === "prod"`, the
- * controller starts polling `/api/runs/:id/state` every ~2 s. The returned map
- * is updated live as each poll resolves; polling stops automatically when the
- * run reaches a terminal status (completed / failed / cancelled).
- *
- * App wiring (passing `lastMessage` down, rendering the map) is intentionally
- * deferred to the next leaf (C1) — this file is machinery only.
+ * controller starts polling `/api/runs/:id/state` every ~2 s and `/api/runs/:id/spend`
+ * in parallel on each tick (best-effort). The returned maps are updated live as
+ * each poll resolves; polling stops automatically when the run reaches a terminal
+ * status (completed / failed / cancelled), and spend polling continues for a few
+ * extra settle cycles before stopping.
  */
 import { useEffect, useRef, useState } from "react";
 
-import type { BusMessage, RunView } from "@shared/types";
+import type { BusMessage, RunSpend, RunView } from "@shared/types";
 
 import { createApi } from "./api";
 import { createRunPollController } from "./run-poll-controller";
@@ -20,10 +19,16 @@ import type { RunPollController } from "./run-poll-controller";
 // Module-level singleton — same pattern as use-harness-state's `const api`.
 const api = createApi();
 
+export interface UseRunPollingResult {
+  runViews: Map<string, RunView>;
+  runSpends: Map<string, RunSpend>;
+}
+
 export function useRunPolling(
   lastMessage: BusMessage | null,
-): Map<string, RunView> {
+): UseRunPollingResult {
   const [runViews, setRunViews] = useState<Map<string, RunView>>(new Map());
+  const [runSpends, setRunSpends] = useState<Map<string, RunSpend>>(new Map());
   const controllerRef = useRef<RunPollController | null>(null);
 
   // Lazy-init the controller once; it persists for the component's lifetime.
@@ -36,6 +41,9 @@ export function useRunPolling(
           next.set(id, rv);
           return next;
         }),
+      fetchSpend: (id, signal) => api.getRunSpend(id, signal),
+      onSpend: (id, spend) =>
+        setRunSpends((prev) => new Map(prev).set(id, spend)),
     });
   }
 
@@ -74,5 +82,5 @@ export function useRunPolling(
     };
   }, []);
 
-  return runViews;
+  return { runViews, runSpends };
 }

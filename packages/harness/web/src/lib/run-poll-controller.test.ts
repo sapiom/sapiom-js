@@ -6,7 +6,7 @@
  * after each timer advance, matching the async-resolved fetch promises.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunView } from "@shared/types";
+import type { RunSpend, RunView } from "@shared/types";
 import { createRunPollController } from "./run-poll-controller";
 import type { RunPollDeps } from "./run-poll-controller";
 
@@ -25,6 +25,15 @@ function makeRunView(
   };
 }
 
+function makeRunSpend(executionId = "exec-1"): RunSpend {
+  return {
+    executionId,
+    totalUsd: "1.23",
+    settleState: "final",
+    byStep: [],
+  };
+}
+
 const POLL_MS = 100;
 
 function setup(fetchImpl: RunPollDeps["fetchRunState"]) {
@@ -35,6 +44,24 @@ function setup(fetchImpl: RunPollDeps["fetchRunState"]) {
     pollMs: POLL_MS,
   });
   return { controller, onUpdate };
+}
+
+function setupWithSpend(
+  fetchImpl: RunPollDeps["fetchRunState"],
+  fetchSpend: NonNullable<RunPollDeps["fetchSpend"]>,
+  spendSettleCycles = 3,
+) {
+  const onUpdate = vi.fn<(executionId: string, runView: RunView) => void>();
+  const onSpend = vi.fn<(executionId: string, spend: RunSpend) => void>();
+  const controller = createRunPollController({
+    fetchRunState: fetchImpl,
+    onUpdate,
+    pollMs: POLL_MS,
+    fetchSpend,
+    onSpend,
+    spendSettleCycles,
+  });
+  return { controller, onUpdate, onSpend };
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +292,105 @@ describe("createRunPollController", () => {
     // The success at call 5 resets the streak, so it survives past 5 and only
     // stops after 5 MORE consecutive fails (calls 6–10) → 10 total.
     expect(fetch).toHaveBeenCalledTimes(10);
+
+    controller.stopAll();
+  });
+
+  // -------------------------------------------------------------------------
+  // Spend polling tests
+  // -------------------------------------------------------------------------
+
+  it("spend is fetched alongside run-state on each tick when fetchSpend is provided", async () => {
+    const fetchState = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunView>>()
+      .mockResolvedValue(makeRunView("running"));
+    const fetchSpend = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunSpend>>()
+      .mockResolvedValue(makeRunSpend());
+    const { controller, onUpdate, onSpend } = setupWithSpend(
+      fetchState,
+      fetchSpend,
+    );
+
+    controller.start("exec-1");
+    // Immediate fetch.
+    await vi.advanceTimersByTimeAsync(0);
+    // One interval tick.
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+
+    // Both run-state and spend fetched on each of the 2 ticks.
+    expect(fetchState).toHaveBeenCalledTimes(2);
+    expect(fetchSpend).toHaveBeenCalledTimes(2);
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    expect(onSpend).toHaveBeenCalledTimes(2);
+    expect(onSpend).toHaveBeenCalledWith("exec-1", makeRunSpend());
+
+    controller.stopAll();
+  });
+
+  it("spend continues for N settle cycles after terminal status then stops everything", async () => {
+    let stateCallCount = 0;
+    const fetchState = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunView>>()
+      .mockImplementation(() => {
+        stateCallCount++;
+        // First call: running; second call: completed (terminal).
+        return Promise.resolve(
+          makeRunView(stateCallCount === 1 ? "running" : "completed"),
+        );
+      });
+    const fetchSpend = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunSpend>>()
+      .mockResolvedValue(makeRunSpend());
+
+    // Use 2 settle cycles for a quick test.
+    const { controller, onSpend } = setupWithSpend(fetchState, fetchSpend, 2);
+
+    controller.start("exec-1");
+    // Immediate fetch → running + spend.
+    await vi.advanceTimersByTimeAsync(0);
+    // Tick 2 → completed + spend (triggers settle mode).
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    // Settle tick 1.
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    // Settle tick 2.
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    // No more ticks — should be fully stopped.
+    await vi.advanceTimersByTimeAsync(POLL_MS * 10);
+
+    // run-state called exactly twice (running + completed), not during settle.
+    expect(fetchState).toHaveBeenCalledTimes(2);
+
+    // spend called: tick1 + tick2 + 2 settle cycles = 4 total.
+    expect(fetchSpend).toHaveBeenCalledTimes(4);
+    expect(onSpend).toHaveBeenCalledTimes(4);
+  });
+
+  it("a spend error does not stop run-state polling", async () => {
+    const fetchState = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunView>>()
+      .mockResolvedValue(makeRunView("running"));
+    // fetchSpend always throws.
+    const fetchSpend = vi
+      .fn<(id: string, signal: AbortSignal) => Promise<RunSpend>>()
+      .mockRejectedValue(new Error("spend unavailable"));
+    const { controller, onUpdate, onSpend } = setupWithSpend(
+      fetchState,
+      fetchSpend,
+    );
+
+    controller.start("exec-1");
+    // Immediate fetch.
+    await vi.advanceTimersByTimeAsync(0);
+    // Three more ticks.
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+
+    // run-state keeps polling normally despite spend failures.
+    expect(fetchState).toHaveBeenCalledTimes(4);
+    expect(onUpdate).toHaveBeenCalledTimes(4);
+
+    // onSpend is never called (all errors swallowed).
+    expect(onSpend).not.toHaveBeenCalled();
 
     controller.stopAll();
   });

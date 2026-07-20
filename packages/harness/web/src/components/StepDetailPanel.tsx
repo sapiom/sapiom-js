@@ -9,11 +9,18 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
-import type { StepView } from "@shared/types";
-import { extractStepContext, formatLatency } from "../lib/extract-step-context";
+import type { RunStepSpend, StepView } from "@shared/types";
+import {
+  extractStepContext,
+  extractStepLinks,
+  formatLatency,
+} from "../lib/extract-step-context";
+import { formatUsd } from "../lib/format-usd";
 
 interface StepDetailPanelProps {
   step: StepView;
+  /** Per-step spend data from the spend endpoint, if available. */
+  spend?: RunStepSpend;
   onClose: () => void;
   onInject: (text: string, submit: boolean) => void;
 }
@@ -37,12 +44,15 @@ function statusChip(status: StepView["status"]): {
 
 export function StepDetailPanel({
   step,
+  spend,
   onClose,
   onInject,
 }: StepDetailPanelProps): JSX.Element {
   const [freeformText, setFreeformText] = useState("");
   const panelRef = useRef<HTMLDivElement>(null);
   const chip = statusChip(step.status);
+  // Any URLs the step surfaced in its logs (preview/deploy URL, download link).
+  const links = extractStepLinks(step);
 
   // Dismiss on Escape.
   useEffect(() => {
@@ -54,7 +64,7 @@ export function StepDetailPanel({
   }, [onClose]);
 
   function inject(question: string): void {
-    const ctx = extractStepContext(step);
+    const ctx = extractStepContext(step, spend);
     onInject(`${ctx}\n\n${question}`, true);
   }
 
@@ -94,9 +104,35 @@ export function StepDetailPanel({
         </button>
       </div>
 
+      {/* Cost line (shown when spend data is available for this step) */}
+      {spend != null ? (
+        <div className="step-detail-cost" data-testid="step-detail-cost">
+          Cost: {formatUsd(spend.totalUsd)} · {spend.entryCount}{" "}
+          {spend.entryCount === 1 ? "call" : "calls"}
+        </div>
+      ) : null}
+
       {/* Error (failed steps only) */}
       {step.status === "failed" && step.error && (
         <div className="step-detail-error">{step.error}</div>
+      )}
+
+      {/* Links this step produced (e.g. a preview/deploy URL, a download link) */}
+      {links.length > 0 && (
+        <div className="step-detail-links" data-testid="step-detail-links">
+          {links.map((url) => (
+            <a
+              key={url}
+              className="step-detail-link"
+              data-testid="step-detail-link"
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {url}
+            </a>
+          ))}
+        </div>
       )}
 
       {/* Log slice */}

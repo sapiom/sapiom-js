@@ -335,6 +335,25 @@ export type BusMessage =
   | { type: "session.activity"; harnessSessionId: string; at: string };
 
 // ---------------------------------------------------------------------------
+// Run spend (cost settled after execution, fetched from core surface)
+// ---------------------------------------------------------------------------
+
+/** Per-step cost summary from the spend endpoint. */
+export interface RunStepSpend {
+  name: string;
+  totalUsd: string;
+  entryCount: number;
+}
+
+/** Full spend summary for one execution, keyed by executionId. */
+export interface RunSpend {
+  executionId: string;
+  totalUsd: string;
+  settleState: string;
+  byStep: RunStepSpend[];
+}
+
+// ---------------------------------------------------------------------------
 // Runtime analytics — live run render state (see core/render-run-state.ts)
 // ---------------------------------------------------------------------------
 //

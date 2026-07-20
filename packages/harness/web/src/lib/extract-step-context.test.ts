@@ -5,9 +5,13 @@
  * path, the missing-logs case, and the long-logs tail-keep truncation.
  */
 import { describe, expect, it } from "vitest";
-import type { StepView } from "@shared/types";
+import type { RunStepSpend, StepView } from "@shared/types";
 
-import { extractStepContext, formatLatency } from "./extract-step-context";
+import {
+  extractStepContext,
+  extractStepLinks,
+  formatLatency,
+} from "./extract-step-context";
 
 // ---------------------------------------------------------------------------
 // formatLatency
@@ -150,5 +154,82 @@ describe("extractStepContext", () => {
     };
     const ctx = extractStepContext(step);
     expect(ctx).toContain(shortLog);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Spend / cost context
+  // ---------------------------------------------------------------------------
+
+  it("includes a cost line when spend is provided", () => {
+    const step: StepView = {
+      id: "s1",
+      name: "fetchData",
+      status: "passed",
+      latencyMs: 1400,
+    };
+    const spend: RunStepSpend = {
+      name: "fetchData",
+      totalUsd: "0.809676",
+      entryCount: 2,
+    };
+    const ctx = extractStepContext(step, spend);
+    expect(ctx).toContain("Cost:");
+    expect(ctx).toContain("$0.8097");
+    expect(ctx).toContain("2 billable call(s)");
+  });
+
+  it("does not include a cost line when spend is absent (backward-compat)", () => {
+    const step: StepView = {
+      id: "s2",
+      name: "processResult",
+      status: "running",
+    };
+    const ctx = extractStepContext(step);
+    expect(ctx).not.toContain("Cost:");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractStepLinks
+// ---------------------------------------------------------------------------
+
+describe("extractStepLinks", () => {
+  it("extracts a preview URL logged inside a JSON blob (strips the quote)", () => {
+    const step: StepView = {
+      id: "s1",
+      name: "servePortal",
+      status: "passed",
+      logSlice:
+        'info portal ready {"url":"https://abc123.preview.bl.run","path":"built"}',
+    };
+    expect(extractStepLinks(step)).toEqual(["https://abc123.preview.bl.run"]);
+  });
+
+  it("dedupes repeated URLs and preserves first-seen order", () => {
+    const step: StepView = {
+      id: "s2",
+      name: "saveKit",
+      status: "passed",
+      logSlice:
+        "uploaded https://files.example.com/a.html\nlink https://files.example.com/a.html\nalso http://x.test/y.",
+    };
+    expect(extractStepLinks(step)).toEqual([
+      "https://files.example.com/a.html",
+      "http://x.test/y",
+    ]);
+  });
+
+  it("returns [] when there are no logs or no URLs", () => {
+    expect(
+      extractStepLinks({ id: "s3", name: "route", status: "passed" }),
+    ).toEqual([]);
+    expect(
+      extractStepLinks({
+        id: "s4",
+        name: "route",
+        status: "passed",
+        logSlice: "dispatched incoming request; nothing to serve",
+      }),
+    ).toEqual([]);
   });
 });

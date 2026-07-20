@@ -1,21 +1,26 @@
 /**
- * Runs router — backs GET /api/runs/:executionId/state.
+ * Runs router — backs GET /api/runs/:executionId/state and
+ * GET /api/runs/:executionId/spend.
  *
- * Returns a {@link RunView} for a running or finished prod agents execution,
- * so the web canvas can poll live status. The Sapiom API key is held
- * server-side and never forwarded to the browser — the router fetches on
- * behalf of the canvas via {@link createRunStateFetcher}.
+ * Returns a {@link RunView} or {@link RunSpend} for a running or finished prod
+ * agents execution, so the web canvas can poll live status and cost. The Sapiom
+ * API key is held server-side and never forwarded to the browser — the router
+ * fetches on behalf of the canvas via {@link createRunStateFetcher} and
+ * {@link createRunSpendFetcher}.
  */
 
 import { Router } from "express";
 
 import { createRunStateFetcher } from "../core/run-state.js";
+import { createRunSpendFetcher } from "../core/run-spend.js";
 
 export interface RunsRouterOpts {
   /** Sapiom API key for the agents surface; null when the harness is not authenticated. */
   apiKey: string | null;
   /** Override the agents base URL (resolved from env by default). Test seam. */
   baseUrl?: string;
+  /** Override the core base URL for the spend endpoint (resolved from env by default). Test seam. */
+  coreBaseUrl?: string;
   /**
    * Injectable fetch implementation forwarded to the fetcher. Undocumented for
    * prod — exists as a test seam only, mirroring the pattern used elsewhere in
@@ -26,13 +31,19 @@ export interface RunsRouterOpts {
 
 /**
  * Create the runs router. Mounts `GET /api/runs/:executionId/state` and
- * delegates to {@link createRunStateFetcher} for the upstream call.
+ * `GET /api/runs/:executionId/spend`, delegating to the respective fetchers
+ * for each upstream call.
  */
 export function createRunsRouter(opts: RunsRouterOpts): Router {
   const router = Router();
-  const fetcher = createRunStateFetcher({
+  const stateFetcher = createRunStateFetcher({
     apiKey: opts.apiKey,
     baseUrl: opts.baseUrl,
+    fetchImpl: opts.fetchImpl,
+  });
+  const spendFetcher = createRunSpendFetcher({
+    apiKey: opts.apiKey,
+    baseUrl: opts.coreBaseUrl,
     fetchImpl: opts.fetchImpl,
   });
 
@@ -57,9 +68,38 @@ export function createRunsRouter(opts: RunsRouterOpts): Router {
       return;
     }
 
-    const result = await fetcher.fetch(id);
+    const result = await stateFetcher.fetch(id);
     if (result.ok) {
       res.json(result.runView);
+    } else {
+      res.status(result.status).json({ error: result.error });
+    }
+  });
+
+  /**
+   * GET /api/runs/:executionId/spend
+   *
+   * Returns a {@link RunSpend} for the given execution id, fetched from the
+   * core surface (api.sapiom.ai). Cost settles just after a run finishes, so
+   * the SPA polls this endpoint a few extra times after terminal state. The key
+   * stays server-side and never reaches the browser.
+   *
+   * 200  RunSpend JSON — spend found and decoded
+   * 400  executionId missing or empty
+   * 404  spend not found on the core surface
+   * 502  upstream error or decode failure
+   * 503  harness is not signed in to Sapiom
+   */
+  router.get("/api/runs/:executionId/spend", async (req, res) => {
+    const id = req.params.executionId;
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      res.status(400).json({ error: "executionId is required" });
+      return;
+    }
+
+    const result = await spendFetcher.fetch(id);
+    if (result.ok) {
+      res.json(result.spend);
     } else {
       res.status(result.status).json({ error: result.error });
     }
