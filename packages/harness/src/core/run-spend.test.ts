@@ -55,18 +55,43 @@ const RAW_SPEND_DOC = {
 // ---------------------------------------------------------------------------
 
 describe("resolveCoreBaseUrl", () => {
-  it("defaults to api.sapiom.ai when SAPIOM_API_URL is not set", () => {
-    const saved = process.env.SAPIOM_API_URL;
-    delete process.env.SAPIOM_API_URL;
-    expect(resolveCoreBaseUrl()).toBe("https://api.sapiom.ai");
-    if (saved !== undefined) process.env.SAPIOM_API_URL = saved;
+  const AGENTS_VARS = ["SAPIOM_CORE_URL", "SAPIOM_AGENTS_URL", "SAPIOM_TOOLS_BASE"];
+  function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
+    const saved: Record<string, string | undefined> = {};
+    for (const k of AGENTS_VARS) saved[k] = process.env[k];
+    for (const k of AGENTS_VARS) delete process.env[k];
+    for (const [k, v] of Object.entries(vars)) if (v !== undefined) process.env[k] = v;
+    try {
+      fn();
+    } finally {
+      for (const k of AGENTS_VARS) {
+        if (saved[k] !== undefined) process.env[k] = saved[k];
+        else delete process.env[k];
+      }
+    }
+  }
+
+  it("defaults to api.sapiom.ai (prod core) when no overrides are set", () => {
+    withEnv({}, () => expect(resolveCoreBaseUrl()).toBe("https://api.sapiom.ai"));
   });
 
-  it("uses SAPIOM_API_URL when set", () => {
-    const saved = process.env.SAPIOM_API_URL;
-    process.env.SAPIOM_API_URL = "https://api.example.com";
-    expect(resolveCoreBaseUrl()).toBe("https://api.example.com");
-    if (saved !== undefined) process.env.SAPIOM_API_URL = saved;
+  it("derives the core host from the agents host so both share an env (tools.<env> → api.<env>)", () => {
+    withEnv({ SAPIOM_AGENTS_URL: "https://tools.sapiom.dev" }, () =>
+      expect(resolveCoreBaseUrl()).toBe("https://api.sapiom.dev"),
+    );
+  });
+
+  it("honours an explicit SAPIOM_CORE_URL override", () => {
+    withEnv({ SAPIOM_CORE_URL: "https://api.example.com" }, () =>
+      expect(resolveCoreBaseUrl()).toBe("https://api.example.com"),
+    );
+  });
+
+  it("ignores SAPIOM_API_URL (which may point at a different env than the agents surface)", () => {
+    const savedApi = process.env.SAPIOM_API_URL;
+    process.env.SAPIOM_API_URL = "https://api.sapiom.dev";
+    withEnv({}, () => expect(resolveCoreBaseUrl()).toBe("https://api.sapiom.ai"));
+    if (savedApi !== undefined) process.env.SAPIOM_API_URL = savedApi;
     else delete process.env.SAPIOM_API_URL;
   });
 });

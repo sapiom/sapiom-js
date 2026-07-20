@@ -17,15 +17,33 @@
  */
 
 import type { RunSpend } from "../shared/types.js";
+import { resolveAgentsBaseUrl } from "./run-state.js";
 
 /**
- * Resolve the CORE surface base URL from the environment.
- * NOTE: this is the CORE host for the spend endpoint, distinct from the agents
- * host run-state.ts uses.  Env-consistency with the run's environment matters
- * — the same caveat applies as for resolveAgentsBaseUrl in run-state.ts.
+ * Resolve the CORE surface base URL for the spend endpoint.
+ *
+ * The spend endpoint lives on the CORE host (`api.<env>`), distinct from the
+ * agents host run-state.ts uses (`tools.<env>`). Crucially, a run lives in the
+ * agents env, and its spend must be read from the MATCHING core env — otherwise
+ * a prod run's spend queried against dev 401s. So we DERIVE the core host from
+ * the agents host (`tools.<env>` → `api.<env>`) rather than reading
+ * `SAPIOM_API_URL`, which in some setups points at a different env than the
+ * agents surface. An explicit `SAPIOM_CORE_URL` still wins for full control.
  */
 export function resolveCoreBaseUrl(): string {
-  return process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai";
+  const override = process.env.SAPIOM_CORE_URL;
+  if (override) return override;
+  const agents = resolveAgentsBaseUrl();
+  try {
+    const url = new URL(agents);
+    if (url.hostname.startsWith("tools.")) {
+      url.hostname = `api.${url.hostname.slice("tools.".length)}`;
+      return url.origin;
+    }
+  } catch {
+    // Unparseable agents URL — fall through to the prod default.
+  }
+  return "https://api.sapiom.ai";
 }
 
 export type RunSpendResult =
