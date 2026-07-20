@@ -8,6 +8,8 @@
  *   4. buildManifest: step with inputSchema → JSON Schema; without → null
  *   5. buildManifest: step with timeoutMs → timeoutMs; without → null
  *   6. buildManifest: protocol is always 1, sdkVersion/artifact from opts
+ *   7. capabilityId: declared → carried; undeclared → null; absent in old
+ *      manifests → parses to null (never stripped); empty string rejected
  */
 import { z } from "zod/v4";
 
@@ -28,7 +30,7 @@ import { defineAgent } from "./agent.js";
 /** A terminal step (declares `terminal: true`) for the schema/inputSchema/timeout tests. */
 function makeStep(
   name: string,
-  opts: { inputSchema?: z.ZodType; timeoutMs?: number } = {},
+  opts: { inputSchema?: z.ZodType; timeoutMs?: number; capability?: string } = {},
 ) {
   return defineStep({
     name,
@@ -36,6 +38,7 @@ function makeStep(
     terminal: true,
     inputSchema: opts.inputSchema,
     timeoutMs: opts.timeoutMs,
+    capability: opts.capability,
     async run() {
       return terminate(null);
     },
@@ -153,6 +156,58 @@ describe("agentManifestSchema", () => {
       steps: { a: { timeoutMs: null, inputSchema: null, transitions: [] } },
     };
     expect(() => agentManifestSchema.parse(good)).not.toThrow();
+  });
+
+  it("preserves a step capabilityId through parse (the engine's edge validation must not strip the binding)", () => {
+    const manifest = {
+      protocol: 1,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      steps: {
+        a: {
+          timeoutMs: null,
+          inputSchema: null,
+          transitions: [{ kind: "terminate" }],
+          capabilityId: "web.search",
+        },
+      },
+    };
+    expect(agentManifestSchema.parse(manifest).steps.a.capabilityId).toBe(
+      "web.search",
+    );
+  });
+
+  it("defaults capabilityId to null when absent (manifests built before the field existed)", () => {
+    const preField = {
+      protocol: 1,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      steps: { a: { timeoutMs: null, inputSchema: null, transitions: [] } },
+    };
+    expect(agentManifestSchema.parse(preField).steps.a.capabilityId).toBeNull();
+  });
+
+  it("rejects an empty-string capabilityId (a binding names a capability or is null)", () => {
+    const bad = {
+      protocol: 1,
+      name: "wf",
+      entry: "a",
+      sdkVersion: "0.1.0",
+      artifact: { sha256: "x", entryFile: "f.mjs" },
+      steps: {
+        a: {
+          timeoutMs: null,
+          inputSchema: null,
+          transitions: [],
+          capabilityId: "",
+        },
+      },
+    };
+    expect(() => agentManifestSchema.parse(bad)).toThrow();
   });
 });
 
@@ -279,6 +334,36 @@ describe("buildManifest", () => {
     // finalize: neither
     expect(manifest.steps.finalize.timeoutMs).toBeNull();
     expect(manifest.steps.finalize.inputSchema).toBeNull();
+  });
+
+  it("step with capability → capabilityId carried through (the step→capability binding)", () => {
+    const def = defineAgent({
+      name: "wf",
+      entry: "search",
+      steps: { search: makeStep("search", { capability: "web.search" }) },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    expect(manifest.steps.search.capabilityId).toBe("web.search");
+    // The emitted manifest must survive the engine's schema validation intact.
+    expect(agentManifestSchema.parse(manifest).steps.search.capabilityId).toBe(
+      "web.search",
+    );
+  });
+
+  it("step without capability → capabilityId: null in manifest (honest runs-in-process)", () => {
+    const def = defineAgent({
+      name: "wf",
+      entry: "plain",
+      steps: { plain: makeStep("plain") },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    expect(manifest.steps.plain.capabilityId).toBeNull();
   });
 
   it("defaulted field is NOT in required in the manifest JSON Schema (AJV pre-check must not be stricter than Zod)", () => {

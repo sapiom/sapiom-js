@@ -81,6 +81,14 @@ export interface StepDefinition<TShared extends Record<string, unknown> = Record
   readonly pause?: { readonly signal: string; readonly resumeStep: string };
   readonly inputSchema?: ZodType<unknown>;
   readonly timeoutMs?: number;
+  /**
+   * The canonical dotted id of the platform capability this step calls
+   * (e.g. `web.search`), if the author declared one. A declaration, not an
+   * enforcement: the platform validates the id against the capability
+   * registry at build/index time and uses it for per-step attribution in
+   * dashboards. Undeclared means "runs in-process / no single capability".
+   */
+  readonly capability?: string;
   run(input: unknown, ctx: AgentExecutionContext<TShared>): Promise<NextStepDirective>;
 }
 
@@ -113,6 +121,8 @@ export function defineStep<
   pause?: PauseDecl;
   inputSchema?: ZodType<TIn>;
   timeoutMs?: number;
+  /** Canonical dotted capability id this step calls (e.g. `web.search`). */
+  capability?: string;
   // Arrow-property (not method) type so `def.run` can be read as a value below
   // without tripping @typescript-eslint/unbound-method.
   run: (
@@ -128,6 +138,9 @@ export function defineStep<
     ...(def.pause ? { pause: def.pause } : {}),
     ...(def.inputSchema ? { inputSchema: def.inputSchema as ZodType<unknown> } : {}),
     ...(def.timeoutMs !== undefined ? { timeoutMs: def.timeoutMs } : {}),
+    // Truthiness on purpose: an empty-string declaration is "no declaration",
+    // so '' never reaches the manifest (whose schema rejects empty ids).
+    ...(def.capability ? { capability: def.capability } : {}),
     run: def.run as unknown as (input: unknown, ctx: AgentExecutionContext<TShared>) => Promise<NextStepDirective>,
   };
 }

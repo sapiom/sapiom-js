@@ -20,6 +20,8 @@ import type { AgentDefinition } from "./agent.js";
  *     `next`/`terminal`/`canFail`/`pause` runtime properties (set by
  *     `defineStep`). This is a runtime-value read, exactly like inputSchema —
  *     no type reflection, no AST parsing.
+ *   - capabilityId: the step's declared `capability` (canonical dotted id),
+ *     null when undeclared — the step→capability binding the engine indexes.
  * - name/entry from def; protocol 1 (locked); sdkVersion/artifact from opts.
  */
 export function buildManifest(
@@ -35,6 +37,7 @@ export function buildManifest(
       timeoutMs: number | null;
       inputSchema: Record<string, unknown> | null;
       transitions: ManifestTransition[];
+      capabilityId: string | null;
     }
   > = {};
 
@@ -50,6 +53,9 @@ export function buildManifest(
       timeoutMs: step.timeoutMs ?? null,
       inputSchema,
       transitions: transitionsFor(step),
+      // `|| null` (not `?? null`): an empty string is "no declaration", and
+      // the manifest schema rejects empty ids.
+      capabilityId: step.capability || null,
     };
   }
 

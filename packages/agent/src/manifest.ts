@@ -47,6 +47,15 @@ export interface AgentStepManifest {
    * per-kind); the renderer draws one edge per entry. `reachable ⊆ declared`.
    */
   readonly transitions: readonly ManifestTransition[];
+  /**
+   * The canonical dotted id of the platform capability this step declares it
+   * calls (`step.capability`, e.g. `web.search`), or null when the step
+   * declares none. The engine validates the id against the capability
+   * registry at index time and binds the step to it for attribution.
+   * Optional in the type for compatibility with manifests built before the
+   * field existed; the schema defaults it to null on parse.
+   */
+  readonly capabilityId?: string | null;
 }
 
 /**
@@ -87,6 +96,11 @@ const workflowStepManifestSchema = z.object({
   timeoutMs: z.union([z.number().int().positive(), z.null()]),
   inputSchema: z.union([z.record(z.string(), z.unknown()), z.null()]),
   transitions: z.array(manifestTransitionSchema),
+  // Absent on manifests built before the field existed → parses to null.
+  // Present ids must be non-empty (strict like timeoutMs); `z.object` strips
+  // unknown keys, so without this entry the engine would silently drop the
+  // binding at its validation edge.
+  capabilityId: z.union([z.string().min(1), z.null()]).default(null),
 });
 
 /**

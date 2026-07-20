@@ -56,6 +56,27 @@ A step declares the transitions it may take (`next` / `terminal` / `canFail` /
 undeclared transition is a compile error. The build reads those same declarations
 to render the orchestration graph without executing anything.
 
+A step may also declare the platform capability it calls, by canonical dotted
+id:
+
+```ts
+const search = defineStep({
+  name: "search",
+  capability: "web.search",
+  next: ["summarize"],
+  async run(input, ctx) {
+    const results = await ctx.sapiom.search.webSearch({ query: input.query });
+    return goto("summarize", results);
+  },
+});
+```
+
+The build emits it into the manifest (`capabilityId`), where the platform
+validates it against the capability registry and uses it for per-step
+attribution — your dashboard shows which step calls which capability (and what
+it costs) before the first run. Steps that declare nothing are simply "runs
+in-process"; the declaration never gates execution.
+
 ## Pausing on a long-running capability
 
 Some `ctx.sapiom` capabilities are **dispatched**: you launch them, they run far
