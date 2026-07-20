@@ -5,7 +5,7 @@
  * path, the missing-logs case, and the long-logs tail-keep truncation.
  */
 import { describe, expect, it } from "vitest";
-import type { RunStepSpend, StepView } from "@shared/types";
+import type { RunCall, RunStepSpend, StepView } from "@shared/types";
 
 import {
   extractStepContext,
@@ -186,6 +186,29 @@ describe("extractStepContext", () => {
     };
     const ctx = extractStepContext(step);
     expect(ctx).not.toContain("Cost:");
+  });
+
+  it("includes a per-call cost breakdown when calls are provided", () => {
+    const step: StepView = {
+      id: "s1",
+      name: "renderPdfs",
+      status: "passed",
+    };
+    const calls: RunCall[] = [
+      { stepName: "renderPdfs", capability: "sandbox", op: "create", usd: "7.948800" },
+    ];
+    const ctx = extractStepContext(step, undefined, calls);
+    expect(ctx).toContain("Cost breakdown (per call):");
+    // formatUsd renders ≥$1 at 2dp, so $7.9488 → $7.95.
+    expect(ctx).toContain("sandbox (create): $7.95");
+  });
+
+  it("omits the breakdown when calls is empty or absent (backward-compat)", () => {
+    const step: StepView = { id: "s2", name: "servePortal", status: "passed" };
+    expect(extractStepContext(step)).not.toContain("Cost breakdown");
+    expect(extractStepContext(step, undefined, [])).not.toContain(
+      "Cost breakdown",
+    );
   });
 });
 

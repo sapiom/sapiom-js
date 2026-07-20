@@ -14,6 +14,7 @@ import type {
   HarnessSettings,
   InjectInputRequest,
   MacroDef,
+  RunCall,
   RunMacroRequest,
   RunSpend,
   RunView,
@@ -22,7 +23,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-export type { RunSpend };
+export type { RunSpend, RunCall };
 
 // Skill types (matched to the server-side SkillMeta/SkillDetail in
 // src/server/skills.ts — kept here rather than in shared/types.ts since they
@@ -135,6 +136,11 @@ export interface HarnessApi {
   getRunState(executionId: string, signal?: AbortSignal): Promise<RunView>;
   /** Fetch the cost/spend summary for a run (polled during and after execution). */
   getRunSpend(executionId: string, signal?: AbortSignal): Promise<RunSpend>;
+  /** Fetch the per-call cost drill-down for a run (lazy, on step drill-in). */
+  getRunTransactions(
+    executionId: string,
+    signal?: AbortSignal,
+  ): Promise<RunCall[]>;
 }
 
 class RealApi implements HarnessApi {
@@ -303,6 +309,16 @@ class RealApi implements HarnessApi {
   getRunSpend(executionId: string, signal?: AbortSignal): Promise<RunSpend> {
     return this.request<RunSpend>(
       `/api/runs/${encodeURIComponent(executionId)}/spend`,
+      { signal },
+    );
+  }
+
+  getRunTransactions(
+    executionId: string,
+    signal?: AbortSignal,
+  ): Promise<RunCall[]> {
+    return this.request<RunCall[]>(
+      `/api/runs/${encodeURIComponent(executionId)}/transactions`,
       { signal },
     );
   }
@@ -629,6 +645,20 @@ class MockApi implements HarnessApi {
         { name: "processResult", totalUsd: "0.37", entryCount: 2 },
       ],
     };
+  }
+
+  async getRunTransactions(
+    _executionId: string,
+    _signal?: AbortSignal,
+  ): Promise<RunCall[]> {
+    await delay(80);
+    // Mirrors the getRunSpend fixture: fetchData = 1 search call; processResult
+    // = 2 LLM calls summing to its $0.37 step total.
+    return [
+      { stepName: "fetchData", capability: "web search", op: "execute", usd: "0.050000" },
+      { stepName: "processResult", capability: "LLM", op: "generate", usd: "0.180000" },
+      { stepName: "processResult", capability: "LLM", op: "generate", usd: "0.190000" },
+    ];
   }
 
   async getRunState(

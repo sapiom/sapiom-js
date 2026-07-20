@@ -2503,6 +2503,55 @@ input {
   font-family: var(--font-mono);
 }
 
+/* Per-call cost drill-down ("why is this costly") — one row per billable
+   capability call, provider-agnostic label + operation + USD. */
+.step-detail-breakdown {
+  padding: 4px 10px 6px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.step-detail-breakdown-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+
+.step-detail-breakdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.step-detail-breakdown-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.step-detail-breakdown-cap {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.step-detail-breakdown-op {
+  color: var(--text-dim);
+  flex: 1;
+}
+
+.step-detail-breakdown-usd {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Step-detail panel ------------------------------------------------------ */
 
 /* Overlay drawer inside the canvas frame wrap — positioned at the bottom of

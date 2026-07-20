@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
-import type { RunStepSpend, StepView } from "@shared/types";
+import type { RunCall, RunStepSpend, StepView } from "@shared/types";
 import {
   extractStepContext,
   extractStepLinks,
@@ -21,6 +21,8 @@ interface StepDetailPanelProps {
   step: StepView;
   /** Per-step spend data from the spend endpoint, if available. */
   spend?: RunStepSpend;
+  /** Per-call cost drill-down for this step (the "why costly" breakdown). */
+  calls?: RunCall[];
   onClose: () => void;
   onInject: (text: string, submit: boolean) => void;
 }
@@ -45,6 +47,7 @@ function statusChip(status: StepView["status"]): {
 export function StepDetailPanel({
   step,
   spend,
+  calls,
   onClose,
   onInject,
 }: StepDetailPanelProps): JSX.Element {
@@ -64,7 +67,7 @@ export function StepDetailPanel({
   }, [onClose]);
 
   function inject(question: string): void {
-    const ctx = extractStepContext(step, spend);
+    const ctx = extractStepContext(step, spend, calls);
     onInject(`${ctx}\n\n${question}`, true);
   }
 
@@ -111,6 +114,34 @@ export function StepDetailPanel({
           {spend.entryCount === 1 ? "call" : "calls"}
         </div>
       ) : null}
+
+      {/* Per-call cost drill-down — "why is this costly". Provider-agnostic
+          capability labels; token counts are not shown (not recorded by the
+          platform for gateway LLM calls). */}
+      {calls != null && calls.length > 0 && (
+        <div
+          className="step-detail-breakdown"
+          data-testid="step-detail-breakdown"
+        >
+          <div className="step-detail-breakdown-title">Cost breakdown</div>
+          <ul className="step-detail-breakdown-list">
+            {calls.map((call, index) => (
+              <li
+                key={`${call.capability}-${call.op}-${index}`}
+                className="step-detail-breakdown-row"
+              >
+                <span className="step-detail-breakdown-cap">
+                  {call.capability}
+                </span>
+                <span className="step-detail-breakdown-op">{call.op}</span>
+                <span className="step-detail-breakdown-usd">
+                  {formatUsd(call.usd)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Error (failed steps only) */}
       {step.status === "failed" && step.error && (

@@ -8,7 +8,7 @@
  * Log slice is tail-kept and trimmed to LOG_CAP characters: when a log is long,
  * the most recent output (the tail) is the most relevant for debugging.
  */
-import type { RunStepSpend, StepView } from "@shared/types";
+import type { RunCall, RunStepSpend, StepView } from "@shared/types";
 import { formatUsd } from "./format-usd";
 
 /** Maximum characters of log slice to include in the context block. */
@@ -33,6 +33,7 @@ export function formatLatency(ms: number): string {
 export function extractStepContext(
   step: StepView,
   spend?: RunStepSpend,
+  calls?: RunCall[],
 ): string {
   const lines: string[] = [];
 
@@ -47,6 +48,17 @@ export function extractStepContext(
     lines.push(
       `Cost: ${formatUsd(spend.totalUsd)} across ${spend.entryCount} billable call(s)`,
     );
+  }
+
+  // Per-call cost breakdown — the "why is this costly" detail. Each line is one
+  // billable capability call (provider-agnostic label + operation + USD). Token
+  // counts are intentionally not shown: the platform does not record per-call
+  // tokens for gateway LLM calls.
+  if (calls != null && calls.length > 0) {
+    lines.push("Cost breakdown (per call):");
+    for (const c of calls) {
+      lines.push(`  - ${c.capability} (${c.op}): ${formatUsd(c.usd)}`);
+    }
   }
 
   if (step.status === "failed" && step.error) {

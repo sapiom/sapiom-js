@@ -4,6 +4,7 @@ import type {
   BackgroundTask,
   BusMessage,
   MacroDef,
+  RunCall,
   RunSpend,
   RunView,
   WorkflowInfo,
@@ -59,6 +60,11 @@ export function CanvasPane({
   // The name of the step node the user last clicked in the canvas iframe.
   // Null when no node is selected or the panel has been closed.
   const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
+  // Per-call cost drill-down for the current execution, fetched lazily the
+  // first time a step is drilled into. `runCallsExec` tags which execution the
+  // cached calls belong to, so a new run refetches instead of showing stale.
+  const [runCalls, setRunCalls] = useState<RunCall[]>([]);
+  const [runCallsExec, setRunCallsExec] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // Keep the latest runView in a ref so the iframe onLoad handler can read it
   // without closing over a stale value.
@@ -139,6 +145,33 @@ export function CanvasPane({
   useEffect(() => {
     setSelectedStepName(null);
   }, [sessionId, boundWorkflow]);
+
+  // Lazily fetch the per-call cost drill-down the first time a step is drilled
+  // into for a given execution (best-effort — a failure just leaves the
+  // breakdown empty). Re-fetches when the execution id changes so a new run
+  // never shows a prior run's calls.
+  const executionId = runView?.executionId;
+  useEffect(() => {
+    if (!selectedStepName || !executionId) return;
+    if (runCallsExec === executionId) return;
+    let cancelled = false;
+    const ac = new AbortController();
+    api
+      .getRunTransactions(executionId, ac.signal)
+      .then((calls) => {
+        if (!cancelled) {
+          setRunCalls(calls);
+          setRunCallsExec(executionId);
+        }
+      })
+      .catch(() => {
+        /* best-effort: leave the breakdown empty on failure */
+      });
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [selectedStepName, executionId, runCallsExec]);
 
   // Probe once per session for pre-existing content — the agent may have written
   // it in an earlier turn, before this pane was around to catch a reload event.
@@ -227,6 +260,14 @@ export function CanvasPane({
     selectedStepName != null
       ? (runView?.steps.find((s) => s.name === selectedStepName) ?? null)
       : null;
+
+  // Per-call breakdown for the selected step — only the calls attributed to it
+  // (matched on the step name the transactions endpoint reports), and only when
+  // the cached calls belong to the run currently on screen.
+  const selectedStepCalls =
+    selectedStep && runCallsExec === executionId
+      ? runCalls.filter((c) => c.stepName === selectedStep.name)
+      : [];
 
   return (
     <aside className="canvas-pane">
@@ -393,6 +434,7 @@ export function CanvasPane({
               spend={runSpend?.byStep.find(
                 (s) => s.name === selectedStep.name,
               )}
+              calls={selectedStepCalls}
               onClose={() => setSelectedStepName(null)}
               onInject={(text, submit) =>
                 api.injectInput(sessionId, { text, submit })

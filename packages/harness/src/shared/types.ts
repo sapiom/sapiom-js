@@ -353,6 +353,26 @@ export interface RunSpend {
   byStep: RunStepSpend[];
 }
 
+/**
+ * One billable capability call within a run — the per-call drill-down behind a
+ * step's cost ("why is this step costly"). Derived from the transactions
+ * endpoint. Deliberately provider-AGNOSTIC: `capability` is a generic label
+ * ("LLM", "sandbox", "web search") mapped server-side from the operation, so
+ * neither the browser nor this file ever carries the upstream provider/model
+ * name. Token counts are intentionally absent — the platform does not record
+ * per-call tokens for gateway LLM calls (see SAP ticket for the backend work).
+ */
+export interface RunCall {
+  /** Step this call is attributed to (workflowStepName ?? capability op). */
+  stepName: string;
+  /** Provider-agnostic capability label, e.g. "LLM" / "sandbox" / "web search". */
+  capability: string;
+  /** The capability operation, e.g. "generate" / "create" / "execute". */
+  op: string;
+  /** Captured USD for this single call. */
+  usd: string;
+}
+
 // ---------------------------------------------------------------------------
 // Runtime analytics — live run render state (see core/render-run-state.ts)
 // ---------------------------------------------------------------------------
