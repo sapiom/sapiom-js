@@ -9,16 +9,30 @@
  *     definitionSlug: null) — exercises the project-name fallback + "inferred" note
  *
  * On initial load, "leasing" is pre-bound and pre-selected (the boot session's
- * boundWorkflowPath is "/Users/demo/acme-app/leasing"). The snippet panel
- * should be visible immediately.
+ * boundWorkflowPath is "/Users/demo/acme-app/leasing"). The snippet panel lives
+ * on its own "Snippet" tab (next to Skills); beforeEach activates that tab, so
+ * with the deployed "leasing" workflow bound the panel renders immediately.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+/**
+ * Clicking a workflow in the rail now only INSPECTS it (the inspect-vs-bind
+ * split); the snippet panel follows the BOUND workflow, so switching which
+ * workflow the panel shows means binding it via "Work on this".
+ */
+async function bindWorkflow(page: Page, testId: string): Promise<void> {
+  await page.getByTestId(testId).click();
+  await page.getByTestId("workflow-bind").click();
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   // Ensure the leasing workflow is selected (it's the default boot binding).
   await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-selected/);
+  // The snippet panel now lives on its own tab (moved off the canvas) — activate
+  // it so the panel (or its deployed/undeployed state) is on screen for assertions.
+  await page.getByTestId("right-tab-snippet").click();
 });
 
 test.describe("snippet panel visibility", () => {
@@ -33,17 +47,17 @@ test.describe("snippet panel visibility", () => {
     page,
   }) => {
     // Click rfq (no definitionId) — panel must disappear.
-    await page.getByTestId("workflow-rfq").click();
+    await bindWorkflow(page, "workflow-rfq");
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
   });
 
   test("shows the panel again after switching from undeployed back to deployed", async ({
     page,
   }) => {
-    await page.getByTestId("workflow-rfq").click();
+    await bindWorkflow(page, "workflow-rfq");
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
 
-    await page.getByTestId("workflow-leasing").click();
+    await bindWorkflow(page, "workflow-leasing");
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
   });
 });
@@ -135,7 +149,7 @@ test.describe("slug (read-only)", () => {
     );
     // onboarding-flow is a second DEPLOYED fixture — the panel must reflect its
     // slug, not keep leasing's.
-    await page.getByTestId("workflow-onboarding-flow").click();
+    await bindWorkflow(page, "workflow-onboarding-flow");
     await expect(page.getByTestId("snippet-slug")).toHaveText(
       "onboarding-flow",
     );
@@ -210,7 +224,7 @@ test.describe("slug fallback when the deployment slug is unresolved", () => {
   test("shows the project name as the slug (deployed but slug unresolved)", async ({
     page,
   }) => {
-    await page.getByTestId("workflow-claims-triage").click();
+    await bindWorkflow(page, "workflow-claims-triage");
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
     await expect(page.getByTestId("snippet-slug")).toHaveText("claims-triage");
     await expect(page.getByTestId("snippet-code")).toContainText(
@@ -228,7 +242,7 @@ test.describe("slug fallback when the deployment slug is unresolved", () => {
     await expect(page.getByTestId("snippet-slug-inferred")).toHaveCount(0);
 
     // Unresolved slug (claims-triage) — the note appears.
-    await page.getByTestId("workflow-claims-triage").click();
+    await bindWorkflow(page, "workflow-claims-triage");
     await expect(page.getByTestId("snippet-slug-inferred")).toBeVisible();
     await expect(page.getByTestId("snippet-slug-inferred")).toContainText(
       "Inferred from the project name",
@@ -243,7 +257,7 @@ test.describe("slug fallback when the deployment slug is unresolved", () => {
       "your-agent-slug",
     );
     // Fallback case (claims-triage).
-    await page.getByTestId("workflow-claims-triage").click();
+    await bindWorkflow(page, "workflow-claims-triage");
     await expect(page.getByTestId("snippet-panel")).not.toContainText(
       "your-agent-slug",
     );
