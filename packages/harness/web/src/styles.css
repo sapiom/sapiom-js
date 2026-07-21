@@ -580,6 +580,24 @@ input {
   text-align: left;
 }
 
+/* The "Work on this" bind control sits above the macros as the primary action
+   for the selected workflow — a hairline separates it from the action set so
+   it reads as a distinct decision ("what am I working on") rather than one more
+   macro. */
+.strip-item-bind {
+  padding-bottom: 7px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+}
+
+/* Once it IS the active session's binding, the control shows the accent so the
+   strip echoes what the canvas and the "working on" chip already say. */
+.strip-item-bind.is-bound,
+.strip-item-bind.is-bound:disabled {
+  color: var(--accent);
+}
+
 .center-pane {
   display: flex;
   flex-direction: column;
@@ -596,6 +614,11 @@ input {
   flex-direction: column;
   background: var(--bg-1);
   min-width: 0;
+  /* Grid/flex items default to min-height:auto, so without this the rail grows
+     to its content height instead of the grid row's — clipping the nav below
+     the fold and stopping .rail-list's overflow-y:auto from ever engaging until
+     a reflow (the "a refresh fixes it" bug). Mirrors .center-pane above. */
+  min-height: 0;
 }
 
 .rail-workflows {
@@ -1318,6 +1341,122 @@ input {
 .terminal-slot > .harness-terminal {
   flex: 1;
   min-height: 0;
+}
+
+/* Image composer (wraps the terminal pane) --------------------------- */
+
+/* Mirrors `.terminal-slot > .harness-terminal` sizing: the composer is now the
+   flex-growing child, and the terminal grows inside it. */
+.terminal-slot > .image-composer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.image-composer-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.image-composer-pane > .harness-terminal {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Drag overlay — covers the terminal pane while a file is dragged over it. */
+.image-composer-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 2px dashed var(--accent-border);
+  border-radius: var(--radius-lg);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.image-composer-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.image-composer-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.image-composer-thumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.image-composer-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+}
+
+.image-composer-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.image-composer-thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--bg-0);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.image-composer-thumb-remove:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.image-composer-send {
+  flex-shrink: 0;
+  font-size: 12px;
 }
 
 .terminal-placeholder,

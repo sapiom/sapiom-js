@@ -62,6 +62,42 @@ export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
 export const CANVAS_CACHE_DIR = `${CANVAS_DIR}/cache`;
 
 /**
+ * Composer image attachments (upload / paste / drag-drop) land here, relative
+ * to the session cwd, before their path is relayed into the agent's prompt.
+ * Co-located under `.sapiom/` with the canvas + context conventions so a single
+ * ignore/clean of that directory covers everything the harness writes.
+ */
+export const HARNESS_UPLOADS_DIR = ".sapiom/uploads";
+
+/**
+ * Image content types the composer accepts for attach. Kept deliberately small
+ * — the formats every supported coding agent can actually read from a file path
+ * — and shared by the client (pre-flight validation) and the server (the real
+ * gate) so the two can't drift.
+ */
+export const ALLOWED_IMAGE_MEDIA_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+
+export type ImageMediaType = (typeof ALLOWED_IMAGE_MEDIA_TYPES)[number];
+
+/** Hard cap on a single attached image (decoded bytes). 10 MiB. */
+export const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Body-parser byte limit for JSON `/api` routes. express.json defaults to
+ * 100 KiB — far below a base64-encoded image (~1.37× the decoded size). Sized
+ * to clear MAX_IMAGE_UPLOAD_BYTES base64'd plus 1 MiB of envelope overhead, and
+ * shared by the app-level `/api` parser (server/index.ts) and the rest router
+ * so the two can't disagree. The real per-image cap is still enforced (after
+ * decode) in the image handler; other routes validate their own small shapes.
+ */
+export const JSON_BODY_LIMIT_BYTES = Math.ceil((MAX_IMAGE_UPLOAD_BYTES * 4) / 3) + 1024 * 1024;
+
+/**
  * Workspace-state convention: the harness mirrors this session's binding,
  * the full workflow registry, and its own identity here, relative to the
  * session cwd, so the agent has an always-current, agent-legible answer to
@@ -149,6 +185,19 @@ export interface SessionSummary {
   title: string;
   lastActiveAt: string;
   source: "registry" | "transcript";
+  /**
+   * Git branch the session was last active on, when the transcript records it.
+   * The strongest within-directory differentiator between otherwise-similar
+   * rows (many sessions in one repo often differ only by branch). Undefined
+   * for harnesses/transcripts that don't record a branch.
+   */
+  gitBranch?: string;
+  /**
+   * Number of human prompts (turns) in the session, when cheaply knowable.
+   * Undefined for transcripts too large to scan for an exact count without a
+   * full read (see the claude-code adapter's full-scan size cap).
+   */
+  messageCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +487,9 @@ export interface HarnessEntry {
   installed: boolean;
   /** Per-agent copy-paste instructions for installing and configuring the Sapiom MCP server. */
   installMcpPrompt: string;
+  /** True when this harness can read an image the composer relays into its
+   *  prompt (as a file path) — the SPA only offers image attach for these. */
+  imageInput: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +607,7 @@ export interface CollectorBatch {
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
+// POST   /api/sessions/:id/image        AttachImageRequest → AttachImageResponse (write + relay path)
 // PATCH  /api/sessions/:id/workflow     BindWorkflowRequest → HarnessSession
 // GET    /api/workflows                 → WorkflowInfo[]
 // POST   /api/workflows/connect         { path } → WorkflowInfo
@@ -580,6 +633,33 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
+}
+
+/**
+ * `POST /api/sessions/:id/image` body — one attached image from the composer
+ * (file picker, clipboard paste, or drag-drop). The image rides as a `data:`
+ * URL rather than multipart so it flows through the same JSON pipeline as every
+ * other endpoint. The server decodes it, writes it under
+ * {@link HARNESS_UPLOADS_DIR} in the session cwd, and relays its path into the
+ * agent's prompt.
+ */
+export interface AttachImageRequest {
+  /** `data:<mediaType>;base64,<payload>` — mediaType must be one of
+   *  {@link ALLOWED_IMAGE_MEDIA_TYPES}; decoded size ≤ {@link MAX_IMAGE_UPLOAD_BYTES}. */
+  dataUrl: string;
+  /** Original filename, if the browser knew one — used only to derive a
+   *  friendly extension; the stored name is always a fresh uuid. */
+  filename?: string;
+}
+
+/** `POST /api/sessions/:id/image` response — where the image landed. */
+export interface AttachImageResponse {
+  /** Absolute path of the written image, relayed into the agent's prompt. */
+  path: string;
+  /** The media type the server accepted the image as. */
+  mediaType: ImageMediaType;
+  /** Decoded bytes written to disk. */
+  bytes: number;
 }
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`

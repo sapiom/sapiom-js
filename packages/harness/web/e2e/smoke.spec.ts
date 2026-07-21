@@ -59,9 +59,54 @@ test("viewport-locked shell: the page never scrolls even when terminal content o
   expect(root.scrollHeight).toBe(root.clientHeight);
 });
 
-test("theme: defaults to light, toggles to dark, and the choice persists across reload", async ({
+test("workspace rail stays inside the viewport and scrolls internally on first paint (SAP-1645)", async ({
   page,
 }) => {
+  // Regression: .rail lacked `min-height: 0`, so as a grid/flex item it grew to
+  // its content height instead of the grid row's — the nav clipped below the
+  // fold and .rail-list's overflow-y:auto never engaged until a reflow (only a
+  // hard refresh "fixed" it). Verified at 900px and a shorter window, without
+  // any reload — this asserts correct containment on the initial paint.
+  for (const height of [900, 600]) {
+    await page.setViewportSize({ width: 1280, height });
+
+    // Stress the rail with far more nav content than the viewport can show,
+    // injected into the real .rail-list so the whole containment chain
+    // (.app grid → .rail → .rail-list) is exercised, not a synthetic node.
+    await page.evaluate(() => {
+      const existing = document.querySelector('[data-testid="rail-overflow-filler"]');
+      if (existing) existing.remove();
+      const list = document.querySelector(".rail-list");
+      const filler = document.createElement("div");
+      filler.setAttribute("data-testid", "rail-overflow-filler");
+      filler.style.height = "4000px";
+      filler.style.flex = "0 0 auto";
+      list?.appendChild(filler);
+    });
+
+    const rail = page.locator(".rail-workflows");
+    const railBox = await rail.boundingBox();
+    // The rail must be constrained to the viewport, not expanded to its content.
+    expect(railBox).not.toBeNull();
+    expect(railBox!.y + railBox!.height).toBeLessThanOrEqual(height + 1);
+
+    // The overflow now lives on .rail-list, which actually scrolls.
+    const list = await page.locator(".rail-list").evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+
+    // No full-page scroll was introduced by the overflowing rail.
+    const root = await page.evaluate(() => {
+      const el = document.scrollingElement as HTMLElement;
+      return { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    });
+    expect(root.scrollHeight).toBe(root.clientHeight);
+  }
+});
+
+test("theme: defaults to light, toggles to dark, and the choice persists across reload", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.screenshot({
     path: "web/e2e/screenshots/theme-light.png",
@@ -249,13 +294,25 @@ test.describe("workspace binding", () => {
     await expect(chip).toContainText("working on leasing");
   });
 
-  test("selecting a different workflow re-binds it and updates the chip", async ({
+  test("inspecting a workflow highlights it WITHOUT rebinding — binding changes only on 'Work on this'", async ({
     page,
   }) => {
+    // Clicking rfq in the rail inspects it: the row highlights and the strip
+    // docks to it, but the active session stays bound to leasing (no clobber).
     await page.getByTestId("workflow-rfq").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText(
-      "working on rfq",
-    );
+    await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-selected/);
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("working on leasing");
+
+    // The strip offers to make it the binding; taking that explicit action is
+    // what rebinds and updates the chip.
+    const bind = page.getByTestId("workflow-bind");
+    await expect(bind).toBeEnabled();
+    await bind.click();
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
+
+    // Now that it IS the binding, the control reflects that and stops offering.
+    await expect(bind).toHaveAttribute("aria-pressed", "true");
+    await expect(bind).toBeDisabled();
   });
 
   test("the binding is per-session: switching sessions shows that session's own binding", async ({
@@ -271,6 +328,27 @@ test.describe("workspace binding", () => {
       .getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f")
       .click();
     await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
+  });
+
+  test("switching tabs keeps the rail highlight in sync with the active session's binding (SAP-1631)", async ({
+    page,
+  }) => {
+    // Boot session is bound to leasing → that row is highlighted on load.
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-selected/);
+
+    // The "scratch" background session has no binding. Switching to its tab
+    // must CLEAR the highlight (and leave the canvas empty) rather than
+    // stranding the rail on leasing while the canvas shows nothing — the
+    // rail↔canvas divergence this fixes.
+    await page.getByTestId("session-tab-sess-bg").click();
+    await expect(page.getByTestId("session-tab-sess-bg")).toHaveClass(/is-active/);
+    await expect(page.locator(".workflow-item.is-selected")).toHaveCount(0);
+    await expect(page.getByTestId("session-workflow-chip")).toHaveCount(0);
+    await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+
+    // Switching back restores that session's own binding highlight.
+    await page.getByTestId("session-tab-sess-boot").click();
+    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-selected/);
   });
 });
 
@@ -564,7 +642,10 @@ test.describe("docked workflow action strip", () => {
     // ONE canvas macro: the old two-button visualize / ai-visualize split is
     // gone — Visualize alone covers structure + AI enrichment server-side.
     await expect(strip.getByTestId("macro-ai-visualize")).toHaveCount(0);
-    await expect(strip.locator(".strip-item")).toHaveCount(5);
+    // Five macros — counted apart from the "Work on this" bind control, which
+    // shares the .strip-item layout but is not one of the workflow's macros.
+    await expect(strip.locator(".strip-item:not(.strip-item-bind)")).toHaveCount(5);
+    await expect(strip.getByTestId("workflow-bind")).toBeVisible();
 
     await page.screenshot({
       path: "web/e2e/screenshots/app-shell-docked-strip.png",
@@ -694,13 +775,11 @@ test.describe("docked workflow action strip", () => {
     const leasingBox = await dot.boundingBox();
     expect(leasingBox).not.toBeNull();
 
-    await page
-      .getByTestId("workflow-onboarding-flow")
-      .locator(".workflow-item-trigger")
-      .click();
-    await expect(page.getByTestId("workflow-actions-header")).toContainText(
-      "onboarding-flow",
-    );
+    // The canvas header names the BOUND workflow, so bind onboarding-flow
+    // (inspect it, then "Work on this") to bring its long name into the header.
+    await page.getByTestId("workflow-onboarding-flow").locator(".workflow-item-trigger").click();
+    await page.getByTestId("workflow-bind").click();
+    await expect(page.getByTestId("workflow-actions-header")).toContainText("onboarding-flow");
     const onboardingBox = await dot.boundingBox();
     expect(onboardingBox).not.toBeNull();
 
@@ -968,13 +1047,12 @@ test("switching the bound workflow refetches the canvas immediately — the serv
   await expect.poll(() => canvasRequests).toBeGreaterThan(0);
   const requestsBeforeBind = canvasRequests;
 
-  // Re-bind to a different workflow: the pane must refetch the same URL on
-  // its own (the served document changes with the binding) — no canvas.reload
-  // round-trip required first.
+  // Re-bind to a different workflow (inspect it, then "Work on this"): the pane
+  // must refetch the same URL on its own (the served document changes with the
+  // binding) — no canvas.reload round-trip required first.
   await page.getByTestId("workflow-rfq").click();
-  await expect(page.getByTestId("session-workflow-chip")).toContainText(
-    "working on rfq",
-  );
+  await page.getByTestId("workflow-bind").click();
+  await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
   await expect.poll(() => canvasRequests).toBeGreaterThan(requestsBeforeBind);
 });
 
@@ -1094,9 +1172,8 @@ test.describe("background-task canvas states", () => {
     // ...and switching the binding mid-run hides it again: the rfq pane must
     // not show leasing's enrichment progress.
     await page.getByTestId("workflow-rfq").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText(
-      "working on rfq",
-    );
+    await page.getByTestId("workflow-bind").click();
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("working on rfq");
     await expect(page.getByTestId("canvas-task-activity")).toHaveCount(0);
   });
 

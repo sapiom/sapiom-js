@@ -28,6 +28,8 @@ export const claudeCodeAdapterInfo: EmbeddedHarnessAdapterInfo = {
   id: "claude-code",
   label: "Claude Code",
   mode: "embedded",
+  // Claude Code reads images referenced by path in a prompt.
+  imageInput: true,
   installMcpPrompt(): string {
     return INSTALL_MCP_PROMPT;
   },

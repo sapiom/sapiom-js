@@ -26,6 +26,7 @@ import type {
   HarnessSession,
   WorkflowInfo,
 } from "../shared/types.js";
+import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import { resolveStatePaths } from "../core/paths.js";
 import { seedExampleProject } from "../core/example-seed.js";
 import {
@@ -725,7 +726,11 @@ export const startServer = async (
   // Everything under /api requires the boot token; mounted as middleware
   // (not a router) so it also gates the workflows/macros routers below,
   // which declare their own absolute /api/* paths.
-  app.use("/api", createBootTokenMiddleware(options.bootToken), express.json());
+  // JSON limit raised above express's 100 KiB default so the image-attach route
+  // (base64 data URLs, up to ~13 MiB encoded) can be parsed — see
+  // JSON_BODY_LIMIT_BYTES. This is the parser that actually gates every /api
+  // route; the rest router mounts its own with the same limit for standalone use.
+  app.use("/api", createBootTokenMiddleware(options.bootToken), express.json({ limit: JSON_BODY_LIMIT_BYTES }));
   app.use(
     "/api",
     createRestRouter({

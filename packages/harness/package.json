@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/harness",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Sapiom Harness — a CLI-launched local web app that runs your coding agent (Claude Code, Codex) in a Sapiom-configured environment: MCP pre-wired, workflows tracked, one-click deploy/run, and a live canvas for previews.",
   "keywords": [
     "sapiom",

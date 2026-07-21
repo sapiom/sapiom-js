@@ -1,5 +1,49 @@
 # @sapiom/harness
 
+## 0.1.4
+
+### Patch Changes
+
+- eff9d50: fix(harness): separate inspecting a workflow from binding it, and keep the rail highlight in sync with the canvas
+
+  Clicking a workflow in the workspace rail used to immediately rebind it to the
+  active session, so just _looking_ at another workflow clobbered what the session
+  was working on. Selecting is now pure inspection (it highlights the row and docks
+  the action strip); a session's binding changes only via an explicit "Work on
+  this" control on the strip (or by running a macro against the workflow, which is
+  already an explicit action).
+
+  Switching session tabs now always snaps the rail/strip highlight to that
+  session's own binding — including clearing it when the session has no binding, so
+  the rail no longer stays lit on the previous session's workflow while the canvas
+  shows nothing.
+
+- 524ffdf: fix(harness): resume/history rows are distinguishable — real titles + branch/turns/last-active
+
+  Resume-history rows were near-indistinguishable: on any long session the title
+  fell back to the bare `agentSessionId` UUID (the tail-only transcript read
+  missed the first prompt), and rows carried no differentiating metadata.
+
+  The claude-code adapter now derives a human-readable title from Claude's own
+  generated `ai-title` (falling back to a compaction `summary`, then the first
+  human prompt, then the directory basename — never a bare UUID), and surfaces
+  the session's git branch and an exact human-turn count. Transcripts small
+  enough to scan in full report an exact turn count; larger ones are still read
+  only at head+tail (so the dropdown never parses a 100MB file) and simply omit
+  the count. The history dropdown renders branch · turns · last-active under each
+  title so many sessions in one directory can be told apart.
+
+- c8eecf0: fix(harness): workspace/workflow rail no longer clips below the fold on first paint
+
+  `.rail` was missing `min-height: 0`, so as a grid/flex item it grew to its
+  content height instead of the grid row's — the nav clipped below the fold and
+  `.rail-list`'s `overflow-y: auto` never engaged until a reflow (only a hard
+  refresh appeared to fix it). The rail is now constrained to the viewport and
+  scrolls internally on the initial render.
+
+- Updated dependencies [c8eecf0]
+  - @sapiom/agent-core@0.9.5
+
 ## 0.1.3
 
 ### Patch Changes
