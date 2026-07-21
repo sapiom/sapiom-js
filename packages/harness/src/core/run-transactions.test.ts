@@ -52,7 +52,7 @@ const TXNS_BODY = {
     {
       actionName: "generate",
       resourceName: "messages",
-      serviceName: "sapiom_llm_provider",
+      serviceName: "llm_provider",
       metadata: {},
       costs: [
         { isActive: false, isEstimate: false, fiatAmount: "0.275000" },
@@ -62,14 +62,14 @@ const TXNS_BODY = {
     {
       actionName: "create",
       resourceName: "sandbox",
-      serviceName: "sapiom_sandbox_provider",
+      serviceName: "sandbox_provider",
       metadata: { workflowStepName: "renderPdfs" },
       costs: [{ isActive: true, isEstimate: false, fiatAmount: "7.948800" }],
     },
     {
       actionName: "execute",
       resourceName: "/v1/search",
-      serviceName: "sapiom_search_provider",
+      serviceName: "search_provider",
       metadata: { workflowStepName: "resolveTargets" },
       costs: [{ isActive: true, isEstimate: false, fiatAmount: "0.055000" }],
     },

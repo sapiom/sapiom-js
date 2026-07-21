@@ -32,7 +32,7 @@ describe("createDefinitionSlugResolver", () => {
     const fetchImpl = makeFetch(200, {
       id: "188",
       slug: "lease-abstractor",
-      name: "IC Diligence",
+      name: "Lease Abstractor",
     });
     const resolver = createDefinitionSlugResolver({
       apiKey: "test-key",
