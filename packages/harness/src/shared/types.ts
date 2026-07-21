@@ -354,6 +354,18 @@ export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
   | { type: "canvas.reload"; harnessSessionId: string }
   | { type: "port.detected"; harnessSessionId: string; port: number; url: string }
+  /**
+   * A run just started (the CLI printed `✓ Started execution <id>`, caught by
+   * the ExecutionDetector). The SPA starts polling `/api/runs/:id/state` on
+   * receipt. `target` is `"prod"` today — local runs render from their final
+   * result rather than polling.
+   */
+  | {
+      type: "execution.started";
+      harnessSessionId: string;
+      executionId: string;
+      target: "prod" | "local";
+    }
   | { type: "workflows.changed" }
   /**
    * Full snapshot of one background task, re-broadcast on every change
@@ -370,6 +382,93 @@ export type BusMessage =
    * receives. Drives the SPA's per-tab busy pulse for background sessions.
    */
   | { type: "session.activity"; harnessSessionId: string; at: string };
+
+// ---------------------------------------------------------------------------
+// Run spend (cost settled after execution, fetched from core surface)
+// ---------------------------------------------------------------------------
+
+/** Per-step cost summary from the spend endpoint. */
+export interface RunStepSpend {
+  name: string;
+  totalUsd: string;
+  entryCount: number;
+}
+
+/** Full spend summary for one execution, keyed by executionId. */
+export interface RunSpend {
+  executionId: string;
+  totalUsd: string;
+  settleState: string;
+  byStep: RunStepSpend[];
+}
+
+/**
+ * One billable capability call within a run — the per-call drill-down behind a
+ * step's cost ("why is this step costly"). Derived from the transactions
+ * endpoint. Deliberately provider-AGNOSTIC: `capability` is a generic label
+ * ("LLM", "sandbox", "web search") mapped server-side from the operation, so
+ * neither the browser nor this file ever carries the upstream provider/model
+ * name. Token counts are intentionally absent — the platform does not record
+ * per-call tokens for gateway LLM calls (see SAP ticket for the backend work).
+ */
+export interface RunCall {
+  /** Step this call is attributed to (workflowStepName ?? capability op). */
+  stepName: string;
+  /** Provider-agnostic capability label, e.g. "LLM" / "sandbox" / "web search". */
+  capability: string;
+  /** The capability operation, e.g. "generate" / "create" / "execute". */
+  op: string;
+  /** Captured USD for this single call. */
+  usd: string;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime analytics — live run render state (see core/render-run-state.ts)
+// ---------------------------------------------------------------------------
+//
+// The transport-agnostic shape the canvas renders a run from. The server
+// produces it (GET /api/runs/:id/state = inspect → decode → renderRunState);
+// the web poll loop and canvas consume it. Deliberately DERIVED, never raw:
+// every field is computed deterministically from the decoded
+// ExecutionProjection — no LLM, no I/O — so the same RunView drives both the
+// polling path today and a future WebSocket push (only the source swaps).
+
+/**
+ * A step's render status, folded from the raw projection step status into the
+ * four states the canvas draws. `cancelled`/`failed` both fold to `failed`
+ * (a cancelled step did not pass — mirrors run-local.ts); anything not yet
+ * `running`/`passed`/`failed` is `pending`.
+ */
+export type StepStatus = "pending" | "running" | "passed" | "failed";
+
+/** One step as the canvas renders it — status plus the deterministically
+ *  derived cost/latency/error/log slice. Optional fields are ABSENT (not
+ *  `undefined`/`0`) when the decoded projection carries no value — honest
+ *  absence, matching the SDK's cost-is-nullable philosophy. */
+export interface StepView {
+  /** Stable id for keyed rendering — the OTel span id, else a step-order key. */
+  id: string;
+  /** Human step label (the projection's stepName). */
+  name: string;
+  status: StepStatus;
+  /** Captured USD for this step; absent when the read carries no cost. */
+  costUsd?: number;
+  /** finishedAt − startedAt in ms; absent while running or on bad timestamps. */
+  latencyMs?: number;
+  /** Terminal error message; present only for a failed step that recorded one. */
+  error?: string;
+  /** Tail-preserving, character-capped executor log text — the debug-macro
+   *  context source (trimmed further before injection). Absent when no logs. */
+  logSlice?: string;
+}
+
+/** A whole run as the canvas renders it. `status` is the run lifecycle folded
+ *  to the four states the UI distinguishes; `steps` is order-preserving. */
+export interface RunView {
+  executionId: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  steps: StepView[];
+}
 
 // ---------------------------------------------------------------------------
 // Adapter registry (GET /api/harnesses)
@@ -610,7 +709,11 @@ export interface AppState {
    * don't run the consent flow (tests, mocks — treated as "stored-explicit"
    * by the UI, i.e. no notice).
    */
-  consentSource?: "env-forced-off" | "stored-explicit" | "prompted" | "default-silent";
+  consentSource?:
+    | "env-forced-off"
+    | "stored-explicit"
+    | "prompted"
+    | "default-silent";
   /**
    * When consentSource === "env-forced-off", which env var forced it off —
    * rendered in the tracking indicator as "off (env)" with the var name.
@@ -642,6 +745,14 @@ export interface AppState {
    *  terminal. Optional so AppState constructed without the CLI (tests,
    *  mocks) reads as a returning user by default. */
   firstRun?: boolean;
+  /** The Agents API base URL this harness resolves and triggers against — the
+   *  same env-configurable base the server uses to resolve deployed-agent slugs
+   *  (`SAPIOM_AGENTS_URL` / `SAPIOM_TOOLS_BASE`, else the prod default). The
+   *  snippet panel renders it as the executions host so the copy-paste cURL/SDK
+   *  call hits the same environment the agent was deployed to. Optional: omitted
+   *  by callers that construct AppState without the CLI (tests, mocks); the SPA
+   *  then falls back to the SDK's own default host. */
+  agentsBaseUrl?: string;
 }
 
 /** `POST /api/sample-project` response — the seeded (or reused) example. */
@@ -699,6 +810,10 @@ export interface WorkflowInfo {
   path: string;
   /** From sapiom.json once linked; null before first link. */
   definitionId: number | null;
+  /** The deployed agent's slug — the `defineAgent({ name })` that sapiom.json
+   *  caches as `name`, used as the executions-API handle
+   *  (`/agents/v1/definitions/{slug}/executions`). Null before first link. */
+  definitionSlug: string | null;
   /** How it entered the registry. */
   source: "scan" | "connect";
 }

@@ -113,11 +113,16 @@ const UI_EVENT_NAMES: readonly UiEventName[] = [
  * carry arbitrary content). Keyed and value length-capped so the endpoint
  * cannot be used as a vector to push large payloads through the remote batcher.
  */
-const uiTrackDataValue = z.union([z.string().max(256), z.number(), z.boolean()]);
-const uiTrackDataSchema = z.record(z.string().max(64), uiTrackDataValue).refine(
-  (obj) => Object.keys(obj).length <= 20,
-  { message: "data must have at most 20 keys" },
-);
+const uiTrackDataValue = z.union([
+  z.string().max(256),
+  z.number(),
+  z.boolean(),
+]);
+const uiTrackDataSchema = z
+  .record(z.string().max(64), uiTrackDataValue)
+  .refine((obj) => Object.keys(obj).length <= 20, {
+    message: "data must have at most 20 keys",
+  });
 
 const uiTrackSchema = z.object({
   event: z.enum(UI_EVENT_NAMES as [UiEventName, ...UiEventName[]]),
@@ -162,6 +167,11 @@ export interface RestRouterOptions {
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
+  /** The Agents API base URL (env-configurable) — surfaced in AppState so the
+   * snippet panel's executions host matches where the server resolves slugs.
+   * Omitted by tests, leaving AppState.agentsBaseUrl absent (the SPA then uses
+   * the SDK's default host). */
+  agentsBaseUrl?: string;
   /** Background tasks known to this boot (TaskManager.list) — surfaced in
    *  AppState so a page load mid-run shows the canvas activity state without
    *  waiting for the next task.status frame. Optional: omitted by callers
@@ -199,8 +209,12 @@ export interface RestRouterOptions {
    * about UI analytics don't need to stub these).
    */
   uiTrack?: {
-    store: { append(event: import("../shared/types.js").AnalyticsEvent): Promise<void> };
-    batcher: { enqueue(event: import("../shared/types.js").AnalyticsEvent): void };
+    store: {
+      append(event: import("../shared/types.js").AnalyticsEvent): Promise<void>;
+    };
+    batcher: {
+      enqueue(event: import("../shared/types.js").AnalyticsEvent): void;
+    };
     /** Per-boot seq counter shared with the ingest pipeline. */
     nextSeq: (sessionId: string) => number;
     machineId: string;
@@ -210,7 +224,14 @@ export interface RestRouterOptions {
 }
 
 export function createRestRouter(options: RestRouterOptions): Router {
-  const { sessionManager, adapters, version, identity, listWorkflows, listMacros } = options;
+  const {
+    sessionManager,
+    adapters,
+    version,
+    identity,
+    listWorkflows,
+    listMacros,
+  } = options;
   const router = Router();
   router.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
@@ -227,11 +248,22 @@ export function createRestRouter(options: RestRouterOptions): Router {
         workflows: await listWorkflows(),
         macros: listMacros(),
         launchDir: options.launchDir,
-        ...(options.availableHarnesses ? { availableHarnesses: options.availableHarnesses } : {}),
+        ...(options.availableHarnesses
+          ? { availableHarnesses: options.availableHarnesses }
+          : {}),
         ...(options.listTasks ? { tasks: options.listTasks() } : {}),
-        ...(options.firstRun !== undefined ? { firstRun: options.firstRun } : {}),
-        ...(options.consentSource !== undefined ? { consentSource: options.consentSource } : {}),
-        ...(options.consentEnvReason !== undefined ? { consentEnvReason: options.consentEnvReason } : {}),
+        ...(options.firstRun !== undefined
+          ? { firstRun: options.firstRun }
+          : {}),
+        ...(options.consentSource !== undefined
+          ? { consentSource: options.consentSource }
+          : {}),
+        ...(options.consentEnvReason !== undefined
+          ? { consentEnvReason: options.consentEnvReason }
+          : {}),
+        ...(options.agentsBaseUrl
+          ? { agentsBaseUrl: options.agentsBaseUrl }
+          : {}),
       };
       res.json(state);
     } catch (err) {
@@ -275,7 +307,11 @@ export function createRestRouter(options: RestRouterOptions): Router {
   // existing session-creation path.
   router.post("/sample-project", async (_req, res, next) => {
     if (!options.seedSampleProject) {
-      res.status(501).json({ error: "sample project seeding is not available on this server" });
+      res
+        .status(501)
+        .json({
+          error: "sample project seeding is not available on this server",
+        });
       return;
     }
     try {
@@ -436,7 +472,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
         err instanceof SessionAlreadyLiveError ||
         err instanceof SessionNotResumeableError
       ) {
-        res.status(409).json({ error: err.message, code: (err as { code: string }).code });
+        res
+          .status(409)
+          .json({ error: err.message, code: (err as { code: string }).code });
         return;
       }
       next(err);
@@ -461,14 +499,21 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
     try {
       const submit = parsed.data.submit ?? true;
-      const ok = await sessionManager.submitInput(req.params.id, parsed.data.text, submit);
+      const ok = await sessionManager.submitInput(
+        req.params.id,
+        parsed.data.text,
+        submit,
+      );
       if (!ok) {
         res.status(404).json({ error: "session not found or has no live pty" });
         return;
       }
       res.json({ ok: true });
     } catch (err) {
-      if (err instanceof SessionNotReadyError || err instanceof ExternalHarnessError) {
+      if (
+        err instanceof SessionNotReadyError ||
+        err instanceof ExternalHarnessError
+      ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
@@ -596,7 +641,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
     // Respond immediately — fire-and-forget from the client's perspective.
     res.json({ ok: true });
 
-    const { store, batcher, nextSeq, machineId, userId, tenantId } = options.uiTrack;
+    const { store, batcher, nextSeq, machineId, userId, tenantId } =
+      options.uiTrack;
     const { event, data, harnessSessionId } = parsed.data;
     // Use the provided session id for seq tracking; fall back to a synthetic
     // one-use id so ui events without a session still get a valid seq.

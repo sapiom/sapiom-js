@@ -49,7 +49,15 @@ export async function generateMcpConfig(
       },
       "sapiom-dev": {
         command: "npx",
-        args: ["-y", "@sapiom/mcp"],
+        // Pin the dist-tag (`@latest`) rather than the bare name so npx always
+        // resolves the PUBLISHED package from the registry. A bare
+        // `@sapiom/mcp` resolves a LOCAL workspace copy whenever the harness
+        // runs from inside the sapiom-js monorepo (dogfooding/dev) — whose bin
+        // isn't linked, so the server fails to launch ("sapiom-mcp: command
+        // not found" → JSON-RPC -32000). A dist-tag spec forces registry
+        // resolution and is behaviourally identical to what a real user
+        // (outside the monorepo) already gets, so it's a pure robustness fix.
+        args: ["-y", "@sapiom/mcp@latest"],
         ...(devEnv ? { env: devEnv } : {}),
       },
     },

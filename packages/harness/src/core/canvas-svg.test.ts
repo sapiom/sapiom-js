@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CanvasGraph } from "./canvas-graph.js";
-import { computeLayers, layoutGraph, renderGraphSvg, usedKinds } from "./canvas-svg.js";
+import {
+  computeLayers,
+  layoutGraph,
+  renderGraphSvg,
+  usedKinds,
+} from "./canvas-svg.js";
 
 const ORDER_TRIAGE_GRAPH: CanvasGraph = {
   manifestName: "order-triage",
@@ -25,10 +30,7 @@ describe("computeLayers", () => {
   it("assigns sequential layers to a straight chain", () => {
     const layers = computeLayers(
       [{ id: "a" } as never, { id: "b" } as never, { id: "c" } as never],
-      [
-        { from: "a", to: "b" } as never,
-        { from: "b", to: "c" } as never,
-      ],
+      [{ from: "a", to: "b" } as never, { from: "b", to: "c" } as never],
     );
     expect(layers.get("a")).toBe(0);
     expect(layers.get("b")).toBe(1);
@@ -38,7 +40,9 @@ describe("computeLayers", () => {
   it("assigns the longest-path layer when branches reconverge (a diamond)", () => {
     // a -> b -> d, a -> c -> ... -> d (longer path), d should land past both.
     const layers = computeLayers(
-      [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "e" }, { id: "d" }].map((n) => n as never),
+      [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "e" }, { id: "d" }].map(
+        (n) => n as never,
+      ),
       [
         { from: "a", to: "b" },
         { from: "a", to: "c" },
@@ -70,7 +74,9 @@ describe("computeLayers", () => {
     // a -> b is the main chain (layers 0, 1); x <-> y is a disconnected
     // island where both nodes have in-degree > 0, so neither starts a BFS.
     const layers = computeLayers(
-      [{ id: "a" }, { id: "b" }, { id: "x" }, { id: "y" }].map((n) => n as never),
+      [{ id: "a" }, { id: "b" }, { id: "x" }, { id: "y" }].map(
+        (n) => n as never,
+      ),
       [
         { from: "a", to: "b" },
         { from: "x", to: "y" },
@@ -101,13 +107,17 @@ describe("layoutGraph", () => {
 describe("renderGraphSvg", () => {
   const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH);
 
-  it("emits one <g class=\"canvas-node ...\"> per node, tagged with its kind", () => {
-    expect((svg.match(/class="canvas-node node--entry"/g) ?? []).length).toBe(1);
+  it('emits one <g class="canvas-node ..."> per node, tagged with its kind', () => {
+    expect((svg.match(/class="canvas-node node--entry"/g) ?? []).length).toBe(
+      1,
+    );
     expect((svg.match(/class="canvas-node node--step"/g) ?? []).length).toBe(2);
-    expect((svg.match(/class="canvas-node node--terminal-success"/g) ?? []).length).toBe(2);
+    expect(
+      (svg.match(/class="canvas-node node--terminal-success"/g) ?? []).length,
+    ).toBe(2);
   });
 
-  it("emits one <path class=\"canvas-edge...\"> per edge", () => {
+  it('emits one <path class="canvas-edge..."> per edge', () => {
     expect((svg.match(/<path class="canvas-edge/g) ?? []).length).toBe(4);
   });
 
@@ -146,6 +156,15 @@ describe("renderGraphSvg", () => {
     expect(renderGraphSvg(linear)).toContain(`width="${layout.width}"`);
   });
 
+  it("tags each node <g> with data-step-name and data-step-id for live run-state lighting", () => {
+    // Every node must carry both attributes so the postMessage listener can
+    // find it by step name (the primary key) or id (fallback).
+    for (const node of ORDER_TRIAGE_GRAPH.nodes) {
+      expect(svg).toContain(`data-step-name="${node.label}"`);
+      expect(svg).toContain(`data-step-id="${node.id}"`);
+    }
+  });
+
   it("never emits its own <defs> — the shared document shell provides glow filter + arrow markers once", () => {
     expect(svg).not.toContain("<defs>");
     expect(svg).toContain('filter="url(#canvas-glow)"');
@@ -176,7 +195,11 @@ describe("renderGraphSvg", () => {
 describe("usedKinds", () => {
   it("collects every distinct node and edge kind present in the graph", () => {
     const { nodeKinds, edgeKinds } = usedKinds(ORDER_TRIAGE_GRAPH);
-    expect([...nodeKinds].sort()).toEqual(["entry", "step", "terminal-success"]);
+    expect([...nodeKinds].sort()).toEqual([
+      "entry",
+      "step",
+      "terminal-success",
+    ]);
     expect([...edgeKinds].sort()).toEqual(["branching", "sequential"]);
   });
 });
@@ -187,13 +210,21 @@ describe("renderGraphSvg with enrichment", () => {
       ...ORDER_TRIAGE_GRAPH,
       nodes: [
         { id: "intake", kind: "entry", label: "intake" },
-        { id: "classify", kind: "pause", label: "classify", sublabel: 'waits for signal "go"' },
+        {
+          id: "classify",
+          kind: "pause",
+          label: "classify",
+          sublabel: 'waits for signal "go"',
+        },
       ],
       edges: [],
     };
     const svg = renderGraphSvg(graph, {
       nodeDetails: {
-        intake: { sublabel: "receives the order", description: "Entry point for order events." },
+        intake: {
+          sublabel: "receives the order",
+          description: "Entry point for order events.",
+        },
         classify: { sublabel: "AI-written override" },
       },
     });
@@ -205,7 +236,10 @@ describe("renderGraphSvg with enrichment", () => {
 
   it("labels edges by the enrichment's from->to key and ignores keys for edges that don't exist", () => {
     const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
-      edgeLabels: { "route->auto_resolve": "low priority", "ghost->nowhere": "never rendered" },
+      edgeLabels: {
+        "route->auto_resolve": "low priority",
+        "ghost->nowhere": "never rendered",
+      },
     });
     expect(svg).toContain(">low priority</text>");
     expect(svg).not.toContain("never rendered");
@@ -213,17 +247,23 @@ describe("renderGraphSvg with enrichment", () => {
 
   it("renders a background band + label for a group whose members all exist, behind the nodes", () => {
     const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
-      layoutHints: { groups: [{ label: "decision core", nodeIds: ["classify", "route"] }] },
+      layoutHints: {
+        groups: [{ label: "decision core", nodeIds: ["classify", "route"] }],
+      },
     });
     expect(svg).toContain('class="canvas-group-band"');
     expect(svg).toContain(">decision core</text>");
     // Behind everything: the band precedes the first node group in the markup.
-    expect(svg.indexOf("canvas-group-band")).toBeLessThan(svg.indexOf("canvas-node"));
+    expect(svg.indexOf("canvas-group-band")).toBeLessThan(
+      svg.indexOf("canvas-node"),
+    );
   });
 
   it("silently drops a group hint that references a node id not in the graph", () => {
     const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
-      layoutHints: { groups: [{ label: "phantom", nodeIds: ["classify", "not-a-node"] }] },
+      layoutHints: {
+        groups: [{ label: "phantom", nodeIds: ["classify", "not-a-node"] }],
+      },
     });
     expect(svg).not.toContain("canvas-group-band");
     expect(svg).not.toContain("phantom");
@@ -232,7 +272,9 @@ describe("renderGraphSvg with enrichment", () => {
   it("laneOrder reorders nodes within their computed layer only", () => {
     // auto_resolve and escalate share the terminal layer; default order is
     // insertion order (auto_resolve first). The hint flips them.
-    const layout = layoutGraph(ORDER_TRIAGE_GRAPH, { "3": ["escalate", "auto_resolve"] });
+    const layout = layoutGraph(ORDER_TRIAGE_GRAPH, {
+      "3": ["escalate", "auto_resolve"],
+    });
     expect(layout.pos["escalate"].x).toBeLessThan(layout.pos["auto_resolve"].x);
     // Same y — the hint may not move a node between layers.
     expect(layout.pos["escalate"].y).toBe(layout.pos["auto_resolve"].y);
@@ -241,7 +283,9 @@ describe("renderGraphSvg with enrichment", () => {
 
   it("ignores a laneOrder entry containing a node id that doesn't exist in the graph", () => {
     const base = layoutGraph(ORDER_TRIAGE_GRAPH);
-    const hinted = layoutGraph(ORDER_TRIAGE_GRAPH, { "3": ["escalate", "no-such-node"] });
+    const hinted = layoutGraph(ORDER_TRIAGE_GRAPH, {
+      "3": ["escalate", "no-such-node"],
+    });
     expect(hinted.pos).toEqual(base.pos);
   });
 
@@ -250,14 +294,21 @@ describe("renderGraphSvg with enrichment", () => {
     // "intake" is in layer 0, listed under layer 3: every id exists, so the
     // hint applies to layer 3's row — but intake isn't in that row, so only
     // the row's own members reorder and intake stays exactly where it was.
-    const hinted = layoutGraph(ORDER_TRIAGE_GRAPH, { "3": ["escalate", "intake", "auto_resolve"] });
+    const hinted = layoutGraph(ORDER_TRIAGE_GRAPH, {
+      "3": ["escalate", "intake", "auto_resolve"],
+    });
     expect(hinted.pos["intake"]).toEqual(base.pos["intake"]);
     expect(hinted.pos["escalate"].x).toBeLessThan(hinted.pos["auto_resolve"].x);
   });
 
   it("escapes every enrichment-supplied string", () => {
     const svg = renderGraphSvg(ORDER_TRIAGE_GRAPH, {
-      nodeDetails: { intake: { sublabel: '<img src=x onerror="1">', description: "a <b>bold</b> claim" } },
+      nodeDetails: {
+        intake: {
+          sublabel: '<img src=x onerror="1">',
+          description: "a <b>bold</b> claim",
+        },
+      },
       edgeLabels: { "intake->classify": "<script>" },
       layoutHints: { groups: [{ label: "<style>", nodeIds: ["intake"] }] },
     });

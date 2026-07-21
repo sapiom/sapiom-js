@@ -7,7 +7,10 @@
  * src/shared/types.ts for the full protocol contract.
  */
 
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import {
+  createServer as createHttpServer,
+  type Server as HttpServer,
+} from "node:http";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,11 +29,18 @@ import type {
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import { resolveStatePaths } from "../core/paths.js";
 import { seedExampleProject } from "../core/example-seed.js";
-import { SessionManager, type LaunchOptsBuilder } from "../core/session-manager.js";
+import {
+  SessionManager,
+  type LaunchOptsBuilder,
+} from "../core/session-manager.js";
 import { TaskManager } from "../core/task-manager.js";
 import { createClaudeCodeAdapter } from "../core/adapters/claude-code.js";
 import { createCodexAdapter } from "../core/adapters/codex.js";
-import { WorkflowRegistry, createWorkflowsRouter } from "../core/workflow-registry.js";
+import {
+  WorkflowRegistry,
+  type WorkflowRegistryLike,
+  createWorkflowsRouter,
+} from "../core/workflow-registry.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
 import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
@@ -38,7 +48,11 @@ import { migrateHarnessIdentity } from "../core/collector/identity-migration.js"
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { createSeqCounter } from "../core/collector/seq.js";
-import { findRolloutFile, tailCodexRollout, type CodexTailerHandle } from "../core/collector/codex-tailer.js";
+import {
+  findRolloutFile,
+  tailCodexRollout,
+  type CodexTailerHandle,
+} from "../core/collector/codex-tailer.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
@@ -46,28 +60,52 @@ import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
 import { generateSystemPromptFile } from "../core/inject/system-prompt.js";
 import { generateSkillsPlugin } from "../core/inject/skills-plugin.js";
-import { removeGeneratedSessionDir, sweepGeneratedDirs } from "../core/inject/retention.js";
+import {
+  removeGeneratedSessionDir,
+  sweepGeneratedDirs,
+} from "../core/inject/retention.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
 import { WorkspaceWatcherManager } from "../core/workspace-watcher.js";
+import { ExecutionDetector } from "../core/execution-detector.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
-import { writeHarnessContext, harnessContextFileExists } from "../core/workspace-context.js";
+import {
+  writeHarnessContext,
+  harnessContextFileExists,
+} from "../core/workspace-context.js";
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
-import { renderCanvasForSession, renderWorkflowRenderFile } from "../core/canvas-render.js";
+import {
+  renderCanvasForSession,
+  renderWorkflowRenderFile,
+} from "../core/canvas-render.js";
 import { CanvasEnrichmentCoordinator } from "../core/canvas-enrich.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
+import {
+  createDefinitionSlugResolver,
+  resolveAgentsBaseUrl,
+} from "../core/definition-slug-resolver.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
 import { attachWebSocketRouters } from "./ws-router.js";
-import { createIngestRouter, processIngest, type IngestDeps, type IngestRequestBody, type IngestSessionContext } from "./ingest.js";
+import {
+  createIngestRouter,
+  processIngest,
+  type IngestDeps,
+  type IngestRequestBody,
+  type IngestSessionContext,
+} from "./ingest.js";
 import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createSkillsRouter } from "./skills.js";
+import { createRunsRouter } from "./runs.js";
+// resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
+// (an identical helper); the runs router reuses it for its agents base URL.
+import { resolveCoreBaseUrl } from "../core/run-spend.js";
 
 /**
  * Codex has no hook system — its rollout file is polled into existence
@@ -194,16 +232,22 @@ function packageRoot(): string {
 /** Whether two workflow lists are equivalent for the rail's purposes —
  *  compares the fields the SPA actually renders/keys on, order-insensitive, so
  *  a rescan that turned up nothing new doesn't trigger a needless broadcast. */
-function workflowListsEqual(a: readonly WorkflowInfo[], b: readonly WorkflowInfo[]): boolean {
+function workflowListsEqual(
+  a: readonly WorkflowInfo[],
+  b: readonly WorkflowInfo[],
+): boolean {
   if (a.length !== b.length) return false;
-  const key = (w: WorkflowInfo): string => `${w.path} ${w.name} ${w.definitionId ?? ""} ${w.source}`;
+  const key = (w: WorkflowInfo): string =>
+    `${w.path} ${w.name} ${w.definitionId ?? ""} ${w.source}`;
   const setA = new Set(a.map(key));
   return b.every((w) => setA.has(key(w)));
 }
 
 function readVersion(): string {
   try {
-    const pkg = JSON.parse(readFileSync(join(packageRoot(), "package.json"), "utf8")) as {
+    const pkg = JSON.parse(
+      readFileSync(join(packageRoot(), "package.json"), "utf8"),
+    ) as {
       version?: string;
     };
     return pkg.version ?? "0.0.0";
@@ -222,14 +266,22 @@ function readVersion(): string {
  * so the remote `sapiom` MCP is actually authenticated — a factory rather
  * than a plain function since it's per-server-instance state.
  */
-function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: string): LaunchOptsBuilder {
+function createDefaultBuildLaunchOpts(
+  apiKey: string | null,
+  generatedRoot?: string,
+): LaunchOptsBuilder {
   return async (harnessSessionId) => {
-    const [settings, mcpConfigFile, systemPromptFile, pluginDir] = await Promise.all([
-      generateClaudeSettings({ harnessSessionId, generatedRoot }),
-      generateMcpConfig(harnessSessionId, { environment: process.env.SAPIOM_ENVIRONMENT, apiKey, generatedRoot }),
-      generateSystemPromptFile(harnessSessionId, { generatedRoot }),
-      generateSkillsPlugin(harnessSessionId, { generatedRoot }),
-    ]);
+    const [settings, mcpConfigFile, systemPromptFile, pluginDir] =
+      await Promise.all([
+        generateClaudeSettings({ harnessSessionId, generatedRoot }),
+        generateMcpConfig(harnessSessionId, {
+          environment: process.env.SAPIOM_ENVIRONMENT,
+          apiKey,
+          generatedRoot,
+        }),
+        generateSystemPromptFile(harnessSessionId, { generatedRoot }),
+        generateSkillsPlugin(harnessSessionId, { generatedRoot }),
+      ]);
     return {
       settingsFile: settings.settingsPath,
       mcpConfigFile,
@@ -239,11 +291,14 @@ function createDefaultBuildLaunchOpts(apiKey: string | null, generatedRoot?: str
   };
 }
 
-export const startServer = async (options: HarnessServerOptions): Promise<HarnessServer> => {
+export const startServer = async (
+  options: HarnessServerOptions,
+): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
   const identity = options.identity ?? null;
   const statePaths = resolveStatePaths(options.stateRoot);
-  const machineId = options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
+  const machineId =
+    options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
 
   // One-way identity migration: seed ~/.sapiom/analytics.json from the
   // legacy harness machine-id so existing installs keep the same anonymous_id
@@ -251,6 +306,40 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // already exists or when HOME is unwritable.
   await migrateHarnessIdentity(statePaths.machineId);
   const launchDir = options.launchDir ?? process.cwd();
+
+  // Serve-time slug enrichment: resolves each workflow's definitionSlug from
+  // the Sapiom Agents API when it's absent (deployed sapiom.json files carry
+  // only { "definitionId": "188" }, not the slug). Constructed once per server
+  // boot; caches successful id→slug resolutions in-memory (ids are stable).
+  // Never throws — a failed resolution leaves definitionSlug as-is.
+  const slugResolver = createDefinitionSlugResolver({
+    apiKey: identity?.apiKey ?? null,
+    baseUrl: resolveAgentsBaseUrl(),
+  });
+
+  /** Returns a copy of the workflow list with definitionSlug filled in from
+   *  the Agents API for any workflow that has a definitionId but no slug.
+   *  Resolves all lookups in parallel. Never mutates the registry. */
+  const enrichWorkflows = async (
+    workflows: WorkflowInfo[],
+  ): Promise<WorkflowInfo[]> => {
+    return Promise.all(
+      workflows.map(async (workflow) => {
+        if (
+          workflow.definitionId == null ||
+          (workflow.definitionSlug != null && workflow.definitionSlug !== "")
+        ) {
+          return workflow;
+        }
+        const resolved = await slugResolver.resolve(
+          String(workflow.definitionId),
+        );
+        if (resolved == null) return workflow;
+        return { ...workflow, definitionSlug: resolved };
+      }),
+    );
+  };
+
   const adapters: Partial<Record<HarnessKind, HarnessAdapter>> =
     options.adapters ??
     ({
@@ -260,7 +349,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
 
   const bus = new EventBus();
   const canvasWatcher = new CanvasWatcherManager({
-    onChange: (harnessSessionId) => bus.publish({ type: "canvas.reload", harnessSessionId }),
+    onChange: (harnessSessionId) =>
+      bus.publish({ type: "canvas.reload", harnessSessionId }),
   });
   // The harness's own infrastructure shouldn't ever show up as a "discovered"
   // dev server in the Preview pane — a mention of our own listening port (in
@@ -279,8 +369,22 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     if (collectorPort !== null) excludedPorts.add(collectorPort);
   }
   const portDetector = new PortDetector({
-    onPort: (harnessSessionId, port, url) => bus.publish({ type: "port.detected", harnessSessionId, port, url }),
+    onPort: (harnessSessionId, port, url) =>
+      bus.publish({ type: "port.detected", harnessSessionId, port, url }),
     excludedPorts,
+  });
+  // Same tool.call output feed as portDetector: catch `✓ Started execution
+  // <id>` so the SPA can start polling that run's live state (see
+  // core/execution-detector.ts). Local runs are rendered from their final
+  // result, not polled, so only prod-run announcements flow through here.
+  const executionDetector = new ExecutionDetector({
+    onExecution: (harnessSessionId, executionId, target) =>
+      bus.publish({
+        type: "execution.started",
+        harnessSessionId,
+        executionId,
+        target,
+      }),
   });
 
   // Declared before sessionManager: writeSessionContext (sessionManager's
@@ -290,7 +394,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // itself (to rewrite every open session's context file on a registry change) —
   // no circularity, since only writeSessionContext is threaded into SessionManager's
   // constructor, and it doesn't need sessionManager.
-  const workflowRegistry = new WorkflowRegistry(options.workflowsRegistryPath ?? statePaths.workflows);
+  const workflowRegistry = new WorkflowRegistry(
+    options.workflowsRegistryPath ?? statePaths.workflows,
+  );
   // Boot-time hygiene, before the first list(): drop registry entries whose
   // path no longer exists on disk (deleted projects, temp dirs a crashed run
   // left registered) so the rail — and every harness-context.json written
@@ -299,7 +405,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   try {
     const prunedWorkflows = await workflowRegistry.prune();
     for (const workflow of prunedWorkflows) {
-      console.error(`[harness] pruned workflow registry entry with missing path: ${workflow.path}`);
+      console.error(
+        `[harness] pruned workflow registry entry with missing path: ${workflow.path}`,
+      );
     }
   } catch (err) {
     console.error("[harness] workflow registry prune failed:", err);
@@ -331,9 +439,12 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
    * SessionManager's create()/resume(), the PATCH bind/unbind route, and
    * scanWorkflowsAndBroadcast's rewrite-all-open-sessions step below.
    */
-  const writeSessionContext = async (session: HarnessSession): Promise<void> => {
+  const writeSessionContext = async (
+    session: HarnessSession,
+  ): Promise<void> => {
     const boundWorkflow = session.boundWorkflowPath
-      ? (workflowsCache.find((w) => w.path === session.boundWorkflowPath) ?? null)
+      ? (workflowsCache.find((w) => w.path === session.boundWorkflowPath) ??
+        null)
       : null;
     await writeHarnessContext(session, boundWorkflow, workflowsCache);
   };
@@ -346,7 +457,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const generatedRoot = options.generatedRoot ?? statePaths.generated;
   const pendingGeneratedRemovals = new Map<string, Promise<void>>();
   const innerBuildLaunchOpts =
-    options.buildLaunchOpts ?? createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot);
+    options.buildLaunchOpts ??
+    createDefaultBuildLaunchOpts(identity?.apiKey ?? null, generatedRoot);
   const buildLaunchOpts: LaunchOptsBuilder = async (harnessSessionId, req) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
     return innerBuildLaunchOpts(harnessSessionId, req);
@@ -367,7 +479,10 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   });
   await sessionManager.init();
 
-  const sessionSweepTimer = setInterval(() => sessionManager.sweepDeadSessions(), SESSION_LIVENESS_SWEEP_MS);
+  const sessionSweepTimer = setInterval(
+    () => sessionManager.sweepDeadSessions(),
+    SESSION_LIVENESS_SWEEP_MS,
+  );
   sessionSweepTimer.unref?.();
 
   // Background tasks (canvas enrichment today): headless one-shot agent
@@ -383,9 +498,11 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     collectorUrl: options.collectorUrl,
     buildLaunchOpts,
     onCleanup: (taskId) => {
-      void removeGeneratedSessionDir(taskId, { generatedRoot }).catch((err: unknown) => {
-        console.error("[harness] task generated-dir cleanup failed:", err);
-      });
+      void removeGeneratedSessionDir(taskId, { generatedRoot }).catch(
+        (err: unknown) => {
+          console.error("[harness] task generated-dir cleanup failed:", err);
+        },
+      );
     },
   });
   taskManager.onStatusChange((task) => {
@@ -417,7 +534,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // Pruning here is what lets a deleted workflow drop out (a plain scan only
   // ever merges in); it respects the same ENOENT/ENOTDIR-only guard as the
   // boot prune, so a merely-unbuilt or unreadable project stays put.
-  const rescanWorkspaceForSession = async (harnessSessionId: string): Promise<void> => {
+  const rescanWorkspaceForSession = async (
+    harnessSessionId: string,
+  ): Promise<void> => {
     const session = sessionManager.get(harnessSessionId);
     if (!session || session.status === "exited") return;
     const before = workflowsCache;
@@ -446,6 +565,7 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       canvasWatcher.stop(session.id);
       workspaceWatcher.stop(session.id);
       portDetector.reset(session.id);
+      executionDetector.reset(session.id);
       // The generated config dir is dead once the pty is: every file in it
       // is regenerated by buildLaunchOpts on resume, and the agent's last
       // emit.cjs execution (SessionEnd) happens before its process exits.
@@ -467,7 +587,11 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // (only the active tab does) — this is the lightweight substitute that lets
   // every session's tab show a busy pulse regardless of which one is active.
   sessionManager.onActivity((harnessSessionId) => {
-    bus.publish({ type: "session.activity", harnessSessionId, at: new Date().toISOString() });
+    bus.publish({
+      type: "session.activity",
+      harnessSessionId,
+      at: new Date().toISOString(),
+    });
   });
 
   // Nothing else triggers a scan (the only other entry point is the SPA's
@@ -483,14 +607,18 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // merged registry) — callers use this to decide whether THIS scan turned
   // up something new worth an unprompted canvas render, without conflating
   // it with unrelated workflows some earlier scan already found elsewhere.
-  const scanWorkflowsAndBroadcast = async (root: string): Promise<WorkflowInfo[]> => {
+  const scanWorkflowsAndBroadcast = async (
+    root: string,
+  ): Promise<WorkflowInfo[]> => {
     const found = await workflowRegistry.scan(root);
     workflowsCache = await workflowRegistry.list();
     // Rewrite every open session's context file before broadcasting — a
     // listener reacting to workflows.changed (the SPA, or an agent that
     // happens to re-read the file right then) must never see the
     // notification before the file it describes is actually updated.
-    await Promise.all(sessionManager.list().map((session) => writeSessionContext(session)));
+    await Promise.all(
+      sessionManager.list().map((session) => writeSessionContext(session)),
+    );
     bus.publish({ type: "workflows.changed" });
     return found;
   };
@@ -522,14 +650,18 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     await enrichment.ensureFresh(session, workflowsCache);
   };
   const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
-    await renderCanvasForSession(session, workflowsCache, { preserveExistingOnFailure: true });
+    await renderCanvasForSession(session, workflowsCache, {
+      preserveExistingOnFailure: true,
+    });
     await enrichment.ensureFresh(session, workflowsCache);
   };
 
-  const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch((err: unknown) => {
-    console.error("[harness] initial workflow scan failed:", err);
-    return [] as WorkflowInfo[];
-  });
+  const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch(
+    (err: unknown) => {
+      console.error("[harness] initial workflow scan failed:", err);
+      return [] as WorkflowInfo[];
+    },
+  );
 
   const eventStorePath = options.eventStorePath ?? statePaths.events;
   const eventStore = createEventStore(eventStorePath);
@@ -539,12 +671,17 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // so the sweep's read→filter→rename window never races a concurrent append.
   // Fire-and-forget — a slow FS is no reason to delay server startup.
   const runNdjsonSweep = (): void => {
-    void eventStore.runExclusive(() => sweepNdjson(eventStorePath)).catch((err: unknown) => {
-      console.error("[harness] events.ndjson retention sweep failed:", err);
-    });
+    void eventStore
+      .runExclusive(() => sweepNdjson(eventStorePath))
+      .catch((err: unknown) => {
+        console.error("[harness] events.ndjson retention sweep failed:", err);
+      });
   };
   runNdjsonSweep();
-  const ndjsonRetentionTimer = setInterval(runNdjsonSweep, NDJSON_RETENTION_SWEEP_MS);
+  const ndjsonRetentionTimer = setInterval(
+    runNdjsonSweep,
+    NDJSON_RETENTION_SWEEP_MS,
+  );
   ndjsonRetentionTimer.unref?.();
 
   const harnessVersion = readVersion();
@@ -562,7 +699,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     },
   });
 
-  const resolveIngestSession = (harnessSessionId: string): IngestSessionContext | undefined => {
+  const resolveIngestSession = (
+    harnessSessionId: string,
+  ): IngestSessionContext | undefined => {
     const session = sessionManager.get(harnessSessionId);
     if (!session) return undefined;
     return {
@@ -598,10 +737,16 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       sessionManager,
       adapters,
       version: readVersion(),
-      identity: identity ? { userId: identity.userId, organizationName: identity.organizationName } : null,
-      listWorkflows: () => workflowRegistry.list(),
+      identity: identity
+        ? {
+            userId: identity.userId,
+            organizationName: identity.organizationName,
+          }
+        : null,
+      listWorkflows: () => workflowRegistry.list().then(enrichWorkflows),
       listMacros: () => DEFAULT_MACROS,
-      findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
+      findWorkflow: (workflowPath) =>
+        workflowsCache.find((w) => w.path === workflowPath) ?? null,
       writeWorkspaceContext: writeSessionContext,
       renderCanvas,
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
@@ -617,10 +762,14 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
             if (session) return autoRenderCanvas(session);
           })
           .catch((err: unknown) => {
-            console.error("[harness] workflow scan on session create failed:", err);
+            console.error(
+              "[harness] workflow scan on session create failed:",
+              err,
+            );
           });
       },
       launchDir,
+      agentsBaseUrl: resolveAgentsBaseUrl(),
       availableHarnesses: options.availableHarnesses,
       listTasks: () => taskManager.list(),
       firstRun: options.firstRun,
@@ -650,15 +799,34 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       listWorkflows: () => workflowsCache,
     }),
   );
+  // Wrap the registry so GET /api/workflows also returns enriched slugs —
+  // the same enrichWorkflows pass that /api/state uses above. Only `list()` is
+  // wrapped; scan/connect write through to the real registry untouched. Typed
+  // as WorkflowRegistryLike so this wrapper needs no unsafe cast.
+  const enrichedWorkflowRegistry: WorkflowRegistryLike = {
+    list: () => workflowRegistry.list().then(enrichWorkflows),
+    scan: (root: string) => workflowRegistry.scan(root),
+    connectPath: (inputPath: string) => workflowRegistry.connectPath(inputPath),
+  };
   app.use(
-    createWorkflowsRouter(workflowRegistry),
+    createRunsRouter({
+      apiKey: identity?.apiKey ?? null,
+      baseUrl: resolveAgentsBaseUrl(),
+      coreBaseUrl: resolveCoreBaseUrl(),
+    }),
+  );
+  app.use(
+    createWorkflowsRouter(enrichedWorkflowRegistry),
     createFsRouter(),
     createSkillsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
-      findWorkflow: (workflowPath) => workflowsCache.find((w) => w.path === workflowPath) ?? null,
-      getSessionCwd: (harnessSessionId) => sessionManager.get(harnessSessionId)?.cwd ?? null,
-      getBoundWorkflowPath: (harnessSessionId) => sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
+      findWorkflow: (workflowPath) =>
+        workflowsCache.find((w) => w.path === workflowPath) ?? null,
+      getSessionCwd: (harnessSessionId) =>
+        sessionManager.get(harnessSessionId)?.cwd ?? null,
+      getBoundWorkflowPath: (harnessSessionId) =>
+        sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
       // The visualize macro is a FORCE refresh, not a plain re-render:
       // invalidate the extraction + enrichment caches, re-render the base
       // instantly, re-spawn the enrichment task. Its refusals map to the
@@ -673,7 +841,12 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
         // bracketed paste and never submits.
         await sessionManager.submitInput(harnessSessionId, text, submit);
       },
-      runBackgroundTask: async (harnessSessionId, macro, prompt, workflowPath) => {
+      runBackgroundTask: async (
+        harnessSessionId,
+        macro,
+        prompt,
+        workflowPath,
+      ) => {
         // The router already 404'd on an unknown session (getSessionCwd),
         // so the session is present here; its harness kind decides whether
         // a headless run is even possible (TaskNotSupportedError → 400).
@@ -726,10 +899,14 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       if (typeof toolInput === "string") {
         portDetector.feed(toolInput, event.harnessSessionId);
         portDetector.flush(event.harnessSessionId);
+        executionDetector.feed(toolInput, event.harnessSessionId);
+        executionDetector.flush(event.harnessSessionId);
       }
       if (typeof toolResponseSummary === "string") {
         portDetector.feed(toolResponseSummary, event.harnessSessionId);
         portDetector.flush(event.harnessSessionId);
+        executionDetector.feed(toolResponseSummary, event.harnessSessionId);
+        executionDetector.flush(event.harnessSessionId);
       }
     },
     onError: (err) => console.error("[harness] ingest processing error:", err),
@@ -749,13 +926,19 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   // format has no line of its own for, and stop.
   const codexTailers = new Map<string, CodexTailerHandle>();
 
-  async function discoverCodexRolloutPath(session: HarnessSession): Promise<string | null> {
+  async function discoverCodexRolloutPath(
+    session: HarnessSession,
+  ): Promise<string | null> {
     const deadline = Date.now() + CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS;
     const sinceMs = Date.parse(session.createdAt);
     for (;;) {
       const found = await findRolloutFile(
         session.agentSessionId
-          ? { cwd: session.cwd, agentSessionId: session.agentSessionId, homeDir: options.codexHomeDir }
+          ? {
+              cwd: session.cwd,
+              agentSessionId: session.agentSessionId,
+              homeDir: options.codexHomeDir,
+            }
           : {
               cwd: session.cwd,
               sinceMs: Number.isNaN(sinceMs) ? undefined : sinceMs,
@@ -764,7 +947,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       );
       if (found) return found;
       if (Date.now() >= deadline) return null;
-      await new Promise((resolve) => setTimeout(resolve, CODEX_ROLLOUT_DISCOVERY_POLL_MS));
+      await new Promise((resolve) =>
+        setTimeout(resolve, CODEX_ROLLOUT_DISCOVERY_POLL_MS),
+      );
     }
   }
 
@@ -795,12 +980,19 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       // real prior history that should stay unemitted.
       startFromBeginning: !session.agentSessionId,
       onEvent: (hookEvent, payload) => {
-        const body: IngestRequestBody = { hookEvent, harnessSessionId, payload };
-        void processIngest(body, ingestDeps, seqCounter).catch((err: unknown) => {
-          console.error("[harness] codex tailer ingest error:", err);
-        });
+        const body: IngestRequestBody = {
+          hookEvent,
+          harnessSessionId,
+          payload,
+        };
+        void processIngest(body, ingestDeps, seqCounter).catch(
+          (err: unknown) => {
+            console.error("[harness] codex tailer ingest error:", err);
+          },
+        );
       },
-      onError: (err) => console.error("[harness] codex tailer parse error:", err),
+      onError: (err) =>
+        console.error("[harness] codex tailer parse error:", err),
     });
     codexTailers.set(harnessSessionId, tailer);
   }
@@ -820,7 +1012,11 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     } else if (session.status === "exited") {
       const tailer = codexTailers.get(session.id);
       if (tailer) {
-        tailer.emitSessionEnd(session.exitCode != null ? `pty exited (code ${session.exitCode})` : undefined);
+        tailer.emitSessionEnd(
+          session.exitCode != null
+            ? `pty exited (code ${session.exitCode})`
+            : undefined,
+        );
         codexTailers.delete(session.id);
       }
     }
@@ -831,7 +1027,9 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   app.use(
     createCanvasRouter((harnessSessionId) => {
       const session = sessionManager.get(harnessSessionId);
-      return session ? { cwd: session.cwd, boundWorkflowPath: session.boundWorkflowPath } : undefined;
+      return session
+        ? { cwd: session.cwd, boundWorkflowPath: session.boundWorkflowPath }
+        : undefined;
     }),
   );
 
@@ -840,10 +1038,17 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
   app.use(createStaticRouter(webDir));
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error("[harness] unhandled request error:", err);
-    res.status(500).json({ error: "internal error" });
-  });
+  app.use(
+    (
+      err: unknown,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      console.error("[harness] unhandled request error:", err);
+      res.status(500).json({ error: "internal error" });
+    },
+  );
 
   const httpServer: HttpServer = createHttpServer(app);
 
@@ -853,7 +1058,10 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
     {
       path: "/ws/terminal",
       wss: terminalWss,
-      onConnection: createTerminalWebSocketHandler(sessionManager, options.bootToken),
+      onConnection: createTerminalWebSocketHandler(
+        sessionManager,
+        options.bootToken,
+      ),
     },
     {
       path: "/ws/events",
@@ -891,7 +1099,8 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
   }
 
   const address = httpServer.address();
-  const actualPort = typeof address === "object" && address ? address.port : options.port;
+  const actualPort =
+    typeof address === "object" && address ? address.port : options.port;
   // Covers the ephemeral `port: 0` case (tests) where `options.port` above
   // was 0 and therefore never a real port to exclude — the actual bound
   // port is only known now.
@@ -919,7 +1128,10 @@ export const startServer = async (options: HarnessServerOptions): Promise<Harnes
       // itself is bounded (KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS
       // = 2500ms); the outer timeout here is a final safety net above that.
       const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
-      const killsSettled = Promise.all([sessionManager.killAll(), taskManager.killAll()]);
+      const killsSettled = Promise.all([
+        sessionManager.killAll(),
+        taskManager.killAll(),
+      ]);
       let shutdownTimerHandle: ReturnType<typeof setTimeout> | undefined;
       const shutdownTimeout = new Promise<void>((resolve) => {
         shutdownTimerHandle = setTimeout(resolve, SHUTDOWN_KILL_TIMEOUT_MS);
