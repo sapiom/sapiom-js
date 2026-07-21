@@ -31,7 +31,7 @@ describe("createDefinitionSlugResolver", () => {
   it("resolves a definitionId to its slug on a 200 response", async () => {
     const fetchImpl = makeFetch(200, {
       id: "188",
-      slug: "ic-diligence-orchestrator",
+      slug: "lease-abstractor",
       name: "IC Diligence",
     });
     const resolver = createDefinitionSlugResolver({
@@ -41,7 +41,7 @@ describe("createDefinitionSlugResolver", () => {
 
     const slug = await resolver.resolve("188");
 
-    expect(slug).toBe("ic-diligence-orchestrator");
+    expect(slug).toBe("lease-abstractor");
   });
 
   it("calls the correct URL with the api key header", async () => {

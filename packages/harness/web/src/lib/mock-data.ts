@@ -157,7 +157,7 @@ export const MOCK_WORKFLOWS: WorkflowInfo[] = [
     name: "leasing",
     path: "/Users/demo/acme-app/leasing",
     definitionId: 4821,
-    definitionSlug: "ic-diligence-orchestrator",
+    definitionSlug: "lease-abstractor",
     source: "scan",
   },
   {

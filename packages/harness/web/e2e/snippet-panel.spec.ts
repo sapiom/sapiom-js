@@ -2,7 +2,7 @@
  * F1 "Trigger from your code" snippet panel — mock-mode UI tests.
  *
  * Fixtures (from mock-data.ts):
- *   - "leasing"  → deployed (definitionId: 4821, definitionSlug: "ic-diligence-orchestrator")
+ *   - "leasing"  → deployed (definitionId: 4821, definitionSlug: "lease-abstractor")
  *   - "rfq"      → undeployed (definitionId: null, definitionSlug: null)
  *   - "onboarding-flow" → deployed (definitionId: 9001, definitionSlug: "onboarding-flow")
  *   - "claims-triage" → deployed but slug unresolved (definitionId: 7314,
@@ -63,7 +63,7 @@ test.describe("TypeScript tab (default)", () => {
 
     // Content assertions.
     await expect(code).toContainText("agents.run({");
-    await expect(code).toContainText('definition: "ic-diligence-orchestrator"');
+    await expect(code).toContainText('definition: "lease-abstractor"');
   });
 
   test("TypeScript snippet does NOT contain forbidden patterns", async ({
@@ -95,7 +95,7 @@ test.describe("cURL tab", () => {
 
     const code = panel.getByTestId("snippet-code");
     await expect(code).toContainText(
-      "POST https://tools.sapiom.ai/agents/v1/definitions/ic-diligence-orchestrator/executions",
+      "POST https://tools.sapiom.ai/agents/v1/definitions/lease-abstractor/executions",
     );
     await expect(code).toContainText("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
   });
@@ -116,7 +116,7 @@ test.describe("cURL tab", () => {
 test.describe("slug (read-only)", () => {
   test("shows the deployed agent's slug", async ({ page }) => {
     await expect(page.getByTestId("snippet-slug")).toHaveText(
-      "ic-diligence-orchestrator",
+      "lease-abstractor",
     );
   });
 
@@ -131,7 +131,7 @@ test.describe("slug (read-only)", () => {
     page,
   }) => {
     await expect(page.getByTestId("snippet-slug")).toHaveText(
-      "ic-diligence-orchestrator",
+      "lease-abstractor",
     );
     // onboarding-flow is a second DEPLOYED fixture — the panel must reflect its
     // slug, not keep leasing's.
@@ -182,7 +182,7 @@ test.describe("copy button", () => {
       navigator.clipboard.readText(),
     );
     expect(clipboardText).toContain("agents.run");
-    expect(clipboardText).toContain("ic-diligence-orchestrator");
+    expect(clipboardText).toContain("lease-abstractor");
   });
 
   test("copy button writes the cURL snippet to the clipboard when on the cURL tab", async ({
@@ -201,7 +201,7 @@ test.describe("copy button", () => {
       navigator.clipboard.readText(),
     );
     expect(clipboardText).toContain("curl -X POST");
-    expect(clipboardText).toContain("ic-diligence-orchestrator");
+    expect(clipboardText).toContain("lease-abstractor");
     expect(clipboardText).toContain("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
   });
 });
@@ -223,7 +223,7 @@ test.describe("slug fallback when the deployment slug is unresolved", () => {
   }) => {
     // Resolved slug (leasing, the default binding) — no note.
     await expect(page.getByTestId("snippet-slug")).toHaveText(
-      "ic-diligence-orchestrator",
+      "lease-abstractor",
     );
     await expect(page.getByTestId("snippet-slug-inferred")).toHaveCount(0);
 
