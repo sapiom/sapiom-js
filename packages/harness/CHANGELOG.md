@@ -1,5 +1,18 @@
 # @sapiom/harness
 
+## 0.1.5
+
+### Patch Changes
+
+- 5752434: Show live run status on the canvas step graph itself — each step node lights up running/passed/failed with latency while a run executes, and the header badge switches to running/testing — replacing the separate status panel.
+- 5752434: Show per-step and total run cost (in credits) on the live canvas — total at the top, per-step in the step panel — and include cost in the debug-macro context.
+- 5752434: Show the live run canvas for runs started via the agent tooling, not just the CLI. The run detector now recognizes the run tool's `executionId` result in addition to the CLI's start line, so pressing Prod Run lights up the live step graph. Also stop polling a run whose state can't be fetched after repeated attempts, so a stale or malformed id can't poll indefinitely.
+- 5752434: Show a live step graph on the canvas while a deployed run executes — steps update from running to passed/failed with latency, driven by the run-state poll loop.
+- 5752434: Add a harness endpoint that reports a deployed run's live per-step state (status, latency, errors, logs) so the canvas can show progress during a run. The Sapiom credential stays server-side.
+- 5752434: Make the deployed-agent trigger snippet resilient when the agent's slug can't be resolved from the deployment. The panel now falls back to the project name (and flags it as inferred so you can verify) instead of showing a fill-in placeholder in the read-only slug field, and it targets the configured Agents API host so the copy-paste call reaches the same environment the agent was deployed to.
+- 5752434: Click a step on the live canvas to see its status, latency, and logs, and run debug macros that hand the step's logs to your coding agent — plus a free-form ask.
+- 5752434: Add the web poll loop that fetches a run's live state during execution — polling on a fixed cadence, stopping when the run finishes, and pausing while the tab is hidden.
+
 ## 0.1.4
 
 ### Patch Changes
