@@ -43,6 +43,10 @@ import {
 
 import { resolveCoreBaseUrl } from "../core/definition-slug-resolver.js";
 import type { RunLocalRequest } from "../core/run-local-bootstrap.js";
+import {
+  type ApiKeyProvider,
+  staticApiKeyProvider,
+} from "../core/api-key-provider.js";
 
 /**
  * A registered workflow the actions router can act on — the subset of
@@ -159,8 +163,16 @@ function parseRunLocalBody(body: unknown): RunLocalRequest | null {
 }
 
 export interface ActionsRouterOpts {
-  /** Sapiom API key for the workflows surface; null when unauthenticated. */
-  apiKey: string | null;
+  /**
+   * Sapiom credential the deploy/prod-run actions authenticate with. Accepts
+   * either a plain `string | null` (the boot-time key) or an
+   * {@link ApiKeyProvider}; pass a provider — exactly like
+   * {@link createRunsRouter} — so a rejected key can refresh + retry and so each
+   * request reads the current key rather than a boot-time snapshot. This is the
+   * API key (`sk_…`), NOT the local boot token. `null` (or a provider whose
+   * `getKey()` is null) means the harness is not signed in.
+   */
+  apiKey: string | null | ApiKeyProvider;
   /**
    * Backend host for @sapiom/agent-core's GatewayClient (the CORE surface —
    * `/v1/workflows` is appended by the client). Resolved from env by default.
@@ -218,7 +230,6 @@ function toDeployErrorEvent(
       phase: "error",
       code: err.code,
       message: err.message,
-      ...(err.hint ? { hint: err.hint } : {}),
     };
   }
   return {
@@ -226,6 +237,51 @@ function toDeployErrorEvent(
     code: "UNKNOWN",
     message: err instanceof Error ? err.message : String(err),
   };
+}
+
+/**
+ * Whether a thrown value is an upstream "the API key was rejected" — worth one
+ * refresh + retry before giving up. agent-core maps a 401/403 to an
+ * {@link AgentOperationError} with `code: "HTTP_401" | "HTTP_403"` (see
+ * client.ts), so we match on that code rather than an HTTP status here — the
+ * error-code analogue of run-state.ts's `isAuthRejection(status)`.
+ */
+function isAuthRejectionError(err: unknown): boolean {
+  return (
+    err instanceof AgentOperationError &&
+    (err.code === "HTTP_401" || err.code === "HTTP_403")
+  );
+}
+
+/**
+ * Run a core operation with the current API key and, when it fails with an auth
+ * rejection, refresh the shared credential store once and retry with the newer
+ * key — the deploy/prod-run analogue of run-state.ts's refresh-on-401 recovery.
+ *
+ * `invoke` is handed a freshly-minted client for the key in force (the boot key
+ * on the first attempt, the refreshed key on the retry) so a rotated/re-logged-in
+ * credential recovers in place instead of every action locking on the stale key.
+ * Retries only when refresh actually yields a *different, non-null* key —
+ * otherwise the original error is re-thrown unchanged (no wasted call, and the
+ * caller's error mapping sees the real auth failure).
+ *
+ * The caller has already checked `provider.getKey()` is non-null, so `apiKey!`
+ * here is safe; a concurrent sign-out would surface as a normal auth error.
+ */
+async function withKeyRefreshRetry<T>(
+  provider: ApiKeyProvider,
+  createClientFor: (apiKey: string) => ReturnType<typeof createClient>,
+  invoke: (client: ReturnType<typeof createClient>) => Promise<T>,
+): Promise<T> {
+  const apiKey = provider.getKey();
+  try {
+    return await invoke(createClientFor(apiKey!));
+  } catch (err) {
+    if (!isAuthRejectionError(err)) throw err;
+    const refreshed = await provider.refresh();
+    if (!refreshed || refreshed === apiKey) throw err;
+    return invoke(createClientFor(refreshed));
+  }
 }
 
 /**
@@ -242,6 +298,17 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   const deps: ActionsCoreDeps = { ...DEFAULT_CORE_DEPS, ...opts.coreDeps };
   const baseUrl = opts.coreBaseUrl ?? resolveCoreBaseUrl();
   const runLocalSpawn = opts.runLocalSpawn ?? defaultRunLocalSpawn;
+  // Normalize to a provider so deploy/prod-run always authenticate with the
+  // held API key and can refresh + retry when that key is rejected — a plain
+  // string|null becomes a no-op static provider (no refresh). Mirrors the runs
+  // router; keeps both action surfaces on the one credential contract.
+  const provider: ApiKeyProvider =
+    opts.apiKey !== null && typeof opts.apiKey === "object"
+      ? opts.apiKey
+      : staticApiKeyProvider(opts.apiKey);
+  /** Mint a core client for a specific key against the resolved core host. */
+  const clientFor = (apiKey: string): ReturnType<typeof createClient> =>
+    deps.createClient({ host: baseUrl, apiKey });
 
   /**
    * POST /api/workflows/:id/deploy
@@ -264,7 +331,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       res.status(400).json({ error: "workflow id is required" });
       return;
     }
-    if (!opts.apiKey) {
+    if (!provider.getKey()) {
       res.status(503).json({ error: "harness is not signed in to Sapiom" });
       return;
     }
@@ -295,10 +362,14 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
     write({ phase: "building", definitionId });
 
     try {
-      const client = deps.createClient({ host: baseUrl, apiKey: opts.apiKey });
-      const result: DeployResult = await deps.deploy(
-        { projectDir: workflow.path, definitionId },
-        client,
+      // Auth against the live key, refreshing + retrying once on a rejected key
+      // (same recovery the runs router gets). The building/terminal streaming
+      // shape is unchanged — the retry is transparent to the NDJSON stream.
+      const result: DeployResult = await withKeyRefreshRetry(
+        provider,
+        clientFor,
+        (client) =>
+          deps.deploy({ projectDir: workflow.path, definitionId }, client),
       );
       write({
         phase: "ready",
@@ -327,7 +398,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
    * 503  harness is not signed in to Sapiom
    */
   router.post("/api/runs", async (req, res) => {
-    if (!opts.apiKey) {
+    if (!provider.getKey()) {
       res.status(503).json({ error: "harness is not signed in to Sapiom" });
       return;
     }
@@ -343,10 +414,12 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
     }
 
     try {
-      const client = deps.createClient({ host: baseUrl, apiKey: opts.apiKey });
-      const result: RunResult = await deps.run(
-        { definitionId, input: body.input },
-        client,
+      // Auth against the live key, refreshing + retrying once on a rejected key
+      // (same recovery the runs router gets), then return { executionId }.
+      const result: RunResult = await withKeyRefreshRetry(
+        provider,
+        clientFor,
+        (client) => deps.run({ definitionId, input: body.input }, client),
       );
       res.json({ executionId: result.executionId });
     } catch (err) {
