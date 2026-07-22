@@ -3,9 +3,12 @@ import type { RefObject } from "react";
 
 interface DismissableOptions {
   onDismiss: () => void;
-  /** Wraps the trigger and the panel — a mousedown anywhere outside it dismisses. */
+  /** The panel itself (or a wrapper around trigger + panel): a mousedown
+   *  anywhere outside it dismisses. */
   containerRef: RefObject<HTMLElement | null>;
-  /** Focus returns here on Escape, so keyboard users aren't dropped on <body>. */
+  /** Focus returns here on Escape. Mousedowns inside it are also ignored,
+   *  so a panel that floats away from its trigger can still be toggled by
+   *  that trigger without dismiss-then-reopen flicker. */
   triggerRef?: RefObject<HTMLElement | null>;
 }
 
@@ -24,9 +27,12 @@ export function useDismissable(open: boolean, { onDismiss, containerRef, trigger
 
     const handleMouseDown = (event: MouseEvent): void => {
       const container = containerRef.current;
-      if (container && event.target instanceof Node && !container.contains(event.target)) {
-        onDismiss();
-      }
+      if (!container || !(event.target instanceof Node)) return;
+      if (container.contains(event.target)) return;
+      // The trigger toggles the panel itself; dismissing here too would close
+      // on mousedown only for the click to immediately reopen it.
+      if (triggerRef?.current?.contains(event.target)) return;
+      onDismiss();
     };
 
     const handleKeyDown = (event: KeyboardEvent): void => {

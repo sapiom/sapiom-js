@@ -14,11 +14,13 @@ function systemPrefersDark(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
 }
 
-/** No stored preference and no dark system signal → light, matching the Sapiom product's own default. */
+/** No stored preference → dark, matching the Harness workspace's default
+ *  (the design-eng skin boots dark like the draft-1 reference; the toggle and
+ *  any stored choice still win). */
 export function getInitialTheme(): Theme {
   const stored = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
   if (stored === "light" || stored === "dark") return stored;
-  return systemPrefersDark() ? "dark" : "light";
+  return "dark";
 }
 
 let current: Theme = getInitialTheme();

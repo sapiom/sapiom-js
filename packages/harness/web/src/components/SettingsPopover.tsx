@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { JSX } from "react";
+import type { AppState } from "@shared/types";
 import { HARNESS_PATHS } from "@shared/types";
 
 import { track } from "../lib/track";
@@ -8,18 +9,26 @@ interface SettingsPopoverProps {
   authenticated: boolean;
   organizationName: string | null;
   telemetryOptIn: boolean;
+  /** How consent was determined - "env-forced-off" locks the toggle. */
+  consentSource?: AppState["consentSource"];
+  /** Which env var forced telemetry off, when consentSource is "env-forced-off". */
+  consentEnvReason?: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
-  onClose: () => void;
 }
 
 export function SettingsPopover({
   authenticated,
   organizationName,
   telemetryOptIn,
+  consentSource,
+  consentEnvReason,
   onToggleTelemetry,
-  onClose,
 }: SettingsPopoverProps): JSX.Element {
   const [busy, setBusy] = useState(false);
+  // An env override outranks any stored preference; flipping the toggle here
+  // would silently lose to it on the next boot, so the control locks instead.
+  const envForced = consentSource === "env-forced-off";
+  const effectiveOptIn = envForced ? false : telemetryOptIn;
 
   const handleToggle = async (): Promise<void> => {
     const next = !telemetryOptIn;
@@ -32,8 +41,10 @@ export function SettingsPopover({
     }
   };
 
+  // No positioned wrapper of its own: the host mounts this inside an
+  // AnchoredPopover carrying the .settings-popover recipe and testid.
   return (
-    <div className="settings-popover" data-testid="settings-popover">
+    <>
       <div className="settings-identity">{authenticated ? (organizationName ?? "Signed in") : "Not signed in"}</div>
 
       <label className="settings-toggle-row">
@@ -41,24 +52,27 @@ export function SettingsPopover({
         <button
           type="button"
           role="switch"
-          aria-checked={telemetryOptIn}
+          aria-checked={effectiveOptIn}
           data-testid="telemetry-toggle"
-          className={"toggle-switch" + (telemetryOptIn ? " is-on" : "")}
-          disabled={busy}
+          className={"toggle-switch" + (effectiveOptIn ? " is-on" : "")}
+          disabled={busy || envForced}
           onClick={() => void handleToggle()}
         >
           <span className="toggle-knob" />
         </button>
       </label>
 
+      {envForced && (
+        <p className="settings-note settings-env-note" data-testid="telemetry-env-note">
+          Analytics is turned off by {consentEnvReason ? `$${consentEnvReason}` : "an environment variable"}. Unset it
+          and restart the Studio server to manage consent here.
+        </p>
+      )}
+
       <p className="settings-note">
         Prompts, tool calls, and session lifecycle events are always written locally to{" "}
         <code>{HARNESS_PATHS.events}</code>. With your consent, they&rsquo;re also sent to Sapiom.
       </p>
-
-      <button className="btn-ghost settings-close" onClick={onClose}>
-        Close
-      </button>
-    </div>
+    </>
   );
 }

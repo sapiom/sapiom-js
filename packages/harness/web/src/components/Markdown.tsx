@@ -138,13 +138,21 @@ export function Markdown({ text }: { text: string }): JSX.Element {
       continue;
     }
 
-    // Paragraph
+    // Paragraph: consecutive non-blank lines join into ONE <p> — a markdown
+    // soft break (single newline) is a line wrap, not a paragraph break.
+    const isBlockStart = (l: string): boolean =>
+      l.startsWith("```") || /^#{1,3}\s+/.test(l) || l.startsWith("> ") || /^[-*+]\s+/.test(l);
+    const paragraphLines: string[] = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) {
+      paragraphLines.push(lines[i]);
+      i++;
+    }
     elements.push(
       <p key={nextKey()} className="chat-paragraph">
-        {renderInline(line)}
+        {renderInline(paragraphLines.join(" "))}
       </p>,
     );
-    i++;
   }
 
   return <>{elements}</>;

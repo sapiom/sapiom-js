@@ -9,9 +9,13 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
+    "useDefineForClassFields": true,
+    "types": ["vite/client", "node"],
     "paths": {
-      "@shared/*": ["../src/shared/*"]
+      "@shared/types": ["./src/lib/harness-types.ts"],
+      "@sapiom/design-system/*": ["./src/styles/ds-neutral/*"]
     }
   },
-  "include": ["src", "../src/shared"]
+  "include": ["src", "vite.config.ts"]
 }

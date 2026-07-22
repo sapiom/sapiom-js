@@ -1,13 +1,8 @@
 import { describe, it, expect } from "vitest";
 
-import {
-  API_KEY_PLACEHOLDER,
-  AUTH_HEADER,
-  DEFAULT_BASE_URL,
-  generateSnippet,
-} from "./generate-snippet.js";
+import { API_KEY_PLACEHOLDER, AUTH_HEADER, DEFAULT_BASE_URL, generateSnippet } from "./generate-snippet";
 
-describe("generateSnippet — TypeScript", () => {
+describe("generateSnippet - TypeScript", () => {
   it("renders the exact SDK snippet with slug + sample input", () => {
     const { typescript } = generateSnippet({
       definition: "daily-digest",
@@ -29,9 +24,7 @@ if (result.status === "completed") {
   });
 
   it("uses a comment placeholder (valid TS) when there is no sample input", () => {
-    expect(generateSnippet({ definition: "x" }).typescript).toContain(
-      "input: { /* your input */ },",
-    );
+    expect(generateSnippet({ definition: "x" }).typescript).toContain("input: { /* your input */ },");
   });
 
   it("treats a null sample the same as an absent one", () => {
@@ -43,9 +36,7 @@ if (result.status === "completed") {
   });
 
   it("quotes the definition slug via JSON so it is always a valid string literal", () => {
-    expect(generateSnippet({ definition: "my-agent" }).typescript).toContain(
-      'definition: "my-agent",',
-    );
+    expect(generateSnippet({ definition: "my-agent" }).typescript).toContain('definition: "my-agent",');
   });
 
   it("re-indents a nested sample so it stays valid TypeScript", () => {
@@ -58,7 +49,7 @@ if (result.status === "completed") {
   });
 });
 
-describe("generateSnippet — cURL", () => {
+describe("generateSnippet - cURL", () => {
   it("renders the exact HTTP snippet with the default base URL", () => {
     const { curl } = generateSnippet({
       definition: "daily-digest",
@@ -87,15 +78,16 @@ describe("generateSnippet — cURL", () => {
     );
   });
 
-  it("POSIX-escapes an apostrophe in a string value so the -d '…' body stays valid shell", () => {
+  it("POSIX-escapes an apostrophe in a string value so the -d '...' body stays valid shell", () => {
     const { curl } = generateSnippet({ definition: "x", inputSample: { name: "O'Brien" } });
-    // Each ' becomes '\'' (close, escaped-quote, reopen) — the exact POSIX-safe
-    // form, so no raw apostrophe survives inside the single-quoted -d arg.
+    // Each ' becomes '\'' (close, escaped-quote, reopen) - the exact
+    // POSIX-safe form, so no raw apostrophe survives inside the single-quoted
+    // -d argument.
     expect(curl).toContain(`-d '{ "input": {"name":"O'\\''Brien"} }'`);
   });
 });
 
-describe("generateSnippet — verified constants (guard against drift)", () => {
+describe("generateSnippet - verified constants (guard against drift)", () => {
   it("exports the ground-truth base URL, auth header, and key placeholder", () => {
     expect(DEFAULT_BASE_URL).toBe("https://tools.sapiom.ai");
     expect(AUTH_HEADER).toBe("x-sapiom-api-key");
@@ -121,10 +113,10 @@ describe("generateSnippet — verified constants (guard against drift)", () => {
 
   it("never emits anything resembling a real key (only the placeholder)", () => {
     const { curl } = generateSnippet({ definition: "x" });
-    // A real Sapiom key would look like sk_… / a long random token; the snippet
-    // must only ever carry the literal placeholder.
+    // A real Sapiom key would look like sk_... / a long random token; the
+    // snippet must only ever carry the literal placeholder.
     expect(curl).not.toMatch(/sk_[A-Za-z0-9]/);
-    // Capture up to the closing quote of the -H "…" argument.
+    // Capture up to the closing quote of the -H "..." argument.
     expect(curl.match(/x-sapiom-api-key: ([^"]+)"/)?.[1]).toBe(API_KEY_PLACEHOLDER);
   });
 });
