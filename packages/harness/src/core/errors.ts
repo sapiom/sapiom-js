@@ -3,8 +3,10 @@
  * so callers can react programmatically to specific failure modes instead of
  * parsing error message strings.
  *
- * HTTP mappings (server/rest.ts, server/macros.ts):
+ * HTTP mappings (server/rest.ts, server/macros.ts, server/workspaces.ts):
  *   UnknownSessionError       → 404
+ *   UnknownWorkspaceError     → 404
+ *   InvalidWorkspaceNameError → 400
  *   SessionNotReadyError      → 409
  *   SessionAlreadyLiveError   → 409
  *   SessionNotResumeableError → 409
@@ -35,6 +37,28 @@ export class HarnessError extends Error {
 export class UnknownSessionError extends HarnessError {
   constructor(id: string) {
     super("UNKNOWN_SESSION", `Unknown session "${id}"`);
+  }
+}
+
+/**
+ * Thrown when a workspace operation references an id that does not exist in
+ * the store (rename/delete/assign/unassign a workspace that was never created
+ * or has been removed). Maps to HTTP 404.
+ */
+export class UnknownWorkspaceError extends HarnessError {
+  constructor(id: string) {
+    super("UNKNOWN_WORKSPACE", `Unknown workspace "${id}"`);
+  }
+}
+
+/**
+ * Thrown when a workspace create/rename is given a name that is empty (or only
+ * whitespace). Names are the user-facing identity of a workspace, so a blank
+ * one is rejected rather than silently coerced. Maps to HTTP 400.
+ */
+export class InvalidWorkspaceNameError extends HarnessError {
+  constructor() {
+    super("INVALID_WORKSPACE_NAME", "Workspace name must be a non-empty string");
   }
 }
 

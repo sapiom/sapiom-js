@@ -27,6 +27,7 @@ describe("resolveStatePaths", () => {
     expect(paths.machineId).toBe(path.join(root, "machine-id"));
     expect(paths.sessions).toBe(path.join(root, "sessions.json"));
     expect(paths.workflows).toBe(path.join(root, "workflows.json"));
+    expect(paths.workspaces).toBe(path.join(root, "workspaces.json"));
     expect(paths.events).toBe(path.join(root, "events.ndjson"));
     expect(paths.settings).toBe(path.join(root, "settings.json"));
     expect(paths.generated).toBe(path.join(root, "generated"));
@@ -39,6 +40,7 @@ describe("resolveStatePaths", () => {
     expect(paths.machineId).toBe("/scratch/state/machine-id");
     expect(paths.sessions).toBe("/scratch/state/sessions.json");
     expect(paths.workflows).toBe("/scratch/state/workflows.json");
+    expect(paths.workspaces).toBe("/scratch/state/workspaces.json");
     expect(paths.events).toBe("/scratch/state/events.ndjson");
     expect(paths.settings).toBe("/scratch/state/settings.json");
     expect(paths.generated).toBe("/scratch/state/generated");

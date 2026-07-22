@@ -22,6 +22,8 @@ export const HARNESS_PATHS = {
   sessions: `${HARNESS_HOME}/sessions.json`,
   /** Workflow registry — WorkflowInfo[] as JSON. */
   workflows: `${HARNESS_HOME}/workflows.json`,
+  /** Persistent, user-owned workspace membership — Workspace[] as JSON. */
+  workspaces: `${HARNESS_HOME}/workspaces.json`,
   /** Local analytics sink (one AnalyticsEvent per line). Always written. */
   events: `${HARNESS_HOME}/events.ndjson`,
   /** User settings (opt-in state, macros overrides). */
@@ -703,6 +705,12 @@ export interface CollectorBatch {
 // GET    /api/workflows                 → WorkflowInfo[]
 // POST   /api/workflows/connect         { path } → WorkflowInfo
 // POST   /api/workflows/scan            { root } → WorkflowInfo[]
+// GET    /api/workspaces                → Workspace[]
+// POST   /api/workspaces                CreateWorkspaceRequest → Workspace
+// PATCH  /api/workspaces/:id            RenameWorkspaceRequest → Workspace
+// DELETE /api/workspaces/:id            → { ok: true }
+// POST   /api/workspaces/:id/agents     WorkspaceAgentRequest → Workspace   (assign)
+// DELETE /api/workspaces/:id/agents     WorkspaceAgentRequest → Workspace   (unassign)
 // GET    /api/macros                    → MacroDef[]
 // POST   /api/macros/:id/run            RunMacroRequest → { ok: true }
 // GET    /api/settings                  → HarnessSettings
@@ -757,6 +765,22 @@ export interface AttachImageResponse {
  *  must be a path already known to the workflow registry (scan/connect). */
 export interface BindWorkflowRequest {
   workflowPath: string | null;
+}
+
+/** `POST /api/workspaces` body — create a workspace with a display name. */
+export interface CreateWorkspaceRequest {
+  name: string;
+}
+
+/** `PATCH /api/workspaces/:id` body — rename a workspace. */
+export interface RenameWorkspaceRequest {
+  name: string;
+}
+
+/** `POST`/`DELETE /api/workspaces/:id/agents` body — assign or unassign an
+ *  agent by its workflow-registry `path` (see {@link Workspace.agentPaths}). */
+export interface WorkspaceAgentRequest {
+  agentPath: string;
 }
 
 /** The trimmed workflow shape embedded in HarnessWorkspaceContext — just
@@ -907,6 +931,33 @@ export interface WorkflowInfo {
   definitionSlug: string | null;
   /** How it entered the registry. */
   source: "scan" | "connect";
+}
+
+/**
+ * A persistent, user-owned group of agents (design.md §4 — the "Workspace"
+ * noun; the rail spine). Membership is **saved and stable**: it is set by the
+ * user (create / rename / assign / unassign) and never recomputed from which
+ * terminals or sessions happen to be open. This is the replacement for the
+ * old cwd-derived bucketing that re-sorted the rail whenever a session opened
+ * or closed.
+ */
+export interface Workspace {
+  /** Stable id (uuid), assigned on create. A rename never changes it. */
+  id: string;
+  /** User-chosen display name. */
+  name: string;
+  /**
+   * Member agents, identified by their workflow-registry `path` (the agent's
+   * project directory — the same stable key {@link WorkflowInfo} is keyed by).
+   * Order is membership (assignment) order; each path appears at most once.
+   * A path that isn't currently in the registry is still a valid member — the
+   * rail shows it as broken rather than silently dropping it.
+   */
+  agentPaths: string[];
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+  /** ISO-8601 timestamp of the last mutation (rename / assign / unassign). */
+  updatedAt: string;
 }
 
 // ---------------------------------------------------------------------------
