@@ -460,6 +460,17 @@ export interface StepView {
   /** Tail-preserving, character-capped executor log text — the debug-macro
    *  context source (trimmed further before injection). Absent when no logs. */
   logSlice?: string;
+  /** The resolved input the step actually ran on, when the source carries it
+   *  (populated by local stub runs today; a production run projection may
+   *  expose it in future). Any JSON shape. ABSENT — never `null`/`{}` — when
+   *  the source has no per-step input, so the inspector shows nothing rather
+   *  than fabricating a payload. */
+  input?: unknown;
+  /** The value the step produced, on the same honest-absence terms as
+   *  {@link StepView.input}: present only when the source captured a real
+   *  output, absent otherwise (a still-running or output-less step shows no
+   *  Output block). Any JSON shape. */
+  output?: unknown;
 }
 
 /** A whole run as the canvas renders it. `status` is the run lifecycle folded

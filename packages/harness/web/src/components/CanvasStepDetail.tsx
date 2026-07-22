@@ -3,6 +3,7 @@ import type { RunView, StepView, WorkflowInfo } from "@shared/types";
 
 import type { CanvasGraph, CanvasGraphEdge, CanvasGraphNode } from "../lib/canvas-graph";
 import { formatTimeout, stepFacts, stepInputFields } from "../lib/canvas-graph";
+import { formatPayload } from "../lib/format-payload";
 import { formatCostExact, runSummaryLabel } from "../lib/run-cost";
 import type { RunTarget } from "../lib/use-harness-state";
 import { Icon } from "./Icon";
@@ -433,6 +434,24 @@ export function CanvasStepDetail({
                 <span className="canvas-input-label">Cost</span>
                 <span className="canvas-detail-timeout">{formatCostExact(runStep.costUsd)}</span>
               </div>
+            )}
+            {/* Real per-step IO — the value this step actually ran on and what
+                it produced. Gated on `!== undefined` (not truthiness) so an
+                honest `null`/`false`/`0`/`""` still renders; a step that never
+                carried an input/output shows no block at all (no fabrication).
+                Capability, not model: these are the step's own payloads, with
+                no provider/model surfaced anywhere. */}
+            {runStep.input !== undefined && (
+              <details className="canvas-run-logs" data-testid={`canvas-detail-run-input-${node.id}`}>
+                <summary>Input</summary>
+                <pre>{formatPayload(runStep.input)}</pre>
+              </details>
+            )}
+            {runStep.output !== undefined && (
+              <details className="canvas-run-logs" data-testid={`canvas-detail-run-output-${node.id}`}>
+                <summary>Output</summary>
+                <pre>{formatPayload(runStep.output)}</pre>
+              </details>
             )}
             {runStep.error && <pre className="canvas-run-error">{runStep.error}</pre>}
             {runStep.logSlice && (
