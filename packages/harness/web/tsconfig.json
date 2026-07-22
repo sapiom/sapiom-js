@@ -14,6 +14,7 @@
     "types": ["vite/client", "node"],
     "paths": {
       "@shared/types": ["../src/shared/types.ts"],
+      "@shared/render-local-run": ["../src/core/render-local-run.ts"],
       "@sapiom/design-system/*": ["./src/styles/ds-neutral/*"]
     }
   },

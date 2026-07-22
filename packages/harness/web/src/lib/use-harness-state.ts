@@ -14,9 +14,19 @@ import type {
 
 import type { HarnessEntry } from "@shared/types";
 
-import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse, type HarnessApi } from "./api";
+import {
+  ApiError,
+  boundWorkflowPathOf,
+  createApi,
+  getBootToken,
+  type FsListResponse,
+  type HarnessApi,
+  type RunLocalLine,
+} from "./api";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { subscribeEvents } from "./events";
+import { renderLocalRun } from "@shared/render-local-run";
+import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 const api = createApi();
 
@@ -92,6 +102,16 @@ export interface HarnessStateHook {
   bindWorkflow: (sessionId: string, workflowPath: string | null) => Promise<void>;
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
+  /**
+   * Runs the workflow at `sourceDir` OFFLINE against stub capabilities and
+   * streams the result into the SAME run store the prod poller feeds — so the
+   * click-into-step inspector renders a local stub run exactly as it renders a
+   * prod run (per-step logs + pass/fail + IO), just `target: "local"` (free,
+   * untimed). Resolves when the stream ends; a failed *run* is a normal
+   * terminal state (surfaced in the run), not a rejection. Fully offline: no
+   * key, no cost, works signed-out.
+   */
+  runLocal: (sessionId: string, sourceDir: string, input?: unknown) => Promise<void>;
   /**
    * Submits text to a session's pty via POST /api/sessions/:id/input.
    * Throws `ApiError` on HTTP errors — callers handle 409 (session not ready)
@@ -251,6 +271,92 @@ export function useHarnessState(): HarnessStateHook {
     void poll();
     runPollers.current.set(sessionId, setInterval(() => void poll(), 2000));
   }, []);
+
+  // Monotonic counter for synthesizing local-run execution ids. A local run has
+  // no server-issued id (it never touches the backend), so the store mints one;
+  // it MUST contain "local" so every cost/target check that keys off the id
+  // (e.g. the mock run-state convention) reads it as free.
+  const localRunSeq = useRef(0);
+
+  /**
+   * Run an offline stub run and stream it into the shared run store. The NDJSON
+   * arrives per-step: each {@link LocalStepTrace} line appends to a local buffer
+   * that is re-mapped through `renderLocalRun` and written to `runsByExecution`,
+   * so the inspector lights up step-by-step (same store, same shape, same
+   * inspector as a prod run). The terminal `summary`/`error` line supplies the
+   * run's final outcome; a run that could not be invoked becomes a single
+   * failed step so the failure is still visible rather than silent.
+   */
+  const runLocal = useCallback(
+    async (sessionId: string, sourceDir: string, input?: unknown): Promise<void> => {
+      localRunSeq.current += 1;
+      const executionId = `local-${Date.now()}-${localRunSeq.current}`;
+      // Attribution + observation facts captured now, exactly like a prod run
+      // (see startRunPolling) — a later re-bind must not re-attribute this run.
+      const workflowPath = boundWorkflowPathOf(sessionsRef.current.find((s) => s.id === sessionId));
+      const observedAt = Date.now();
+      const traces: LocalStepTrace[] = [];
+      let outcome: LocalRunOutcome | undefined;
+
+      // Register the run so runsBySession surfaces it, and drop any explicit run
+      // pick so the session follows this fresh run (mirrors startRunPolling).
+      setRunIdsBySession((prev) => {
+        const ids = prev.get(sessionId) ?? [];
+        if (ids.includes(executionId)) return prev;
+        return new Map(prev).set(sessionId, [...ids, executionId]);
+      });
+      setPickedRunBySession((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+
+      const publish = (): void => {
+        const run = renderLocalRun(traces, { executionId, outcome });
+        setRunsByExecution((prev) =>
+          new Map(prev).set(executionId, { run, target: "local", workflowPath, observedAt }),
+        );
+      };
+      // Seed an empty running RunView up front so the Steps tab switches to this
+      // run immediately, before the first trace line lands.
+      publish();
+
+      const onLine = (line: RunLocalLine): void => {
+        if (line.kind === "summary") {
+          outcome = line.outcome;
+        } else if (line.kind === "error") {
+          // The run could not be invoked (bad project / stub file). Represent it
+          // as a failed run carrying one failed step so the inspector shows the
+          // reason instead of an empty, silently-failed run.
+          outcome = "failed";
+          traces.push({
+            step: "run-local",
+            attempt: 1,
+            input,
+            status: "threw",
+            error: { name: "RunLocalError", message: line.error },
+            logs: [],
+          });
+        } else {
+          // A per-step trace line (no `kind`).
+          traces.push(line);
+        }
+        publish();
+      };
+
+      try {
+        await api.runLocal({ sourceDir, input }, onLine);
+      } catch (err) {
+        // Transport failure (the stream itself broke) — mark the run failed so
+        // it doesn't spin as "running" forever, and toast the reason.
+        outcome = "failed";
+        publish();
+        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      }
+    },
+    [],
+  );
 
   const selectRun = useCallback(
     (sessionId: string, executionId: string) => {
@@ -649,6 +755,7 @@ export function useHarnessState(): HarnessStateHook {
     bindWorkflow,
     updateSettings,
     runMacro,
+    runLocal,
     injectInput,
     useSkill,
     showToast,

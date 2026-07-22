@@ -313,6 +313,56 @@ describe("renderRunState — log slice", () => {
   });
 });
 
+describe("renderRunState — per-step input/output", () => {
+  it("surfaces a real per-step input", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ input: { topic: "otters" } })],
+    });
+    expect(view.steps[0].input).toEqual({ topic: "otters" });
+  });
+
+  it("surfaces a real per-step output", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ output: { facts: 3 } })],
+    });
+    expect(view.steps[0].output).toEqual({ facts: 3 });
+  });
+
+  it("omits input on honest absence (the read carried none → decoded null)", () => {
+    // decodeStep collapses a missing input to null; null is the absence
+    // sentinel and must render as ABSENT, not a fabricated `null` payload.
+    const view = render({ id: "e1", status: "completed", steps: [step({})] });
+    expect(view.steps[0]).not.toHaveProperty("input");
+  });
+
+  it("omits output on honest absence (decoded null)", () => {
+    const view = render({ id: "e1", status: "completed", steps: [step({})] });
+    expect(view.steps[0]).not.toHaveProperty("output");
+  });
+
+  it("keeps a falsy-but-real input (0) rather than dropping it", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ input: 0 })],
+    });
+    expect(view.steps[0].input).toBe(0);
+  });
+
+  it("keeps a falsy-but-real output (false) rather than dropping it", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ output: false })],
+    });
+    expect(view.steps[0].output).toBe(false);
+  });
+});
+
 describe("renderRunState — whole run", () => {
   it("preserves step order", () => {
     const view = render({

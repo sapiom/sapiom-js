@@ -28,6 +28,8 @@ export default defineConfig({
   test: {
     include: [
       "src/core/render-run-state.test.ts",
+      "src/core/render-local-run.test.ts",
+      "src/core/render-log-slice.test.ts",
       "web/src/lib/generate-snippet.test.ts",
       "web/src/lib/extract-step-context.test.ts",
     ],
