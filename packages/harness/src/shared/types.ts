@@ -461,10 +461,10 @@ export interface StepView {
    *  context source (trimmed further before injection). Absent when no logs. */
   logSlice?: string;
   /** The resolved input the step actually ran on, when the source carries it
-   *  (local-stub runs via `renderLocalRun` today; prod when the projection
-   *  ever exposes it). Any JSON shape. ABSENT — never `null`/`{}` — when the
-   *  source has no per-step input, so the inspector shows nothing rather than
-   *  fabricating a payload. */
+   *  (populated by local stub runs today; a production run projection may
+   *  expose it in future). Any JSON shape. ABSENT — never `null`/`{}` — when
+   *  the source has no per-step input, so the inspector shows nothing rather
+   *  than fabricating a payload. */
   input?: unknown;
   /** The value the step produced, on the same honest-absence terms as
    *  {@link StepView.input}: present only when the source captured a real

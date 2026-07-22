@@ -58,10 +58,11 @@ describe("formatPayload", () => {
     expect(formatPayload(10n)).toBe("10");
   });
 
-  it("does not render the literal text 'undefined' for a value with no JSON form", () => {
-    // Defensive: callers gate on `!== undefined`, but a function (no JSON
-    // representation) must not leak the literal string "undefined".
+  it("falls back to String() for a value with no JSON form, never the text 'undefined'", () => {
+    // JSON.stringify returns `undefined` for a function; the `?? String(value)`
+    // fallback must kick in. Asserting the exact String() form (not merely
+    // "!== 'undefined'") catches a dropped fallback branch.
     const fn = (): number => 1;
-    expect(formatPayload(fn)).not.toBe("undefined");
+    expect(formatPayload(fn)).toBe(String(fn));
   });
 });
