@@ -85,6 +85,7 @@ import {
   resolveAgentsBaseUrl,
 } from "../core/definition-slug-resolver.js";
 import { createBootTokenMiddleware } from "./auth.js";
+import { createApiKeyProvider } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -296,6 +297,14 @@ export const startServer = async (
 ): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
   const identity = options.identity ?? null;
+  // The single source of truth for the Sapiom API key (`sk_…`) that Studio
+  // actions authenticate with — distinct from the per-boot boot token that only
+  // gates the local /api surface. Seeded from the boot-time identity; its
+  // refresh() re-reads the shared credential store so a rotated/re-logged-in key
+  // recovers a 401 in place instead of locking the Studio.
+  const apiKeyProvider = createApiKeyProvider(identity?.apiKey ?? null, {
+    environment: process.env.SAPIOM_ENVIRONMENT,
+  });
   const statePaths = resolveStatePaths(options.stateRoot);
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
@@ -814,7 +823,9 @@ export const startServer = async (
   };
   app.use(
     createRunsRouter({
-      apiKey: identity?.apiKey ?? null,
+      // Pass the provider (not a static key) so the live-status path can refresh
+      // the API key on a 401 and retry, recovering instead of locking.
+      apiKey: apiKeyProvider,
       baseUrl: resolveAgentsBaseUrl(),
     }),
   );
