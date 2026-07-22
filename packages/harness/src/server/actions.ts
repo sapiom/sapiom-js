@@ -30,7 +30,7 @@ import {
   type SapiomConfig,
 } from "@sapiom/agent-core";
 
-import { resolveCoreBaseUrl } from "../core/run-spend.js";
+import { resolveCoreBaseUrl } from "../core/definition-slug-resolver.js";
 
 /**
  * A registered workflow the actions router can act on — the subset of
