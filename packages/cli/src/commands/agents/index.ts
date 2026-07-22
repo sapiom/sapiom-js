@@ -58,6 +58,9 @@ export function registerAgentsCommands(program: Command): void {
     json(group.command('logs [executionId]').description('Inspect an execution, a build (--build), or recent runs.')),
   )
     .option('--build <buildRunId>', 'inspect a build instead of an execution')
+    .option('-f, --follow', 'stream live updates and re-render until the run reaches a terminal status')
+    .option('--watch', 'alias for --follow')
+    .option('--verbose', 'show step errors, timings, and dispatch details')
     .action(action(runLogs));
 
   withHostFlags(json(group.command('signal <executionId>').description('Resume a paused execution.')))
