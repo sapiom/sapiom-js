@@ -824,7 +824,8 @@ export const startServer = async (
   app.use(
     createActionsRouter({
       apiKey: identity?.apiKey ?? null,
-      coreBaseUrl: resolveCoreBaseUrl(),
+      // coreBaseUrl omitted: the router self-defaults via resolveCoreBaseUrl()
+      // (see actions.ts), which derives the core host from the agents env.
       resolveWorkflow: (id) =>
         workflowsCache.find((w) => w.path === id) ?? null,
     }),
