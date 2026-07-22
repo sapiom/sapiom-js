@@ -42,14 +42,14 @@ test.describe("first-run welcome panel", () => {
     await page.getByRole("button", { name: "Start session" }).click();
 
     await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
-    await expect(page.locator(".session-tab.is-active")).toContainText("acme-app");
+    await expect(page.getByTestId("session-context-title")).toContainText("acme-app");
   });
 
   test("'Run the sample project' seeds the example and opens a session in it", async ({ page }) => {
     await page.getByTestId("welcome-run-sample").click();
 
     await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
-    await expect(page.locator(".session-tab.is-active")).toContainText("sample-project");
+    await expect(page.getByTestId("session-context-title")).toContainText("sample-project");
 
     // MockApi.seedSampleProject has no other observable effect — the test
     // hook confirms the click actually seeded before creating the session.
@@ -61,10 +61,11 @@ test.describe("first-run welcome panel", () => {
     expect(lastSeed?.root).toBe("/Users/demo/.sapiom/harness/sample-project");
   });
 
-  test("'Skip for now' dismisses to the plain empty-terminal state", async ({ page }) => {
-    await page.getByTestId("welcome-dismiss").click();
-    await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
-    await expect(page.locator(".terminal-empty")).toBeVisible();
+  test("the footer links out to the documentation instead of a dismiss", async ({ page }) => {
+    const docs = page.getByTestId("welcome-docs");
+    await expect(docs).toBeVisible();
+    await expect(docs).toHaveAttribute("href", "https://docs.sapiom.ai");
+    await expect(docs).toHaveAttribute("target", "_blank");
   });
 });
 
@@ -73,6 +74,6 @@ test("returning users never see the welcome panel — the default (lived-in) fix
 }) => {
   await page.goto("/");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await expect(page.getByTestId("session-tab-sess-boot")).toHaveClass(/is-active/);
+  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
   await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
 });

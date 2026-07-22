@@ -119,11 +119,15 @@ test.describe("right-pane segmented switch", () => {
     // Wait for the list to be visible again (post-refetch).
     await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 3_000 });
 
-    const countAfterSecond = await page.evaluate(
-      () => (window as unknown as TestHarness).__HARNESS_TEST__?.listSkillsCallCount ?? 0,
-    );
-    // Each tab activation must trigger a new fetch — count strictly increases.
-    expect(countAfterSecond).toBeGreaterThan(countAfterFirst);
+    // The panel is kept mounted (hidden), so the list is visible immediately on
+    // flip-back — the refetch itself resolves shortly after (mock latency), so
+    // poll for the count to strictly increase rather than reading it once.
+    await expect
+      .poll(
+        () => page.evaluate(() => (window as unknown as TestHarness).__HARNESS_TEST__?.listSkillsCallCount ?? 0),
+        { timeout: 3_000 },
+      )
+      .toBeGreaterThan(countAfterFirst);
   });
 });
 
@@ -281,6 +285,26 @@ test.describe("skills panel — detail view", () => {
 
     // The Use skill button is present in the detail view.
     await expect(page.getByTestId("skill-use-btn")).toBeVisible();
+  });
+
+  test("a failed detail fetch shows a scoped error with a back affordance, not the list error", async ({ page }) => {
+    // ?mockError=skill makes getSkill reject; the failure must stay inside the
+    // detail view (own back button) rather than wiping the still-valid list.
+    await page.goto("/?mockError=skill");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.getByTestId("right-tab-skills").click();
+    await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 5_000 });
+
+    await page.getByTestId("skill-card-sapiom-agent-authoring").click();
+
+    const errorView = page.getByTestId("skill-detail-error");
+    await expect(errorView).toBeVisible({ timeout: 3_000 });
+    await expect(errorView).toContainText("Could not load this skill");
+
+    // Back returns to the intact list (which never showed an error).
+    await page.getByTestId("skill-detail-error-back").click();
+    await expect(page.getByTestId("skills-list")).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByTestId("skills-error")).toHaveCount(0);
   });
 });
 

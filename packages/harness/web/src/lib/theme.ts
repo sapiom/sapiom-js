@@ -14,9 +14,8 @@ function systemPrefersDark(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
 }
 
-/** No stored preference → dark, matching the Harness workspace's default
- *  (the design-eng skin boots dark like the draft-1 reference; the toggle and
- *  any stored choice still win). */
+/** No stored preference → dark, matching the Studio's default.
+ *  The toggle and any stored choice still win. */
 export function getInitialTheme(): Theme {
   const stored = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
   if (stored === "light" || stored === "dark") return stored;

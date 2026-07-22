@@ -41,9 +41,9 @@ const DS_NEUTRAL_DIR = fileURLToPath(new URL("./src/styles/ds-neutral", import.m
  * NAMES; only the values differ. Never redefine a token in `styles.css` (it
  * bridges the upstream frontend var names onto these tokens via `var()` only).
  *
- * TODO(SAP-1773, CI): the "use the private package" half needs the official
- * build to install `@sapiom/design-system` from the private registry before
- * `build:web` (an authed `.npmrc`/registry step in the release workflow). That
+ * TODO: the "use the private package" half needs the official build to install
+ * `@sapiom/design-system` from the private registry before `build:web` (an
+ * authed `.npmrc`/registry step in the release workflow). That
  * private-registry/publish infra is not set up in this repo; until it is,
  * every build here resolves to the neutral fallback. Public clones must never
  * install it — the package is `private: true`, off public npm, and no brand
