@@ -35,9 +35,11 @@ if (result.status === "completed") {
   });
 
   it("treats a null sample the same as an absent one", () => {
-    expect(generateSnippet({ definition: "x", inputSample: null }).typescript).toContain(
-      "input: { /* your input */ },",
-    );
+    const { typescript, curl } = generateSnippet({ definition: "x", inputSample: null });
+    expect(typescript).toContain("input: { /* your input */ },");
+    // A null sample must collapse to the same empty-input body an absent sample
+    // produces — so the cURL carries the empty JSON object, never `null`.
+    expect(curl).toContain(`-d '{ "input": {} }'`);
   });
 
   it("quotes the definition slug via JSON so it is always a valid string literal", () => {
