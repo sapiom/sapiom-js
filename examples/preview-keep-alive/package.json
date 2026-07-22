@@ -1,0 +1,20 @@
+{
+  "name": "@sapiom/example-preview-keep-alive",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sapiom agent template: a durable cron heartbeat that relaunches a dead sandbox preview — self-healing on sandbox lifecycle, DB-handle env, and runtime vault secrets.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\""
+  },
+  "dependencies": {
+    "@sapiom/agent": "^0.6.0",
+    "@sapiom/tools": "^0.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.2"
+  }
+}
