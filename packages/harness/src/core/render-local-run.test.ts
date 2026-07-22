@@ -205,6 +205,55 @@ describe("renderLocalRun — log slice", () => {
   });
 });
 
+describe("renderLocalRun — stub signal (WB15-2)", () => {
+  it("marks every local run as stubbed (stub-served by construction)", () => {
+    expect(renderLocalRun([]).stubbed).toBe(true);
+    expect(renderOne({ status: "succeeded" }).stubbed).toBe(true);
+  });
+
+  it("surfaces a non-empty unusedStubs list from the summary", () => {
+    const view = renderLocalRun([], {
+      outcome: "completed",
+      unusedStubs: [{ step: "gather", key: "models.coding.launch" }],
+    });
+    expect(view.unusedStubs).toEqual([{ step: "gather", key: "models.coding.launch" }]);
+  });
+
+  it("surfaces a non-empty stubWarnings list from the summary", () => {
+    const view = renderLocalRun([], {
+      outcome: "completed",
+      stubWarnings: ["'repositories.list' stub must be an array of repositories"],
+    });
+    expect(view.stubWarnings).toEqual(["'repositories.list' stub must be an array of repositories"]);
+  });
+
+  it("omits unusedStubs when the supplied list is empty (honest absence, not [])", () => {
+    const view = renderLocalRun([], { outcome: "completed", unusedStubs: [] });
+    expect(view).not.toHaveProperty("unusedStubs");
+  });
+
+  it("omits stubWarnings when the supplied list is empty (honest absence, not [])", () => {
+    const view = renderLocalRun([], { outcome: "completed", stubWarnings: [] });
+    expect(view).not.toHaveProperty("stubWarnings");
+  });
+
+  it("omits both stub-hygiene fields when none were supplied (stream still open)", () => {
+    const view = renderLocalRun([trace({})]);
+    expect(view).not.toHaveProperty("unusedStubs");
+    expect(view).not.toHaveProperty("stubWarnings");
+  });
+
+  it("carries unusedStubs and stubWarnings together when both are present", () => {
+    const view = renderLocalRun([], {
+      outcome: "failed",
+      unusedStubs: [{ step: "s", key: "repository.pushFromSandbox" }],
+      stubWarnings: ["'repositories.list'[0] is not a repository shape"],
+    });
+    expect(view.unusedStubs).toHaveLength(1);
+    expect(view.stubWarnings).toHaveLength(1);
+  });
+});
+
 describe("renderLocalRun — whole run", () => {
   it("preserves trace order", () => {
     const view = renderLocalRun([
@@ -219,6 +268,9 @@ describe("renderLocalRun — whole run", () => {
       executionId: "local-1",
       status: "completed",
       steps: [],
+      // Every local run is stub-served by construction (see the stub-signal
+      // block); no unusedStubs/stubWarnings for a clean run (honest absence).
+      stubbed: true,
     });
   });
 
@@ -259,6 +311,7 @@ describe("renderLocalRun — whole run", () => {
           logSlice: "info fetched 1 fact",
         },
       ],
+      stubbed: true,
     });
   });
 

@@ -432,12 +432,41 @@ export interface StepView {
   output?: unknown;
 }
 
+/** A supplied stub key that no capability call ever matched in its step — almost
+ *  always a typo or the wrong path form. Surfaced read-only in the inspector so a
+ *  no-op mock (a stub that silently served nothing) is visible instead of a
+ *  mystery. Mirrors agent-core's `UnusedStub` (consumed as-is). */
+export interface UnusedStubView {
+  step: string;
+  key: string;
+}
+
 /** A whole run as the canvas renders it. `status` is the run lifecycle folded
- *  to the four states the UI distinguishes; `steps` is order-preserving. */
+ *  to the four states the UI distinguishes; `steps` is order-preserving.
+ *
+ *  Stub fields are RUN-LEVEL and honest-absence: they are set only by
+ *  {@link renderLocalRun} for an offline stub run (prod runs from renderRunState
+ *  never carry them), and only when they carry real signal. A local run is
+ *  stub-served by construction — every `ctx.sapiom.*` call resolves from a stub —
+ *  so `stubbed` is the honest per-run truth the inspector marks each executed
+ *  step with (agent-core records no per-CALL stub attribution, so the chip lives
+ *  at the granularity the trace actually supports). `unusedStubs`/`stubWarnings`
+ *  come from the run's terminal NDJSON summary and are ABSENT (not `[]`) when
+ *  empty, so the read-only notice renders nothing when there is nothing wrong. */
 export interface RunView {
   executionId: string;
   status: "running" | "completed" | "failed" | "cancelled";
   steps: StepView[];
+  /** True when this run was served entirely by stub capabilities (an offline
+   *  local run). Absent for real (prod / local-backend) runs. Drives the
+   *  per-step "stubbed" chip. */
+  stubbed?: boolean;
+  /** Supplied stub keys that matched no capability call this run (likely a typo
+   *  / wrong path). Absent when none — never an empty array. */
+  unusedStubs?: UnusedStubView[];
+  /** Human-readable warnings about stub values that matched a key but had the
+   *  wrong shape (the silent-wrong-data trap). Absent when none. */
+  stubWarnings?: string[];
 }
 
 // ---------------------------------------------------------------------------

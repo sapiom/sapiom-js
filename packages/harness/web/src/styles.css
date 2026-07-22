@@ -3582,7 +3582,33 @@ input {
   color: var(--amber-text);
 }
 
+/* Per-step "stubbed" chip (WB15-2): a flat, mono, unbranded label — a stub run
+   is a fact, not a state, so it reads like the run-note, not a status hue. Uses
+   the shared neutral warning tokens (never a brand palette). */
+.canvas-run-stub-chip {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-warning);
+  background: var(--bg-warning);
+  color: var(--amber-text);
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+  font-weight: 590;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
 
+/* Read-only stub-hygiene notice groups (unused stubs / wrong-shape warnings). */
+.canvas-stub-notice + .canvas-stub-notice {
+  margin-top: var(--sp2);
+}
+
+.canvas-stub-notice-hint {
+  margin: 2px 0 var(--sp1);
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+}
 
 .canvas-detail-kind {
   flex: 0 0 auto;
