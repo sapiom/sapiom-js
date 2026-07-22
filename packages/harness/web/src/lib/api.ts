@@ -73,6 +73,21 @@ export function isFreshMockState(): boolean {
   );
 }
 
+/**
+ * Mock mode only: `?pane=conversation` swaps the center pane for a preview of
+ * the Assistant ⇄ CLI conversation region (SAP-1806), built against a mock
+ * stream. It is a preview flag on purpose — the region's real home is the
+ * right side of the adopted studio shell, wired when that layout lands; this
+ * keeps the pane demonstrable and e2e-testable now without disturbing the
+ * default terminal-first shell (or any existing spec, none of which set it).
+ */
+export function isConversationPreview(): boolean {
+  return (
+    isMockMode() &&
+    new URLSearchParams(window.location.search).get("pane") === "conversation"
+  );
+}
+
 /** `session.boundWorkflowPath` is nullable already, but keeps callers safe against a missing session. */
 export function boundWorkflowPathOf(
   session: HarnessSession | null | undefined,
