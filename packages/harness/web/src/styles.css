@@ -243,6 +243,108 @@ input {
   color: var(--red);
 }
 
+/* Connectivity recovery screen: replaces the bare boot-error screen with an
+   honest, recoverable state (offline / session-expired / server error). Built
+   on .app-status (full-height, centered) — a legible card with one clear
+   next action, never a dead white screen. Semantic tokens only. */
+.connectivity-screen {
+  padding: var(--sp6);
+}
+
+.connectivity-screen-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--sp3);
+  max-width: 34rem;
+}
+
+.connectivity-screen-icon {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+
+/* The auth state reads as "reconnect" (accent), the error state as a real
+   fault (red); offline stays neutral — the copy carries the meaning. */
+.connectivity-screen[data-status="auth"] .connectivity-screen-icon {
+  color: var(--accent);
+}
+
+.connectivity-screen[data-status="error"] .connectivity-screen-icon {
+  color: var(--red);
+}
+
+.connectivity-screen-title {
+  color: var(--text);
+  font-size: var(--type-h2);
+  font-weight: 560;
+}
+
+.connectivity-screen-body {
+  color: var(--text-dim);
+  font-size: var(--type-ui);
+  line-height: 1.55;
+}
+
+.connectivity-screen-detail {
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  font-family: var(--mono, monospace);
+  word-break: break-word;
+}
+
+.connectivity-screen-retry {
+  margin-top: var(--sp2);
+}
+
+/* Mid-session offline strip: same non-blocking recipe as .telemetry-notice
+   (top-of-workspace band), so a network drop never blocks or reflows the app.
+   Neutral-line rather than accent — this is a heads-up, not a promotion. */
+.connectivity-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding: var(--sp2) var(--sp4);
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--type-label);
+  color: var(--text-dim);
+}
+
+.connectivity-banner-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.connectivity-banner-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.connectivity-banner-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: var(--type-h2);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color var(--transition-fast);
+}
+
+.connectivity-banner-dismiss:hover {
+  color: var(--text);
+}
+
+.connectivity-banner-dismiss:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* Layout ------------------------------------------------------------- */
 
 /* Two stable columns: the full-height workspace rail, then the

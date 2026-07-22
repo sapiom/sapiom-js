@@ -25,6 +25,7 @@ import { CanvasPane } from "./components/CanvasPane";
 import { ChatPane } from "./components/chat/ChatPane";
 import { CodePanel } from "./components/CodePanel";
 import { CommandPalette } from "./components/CommandPalette";
+import { ConnectivityBanner, ConnectivityScreen } from "./components/ConnectivityState";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
@@ -41,6 +42,7 @@ import { TooltipLayer } from "./components/TooltipLayer";
 import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { ApiError, boundWorkflowPathOf, DEMO_SESSION_ID, isDemoSeedEnabled, isMockMode } from "./lib/api";
+import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { workflowCostStats } from "./lib/run-cost";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
@@ -73,6 +75,9 @@ function liveSessionsForFocus(sessions: HarnessSession[], focusPath: string | nu
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  // Live browser connectivity (navigator.onLine + online/offline events).
+  // Combined with the boot-error kind below to pick the honest shell state.
+  const online = useConnectivity();
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Overview (in the rail's account menu): shows the intro panel in the main
   // slot. Opening any session leaves it (openSession below is the one path).
@@ -208,8 +213,24 @@ export const App = (): JSX.Element => {
   if (harness.loading) {
     return <div className="app-status">Loading Sapiom Studio…</div>;
   }
+  // Boot failed (no state to render): degrade gracefully to a recoverable
+  // state instead of a dead "Failed to load" white screen. The classifier
+  // names it honestly from real signals — offline (browser/network), auth
+  // (rejected credential — the server re-reads a rotated key on the retry's
+  // request), or a generic server error — and Retry re-runs the boot fetch in
+  // place. Mock mode never reaches here (its fetches always resolve).
   if (harness.error || !harness.state) {
-    return <div className="app-status app-status-error">Failed to load: {harness.error}</div>;
+    const status = classifyConnectivity({ online, error: harness.errorKind });
+    return (
+      <ConnectivityScreen
+        // classify only returns "online" when there's neither an offline flag
+        // nor an error; we're here because the boot failed, so treat that
+        // impossible case as a generic error rather than rendering nothing.
+        status={status === "online" ? "error" : status}
+        onRetry={harness.reload}
+        detail={harness.error}
+      />
+    );
   }
 
   const { state } = harness;
@@ -560,6 +581,12 @@ export const App = (): JSX.Element => {
       )}
 
       <div className="workspace-main">
+        {/* Mid-session network drop: the app already loaded, so it stays fully
+            usable against its last-known state — this non-blocking strip just
+            tells the truth about why live actions pause. Clears itself when
+            connectivity returns (useConnectivity re-renders online=true).
+            Mock mode is always "online" so the demo build never shows it. */}
+        {!online && <ConnectivityBanner />}
         {state.consentSource === "default-silent" && !harness.settings?.telemetryNoticeDismissed && (
           <TelemetryNotice
             onDismiss={() => {
