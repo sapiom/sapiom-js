@@ -41,6 +41,7 @@ import {
   type WorkflowRegistryLike,
   createWorkflowsRouter,
 } from "../core/workflow-registry.js";
+import { WorkspaceStore } from "../core/workspace-store.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
 import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
@@ -103,6 +104,7 @@ import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
+import { createWorkspacesRouter } from "./workspaces.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
 // (an identical helper); the runs router reuses it for its agents base URL.
 import { resolveCoreBaseUrl } from "../core/run-spend.js";
@@ -167,6 +169,8 @@ export interface HarnessServerOptions {
   collectorUrl?: string;
   /** Workflow registry file. Defaults to `<stateRoot>/workflows.json`. */
   workflowsRegistryPath?: string;
+  /** Workspace membership store file. Defaults to `<stateRoot>/workspaces.json`. */
+  workspacesStorePath?: string;
   /** Local analytics ndjson sink. Defaults to `<stateRoot>/events.ndjson`. */
   eventStorePath?: string;
   /** Overrides the home directory codex rollout discovery scans
@@ -422,6 +426,12 @@ export const startServer = async (
   } catch (err) {
     console.error("[harness] recent-dirs prune failed:", err);
   }
+  // Persistent, user-owned workspace membership (design.md §4). Independent of
+  // the workflow registry: membership is saved and stable, never recomputed
+  // from open sessions, so it needs no boot-time prune tied to session state.
+  const workspaceStore = new WorkspaceStore(
+    options.workspacesStorePath ?? statePaths.workspaces,
+  );
   let workflowsCache: WorkflowInfo[] = await workflowRegistry.list();
   const workflowsCacheTimer = setInterval(() => {
     void workflowRegistry.list().then((list) => {
@@ -817,6 +827,7 @@ export const startServer = async (
   );
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
+    createWorkspacesRouter(workspaceStore),
     createFsRouter(),
     createSkillsRouter(),
     createMacrosRouter({

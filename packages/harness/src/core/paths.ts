@@ -23,6 +23,7 @@ export interface HarnessStatePaths {
   machineId: string;
   sessions: string;
   workflows: string;
+  workspaces: string;
   events: string;
   settings: string;
   generated: string;
@@ -50,6 +51,7 @@ export function resolveStatePaths(stateRoot?: string): HarnessStatePaths {
     machineId: join(root, relativeToHome(HARNESS_PATHS.machineId)),
     sessions: join(root, relativeToHome(HARNESS_PATHS.sessions)),
     workflows: join(root, relativeToHome(HARNESS_PATHS.workflows)),
+    workspaces: join(root, relativeToHome(HARNESS_PATHS.workspaces)),
     events: join(root, relativeToHome(HARNESS_PATHS.events)),
     settings: join(root, relativeToHome(HARNESS_PATHS.settings)),
     generated: join(root, relativeToHome(HARNESS_PATHS.generated)),
