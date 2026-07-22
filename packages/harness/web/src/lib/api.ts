@@ -150,6 +150,24 @@ export interface HarnessApi {
     executionId: string,
     signal?: AbortSignal,
   ): Promise<RunCall[]>;
+  /**
+   * Trigger the intelligence-spine spike (SAP-1804): run a Sapiom workflow on
+   * OUR account and stream `spine.*` frames onto the event bus. Returns the
+   * `spineRunId` the {@link import("./spine-sink").SpineSinkState} keys on.
+   */
+  runSpine(req?: SpineRunRequest): Promise<SpineRunResponse>;
+}
+
+/** Body for POST /api/spine/run — both fields optional (server defaults). */
+export interface SpineRunRequest {
+  definitionId?: string;
+  input?: Record<string, unknown>;
+}
+
+/** Response from POST /api/spine/run. */
+export interface SpineRunResponse {
+  spineRunId: string;
+  definitionId: string;
 }
 
 class RealApi implements HarnessApi {
@@ -341,6 +359,13 @@ class RealApi implements HarnessApi {
       `/api/runs/${encodeURIComponent(executionId)}/transactions`,
       { signal },
     );
+  }
+
+  runSpine(req: SpineRunRequest = {}): Promise<SpineRunResponse> {
+    return this.request<SpineRunResponse>("/api/spine/run", {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
   }
 }
 
@@ -710,6 +735,14 @@ class MockApi implements HarnessApi {
       { stepName: "processResult", capability: "LLM", op: "generate", usd: "0.180000" },
       { stepName: "processResult", capability: "LLM", op: "generate", usd: "0.190000" },
     ];
+  }
+
+  async runSpine(req: SpineRunRequest = {}): Promise<SpineRunResponse> {
+    await delay(80);
+    return {
+      spineRunId: "spine-mock-1",
+      definitionId: req.definitionId ?? "mock-workflow",
+    };
   }
 
   async getRunState(
