@@ -3,6 +3,7 @@ import type { JSX } from "react";
 import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
+import { track } from "../lib/track";
 import { useDismissable } from "../lib/use-dismissable";
 import { Icon } from "./Icon";
 import { NewSessionModal } from "./NewSessionModal";
@@ -29,6 +30,10 @@ interface SessionBarProps {
   /** Session ids with terminal output in roughly the last ~3s — renders a
    *  busy pulse on that session's tab regardless of whether it's active. */
   busySessionIds: Set<string>;
+  /** Controlled open state for the settings popover — lifted to App so the
+   *  telemetry chip in BrandHeader can open it from outside SessionBar. */
+  settingsOpen: boolean;
+  onSetSettingsOpen: (open: boolean) => void;
 }
 
 export function SessionBar({
@@ -49,10 +54,11 @@ export function SessionBar({
   telemetryOptIn,
   onToggleTelemetry,
   busySessionIds,
+  settingsOpen,
+  onSetSettingsOpen,
 }: SessionBarProps): JSX.Element {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const historyWrapRef = useRef<HTMLDivElement>(null);
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
@@ -61,7 +67,7 @@ export function SessionBar({
   const newSessionTriggerRef = useRef<HTMLButtonElement>(null);
 
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => onSetSettingsOpen(false), [onSetSettingsOpen]);
   useDismissable(historyOpen, {
     onDismiss: closeHistory,
     containerRef: historyWrapRef,
@@ -109,7 +115,10 @@ export function SessionBar({
               aria-selected={isActive}
               className={"session-tab" + (isActive ? " is-active" : "")}
               data-testid={`session-tab-${session.id}`}
-              onClick={() => onSelectSession(session.id)}
+              onClick={() => {
+                onSelectSession(session.id);
+                track("session.switched", {}, session.id);
+              }}
             >
               <span className="session-dot" data-status={session.status} />
               <span className="session-tab-title">{session.title}</span>
@@ -195,8 +204,8 @@ export function SessionBar({
                   }}
                 >
                   <span className="session-item-title">{summary.title}</span>
-                  <span className="session-item-meta">
-                    {summary.harness} · {new Date(summary.lastActiveAt).toLocaleString()}
+                  <span className="session-item-meta" data-testid={`history-meta-${summary.agentSessionId}`}>
+                    {historyRowMeta(summary)}
                   </span>
                 </button>
               ))}
@@ -210,7 +219,7 @@ export function SessionBar({
           className="gear-btn"
           aria-label="Settings"
           data-testid="settings-trigger"
-          onClick={() => setSettingsOpen((prev) => !prev)}
+          onClick={() => onSetSettingsOpen(!settingsOpen)}
         >
           <Icon name="Settings" size={16} />
         </button>
@@ -220,7 +229,7 @@ export function SessionBar({
             organizationName={organizationName}
             telemetryOptIn={telemetryOptIn}
             onToggleTelemetry={onToggleTelemetry}
-            onClose={() => setSettingsOpen(false)}
+            onClose={() => onSetSettingsOpen(false)}
           />
         )}
       </div>
@@ -237,4 +246,35 @@ export function SessionBar({
       )}
     </div>
   );
+}
+
+/**
+ * The meta line under a history row's title — the differentiators that let a
+ * user tell otherwise-similar rows apart (branch, turn count, when it was last
+ * active). Falls back to the harness name so the line is never empty.
+ */
+function historyRowMeta(summary: SessionSummary): string {
+  const parts: string[] = [];
+  if (summary.gitBranch) parts.push(summary.gitBranch);
+  if (typeof summary.messageCount === "number") {
+    parts.push(`${summary.messageCount} ${summary.messageCount === 1 ? "turn" : "turns"}`);
+  }
+  parts.push(formatRelativeTime(summary.lastActiveAt));
+  if (parts.length === 1) parts.unshift(summary.harness);
+  return parts.join(" · ");
+}
+
+/** Compact "time ago" for last-active timestamps, falling back to a locale
+ * date string for anything a day or more old (or an unparseable value). */
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const seconds = Math.round((Date.now() - then) / 1000);
+  if (seconds < 45) return "just now";
+  if (seconds < 90) return "1 min ago";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(iso).toLocaleDateString();
 }

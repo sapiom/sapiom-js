@@ -54,6 +54,42 @@ function createMockClient(): SapiomClient {
   } as unknown as SapiomClient;
 }
 
+/**
+ * Mock client that returns a payment-authorized transaction on the second
+ * createAndAuthorize call, enabling payment-retry test scenarios.
+ */
+function createMockClientWithPayment(): SapiomClient {
+  const client = {
+    transactions: {
+      create: jest
+        .fn()
+        .mockResolvedValueOnce({
+          id: "tx-tool",
+          status: "authorized",
+          trace: { id: "trace-uuid-123", externalId: null },
+        })
+        .mockResolvedValueOnce({
+          id: "tx-payment",
+          status: "authorized",
+          payment: { authorizationPayload: "auth-token" },
+        }),
+      get: jest
+        .fn()
+        .mockResolvedValueOnce({ id: "tx-tool", status: "authorized" })
+        .mockResolvedValueOnce({
+          id: "tx-payment",
+          status: "authorized",
+          payment: { authorizationPayload: "auth-token" },
+        }),
+      addFacts: jest.fn().mockResolvedValue({ success: true }),
+      complete: jest.fn().mockResolvedValue({
+        transaction: { id: "tx-tool", status: "completed" },
+      }),
+    },
+  } as unknown as SapiomClient;
+  return client;
+}
+
 function mockOpenAIGenerate(
   content: string,
   usage?: {
@@ -205,6 +241,109 @@ describe("langchain-classic usage analytics", () => {
       await (wrapped as any).func({ city: "Tokyo" });
       await getAnalytics().flush();
       expect(collector.events()).toHaveLength(0);
+    });
+
+    it("emits ONE success event with payment_retried:true on successful payment retry", async () => {
+      const paymentError = {
+        message: JSON.stringify({
+          x402Version: 1,
+          accepts: [{ scheme: "exact", amount: "100", unit: "sats" }],
+        }),
+      };
+      let callCount = 0;
+      const wrapped = wrapSapiomTool(
+        buildTool((args: any) => {
+          callCount++;
+          if (callCount === 1 && !(args as any)._meta?.["x402/payment"]) {
+            throw paymentError;
+          }
+          return "Paid result";
+        }),
+        { sapiomClient: createMockClientWithPayment() },
+      );
+
+      const result = await (wrapped as any).func({ city: "Tokyo" });
+      expect(result).toBe("Paid result");
+      await getAnalytics().flush();
+
+      const events = collector.events();
+      // ONE event — the expected-402 bounce never emits.
+      expect(events).toHaveLength(1);
+      expect(events[0].data.status).toBe("success");
+      expect(events[0].data.payment_retried).toBe(true);
+      expect(Object.keys(events[0].data).sort()).toEqual([
+        "duration_ms",
+        "payment_retried",
+        "status",
+        "tool_name",
+      ]);
+    });
+
+    it("emits ONE error event with payment_retried:true when retry also fails", async () => {
+      class RetryFailedError extends Error {}
+      const paymentError = {
+        message: JSON.stringify({
+          x402Version: 1,
+          accepts: [{ scheme: "exact", amount: "100", unit: "sats" }],
+        }),
+      };
+      let callCount = 0;
+      const wrapped = wrapSapiomTool(
+        buildTool((args: any) => {
+          callCount++;
+          if (callCount === 1 && !(args as any)._meta?.["x402/payment"]) {
+            throw paymentError;
+          }
+          throw new RetryFailedError("server still refused");
+        }),
+        { sapiomClient: createMockClientWithPayment() },
+      );
+
+      await expect((wrapped as any).func({ city: "Tokyo" })).rejects.toThrow(
+        "server still refused",
+      );
+      await getAnalytics().flush();
+
+      const events = collector.events();
+      // ONE event — the expected-402 bounce is suppressed; retry outcome wins.
+      expect(events).toHaveLength(1);
+      expect(events[0].data.status).toBe("error");
+      expect(events[0].data.error_class).toBe("RetryFailedError");
+      expect(events[0].data.payment_retried).toBe(true);
+      expect(Object.keys(events[0].data).sort()).toEqual([
+        "duration_ms",
+        "error_class",
+        "payment_retried",
+        "status",
+        "tool_name",
+      ]);
+    });
+
+    it("non-payment errors emit ONE error event without payment_retried", async () => {
+      class DatabaseError extends Error {}
+      const wrapped = wrapSapiomTool(
+        buildTool(() => {
+          throw new DatabaseError("connection refused");
+        }),
+        { sapiomClient: createMockClient() },
+      );
+
+      await expect((wrapped as any).func({ city: "Tokyo" })).rejects.toThrow(
+        "connection refused",
+      );
+      await getAnalytics().flush();
+
+      const events = collector.events();
+      expect(events).toHaveLength(1);
+      expect(events[0].data.status).toBe("error");
+      expect(events[0].data.error_class).toBe("DatabaseError");
+      expect(events[0].data.payment_retried).toBeUndefined();
+      expect(Object.keys(events[0].data).sort()).toEqual([
+        "duration_ms",
+        "error_class",
+        "status",
+        "tool_name",
+      ]);
     });
   });
 

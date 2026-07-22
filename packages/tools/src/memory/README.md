@@ -1,70 +1,115 @@
 # memory
 
-Tenant-scoped long-term memory over the Sapiom memory gateway.
+Tenant-scoped long-term memory backed by the Sapiom memory service.
 
 ```typescript
 import { createClient } from "@sapiom/tools";
 
 const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
 
-const { id, decision } = await sapiom.memory.append({
+const { id } = await sapiom.memory.append({
   content: "User prefers dark mode.",
-  scope: "user",
-  metadata: { source: "preference-survey" },
+  namespace: "user-42",
+  metadata: { source: "preference-survey", user_theme: "dark" },
 });
 
 const { results } = await sapiom.memory.recall({
   query: "ui preferences",
-  scope: "user",
+  namespace: "user-42",
   topK: 5,
 });
 
-const record = await sapiom.memory.get(id);
-await sapiom.memory.forget(id);
+await sapiom.memory.forget({ ids: [id], namespace: "user-42" });
+await sapiom.memory.drop("user-42");
 ```
 
 Ambient import works too: `import { memory } from "@sapiom/tools"`.
 
 ## Operations
 
-| Method                 | Notes                                                                                                 |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| `append(input)`        | Writes a memory or returns an existing near-duplicate. Success decisions are `"ADDED"` or `"NOOP"`.   |
-| `recall(input)`        | Searches memories by `query`; supports `strategy`, temporal `weight`, metadata `filter`, and `store`. |
-| `sweep(input?)`        | Neon-only compaction. `dryRun` defaults to `true`; pass `false` to delete selected rows.              |
-| `get(id, options?)`    | Fetches one memory. Pass `options.store` when the write used a non-default store.                     |
-| `forget(id, options?)` | Hard-deletes one memory. Idempotent: already-gone rows still resolve successfully.                    |
+| Method            | Notes                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `append(input)`   | Writes one memory into a namespace. Metered.                                                                |
+| `recall(input)`   | Searches one namespace by `query`; supports `strategy`, temporal `weight`, and metadata `filter`. Metered.  |
+| `forget(input)`   | Hard-deletes memories by id. Blind-idempotent: already-gone ids still resolve successfully. Free.           |
+| `drop(namespace)` | Deletes an entire namespace. Idempotent. Free.                                                              |
 
-## Store Identity
+## Namespaces
 
-`store` selects the physical store. Reads must pass the same selector used by the matching write.
+`namespace` is the isolation boundary: reads only ever see one namespace, and
+`drop` deletes one namespace wholesale.
+
+**Default to a namespace per agent, per user, or per project.** A namespace has
+bounded capacity, so prefer many small namespaces over one large one. Put
+subsets into a single shared namespace — distinguished by `metadata` and
+narrowed with a recall `filter` — only when a single recall must span those
+subsets. For better performance, use a namespace instead if you'd always
+filter to one value.
 
 ```typescript
-export interface MemoryStore {
-  backend?: "neon-pgvector" | "upstash-vector";
-  embedder?: {
-    provider: string;
-    model: string;
-  };
-  namespace?: string;
-}
+// Preferred: one namespace per user
+await sapiom.memory.append({ content, namespace: `user-${userId}` });
+
+// Only when one recall must span subsets: shared namespace + metadata + filter
+await sapiom.memory.append({
+  content,
+  namespace: "support-team",
+  metadata: { user_id: userId },
+});
+await sapiom.memory.recall({
+  query,
+  namespace: "support-team",
+  filter: { user_id: userId },
+});
 ```
 
-Pass the same `store` to reads/deletes that was used when writing. Omit `store` for the v0 default: Neon pgvector, your default namespace, and OpenRouter `openai/text-embedding-3-small`.
+## Metadata
+
+Metadata you WRITE is flat: a map of identifier keys to string, number, or
+boolean values (arrays and nulls are rejected with `invalid_metadata`). Express
+hierarchy through key naming conventions (e.g. `env_prod`, `user_theme`) rather
+than nesting. Keys start with a letter and must not contain `.`. Key count and
+sizes are bounded (enforced server-side).
+
+Every metadata leaf is a scalar. Filter values match exactly, or against a set
+with `{ in: [...] }`. For better performance, use `namespace` for a key you'd
+filter on every recall — metadata suits optionally-filtered dimensions.
+
+## Limits
+
+| Field                     | Limit                                         |
+| ------------------------- | --------------------------------------------- |
+| `content`                 | ≤ 32,000 characters                           |
+| `namespace`               | 1–100 characters; letters, digits, `-`, `_`   |
+| `query`                   | ≤ 4,096 characters                            |
+| `topK`                    | 1–50 (default 5)                              |
+| `metadata` keys           | ≤ 20 per memory                               |
+| `metadata` key            | ≤ 64 bytes; matches `^[a-zA-Z]\w*$`           |
+| `metadata` string value   | ≤ 512 characters                              |
+| `filter` keys             | ≤ 20                                          |
+| `filter` `{ in: [...] }`  | ≤ 64 values                                   |
+| `forget` ids              | ≤ 100 per call                                |
+| `weight.halfLifeDays`     | 1–365 (default 30)                            |
 
 ## Contract Notes
 
-- `append` is append-log only. It never mutates or supersedes existing rows.
-- Secret-like content or metadata is rejected before embedding with `MemoryHttpError` status `400` and body fields such as `error: "SecretDetected"` and `decision: "REJECTED"`.
-- `occurredAt` is optional event time. When omitted, the backend stores `null`; temporal recall falls back to `createdAt`.
-- `recall` defaults to `strategy: "cosine"`, `topK: 5`, and `minSimilarity: 0`.
-- `strategy: "keyword"` is Neon-only; requesting it on `upstash-vector` returns `400`.
-- `sweep` is Neon-only; for Upstash-backed stores, call `forget` on specific ids.
-- `upstash-vector` is experimental in v0. Append, cosine recall, get, and forget work; native Upstash embedding, keyword recall, and sweep are not part of this SDK contract yet.
-- The gateway is authoritative for embedder support. v0 currently supports OpenRouter-backed embedding providers/models and returns `400` for unsupported selectors.
-- `filter` is a hard metadata filter. Neon uses JSONB containment; Upstash supports scalar equality filters.
-- After the route gate succeeds, recall degrades child infra, billing, rate-limit, and timeout failures to `{ results: [], count: 0 }`. Bad requests, missing identity, and ownership failures still throw.
-- Every route has the near-zero x402 minimum gate. Embedding and store operations are child costs billed to the run.
+- Memory is durable knowledge, not chat history: `recall` ranks by relevance,
+  never by recency — it is not a way to page through recent turns. Keep last-N
+  context in your own store.
+- `append` is append-log only; it never mutates existing memories.
+- Secret-like content is rejected before anything is stored:
+  `MemoryHttpError` status `400`, body `code: "secret_detected"`.
+- `occurredAt` is optional event time, distinct from `createdAt` (ingestion
+  time); it drives `weight.temporal` recall decay.
+- `recall` defaults to `strategy: "semantic"` and `topK: 5`; `"keyword"` and
+  `"hybrid"` are also supported. Scores are a relevance ranking weight — higher
+  is more relevant; compare only within one result set.
+- Caller-safe validation failures surface as `400` with a stable `body.code`
+  (`invalid_metadata`, `invalid_filter`, `secret_detected`). Other request-shape
+  violations (e.g. oversized content) surface as a plain `400` without a stable
+  code. Infrastructure failures surface as generic `502`/`503`/`504` — details
+  are logged server-side, never returned to the caller.
 - Non-2xx responses throw `MemoryHttpError` with `status` and parsed `body`.
 
-The base URL follows the shared service resolver: `SAPIOM_MEMORY_URL`, then `SAPIOM_SERVICES_BASE`, then `https://memory.services.sapiom.ai`.
+The base URL follows the shared service resolver: `SAPIOM_MEMORY_URL`, then
+`SAPIOM_SERVICES_BASE`, then `https://memory.services.sapiom.ai`.

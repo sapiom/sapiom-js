@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { AgentOperationError } from "../errors";
-import { registryFor, scaffold } from "../scaffold";
+import { registryFor, resolveVersions, scaffold } from "../scaffold";
 
 // Point template resolution at the bundled templates dir (two levels up from
 // src/), bypassing the dist/ path that TEMPLATES_DIR normally expects.
@@ -223,6 +223,38 @@ describe("scaffold .npmrc (local registry)", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveVersions offline fallback", () => {
+  const savedFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = savedFetch;
+  });
+
+  it("falls back to a version that is actually published (matches the workspace's own package.json)", async () => {
+    // Regression test: VERSION_FALLBACK in scaffold.ts is a hand-maintained
+    // snapshot with no other guardrail — it previously drifted to versions
+    // that no longer exist on npm at all (0.1.1 for both packages, while
+    // published was agent@0.5.0 / tools@0.16.0), so every offline/registry-
+    // hiccup scaffold failed with ETARGET. This doesn't hit npm; it checks
+    // the fallback against this workspace's own @sapiom/agent and
+    // @sapiom/tools package.json, which is what actually gets published.
+    global.fetch = (async () => {
+      throw new Error("simulated offline — network unreachable");
+    }) as unknown as typeof fetch;
+
+    const workspaceAgentVersion = JSON.parse(
+      readFileSync(path.resolve(__dirname, "..", "..", "..", "agent", "package.json"), "utf8"),
+    ).version;
+    const workspaceToolsVersion = JSON.parse(
+      readFileSync(path.resolve(__dirname, "..", "..", "..", "tools", "package.json"), "utf8"),
+    ).version;
+
+    const versions = await resolveVersions();
+
+    expect(versions.agent).toBe(workspaceAgentVersion);
+    expect(versions.tools).toBe(workspaceToolsVersion);
   });
 });
 

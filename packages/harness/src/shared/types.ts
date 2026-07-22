@@ -62,6 +62,42 @@ export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
 export const CANVAS_CACHE_DIR = `${CANVAS_DIR}/cache`;
 
 /**
+ * Composer image attachments (upload / paste / drag-drop) land here, relative
+ * to the session cwd, before their path is relayed into the agent's prompt.
+ * Co-located under `.sapiom/` with the canvas + context conventions so a single
+ * ignore/clean of that directory covers everything the harness writes.
+ */
+export const HARNESS_UPLOADS_DIR = ".sapiom/uploads";
+
+/**
+ * Image content types the composer accepts for attach. Kept deliberately small
+ * — the formats every supported coding agent can actually read from a file path
+ * — and shared by the client (pre-flight validation) and the server (the real
+ * gate) so the two can't drift.
+ */
+export const ALLOWED_IMAGE_MEDIA_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+
+export type ImageMediaType = (typeof ALLOWED_IMAGE_MEDIA_TYPES)[number];
+
+/** Hard cap on a single attached image (decoded bytes). 10 MiB. */
+export const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Body-parser byte limit for JSON `/api` routes. express.json defaults to
+ * 100 KiB — far below a base64-encoded image (~1.37× the decoded size). Sized
+ * to clear MAX_IMAGE_UPLOAD_BYTES base64'd plus 1 MiB of envelope overhead, and
+ * shared by the app-level `/api` parser (server/index.ts) and the rest router
+ * so the two can't disagree. The real per-image cap is still enforced (after
+ * decode) in the image handler; other routes validate their own small shapes.
+ */
+export const JSON_BODY_LIMIT_BYTES = Math.ceil((MAX_IMAGE_UPLOAD_BYTES * 4) / 3) + 1024 * 1024;
+
+/**
  * Workspace-state convention: the harness mirrors this session's binding,
  * the full workflow registry, and its own identity here, relative to the
  * session cwd, so the agent has an always-current, agent-legible answer to
@@ -87,7 +123,19 @@ export const ENV = {
 // Sessions
 // ---------------------------------------------------------------------------
 
-export type HarnessKind = "claude-code" | "codex";
+/**
+ * Every harness kind that can be spawned as a session — i.e. has a full
+ * runtime adapter (launch/resume/doctor/listPastSessions) and a real e2e
+ * suite. Both `HarnessKind` and the zod enum in server/rest.ts are derived
+ * from this tuple so they can never drift from each other.
+ *
+ * External-mode adapters (conductor) and scaffold adapters that haven't
+ * earned an e2e suite yet (pi, opencode) are deliberately absent: the
+ * picker and POST /sessions reject them at the validation layer.
+ */
+export const SPAWNABLE_HARNESS_KINDS = ["claude-code", "codex"] as const;
+
+export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 
@@ -137,6 +185,19 @@ export interface SessionSummary {
   title: string;
   lastActiveAt: string;
   source: "registry" | "transcript";
+  /**
+   * Git branch the session was last active on, when the transcript records it.
+   * The strongest within-directory differentiator between otherwise-similar
+   * rows (many sessions in one repo often differ only by branch). Undefined
+   * for harnesses/transcripts that don't record a branch.
+   */
+  gitBranch?: string;
+  /**
+   * Number of human prompts (turns) in the session, when cheaply knowable.
+   * Undefined for transcripts too large to scan for an exact count without a
+   * full read (see the claude-code adapter's full-scan size cap).
+   */
+  messageCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +227,13 @@ export interface LaunchOpts {
   mcpConfigFile?: string;
   /** Absolute path to the generated settings file (hooks). Claude only. */
   settingsFile?: string;
+  /**
+   * Absolute path to a generated --plugin-dir directory. Currently used to
+   * inject Sapiom's bundled skills as session-scoped slash commands via
+   * claude-code's `--plugin-dir` flag. Adapters that don't support
+   * --plugin-dir (e.g. codex) silently ignore this field.
+   */
+  pluginDir?: string;
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;
@@ -286,6 +354,18 @@ export type BusMessage =
   | { type: "session.status"; session: HarnessSession }
   | { type: "canvas.reload"; harnessSessionId: string }
   | { type: "port.detected"; harnessSessionId: string; port: number; url: string }
+  /**
+   * A run just started (the CLI printed `✓ Started execution <id>`, caught by
+   * the ExecutionDetector). The SPA starts polling `/api/runs/:id/state` on
+   * receipt. `target` is `"prod"` today — local runs render from their final
+   * result rather than polling.
+   */
+  | {
+      type: "execution.started";
+      harnessSessionId: string;
+      executionId: string;
+      target: "prod" | "local";
+    }
   | { type: "workflows.changed" }
   /**
    * Full snapshot of one background task, re-broadcast on every change
@@ -304,8 +384,152 @@ export type BusMessage =
   | { type: "session.activity"; harnessSessionId: string; at: string };
 
 // ---------------------------------------------------------------------------
+// Run spend (cost settled after execution, fetched from core surface)
+// ---------------------------------------------------------------------------
+
+/** Per-step cost summary from the spend endpoint. */
+export interface RunStepSpend {
+  name: string;
+  totalUsd: string;
+  entryCount: number;
+}
+
+/** Full spend summary for one execution, keyed by executionId. */
+export interface RunSpend {
+  executionId: string;
+  totalUsd: string;
+  settleState: string;
+  byStep: RunStepSpend[];
+}
+
+/**
+ * One billable capability call within a run — the per-call drill-down behind a
+ * step's cost ("why is this step costly"). Derived from the transactions
+ * endpoint. Deliberately provider-AGNOSTIC: `capability` is a generic label
+ * ("LLM", "sandbox", "web search") mapped server-side from the operation, so
+ * neither the browser nor this file ever carries the upstream provider/model
+ * name. Token counts are intentionally absent — the platform does not record
+ * per-call tokens for gateway LLM calls (see SAP ticket for the backend work).
+ */
+export interface RunCall {
+  /** Step this call is attributed to (workflowStepName ?? capability op). */
+  stepName: string;
+  /** Provider-agnostic capability label, e.g. "LLM" / "sandbox" / "web search". */
+  capability: string;
+  /** The capability operation, e.g. "generate" / "create" / "execute". */
+  op: string;
+  /** Captured USD for this single call. */
+  usd: string;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime analytics — live run render state (see core/render-run-state.ts)
+// ---------------------------------------------------------------------------
+//
+// The transport-agnostic shape the canvas renders a run from. The server
+// produces it (GET /api/runs/:id/state = inspect → decode → renderRunState);
+// the web poll loop and canvas consume it. Deliberately DERIVED, never raw:
+// every field is computed deterministically from the decoded
+// ExecutionProjection — no LLM, no I/O — so the same RunView drives both the
+// polling path today and a future WebSocket push (only the source swaps).
+
+/**
+ * A step's render status, folded from the raw projection step status into the
+ * four states the canvas draws. `cancelled`/`failed` both fold to `failed`
+ * (a cancelled step did not pass — mirrors run-local.ts); anything not yet
+ * `running`/`passed`/`failed` is `pending`.
+ */
+export type StepStatus = "pending" | "running" | "passed" | "failed";
+
+/** One step as the canvas renders it — status plus the deterministically
+ *  derived cost/latency/error/log slice. Optional fields are ABSENT (not
+ *  `undefined`/`0`) when the decoded projection carries no value — honest
+ *  absence, matching the SDK's cost-is-nullable philosophy. */
+export interface StepView {
+  /** Stable id for keyed rendering — the OTel span id, else a step-order key. */
+  id: string;
+  /** Human step label (the projection's stepName). */
+  name: string;
+  status: StepStatus;
+  /** Captured USD for this step; absent when the read carries no cost. */
+  costUsd?: number;
+  /** finishedAt − startedAt in ms; absent while running or on bad timestamps. */
+  latencyMs?: number;
+  /** Terminal error message; present only for a failed step that recorded one. */
+  error?: string;
+  /** Tail-preserving, character-capped executor log text — the debug-macro
+   *  context source (trimmed further before injection). Absent when no logs. */
+  logSlice?: string;
+}
+
+/** A whole run as the canvas renders it. `status` is the run lifecycle folded
+ *  to the four states the UI distinguishes; `steps` is order-preserving. */
+export interface RunView {
+  executionId: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  steps: StepView[];
+}
+
+// ---------------------------------------------------------------------------
+// Adapter registry (GET /api/harnesses)
+// ---------------------------------------------------------------------------
+
+/** One entry in the adapter registry, as the SPA sees it (GET /api/harnesses). */
+export interface HarnessEntry {
+  /** Stable adapter identifier — one of the known HarnessAdapterId values (e.g. "claude-code", "codex", "conductor"). */
+  id: string;
+  label: string;
+  /** Whether the harness is spawned by the harness server ("embedded") or managed by its own companion app ("external"). */
+  mode: "embedded" | "external";
+  /** True for adapters whose launch behaviour is not yet hardened by an end-to-end suite. */
+  experimental: boolean;
+  /** True when the adapter's binary is detected on PATH at request time. */
+  installed: boolean;
+  /** Per-agent copy-paste instructions for installing and configuring the Sapiom MCP server. */
+  installMcpPrompt: string;
+  /** True when this harness can read an image the composer relays into its
+   *  prompt (as a file path) — the SPA only offers image attach for these. */
+  imageInput: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Analytics events
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// UI-interaction analytics  (POST /api/track)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical UI event names.  Dot-separated, source "harness", surface marker
+ * data.surface: "ui".  These ride the same collector pipeline as hook events
+ * (local ndjson always; remote only when opted in), so seq/session dimensions
+ * and the analytics-core envelope are added server-side, not client-side.
+ * See the collector README section in packages/harness/src/core/collector/
+ * for the full surface-"ui" contract.
+ */
+export type UiEventName =
+  | "prompt.submitted"
+  | "session.switched"
+  | "macro.invoked"
+  | "visualize.triggered"
+  | "consent.changed"
+  | "session.created"
+  | "skill.viewed"
+  | "skill.used"
+  | "mcp.install";
+
+export interface UiTrackRequest {
+  /** Dot-canonical event name — one of the UiEventName literals. */
+  event: UiEventName;
+  /** Arbitrary data payload; server stamps data.surface: "ui" automatically.
+   *  Never include prompt text — this is UI-interaction metadata only. */
+  data?: Record<string, unknown>;
+  /** harnessSessionId to associate this event with (for seq/session dims).
+   *  Optional: when omitted, the event gets a synthetic single-use session id.
+   */
+  harnessSessionId?: string;
+}
 
 export const ANALYTICS_SCHEMA_VERSION = 1;
 
@@ -314,7 +538,16 @@ export type AnalyticsEventType =
   | "prompt.submitted"
   | "tool.call"
   | "turn.completed"
-  | "session.end";
+  | "session.end"
+  // UI-interaction analytics (surface: "ui" in payload — see UiEventName):
+  | "session.switched"
+  | "macro.invoked"
+  | "visualize.triggered"
+  | "consent.changed"
+  | "session.created"
+  | "skill.viewed"
+  | "skill.used"
+  | "mcp.install";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -374,6 +607,7 @@ export interface CollectorBatch {
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
+// POST   /api/sessions/:id/image        AttachImageRequest → AttachImageResponse (write + relay path)
 // PATCH  /api/sessions/:id/workflow     BindWorkflowRequest → HarnessSession
 // GET    /api/workflows                 → WorkflowInfo[]
 // POST   /api/workflows/connect         { path } → WorkflowInfo
@@ -384,6 +618,7 @@ export interface CollectorBatch {
 // PATCH  /api/settings                  Partial<HarnessSettings> → HarnessSettings
 // POST   /api/sample-project            → SampleProjectSeedResponse (seed/reuse the bundled example)
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
+// POST   /api/track                     UiTrackRequest → { ok: true }  (UI-interaction analytics)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
 
 export interface CreateSessionRequest {
@@ -398,6 +633,33 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
+}
+
+/**
+ * `POST /api/sessions/:id/image` body — one attached image from the composer
+ * (file picker, clipboard paste, or drag-drop). The image rides as a `data:`
+ * URL rather than multipart so it flows through the same JSON pipeline as every
+ * other endpoint. The server decodes it, writes it under
+ * {@link HARNESS_UPLOADS_DIR} in the session cwd, and relays its path into the
+ * agent's prompt.
+ */
+export interface AttachImageRequest {
+  /** `data:<mediaType>;base64,<payload>` — mediaType must be one of
+   *  {@link ALLOWED_IMAGE_MEDIA_TYPES}; decoded size ≤ {@link MAX_IMAGE_UPLOAD_BYTES}. */
+  dataUrl: string;
+  /** Original filename, if the browser knew one — used only to derive a
+   *  friendly extension; the stored name is always a fresh uuid. */
+  filename?: string;
+}
+
+/** `POST /api/sessions/:id/image` response — where the image landed. */
+export interface AttachImageResponse {
+  /** Absolute path of the written image, relayed into the agent's prompt. */
+  path: string;
+  /** The media type the server accepted the image as. */
+  mediaType: ImageMediaType;
+  /** Decoded bytes written to disk. */
+  bytes: number;
 }
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
@@ -439,6 +701,25 @@ export interface AppState {
   userId: string | null;
   organizationName: string | null;
   telemetryOptIn: boolean;
+  /**
+   * How telemetry consent was determined at CLI boot. The UI uses this to
+   * decide whether to show the first-run notice: "default-silent" means the
+   * user never explicitly answered the Y/n prompt (e.g. non-TTY / CI), so
+   * we surface a gentle one-time indicator. Optional: omitted by callers that
+   * don't run the consent flow (tests, mocks — treated as "stored-explicit"
+   * by the UI, i.e. no notice).
+   */
+  consentSource?:
+    | "env-forced-off"
+    | "stored-explicit"
+    | "prompted"
+    | "default-silent";
+  /**
+   * When consentSource === "env-forced-off", which env var forced it off —
+   * rendered in the tracking indicator as "off (env)" with the var name.
+   * Null/absent otherwise.
+   */
+  consentEnvReason?: string | null;
   sessions: HarnessSession[];
   workflows: WorkflowInfo[];
   macros: MacroDef[];
@@ -464,6 +745,14 @@ export interface AppState {
    *  terminal. Optional so AppState constructed without the CLI (tests,
    *  mocks) reads as a returning user by default. */
   firstRun?: boolean;
+  /** The Agents API base URL this harness resolves and triggers against — the
+   *  same env-configurable base the server uses to resolve deployed-agent slugs
+   *  (`SAPIOM_AGENTS_URL` / `SAPIOM_TOOLS_BASE`, else the prod default). The
+   *  snippet panel renders it as the executions host so the copy-paste cURL/SDK
+   *  call hits the same environment the agent was deployed to. Optional: omitted
+   *  by callers that construct AppState without the CLI (tests, mocks); the SPA
+   *  then falls back to the SDK's own default host. */
+  agentsBaseUrl?: string;
 }
 
 /** `POST /api/sample-project` response — the seeded (or reused) example. */
@@ -480,6 +769,12 @@ export interface HarnessSettings {
   telemetryOptIn: boolean;
   /** Most-recently-used project directories, newest first. */
   recentDirs: string[];
+  /**
+   * True once the user has dismissed the first-run telemetry notice
+   * (shown when consent was determined silently in a non-TTY environment).
+   * Persisted so the notice never appears again after the first dismiss.
+   */
+  telemetryNoticeDismissed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +810,10 @@ export interface WorkflowInfo {
   path: string;
   /** From sapiom.json once linked; null before first link. */
   definitionId: number | null;
+  /** The deployed agent's slug — the `defineAgent({ name })` that sapiom.json
+   *  caches as `name`, used as the executions-API handle
+   *  (`/agents/v1/definitions/{slug}/executions`). Null before first link. */
+  definitionSlug: string | null;
   /** How it entered the registry. */
   source: "scan" | "connect";
 }

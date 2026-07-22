@@ -36,7 +36,7 @@ user has opted out (see the README's telemetry section).
       "anonymous_id": "b1a2c3d4-...",        // machine UUID — send whenever available
       "session_id": "5e6f7a8b-...",          // producer-defined session
       "event_timestamp": "2026-01-15T10:30:00.000Z", // ISO-8601, client clock — data.seq is authoritative for ordering when present
-      "source": "ui",                        // ui|mcp|tools|cli|agent|langchain|backend
+      "source": "ui",                        // ui|mcp|tools|cli|agent|langchain|backend|harness
       "event_type": "prompt.submitted",
       "user_id": "usr_123",                  // ONLY when signed in (real account identity)
       "sdk_name": "@sapiom/harness",
@@ -120,6 +120,12 @@ Client-claimed `user_id` passes through as sent.
    Sapiom-bound calls; calls to third-party tools or services (e.g.
    user-supplied tools wrapped by a Sapiom integration) send metadata only —
    names, durations, statuses — never arguments or content.
+   **First-party carve-out:** the Sapiom Harness is a first-party product
+   surface whose disclosed, consent-gated behavior includes session content
+   (prompts, tool I/O, assistant text). This content flows only when the user
+   has opted in (see the telemetry consent gate); the third-party metadata-only
+   rule governs SDK wraps around non-Sapiom-bound calls, not the harness's own
+   hook-to-analytics pipeline.
 
 ## Harness & session telemetry conventions
 
@@ -130,13 +136,17 @@ cross-producer analysis stays cheap.
 
 **Per-session `seq`.** Producers that manage sessions locally (e.g. the dev
 harness) MAY assign each session's events a monotonic sequence number
-starting at 1, carried as `data.seq`. Within one `session_id`, gaps
-indicate loss and `seq` order is authoritative — when it disagrees with
-`event_timestamp` (a client clock), trust `seq`. It is producer-assigned
-and stored verbatim; the collector never renumbers, and `seq` values from
-different sessions are not comparable. If a producer restarts mid-session,
-`seq` resets — consumers should treat a `seq` decrease as a restart
-boundary, not loss.
+starting at 1, carried as `data.seq`. Within one `session_id`, `seq` order
+is authoritative — when it disagrees with `event_timestamp` (a client
+clock), trust `seq`. It is producer-assigned and stored verbatim; the
+collector never renumbers, and `seq` values from different sessions are not
+comparable. If a producer restarts mid-session, `seq` resets — consumers
+should treat a `seq` decrease as a restart boundary, not loss.
+
+For the harness specifically: `seq` indexes the harness's local capture
+stream; some locally-sequenced event kinds are not forwarded remotely, so
+remote streams have **expected gaps** — duplicates are the anomaly signal,
+not gaps. (Verified against production data 2026-07-09.)
 
 **Batch context.** `data.context` MAY carry `app_version`, `os`, `arch`,
 and `node`, stamped once per batch by the producer — the conventional
@@ -168,7 +178,8 @@ the collector stores `event_type` verbatim either way.
 | `mcp` | `tool.call` |
 | `cli` | `command.run`, `notice.shown`, `telemetry.opt_out` |
 | `agent` | `workflow.deploy`, `workflow.run`, `workflow.link`, `step.start`, `step.complete`, `step.error` |
-| `langchain` | `model.call`, `tool.call` |
+| `langchain` | `model.call`, `tool.call` — pay-gated calls emit one event; `payment_retried: true` marks the 402-retry path |
+| `harness` | `session.start`, `prompt.submitted`, `tool.call`, `turn.completed`, `session.end` |
 
 New event types require no contract change — send them.
 

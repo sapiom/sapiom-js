@@ -80,12 +80,15 @@ import type {
   DomainTransfer,
   DnsRecord,
 } from "../domains/index.js";
+import { MemoryHttpError } from "../memory/index.js";
 import type {
   AppendResult,
+  RecallMatch,
   RecallResponse,
-  MemorySweepResponse,
-  Memory,
-  MemoryCallOptions,
+  RetrievalStrategy,
+  ForgetInput,
+  MemoryMetadata,
+  MemoryMetadataValue,
 } from "../memory/index.js";
 import type { SpeechResult, VoicesResult } from "../speech/index.js";
 
@@ -496,6 +499,90 @@ function stubModelRunHandle(
  * Create a stub `Sapiom` client. Runs every capability against built-in defaults;
  * pass `overrides` to control the results a step branches on.
  */
+/** One memory row in the stub's in-process store. */
+interface StubMemoryRecord {
+  id: string;
+  content: string;
+  createdAt: string;
+  occurredAt?: string;
+  /** The stored metadata; undefined when empty. */
+  metadata?: MemoryMetadata;
+  /** Leaf view — what recall `filter` keys match against. */
+  flat: Map<string, MemoryMetadataValue>;
+}
+
+/**
+ * Validate flat memory metadata with the same observable rules a caller sees on
+ * the real service: keys are identifiers (`^[a-zA-Z]\w*$` — a leading letter,
+ * then letters, digits, or underscores), values are string/number/boolean
+ * (objects, arrays, and nulls are `invalid_metadata`), and `undefined` values
+ * are absent. Whole-store bounds (key counts, byte caps) are not simulated here.
+ */
+function validateStubMemoryMetadata(
+  metadata: MemoryMetadata,
+): Map<string, MemoryMetadataValue> {
+  const out = new Map<string, MemoryMetadataValue>();
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value === undefined) continue;
+    if (key.includes(".")) {
+      throw new MemoryHttpError(
+        `invalid_metadata: key '${key}' must not contain '.' — keys must start with a letter and contain only letters, digits, or underscores`,
+        400,
+        { code: "invalid_metadata" },
+      );
+    }
+    if (!/^[a-zA-Z]\w*$/.test(key)) {
+      throw new MemoryHttpError(
+        `invalid_metadata: key '${key}' is invalid — keys must start with a letter and contain only letters, digits, or underscores`,
+        400,
+        { code: "invalid_metadata" },
+      );
+    }
+    if (
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    ) {
+      throw new MemoryHttpError(
+        `invalid_metadata: value at '${key}' must be a string, number, or boolean`,
+        400,
+        { code: "invalid_metadata" },
+      );
+    }
+    out.set(key, value);
+  }
+  return out;
+}
+
+/** {@link RetrievalStrategy} is type-level only — this is its runtime enumeration for the stub's recall check. */
+const STUB_RETRIEVAL_STRATEGIES: readonly RetrievalStrategy[] = [
+  "semantic",
+  "keyword",
+  "hybrid",
+];
+
+/** A recall filter value matches a record's flattened leaf: `{in}` set or strict scalar equality. */
+function stubMemoryFilterMatches(
+  record: StubMemoryRecord,
+  filter: Record<string, unknown> | undefined,
+): boolean {
+  if (!filter) return true;
+  for (const [key, expected] of Object.entries(filter)) {
+    const actual = record.flat.get(key);
+    if (
+      expected !== null &&
+      typeof expected === "object" &&
+      Array.isArray((expected as { in?: unknown[] }).in)
+    ) {
+      if (!(expected as { in: unknown[] }).in.includes(actual as unknown))
+        return false;
+    } else if (actual !== expected) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function createStubClient(opts: StubClientOptions = {}): Sapiom {
   // Record which override keys actually match a call, so the runner can flag
   // supplied-but-unmatched keys (typos / wrong plural-singular form).
@@ -505,6 +592,11 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     args: unknown[],
     fallback: () => unknown,
   ) => resolve(overrides, paths, args, fallback);
+
+  // Per-client memory state: namespace → (id → record). See the `memory`
+  // capability below for what is and isn't simulated.
+  const memoryNamespaces = new Map<string, Map<string, StubMemoryRecord>>();
+  let memorySeq = 0;
 
   // Resolve a coding run result, then re-wrap its `sandbox` as a handle so the
   // blocking `run()` path keeps a method-capable Sandbox even when the result was
@@ -1209,51 +1301,125 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           ),
       },
     },
+    // Stateful, semantically faithful memory stub: appends land in an in-process
+    // per-namespace store; recall applies the SDK's filter semantics (flat keys,
+    // `{in}` sets); forget is blind-idempotent; drop clears the namespace. NOT
+    // simulated: relevance ranking (offline — every filter-matching record
+    // returns with score 1, insertion order) and whole-store bounds (key
+    // counts / byte caps).
     memory: {
+      // Deferred so a validation throw inside the fallback REJECTS the returned
+      // promise (the async contract) instead of throwing synchronously.
       append: (input) =>
-        Promise.resolve(
-          r("memory.append", [input], () => ({
-            id: "stub-memory",
-            content: input.content,
-            scope: input.scope ?? "default",
-            decision: "ADDED",
-            createdAt: "2099-01-01T00:00:00Z",
-            occurredAt: input.occurredAt ?? null,
-            metadata: input.metadata ?? {},
-          })) as AppendResult,
+        Promise.resolve().then(
+          () =>
+            r("memory.append", [input], () => {
+              const flat = input.metadata
+                ? validateStubMemoryMetadata(input.metadata)
+                : new Map<string, MemoryMetadataValue>();
+              const metadata =
+                input.metadata !== undefined &&
+                Object.keys(input.metadata).length > 0
+                  ? input.metadata
+                  : undefined;
+              const record: StubMemoryRecord = {
+                id: `stub-memory-${++memorySeq}`,
+                content: input.content,
+                createdAt: "2099-01-01T00:00:00Z",
+                ...(input.occurredAt !== undefined && {
+                  occurredAt: input.occurredAt,
+                }),
+                ...(metadata !== undefined && { metadata }),
+                flat,
+              };
+              const namespace = input.namespace ?? "default";
+              const records =
+                memoryNamespaces.get(namespace) ??
+                new Map<string, StubMemoryRecord>();
+              records.set(record.id, record);
+              memoryNamespaces.set(namespace, records);
+              const result: AppendResult = {
+                id: record.id,
+                content: record.content,
+                createdAt: record.createdAt,
+                ...(record.metadata !== undefined && {
+                  metadata: record.metadata,
+                }),
+                ...(record.occurredAt !== undefined && {
+                  occurredAt: record.occurredAt,
+                }),
+              };
+              return result;
+            }) as AppendResult,
         ),
+      // Deferred so a validation throw inside the fallback REJECTS the returned
+      // promise (the async contract) instead of throwing synchronously.
       recall: (input) =>
-        Promise.resolve(
-          r("memory.recall", [input], () => ({
-            results: [],
-            query: input.query,
-            topK: input.topK ?? 5,
-            count: 0,
-          })) as RecallResponse,
+        Promise.resolve().then(
+          () =>
+            r("memory.recall", [input], () => {
+              if (
+                input.strategy !== undefined &&
+                !STUB_RETRIEVAL_STRATEGIES.includes(input.strategy)
+              ) {
+                const message = `strategy must be one of the following values: ${STUB_RETRIEVAL_STRATEGIES.join(", ")}`;
+                throw new MemoryHttpError(message, 400, { message });
+              }
+              const records = memoryNamespaces.get(
+                input.namespace ?? "default",
+              );
+              const topK = input.topK ?? 5;
+              const results: RecallMatch[] = [...(records?.values() ?? [])]
+                .filter((record) =>
+                  stubMemoryFilterMatches(record, input.filter),
+                )
+                .slice(0, topK)
+                .map((record) => ({
+                  id: record.id,
+                  content: record.content,
+                  score: 1,
+                  createdAt: record.createdAt,
+                  occurredAt: record.occurredAt ?? null,
+                  metadata: record.metadata ?? null,
+                }));
+              return {
+                results,
+                query: input.query,
+                topK,
+                count: results.length,
+              } satisfies RecallResponse;
+            }) as RecallResponse,
         ),
-      sweep: (input) =>
+      forget: (input: ForgetInput) =>
         Promise.resolve(
-          r("memory.sweep", [input], () =>
-            input?.dryRun === false
-              ? { evicted: 0 }
-              : { evicted: 0, candidates: [] },
-          ) as MemorySweepResponse,
+          r("memory.forget", [input], () => {
+            const records = memoryNamespaces.get(input.namespace ?? "default");
+            for (const id of input.ids) records?.delete(id);
+            return undefined;
+          }) as void,
         ),
-      get: (id: string, options?: MemoryCallOptions) =>
+      drop: (namespace: string) =>
         Promise.resolve(
-          r("memory.get", [id, options], () => ({
-            id,
-            content: "(stub) memory content",
-            scope: "default",
-            createdAt: "2099-01-01T00:00:00Z",
-            occurredAt: null,
-            lastAccessedAt: null,
-            metadata: {},
-          })) as Memory,
+          r("memory.drop", [namespace], () => {
+            memoryNamespaces.delete(namespace);
+            return undefined;
+          }) as void,
         ),
-      forget: (id: string, options?: MemoryCallOptions) =>
+    },
+    // Read-only vault (SAP-1471). Stubs return empty/absent — a local run must
+    // never surface real credentials, and "no secret found" is the safe default.
+    vault: {
+      list: (ref: string) =>
+        Promise.resolve(r("vault.list", [ref], () => []) as string[]),
+      get: (ref: string, key: string) =>
+        Promise.resolve(r("vault.get", [ref, key], () => null) as string | null),
+      getMany: (ref: string, keys: string[]) =>
         Promise.resolve(
-          r("memory.forget", [id, options], () => undefined) as void,
+          r("vault.getMany", [ref, keys], () => ({})) as Record<string, string>,
+        ),
+      getAll: (ref: string) =>
+        Promise.resolve(
+          r("vault.getAll", [ref], () => ({})) as Record<string, string>,
         ),
     },
     speech: {

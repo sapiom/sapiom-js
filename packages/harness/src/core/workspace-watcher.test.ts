@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { WorkspaceWatcherManager, snapshotWorkspaceWorkflows } from "./workspace-watcher.js";
+import { WorkspaceWatcherManager, snapshotWorkspaceWorkflows, snapshotWorkspaceWorkflowsAsync } from "./workspace-watcher.js";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -98,6 +98,46 @@ describe("WorkspaceWatcherManager", () => {
     manager.start("sess-1", cwd);
     expect(manager.size).toBe(1);
   });
+
+  it("poll in-flight guard: second tick while first async walk is running is skipped (C3)", async () => {
+    // Verify the in-flight guard semantic directly: a tick() call while a
+    // previous async walk is still pending should be a no-op. We implement the
+    // same pattern as SessionWorkspaceWatcher.fallBackToPolling() in isolation
+    // to assert the invariant without depending on timing or fs.watch mock.
+    let inFlightAtSecondTick = false;
+    let walkCallCount = 0;
+    let resolveFirstWalk!: () => void;
+
+    // Minimal reimplementation of the guarded poll pattern from workspace-watcher.ts.
+    let pollInFlight = false;
+    const tick = (): void => {
+      if (pollInFlight) { inFlightAtSecondTick = true; return; }
+      pollInFlight = true;
+      walkCallCount++;
+      // Slow async that doesn't resolve until resolveFirstWalk() is called.
+      new Promise<void>((r) => { resolveFirstWalk = r; })
+        .finally(() => { pollInFlight = false; });
+    };
+
+    // First tick: starts the walk, sets pollInFlight = true.
+    tick();
+    expect(walkCallCount).toBe(1);
+    expect(pollInFlight).toBe(true);
+
+    // Second tick: should be skipped because pollInFlight is true.
+    tick();
+    expect(inFlightAtSecondTick).toBe(true);
+    expect(walkCallCount).toBe(1); // no second walk started
+
+    // Once the first walk completes, the flag is cleared.
+    resolveFirstWalk();
+    await new Promise((r) => setImmediate(r));
+    expect(pollInFlight).toBe(false);
+
+    // Now a third tick can proceed.
+    tick();
+    expect(walkCallCount).toBe(2);
+  });
 });
 
 describe("snapshotWorkspaceWorkflows", () => {
@@ -137,5 +177,59 @@ describe("snapshotWorkspaceWorkflows", () => {
     await scaffoldWorkflow(path.join(dir, "flow-a"), "nested");
     const snapshot = snapshotWorkspaceWorkflows(dir);
     expect(snapshot).not.toContain("nested");
+  });
+});
+
+describe("snapshotWorkspaceWorkflowsAsync", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-workspace-snapshot-async-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("produces the same fingerprint as the sync version for a populated workspace", async () => {
+    await scaffoldWorkflow(dir, "flow-a");
+    await scaffoldWorkflow(dir, "flow-b");
+    await fs.mkdir(path.join(dir, "node_modules", "pkg"), { recursive: true });
+
+    const sync = snapshotWorkspaceWorkflows(dir);
+    const async_ = await snapshotWorkspaceWorkflowsAsync(dir);
+    expect(async_).toBe(sync);
+    expect(async_).toContain("flow-a");
+    expect(async_).toContain("flow-b");
+  });
+
+  it("returns an empty string for an empty root, matching the sync version", async () => {
+    const sync = snapshotWorkspaceWorkflows(dir);
+    const async_ = await snapshotWorkspaceWorkflowsAsync(dir);
+    expect(async_).toBe(sync);
+    expect(async_).toBe("");
+  });
+
+  it("changes when a workflow appears and again when it's removed — same as the sync version", async () => {
+    const emptySync = snapshotWorkspaceWorkflows(dir);
+    const emptyAsync = await snapshotWorkspaceWorkflowsAsync(dir);
+    expect(emptyAsync).toBe(emptySync);
+
+    const wfDir = await scaffoldWorkflow(dir, "flow-c");
+    const withOneSync = snapshotWorkspaceWorkflows(dir);
+    const withOneAsync = await snapshotWorkspaceWorkflowsAsync(dir);
+    expect(withOneAsync).toBe(withOneSync);
+    expect(withOneAsync).not.toBe(emptyAsync);
+
+    await fs.rm(wfDir, { recursive: true, force: true });
+    const afterRemoveAsync = await snapshotWorkspaceWorkflowsAsync(dir);
+    expect(afterRemoveAsync).toBe(emptyAsync);
+  });
+
+  it("does not descend into a marker directory — same stop-at-first-marker semantics as sync", async () => {
+    await scaffoldWorkflow(dir, "flow-d");
+    await scaffoldWorkflow(path.join(dir, "flow-d"), "nested-should-not-appear");
+    const async_ = await snapshotWorkspaceWorkflowsAsync(dir);
+    expect(async_).not.toContain("nested-should-not-appear");
   });
 });

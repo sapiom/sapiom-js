@@ -6,6 +6,38 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeCodeAdapter } from "./claude-code.js";
 
 describe("ClaudeCodeAdapter", () => {
+  describe("launch/resume — pluginDir flag", () => {
+    it("includes --plugin-dir in launch args when pluginDir is set", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launch({
+        harnessSessionId: "h-plugin",
+        cwd: "/tmp/proj",
+        pluginDir: "/tmp/generated/h-plugin/skills-plugin",
+      });
+      expect(spec.args).toContain("--plugin-dir");
+      const idx = spec.args.indexOf("--plugin-dir");
+      expect(spec.args[idx + 1]).toBe("/tmp/generated/h-plugin/skills-plugin");
+    });
+
+    it("includes --plugin-dir in resume args when pluginDir is set", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.resume("agent-uuid-456", {
+        harnessSessionId: "h-plugin",
+        cwd: "/tmp/proj",
+        pluginDir: "/tmp/generated/h-plugin/skills-plugin",
+      });
+      expect(spec.args).toContain("--plugin-dir");
+      const idx = spec.args.indexOf("--plugin-dir");
+      expect(spec.args[idx + 1]).toBe("/tmp/generated/h-plugin/skills-plugin");
+    });
+
+    it("omits --plugin-dir from args when pluginDir is not set", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launch({ harnessSessionId: "h-no-plugin", cwd: "/tmp/proj" });
+      expect(spec.args).not.toContain("--plugin-dir");
+    });
+  });
+
   describe("launch/resume", () => {
     it("builds a launch SpawnSpec with settings/mcp-config/system-prompt flags and unsets CLAUDECODE", async () => {
       const promptDir = await mkdtemp(join(tmpdir(), "harness-claude-test-"));
@@ -199,10 +231,75 @@ describe("ClaudeCodeAdapter", () => {
       expect(Buffer.byteLength(content, "utf8")).toBeGreaterThan(65_536);
       await writeFile(join(projectDir, "session-large.jsonl"), content, "utf8");
 
-      const adapter = new ClaudeCodeAdapter({ homeDir });
+      // Force the head/tail-window path (not a full scan) with a tiny cap.
+      const adapter = new ClaudeCodeAdapter({ homeDir, fullScanMaxBytes: 1_024 });
       const summaries = await adapter.listPastSessions(cwd);
       expect(summaries).toHaveLength(1);
       expect(summaries[0]).toMatchObject({ title: "Found in the tail" });
+      // A file too large to fully scan reports no exact turn count.
+      expect(summaries[0]!.messageCount).toBeUndefined();
+    });
+
+    it("prefers Claude's ai-title over the (often boilerplate) first prompt and never returns a UUID", async () => {
+      const projectDir = encodedProjectDir(homeDir, cwd);
+      await mkdir(projectDir, { recursive: true });
+
+      const content = [
+        JSON.stringify({
+          type: "user",
+          origin: { kind: "human" },
+          gitBranch: "feat/SAP-1632",
+          message: { role: "user", content: "You are an AI coding agent managed by the Orchestrator. Do X." },
+        }),
+        JSON.stringify({ type: "ai-title", aiTitle: "Fix resume history row labels" }),
+        JSON.stringify({ type: "assistant", gitBranch: "feat/SAP-1632", message: { role: "assistant", content: "ok" } }),
+      ].join("\n");
+      await writeFile(join(projectDir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"), content + "\n", "utf8");
+
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      const summaries = await adapter.listPastSessions(cwd);
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]).toMatchObject({
+        title: "Fix resume history row labels",
+        gitBranch: "feat/SAP-1632",
+      });
+      expect(summaries[0]!.title).not.toContain("aaaaaaaa");
+    });
+
+    it("extracts gitBranch and an exact human-turn count, excluding tool results and sub-agent turns", async () => {
+      const projectDir = encodedProjectDir(homeDir, cwd);
+      await mkdir(projectDir, { recursive: true });
+
+      const content = [
+        JSON.stringify({ type: "user", origin: { kind: "human" }, gitBranch: "main", message: { role: "user", content: "first" } }),
+        JSON.stringify({ type: "assistant", gitBranch: "main", message: { role: "assistant", content: "working" } }),
+        // Tool result echoed back with role "user" — not a human turn.
+        JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", content: "done" }] } }),
+        // Sub-agent (sidechain) prompt — not a top-level human turn.
+        JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: "sub-agent ask" } }),
+        JSON.stringify({ type: "user", origin: { kind: "human" }, gitBranch: "feat/x", message: { role: "user", content: "second" } }),
+      ].join("\n");
+      await writeFile(join(projectDir, "session-turns.jsonl"), content + "\n", "utf8");
+
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      const [summary] = await adapter.listPastSessions(cwd);
+      expect(summary).toMatchObject({ messageCount: 2, gitBranch: "feat/x", title: "first" });
+    });
+
+    it("falls back to the directory basename (never a bare UUID) when a session has no title, summary, or prompt", async () => {
+      const projectDir = encodedProjectDir(homeDir, cwd);
+      await mkdir(projectDir, { recursive: true });
+
+      const content = [
+        JSON.stringify({ type: "assistant", message: { role: "assistant", content: "no user prompt here" } }),
+      ].join("\n");
+      await writeFile(join(projectDir, "11111111-2222-3333-4444-555555555555.jsonl"), content + "\n", "utf8");
+
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      const [summary] = await adapter.listPastSessions(cwd);
+      // cwd is "/Users/test/my-project" → basename "my-project".
+      expect(summary!.title).toBe("my-project");
+      expect(summary!.title).not.toContain("11111111");
     });
   });
 });

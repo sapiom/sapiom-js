@@ -17,10 +17,11 @@
 export const AUTHORING_INSTRUCTIONS = `# Sapiom dev MCP (sapiom-dev)
 
 \`sapiom-dev\` is Sapiom's local developer MCP — the terminal surface for building and managing
-your Sapiom projects. Today it drives **agent authoring** (more dev/management tools will land
-here over time): build, test, and deploy a Sapiom agent — a \`defineAgent({ name, entry, steps })\`
-(from \`@sapiom/agent\`) where each step's \`run(input, ctx)\` does work and returns a directive.
-All from the terminal; no dashboard required.
+your Sapiom projects. Today it drives **agent authoring and sandbox app previews** (more
+dev/management tools will land here over time). Agent authoring: build, test, and deploy a
+Sapiom agent — a \`defineAgent({ name, entry, steps })\` (from \`@sapiom/agent\`) where each
+step's \`run(input, ctx)\` does work and returns a directive. All from the terminal; no
+dashboard required.
 
 ## Two ways to use Sapiom
 This server (\`sapiom-dev\`) is where you **author agents** — the \`sapiom_dev_agents_*\` tools
@@ -45,6 +46,12 @@ remote MCP or the SDK for a single action.
    offline) → \`sapiom_dev_agents_run_local\` (capabilities are stubbed; zero spend).
 4. Ship: \`sapiom_dev_agents_link\` → \`_deploy\` → \`_run\` (real, billed) → \`_inspect\`.
 
+## Preview a web app
+From inside the project: \`sapiom_dev_sandbox_configure\` (writes the validated \`sapiom.json\`
+resource — source, start command, port, optional build/tier/ttl/env) →
+\`sapiom_dev_sandbox_check\` (optional) → \`sapiom_dev_sandbox_preview\` (uploads, builds, starts,
+and returns a live URL; a \`failed\` status carries the build/start logs — fix and retry).
+
 ## Canonical rules (types are the source of truth — run \`npm run typecheck\`)
 - Import \`defineAgent\`, \`defineStep\`, and the directives
   (\`goto\` / \`terminate\` / \`fail\` / \`retry\` / \`pauseUntilSignal\`) from \`@sapiom/agent\`.
@@ -54,8 +61,9 @@ remote MCP or the SDK for a single action.
   target must be listed in \`next[]\`. TypeScript enforces all of these.
 - Cross-step state: \`ctx.shared\` — the entry input reaches only the entry step.
 - Capabilities run via the typed \`ctx.sapiom.*\` client (sandboxes, repositories,
-  models.coding, fileStorage, search, database, and more) — don't memorize the catalog;
-  use autocomplete/typecheck.
+  models.coding, fileStorage, search, database, email, domains, memory, and more) —
+  don't memorize the catalog; use autocomplete/typecheck. Schedules (cron triggers) are
+  a top-level \`@sapiom/tools\` import, not under \`ctx.sapiom\`.
 
 Full reference: https://docs.sapiom.ai/agents/quick-start (authoring · capabilities ·
 reference · examples), plus the \`AGENTS.md\` and \`sapiom-agent-authoring\` skill inside

@@ -41,7 +41,9 @@ describe("generateMcpConfig", () => {
     });
     expect(config.mcpServers["sapiom-dev"]).toEqual({
       command: "npx",
-      args: ["-y", "@sapiom/mcp"],
+      // Dist-tagged so npx resolves the published package, not a local
+      // workspace copy when the harness runs inside the monorepo.
+      args: ["-y", "@sapiom/mcp@latest"],
     });
   });
 

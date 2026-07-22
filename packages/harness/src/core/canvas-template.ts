@@ -18,6 +18,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
+import {
+  applyRunStateToCanvas,
+  bootCanvasNodeClicks,
+  bootCanvasRunState,
+  runStateNodeClass,
+} from "./canvas-run-state.js";
 
 /** Lives alongside index.html, in the same CANVAS_DIR — a pristine copy of
  *  the template, written once and never touched again, so "clone the
@@ -40,6 +46,8 @@ function themeStyleBlock(): string {
   --canvas-text-dim: #737373;
   --canvas-accent: #05a9bc;
   --canvas-success: #05a9bc;
+  --canvas-running: #2563eb;
+  --canvas-passed: #16a34a;
   --canvas-escalation: #b45309;
   --canvas-failure: #ef4444;
 }
@@ -52,6 +60,8 @@ function themeStyleBlock(): string {
   --canvas-text-dim: #a1a1aa;
   --canvas-accent: #6be195;
   --canvas-success: #6be195;
+  --canvas-running: #60a5fa;
+  --canvas-passed: #4ade80;
   --canvas-escalation: #f59e0b;
   --canvas-failure: #f87171;
 }
@@ -101,6 +111,10 @@ html, body {
 .canvas-graph-svg { display: block; margin: 0 auto; }
 
 /* --- node kinds: entry | step | pause | terminal-success | terminal-warn | launched-workflow --- */
+/* Nodes are clickable — pointer cursor signals this, and a subtle stroke-width bump on hover
+   makes the affordance visible without requiring external JS to track hover state. */
+.canvas-node { cursor: pointer; }
+.canvas-node:hover .canvas-node-rect { stroke-width: 2.5; }
 .canvas-node .canvas-node-rect { fill: var(--canvas-panel); stroke-width: 1.5; stroke: var(--canvas-border-strong); }
 .node--entry .canvas-node-rect { stroke: var(--canvas-accent); }
 .node--pause .canvas-node-rect { stroke: var(--canvas-text-dim); stroke-dasharray: 5 4; }
@@ -147,6 +161,59 @@ html, body {
 .canvas-notes { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--canvas-text-dim); }
 .canvas-cross-workflow { margin: 0; font-size: 11.5px; color: var(--canvas-text-dim); }
 template { display: none; }
+
+/* --- live run-state node lighting ---------------------------------------- */
+/* Applied by the postMessage listener (canvas-run-state.ts) while a run is
+   active. Each step's <g class="canvas-node"> gains one of is-running /
+   is-passed / is-failed / is-pending, lighting up its rect in place. */
+
+@keyframes canvas-node-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50%       { stroke-opacity: 0.45; }
+}
+
+/* running/in-flight: blue, tinted fill, and a pulse so you SEE it working. */
+.canvas-node.is-running .canvas-node-rect {
+  fill: var(--canvas-running);
+  fill-opacity: 0.12;
+  stroke: var(--canvas-running);
+  stroke-width: 2.5;
+  animation: canvas-node-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-node.is-running .canvas-node-rect {
+    animation: none;
+  }
+}
+
+/* passed: green box. */
+.canvas-node.is-passed .canvas-node-rect {
+  fill: var(--canvas-passed);
+  fill-opacity: 0.14;
+  stroke: var(--canvas-passed);
+  stroke-width: 2.5;
+}
+
+/* failed: red box. */
+.canvas-node.is-failed .canvas-node-rect {
+  fill: var(--canvas-failure);
+  fill-opacity: 0.14;
+  stroke: var(--canvas-failure);
+  stroke-width: 2.5;
+}
+
+/* pending: dim, so not-yet-run steps read as inactive. */
+.canvas-node.is-pending {
+  opacity: 0.5;
+}
+
+/* Active-run header badge — accent background signals a live run. */
+.canvas-badge.canvas-badge--active {
+  color: var(--canvas-bg);
+  background: var(--canvas-accent);
+  border-color: var(--canvas-accent);
+}
 `.trim();
 }
 
@@ -247,11 +314,19 @@ const SVG_DEFS = `
 </svg>
 `.trim();
 
+/** Stringified run-state listener and node-click channel injected into every
+ *  canvas document. The run-state functions must all be in scope together
+ *  because `bootCanvasRunState` calls `applyRunStateToCanvas`, which calls
+ *  `runStateNodeClass`. `bootCanvasNodeClicks` adds the reverse click channel
+ *  (iframe → parent) using the same stringify pattern. */
+const RUN_STATE_SCRIPT = `${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();`;
+
 /**
  * Wraps `bodyHtml` in the shared canvas document shell: doctype, the theme
- * switch script, and every CSS class an agent's markup can use. This is the
- * single source both the pristine template and `scripts/seed-example.mjs`'s
- * prefilled instance render through, so they can't drift from each other.
+ * switch script, the run-state listener, and every CSS class an agent's markup
+ * can use. This is the single source both the pristine template and
+ * `scripts/seed-example.mjs`'s prefilled instance render through, so they
+ * can't drift from each other.
  */
 export function renderCanvasDocument(bodyHtml: string): string {
   return `<!DOCTYPE html>
@@ -262,6 +337,9 @@ export function renderCanvasDocument(bodyHtml: string): string {
 <title>Sapiom workflow canvas</title>
 <script>
 ${THEME_SCRIPT}
+</script>
+<script>
+${RUN_STATE_SCRIPT}
 </script>
 <style>
 ${themeStyleBlock()}
@@ -311,7 +389,10 @@ ${PATTERNS_TEMPLATE}
  *  `index.html` — a friendly empty state plus the patterns reference. */
 export const TEMPLATE_HTML = renderCanvasDocument(TEMPLATE_BODY);
 
-async function writeIfMissing(filePath: string, content: string): Promise<void> {
+async function writeIfMissing(
+  filePath: string,
+  content: string,
+): Promise<void> {
   try {
     await fs.access(filePath);
     return;
@@ -366,6 +447,9 @@ async function removeLegacyOverviewIndex(indexPath: string): Promise<void> {
   try {
     await fs.rm(indexPath, { force: true });
   } catch (err) {
-    console.error(`[harness] failed to remove legacy canvas overview ${indexPath}:`, err);
+    console.error(
+      `[harness] failed to remove legacy canvas overview ${indexPath}:`,
+      err,
+    );
   }
 }

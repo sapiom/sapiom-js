@@ -41,6 +41,10 @@ Thumbs.db
 .claude/commands/
 .trees
 
+# Harness runtime output — canvas renders/cache + per-project context the CLI
+# writes into whatever directory it's launched in. Never source.
+.sapiom/
+
 # Local Verdaccio registry (SDK dev loop) — storage + runtime auth, never committed
 .verdaccio/storage/
 .verdaccio/.npmrc

@@ -1,0 +1,11 @@
+{
+  "resources": {
+    "sapiom-e2e-app": {
+      "type": "sandbox",
+      "source": { "kind": "upload" },
+      "start": "node server.js",
+      "port": 3000,
+      "ttl": "1h"
+    }
+  }
+}

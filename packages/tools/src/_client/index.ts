@@ -34,13 +34,32 @@ import {
  * optional and maps 1:1 to an `x-sapiom-*` header the collapsed flow understands.
  */
 export interface Attribution {
-  /** Human-readable agent name. Mutually exclusive with `agentId` (gateway-enforced). */
+  /**
+   * @deprecated A free-form agent label, not a resolved agent. Prefer omitting — the agent a call
+   * belongs to is resolved from the authenticated request.
+   */
   agentName?: string;
-  /** Agent UUID. Mutually exclusive with `agentName` (gateway-enforced). */
+  /**
+   * @deprecated A free-form agent id (a label, not the resolved agent). Prefer omitting.
+   */
   agentId?: string;
-  /** Sapiom trace id to attribute this call to. */
+  /** Core trace id to link this call's transaction to — must reference an existing Core trace. */
   traceId?: string;
-  /** Your own external trace / correlation id. */
+  /**
+   * Activity trace this call's span nests under (the customer-facing execution trace). A distinct,
+   * client-minted id — kept separate from `traceId` (the Core transaction trace) so the two never
+   * collide on one header.
+   */
+  activityTraceId?: string;
+  /** Parent span id this call nests under, within `activityTraceId`. */
+  parentSpanId?: string;
+  /** Id of the run/execution this call belongs to. */
+  executionId?: string;
+  /** Ordinal of the step this call was made from (0-based). */
+  stepOrder?: number;
+  /**
+   * @deprecated Legacy correlation field. Use `traceId`.
+   */
   traceExternalId?: string;
   /** Arbitrary JSON object stored with the transaction. Must be an object. */
   metadata?: Record<string, unknown>;
@@ -89,6 +108,11 @@ function attributionToHeaders(a: Attribution): Record<string, string> {
   if (a.agentName) h["x-sapiom-agent-name"] = a.agentName;
   if (a.agentId) h["x-sapiom-agent-id"] = a.agentId;
   if (a.traceId) h["x-sapiom-trace-id"] = a.traceId;
+  if (a.activityTraceId) h["x-sapiom-activity-trace-id"] = a.activityTraceId;
+  if (a.parentSpanId) h["x-sapiom-parent-span-id"] = a.parentSpanId;
+  if (a.executionId) h["x-sapiom-execution-id"] = a.executionId;
+  // 0 is a valid first-step ordinal — guard on undefined, not falsiness.
+  if (a.stepOrder !== undefined) h["x-sapiom-step-order"] = String(a.stepOrder);
   if (a.traceExternalId) h["x-sapiom-trace-external-id"] = a.traceExternalId;
   if (a.metadata) h["x-sapiom-metadata"] = JSON.stringify(a.metadata);
   return h;
@@ -107,6 +131,16 @@ export function attributionFromEnv(): Attribution {
   if (process.env.SAPIOM_AGENT_NAME)
     a.agentName = process.env.SAPIOM_AGENT_NAME;
   if (process.env.SAPIOM_TRACE_ID) a.traceId = process.env.SAPIOM_TRACE_ID;
+  if (process.env.SAPIOM_ACTIVITY_TRACE_ID)
+    a.activityTraceId = process.env.SAPIOM_ACTIVITY_TRACE_ID;
+  if (process.env.SAPIOM_PARENT_SPAN_ID)
+    a.parentSpanId = process.env.SAPIOM_PARENT_SPAN_ID;
+  if (process.env.SAPIOM_EXECUTION_ID)
+    a.executionId = process.env.SAPIOM_EXECUTION_ID;
+  if (process.env.SAPIOM_STEP_ORDER) {
+    const n = Number(process.env.SAPIOM_STEP_ORDER);
+    if (Number.isFinite(n)) a.stepOrder = n;
+  }
   if (process.env.SAPIOM_TRACE_EXTERNAL_ID)
     a.traceExternalId = process.env.SAPIOM_TRACE_EXTERNAL_ID;
   return a;

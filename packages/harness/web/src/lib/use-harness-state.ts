@@ -11,7 +11,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse } from "./api";
+import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse, type HarnessApi } from "./api";
 import { subscribeEvents } from "./events";
 
 const api = createApi();
@@ -50,6 +50,20 @@ export interface HarnessStateHook {
   bindWorkflow: (sessionId: string, workflowPath: string | null) => Promise<void>;
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
+  /**
+   * Submits text to a session's pty via POST /api/sessions/:id/input.
+   * Throws `ApiError` on HTTP errors — callers handle 409 (session not ready)
+   * by showing the reason inline rather than as a toast.
+   */
+  injectInput: (sessionId: string, text: string) => Promise<void>;
+  /**
+   * Populates the terminal's input line with `text` WITHOUT submitting
+   * (submit:false). Shows a toast on success; sets the toast on failure
+   * (same as runMacro) since callers fire this from click handlers.
+   */
+  useSkill: (sessionId: string, text: string) => Promise<void>;
+  /** Expose the toast setter so panels can push their own toasts. */
+  showToast: (message: string) => void;
   listDir: (path?: string) => Promise<FsListResponse>;
   lastMessage: BusMessage | null;
   /** A user-facing message from the most recent failed action (e.g. a macro
@@ -65,6 +79,9 @@ export interface HarnessStateHook {
    *  then kept fresh by `task.status` frames. Drives the canvas pane's
    *  activity/failure states. */
   tasks: BackgroundTask[];
+  /** The underlying API client — exposed so consumers (e.g. SkillsPanel) can
+   *  call methods (listSkills, getSkill) not surfaced as dedicated hook fns. */
+  api: HarnessApi;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -113,13 +130,16 @@ export function useHarnessState(): HarnessStateHook {
     };
   }, []);
 
-  // Switching sessions follows that session's own binding (if any) rather than
-  // leaving the rail highlighted on whatever the previous session had selected.
+  // Switching sessions snaps the rail/strip selection to that session's own
+  // binding so the highlight always matches the canvas (which is driven by the
+  // active session's binding). Crucially this also CLEARS the selection when
+  // the new session has no binding — otherwise the rail stayed highlighted on
+  // the previous session's workflow while the canvas showed nothing, the
+  // rail↔canvas divergence users hit on every tab switch to an unbound session.
   useEffect(() => {
     if (!activeSessionId) return;
     const session = state?.sessions.find((s) => s.id === activeSessionId);
-    const bound = boundWorkflowPathOf(session);
-    if (bound) setSelectedWorkflowPath(bound);
+    setSelectedWorkflowPath(boundWorkflowPathOf(session));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
@@ -239,12 +259,19 @@ export function useHarnessState(): HarnessStateHook {
   }, [state?.availableHarnesses, createSession]);
 
   const resumeSession = useCallback(async (harnessSessionId: string): Promise<HarnessSession> => {
-    const session = await api.resumeSession(harnessSessionId);
-    setState((prev) =>
-      prev ? { ...prev, sessions: prev.sessions.map((s) => (s.id === session.id ? session : s)) } : prev,
-    );
-    setActiveSessionId(session.id);
-    return session;
+    try {
+      const session = await api.resumeSession(harnessSessionId);
+      setState((prev) =>
+        prev ? { ...prev, sessions: prev.sessions.map((s) => (s.id === session.id ? session : s)) } : prev,
+      );
+      setActiveSessionId(session.id);
+      return session;
+    } catch (err) {
+      // Surface resume failures as a toast so a failed resume is never silent
+      // (the caller fires this with void and swallows the rejection).
+      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      throw err;
+    }
   }, []);
 
   /**
@@ -267,7 +294,15 @@ export function useHarnessState(): HarnessStateHook {
 
   const closeSession = useCallback(
     async (id: string): Promise<void> => {
-      await api.killSession(id);
+      try {
+        await api.killSession(id);
+      } catch (err) {
+        // Surface the failure as a toast and keep the user on the dead-session
+        // overlay: the re-throw below skips the local removal, so a failed kill
+        // never makes the session vanish from the UI as if it had succeeded.
+        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        throw err;
+      }
       const remaining = (state?.sessions ?? []).filter((session) => session.id !== id);
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
       if (activeSessionId === id) {
@@ -316,6 +351,29 @@ export function useHarnessState(): HarnessStateHook {
 
   const dismissToast = useCallback(() => setToast(null), []);
 
+  // Unlike runMacro (which swallows errors into a toast), injectInput lets the
+  // error propagate so callers can handle 409 "not ready" inline without a
+  // generic toast message.
+  const injectInput = useCallback(async (sessionId: string, text: string): Promise<void> => {
+    await api.injectInput(sessionId, { text, submit: true });
+  }, []);
+
+  // Populates the terminal input line without submitting (submit:false).
+  // Failures go to the toast slot rather than propagating — same pattern as
+  // runMacro, since callers fire this from a click handler without awaiting.
+  const useSkill = useCallback(async (sessionId: string, text: string): Promise<void> => {
+    try {
+      await api.injectInput(sessionId, { text, submit: false });
+      setToast("Typed into the terminal — edit and press Enter.");
+    } catch (err) {
+      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+    }
+  }, []);
+
+  const showToast = useCallback((message: string): void => {
+    setToast(message);
+  }, []);
+
   const listDir = useCallback((path?: string): Promise<FsListResponse> => api.listDir(path), []);
 
   return {
@@ -340,11 +398,15 @@ export function useHarnessState(): HarnessStateHook {
     bindWorkflow,
     updateSettings,
     runMacro,
+    injectInput,
+    useSkill,
+    showToast,
     listDir,
     lastMessage,
     toast,
     dismissToast,
     busySessionIds,
     tasks,
+    api,
   };
 }

@@ -6,6 +6,7 @@ const workflow: WorkflowInfo = {
   name: "leasing",
   path: "/Users/demo/acme-app/leasing",
   definitionId: 4821,
+  definitionSlug: "leasing",
   source: "scan",
 };
 
@@ -17,7 +18,7 @@ const baseCtx: MacroContext = {
 };
 
 describe("resolveMacro", () => {
-  it("substitutes all documented placeholders in an inject macro", () => {
+  it("substitutes all documented placeholders in an inject macro (workflow.path is POSIX single-quoted)", () => {
     const macro: MacroDef = {
       id: "kitchen-sink",
       label: "Kitchen sink",
@@ -31,7 +32,9 @@ describe("resolveMacro", () => {
     const resolved = resolveMacro(macro, baseCtx);
     expect(resolved).toEqual({
       kind: "inject",
-      text: "/Users/demo/acme-app/leasing leasing 4821 /Users/demo/acme-app /Users/demo/acme-app/.sapiom/canvas/index.html the leasing funnel",
+      // {{workflow.path}} is POSIX single-quoted by shellQuote() at resolution time.
+      // Other placeholders (name, id, cwd, canvas.path, subject) are plain strings.
+      text: "'/Users/demo/acme-app/leasing' leasing 4821 /Users/demo/acme-app /Users/demo/acme-app/.sapiom/canvas/index.html the leasing funnel",
       submit: true,
     });
   });

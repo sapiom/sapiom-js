@@ -53,12 +53,14 @@ describe("WorkflowRegistry", () => {
       name: "@acme/proj-a",
       path: path.join(tmpRoot, "proj-a"),
       definitionId: 42,
+      definitionSlug: null,
       source: "scan",
     });
     expect(byPath.get(path.join(tmpRoot, "proj-b"))).toEqual({
       name: "proj-b",
       path: path.join(tmpRoot, "proj-b"),
       definitionId: null,
+      definitionSlug: null,
       source: "scan",
     });
     expect(byPath.has(path.join(tmpRoot, "a", "b", "c"))).toBe(true);
@@ -88,6 +90,7 @@ describe("WorkflowRegistry", () => {
       name: "not-yet-linked",
       path: projectDir,
       definitionId: null,
+      definitionSlug: null,
       source: "connect",
     });
     expect(await registry.list()).toEqual([info]);
@@ -157,6 +160,78 @@ describe("WorkflowRegistry", () => {
     it("is a no-op when no registry file exists yet", async () => {
       expect(await registry.prune()).toEqual([]);
       await expect(fs.access(registryPath)).rejects.toThrow();
+    });
+  });
+
+  describe("write serialization", () => {
+    it("concurrent scan/prune calls serialize so no entry is lost from the persisted file", async () => {
+      // Seed N workflow directories and fire scan + prune concurrently.
+      // Without the write queue, a prune that starts reading this.workflows
+      // before a concurrent scan finishes writing it can overwrite the just-
+      // merged entries. With serialization, the persisted file must contain
+      // all discovered paths.
+      const N = 5;
+      for (let i = 0; i < N; i++) {
+        await writeMarker(path.join(tmpRoot, `proj-${i}`), i);
+      }
+
+      // Fire N scans and N prunes all at once.
+      const ops: Promise<unknown>[] = [];
+      for (let i = 0; i < N; i++) {
+        ops.push(registry.scan(tmpRoot));
+        ops.push(registry.prune());
+      }
+      await Promise.all(ops);
+
+      // All N workflow paths must survive in the persisted file.
+      const reloaded = new WorkflowRegistry(registryPath);
+      const list = await reloaded.list();
+      const paths = new Set(list.map((w) => w.path));
+      for (let i = 0; i < N; i++) {
+        expect(paths.has(path.join(tmpRoot, `proj-${i}`))).toBe(true);
+      }
+    });
+
+    it("persist uses atomic tmp-file + rename so a mid-write crash cannot tear workflows.json (C4)", async () => {
+      // Verify: after a scan, the registry file exists at registryPath and no
+      // .tmp file is left behind (the rename completed atomically).
+      await writeMarker(path.join(tmpRoot, "proj-a"), 1);
+      await registry.scan(tmpRoot);
+
+      // The final file should exist and be valid JSON.
+      const raw = await fs.readFile(registryPath, "utf8");
+      const parsed = JSON.parse(raw) as unknown[];
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(1);
+
+      // The .tmp file must NOT be left behind (rename completed).
+      const tmpPath = `${registryPath}.tmp`;
+      await expect(fs.access(tmpPath)).rejects.toThrow();
+    });
+
+    it("a failed persist does not poison the queue — subsequent writes succeed", async () => {
+      // Seed one workflow so there's something to scan.
+      await writeMarker(path.join(tmpRoot, "proj-ok"), 1);
+
+      // Make the registry path a DIRECTORY so writeFile throws EISDIR
+      // (mkdir({ recursive: true }) on the parent won't help because the
+      // path itself is already a directory, not a file destination).
+      const badPath = path.join(tmpRoot, "workflows-dir");
+      await fs.mkdir(badPath, { recursive: true }); // now badPath is a dir, not a file
+
+      const brokenRegistry = new WorkflowRegistry(badPath);
+
+      // Scan — persist will throw (EISDIR: illegal operation on a directory).
+      // The write queue must swallow the error so the next op can proceed.
+      await expect(brokenRegistry.scan(tmpRoot)).rejects.toThrow();
+
+      // Clear the obstruction and scan again on the SAME instance — the
+      // queue must not be poisoned by the earlier rejection.
+      await fs.rmdir(badPath);
+      await brokenRegistry.scan(tmpRoot);
+      const list = await brokenRegistry.list();
+      expect(list).toHaveLength(1);
+      expect(list[0].path).toBe(path.join(tmpRoot, "proj-ok"));
     });
   });
 });

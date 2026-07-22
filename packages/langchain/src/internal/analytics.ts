@@ -68,6 +68,13 @@ export interface ToolCallMeta {
   toolName?: string;
   /** Error constructor name only — never the error message. */
   errorClass?: string;
+  /**
+   * True when a pay-gated (x402) bounce happened and the call was retried
+   * with payment. Set on BOTH the success event (payment went through and
+   * the retry succeeded) and the error event (retry also failed). Keeps
+   * friction visible as a field — never as a second event.
+   */
+  paymentRetried?: boolean;
 }
 
 /**
@@ -115,6 +122,7 @@ export function buildToolCallData(meta: ToolCallMeta): Record<string, unknown> {
   if (meta.status === "error" && errorClass !== undefined) {
     data.error_class = errorClass;
   }
+  if (meta.paymentRetried === true) data.payment_retried = true;
   return data;
 }
 

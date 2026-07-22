@@ -5,7 +5,12 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CANVAS_INDEX } from "../shared/types.js";
-import { CANVAS_TEMPLATE_FILE, TEMPLATE_HTML, ensureCanvasTemplate, renderCanvasDocument } from "./canvas-template.js";
+import {
+  CANVAS_TEMPLATE_FILE,
+  TEMPLATE_HTML,
+  ensureCanvasTemplate,
+  renderCanvasDocument,
+} from "./canvas-template.js";
 import { assembleCanvasBody, buildErrorPanelHtml } from "./canvas-body.js";
 
 /** The stale legacy overview a pre-split server wrote to index.html. */
@@ -22,9 +27,47 @@ describe("renderCanvasDocument", () => {
     const html = renderCanvasDocument("<p>hi</p>");
     expect(html).not.toMatch(/<link[^>]+href=["']https?:/i);
     expect(html).not.toMatch(/<script[^>]+src=["']https?:/i);
-    // The only <script> content is the theme switch — it must never itself
-    // issue a network fetch.
+    // The inline scripts (theme switch + run-state listener) must never issue
+    // a network fetch — the iframe is sandboxed (allow-scripts only).
     expect(html).not.toMatch(/\bfetch\s*\(/);
+  });
+
+  it("injects the run-state postMessage listener so nodes light up during a live run", () => {
+    const html = renderCanvasDocument("<p>x</p>");
+    // The message type guard — proves the listener is wired.
+    expect(html).toContain("sapiom:run-state");
+    // The boot call — proves the listener is activated, not just defined.
+    expect(html).toContain("bootCanvasRunState()");
+    // The three function bodies should all be present.
+    expect(html).toContain("runStateNodeClass");
+    expect(html).toContain("applyRunStateToCanvas");
+    expect(html).toContain("bootCanvasRunState");
+  });
+
+  it("injects the node-click reverse channel so clicking a canvas node notifies the parent", () => {
+    const html = renderCanvasDocument("<p>x</p>");
+    // The reverse message type — proves the click channel is wired.
+    expect(html).toContain("sapiom:node-click");
+    // The boot call — proves the listener is activated, not just defined.
+    expect(html).toContain("bootCanvasNodeClicks()");
+    // The function body itself must be present.
+    expect(html).toContain("bootCanvasNodeClicks");
+  });
+
+  it("makes canvas nodes read as clickable via cursor: pointer CSS", () => {
+    const html = renderCanvasDocument("<p>x</p>");
+    expect(html).toContain("cursor: pointer");
+  });
+
+  it("includes is-running / is-passed / is-failed CSS rules for node live-state lighting", () => {
+    const html = renderCanvasDocument("");
+    expect(html).toContain("is-running");
+    expect(html).toContain("is-passed");
+    expect(html).toContain("is-failed");
+    // The pulse animation for running nodes.
+    expect(html).toContain("canvas-node-pulse");
+    // The active badge class for the header badge during a run.
+    expect(html).toContain("canvas-badge--active");
   });
 
   it("embeds the given body content verbatim inside #canvas-root", () => {
@@ -77,11 +120,21 @@ describe("TEMPLATE_HTML", () => {
 
   it("documents one example of every node kind and edge kind inside an inert <template>", () => {
     expect(TEMPLATE_HTML).toContain('<template id="canvas-patterns">');
-    for (const nodeKind of ["node--entry", "node--step", "node--pause", "node--terminal-success", "node--terminal-warn"]) {
+    for (const nodeKind of [
+      "node--entry",
+      "node--step",
+      "node--pause",
+      "node--terminal-success",
+      "node--terminal-warn",
+    ]) {
       expect(TEMPLATE_HTML).toContain(nodeKind);
     }
     // sequential (base .canvas-edge), branching (--success/--warn), cross-workflow (--cross)
-    for (const edgeClass of ["canvas-edge--success", "canvas-edge--warn", "canvas-edge--cross"]) {
+    for (const edgeClass of [
+      "canvas-edge--success",
+      "canvas-edge--warn",
+      "canvas-edge--cross",
+    ]) {
       expect(TEMPLATE_HTML).toContain(edgeClass);
     }
   });
@@ -100,7 +153,9 @@ describe("ensureCanvasTemplate", () => {
   let cwd: string;
 
   beforeEach(async () => {
-    cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-canvas-template-test-"));
+    cwd = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-canvas-template-test-"),
+    );
   });
 
   afterEach(async () => {
@@ -122,8 +177,14 @@ describe("ensureCanvasTemplate", () => {
   });
 
   it("never clobbers an index.html that's already there — backfill only", async () => {
-    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), { recursive: true });
-    await fs.writeFile(path.join(cwd, CANVAS_INDEX), "already customized by an earlier session", "utf8");
+    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(cwd, CANVAS_INDEX),
+      "already customized by an earlier session",
+      "utf8",
+    );
 
     await ensureCanvasTemplate(cwd);
 
@@ -135,12 +196,20 @@ describe("ensureCanvasTemplate", () => {
   });
 
   it("never clobbers _template.html either, independent of index.html's state", async () => {
-    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_TEMPLATE_FILE)), { recursive: true });
-    await fs.writeFile(path.join(cwd, CANVAS_TEMPLATE_FILE), "a pristine copy from a previous session", "utf8");
+    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_TEMPLATE_FILE)), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(cwd, CANVAS_TEMPLATE_FILE),
+      "a pristine copy from a previous session",
+      "utf8",
+    );
 
     await ensureCanvasTemplate(cwd);
 
-    expect(await readTemplate()).toBe("a pristine copy from a previous session");
+    expect(await readTemplate()).toBe(
+      "a pristine copy from a previous session",
+    );
     expect(await readIndex()).toBe(TEMPLATE_HTML);
   });
 
@@ -158,8 +227,14 @@ describe("ensureCanvasTemplate", () => {
   });
 
   it("deletes a stale legacy deterministic overview and reseeds the pristine template", async () => {
-    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), { recursive: true });
-    await fs.writeFile(path.join(cwd, CANVAS_INDEX), LEGACY_OVERVIEW_HTML, "utf8");
+    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(cwd, CANVAS_INDEX),
+      LEGACY_OVERVIEW_HTML,
+      "utf8",
+    );
 
     await ensureCanvasTemplate(cwd);
 
@@ -174,7 +249,9 @@ describe("ensureCanvasTemplate", () => {
     const custom = renderCanvasDocument(
       `<section class="canvas-panel"><h1 class="canvas-title">Hand-built</h1><p>bespoke</p></section>`,
     );
-    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), { recursive: true });
+    await fs.mkdir(path.dirname(path.join(cwd, CANVAS_INDEX)), {
+      recursive: true,
+    });
     await fs.writeFile(path.join(cwd, CANVAS_INDEX), custom, "utf8");
 
     await ensureCanvasTemplate(cwd);

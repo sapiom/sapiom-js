@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/mcp",
-  "version": "0.11.0",
+  "version": "0.11.3",
   "description": "Local Sapiom developer MCP server (sapiom-dev) — the unmetered surface for building and operating on Sapiom; today it scaffolds, tests, deploys, and inspects orchestrations. Not the remote Sapiom capability MCP.",
   "mcpName": "io.github.sapiom/mcp",
   "keywords": [
@@ -56,6 +56,7 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
+    "@sapiom/sandbox-preview": "workspace:^",
     "zod": "^3.25.0"
   },
   "devDependencies": {

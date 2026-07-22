@@ -1,5 +1,32 @@
 # @sapiom/analytics-core
 
+## 0.2.1
+
+### Patch Changes
+
+- 95bfcd1: Reconcile CONTRACT.md obligation #6 with harness first-party behavior.
+
+  Obligation #6's third-party metadata-only rule governs SDK wraps around non-Sapiom-bound calls (e.g. user-supplied langchain tools). The harness is a first-party product surface: its hook-to-analytics pipeline ships session content (prompts, tool I/O, assistant text) under the disclosed, consent-gated telemetry path. Added an explicit first-party carve-out to obligation #6 to resolve the contradiction between the rule and the harness envelope/taxonomy examples already in the document.
+
+- bf44229: Add `seedAnalyticsIdentity` export and `harness` to the `EventSource` union.
+
+  `seedAnalyticsIdentity(anonymousId)` seeds `~/.sapiom/analytics.json` with a known id if the file does not yet exist — idempotent, 0600-preserving, and degrades silently on unwritable HOME. Intended for one-way migration of a prior-version per-install id into the canonical identity file.
+
+  `EventSource` now includes `"harness"` for events emitted by the harness server.
+
+  `SapiomAnalytics` gains `discard()`: drop all buffered events without sending them. Complements `flush()`/`shutdown()` for hosts that must guarantee zero deliveries after a user opts out mid-process. Optional on the type (existing structural fakes keep compiling); every emitter `createAnalytics` returns implements it.
+
+  All changes are additive; no existing API signatures are modified.
+
+- dab6d44: Clarify harness `seq` gap semantics in CONTRACT.md.
+
+  The per-session `seq` section now notes that for the harness specifically,
+  `seq` indexes the local capture stream; some locally-sequenced event kinds are
+  not forwarded remotely, so remote streams have expected gaps. Duplicates are
+  the anomaly signal, not gaps. Verified against production data 2026-07-09.
+
+- ebfa0bc: All emitter instances now share a single `process.on("beforeExit")` listener (module-level registry) instead of registering one each. Consumers constructing many short-lived emitters no longer accumulate listeners toward `MaxListenersExceededWarning`; the shared listener detaches when the last instance shuts down, so listener counts return to baseline. No API change; flush-on-exit and process-lifetime semantics are unchanged.
+
 ## 0.2.0
 
 ### Minor Changes

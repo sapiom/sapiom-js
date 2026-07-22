@@ -28,7 +28,7 @@ When you've made a coherent change and want to validate it — the same point yo
 { "version": 1, "steps": { "<stepName>": { "<capability.path>": <response> } } }
 ```
 
-- Capability paths are namespace methods (`repositories.list`, `repositories.create`, `agent.coding.run`) or handle methods, which use the **singular** handle type (`repository.pushFromSandbox`, `sandbox.exec`) — not the plural namespace.
+- Capability paths are namespace methods (`repositories.list`, `repositories.create`, `models.coding.run`) or handle methods, which use the **singular** handle type (`repository.pushFromSandbox`, `sandbox.exec`) — not the plural namespace.
 - `<response>` is returned **verbatim** — it is the value that call would return, so match its real shape. `repositories.list` takes the array `list()` returns: `[{ "slug": "...", "cloneUrl": "..." }]` (each element a repository — *not* `[[ … ]]`). `repositories.create`/`get`/`attach` take a single `{ "slug", "cloneUrl" }`.
 - `run_local` reports **`unusedStubs`** (a key that matched no call — usually a typo or the plural/singular mistake) and **`stubWarnings`** (a key matched but the value was the wrong shape). A green run with either non-empty means a stub silently didn't take effect — check them.
 
@@ -43,7 +43,7 @@ return pauseUntilSignal(run, { resumeStep: "finalize" });                       
 
 - **The resumed step's `input` IS the run's result signal payload.** Annotate it with `CodingResultPayload` (from `@sapiom/tools`) — you don't have to hand-roll the shape.
 - That payload crossed a wire boundary, so it carries **no live handles** — to act on the run's sandbox, re-attach one from **`executionEnvironment`** with `ctx.sapiom.sandboxes.attach(result.executionEnvironment.id)` (`executionEnvironment` is `null` when the run provisioned none, e.g. a launch failure). Anything else the resumed step needs, stash in `ctx.shared` before pausing.
-- **To stub the resume payload** (e.g. to exercise the failure branch), override `agent.coding.run` *in the launching step* — that one value is both the `run()` result and the payload the paused step resumes with. `agent.coding.launch` is accepted there too.
+- **To stub the resume payload** (e.g. to exercise the failure branch), override `models.coding.run` *in the launching step* — that one value is both the `run()` result and the payload the paused step resumes with. `models.coding.launch` is accepted there too.
 
 ## Determinism
 

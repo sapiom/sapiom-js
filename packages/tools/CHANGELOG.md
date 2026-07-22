@@ -1,5 +1,45 @@
 # @sapiom/tools
 
+## 0.20.1
+
+### Patch Changes
+
+- ebb0342: Forward activity-trace context on capability and model calls. `Attribution` gains `activityTraceId`, `parentSpanId`, `executionId`, and `stepOrder` — emitted as `x-sapiom-activity-trace-id` / `x-sapiom-parent-span-id` / `x-sapiom-execution-id` / `x-sapiom-step-order`, and read ambiently from the matching `SAPIOM_*` env vars (`attributionFromEnv`) — so calls nest under the calling run and step. Applied once at the shared transport, so every capability inherits it.
+
+  `activityTraceId` is deliberately a **separate field/header from `traceId`**: `traceId` (`x-sapiom-trace-id`) remains the Core transaction trace, while `activityTraceId` (`x-sapiom-activity-trace-id`) is the client-minted activity/execution trace — kept apart so the two never collide on one header.
+
+  Deprecates `agentName`, `agentId`, and `traceExternalId` (a free-form label / legacy correlation field). They still forward for backward compatibility.
+
+## 0.20.0
+
+### Minor Changes
+
+- 4cf0156: Forward activity-trace context on capability and model calls. `Attribution` gains `parentSpanId`, `executionId`, and `stepOrder` — emitted as `x-sapiom-parent-span-id` / `x-sapiom-execution-id` / `x-sapiom-step-order`, and read ambiently from `SAPIOM_PARENT_SPAN_ID` / `SAPIOM_EXECUTION_ID` / `SAPIOM_STEP_ORDER` (`attributionFromEnv`) — so calls nest under the calling run and step. Applied once at the shared transport, so every capability inherits it.
+
+  Deprecates `agentName`, `agentId`, and `traceExternalId` (a free-form label / legacy correlation field). They still forward for backward compatibility; prefer `traceId` plus the new fields.
+
+## 0.19.0
+
+### Minor Changes
+
+- e446a4a: Align the memory surface to the v1 wire contract: `MemoryMetadata` is a flat scalar map (`string | number | boolean`), retrieval `strategy` is `semantic | keyword | hybrid`, and the offline stub mirrors the wire's runtime rejections for invalid metadata shapes and strategy values (400s). Docs now recommend namespace-first modeling for always-filtered dimensions.
+
+## 0.18.0
+
+### Minor Changes
+
+- afc77e3: Add a READ-ONLY `vault` namespace (`vault.list/get/getMany/getAll` + `ctx.sapiom.vault`) against the vault gateway's v2 API. List returns key names only; get maps a 404 to `null`. No set/delete by decision (SAP-1471) — writing secrets stays in the dashboard / `@sapiom/core` `VaultAPI`.
+
+## 0.17.2
+
+### Patch Changes
+
+- 41e9ecd: Add sandbox preview primitives to the `sandbox` capability.
+
+  - `deployPreview({ source, build, start, port, env })` triggers the server-side deploy op and returns the live preview URL. `source` is either a local upload or a Sapiom git repository (`{ kind: 'git', repo, ref? }`), so an in-process caller with an existing repo can deploy in one call.
+  - `uploadDir(localDir, { ignore })` ships a local directory to the sandbox (ignore-aware walk), the companion to the upload source.
+  - Renames `createPreview` to `createPublicUrl` — the method exposes a sandbox port at a public URL and is not a 1:1 wrapper of any single provider's naming.
+
 ## 0.17.1
 
 ### Patch Changes

@@ -6,8 +6,9 @@
  * generated emit.cjs (exactly the way Claude Code would invoke it), against
  * a real HTTP server mounting createIngestRouter, and asserts:
  *   1. Both events land in the local ndjson store.
- *   2. The batcher forwards them to a real mock-collector.mjs process, and
- *      the batch shows up in its received-events file.
+ *   2. The harness emitter forwards them to startMockCollector() from
+ *      @sapiom/analytics-core/testing, using the analytics-core envelope
+ *      (POST /v1/analytics/collector, source "harness", analytics-core fields).
  *
  * Run with: pnpm sim:e2e
  */
@@ -20,18 +21,18 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { startMockCollector } from "@sapiom/analytics-core/testing";
 import { generateClaudeSettings } from "../src/core/inject/claude-settings.js";
 import { normalizeHookEvent } from "../src/core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../src/core/collector/transcript.js";
 import { createEventStore } from "../src/core/collector/store.js";
-import { CollectorBatcher } from "../src/core/collector/batcher.js";
+import { createHarnessEmitter } from "../src/core/collector/analytics-emitter.js";
 import { createIngestRouter, type IngestSessionContext } from "../src/server/ingest.js";
 import { ENV, type CollectorContext } from "../src/shared/types.js";
 
 const INGEST_TOKEN = crypto.randomUUID();
 const HARNESS_SESSION_ID = "sim-session-1";
 const AGENT_SESSION_ID = "sim-agent-uuid-1";
-const MOCK_COLLECTOR_PORT = 4299; // distinct from the default 4199 to avoid clashing with a real one.
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -72,12 +73,18 @@ async function main(): Promise<void> {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "harness-e2e-sim-"));
   const eventsFile = path.join(tmpRoot, "events.ndjson");
   const generatedRoot = path.join(tmpRoot, "generated");
-  const collectorCwd = path.join(tmpRoot, "collector");
-  await fs.mkdir(collectorCwd, { recursive: true });
+  await fs.mkdir(generatedRoot, { recursive: true });
 
   console.log(`scratch dir: ${tmpRoot}`);
 
-  // --- wire the local store + batcher + ingest router (stand-in for the real server) ---
+  // --- start the analytics-core mock collector ---
+  const mockCollector = await startMockCollector();
+  // Clear the global test guard so the emitter actually sends.
+  delete process.env.SAPIOM_TELEMETRY_DISABLED;
+
+  console.log(`mock collector listening on ${mockCollector.url}`);
+
+  // --- wire the local store + emitter + ingest router (stand-in for the real server) ---
   const store = createEventStore(eventsFile);
   const sessions = new Map<string, IngestSessionContext>([
     [
@@ -99,16 +106,19 @@ async function main(): Promise<void> {
     nodeVersion: process.version,
   };
 
-  // CollectorBatcher appends /v1/harness/events itself — pass the bare base URL.
-  const collectorUrl = `http://127.0.0.1:${MOCK_COLLECTOR_PORT}`;
-  const batcher = new CollectorBatcher({
-    machineId: "sim-machine",
-    context: collectorContext,
+  // Use a temp HOME so analytics.json is created in scratch, not in ~/.sapiom.
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  process.env.HOME = tmpRoot;
+  process.env.USERPROFILE = tmpRoot;
+
+  const batcher = createHarnessEmitter({
     telemetryOptIn: true,
-    collectorUrl,
-    maxBatchSize: 50,
-    flushIntervalMs: 60_000, // we flush manually below
-    onDebug: (msg) => console.log(`[batcher] ${msg}`),
+    context: collectorContext,
+    sdkName: "@sapiom/harness",
+    sdkVersion: "0.0.1",
+    // Point directly at the in-process mock collector.
+    endpoint: mockCollector.url,
   });
 
   const app = express();
@@ -131,26 +141,6 @@ async function main(): Promise<void> {
   const server = app.listen(0);
   const port = (server.address() as AddressInfo).port;
   console.log(`ingest server listening on http://127.0.0.1:${port}`);
-
-  // --- spawn the real mock-collector.mjs as tonight's "remote" ---
-  const mockCollector = spawn(
-    process.execPath,
-    [path.join(process.cwd(), "scripts", "mock-collector.mjs")],
-    {
-      cwd: collectorCwd,
-      env: { ...process.env, MOCK_COLLECTOR_PORT: String(MOCK_COLLECTOR_PORT) },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  let mockCollectorOutput = "";
-  mockCollector.stdout.on("data", (chunk) => {
-    mockCollectorOutput += chunk;
-  });
-  mockCollector.stderr.on("data", (chunk) => {
-    mockCollectorOutput += chunk;
-  });
-  await waitFor(async () => (mockCollectorOutput.includes("listening on") ? true : undefined));
-  console.log("mock-collector is up");
 
   try {
     // --- generate the settings + emit.cjs exactly like the real launch flow would ---
@@ -217,34 +207,50 @@ async function main(): Promise<void> {
     assert(events[1].seq === 2, "prompt.submitted got seq 2 (monotonic per harnessSessionId)");
     assert(sessions.get(HARNESS_SESSION_ID)?.agentSessionId === AGENT_SESSION_ID, "session registry callback linked agentSessionId");
 
-    // --- force a batch flush and assert the mock collector received it ---
+    // --- force a batch flush and assert the analytics-core mock collector received it ---
     await batcher.flush();
-    const receivedFile = path.join(collectorCwd, "mock-collector-received.ndjson");
-    const receivedLines = await waitFor(async () => {
-      try {
-        const content = await fs.readFile(receivedFile, "utf8");
-        const parsed = content.trim().split("\n").filter(Boolean);
-        return parsed.length >= 1 ? parsed : undefined;
-      } catch {
-        return undefined;
-      }
-    });
-    const batch = JSON.parse(receivedLines[receivedLines.length - 1]);
-    assert(batch.machineId === "sim-machine", "mock-collector received the right machineId");
-    assert(batch.schemaVersion === 1, "mock-collector received schemaVersion 1");
-    assert(typeof batch.batchId === "string", "mock-collector received a batchId");
-    assert(batch.context?.harnessVersion === "0.0.1", "mock-collector received the CollectorContext");
-    assert(batch.events.length === 2, "mock-collector received both events in one batch");
-    assert(
-      mockCollectorOutput.includes("session.start=1") || mockCollectorOutput.includes("prompt.submitted=1"),
-      "mock-collector logged a batch summary",
-    );
+    await mockCollector.waitForRequests(1, 10_000);
+
+    const collectorEvents = mockCollector.events();
+    assert(collectorEvents.length >= 2, `mock collector received at least 2 events (got ${collectorEvents.length})`);
+
+    // Assert analytics-core envelope shape
+    for (const ev of collectorEvents) {
+      assert(ev.source === "harness", `event source is "harness" (got ${String(ev.source)})`);
+      assert(typeof ev.session_id === "string", `event has session_id (got ${String(ev.session_id)})`);
+      assert(ev.sdk_name === "@sapiom/harness", `event sdk_name is @sapiom/harness (got ${String(ev.sdk_name)})`);
+      assert(ev.schema_version === "1", `event schema_version is "1" (got ${String(ev.schema_version)})`);
+    }
+
+    const eventTypes = collectorEvents.map((e) => e.event_type);
+    assert(eventTypes.includes("session.start"), "collector received a session.start event");
+    assert(eventTypes.includes("prompt.submitted"), "collector received a prompt.submitted event");
+
+    // Assert harness-specific data fields
+    const sessionStartEv = collectorEvents.find((e) => e.event_type === "session.start");
+    const data = sessionStartEv?.data as Record<string, unknown> | undefined;
+    assert(data?.harness_session_id === HARNESS_SESSION_ID, `data.harness_session_id is ${HARNESS_SESSION_ID}`);
+    assert(data?.harness_kind === "claude-code", `data.harness_kind is "claude-code"`);
+    assert(typeof data?.context === "object" && data.context !== null, "data.context is present");
+    const ctx = data?.context as Record<string, unknown>;
+    assert(ctx.app_version === "0.0.1", `data.context.app_version is "0.0.1"`);
+
+    // seq monotonic
+    const seqs = collectorEvents.map((e) => (e.data as Record<string, unknown>)?.seq as number);
+    assert(seqs.includes(1), "collector received event with seq=1");
+    assert(seqs.includes(2), "collector received event with seq=2");
 
     console.log("\nPASS — analytics pipeline e2e simulation succeeded\n");
   } finally {
     await batcher.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    mockCollector.kill();
+    await mockCollector.close();
+    // Restore env
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    process.env.SAPIOM_TELEMETRY_DISABLED = "1";
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
 }

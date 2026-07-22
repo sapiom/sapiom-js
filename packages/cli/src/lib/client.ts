@@ -20,7 +20,7 @@ export type { CliTarget };
  * agents), then the stored session from `sapiom login`. Stateful by default,
  * but every stateful path has a stateless override.
  */
-function resolveApiKey(): string {
+export function resolveApiKey(): string {
   const env = process.env.SAPIOM_API_KEY;
   if (env) return env;
 

@@ -106,3 +106,6 @@ export { MemoryHttpError } from "./memory/index.js";
 
 export * as speech from "./speech/index.js";
 export { SpeechHttpError } from "./speech/index.js";
+
+export * as vault from "./vault/index.js";
+export { VaultHttpError } from "./vault/index.js";

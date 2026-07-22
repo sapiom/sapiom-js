@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   ChevronDown,
   Cloud,
   CornerLeftUp,
@@ -6,9 +7,12 @@ import {
   Folder,
   HelpCircle,
   History,
+  ImageUp,
   type LucideIcon,
   Moon,
+  Paperclip,
   Play,
+  Plug,
   Plus,
   Radio,
   RefreshCw,
@@ -29,14 +33,18 @@ import type { JSX } from "react";
  * fall back to HelpCircle rather than failing to render.
  */
 const ICONS: Record<string, LucideIcon> = {
+  ArrowLeft,
   ChevronDown,
   Cloud,
   CornerLeftUp,
   ExternalLink,
   Folder,
   History,
+  ImageUp,
   Moon,
+  Paperclip,
   Play,
+  Plug,
   Plus,
   Radio,
   RefreshCw,

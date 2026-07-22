@@ -3,6 +3,7 @@ import express from "express";
 import type { Server } from "node:http";
 import { createMacrosRouter, type MacrosRouterDeps } from "./macros.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
+import { ExternalHarnessError } from "../core/errors.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
 import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
 import type { WorkflowInfo } from "../shared/types.js";
@@ -14,6 +15,7 @@ const workflow: WorkflowInfo = {
   name: "leasing",
   path: "/Users/demo/acme-app/leasing",
   definitionId: 4821,
+  definitionSlug: "leasing",
   source: "scan",
 };
 
@@ -73,7 +75,7 @@ describe("macros router", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      "cd '/Users/demo/acme-app/leasing' && sapiom agents deploy",
       true,
     );
     expect(deps.openUrl).not.toHaveBeenCalled();
@@ -149,13 +151,13 @@ describe("macros router", () => {
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      "cd '/Users/demo/acme-app/leasing' && sapiom agents deploy",
       true,
     );
   });
 
   it("prefers an explicit workflowPath on the request over the session's bound workflow", async () => {
-    const otherWorkflow: WorkflowInfo = { name: "rfq", path: "/Users/demo/acme-app/rfq", definitionId: 7, source: "scan" };
+    const otherWorkflow: WorkflowInfo = { name: "rfq", path: "/Users/demo/acme-app/rfq", definitionId: 7, definitionSlug: "rfq", source: "scan" };
     const deps = makeDeps({
       findWorkflow: (p) => (p === workflow.path ? workflow : p === otherWorkflow.path ? otherWorkflow : null),
       getBoundWorkflowPath: (id) => (id === "sess-1" ? otherWorkflow.path : null),
@@ -171,9 +173,111 @@ describe("macros router", () => {
     expect(res.status).toBe(200);
     expect(deps.injectInput).toHaveBeenCalledWith(
       "sess-1",
-      "cd /Users/demo/acme-app/leasing && sapiom agents deploy",
+      "cd '/Users/demo/acme-app/leasing' && sapiom agents deploy",
       true,
     );
+  });
+
+  describe("shell injection hardening — workflow.path is POSIX single-quoted", () => {
+    /**
+     * Each test registers a workflow whose path contains a shell metacharacter
+     * that double-quoting does NOT neutralise (subshell, backtick, embedded
+     * quote). The resolved cd argument must be wrapped in single quotes so
+     * the injected text is inert — the subshell can never actually execute.
+     */
+    function makeWithPath(p: string) {
+      const evil: WorkflowInfo = { name: "evil", path: p, definitionId: null, definitionSlug: null, source: "scan" };
+      return makeDeps({
+        findWorkflow: (wp) => (wp === p ? evil : null),
+        getBoundWorkflowPath: () => p,
+      });
+    }
+
+    it("wraps a path containing spaces in single quotes (not word-split)", async () => {
+      const deps = makeWithPath("/Users/demo/my workflow");
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: "/Users/demo/my workflow" }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/my workflow' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("neutralises a path containing a subshell expansion — $(evil) cannot run", async () => {
+      const p = "/Users/demo/$(evil)";
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/$(evil)' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("neutralises a path containing backtick expansion — backtick subshell cannot run", async () => {
+      const p = "/Users/demo/`evil`";
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/`evil`' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("neutralises a path containing an embedded double-quote — cannot break out of double-quoting", async () => {
+      const p = '/Users/demo/path"with"quotes';
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/path\"with\"quotes' && sapiom agents deploy",
+        true,
+      );
+    });
+
+    it("escapes an embedded single-quote via POSIX close-escape-reopen", async () => {
+      // Path: /Users/demo/it's here
+      // Expected: cd '/Users/demo/it'\''s here' && ...
+      const p = "/Users/demo/it's here";
+      const deps = makeWithPath(p);
+      await start(deps);
+      const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: p }),
+      });
+      expect(res.status).toBe(200);
+      expect(deps.injectInput).toHaveBeenCalledWith(
+        "sess-1",
+        "cd '/Users/demo/it'\\''s here' && sapiom agents deploy",
+        true,
+      );
+    });
   });
 
   it("400s a workflow-required macro when both the request and the session binding lack a workflow", async () => {
@@ -230,15 +334,44 @@ describe("macros router", () => {
       body: JSON.stringify({ harnessSessionId: "sess-1" }),
     });
     expect(res.status).toBe(200);
-    const [sessionId, macro, prompt] = (deps.runBackgroundTask as ReturnType<typeof vi.fn>).mock.calls[0] as [
-      string,
-      { id: string },
-      string,
-    ];
+    const [sessionId, macro, prompt, passedWorkflowPath] = (
+      deps.runBackgroundTask as ReturnType<typeof vi.fn>
+    ).mock.calls[0] as [string, { id: string }, string, string | null];
     expect(sessionId).toBe("sess-1");
     expect(macro.id).toBe("bg-macro");
     expect(prompt).toBe("do something in /Users/demo/acme-app"); // {{session.cwd}} substituted
+    // No workflowPath on the request and no bound workflow — must be null (not omitted)
+    // so TaskManager can apply its per-session dedupe key (not per-workflow).
+    expect(passedWorkflowPath).toBeNull();
     expect(deps.injectInput).not.toHaveBeenCalled();
+  });
+
+  it("passes the resolved workflowPath into runBackgroundTask so TaskManager can dedupe per-workflow", async () => {
+    const backgroundMacro = {
+      id: "bg-wf-macro",
+      label: "Background workflow macro",
+      icon: "Wand2",
+      execution: "background" as const,
+      action: { kind: "inject" as const, text: "enrich {{workflow.path}}", submit: true },
+    };
+    const deps = makeDeps({ listMacros: () => [...DEFAULT_MACROS, backgroundMacro] });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/bg-wf-macro/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path }),
+    });
+    expect(res.status).toBe(200);
+    const [, , , passedWorkflowPath] = (deps.runBackgroundTask as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { id: string },
+      string,
+      string | null,
+    ];
+    // workflowPath must be threaded through so TaskManager can reject a
+    // second session running the same macro against the same workflow.
+    expect(passedWorkflowPath).toBe(workflow.path);
   });
 
   it("400s visualize on a harness with no headless mode (TaskNotSupportedError from the enrichment spawn)", async () => {
@@ -287,5 +420,47 @@ describe("macros router", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toMatch(/not ready yet/i);
     expect(body.error).toMatch(/trust the folder/i);
+  });
+
+  it("409s when injectInput throws ExternalHarnessError (conductor session — inject not supported)", async () => {
+    const deps = makeDeps({
+      injectInput: vi.fn().mockRejectedValue(new ExternalHarnessError("conductor", "Conductor")),
+    });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/deploy/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1", workflowPath: workflow.path }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/conductor/i);
+  });
+
+  it("409s when runBackgroundTask throws ExternalHarnessError (background task on external harness)", async () => {
+    const backgroundMacro = {
+      id: "bg-ext-macro",
+      label: "Background macro",
+      icon: "Wand2",
+      execution: "background" as const,
+      action: { kind: "inject" as const, text: "do something in {{session.cwd}}", submit: true },
+    };
+    const deps = makeDeps({
+      listMacros: () => [...DEFAULT_MACROS, backgroundMacro],
+      runBackgroundTask: vi.fn().mockRejectedValue(new ExternalHarnessError("conductor", "Conductor")),
+    });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/bg-ext-macro/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/conductor/i);
   });
 });
