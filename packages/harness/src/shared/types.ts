@@ -423,6 +423,97 @@ export interface RunCall {
 }
 
 // ---------------------------------------------------------------------------
+// Operational status — the Agent's prod reality (see core/op-status.ts)
+// ---------------------------------------------------------------------------
+//
+// A per-agent triage summary stitched from four EXISTING platform signals —
+// runs+failing (metrics), scheduled (triggers), deployment (activeBuildRunStatus)
+// and open alerts — into the "is it alive / failing / scheduled / deployed /
+// alerting" view the Studio rail and focused health strip render. There is no
+// single per-agent operational-summary endpoint upstream, so the harness server
+// fans out to the four and stitches (see plans/sapiom-studio §9).
+//
+// HONEST ABSENCE is the contract, mirroring RunView/StepView: each signal's
+// fields are ABSENT when that upstream call failed (or its slug couldn't be
+// resolved), never faked to a zero/`unknown`. A present-but-empty signal (e.g.
+// `runCount: 0`, `scheduled: false`) means "we asked and there is nothing";
+// an absent field means "we could not ask". Consumers must distinguish the two.
+
+/** Composite run-reliability verdict — mirrors the backend metrics
+ *  `DefinitionHealth.verdict`; kept as a local literal so this package carries
+ *  no backend dependency. */
+export type OperationalHealthVerdict =
+  | "healthy"
+  | "degraded"
+  | "at_risk"
+  | "unknown";
+
+/** The deployment status of an agent's active build — mirrors the backend
+ *  `BuildRunStatus`. `stale` is projection-derived (ready but artifact missing →
+ *  not runnable); a local literal so this package carries no backend dependency. */
+export type OperationalDeployStatus =
+  | "pending"
+  | "queued"
+  | "building"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "superseded"
+  | "stale";
+
+/** Alert severity — mirrors the backend `AlertSeverity`. */
+export type OperationalAlertSeverity = "info" | "warning" | "error";
+
+/**
+ * The per-agent operational status the rail + health strip render. Stitched by
+ * the harness server (GET /api/agents/:definitionId/op-status) from the four
+ * signals. Every signal field is optional and ABSENT on that signal's fetch
+ * failure — see the honest-absence note above.
+ */
+export interface OperationalStatus {
+  /** The definition this status is for (engine bigint id, as a string). */
+  definitionId: string;
+  /** Resolved slug (the caller hint, else the definition detail's slug); null
+   *  when neither was available — the triggers signal is then absent, since
+   *  triggers key on slug. */
+  slug: string | null;
+
+  // --- Runs signal (metrics). Present together, or all absent, as one block. ---
+  /** Finished-run count over the window; absent when metrics were unavailable. */
+  runCount?: number;
+  /** Failed-run count over the window; absent when metrics were unavailable. */
+  failedCount?: number;
+  /** completed/(completed+failed); `null` when there were no finished runs
+   *  (honest); the field is ABSENT when metrics were unavailable. */
+  successRate?: number | null;
+  /** Composite reliability verdict; absent when metrics were unavailable. */
+  health?: OperationalHealthVerdict;
+
+  // --- Scheduled signal (triggers). Absent when unavailable / slug unresolved. ---
+  /** Whether any active trigger exists; absent when the triggers signal could
+   *  not be fetched (e.g. no slug to key on). */
+  scheduled?: boolean;
+  /** Soonest upcoming fire across active triggers; `null` when scheduled but no
+   *  trigger carries an upcoming fire time. Absent with `scheduled`. */
+  nextFireAt?: string | null;
+
+  // --- Deployment signal (definition detail). Absent when detail unavailable. ---
+  /** The active build's status; `null` when the definition has no active build
+   *  (honest); the field is ABSENT when the detail fetch failed. */
+  deployStatus?: OperationalDeployStatus | null;
+
+  // --- Alerts signal (alerts list). Absent when the alerts fetch failed. ---
+  /** Count of open alerts keyed to this definition; absent when unavailable. */
+  openAlerts?: number;
+  /** True when the open-alert count hit the fetch page cap — more may exist, so
+   *  `openAlerts` is a floor, not an exact total. Present with `openAlerts`. */
+  openAlertsTruncated?: boolean;
+  /** Highest severity among the fetched open alerts; `null` when there are none.
+   *  Present with `openAlerts`. */
+  highestAlertSeverity?: OperationalAlertSeverity | null;
+}
+
+// ---------------------------------------------------------------------------
 // Runtime analytics — live run render state (see core/render-run-state.ts)
 // ---------------------------------------------------------------------------
 //
