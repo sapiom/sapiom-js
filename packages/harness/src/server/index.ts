@@ -105,6 +105,7 @@ import { createFsRouter } from "./fs.js";
 import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
 import { createWorkspacesRouter } from "./workspaces.js";
+import { createSpineRouter } from "./spine.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
 // (an identical helper); the runs router reuses it for its agents base URL.
 import { resolveCoreBaseUrl } from "../core/run-spend.js";
@@ -136,6 +137,19 @@ const SESSION_LIVENESS_SWEEP_MS = 10_000;
 /** events.ndjson retention: sweeps once at boot and then periodically.
  * Keeps the local sink from growing unbounded on long-lived installs. */
 const NDJSON_RETENTION_SWEEP_MS = 6 * 60 * 60 * 1_000; // every 6 hours
+
+/**
+ * The one workflow the intelligence-spine spike (SAP-1804) runs on our
+ * account. A proof-of-mechanism wires exactly ONE workflow, but its id is not
+ * baked in — point it at a real deployed definition via
+ * `SAPIOM_SPINE_WORKFLOW_ID`. Absent an override the spine route still mounts;
+ * a triggered run surfaces an upstream error frame (no such definition) rather
+ * than doing nothing silently. Replaced by real per-tool dispatch in the
+ * formalized spine (SAP-1807/1808).
+ */
+function resolveSpineWorkflowId(): string {
+  return process.env.SAPIOM_SPINE_WORKFLOW_ID ?? "";
+}
 
 export interface HarnessServerOptions {
   port: number;
@@ -823,6 +837,18 @@ export const startServer = async (
       apiKey: identity?.apiKey ?? null,
       baseUrl: resolveAgentsBaseUrl(),
       coreBaseUrl: resolveCoreBaseUrl(),
+    }),
+  );
+  // Intelligence-spine spike (SAP-1804): runs a Sapiom workflow on OUR account
+  // (held key) and streams `spine.*` frames onto the same bus /ws/events
+  // forwards — never the user's Claude Code tokens.
+  app.use(
+    createSpineRouter({
+      apiKey: identity?.apiKey ?? null,
+      bus,
+      definitionId: resolveSpineWorkflowId(),
+      coreBaseUrl: resolveCoreBaseUrl(),
+      agentsBaseUrl: resolveAgentsBaseUrl(),
     }),
   );
   app.use(

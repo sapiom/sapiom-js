@@ -383,7 +383,52 @@ export type BusMessage =
    * on /ws/events, which only the session with an open /ws/terminal socket
    * receives. Drives the SPA's per-tab busy pulse for background sessions.
    */
-  | { type: "session.activity"; harnessSessionId: string; at: string };
+  | { type: "session.activity"; harnessSessionId: string; at: string }
+  // -------------------------------------------------------------------------
+  // Intelligence spine (SAP-1804 spike) — harness server runs a Sapiom
+  // workflow ON OUR ACCOUNT (authenticated with the held server-side key,
+  // never the user's Claude Code) and streams the run's progress to the SPA
+  // over this same bus. Proof-of-mechanism for the formalized spine
+  // (SAP-1807): the Assistant's tools and Tier-2 canvas enrichment ride this
+  // exact path. `spineRunId` is a harness-minted correlation id the SPA
+  // subscribes on; it exists BEFORE the cloud execution does, so a start
+  // failure can still be routed to the right listener (`executionId` is only
+  // known once the run is enqueued).
+  // -------------------------------------------------------------------------
+  /** The workflow was enqueued on our account; streaming has begun. */
+  | { type: "spine.started"; spineRunId: string; executionId: string }
+  /** One streamed turn: a step whose status changed since the last frame. */
+  | {
+      type: "spine.frame";
+      spineRunId: string;
+      executionId: string;
+      frame: SpineFrame;
+    }
+  /** The run reached a terminal state; no more frames for this spineRunId. */
+  | {
+      type: "spine.finished";
+      spineRunId: string;
+      executionId: string;
+      status: RunView["status"];
+    }
+  /** The run could not be started or streamed (auth, upstream, or decode). */
+  | { type: "spine.error"; spineRunId: string; error: string };
+
+// ---------------------------------------------------------------------------
+// Intelligence spine — streamed frame shape (see BusMessage spine.* above)
+// ---------------------------------------------------------------------------
+
+/**
+ * One streamed turn of a spine run. Deliberately carries the same
+ * {@link StepView} the run canvas already renders, so a live spine frame and a
+ * polled `/api/runs/:id/state` snapshot share one render path — the SPA never
+ * needs a second, spine-only step shape. A frame is emitted each time a step
+ * transitions (pending → running → passed/failed), so the SPA sees the run
+ * unfold turn by turn rather than only at the end.
+ */
+export interface SpineFrame {
+  step: StepView;
+}
 
 // ---------------------------------------------------------------------------
 // Run spend (cost settled after execution, fetched from core surface)
