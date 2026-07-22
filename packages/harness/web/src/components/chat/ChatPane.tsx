@@ -11,7 +11,6 @@ import type { HarnessEntry, HarnessKind, MacroDef } from "@shared/types";
 import type { SkillMeta } from "../../lib/api";
 import type { FeedItem } from "../../lib/chat-types";
 import { pickChatScript, seededMappingFeed } from "../../lib/mock-chat";
-import { runCostLabel } from "../../lib/run-cost";
 import type { ObservedRun } from "../../lib/use-harness-state";
 import { ChatFeed } from "./ChatFeed";
 import { Composer } from "./Composer";
@@ -109,11 +108,9 @@ export const ChatPane = ({
       seen.add(run.executionId);
       const failed = run.status !== "completed";
       const duration = runDurationLabel(run);
-      const cost = runCostLabel(run, target);
       const chips = [
         `${run.steps.length} ${run.steps.length === 1 ? "step" : "steps"}`,
         ...(duration ? [duration] : []),
-        ...(cost ? [cost] : []),
       ];
       append({
         id: `run-${run.executionId}`,
@@ -122,7 +119,7 @@ export const ChatPane = ({
         title: `Run ${run.status}`,
         body: failed
           ? "The run ended without completing. Per-step detail is on the Steps tab."
-          : "Every step settled. Per-step latency and cost are on the Steps tab.",
+          : "Every step settled. Per-step latency is on the Steps tab.",
         chips,
         meta: `${target} run · ${run.executionId}`,
       });
@@ -201,7 +198,7 @@ export const ChatPane = ({
       role: "system",
       tone: "warning",
       title: "Drafting stopped",
-      body: "Partial draft preserved. Nothing ran and nothing was charged.",
+      body: "Partial draft preserved. Nothing ran.",
       meta: "stopped · no side effects",
     });
     setStage(null);

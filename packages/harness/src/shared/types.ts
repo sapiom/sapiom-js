@@ -384,45 +384,6 @@ export type BusMessage =
   | { type: "session.activity"; harnessSessionId: string; at: string };
 
 // ---------------------------------------------------------------------------
-// Run spend (cost settled after execution, fetched from core surface)
-// ---------------------------------------------------------------------------
-
-/** Per-step cost summary from the spend endpoint. */
-export interface RunStepSpend {
-  name: string;
-  totalUsd: string;
-  entryCount: number;
-}
-
-/** Full spend summary for one execution, keyed by executionId. */
-export interface RunSpend {
-  executionId: string;
-  totalUsd: string;
-  settleState: string;
-  byStep: RunStepSpend[];
-}
-
-/**
- * One billable capability call within a run — the per-call drill-down behind a
- * step's cost ("why is this step costly"). Derived from the transactions
- * endpoint. Deliberately provider-AGNOSTIC: `capability` is a generic label
- * ("LLM", "sandbox", "web search") mapped server-side from the operation, so
- * neither the browser nor this file ever carries the upstream provider/model
- * name. Token counts are intentionally absent — the platform does not record
- * per-call tokens for gateway LLM calls (see SAP ticket for the backend work).
- */
-export interface RunCall {
-  /** Step this call is attributed to (workflowStepName ?? capability op). */
-  stepName: string;
-  /** Provider-agnostic capability label, e.g. "LLM" / "sandbox" / "web search". */
-  capability: string;
-  /** The capability operation, e.g. "generate" / "create" / "execute". */
-  op: string;
-  /** Captured USD for this single call. */
-  usd: string;
-}
-
-// ---------------------------------------------------------------------------
 // Runtime analytics — live run render state (see core/render-run-state.ts)
 // ---------------------------------------------------------------------------
 //
@@ -442,17 +403,15 @@ export interface RunCall {
 export type StepStatus = "pending" | "running" | "passed" | "failed";
 
 /** One step as the canvas renders it — status plus the deterministically
- *  derived cost/latency/error/log slice. Optional fields are ABSENT (not
+ *  derived latency/error/log slice. Optional fields are ABSENT (not
  *  `undefined`/`0`) when the decoded projection carries no value — honest
- *  absence, matching the SDK's cost-is-nullable philosophy. */
+ *  absence. The inspector surfaces logs, latency, and pass/fail only. */
 export interface StepView {
   /** Stable id for keyed rendering — the OTel span id, else a step-order key. */
   id: string;
   /** Human step label (the projection's stepName). */
   name: string;
   status: StepStatus;
-  /** Captured USD for this step; absent when the read carries no cost. */
-  costUsd?: number;
   /** finishedAt − startedAt in ms; absent while running or on bad timestamps. */
   latencyMs?: number;
   /** Terminal error message; present only for a failed step that recorded one. */

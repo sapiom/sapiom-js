@@ -4,19 +4,17 @@
  *
  * Pure and deterministic: no LLM, no I/O, no clock. Every field is derived from
  * the decoded projection, so the same function drives the polling path today and
- * a future WebSocket push (only the data source swaps, never this mapping). Cost
- * and latency are read straight from the projection and rendered statically — the
+ * a future WebSocket push (only the data source swaps, never this mapping).
+ * Latency is read straight from the projection and rendered statically — the
  * LLM is only ever invoked later by an explicit debug-macro press, never to
  * compute what's shown here.
  *
- * Honest absence is preserved end to end: a step with no cost on this read gets
- * no `costUsd` (not `0`), a still-running step gets no `latencyMs`, and a step
- * with no logs gets no `logSlice` — matching the SDK's "null cost is honest
- * absence, never a fabricated $0" contract.
+ * Honest absence is preserved end to end: a still-running step gets no
+ * `latencyMs`, and a step with no logs gets no `logSlice`. The inspector
+ * surfaces logs, latency, and pass/fail only — no cost.
  */
 import { isExecutionTerminal } from "@sapiom/agent-core";
 import type {
-  CostNode,
   ExecutionProjection,
   StepProjection,
 } from "@sapiom/agent-core";
@@ -62,14 +60,6 @@ function toStepStatus(raw: string): StepStatus {
   return "pending";
 }
 
-/** Captured USD as a number; `undefined` on honest absence (null cost) or an
- *  unparseable amount — never a fabricated `0`. */
-function toCostUsd(cost: CostNode | null): number | undefined {
-  if (!cost) return undefined;
-  const n = Number(cost.capturedUsd);
-  return Number.isFinite(n) ? n : undefined;
-}
-
 /** `finishedAt − startedAt` in ms; `undefined` while still running (no finish)
  *  or when either timestamp is unparseable. A negative delta (clock skew) is
  *  dropped rather than shown as a misleading negative latency. */
@@ -93,8 +83,6 @@ function toStepView(step: StepProjection): StepView {
     name: step.stepName,
     status: toStepStatus(step.status),
   };
-  const costUsd = toCostUsd(step.cost);
-  if (costUsd !== undefined) view.costUsd = costUsd;
   const latencyMs = toLatencyMs(step.startedAt, step.finishedAt);
   if (latencyMs !== undefined) view.latencyMs = latencyMs;
   if (step.error?.message) view.error = step.error.message;

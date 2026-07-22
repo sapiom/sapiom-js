@@ -18,8 +18,7 @@ const MOCK_ACTIVITY_DELAY_MS = 1200;
 /** Delay before the one-shot demo `execution.started` fires — long enough that
  *  the chat pane has mounted (so its run-receipt logic seeds an empty
  *  baseline and the completed run lands a fresh receipt), and short enough to
- *  read as "on load". Its executionId must NOT contain "local" so the mock
- *  run-state endpoint returns the captured $0.0155 prod cost (see api.ts). */
+ *  read as "on load". The executionId marks a prod run (see api.ts). */
 const DEMO_RUN_DELAY_MS = 700;
 const DEMO_EXECUTION_ID = "exec-leasing-prod-001";
 
@@ -74,10 +73,10 @@ export function subscribeEvents(onMessage: BusListener): () => void {
       }, MOCK_ACTIVITY_DELAY_MS);
     }
     // Demo end-state: announce one completed prod run for the boot session, so
-    // the Steps overlay, the Wallet's observed spend, and the chat run receipt
-    // all populate on load from the authored run-state — the run pipeline the
-    // real server drives via ExecutionDetector, minus the server. Off under
-    // ?seed=0 (mechanics tests) and the fresh-install state (no boot session).
+    // the Steps overlay and the chat run receipt both populate on load from
+    // the authored run-state — the run pipeline the real server drives via
+    // ExecutionDetector, minus the server. Off under ?seed=0 (mechanics
+    // tests) and the fresh-install state (no boot session).
     if (!demoRunSimulated && isDemoSeedEnabled()) {
       demoRunSimulated = true;
       setTimeout(() => {

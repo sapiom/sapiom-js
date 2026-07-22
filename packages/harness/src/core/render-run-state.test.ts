@@ -95,64 +95,6 @@ describe("renderRunState — step id + name", () => {
   });
 });
 
-describe("renderRunState — cost", () => {
-  it("surfaces CAPTURED usd as a number (not authorized)", () => {
-    const view = render({
-      id: "e1",
-      status: "completed",
-      steps: [
-        step({
-          cost: {
-            authorizedUsd: "9.99",
-            capturedUsd: "1.20",
-            settleState: "final",
-          },
-        }),
-      ],
-    });
-    expect(view.steps[0].costUsd).toBe(1.2);
-  });
-
-  it("omits costUsd entirely on honest absence (no cost on the read)", () => {
-    const view = render({ id: "e1", status: "completed", steps: [step({})] });
-    expect(view.steps[0]).not.toHaveProperty("costUsd");
-  });
-
-  it("omits costUsd when the captured amount is unparseable", () => {
-    const view = render({
-      id: "e1",
-      status: "completed",
-      steps: [
-        step({
-          cost: {
-            authorizedUsd: "0",
-            capturedUsd: "n/a",
-            settleState: "final",
-          },
-        }),
-      ],
-    });
-    expect(view.steps[0]).not.toHaveProperty("costUsd");
-  });
-
-  it("keeps a genuine zero captured cost as 0 (not absent)", () => {
-    const view = render({
-      id: "e1",
-      status: "completed",
-      steps: [
-        step({
-          cost: {
-            authorizedUsd: "1.00",
-            capturedUsd: "0",
-            settleState: "pending",
-          },
-        }),
-      ],
-    });
-    expect(view.steps[0].costUsd).toBe(0);
-  });
-});
-
 describe("renderRunState — latency", () => {
   it("computes finishedAt − startedAt in ms", () => {
     const view = render({
@@ -399,7 +341,7 @@ describe("renderRunState — whole run", () => {
     expect(view.steps[0]).toEqual({ id: "s1", name: "s", status: "running" });
   });
 
-  it("maps a realistic cost-bearing completed run end to end", () => {
+  it("maps a realistic completed run end to end", () => {
     const view = render({
       id: "exec_0001",
       status: "completed",
@@ -412,11 +354,6 @@ describe("renderRunState — whole run", () => {
           spanId: "span_0001",
           startedAt: "2026-01-01T00:00:00.000Z",
           finishedAt: "2026-01-01T00:00:45.000Z",
-          cost: {
-            authorizedUsd: "0.50",
-            capturedUsd: "0.50",
-            settleState: "final",
-          },
         },
       ],
     });
@@ -428,7 +365,6 @@ describe("renderRunState — whole run", () => {
           id: "span_0001",
           name: "gather",
           status: "passed",
-          costUsd: 0.5,
           latencyMs: 45_000,
         },
       ],

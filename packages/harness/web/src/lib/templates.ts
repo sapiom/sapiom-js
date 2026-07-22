@@ -105,10 +105,10 @@ export const GALLERY_TEMPLATES: GalleryTemplate[] = [
     useCases: [
       "Get a quick, sourced briefing on an unfamiliar topic before a meeting.",
       "Turn a research question into a shareable markdown digest with citations.",
-      "Learn how to wire a single metered capability into an agent you can extend.",
+      "Learn how to wire a single capability into an agent you can extend.",
     ],
     notes:
-      "`run_local` stubs the `web.search` capability, so you can trace the full graph offline for free before deploying. A real `deploy` + `run` performs a billed web search.\n\nTo extend it, add a step after `summarize`, e.g. store the digest with `ctx.sapiom.memory.*`, or fan out one search per subtopic. `AGENTS.md` in this directory has the authoring loop.",
+      "`run_local` stubs the `web.search` capability, so you can trace the full graph offline before deploying. A real `deploy` + `run` performs a live web search.\n\nTo extend it, add a step after `summarize`, e.g. store the digest with `ctx.sapiom.memory.*`, or fan out one search per subtopic. `AGENTS.md` in this directory has the authoring loop.",
     examples: [
       {
         title: "Research an unfamiliar term",

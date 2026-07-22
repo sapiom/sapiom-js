@@ -8,8 +8,6 @@ import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { track } from "../lib/track";
 import { type CanvasGraph, formatGraphCounts, parseCanvasGraph } from "../lib/canvas-graph";
-import { estimateRunCost } from "../lib/capability-rates";
-import type { WorkflowCostStats } from "../lib/run-cost";
 import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { CanvasOverviewPanel } from "./CanvasOverviewPanel";
 import { CanvasStepDetail, CanvasStepsList, RunStepsList } from "./CanvasStepDetail";
@@ -53,15 +51,11 @@ interface CanvasPaneProps {
   /** The run this session's Steps tab shows (latest observed, or a picker
    *  choice), or null when nothing has run. Structure renders either way. */
   run: RunView | null;
-  /** Where that run executed (prod = billed, local = free/stubbed). */
+  /** Where that run executed (prod / local); local runs are stubbed. */
   runTarget: RunTarget | null;
   /** Every run observed for this session, oldest first (the run picker). */
   runs: ObservedRun[];
   onSelectRun: (executionId: string) => void;
-  /** Observed cost aggregates for the bound workflow across every session,
-   *  attributed at execution.started time — the Steps subheader's upfront
-   *  price slot. Null renders no slot (never a fabricated price). */
-  priceStats: WorkflowCostStats | null;
   /** Registry workflows — launched-workflow nodes navigate to theirs. */
   workflows: WorkflowInfo[];
   /** Binds and switches to another workflow (App's handleBindWorkflow) —
@@ -88,7 +82,6 @@ export function CanvasPane({
   runTarget,
   runs,
   onSelectRun,
-  priceStats,
   workflows,
   onOpenWorkflow,
 }: CanvasPaneProps): JSX.Element {
@@ -627,11 +620,6 @@ export function CanvasPane({
           runTarget={runTarget}
           runs={runs}
           onSelectRun={onSelectRun}
-          priceStats={priceStats}
-          // The pre-run rung of the price ladder: a labeled rate-card
-          // estimate from the posted graph's declared capabilities. Null
-          // (no graph, or nothing metered) keeps the quiet pre-run state.
-          priceEstimate={graph ? estimateRunCost(graph) : null}
         />
       )}
 

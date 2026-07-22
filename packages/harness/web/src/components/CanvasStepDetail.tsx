@@ -4,13 +4,19 @@ import type { RunView, StepView, WorkflowInfo } from "@shared/types";
 import type { CanvasGraph, CanvasGraphEdge, CanvasGraphNode } from "../lib/canvas-graph";
 import { formatTimeout, stepFacts, stepInputFields } from "../lib/canvas-graph";
 import { formatPayload } from "../lib/format-payload";
-import { formatCostExact, runSummaryLabel } from "../lib/run-cost";
 import type { RunTarget } from "../lib/use-harness-state";
 import { Icon } from "./Icon";
 
 /** RunView steps are keyed by the manifest step name == our node id. */
 export function runStepFor(run: RunView | null, nodeId: string): StepView | null {
   return run?.steps.find((s) => s.name === nodeId) ?? null;
+}
+
+/** The run's origin as a plain phrase ("prod run" / "local run"), or a bare
+ *  "run" when the bus message predates the target field. Cost-free: the
+ *  inspector shows logs, latency, and pass/fail only. */
+function runKindLabel(target: RunTarget | null): string {
+  return target ? `${target} run` : "run";
 }
 
 /** Status glyph for a run step: check, cross, pulse, or hollow pending dot.
@@ -184,7 +190,7 @@ function OpenLaunchedWorkflow({
  * Run-only steps view: when a run has been observed but the canvas
  * has not posted a structural graph (nothing visualized, or a document
  * without the graph contract), the real per-step data still renders —
- * name, status, latency, cost, error, logs — instead of "No steps yet".
+ * name, status, latency, error, logs — instead of "No steps yet".
  * Structure (transitions, contracts) needs Visualize; the hint says so.
  */
 export function RunStepsList({ run, target }: { run: RunView; target: RunTarget | null }): JSX.Element {
@@ -193,13 +199,12 @@ export function RunStepsList({ run, target }: { run: RunView; target: RunTarget 
       <div className="canvas-steps-label">
         Run steps
         <span className="canvas-steps-run-note" data-testid="canvas-steps-run-note">
-          {runSummaryLabel(run, target)}
+          {runKindLabel(target)}
         </span>
       </div>
       {run.steps.map((step, index) => {
         const meta = [
           step.latencyMs !== undefined ? formatTimeout(step.latencyMs) : null,
-          step.costUsd !== undefined ? formatCostExact(step.costUsd) : null,
         ].filter((v): v is string => v !== null);
         return (
           <div key={step.id} className="canvas-step-item">
@@ -244,7 +249,7 @@ export function RunStepsList({ run, target }: { run: RunView; target: RunTarget 
  * Row anatomy (index | kind dot | name + role eyebrow | facts | caret)
  * carries manifest truth; when a run has been observed (execution.started ->
  * polled RunView) the dot becomes the step's run status and the meta column
- * shows its real latency/cost. Absent run fields stay absent - no zeros, no
+ * shows its real latency. Absent run fields stay absent - no zeros, no
  * placeholder columns.
  */
 export function CanvasStepsList({
@@ -258,11 +263,11 @@ export function CanvasStepsList({
   onOpenDetail,
 }: {
   graph: CanvasGraph;
-  /** The session's shown run; per-step status/latency/cost render only
+  /** The session's shown run; per-step status/latency render only
    *  when present - structure-only lists carry no run columns at all. */
   run: RunView | null;
-  /** Where that run executed (prod = billed, local = free); null when the
-   *  bus message predates the target field. */
+  /** Where that run executed (prod / local); null when the bus message
+   *  predates the target field. */
   runTarget: RunTarget | null;
   /** Registry workflows — launched-workflow nodes link through to theirs. */
   workflows: WorkflowInfo[];
@@ -291,11 +296,11 @@ export function CanvasStepsList({
     <div className="canvas-steps-list" data-testid="canvas-steps-list">
       <div className="canvas-steps-label">
         Steps
-        {/* The run's origin and total cost lead the list —
-            "did this cost me anything" answered before any row is read. */}
+        {/* The run's origin leads the list — prod vs local at a glance
+            before any row is read. */}
         {run && (
           <span className="canvas-steps-run-note" data-testid="canvas-steps-run-note">
-            {runSummaryLabel(run, runTarget)}
+            {runKindLabel(runTarget)}
           </span>
         )}
       </div>
@@ -314,7 +319,6 @@ export function CanvasStepsList({
         const runMeta = runStep
           ? [
               runStep.latencyMs !== undefined ? formatTimeout(runStep.latencyMs) : null,
-              runStep.costUsd !== undefined ? formatCostExact(runStep.costUsd) : null,
             ].filter((v): v is string => v !== null)
           : [];
         return (
@@ -427,12 +431,6 @@ export function CanvasStepDetail({
               <div className="canvas-detail-contract">
                 <span className="canvas-input-label">Duration</span>
                 <span className="canvas-detail-timeout">{formatTimeout(runStep.latencyMs)}</span>
-              </div>
-            )}
-            {runStep.costUsd !== undefined && (
-              <div className="canvas-detail-contract">
-                <span className="canvas-input-label">Cost</span>
-                <span className="canvas-detail-timeout">{formatCostExact(runStep.costUsd)}</span>
               </div>
             )}
             {/* Real per-step IO — the value this step actually ran on and what
@@ -588,8 +586,8 @@ export function CanvasStepDetail({
  * full-pane detail use, so the three surfaces can never disagree: role and
  * description, the input/capability contract chips plus timeout, elbow
  * transition rows (clicking one retargets the selection), and the selected
- * step's observed run facts when a run exists — status, duration, cost,
- * error. Absent fields stay absent.
+ * step's observed run facts when a run exists — status, duration, error.
+ * Absent fields stay absent.
  */
 export function CanvasStepInspector({
   graph,
@@ -623,9 +621,6 @@ export function CanvasStepInspector({
           </span>
           {runStep.latencyMs !== undefined && (
             <span className="canvas-inspector-run-meta">{formatTimeout(runStep.latencyMs)}</span>
-          )}
-          {runStep.costUsd !== undefined && (
-            <span className="canvas-inspector-run-meta">{formatCostExact(runStep.costUsd)}</span>
           )}
         </div>
       )}

@@ -1,7 +1,7 @@
 /**
  * Scripted demo conversation for mock mode (VITE_MOCK=1) — the reference
  * implementation of the agent's voice: verdict first in the prose, no
- * throat-clearing, no exclamation marks, costs exact or honestly absent.
+ * throat-clearing, no exclamation marks.
  *
  * Sequencing contract (industry order, matching what real harnesses emit):
  *   1. the THINKING card streams first — open, elapsed seconds counting,
@@ -62,11 +62,11 @@ function streamTime(text: string): number {
  *  is strictly shorter than this full body. Verdict first, one next action
  *  last — the whole turn's prose in a single message. */
 export const MAPPING_VERDICT_BODY =
-  "The leasing workflow is a four step pipeline with two clean exits. Intake feeds screening, screening feeds the credit check, and approval routing splits on the score: 620 and above drafts a lease, anything lower goes to manual review.\n\nNext action: dry run the pipeline on the three most recent applications to watch the routing decide with real records. Nothing is charged until you approve a live run.";
+  "The leasing workflow is a four step pipeline with two clean exits. Intake feeds screening, screening feeds the credit check, and approval routing splits on the score: 620 and above drafts a lease, anything lower goes to manual review.\n\nNext action: dry run the pipeline on the three most recent applications to watch the routing decide with real records.";
 
 /** Exported for the e2e suite: the thinking card expands to exactly this. */
 export const MAPPING_THINKING_TEXT =
-  "The workspace declares one workflow, leasing, with application intake as the only entry point. Screening and credit check have to stay sequential because the credit check reads the screening score. Approval routing branches on that score: 620 and above drafts a lease, everything else escalates to a person. Both ends of the graph are marked terminal, so the map has no dangling states. Nothing in this pass calls a paid capability, so mapping stays read only.";
+  "The workspace declares one workflow, leasing, with application intake as the only entry point. Screening and credit check have to stay sequential because the credit check reads the screening score. Approval routing branches on that score: 620 and above drafts a lease, everything else escalates to a person. Both ends of the graph are marked terminal, so the map has no dangling states. Nothing in this pass calls a capability, so mapping stays read only.";
 
 /** The prompt the demo opens on — the mapping conversation answers it. */
 export const DEMO_MAP_PROMPT = "Map the leasing workflow before anything runs.";
@@ -164,7 +164,7 @@ export async function runMappingScript(h: ChatScriptHandlers, signal: AbortSigna
     id: "map-steps",
     role: "assistant",
     body: "",
-    chips: ["4 typed steps", "2 exits", "read only", "no spend"],
+    chips: ["4 typed steps", "2 exits", "read only"],
     card: {
       kind: "steps",
       label: "Leasing intake map",
@@ -208,12 +208,11 @@ export async function runMappingScript(h: ChatScriptHandlers, signal: AbortSigna
 
 /** Exported for the e2e suite: the local-test turn's verdict, verbatim. */
 export const LOCAL_TEST_VERDICT_BODY =
-  "Local test passed. Every capability was stubbed, so nothing was called and nothing was charged: intake, screening, the credit check, and approval routing all ran against fixtures. This proves the wiring, not the data.\n\nNext action: run it on prod when you want the pipeline to touch real records.";
+  "Local test passed. Every capability was stubbed, so nothing was called: intake, screening, the credit check, and approval routing all ran against fixtures. This proves the wiring, not the data.\n\nNext action: run it on prod when you want the pipeline to touch real records.";
 
 /**
- * "Run a free local test": an honest local run turn. The tool card shows the
- * stubbed run and the receipt frames it as free — no fabricated cost, because
- * a local run has none (the mock run-state endpoint records no cost for local).
+ * "Run a local test": an honest local run turn. The tool card shows the
+ * stubbed run — every capability runs against fixtures, so nothing is called.
  */
 export async function runLocalTestScript(h: ChatScriptHandlers, signal: AbortSignal): Promise<void> {
   h.setStage("Stubbing every capability");
@@ -242,7 +241,7 @@ export async function runLocalTestScript(h: ChatScriptHandlers, signal: AbortSig
       running: false,
       name: "sapiom agents run --target local",
       summary: "4 steps passed, capabilities stubbed",
-      output: ["leasing.run  target=local", "  steps    4 passed", "  spend    $0 (stubbed)"].join("\n"),
+      output: ["leasing.run  target=local", "  steps    4 passed", "  stubs    every capability"].join("\n"),
     },
   });
   h.setStage("Reading the stubbed results");
@@ -253,9 +252,9 @@ export async function runLocalTestScript(h: ChatScriptHandlers, signal: AbortSig
   h.append({
     id: verdictId,
     role: "assistant",
-    title: "Local test passed, no spend",
+    title: "Local test passed",
     body: LOCAL_TEST_VERDICT_BODY,
-    chips: ["4 steps", "stubbed", "free"],
+    chips: ["4 steps", "stubbed"],
     streaming: true,
   });
   h.setStage(null);
@@ -269,40 +268,9 @@ export async function runLocalTestScript(h: ChatScriptHandlers, signal: AbortSig
     role: "system",
     tone: "success",
     title: "Local test passed",
-    body: "Stubbed capabilities record no cost, so this run is free. Prod runs are billed; the estimate is on the Steps tab.",
-    meta: "local · free · no spend",
+    body: "Every capability ran against a stub, so nothing was called. This proves the wiring; per-step latency and pass/fail are on the Steps tab.",
+    meta: "local · stubbed",
   });
-  h.setStage(null);
-}
-
-/** Exported for the e2e suite: the cost turn's verdict, verbatim. Every figure
- *  traces to the one authored prod run ($0.003 + $0.0125 = $0.0155). */
-export const COST_VERDICT_BODY =
-  "A prod run of leasing costs $0.0155, observed from the last run: $0.0030 on screening and $0.0125 on the credit check. Intake, approval routing, and drafting the lease recorded no cost. Local runs stay free because their capabilities are stubbed.\n\nNext action: check the Steps tab for the per step breakdown, or run prod when you want real records.";
-
-/**
- * "What would a prod run cost": a cost answer grounded in the observed run.
- * Money is exact or absent — this cites only the authored $0.0155 and its two
- * metered steps, never an invented figure.
- */
-export async function runCostScript(h: ChatScriptHandlers, signal: AbortSignal): Promise<void> {
-  h.setStage("Reading the observed run cost");
-  await wait(600, signal);
-  if (signal.aborted) return;
-
-  const id = `cost-${Date.now()}`;
-  h.append({
-    id,
-    role: "assistant",
-    title: "About $0.0155 per prod run",
-    body: COST_VERDICT_BODY,
-    chips: ["$0.0155 / run", "observed", "1 run"],
-    streaming: true,
-  });
-  h.setStage(null);
-  await wait(streamTime(COST_VERDICT_BODY), signal);
-  if (signal.aborted) return;
-  h.patch(id, { streaming: false });
   h.setStage(null);
 }
 
@@ -344,7 +312,7 @@ export function seededMappingFeed(): FeedItem[] {
       id: "map-steps",
       role: "assistant",
       body: "",
-      chips: ["4 typed steps", "2 exits", "read only", "no spend"],
+      chips: ["4 typed steps", "2 exits", "read only"],
       card: { kind: "steps", label: "Leasing intake map", steps: MAPPING_STEPS },
     },
     {
@@ -366,7 +334,7 @@ export function seededMappingFeed(): FeedItem[] {
 }
 
 const FOLLOW_UP_BODY =
-  "The map above stays accurate to sapiom.json as of the last pass. Try one of the starter prompts to run a free local test or check the prod run cost, or run prod when you want the pipeline to touch real records.";
+  "The map above stays accurate to sapiom.json as of the last pass. Try one of the starter prompts to run a local test, or run prod when you want the pipeline to touch real records.";
 
 /** Later turns with no dedicated script: an honest, short reply that points at
  *  the moves that DO respond, never faking a run. */
@@ -386,8 +354,8 @@ export async function runFollowUpScript(h: ChatScriptHandlers, signal: AbortSign
 
 /**
  * Routes a submitted prompt to the right scripted turn by intent. Map intent
- * (and the auto-played first turn) draws the step map; the two demo starter
- * pills get dedicated honest turns; everything else gets the generic reply.
+ * (and the auto-played first turn) draws the step map; the local-test starter
+ * pill gets a dedicated honest turn; everything else gets the generic reply.
  */
 export function pickChatScript(
   text: string,
@@ -395,6 +363,5 @@ export function pickChatScript(
   const t = text.toLowerCase();
   if (t.includes("map")) return runMappingScript;
   if (t.includes("local")) return runLocalTestScript;
-  if (t.includes("cost")) return runCostScript;
   return runFollowUpScript;
 }

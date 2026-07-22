@@ -27,6 +27,8 @@ import type {
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
+import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
+
 // Skill types (matched to the server-side SkillMeta/SkillDetail in
 // src/server/skills.ts — kept here rather than in shared/types.ts since they
 // are only consumed by the SPA, never by CLI or server logic).
@@ -75,8 +77,6 @@ export type RunLocalLine =
     }
   | { kind: "error"; outcome: "failed"; error: string };
 
-import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
-
 export type { FsDirEntry, FsListResponse };
 
 export function isMockMode(): boolean {
@@ -98,8 +98,8 @@ export const DEMO_SESSION_ID = "sess-boot";
 
 /**
  * Mock mode only: whether to seed the first-load DEMO end-state — a completed
- * prod run for the boot session (lighting Steps, the Wallet, and a chat
- * receipt) plus the auto-played mapping conversation. On by default so a bare
+ * prod run for the boot session (lighting Steps and a chat receipt) plus the
+ * auto-played mapping conversation. On by default so a bare
  * load shows the real product story; tests that exercise mechanics from a
  * clean slate opt out with `?seed=0`, and the fresh-install state has no boot
  * session to seed.
@@ -721,26 +721,21 @@ class MockApi implements HarnessApi {
     return { ...found, body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}` };
   }
 
-  // Scripted completed run for the demo leasing workflow. The two metered
-  // steps carry captured USD; the rest recorded no cost and stay honestly
-  // absent (mirrors renderRunState's null-cost contract, never a
-  // fabricated $0). The wallet card sums these into observed spend.
-  // Convention: an executionId containing "local" mirrors a LOCAL run —
-  // stubbed capabilities record no cost at all, so every step comes back
-  // cost-free (the chip reads "free", the wallet counts nothing).
+  // Scripted completed run for the demo leasing workflow. Per-step latency
+  // and pass/fail only — the run inspector surfaces logs, latency, and
+  // status, never cost.
   async getRunState(executionId: string): Promise<RunView> {
     await delay(120);
-    const steps = [
-      { id: "intake", name: "intake", status: "passed" as const, latencyMs: 240 },
-      { id: "screen", name: "screen", status: "passed" as const, latencyMs: 610, costUsd: 0.003 },
-      { id: "credit-check", name: "credit-check", status: "passed" as const, latencyMs: 1900, costUsd: 0.0125 },
-      { id: "approve", name: "approve", status: "passed" as const, latencyMs: 130 },
-      { id: "draft-lease", name: "draft-lease", status: "passed" as const, latencyMs: 800 },
-    ];
     return {
       executionId,
       status: "completed",
-      steps: executionId.includes("local") ? steps.map(({ costUsd: _costUsd, ...rest }) => rest) : steps,
+      steps: [
+        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 240 },
+        { id: "screen", name: "screen", status: "passed" as const, latencyMs: 610 },
+        { id: "credit-check", name: "credit-check", status: "passed" as const, latencyMs: 1900 },
+        { id: "approve", name: "approve", status: "passed" as const, latencyMs: 130 },
+        { id: "draft-lease", name: "draft-lease", status: "passed" as const, latencyMs: 800 },
+      ],
     };
   }
 

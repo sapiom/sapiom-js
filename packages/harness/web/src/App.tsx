@@ -43,7 +43,6 @@ import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { ApiError, boundWorkflowPathOf, DEMO_SESSION_ID, isDemoSeedEnabled, isMockMode } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
-import { workflowCostStats } from "./lib/run-cost";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
 import { resolveMacroUrl } from "./lib/macro-gating";
@@ -276,9 +275,6 @@ export const App = (): JSX.Element => {
         .map((executionId) => harness.runsByExecution.get(executionId))
         .filter((observed): observed is ObservedRun => observed !== undefined)
     : [];
-  const boundWorkflowPriceStats = boundWorkflow
-    ? workflowCostStats(harness.runsByExecution.values(), boundWorkflow.path)
-    : null;
 
   const closeMobileDrawer = (): void => {
     if (isMobile) setRailCollapsed(true);
@@ -543,7 +539,6 @@ export const App = (): JSX.Element => {
             setReviewSummary(null);
             closeMobileDrawer();
           }}
-          runsByExecution={harness.runsByExecution}
           onReviewSummary={reviewPastSession}
           history={harness.history}
           historyLoading={harness.historyLoading}
@@ -868,7 +863,6 @@ export const App = (): JSX.Element => {
                 onSelectRun={(executionId) => {
                   if (harness.activeSessionId) harness.selectRun(harness.activeSessionId, executionId);
                 }}
-                priceStats={boundWorkflowPriceStats}
                 workflows={state.workflows}
                 onOpenWorkflow={(path) => void handleBindWorkflow(path)}
                 onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}

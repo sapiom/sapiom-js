@@ -39,8 +39,8 @@ const api = createApi();
 const BUSY_WINDOW_MS = 3_000;
 
 /** Where a run executed — the server announces it on execution.started.
- *  "local" runs are stubbed and free; "prod" runs are real, billed cloud
- *  executions. The UI must never blur the two (cost honesty). */
+ *  "local" runs are stubbed (capabilities run against fixtures); "prod" runs
+ *  are real cloud executions. */
 export type RunTarget = "prod" | "local";
 
 /** One observed run: the polled RunView plus the facts captured when its
@@ -132,8 +132,8 @@ export interface HarnessStateHook {
    *  default, or a past run picked via selectRun), with its target. */
   runsBySession: Map<string, ObservedRun>;
   /** EVERY run observed this Studio session, keyed by executionId. Entries
-   *  are updated while a run polls but never dropped, so accumulated cost
-   *  (the wallet) can only grow and past runs stay inspectable. */
+   *  are updated while a run polls but never dropped, so past runs stay
+   *  inspectable. */
   runsByExecution: Map<string, ObservedRun>;
   /** Ordered executionIds observed per session (oldest first) — the run
    *  picker's source of truth. */
