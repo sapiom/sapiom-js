@@ -13,7 +13,7 @@
     "useDefineForClassFields": true,
     "types": ["vite/client", "node"],
     "paths": {
-      "@shared/types": ["./src/lib/harness-types.ts"],
+      "@shared/types": ["../src/shared/types.ts"],
       "@sapiom/design-system/*": ["./src/styles/ds-neutral/*"]
     }
   },

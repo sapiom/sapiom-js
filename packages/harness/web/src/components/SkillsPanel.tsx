@@ -324,7 +324,7 @@ export function SkillsPanel({ listSkills, getSkill, isActive, activeSession, onU
 
   const createDisabledReason = sessionGate(activeSession);
   // No dedicated analytics event exists for this in the server's UiEventName
-  // contract (see harness-types.ts) — not invented here; this is a plain
+  // contract (see @shared/types) — not invented here; this is a plain
   // terminal-injection convenience, same mechanism as "Use skill".
   const handleCreateSkill = (): void => {
     if (createDisabledReason || !activeSession) return;

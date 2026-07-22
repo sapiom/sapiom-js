@@ -405,7 +405,12 @@ export const App = (): JSX.Element => {
 
   // Jump from the Studio to the real code.
   const openInEditor = (path: string): void => {
-    const template = harness.settings?.editorUrlTemplate ?? "vscode://file{path}";
+    // `editorUrlTemplate` is a forward-looking setting the canonical contract
+    // doesn't carry yet; read it defensively so the default holds on servers
+    // (and mocks) that omit it. Mirrors the agentsBaseUrl cast below.
+    const template =
+      (harness.settings as { editorUrlTemplate?: string } | null)?.editorUrlTemplate ??
+      "vscode://file{path}";
     window.location.href = template.replace("{path}", encodeURI(path));
   };
 

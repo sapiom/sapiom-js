@@ -187,11 +187,11 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
 };
 
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
-  { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821, source: "scan" },
-  { name: "rfq", path: "/Users/demo/rfq-workflows", definitionId: null, source: "scan" },
+  { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821, definitionSlug: "leasing", source: "scan" },
+  { name: "rfq", path: "/Users/demo/rfq-workflows", definitionId: null, definitionSlug: null, source: "scan" },
   // Deployed like "leasing" but with a much longer name — exercises the
   // canvas header's deployed-dot staying pinned regardless of name length.
-  { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: 9001, source: "connect" },
+  { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: 9001, definitionSlug: "onboarding-flow", source: "connect" },
 ];
 
 export const MOCK_MACROS: MacroDef[] = [
@@ -273,6 +273,7 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     experimental: true,
     installed: false,
     installMcpPrompt: "",
+    imageInput: false,
   },
   {
     id: "opencode",
@@ -281,6 +282,7 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     experimental: true,
     installed: false,
     installMcpPrompt: "",
+    imageInput: false,
   },
   {
     id: "conductor",
@@ -289,6 +291,7 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
     experimental: false,
     installed: false,
     installMcpPrompt: "",
+    imageInput: false,
   },
 ];
 

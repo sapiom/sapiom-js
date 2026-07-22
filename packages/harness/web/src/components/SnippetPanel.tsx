@@ -11,20 +11,16 @@ import { generateSnippet } from "../lib/generate-snippet";
 const SAPIOM_API_KEYS_URL = "https://app.sapiom.ai/settings?tab=api-keys";
 
 /**
- * The upstream feat/harness-snippets branch adds these two fields server-side
- * (`WorkflowInfo.definitionSlug` resolved from the deployment,
- * `AppState.agentsBaseUrl` from the server's env). The vendored contract
- * (harness-types.ts, pinned at eebb95c) predates them, so the panel types them
- * as optional here and falls back client-side: project name for the slug
- * (flagged as inferred), the SDK's default host for the base URL. When the
- * branch's server work merges and the contract is re-vendored, the accurate
- * values light up with no component change.
+ * `WorkflowInfo.definitionSlug` (resolved from the deployment) and
+ * `AppState.agentsBaseUrl` (from the server's env) are both part of the
+ * canonical shared contract, so the panel reads them directly. It still falls
+ * back client-side when they are absent: the project name for the slug (flagged
+ * as inferred) when `definitionSlug` is null, and the SDK's default host for
+ * the base URL when `agentsBaseUrl` is undefined (older servers / mocks).
  */
-type SnippetWorkflow = WorkflowInfo & { definitionSlug?: string | null };
-
 interface SnippetPanelProps {
   /** The workflow currently bound to the active session. */
-  boundWorkflow: SnippetWorkflow;
+  boundWorkflow: WorkflowInfo;
   /** The Agents API base URL (from AppState) — the executions host the snippet
    *  targets, so it matches where the server resolved the slug. Undefined on
    *  servers that predate the field (and in mocks), where generateSnippet

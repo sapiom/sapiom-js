@@ -97,8 +97,8 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
 
   const imageSupported = useMemo(() => {
     if (!entries) return true; // optimistic until the registry loads
-    // imageInput is optional in the vendored contract: absent (old server)
-    // reads as unsupported, so the affordance never dangles without a route.
+    // No matching registry entry reads as unsupported, so the affordance never
+    // dangles without a route.
     return entries.find((e) => e.id === harness)?.imageInput ?? false;
   }, [entries, harness]);
 
