@@ -7,7 +7,7 @@
  *     sessions live here.
  *  2. MAIN PANEL — the workbench for the focused agent: a session tab strip
  *     (one tab per live session belonging to the agent) above the session
- *     bar, terminal/chat, and action bar. Session switching lives in the tab
+ *     bar, terminal, and action bar. Session switching lives in the tab
  *     strip; the session bar is the active session's identity header.
  *  3. RIGHT PANEL — projections of the ACTIVE session's bound agent (Canvas |
  *     Steps | Code | Skills), session-keyed. The canvas stays mounted behind
@@ -22,7 +22,6 @@ import type { JSX } from "react";
 import type { HarnessKind, HarnessSession, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
 
 import { CanvasPane } from "./components/CanvasPane";
-import { ChatPane } from "./components/chat/ChatPane";
 import { CodePanel } from "./components/CodePanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConnectivityBanner, ConnectivityScreen } from "./components/ConnectivityState";
@@ -41,7 +40,7 @@ import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { ApiError, boundWorkflowPathOf, DEMO_SESSION_ID, isDemoSeedEnabled, isMockMode } from "./lib/api";
+import { ApiError, boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
@@ -53,7 +52,6 @@ import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } fr
 import { useHarnessState, type ObservedRun } from "./lib/use-harness-state";
 
 type RightTab = "canvas" | "steps" | "code" | "skills";
-type AgentView = "chat" | "terminal";
 
 /**
  * Live sessions belonging to the focused subject, in tab order (oldest first,
@@ -130,9 +128,6 @@ export const App = (): JSX.Element => {
     () => isMobileShell() || (loadUiPrefs().rightCollapsed ?? false),
   );
   const isMobile = useMobileShell();
-  // Session pane surface: Chat is the demo's front door (mock mode); live mode
-  // defaults to Terminal. Both surfaces stay mounted across flips.
-  const [agentView, setAgentView] = useState<AgentView>(isMockMode() ? "chat" : "terminal");
 
   // Stable function references for SkillsPanel props — prevents the panel's
   // effects from refiring on every unrelated App re-render. Must be before any
@@ -646,8 +641,6 @@ export const App = (): JSX.Element => {
               onToast={harness.showToast}
               onExpandRail={railCollapsed ? () => setRailCollapsed(false) : null}
               onExpandRight={rightCollapsed ? () => setRightCollapsed(false) : null}
-              agentView={agentView}
-              onSetAgentView={setAgentView}
             />
 
             {/* Session tab strip: one tab per live session belonging to the
@@ -745,27 +738,8 @@ export const App = (): JSX.Element => {
                   api={harness.api}
                   showToast={harness.showToast}
                 >
-                  <div className="agent-view" data-view={agentView} data-testid="agent-view">
-                    <div
-                      className={"agent-view-panel" + (agentView === "chat" ? "" : " is-hidden")}
-                      id="agent-panel-chat"
-                    >
-                      <ChatPane
-                        key={harness.activeSessionId}
-                        live={!isMockMode()}
-                        onInject={(text) => harness.injectInput(harness.activeSessionId as string, text)}
-                        harness={activeSession?.harness ?? "claude-code"}
-                        macros={state.macros}
-                        listSkills={listSkills}
-                        listHarnesses={harness.listHarnesses}
-                        runs={activeSessionRuns}
-                        autoStartScript={isDemoSeedEnabled() && harness.activeSessionId === DEMO_SESSION_ID}
-                      />
-                    </div>
-                    <div
-                      className={"agent-view-panel" + (agentView === "terminal" ? "" : " is-hidden")}
-                      id="agent-panel-terminal"
-                    >
+                  <div className="agent-view" data-testid="agent-view">
+                    <div className="agent-view-panel" id="agent-panel-terminal">
                       <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
                     </div>
                   </div>
