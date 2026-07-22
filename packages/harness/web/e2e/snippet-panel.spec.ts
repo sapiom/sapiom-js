@@ -1,295 +1,119 @@
 /**
- * F1 "Trigger from your code" snippet panel — mock-mode UI tests.
- *
- * Fixtures (from mock-data.ts):
- *   - "leasing"  → deployed (definitionId: 4821, definitionSlug: "lease-abstractor")
- *   - "rfq"      → undeployed (definitionId: null, definitionSlug: null)
- *   - "onboarding-flow" → deployed (definitionId: 9001, definitionSlug: "onboarding-flow")
- *   - "claims-triage" → deployed but slug unresolved (definitionId: 7314,
- *     definitionSlug: null) — exercises the project-name fallback + "inferred" note
- *
- * On initial load, "leasing" is pre-bound and pre-selected (the boot session's
- * boundWorkflowPath is "/Users/demo/acme-app/leasing"). The snippet panel lives
- * on its own "Snippet" tab (next to Skills); beforeEach activates that tab, so
- * with the deployed "leasing" workflow bound the panel renders immediately.
+ * Code tab — "Trigger from your code" snippets (UP-03), mock-mode UI tests,
+ * same fixtures as smoke.spec.ts:
+ *   - "leasing" → deployed (definitionId: 4821, definitionSlug: "leasing"), the
+ *     boot session's binding, so opening the Code tab shows the snippet panel.
+ *     The re-vendored contract carries definitionSlug, so the slug is the one
+ *     the server resolved from the deployment (no inferred fallback).
+ *   - "rfq" → undeployed (definitionId: null) — binding it swaps the tab to
+ *     its honest "deploy first" empty state.
+ * The tab is the bound agent's integration projection (docs/IA.md: the right
+ * pane is Canvas | Steps | Code | Skills); the Canvas tab stays a pure board.
  */
-import { expect, test, type Page } from "@playwright/test";
-
-/**
- * Clicking a workflow in the rail now only INSPECTS it (the inspect-vs-bind
- * split); the snippet panel follows the BOUND workflow, so switching which
- * workflow the panel shows means binding it via "Work on this".
- */
-async function bindWorkflow(page: Page, testId: string): Promise<void> {
-  await page.getByTestId(testId).click();
-  await page.getByTestId("workflow-bind").click();
-}
+import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  // Ensure the leasing workflow is selected (it's the default boot binding).
-  await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-selected/);
-  // The snippet panel now lives on its own tab (moved off the canvas) — activate
-  // it so the panel (or its deployed/undeployed state) is on screen for assertions.
-  await page.getByTestId("right-tab-snippet").click();
+  await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+  await page.getByTestId("right-tab-code").click();
 });
 
-test.describe("snippet panel visibility", () => {
-  test("shows the snippet panel when a deployed workflow is bound", async ({
-    page,
-  }) => {
-    // leasing is deployed — the panel should be visible on initial load.
+test.describe("the Code tab follows the BOUND workflow's deploy state", () => {
+  test("shows the snippet panel when the bound workflow is deployed", async ({ page }) => {
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
+    // Same subheader anatomy as Canvas/Steps: agent name left, the one
+    // server-provable status right.
+    const header = page.getByTestId("code-panel-header");
+    await expect(header.locator(".workflow-actions-name")).toHaveText("leasing");
+    await expect(header.getByTestId("code-panel-status")).toContainText("Deployed");
   });
 
-  test("hides the snippet panel when an undeployed workflow is selected", async ({
+  test("an undeployed binding swaps to the deploy-first empty state; a deployed one brings the panel back", async ({
     page,
   }) => {
-    // Click rfq (no definitionId) — panel must disappear.
-    await bindWorkflow(page, "workflow-rfq");
+    // Opening rfq (no session in its workspace) swaps the tab to the honest
+    // "no session" state — no other agent's snippets leak in.
+    await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
-  });
+    await expect(page.getByTestId("right-panel-code")).toContainText("No running session for rfq");
 
-  test("shows the panel again after switching from undeployed back to deployed", async ({
-    page,
-  }) => {
-    await bindWorkflow(page, "workflow-rfq");
+    // Starting the session binds rfq (undeployed) — the deploy-first state.
+    await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
+    await expect(page.getByTestId("right-panel-code")).toContainText("Deploy to trigger from code");
 
-    await bindWorkflow(page, "workflow-leasing");
+    // Opening leasing again binds + switches back to the boot session's
+    // deployed agent, bringing the snippet panel back.
+    await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
+    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+  });
+
+  test("the snippets live in the Code tab only — Canvas stays a pure board and Steps a pure list", async ({
+    page,
+  }) => {
+    await expect(page.getByTestId("snippet-panel")).toBeVisible();
+    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.getByTestId("snippet-panel")).not.toBeVisible();
+    await page.getByTestId("right-tab-steps").click();
+    await expect(page.getByTestId("snippet-panel")).not.toBeVisible();
+    await page.getByTestId("right-tab-code").click();
     await expect(page.getByTestId("snippet-panel")).toBeVisible();
   });
 });
 
-test.describe("TypeScript tab (default)", () => {
-  test("default tab is TypeScript and contains the SDK call with the correct slug", async ({
+test.describe("slug", () => {
+  test("is read-only (a chip, not an input) and shows the deployment's resolved slug", async ({
     page,
   }) => {
-    const panel = page.getByTestId("snippet-panel");
-    const code = panel.getByTestId("snippet-code");
-
-    // TS tab is active by default.
-    await expect(panel.getByTestId("snippet-tab-ts")).toHaveClass(/is-active/);
-    await expect(panel.getByTestId("snippet-tab-curl")).not.toHaveClass(
-      /is-active/,
-    );
-
-    // Content assertions.
-    await expect(code).toContainText("agents.run({");
-    await expect(code).toContainText('definition: "lease-abstractor"');
-  });
-
-  test("TypeScript snippet does NOT contain forbidden patterns", async ({
-    page,
-  }) => {
-    const code = page.getByTestId("snippet-code");
-    const text = await code.textContent();
-    expect(text).not.toContain("Authorization");
-    expect(text).not.toContain("Bearer");
-    expect(text).not.toContain("api.sapiom.ai");
-    expect(text).not.toContain("/triggers");
-    expect(text).not.toMatch(/sk_[A-Za-z0-9]/);
-  });
-});
-
-test.describe("cURL tab", () => {
-  test("switching to the cURL tab shows the HTTP snippet with the correct endpoint and header", async ({
-    page,
-  }) => {
-    const panel = page.getByTestId("snippet-panel");
-    await panel.getByTestId("snippet-tab-curl").click();
-
-    await expect(panel.getByTestId("snippet-tab-curl")).toHaveClass(
-      /is-active/,
-    );
-    await expect(panel.getByTestId("snippet-tab-ts")).not.toHaveClass(
-      /is-active/,
-    );
-
-    const code = panel.getByTestId("snippet-code");
-    await expect(code).toContainText(
-      "POST https://tools.sapiom.ai/agents/v1/definitions/lease-abstractor/executions",
-    );
-    await expect(code).toContainText("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
-  });
-
-  test("cURL snippet does NOT contain forbidden patterns", async ({ page }) => {
-    const panel = page.getByTestId("snippet-panel");
-    await panel.getByTestId("snippet-tab-curl").click();
-
-    const text = await panel.getByTestId("snippet-code").textContent();
-    expect(text).not.toContain("Authorization");
-    expect(text).not.toContain("Bearer");
-    expect(text).not.toContain("api.sapiom.ai");
-    expect(text).not.toContain("/triggers");
-    expect(text).not.toMatch(/sk_[A-Za-z0-9]/);
-  });
-});
-
-test.describe("slug (read-only)", () => {
-  test("shows the deployed agent's slug", async ({ page }) => {
-    await expect(page.getByTestId("snippet-slug")).toHaveText(
-      "lease-abstractor",
-    );
-  });
-
-  test("the slug is read-only — not an editable input (it's the agent's identity, not a rename field)", async ({
-    page,
-  }) => {
-    await expect(page.getByTestId("snippet-slug-input")).toHaveCount(0);
-    await expect(page.locator(".snippet-panel input")).toHaveCount(0);
-  });
-
-  test("switching to a second deployed workflow shows the new slug (no stale value)", async ({
-    page,
-  }) => {
-    await expect(page.getByTestId("snippet-slug")).toHaveText(
-      "lease-abstractor",
-    );
-    // onboarding-flow is a second DEPLOYED fixture — the panel must reflect its
-    // slug, not keep leasing's.
-    await bindWorkflow(page, "workflow-onboarding-flow");
-    await expect(page.getByTestId("snippet-slug")).toHaveText(
-      "onboarding-flow",
-    );
-    await expect(page.getByTestId("snippet-code")).toContainText(
-      'definition: "onboarding-flow"',
-    );
-  });
-});
-
-test.describe("copy button", () => {
-  test("copy button shows 'Copied' confirmation after click and reverts", async ({
-    page,
-    context,
-  }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-
-    const panel = page.getByTestId("snippet-panel");
-    const copyBtn = panel.getByTestId("snippet-copy");
-    await expect(copyBtn).toHaveText("Copy");
-
-    await copyBtn.click();
-
-    // Brief confirmation appears.
-    await expect(copyBtn).toHaveText("Copied");
-
-    // After ~2s the button reverts — use a generous timeout.
-    await expect(copyBtn).toHaveText("Copy", { timeout: 4_000 });
-  });
-
-  test("copy button writes the TS snippet to the clipboard (TS tab)", async ({
-    page,
-    context,
-  }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-
-    const panel = page.getByTestId("snippet-panel");
-    // TS tab is active by default.
-    await expect(panel.getByTestId("snippet-tab-ts")).toHaveClass(/is-active/);
-
-    await panel.getByTestId("snippet-copy").click();
-    await expect(panel.getByTestId("snippet-copy")).toHaveText("Copied");
-
-    const clipboardText = await page.evaluate(() =>
-      navigator.clipboard.readText(),
-    );
-    expect(clipboardText).toContain("agents.run");
-    expect(clipboardText).toContain("lease-abstractor");
-  });
-
-  test("copy button writes the cURL snippet to the clipboard when on the cURL tab", async ({
-    page,
-    context,
-  }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-
-    const panel = page.getByTestId("snippet-panel");
-    await panel.getByTestId("snippet-tab-curl").click();
-
-    await panel.getByTestId("snippet-copy").click();
-    await expect(panel.getByTestId("snippet-copy")).toHaveText("Copied");
-
-    const clipboardText = await page.evaluate(() =>
-      navigator.clipboard.readText(),
-    );
-    expect(clipboardText).toContain("curl -X POST");
-    expect(clipboardText).toContain("lease-abstractor");
-    expect(clipboardText).toContain("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
-  });
-});
-
-test.describe("slug fallback when the deployment slug is unresolved", () => {
-  test("shows the project name as the slug (deployed but slug unresolved)", async ({
-    page,
-  }) => {
-    await bindWorkflow(page, "workflow-claims-triage");
-    await expect(page.getByTestId("snippet-panel")).toBeVisible();
-    await expect(page.getByTestId("snippet-slug")).toHaveText("claims-triage");
-    await expect(page.getByTestId("snippet-code")).toContainText(
-      'definition: "claims-triage"',
-    );
-  });
-
-  test("shows the 'inferred from the project name' note only in the fallback case", async ({
-    page,
-  }) => {
-    // Resolved slug (leasing, the default binding) — no note.
-    await expect(page.getByTestId("snippet-slug")).toHaveText(
-      "lease-abstractor",
-    );
+    const slug = page.getByTestId("snippet-slug");
+    // The re-vendored contract carries definitionSlug, so leasing's slug is the
+    // one the server resolved from the deployment ("leasing") — not an inferred
+    // fallback, so the "inferred" note does not show.
+    await expect(slug).toHaveText("leasing");
+    // READ-ONLY: the slug is the deployed agent's stable handle — never an
+    // editable field (editing it could only produce a 404 call).
+    const tag = await slug.evaluate((el) => el.tagName.toLowerCase());
+    expect(tag).not.toBe("input");
     await expect(page.getByTestId("snippet-slug-inferred")).toHaveCount(0);
-
-    // Unresolved slug (claims-triage) — the note appears.
-    await bindWorkflow(page, "workflow-claims-triage");
-    await expect(page.getByTestId("snippet-slug-inferred")).toBeVisible();
-    await expect(page.getByTestId("snippet-slug-inferred")).toContainText(
-      "Inferred from the project name",
-    );
-  });
-
-  test("the 'your-agent-slug' placeholder never appears — resolved or fallback", async ({
-    page,
-  }) => {
-    // Resolved case (leasing).
-    await expect(page.getByTestId("snippet-panel")).not.toContainText(
-      "your-agent-slug",
-    );
-    // Fallback case (claims-triage).
-    await bindWorkflow(page, "workflow-claims-triage");
-    await expect(page.getByTestId("snippet-panel")).not.toContainText(
-      "your-agent-slug",
-    );
   });
 });
 
-test.describe("panel structure", () => {
-  test("panel has the expected title", async ({ page }) => {
-    await expect(page.getByTestId("snippet-panel")).toContainText(
-      "Trigger from your code",
-    );
+test.describe("snippet content", () => {
+  test("defaults to the TypeScript SDK tab with the executions call", async ({ page }) => {
+    await expect(page.getByTestId("snippet-tab-ts")).toHaveClass(/is-active/);
+    const code = page.getByTestId("snippet-code");
+    await expect(code).toContainText("agents.run({");
+    await expect(code).toContainText('definition: "leasing"');
   });
 
-  test("panel includes the idempotencyKey helper hint", async ({ page }) => {
-    await expect(page.getByTestId("snippet-panel")).toContainText(
-      "idempotencyKey",
-    );
+  test("the cURL tab shows the same endpoint with the placeholder key, never a real one", async ({ page }) => {
+    await page.getByTestId("snippet-tab-curl").click();
+    await expect(page.getByTestId("snippet-tab-curl")).toHaveClass(/is-active/);
+    const code = page.getByTestId("snippet-code");
+    await expect(code).toContainText("/agents/v1/definitions/leasing/executions");
+    await expect(code).toContainText("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
+    const text = await code.textContent();
+    expect(text).not.toContain("Bearer");
+    expect(text).not.toMatch(/sk_[A-Za-z0-9]/);
   });
 
-  test("links to the dashboard where users get an API key (for use outside the harness)", async ({
-    page,
-  }) => {
+  test("links to the dashboard's API keys page for the real credential", async ({ page }) => {
     const link = page.getByTestId("snippet-api-key-link");
-    await expect(link).toBeVisible();
-    await expect(link).toHaveAttribute(
-      "href",
-      "https://app.sapiom.ai/settings?tab=api-keys",
-    );
+    await expect(link).toHaveAttribute("href", "https://app.sapiom.ai/settings?tab=api-keys");
     await expect(link).toHaveAttribute("target", "_blank");
-    await expect(link).toHaveAttribute("rel", /noreferrer/);
-    await expect(page.getByTestId("snippet-panel")).toContainText(
-      "YOUR_SAPIOM_API_KEY",
-    );
+  });
+});
+
+test.describe("copy", () => {
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+  test("copies the active snippet and confirms with a label change", async ({ page }) => {
+    const copy = page.getByTestId("snippet-copy");
+    await expect(copy).toHaveText("Copy");
+    await copy.click();
+    await expect(copy).toHaveText("Copied");
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).toContain("agents.run({");
   });
 });

@@ -1,8 +1,8 @@
 /**
- * Mock-mode UI test for the composer image-attach feature (SAP-1634). Runs
- * against `vite dev` with VITE_MOCK=1 (see playwright.config.ts) — no harness
- * server. MockApi.attachImage records each call on
- * window.__HARNESS_TEST__.attachImageCalls, and MockApi.listHarnesses reports
+ * Mock-mode UI test for the composer image-attach feature (SAP-1634, ported
+ * from upstream 08af9eb). Runs against `vite dev` with VITE_MOCK=1 (see
+ * playwright.config.ts) — no harness server. MockApi.attachImage records each
+ * call on window.__HARNESS_TEST__.attachImageCalls, and MOCK_HARNESSES report
  * claude-code (the boot session's harness) as imageInput:true, so the attach
  * affordance renders on the active session.
  */
@@ -22,8 +22,14 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 
-test("the attach affordance shows on an image-capable session", async ({ page }) => {
-  await expect(page.getByTestId("image-composer-attach")).toBeVisible();
+test("the composer's + is the ONE attach entry — no duplicate standalone button", async ({ page }) => {
+  // The chat composer's + (wired to the pane-level picker via
+  // ImageAttachContext) is the only attach control on an image-capable
+  // session; the old standalone "Attach image" button below the composer is
+  // gone, and the queue strip only appears once something is queued.
+  await expect(page.getByTestId("composer-attach")).toBeVisible();
+  await expect(page.getByTestId("image-composer-attach")).toHaveCount(0);
+  await expect(page.locator(".image-composer-bar")).toHaveCount(0);
   await page.screenshot({ path: "web/e2e/screenshots/image-composer-idle.png" });
 });
 
