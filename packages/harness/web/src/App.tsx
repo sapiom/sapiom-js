@@ -407,7 +407,7 @@ export const App = (): JSX.Element => {
   const openInEditor = (path: string): void => {
     // `editorUrlTemplate` is a forward-looking setting the canonical contract
     // doesn't carry yet; read it defensively so the default holds on servers
-    // (and mocks) that omit it. Mirrors the agentsBaseUrl cast below.
+    // (and mocks) that omit it.
     const template =
       (harness.settings as { editorUrlTemplate?: string } | null)?.editorUrlTemplate ??
       "vscode://file{path}";
@@ -859,7 +859,7 @@ export const App = (): JSX.Element => {
                 <CodePanel
                   boundWorkflow={rightPaneWorkflow}
                   noSessionAgent={noSessionAgentName}
-                  agentsBaseUrl={(state as { agentsBaseUrl?: string }).agentsBaseUrl}
+                  agentsBaseUrl={state.agentsBaseUrl}
                 />
               </div>
             )}
