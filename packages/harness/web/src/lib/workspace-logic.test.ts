@@ -28,6 +28,7 @@ const workflow = (overrides: Partial<WorkflowInfo>): WorkflowInfo => ({
   name: "leasing",
   path: "/home/dev/app/leasing",
   definitionId: null,
+  definitionSlug: null,
   source: "scan",
   ...overrides,
 });

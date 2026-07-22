@@ -26,10 +26,11 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // The upstream engineering frontend imports its runtime contract from
-      // `@shared/types`. We vendor that contract in src/lib/harness-types.ts;
-      // re-pointing it at the package's own shared contract is a follow-up.
-      "@shared/types": fileURLToPath(new URL("./src/lib/harness-types.ts", import.meta.url)),
+      // The frontend imports its runtime contract from `@shared/types`. It
+      // resolves to the package's own canonical shared contract
+      // (packages/harness/src/shared/types.ts) so the web and server always
+      // build against one source of truth — no vendored copy to drift.
+      "@shared/types": fileURLToPath(new URL("../src/shared/types.ts", import.meta.url)),
       // The design system is a private package. Public builds resolve it to a
       // committed neutral fallback so `@import "@sapiom/design-system/*"` in
       // styles.css resolves and the app renders legibly; official builds swap

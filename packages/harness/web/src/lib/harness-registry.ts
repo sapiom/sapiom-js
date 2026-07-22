@@ -10,10 +10,11 @@ import { SPAWNABLE_HARNESS_KINDS } from "@shared/types";
 /** Fallback shown until (or in case) the registry fetch resolves — the two
  *  embedded adapters every install ships, assumed selectable so demo mode
  *  and older servers behave exactly as before. Labels mirror the upstream
- *  adapter descriptors. */
+ *  adapter descriptors. `imageInput: false` is the honest pre-fetch default
+ *  (no image affordance until the real registry confirms support). */
 export const FALLBACK_HARNESSES: HarnessEntry[] = [
-  { id: "claude-code", label: "Claude Code", mode: "embedded", experimental: false, installed: true, installMcpPrompt: "" },
-  { id: "codex", label: "Codex CLI", mode: "embedded", experimental: false, installed: true, installMcpPrompt: "" },
+  { id: "claude-code", label: "Claude Code", mode: "embedded", experimental: false, installed: true, installMcpPrompt: "", imageInput: false },
+  { id: "codex", label: "Codex CLI", mode: "embedded", experimental: false, installed: true, installMcpPrompt: "", imageInput: false },
 ];
 
 /**
