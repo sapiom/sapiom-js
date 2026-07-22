@@ -230,7 +230,6 @@ function toDeployErrorEvent(
       phase: "error",
       code: err.code,
       message: err.message,
-      ...(err.hint ? { hint: err.hint } : {}),
     };
   }
   return {

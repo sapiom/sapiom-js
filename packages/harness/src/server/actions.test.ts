@@ -232,11 +232,12 @@ describe("createActionsRouter", () => {
 
       const events = parseNdjson(await res.text());
       expect(events[0]).toEqual({ phase: "building", definitionId: "def_123" });
+      // The hint is dropped — the terminal error carries only code + message
+      // (mirrors the prod-run error response, which also omits the hint).
       expect(events[1]).toEqual({
         phase: "error",
         code: "BUILD_FAILED",
         message: "Build failed.",
-        hint: "traceback here",
       });
     });
 
@@ -451,6 +452,9 @@ describe("createActionsRouter", () => {
       const events = parseNdjson(await res.text());
       expect(events[0]).toEqual({ phase: "building", definitionId: "def_123" });
       expect(events[1]).toMatchObject({ phase: "error", code: "HTTP_401" });
+      // The credential hint must NOT leak to the browser (mirrors the prod-run
+      // 401 test, which asserts the same on its 502 body).
+      expect((events[1] as Record<string, unknown>).hint).toBeUndefined();
       // deploy was tried once; refresh ran but produced no different key so the
       // router did not burn a second attempt.
       expect(deploy).toHaveBeenCalledTimes(1);
