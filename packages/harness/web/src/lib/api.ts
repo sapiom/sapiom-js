@@ -54,6 +54,10 @@ export interface RunLocalArgs {
   sourceDir: string;
   /** The workflow's entry-step input (optional; agent-core defaults it). */
   input?: unknown;
+  /** Explicit per-capability stub overrides; omitted → the project's committed
+   *  dev stubs are used. Left as an opaque record here — the SPA only forwards
+   *  it, agent-core owns the schema. */
+  stubs?: unknown;
   /** Per-step attempt cap (optional; agent-core defaults it). */
   maxAttemptsPerStep?: number;
 }
@@ -76,6 +80,31 @@ export type RunLocalLine =
       stubWarnings: string[];
     }
   | { kind: "error"; outcome: "failed"; error: string };
+
+// ---------------------------------------------------------------------------
+// Direct-action wire shapes (matched to src/server/actions.ts). SPA-only — the
+// browser consumes these streams but never the server modules that emit them,
+// so (like SkillMeta above) they live here rather than in shared/types.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * One line of the `POST /api/workflows/:id/deploy` NDJSON stream (mirrors
+ * `DeployStreamEvent` in src/server/actions.ts): a `building` line up front,
+ * then exactly one terminal `ready` | `error` line closing the stream.
+ */
+export type DeployStreamEvent =
+  | { phase: "building"; definitionId: string }
+  | { phase: "ready"; definitionId: string; buildRunId: string; status: string }
+  | { phase: "error"; code: string; message: string; hint?: string };
+
+/** The `POST /api/runs` response — the started prod execution's id, which the
+ *  live-canvas path then polls via `getRunState`. */
+export interface RunResponse {
+  executionId: string;
+}
+
+/** Callback fired once per NDJSON line as a direct-action stream is consumed. */
+export type StreamLineHandler<T> = (line: T) => void;
 
 export type { FsDirEntry, FsListResponse };
 
@@ -205,6 +234,22 @@ export interface HarnessApi {
    * a failed run is a normal terminal line). Fully offline: no key, no cost.
    */
   runLocal(args: RunLocalArgs, onLine: (line: RunLocalLine) => void): Promise<void>;
+  /**
+   * Deploy the agent linked to `workflowPath` (Deploy button) — POST
+   * /api/workflows/:id/deploy. The server holds the API key and drives the
+   * build; NO Claude Code, no user LLM credits. `onEvent` fires per NDJSON
+   * line as the build streams (`building` → terminal `ready`/`error`); the
+   * promise resolves with the terminal event. Rejects (ApiError) only on the
+   * request itself failing (e.g. 409 not-linked) — a build *failure* resolves
+   * with a `phase: "error"` terminal event, since the request succeeded.
+   */
+  deploy(workflowPath: string, onEvent?: StreamLineHandler<DeployStreamEvent>): Promise<DeployStreamEvent>;
+  /**
+   * Start a real prod execution (Prod-run button) — POST /api/runs. Runs
+   * server-side with the held key; NO Claude Code. Returns the new
+   * `{ executionId }`, which the caller hands to the run-inspector poller.
+   */
+  run(req: { definitionId: string; input?: unknown }): Promise<RunResponse>;
 }
 
 class RealApi implements HarnessApi {
@@ -377,6 +422,113 @@ class RealApi implements HarnessApi {
     // Flush the decoder + any trailing line without a newline terminator.
     drain(decoder.decode(), true);
   }
+
+  async deploy(
+    workflowPath: string,
+    onEvent?: StreamLineHandler<DeployStreamEvent>,
+  ): Promise<DeployStreamEvent> {
+    // The workflow id in the route path is its absolute path (the server's
+    // resolveWorkflow matches on path — see createActionsRouter mount).
+    const events = await this.streamNdjson<DeployStreamEvent>(
+      `/api/workflows/${encodeURIComponent(workflowPath)}/deploy`,
+      { method: "POST" },
+      onEvent,
+    );
+    return terminalDeployEvent(events);
+  }
+
+  async run(req: { definitionId: string; input?: unknown }): Promise<RunResponse> {
+    return this.request<RunResponse>("/api/runs", { method: "POST", body: JSON.stringify(req) });
+  }
+
+  /**
+   * POST to an NDJSON route and parse the response body line by line, invoking
+   * `onLine` for each well-formed JSON line as it arrives and returning every
+   * parsed line. Non-JSON lines (stray banner/console noise the server may not
+   * have filtered) are skipped — the same "degrade, never throw" stance the
+   * server's own stream forwarders take. Throws `ApiError` on a non-2xx status,
+   * matching `request()`, so a rejected request (e.g. 409/503) surfaces the
+   * same way a normal call would rather than as an empty stream.
+   */
+  private async streamNdjson<T>(
+    path: string,
+    init: RequestInit,
+    onLine?: StreamLineHandler<T>,
+  ): Promise<T[]> {
+    const res = await fetch(path, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": getBootToken(),
+        ...init.headers,
+      },
+    });
+    if (!res.ok || !res.body) {
+      const body = await res.text().catch(() => "");
+      let reason: string | undefined;
+      try {
+        const parsed: unknown = body ? JSON.parse(body) : undefined;
+        if (parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string") {
+          reason = (parsed as { error: string }).error;
+        }
+      } catch {
+        // Not JSON — reason stays undefined.
+      }
+      throw new ApiError(
+        res.status,
+        `${init.method ?? "GET"} ${path} → ${res.status}${body ? `: ${body}` : ""}`,
+        reason,
+      );
+    }
+    const collected: T[] = [];
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const flush = (chunk: string): void => {
+      buffer += chunk;
+      let newline = buffer.indexOf("\n");
+      while (newline !== -1) {
+        const raw = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        const parsed = parseNdjsonLine<T>(raw);
+        if (parsed !== undefined) {
+          collected.push(parsed);
+          onLine?.(parsed);
+        }
+        newline = buffer.indexOf("\n");
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      flush(decoder.decode(value, { stream: true }));
+    }
+    // A final line with no trailing newline (the server always terminates lines,
+    // but be defensive).
+    flush(decoder.decode() + "\n");
+    return collected;
+  }
+}
+
+/**
+ * Parse one NDJSON line from a generic stream (used by the deploy stream), or
+ * `undefined` for a line that carries no value: blank, non-JSON noise, OR a
+ * bare `null` (`JSON.parse("null")`). Rejecting `null` here — not just
+ * `undefined` — means a stray `null` line is dropped rather than forwarded to
+ * the consumer, which would otherwise receive it as an event and could throw
+ * downstream. Mirrors {@link parseRunLocalLine}'s null rejection. Pure — no
+ * I/O — so it is unit-testable without a live stream.
+ */
+export function parseNdjsonLine<T>(raw: string): T | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined; // non-JSON noise — skip.
+  }
+  return parsed === null ? undefined : (parsed as T);
 }
 
 /**
@@ -415,6 +567,17 @@ export function parseRunLocalLine(raw: string): RunLocalLine | null {
   // scalar is noise, not a trace/summary/error line).
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
   return parsed as RunLocalLine;
+}
+
+/** The terminal deploy event (the `ready`/`error` line), or a synthesized
+ *  `error` when the stream ended without one — the button always gets a
+ *  definite outcome. */
+export function terminalDeployEvent(events: DeployStreamEvent[]): DeployStreamEvent {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.phase === "ready" || event.phase === "error") return event;
+  }
+  return { phase: "error", code: "NO_OUTPUT", message: "deploy produced no terminal status" };
 }
 
 const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -777,6 +940,60 @@ class MockApi implements HarnessApi {
     }
     await delay(140);
     onLine({ kind: "summary", outcome: "completed", output: { approved: true }, unusedStubs: [], stubWarnings: [] });
+  }
+
+  // The direct actions have no network in mock mode: they synthesize the same
+  // NDJSON shapes the real server streams, drive `onLine`/`onEvent` so the
+  // consuming UI is exercised, and record the call on __HARNESS_TEST__ so
+  // Playwright can assert the button hit the DIRECT path — never a pty inject
+  // (lastMacroRun) — which is the whole point of the direct-action button handler.
+
+  async deploy(
+    workflowPath: string,
+    onEvent?: StreamLineHandler<DeployStreamEvent>,
+  ): Promise<DeployStreamEvent> {
+    this.recordDirectAction("deploy", { workflowPath });
+    const building: DeployStreamEvent = { phase: "building", definitionId: "mock-def" };
+    onEvent?.(building);
+    await delay(400);
+    const ready: DeployStreamEvent = {
+      phase: "ready",
+      definitionId: "mock-def",
+      buildRunId: "mock-build-1",
+      status: "succeeded",
+    };
+    onEvent?.(ready);
+    // Mirror the real server: a successful deploy links the workflow, so its
+    // definitionId flips. Reflect that in the fixture so the Draft→Deployed
+    // chip and the deploy-gated actions light up after a mock deploy.
+    this.workflows = this.workflows.map((w) =>
+      w.path === workflowPath && w.definitionId == null
+        ? { ...w, definitionId: 4242, definitionSlug: w.definitionSlug ?? "mock-agent" }
+        : w,
+    );
+    return ready;
+  }
+
+  async run(req: { definitionId: string; input?: unknown }): Promise<RunResponse> {
+    this.recordDirectAction("run", req);
+    await delay(200);
+    // A fresh, non-"local" id so the run-state fixture returns the prod
+    // steps and the inspector poller has something to follow.
+    return { executionId: `exec-mock-prod-${Date.now()}` };
+  }
+
+  /** Test-only escape hatch (mock mode only): record a direct-action call so
+   *  Playwright can assert the button used the DIRECT route rather than the pty
+   *  inject path. Same pattern as lastMacroRun/lastInjectInput. */
+  private recordDirectAction(action: "deploy" | "run" | "runLocal", req: unknown): void {
+    if (typeof window === "undefined") return;
+    const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+    const prev = (win.__HARNESS_TEST__?.directActions as unknown[]) ?? [];
+    win.__HARNESS_TEST__ = {
+      ...(win.__HARNESS_TEST__ ?? {}),
+      directActions: [...prev, { action, req }],
+      lastDirectAction: { action, req },
+    };
   }
 }
 

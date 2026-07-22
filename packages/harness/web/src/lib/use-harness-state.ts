@@ -103,6 +103,21 @@ export interface HarnessStateHook {
   updateSettings: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>;
   runMacro: (id: string, req: RunMacroRequest) => Promise<void>;
   /**
+   * Deploy the agent linked to `workflowPath` via the DIRECT route (Deploy
+   * button) — server-side, no Claude Code. Streams build status into the toast
+   * slot; refreshes the registry on success so the Draft→Deployed chip flips.
+   * Never rejects on a build failure (surfaced as a toast), matching runMacro's
+   * fire-and-forget click contract.
+   */
+  deploy: (workflowPath: string) => Promise<void>;
+  /**
+   * Start a real prod execution via the DIRECT route (Prod-run button) — no
+   * Claude Code — then hand the returned `executionId` to the run-inspector
+   * poller so the run shows up in the Steps tab exactly as a CLI-launched run
+   * does. Errors go to the toast slot.
+   */
+  startProdRun: (sessionId: string, definitionId: string, input?: unknown) => Promise<void>;
+  /**
    * Runs the workflow at `sourceDir` OFFLINE against stub capabilities and
    * streams the result into the SAME run store the prod poller feeds — so the
    * click-into-step inspector renders a local stub run exactly as it renders a
@@ -700,6 +715,47 @@ export function useHarnessState(): HarnessStateHook {
     }
   }, []);
 
+  // Deploy via the direct route: stream build status to the toast, then refresh
+  // the registry so a linked/rebuilt workflow's Deployed chip flips. Swallows
+  // failures into the toast (like runMacro) — its caller fires it unawaited.
+  const deploy = useCallback(
+    async (workflowPath: string): Promise<void> => {
+      setToast("Deploying — building on Sapiom…");
+      try {
+        const terminal = await api.deploy(workflowPath, (event) => {
+          if (event.phase === "building") setToast("Deploying — building on Sapiom…");
+        });
+        if (terminal.phase === "ready") {
+          setToast("Deployed to Sapiom.");
+          // A successful deploy links/rebuilds the agent — re-read the registry
+          // so definitionId (the Draft→Deployed truth) and the deploy-gated
+          // actions update without waiting on a bus refresh.
+          await refreshWorkflows();
+        } else if (terminal.phase === "error") {
+          setToast(terminal.hint ? `Deploy failed: ${terminal.message} (${terminal.hint})` : `Deploy failed: ${terminal.message}`);
+        }
+      } catch (err) {
+        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      }
+    },
+    [refreshWorkflows],
+  );
+
+  // Prod-run via the direct route: start the execution server-side, then feed
+  // the returned executionId into the SAME poller a CLI-launched run uses
+  // (startRunPolling) so it lands in the Steps tab / run picker identically.
+  const startProdRun = useCallback(
+    async (sessionId: string, definitionId: string, input?: unknown): Promise<void> => {
+      try {
+        const { executionId } = await api.run({ definitionId, input });
+        startRunPolling(sessionId, executionId, "prod");
+      } catch (err) {
+        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      }
+    },
+    [startRunPolling],
+  );
+
   const dismissToast = useCallback(() => setToast(null), []);
 
   // Unlike runMacro (which swallows errors into a toast), injectInput lets the
@@ -755,6 +811,8 @@ export function useHarnessState(): HarnessStateHook {
     bindWorkflow,
     updateSettings,
     runMacro,
+    deploy,
+    startProdRun,
     runLocal,
     injectInput,
     useSkill,

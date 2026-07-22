@@ -46,6 +46,7 @@ import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
 import { resolveMacroUrl } from "./lib/macro-gating";
+import { directActionKind } from "./lib/macro-actions";
 import { sessionDisplayName } from "./lib/session-name";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
@@ -501,6 +502,26 @@ export const App = (): JSX.Element => {
         return;
       }
       if (!sessionId) return;
+      // Deploy / Prod-run / Run-local run via the DIRECT harness routes (no
+      // Claude Code, no user LLM credits). Once a macro is a direct action we
+      // NEVER fall through to the pty-inject runMacro — the buttons are already
+      // gated (require a workflow / a deploy), so a missing prerequisite here is
+      // a no-op, never a silent revert to the Claude Code path.
+      const direct = directActionKind(macro.id);
+      if (direct !== null) {
+        if (direct === "deploy" && workflow) {
+          void harness.deploy(workflow.path);
+        } else if (direct === "prod-run" && workflow?.definitionId != null) {
+          // definitionId is present (the button is deploy-gated); the runs route
+          // wants it as a string.
+          void harness.startProdRun(sessionId, String(workflow.definitionId));
+        } else if (direct === "run-local" && workflow) {
+          void harness.runLocal(sessionId, workflow.path);
+        }
+        return;
+      }
+      // Visualize (render-canvas) and every inject macro (Debug / Explain /
+      // free-form) keep their existing path through runMacro.
       void harness.runMacro(macro.id, {
         harnessSessionId: sessionId,
         workflowPath: workflow?.path,
