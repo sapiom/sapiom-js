@@ -10,6 +10,7 @@ import {
   type ActionsRouterOpts,
   type RunLocalChildProcess,
 } from "./actions.js";
+import type { ApiKeyProvider } from "../core/api-key-provider.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,6 +40,43 @@ function parseNdjson(text: string): Array<Record<string, unknown>> {
     .map((l) => l.trim())
     .filter(Boolean)
     .map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
+/**
+ * A provider whose refresh() swaps to `refreshedKey` exactly once — the same
+ * shape runs.test.ts uses. Records refresh() calls so a test can assert the
+ * router refreshed at most once. Passing this as `apiKey` (rather than a plain
+ * string) is exactly what the real server does.
+ */
+function refreshingProvider(
+  initialKey: string | null,
+  refreshedKey: string | null,
+): ApiKeyProvider & { refreshCalls: number } {
+  let current = initialKey;
+  let refreshed = false;
+  const provider = {
+    refreshCalls: 0,
+    getKey: () => current,
+    refresh: () => {
+      provider.refreshCalls += 1;
+      if (!refreshed) {
+        refreshed = true;
+        current = refreshedKey;
+      }
+      return Promise.resolve(current);
+    },
+  };
+  return provider;
+}
+
+/** An agent-core auth rejection (what a 401/403 upstream surfaces as). */
+async function makeAuthRejection(status: 401 | 403): Promise<Error> {
+  const { AgentOperationError } = await import("@sapiom/agent-core");
+  return new AgentOperationError({
+    code: `HTTP_${status}`,
+    message: "Unauthorized.",
+    hint: "check your key", // must never leak to the browser
+  });
 }
 
 /**
@@ -295,6 +333,129 @@ describe("createActionsRouter", () => {
       expect(coreDeps.deploy).not.toHaveBeenCalled();
       expect(coreDeps.createClient).not.toHaveBeenCalled();
     });
+
+    it("authenticates via the provider's held key (not a boot snapshot)", async () => {
+      // A provider (what the real server passes), not a plain string — the
+      // client must be minted from provider.getKey(), and no refresh happens on
+      // the happy path.
+      const provider = refreshingProvider("sk-held-key", "sk-unused");
+      const coreDeps = makeCoreDeps({
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: provider,
+        coreBaseUrl: "https://api.test",
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      expect(coreDeps.createClient).toHaveBeenCalledWith({
+        host: "https://api.test",
+        apiKey: "sk-held-key",
+      });
+      expect(provider.refreshCalls).toBe(0);
+    });
+
+    it("returns 503 when the provider's held key is null", async () => {
+      // A provider whose getKey() is null must behave exactly like apiKey: null.
+      const coreDeps = makeCoreDeps();
+      start({
+        apiKey: refreshingProvider(null, null),
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(503);
+      expect(coreDeps.deploy).not.toHaveBeenCalled();
+      expect(coreDeps.createClient).not.toHaveBeenCalled();
+    });
+
+    it("recovers a 401 by refreshing the key and retrying, streaming ready", async () => {
+      // First deploy attempt is rejected (stale key); the router refreshes to a
+      // newer key and the retry succeeds — a single building line, then ready.
+      const provider = refreshingProvider("sk-stale", "sk-fresh");
+      const deploy = vi
+        .fn()
+        .mockRejectedValueOnce(await makeAuthRejection(401))
+        .mockResolvedValueOnce({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        });
+      const coreDeps = makeCoreDeps({ deploy });
+      start({
+        apiKey: provider,
+        coreBaseUrl: "https://api.test",
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_123" },
+        {
+          phase: "ready",
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        },
+      ]);
+
+      expect(provider.refreshCalls).toBe(1);
+      expect(deploy).toHaveBeenCalledTimes(2);
+      // Retry re-minted the client with the refreshed key.
+      expect(coreDeps.createClient).toHaveBeenNthCalledWith(1, {
+        host: "https://api.test",
+        apiKey: "sk-stale",
+      });
+      expect(coreDeps.createClient).toHaveBeenNthCalledWith(2, {
+        host: "https://api.test",
+        apiKey: "sk-fresh",
+      });
+    });
+
+    it("does not retry (streams the terminal 401) when refresh yields no newer key", async () => {
+      // Every deploy attempt 401s and refresh returns the SAME key — the router
+      // must refresh once, decline to retry, and stream the terminal error.
+      const provider = refreshingProvider("sk-stale", "sk-stale");
+      const deploy = vi.fn().mockRejectedValue(await makeAuthRejection(401));
+      const coreDeps = makeCoreDeps({ deploy });
+      start({
+        apiKey: provider,
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events[0]).toEqual({ phase: "building", definitionId: "def_123" });
+      expect(events[1]).toMatchObject({ phase: "error", code: "HTTP_401" });
+      // deploy was tried once; refresh ran but produced no different key so the
+      // router did not burn a second attempt.
+      expect(deploy).toHaveBeenCalledTimes(1);
+      expect(provider.refreshCalls).toBe(1);
+    });
   });
 
   // ── POST /api/runs ────────────────────────────────────────────────────────
@@ -423,6 +584,154 @@ describe("createActionsRouter", () => {
       expect(res.status).toBe(503);
       expect(coreDeps.run).not.toHaveBeenCalled();
       expect(coreDeps.createClient).not.toHaveBeenCalled();
+    });
+
+    it("authenticates via the provider's held key (not a boot snapshot)", async () => {
+      const provider = refreshingProvider("sk-held-key", "sk-unused");
+      const coreDeps = makeCoreDeps({
+        run: vi.fn().mockResolvedValue({ executionId: "exec_1", raw: {} }),
+      });
+      start({
+        apiKey: provider,
+        coreBaseUrl: "https://api.test",
+        resolveWorkflow: () => null,
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ definitionId: "def_123" }),
+      });
+      expect(res.status).toBe(200);
+      expect(coreDeps.createClient).toHaveBeenCalledWith({
+        host: "https://api.test",
+        apiKey: "sk-held-key",
+      });
+      expect(provider.refreshCalls).toBe(0);
+    });
+
+    it("returns 503 when the provider's held key is null", async () => {
+      const coreDeps = makeCoreDeps();
+      start({
+        apiKey: refreshingProvider(null, null),
+        resolveWorkflow: () => null,
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ definitionId: "def_123" }),
+      });
+      expect(res.status).toBe(503);
+      expect(coreDeps.run).not.toHaveBeenCalled();
+      expect(coreDeps.createClient).not.toHaveBeenCalled();
+    });
+
+    it("recovers a 401 by refreshing the key and retrying, returning executionId", async () => {
+      const provider = refreshingProvider("sk-stale", "sk-fresh");
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(await makeAuthRejection(401))
+        .mockResolvedValueOnce({ executionId: "exec_42", raw: {} });
+      const coreDeps = makeCoreDeps({ run });
+      start({
+        apiKey: provider,
+        coreBaseUrl: "https://api.test",
+        resolveWorkflow: () => null,
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ definitionId: "def_123", input: { foo: "bar" } }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toEqual({ executionId: "exec_42" });
+
+      expect(provider.refreshCalls).toBe(1);
+      expect(run).toHaveBeenCalledTimes(2);
+      // The retried run reused the same request args, minted against the new key.
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        { definitionId: "def_123", input: { foo: "bar" } },
+        expect.anything(),
+      );
+      expect(coreDeps.createClient).toHaveBeenNthCalledWith(1, {
+        host: "https://api.test",
+        apiKey: "sk-stale",
+      });
+      expect(coreDeps.createClient).toHaveBeenNthCalledWith(2, {
+        host: "https://api.test",
+        apiKey: "sk-fresh",
+      });
+    });
+
+    it("also refreshes + retries on a 403 (authorization loss)", async () => {
+      const provider = refreshingProvider("sk-stale", "sk-fresh");
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(await makeAuthRejection(403))
+        .mockResolvedValueOnce({ executionId: "exec_7", raw: {} });
+      const coreDeps = makeCoreDeps({ run });
+      start({ apiKey: provider, resolveWorkflow: () => null, coreDeps });
+
+      const res = await fetch(`${baseUrl}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ definitionId: "def_123" }),
+      });
+      expect(res.status).toBe(200);
+      expect(provider.refreshCalls).toBe(1);
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("maps a 401 to 502 (no retry, hint stripped) when refresh yields no newer key", async () => {
+      // The auth error is unrecoverable — refresh returns the same key. The
+      // router must not retry, and the credential hint must not reach the browser.
+      const provider = refreshingProvider("sk-stale", "sk-stale");
+      const run = vi.fn().mockRejectedValue(await makeAuthRejection(401));
+      const coreDeps = makeCoreDeps({ run });
+      start({ apiKey: provider, resolveWorkflow: () => null, coreDeps });
+
+      const res = await fetch(`${baseUrl}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ definitionId: "def_123" }),
+      });
+      expect(res.status).toBe(502);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.code).toBe("HTTP_401");
+      expect(body.hint).toBeUndefined();
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(provider.refreshCalls).toBe(1);
+    });
+
+    it("does not refresh on a non-auth gateway error", async () => {
+      // A 404 (definition not found) is not an auth rejection — no refresh, no
+      // retry, mapped straight to 502.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const provider = refreshingProvider("sk-key", "sk-unused");
+      const run = vi.fn().mockRejectedValue(
+        new AgentOperationError({
+          code: "HTTP_404",
+          message: "Definition not found.",
+        }),
+      );
+      const coreDeps = makeCoreDeps({ run });
+      start({ apiKey: provider, resolveWorkflow: () => null, coreDeps });
+
+      const res = await fetch(`${baseUrl}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ definitionId: "def_missing" }),
+      });
+      expect(res.status).toBe(502);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(provider.refreshCalls).toBe(0);
     });
   });
 

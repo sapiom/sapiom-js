@@ -834,7 +834,10 @@ export const startServer = async (
   // same live cache the rest router's findWorkflow uses.
   app.use(
     createActionsRouter({
-      apiKey: identity?.apiKey ?? null,
+      // Pass the provider (not a static key) so deploy/prod-run authenticate
+      // with the live key and can refresh + retry on a rejected key, recovering
+      // instead of locking — matching the runs router above.
+      apiKey: apiKeyProvider,
       // coreBaseUrl omitted: the router self-defaults via resolveCoreBaseUrl()
       // (see actions.ts), which derives the core host from the agents env.
       resolveWorkflow: (id) =>
