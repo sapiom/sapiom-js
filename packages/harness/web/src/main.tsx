@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
 import { interceptMockTrack } from "./lib/api.js";
 import "./styles.css";
+import "./styles/refine.css";
 
 // In mock mode, intercept /api/track calls so Playwright tests can assert
 // that track() events fire without a real server. No-op in real mode.

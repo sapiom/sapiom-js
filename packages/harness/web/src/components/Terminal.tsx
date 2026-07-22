@@ -1,10 +1,22 @@
 /**
  * Terminal — xterm.js bound to a session's /ws/terminal WebSocket.
  *
+ * How the real CLI UI renders here: the harness server spawns the actual
+ * `claude` / `codex` binary inside a node-pty (TERM=xterm-256color) and
+ * relays raw PTY bytes over the socket both ways (JSON {type:"resize"}
+ * control frames from client to server). xterm.js renders those bytes
+ * verbatim — the CLI draws its own real TUI; nothing is re-implemented.
+ *
  * Ports two non-obvious fixes from browser-terminal work elsewhere in the
  * ecosystem: an Extended Device Attributes (XDA, `CSI > q`) reply and an
  * OSC 52 clipboard handler. Without them, terminal-aware CLIs either fail to
  * detect a terminal at all, or render as if clipboard support doesn't exist.
+ *
+ * Theming: panel chrome (statusbar, borders) is CSS class + token based —
+ * see "Terminal panel" in styles.css. The xterm screen itself needs concrete
+ * color values, so they're read from the design-system tokens at mount and
+ * on theme change; only the 16-color ANSI ramp stays constant per theme
+ * (terminal data colors, not chrome — see design-system/themes.md).
  */
 
 import { useEffect, useRef, useState, type JSX } from "react";
@@ -14,6 +26,8 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { buildTerminalWsUrl } from "../lib/terminal-ws.js";
 import { getTheme, subscribeTheme, type Theme } from "../lib/theme.js";
+import { isMockMode } from "../lib/api.js";
+import { attachMockTerminal, type MockTerminalHandle } from "../lib/mock-terminal.js";
 
 export interface TerminalProps {
   sessionId: string;
@@ -28,98 +42,92 @@ const MAX_RECONNECT_DELAY_MS = 15_000;
 // both are permanent for this WS instance; retrying won't help.
 const PERMANENT_CLOSE_CODES = new Set([4001, 4004]);
 
-// Status-pill colors are global constants in Sapiom's own design system (not
-// overridden per light/dark) — kept as plain constants rather than per-theme.
-const STATUS_SUCCESS = "#10B981";
-const STATUS_WAITING = "#F59E0B";
-const STATUS_ERROR = "#EF4444";
-const MONO_FONT_STACK =
-  '"SF Mono", Menlo, Monaco, Inconsolata, "Source Code Pro", Consolas, "Liberation Mono", "Ubuntu Mono", "Courier Prime", "JetBrains Mono", "Courier New", monospace';
+const FALLBACK_MONO =
+  '"Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace';
 
-interface PanelPalette {
-  panelBackground: string;
-  textMuted: string;
-  borderSubtle: string;
-  xterm: ITheme;
+/** Resolve a design-system custom property to a concrete value for xterm. */
+function readToken(name: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
 }
 
-// Palette values below are copied (values only) from Sapiom's own design
-// tokens for each theme, so the embedded terminal reads as part of the app
-// rather than a bare xterm.js default panel.
-const DARK_PALETTE: PanelPalette = {
-  panelBackground: "#0E0E0E",
-  textMuted: "#A1A1AA",
-  borderSubtle: "#2E2E2E",
-  xterm: {
-    background: "#0E0E0E",
-    foreground: "#FAFAFA",
-    cursor: "#6BE195",
-    cursorAccent: "#0E0E0E",
-    selectionBackground: "rgba(107, 225, 149, 0.25)",
-    black: "#1A1A1A",
-    red: "#f87171",
-    green: "#6BE195",
-    yellow: "#f59e0b",
-    blue: "#3b82f6",
-    magenta: "#a78bfa",
-    cyan: "#22d3ee",
-    white: "#FAFAFA",
-    brightBlack: "#404040",
-    brightRed: "#ff9b96",
-    brightGreen: "#8bd4a6",
-    brightYellow: "#ffd966",
-    brightBlue: "#60a5fa",
-    brightMagenta: "#c4b5fd",
-    brightCyan: "#67e8f9",
-    brightWhite: "#ffffff",
-  },
+// ANSI 16-color ramps: terminal DATA colors (what CLIs paint with), not app
+// chrome — kept as constants per theme, same as a data-viz scale.
+const DARK_ANSI: Partial<ITheme> = {
+  black: "#1a1a1e",
+  red: "#f87171",
+  green: "#4ade80",
+  yellow: "#f59e0b",
+  blue: "#3b82f6",
+  magenta: "#a78bfa",
+  cyan: "#22d3ee",
+  white: "#f4f4f5",
+  brightBlack: "#404046",
+  brightRed: "#ff9b96",
+  brightGreen: "#86efac",
+  brightYellow: "#ffd966",
+  brightBlue: "#60a5fa",
+  brightMagenta: "#c4b5fd",
+  brightCyan: "#67e8f9",
+  brightWhite: "#ffffff",
 };
 
-const LIGHT_PALETTE: PanelPalette = {
-  panelBackground: "#FFFFFF",
-  textMuted: "#737373",
-  borderSubtle: "#E5E5E5",
-  xterm: {
-    background: "#FFFFFF",
-    foreground: "#1A1A1A",
-    cursor: "#05A9BC",
-    cursorAccent: "#FFFFFF",
-    selectionBackground: "rgba(5, 169, 188, 0.18)",
-    black: "#3A3A3A",
-    red: "#dc2626",
-    green: "#05A9BC",
-    yellow: "#b45309",
-    blue: "#2563eb",
-    magenta: "#7c3aed",
-    cyan: "#0891b2",
-    white: "#d4d4d8",
-    brightBlack: "#737373",
-    brightRed: "#ef4444",
-    brightGreen: "#06b6d4",
-    brightYellow: "#f59e0b",
-    brightBlue: "#3b82f6",
-    brightMagenta: "#a78bfa",
-    brightCyan: "#22d3ee",
-    brightWhite: "#ffffff",
-  },
+const LIGHT_ANSI: Partial<ITheme> = {
+  black: "#3a3a3e",
+  red: "#dc2626",
+  green: "#16a34a",
+  yellow: "#b45309",
+  blue: "#2563eb",
+  magenta: "#7c3aed",
+  cyan: "#0891b2",
+  white: "#d4d4d8",
+  brightBlack: "#6a6a74",
+  brightRed: "#ef4444",
+  brightGreen: "#22c55e",
+  brightYellow: "#f59e0b",
+  brightBlue: "#3b82f6",
+  brightMagenta: "#a78bfa",
+  brightCyan: "#22d3ee",
+  brightWhite: "#ffffff",
 };
 
-const paletteFor = (theme: Theme): PanelPalette => (theme === "dark" ? DARK_PALETTE : LIGHT_PALETTE);
+/**
+ * Screen theme from the live design-system tokens: app background/ink for
+ * the canvas, the brand green for cursor + selection. Read at call
+ * time so it always reflects the current [data-theme].
+ */
+function xtermThemeFor(theme: Theme): ITheme {
+  const background = readToken("--bg", theme === "dark" ? "#0a0a0c" : "#fafafa");
+  const foreground = readToken("--ink", theme === "dark" ? "#f4f4f5" : "#141417");
+  // Fallbacks mirror the per-theme --brand values in styles.css.
+  const brand = readToken("--brand", theme === "dark" ? "#6be195" : "#167e3a");
+  return {
+    ...(theme === "dark" ? DARK_ANSI : LIGHT_ANSI),
+    background,
+    foreground,
+    cursor: brand,
+    cursorAccent: background,
+    // Brand at ~25% — hex alpha works because --brand is a hex token.
+    selectionBackground: `${brand}40`,
+  };
+}
 
 export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [theme, setTheme] = useState<Theme>(getTheme());
 
   // Re-applies live on toggle — doesn't touch the pty connection, so this is
   // a separate effect from the one that opens the terminal/socket below.
-  useEffect(() => subscribeTheme(setTheme), []);
-
-  useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = paletteFor(theme).xterm;
-  }, [theme]);
+  useEffect(
+    () =>
+      subscribeTheme((next: Theme) => {
+        if (termRef.current) termRef.current.options.theme = xtermThemeFor(next);
+      }),
+    [],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -133,8 +141,8 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     const term = new XTerm({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: MONO_FONT_STACK,
-      theme: paletteFor(getTheme()).xterm,
+      fontFamily: readToken("--mono", FALLBACK_MONO),
+      theme: xtermThemeFor(getTheme()),
       scrollback: 10_000,
       allowProposedApi: true,
     });
@@ -170,6 +178,14 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
 
     term.open(container);
     fitAddon.fit();
+    // Geist Mono usually lands after mount; a fit computed with fallback
+    // metrics leaves uneven right/bottom remainders. Refit on real metrics.
+    void document.fonts?.ready.then(() => {
+      if (!disposed) {
+        fitAddon.fit();
+        sendResize();
+      }
+    });
 
     const inputDisposable = term.onData((data) => {
       if (ws?.readyState === WebSocket.OPEN) ws.send(data);
@@ -220,68 +236,46 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
       };
     }
 
-    connect();
+    // Static Pages demo: no server exists, so never open a WebSocket —
+    // play the deterministic scripted transcript instead (see mock-terminal).
+    let mock: MockTerminalHandle | null = null;
+    if (isMockMode()) {
+      mock = attachMockTerminal(term);
+      setStatus("connected");
+    } else {
+      connect();
+    }
 
     return () => {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       resizeObserver.disconnect();
       inputDisposable.dispose();
+      mock?.dispose();
       ws?.close();
       term.dispose();
       termRef.current = null;
     };
   }, [sessionId, token]);
 
-  const statusColor =
-    status === "connected" ? STATUS_SUCCESS : status === "error" ? STATUS_ERROR : STATUS_WAITING;
   const statusLabel =
-    status === "connected" ? "Connected" : status === "error" ? (errorMessage ?? "Error") : "Connecting…";
-  const palette = paletteFor(theme);
+    status === "connected"
+      ? isMockMode()
+        ? "Demo session, scripted. No live agent."
+        : "Connected"
+      : status === "error"
+        ? (errorMessage ?? "Error")
+        : "Connecting…";
 
   return (
-    // Stable hook for the surrounding app shell to lay out/border this panel —
-    // internal theming (colors, font, padding, status pill) lives here.
-    <div
-      className="harness-terminal"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        width: "100%",
-        background: palette.panelBackground,
-        borderRadius: 8,
-        border: `1px solid ${palette.borderSubtle}`,
-        overflow: "hidden",
-      }}
-    >
-      <div
-        data-status={status}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          flexShrink: 0,
-          padding: "6px 10px",
-          borderBottom: `1px solid ${palette.borderSubtle}`,
-          fontFamily: MONO_FONT_STACK,
-          fontSize: 11,
-        }}
-      >
-        <span
-          aria-hidden="true"
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            background: statusColor,
-            boxShadow: status === "connecting" ? `0 0 0 3px ${statusColor}33` : "none",
-            flexShrink: 0,
-          }}
-        />
-        <span style={{ color: palette.textMuted }}>{statusLabel}</span>
+    // Full-bleed terminal block: a status subheader over the raw PTY screen.
+    // All chrome styling is class + token based — see styles.css.
+    <div className="harness-terminal">
+      <div className="terminal-statusbar" data-status={status}>
+        <span className="terminal-status-dot" aria-hidden="true" />
+        <span className="terminal-status-label">{statusLabel}</span>
       </div>
-      <div ref={containerRef} style={{ flex: 1, minHeight: 0, padding: 8, overflow: "hidden" }} />
+      <div ref={containerRef} className="terminal-screen" />
     </div>
   );
 };

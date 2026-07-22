@@ -1,0 +1,36 @@
+/*
+ * Neutral accent layer — public fallback.
+ *
+ * Import after tokens.css. Supplies the accent/brand + focus tokens the app
+ * references, so `styles.css`'s `@import ".../themes/agent-cloud.css"`
+ * resolves in the public build with no private assets present.
+ *
+ * The accent here is a single restrained, unbranded slate — it carries NO
+ * proprietary hue. Official builds swap the `@sapiom/design-system` alias for
+ * the private package, which supplies the branded accent against these same
+ * token names; the app is otherwise unchanged. (styles.css additionally maps
+ * these accent tokens and layers its own product accent on top — the one
+ * sanctioned deviation, documented at its declaration there.)
+ */
+:root,
+[data-theme="dark"] {
+  --brand: #6b7a90;
+  --brand-hover: #869ab2;
+  --brand-ink: #0c0f14;
+  --brand-wash: color-mix(in srgb, var(--brand) 14%, transparent);
+  --brand-line: color-mix(in srgb, var(--brand) 38%, transparent);
+  --focus-ring: color-mix(in srgb, var(--brand) 54%, transparent);
+  --focus: var(--focus-ring);
+  --violet: #9b8fc4;
+}
+
+[data-theme="light"] {
+  --brand: #566175;
+  --brand-hover: #454e5f;
+  --brand-ink: #ffffff;
+  --brand-wash: color-mix(in srgb, var(--brand) 12%, transparent);
+  --brand-line: color-mix(in srgb, var(--brand) 30%, transparent);
+  --focus-ring: color-mix(in srgb, var(--brand) 38%, transparent);
+  --focus: var(--focus-ring);
+  --violet: #7a6ea6;
+}

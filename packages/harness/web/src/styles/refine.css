@@ -1,0 +1,353 @@
+/* ==========================================================================
+   Draft-1 refinement layer
+   --------------------------------------------------------------------------
+   Loaded AFTER styles.css. Elevates the live workspace to the draft-1
+   reference's visual language while keeping every DOM node, class, and test
+   selector intact — this file only restyles.
+
+   Draft-1 signatures applied here:
+     · dark-default, two-step etched surfaces on translucent hairlines
+     · monochrome chrome; the brand green (--brand) reserved for focus / live / selection
+     · Geist-Mono metadata with tabular-nums; 590 weights + tight tracking
+     · 1px resize splitters that bloom to 2px brand green
+     · one 0.5rem control radius with a translateY(-1px) lift; --btn primary buttons
+     · soft content-in / disclosure / dialog motion (reduced-motion honored)
+   ========================================================================== */
+
+/* ---- Global type texture ------------------------------------------------ */
+body {
+  font-size: var(--type-ui, 13px);
+}
+
+/* Tabular, mono metadata everywhere it reads as a machine value. */
+.session-item-meta,
+.session-item-cwd,
+.palette-trigger-hint,
+.session-history-badge {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Header ------------------------------------------------------------- */
+/* Geometry lives in styles.css (the brand header is the rail's 56px top
+   row); this layer only carries the type texture. */
+.brand-name {
+  font-size: var(--type-body);
+  font-weight: 590;
+  letter-spacing: -0.03em;
+}
+
+.brand-product {
+  font-weight: 510;
+  letter-spacing: -0.01em;
+}
+
+.brand-divider {
+  height: 16px;
+  background: var(--ui-line-strong, var(--border-strong));
+}
+
+/* The jump/search field's geometry lives in styles.css (.rail-search); no
+   overrides needed here. */
+.theme-toggle {
+  width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  border-radius: var(--radius);
+}
+
+.theme-toggle:active {
+  transform: scale(0.96);
+}
+
+.brand-identity {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  letter-spacing: -0.01em;
+}
+
+/* ---- Left rail ---------------------------------------------------------- */
+.rail {
+  background: var(--surface-raised);
+  border-right: 1px solid var(--ui-line, var(--border));
+}
+
+/* Workflow rows: exactly ONE row in the rail ever reads as selected - the
+   shaded active session. The workflow BOUND to it is a relationship, not a
+   second selection: brand-green glyph (styles.css) only. */
+.workflow-item {
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+
+.workflow-item:hover {
+  background: var(--surface-hover, var(--bg-hover));
+}
+
+/* ---- Resize splitters: 1px line → 2px brand bloom ---------------------- */
+.pane-resize-handle {
+  width: 9px;
+  background: transparent;
+}
+
+.pane-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--ui-line, var(--border));
+  transition:
+    width var(--fast, 0.13s) var(--ease),
+    background-color var(--fast, 0.13s) var(--ease);
+}
+
+.pane-resize-handle:hover,
+.pane-resize-handle:active {
+  background: transparent;
+}
+
+.pane-resize-handle:hover::before,
+.pane-resize-handle:active::before,
+.pane-resize-handle:focus-visible::before {
+  width: 2px;
+  background: var(--brand);
+}
+
+.pane-resize-handle:focus-visible {
+  outline: none;
+}
+
+/* ---- Center surface + terminal ----------------------------------------- */
+.center-pane {
+  border-right: 1px solid var(--ui-line, var(--border));
+  background: var(--surface-base, var(--bg-0));
+}
+
+.terminal-empty,
+.rail-empty {
+  color: var(--text-faint);
+}
+
+/* ---- Session bar --------------------------------------------------------- */
+.session-bar {
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--ui-line, var(--border));
+}
+
+/* Bound-workflow suffix inside the active tab: quiet metadata text, not a
+   boxed tag. */
+.session-workflow-chip {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Shared buttons: pill + lift; primary is the inverted --btn -------- */
+.btn-ghost,
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp1);
+  border-radius: var(--radius);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp3);
+  font-weight: 510;
+  transition:
+    background-color var(--fast, 0.13s) var(--ease),
+    border-color var(--fast, 0.13s) var(--ease),
+    color var(--fast, 0.13s) var(--ease),
+    transform var(--fast, 0.13s) var(--ease);
+}
+
+.btn-ghost {
+  border-color: var(--ui-line, var(--border));
+  box-shadow: none;
+}
+
+/* Neutral fill + hairline + lift, identical in both themes (the solid-fill
+   hover now lives nowhere — brand is reserved for primary/selection/live). */
+.btn-ghost:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--btn);
+  color: var(--btn-ink);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--btn);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+/* ---- Right pane: Canvas | Skills tabs ---------------------------------- */
+.right-pane {
+  background: var(--surface-raised);
+}
+
+.right-pane-tabs {
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--ui-line, var(--border));
+}
+
+.right-pane-tab {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp3);
+  font-weight: 510;
+}
+
+.right-pane-tab:hover {
+  background: var(--surface-hover, var(--bg-hover));
+}
+
+.right-pane-tab.is-active {
+  background: var(--active-shade);
+  border-color: var(--ui-line, var(--border));
+  box-shadow: none;
+  color: var(--text);
+}
+
+/* ---- Canvas / studio panes --------------------------------------------- */
+.canvas-pane,
+.right-pane-panel {
+  background: var(--surface-raised);
+}
+
+.canvas-empty,
+.canvas-empty-hint {
+  color: var(--text-dim);
+}
+
+.canvas-empty-hint code {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  padding: 1px 5px;
+  border-radius: var(--radius);
+  background: var(--surface-inset, var(--bg-2));
+}
+
+/* Pane content eases in rather than hard-cutting. */
+.canvas-frame-wrap,
+.right-pane-panel:not(.is-hidden) .skills-panel {
+  animation: refine-content-in var(--base, 0.22s) var(--ease) both;
+}
+
+/* ---- Modals + command palette ------------------------------------------ */
+.modal-backdrop {
+  background: var(--scrim-bg, rgba(3, 3, 5, 0.55));
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.modal,
+.command-palette,
+.settings-popover {
+  border: 1px solid var(--ui-line-strong, var(--border-strong));
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: refine-dialog-in var(--base, 0.22s) var(--ease) both;
+}
+
+.settings-popover {
+  border-radius: var(--radius);
+}
+
+/* ---- Unified empty / loading / error states --------------------------- */
+/* One legible recipe for every "nothing here yet / working / it broke"
+   surface so they read as one system across rail, canvas, skills, menus,
+   palette, and pickers. Each surface keeps its own layout (centered vs
+   inline); this only unifies type scale + tone. */
+.rail-empty,
+.workspace-group-empty,
+.terminal-empty,
+.canvas-empty,
+.skills-empty,
+.skills-loading,
+.dir-picker-empty,
+.session-dropdown-empty,
+.command-palette-empty {
+  color: var(--text-faint);
+  font-size: var(--type-label, 12px);
+  line-height: 1.5;
+}
+
+/* Error copy uses the readable state hue (--red-text), never the raw --red
+   which is tuned for icons/borders — so it clears contrast in both themes. */
+.skills-error,
+.modal-error,
+.welcome-error,
+.command-palette-error,
+.dir-picker-error {
+  color: var(--red-text);
+  font-size: var(--type-label, 12px);
+  line-height: 1.5;
+}
+
+/* Inline list-surface errors read as machine output: mono + meta scale. */
+.command-palette-error,
+.dir-picker-error {
+  padding: var(--sp2, 8px) var(--sp3, 12px);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta, 11px);
+}
+
+/* Inside the full-bleed listing the rows own the dialog inset. */
+.dir-picker-error {
+  padding: var(--sp2, 8px) var(--sp5, 24px);
+}
+
+/* ---- Status dots: pulse for live/running ------------------------------- */
+.workflow-dot,
+.session-dot {
+  box-shadow: none;
+}
+
+/* ---- Motion keyframes (honor reduced motion) --------------------------- */
+@keyframes refine-content-in {
+  from {
+    opacity: 0.35;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes refine-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-ghost:hover:not(:disabled),
+  .btn-primary:hover:not(:disabled) {
+    transform: none;
+  }
+  .canvas-frame-wrap,
+  .right-pane-panel:not(.is-hidden) .skills-panel,
+  .modal,
+  .command-palette,
+  .settings-popover {
+    animation-duration: 1ms;
+  }
+}
