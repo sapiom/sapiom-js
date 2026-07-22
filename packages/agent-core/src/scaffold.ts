@@ -84,7 +84,7 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
  */
 const VERSION_FALLBACK = {
   agent: "0.6.5",
-  tools: "0.20.0",
+  tools: "0.20.1",
 };
 
 /** The zod major the authoring SDK is built against. */
