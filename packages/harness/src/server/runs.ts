@@ -10,10 +10,20 @@
 import { Router } from "express";
 
 import { createRunStateFetcher } from "../core/run-state.js";
+import {
+  type ApiKeyProvider,
+  staticApiKeyProvider,
+} from "../core/api-key-provider.js";
 
 export interface RunsRouterOpts {
-  /** Sapiom API key for the agents surface; null when the harness is not authenticated. */
-  apiKey: string | null;
+  /**
+   * Sapiom credential Studio actions authenticate with. Accepts either a plain
+   * `string | null` (the boot-time key) or an {@link ApiKeyProvider}; pass a
+   * provider so a rejected key can refresh + retry (the live-status path) and so
+   * the fetcher reads the current key rather than a boot-time snapshot. This is
+   * the API key (`sk_…`), NOT the local boot token.
+   */
+  apiKey: string | null | ApiKeyProvider;
   /** Override the agents base URL (resolved from env by default). Test seam. */
   baseUrl?: string;
   /**
@@ -30,8 +40,16 @@ export interface RunsRouterOpts {
  */
 export function createRunsRouter(opts: RunsRouterOpts): Router {
   const router = Router();
+  // Normalize to a provider so the live-status path always authenticates with
+  // the held API key and can refresh + retry when that key is rejected — a
+  // plain string|null becomes a no-op static provider (no refresh).
+  const provider: ApiKeyProvider =
+    opts.apiKey !== null && typeof opts.apiKey === "object"
+      ? opts.apiKey
+      : staticApiKeyProvider(opts.apiKey);
+
   const stateFetcher = createRunStateFetcher({
-    apiKey: opts.apiKey,
+    apiKey: provider,
     baseUrl: opts.baseUrl,
     fetchImpl: opts.fetchImpl,
   });
