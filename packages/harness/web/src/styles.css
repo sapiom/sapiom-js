@@ -60,7 +60,7 @@
 /* --------------------------------------------------------------------------
    Status tags — ONE flat contract for every status pill/tag in the app
    (session state, Draft/Deployed lifecycle, run chip, canvas deployed
-   label, wallet connection state, skills badges). A status is a labeled
+   label, connection state, skills badges). A status is a labeled
    fact, not a control: NO border, NO background wash, one type token
    (--type-meta); the dot or icon carries the hue, the word carries the
    meaning (never color alone). Interactive variants (.status-tag-action)
@@ -884,9 +884,7 @@ input {
 .composer-library,
 .profile-menu,
 .session-menu,
-.settings-popover,
-.wallet-menu,
-.workflow-price-popover {
+.settings-popover {
   display: flex;
   flex-direction: column;
   gap: var(--tree-row-gap);
@@ -906,9 +904,7 @@ input {
   .connect-card,
   .profile-menu,
   .session-menu,
-  .settings-popover,
-  .wallet-menu,
-  .workflow-price-popover {
+  .settings-popover {
     animation: none;
   }
 }
@@ -1240,127 +1236,6 @@ input {
   --tree-row-gap: 3px;
   --tree-pad-x: 6px;
   --tree-indent: calc(var(--tree-pad-x) + 13px + 6px);
-}
-
-/* Wallet: bottom-anchored spend/balance band above the account footer.
-   Spend is computed from observed runs only, so it shows honest absence
-   ("No billed runs yet") instead of a fabricated $0.00. */
-.rail-wallet {
-  flex: 0 0 auto;
-  /* The single hairline separating the band — same rule as .rail-footer. */
-  border-top: 1px solid var(--ui-line);
-}
-
-/* Full-bleed rail section, not a boxed card: transparent, no border, on the
-   same horizontal rhythm as the footer/profile rows (--pane-pad-x). */
-.wallet-card {
-  /* Anchor for the actions menu, which floats above the band. */
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp2);
-  /* min-width: 0 lets the band shrink with the rail's flex column instead
-     of forcing a horizontal scrollbar at narrow rail widths. */
-  min-width: 0;
-  padding: var(--sp3) var(--pane-pad-x);
-  background: transparent;
-}
-
-.wallet-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp2);
-}
-
-.wallet-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp2);
-  min-width: 0;
-  color: var(--text);
-  font-size: var(--type-label);
-  font-weight: 510;
-}
-
-.wallet-menu-btn {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: var(--sp5);
-  height: var(--sp5);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  border-radius: var(--radius);
-  color: var(--text-faint);
-  transition:
-    background-color var(--fast) var(--ease),
-    color var(--fast) var(--ease);
-}
-
-.wallet-menu-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.wallet-menu-btn:active {
-  background: var(--active-shade);
-  color: var(--text);
-}
-
-.wallet-menu-btn:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
-}
-
-/* Actions menu (portaled): sized to content with a floor that matches the
-   account menu's width at the rail's 180px floor. */
-.wallet-menu {
-  min-width: 200px;
-}
-
-.wallet-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp1);
-}
-
-.wallet-line {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp2);
-  min-width: 0;
-  /* Label scale: spend and balance are numbers the user acts on, and the
-     band has room at 12px. */
-  font-size: var(--type-label);
-}
-
-.wallet-line-label {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-}
-
-.wallet-line-value {
-  color: var(--text);
-  font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wallet-line-quiet {
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .wallet-menu-btn {
-    transition: none;
-  }
 }
 
 .workspace-group {
@@ -3329,8 +3204,8 @@ input {
   padding: var(--sp1) 0;
 }
 
-/* The shown run's origin + total cost, right-anchored on the list header:
-   "local run · free" / "prod run · $0.0155" (see runSummaryLabel). */
+/* The shown run's origin, right-anchored on the list header:
+   "local run" / "prod run" (see runKindLabel). */
 .canvas-steps-run-note {
   margin-left: auto;
   font-family: var(--font-mono);
@@ -3469,7 +3344,7 @@ input {
 }
 
 /* Structural facts (inputs, branches, timeout) — or, once a run has been
-   observed, its real latency/cost. Absent fields stay absent: the column
+   observed, its real latency. Absent fields stay absent: the column
    never shows fabricated values. */
 .canvas-step-meta {
   font-family: var(--font-mono);
@@ -3629,7 +3504,7 @@ input {
 }
 
 /* Steps subheader run chip: the flat .status-tag recipe — run truth is a
-   labeled fact ("prod run completed · $0.0155"), mono because it is data. */
+   labeled fact ("prod run completed"), mono because it is data. */
 .canvas-run-chip {
   font-family: var(--font-mono);
 }
@@ -3660,77 +3535,12 @@ input {
   font-size: var(--type-micro);
 }
 
-/* The scan level of the cost ladder: each run row's own observed total (or
-   free/billed truth) plus when the Studio saw it start, pushed to the row's
-   trailing edge. Faint on purpose — facts, not the pick target. */
+/* Each run row's trailing meta — when the Studio observed the run start,
+   pushed to the row's trailing edge. Faint on purpose — a fact, not the
+   pick target. */
 .canvas-run-option-meta {
   margin-left: auto;
   padding-left: var(--sp3);
-  color: var(--text-faint);
-}
-
-/* Steps subheader price slot: the presented workflow's upfront price. Flat
-   .status-tag anatomy on the interactive states; mono because money is
-   data. Faint while unpriced (a quiet state, not a claim), dim once an
-   observed average exists. The popover carries the basis. */
-.workflow-price-wrap {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.workflow-price-note {
-  font-family: var(--font-mono);
-  color: var(--text-faint);
-}
-
-.workflow-price-note.is-priced {
-  color: var(--text-dim);
-}
-
-/* Narrow pane: the words yield to the coin glyph — aria-label, tooltip,
-   and the popover keep naming the slot (same degrade recipe as the detail
-   mode's Ask agent label above). With a run chip sharing the bar (has-run)
-   the words yield much earlier: the chip already carries glance-level
-   cost, and both mono labels cannot share an equal-split pane. */
-@container (max-width: 347px) {
-  .workflow-actions-header .workflow-price-label {
-    display: none;
-  }
-}
-
-@container (max-width: 620px) {
-  .workflow-actions-header.has-run .workflow-price-label {
-    display: none;
-  }
-}
-
-/* Prose popover on the shared recipe: a readable well (the 6px menu well is
-   for rows), one measure, three registers — lead (label ink), the exact
-   total (mono data), the basis hint (faint). */
-.workflow-price-popover {
-  width: min(300px, calc(100vw - 24px));
-  padding: var(--sp3);
-  gap: var(--sp2);
-}
-
-.workflow-price-lead {
-  margin: 0;
-  font-size: var(--type-label);
-  line-height: 1.5;
-  color: var(--text);
-}
-
-.workflow-price-line {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  color: var(--text-dim);
-}
-
-.workflow-price-hint {
-  margin: 0;
-  font-size: var(--type-meta);
-  line-height: 1.5;
   color: var(--text-faint);
 }
 
@@ -4060,7 +3870,7 @@ input {
 }
 
 /* The selected step's observed run facts: one meta-size row — status ink
-   from the shared run-text scale, then duration and cost. */
+   from the shared run-text scale, then duration. */
 .canvas-inspector-run {
   display: flex;
   align-items: baseline;

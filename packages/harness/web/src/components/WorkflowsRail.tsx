@@ -11,7 +11,6 @@ import type {
 
 import type { FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
-import type { ObservedRun } from "../lib/use-harness-state";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
@@ -20,7 +19,6 @@ import { Icon } from "./Icon";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
 import { TemplatesDialog } from "./TemplatesDialog";
-import { WalletCard } from "./WalletCard";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
 import { HARNESS_LABELS, historyRowMeta } from "../lib/history-meta";
@@ -52,9 +50,6 @@ interface WorkflowsRailProps {
    *  main slot. Selecting any session leaves it. */
   overviewSelected: boolean;
   onSelectOverview: () => void;
-  /** Every run observed this Studio session (by executionId) - the wallet
-   *  card sums step costs across all of them, never losing a past run. */
-  runsByExecution: Map<string, ObservedRun>;
   /** Opens the past-session review pane for a history entry. */
   onReviewSummary: (summary: SessionSummary) => void;
   history: SessionSummary[];
@@ -261,9 +256,9 @@ function PastSessionRow({
 
 /**
  * Full-height workspace rail: brand header, a jump/search field, the explorer
- * tree (workspace folder headers > agent rows), the wallet card, and the
- * account row. Sessions are not a rail concern — they live in the main
- * panel's tab strip, keyed to the focused agent.
+ * tree (workspace folder headers > agent rows), and the account row.
+ * Sessions are not a rail concern — they live in the main panel's tab strip,
+ * keyed to the focused agent.
  */
 export function WorkflowsRail({
   width,
@@ -279,7 +274,6 @@ export function WorkflowsRail({
   onSelectSession,
   overviewSelected,
   onSelectOverview,
-  runsByExecution,
   onReviewSummary,
   history,
   historyLoading,
@@ -576,10 +570,6 @@ export function WorkflowsRail({
             </div>
           )}
         </div>
-      </div>
-
-      <div className="rail-wallet">
-        <WalletCard runsByExecution={runsByExecution} organizationName={organizationName} onToast={onToast} />
       </div>
 
       <div className="rail-footer">

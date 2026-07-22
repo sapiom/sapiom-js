@@ -132,8 +132,7 @@ function transcript(): ScriptLine[] {
       delayMs: 700,
     },
     // The prod run after Visualize — the CLI transcript matches the other
-    // surfaces' end-state (Steps, Wallet, chat receipt all show this run).
-    // Figures trace to the authored run-state ($0.0030 + $0.0125 = $0.0155).
+    // surfaces' end-state (Steps and chat receipt show the same run).
     { text: bold("> ") + "Run it on prod\r\n\r\n", delayMs: 800 },
     { text: green("⏺") + " " + bold("Bash") + "(sapiom agents run --target prod)\r\n", delayMs: 700 },
     { text: dim("  ⎿  Started execution exec-leasing-prod-001") + "\r\n\r\n", delayMs: 600 },
@@ -142,8 +141,6 @@ function transcript(): ScriptLine[] {
         green("⏺") +
         " Run completed: 5 steps passed\r\n  " +
         cyan("intake · screen · credit-check · approve · draft-lease") +
-        "\r\n  " +
-        dim("billed $0.0155 (screen $0.0030, credit-check $0.0125)") +
         "\r\n\r\n",
       delayMs: 900,
     },

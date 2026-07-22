@@ -4,13 +4,10 @@ import type { RunView, WorkflowInfo } from "@shared/types";
 
 import type { CanvasGraphNode } from "../lib/canvas-graph";
 import { nodeKindLabel } from "../lib/canvas-graph";
-import type { RunCostEstimate } from "../lib/capability-rates";
 import { relativeTimeLabel } from "../lib/relative-time";
-import { runCostLabel, type WorkflowCostStats } from "../lib/run-cost";
 import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { Icon } from "./Icon";
-import { WorkflowPriceNote } from "./WorkflowPriceNote";
 
 interface WorkflowActionsHeaderProps {
   workflow: WorkflowInfo;
@@ -33,26 +30,19 @@ interface WorkflowActionsHeaderProps {
   stepsSummary: string | null;
   /** The run the Steps tab is showing, when one was observed. */
   run: RunView | null;
-  /** Where that run executed — drives the chip's free/billed truth. */
+  /** Where that run executed (prod / local) — labels the run chip. */
   runTarget: RunTarget | null;
   /** Every run observed for this session (oldest first) — ≥2 arms the
    *  run picker on the chip. */
   runs: ObservedRun[];
   onSelectRun: (executionId: string) => void;
-  /** Observed cost aggregates for THIS workflow across every session —
-   *  drives the steps subheader's price slot. Null when the app has no
-   *  run store to aggregate (never rendered as a fabricated price). */
-  priceStats: WorkflowCostStats | null;
-  /** Rate-card estimate from the posted graph — the price slot's labeled
-   *  pre-run rung; observed truth replaces it (see WorkflowPriceNote). */
-  priceEstimate: RunCostEstimate | null;
 }
 
-/** Chip copy: "prod run completed · $0.0155" / "local run running · free". */
+/** Chip copy: "prod run completed" / "local run running". Cost-free — the
+ *  inspector surfaces logs, latency, and pass/fail only. */
 function runChipLabel(run: RunView, target: RunTarget | null): string {
   const kind = target ? `${target} run` : "run";
-  const cost = runCostLabel(run, target);
-  return cost ? `${kind} ${run.status} · ${cost}` : `${kind} ${run.status}`;
+  return `${kind} ${run.status}`;
 }
 
 /**
@@ -81,8 +71,6 @@ export function WorkflowActionsHeader({
   runTarget,
   runs,
   onSelectRun,
-  priceStats,
-  priceEstimate,
 }: WorkflowActionsHeaderProps): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -180,9 +168,6 @@ export function WorkflowActionsHeader({
       </>
     );
     return (
-      /* has-run drives the price label's earlier container-query degrade:
-         the run chip already carries glance-level cost, and both labels
-         cannot share an equal-split pane. */
       <div
         className={"workflow-actions-header" + (run ? " has-run" : "")}
         data-testid="workflow-actions-header"
@@ -191,12 +176,7 @@ export function WorkflowActionsHeader({
         <span className="workflow-actions-count" data-testid="canvas-steps-count">
           {stepsSummary ?? "no steps"}
         </span>
-        {/* The workflow's upfront price slot: observed average once billed
-            runs exist; before that, a labeled rate-card estimate when the
-            posted graph carries listed rates, else a quiet "priced after
-            the first run" (see WorkflowPriceNote). */}
-        {priceStats && <WorkflowPriceNote stats={priceStats} estimate={priceEstimate} />}
-        {/* One observed run: a plain status/cost chip. Several: the chip is
+        {/* One observed run: a plain status chip. Several: the chip is
             the run picker — any past run is one click away. */}
         {run && runs.length <= 1 && (
           <span className={"status-tag canvas-run-chip is-" + run.status} data-testid="canvas-run-chip">
@@ -230,15 +210,11 @@ export function WorkflowActionsHeader({
                 {[...runs].reverse().map((observed, reversedIndex) => {
                   const ordinal = runs.length - reversedIndex;
                   const active = observed.run.executionId === run.executionId;
-                  // The scan level of the cost ladder: each row carries the
-                  // run's own total (or free/billed truth) and when the
-                  // Studio observed it start — no popover dive needed to
-                  // compare runs. Coarse relative time on purpose: a client
-                  // observation is not a server timestamp.
-                  const cost = runCostLabel(observed.run, observed.target);
-                  const meta = [cost, relativeTimeLabel(observed.observedAt)]
-                    .filter((part): part is string => part !== null)
-                    .join(" · ");
+                  // Each row carries when the Studio observed the run start —
+                  // enough to tell runs apart at a glance. Coarse relative
+                  // time on purpose: a client observation is not a server
+                  // timestamp.
+                  const meta = relativeTimeLabel(observed.observedAt);
                   return (
                     <button
                       key={observed.run.executionId}

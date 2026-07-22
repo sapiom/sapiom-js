@@ -24,10 +24,10 @@ interface SessionStepsBarProps {
  * as you ship. The only durable state is "deployed" (definitionId), shown as
  * the left-anchored status chip. Actions sit right-anchored, Deploy at the
  * right edge as the primary:
- *   Local  = run_local  (test free, capabilities stubbed, no spend)
+ *   Local  = run_local  (test run, capabilities stubbed)
  *   Prod   = open_prod  (dashboard link; needs a deploy)
- *   Run    = prod_run   (real billed cloud execution; needs a deploy)
- *   Deploy = deploy     (push + cloud build; publishing itself is free)
+ *   Run    = prod_run   (real cloud execution; needs a deploy)
+ *   Deploy = deploy     (push + cloud build)
  */
 export function SessionStepsBar({
   workflow,
@@ -64,7 +64,7 @@ export function SessionStepsBar({
       icon: "FlaskConical",
       macro: macroFor("run_local"),
       testId: "session-step-local",
-      hint: "Test: run locally with every capability stubbed. Free - no real calls, no spend.",
+      hint: "Test: run locally with every capability stubbed - no real calls.",
     },
     {
       id: "prod",
@@ -85,7 +85,7 @@ export function SessionStepsBar({
       icon: "Play",
       macro: macroFor("prod_run"),
       testId: "session-step-run",
-      hint: "Ship: start a real cloud execution, billed to Sapiom credits.",
+      hint: "Ship: start a real cloud execution on Sapiom.",
       needsDeploy: true,
     },
     {
@@ -94,7 +94,7 @@ export function SessionStepsBar({
       icon: "CloudUpload",
       macro: macroFor("deploy"),
       testId: "session-step-deploy",
-      hint: "Ship: push and build on Sapiom. Publishing is free; runs use Sapiom credits.",
+      hint: "Ship: push and build on Sapiom.",
       primary: true,
     },
   ].filter((action) => action.macro);
@@ -108,7 +108,7 @@ export function SessionStepsBar({
         data-deployed={deployed}
         data-tooltip={
           deployed
-            ? `Deployed to Sapiom (definition ${workflow.definitionId}). Run starts billed cloud executions.`
+            ? `Deployed to Sapiom (definition ${workflow.definitionId}). Run starts real cloud executions.`
             : "Draft: exists locally only. Building here uses your Claude Code account; Deploy publishes to Sapiom."
         }
       >
