@@ -3447,7 +3447,7 @@ input {
 }
 
 .canvas-run-status.is-failed {
-  color: var(--red, #ef5350);
+  color: var(--red, #e05a57);
 }
 
 .canvas-run-status.is-running {
@@ -3496,9 +3496,9 @@ input {
 .canvas-run-error {
   margin: 0;
   padding: var(--sp2) var(--sp3);
-  border: 1px solid color-mix(in srgb, var(--red, #ef5350) 30%, var(--ui-line));
+  border: 1px solid color-mix(in srgb, var(--red, #e05a57) 30%, var(--ui-line));
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--red, #ef5350) 6%, transparent);
+  background: color-mix(in srgb, var(--red, #e05a57) 6%, transparent);
   font-family: var(--font-mono);
   font-size: var(--type-micro);
   color: var(--text-dim);

@@ -231,8 +231,8 @@ export interface LaunchOpts {
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;
-  /** Only consulted by `launchTask` — model override (`--model`), e.g.
-   *  "sonnet". Interactive sessions keep the user's own default. */
+  /** Only consulted by `launchTask` — model override (`--model`), e.g. a
+   *  model id. Interactive sessions keep the user's own default. */
   model?: string;
   /** Only consulted by `launchTask` — hard cap on agent turns
    *  (`--max-turns`), so a bounded task can't run away. */

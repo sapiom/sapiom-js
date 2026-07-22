@@ -60,9 +60,9 @@ const DARK_ANSI: Partial<ITheme> = {
   green: "#4ade80",
   yellow: "#f59e0b",
   blue: "#3b82f6",
-  magenta: "#a78bfa",
+  magenta: "#9b8fc4",
   cyan: "#22d3ee",
-  white: "#f4f4f5",
+  white: "#f3f3f5",
   brightBlack: "#404046",
   brightRed: "#ff9b96",
   brightGreen: "#86efac",
@@ -82,24 +82,24 @@ const LIGHT_ANSI: Partial<ITheme> = {
   magenta: "#7c3aed",
   cyan: "#0891b2",
   white: "#d4d4d8",
-  brightBlack: "#6a6a74",
+  brightBlack: "#6b6b75",
   brightRed: "#ef4444",
   brightGreen: "#22c55e",
   brightYellow: "#f59e0b",
   brightBlue: "#3b82f6",
-  brightMagenta: "#a78bfa",
+  brightMagenta: "#9b8fc4",
   brightCyan: "#22d3ee",
   brightWhite: "#ffffff",
 };
 
 /**
- * Screen theme from the live design-system tokens: app background/ink for
- * the canvas, the brand green for cursor + selection. Read at call
+ * Screen theme from the app's CSS tokens: app background/ink for the
+ * canvas, the brand accent for cursor + selection. Read at call
  * time so it always reflects the current [data-theme].
  */
 function xtermThemeFor(theme: Theme): ITheme {
-  const background = readToken("--bg", theme === "dark" ? "#0a0a0c" : "#fafafa");
-  const foreground = readToken("--ink", theme === "dark" ? "#f4f4f5" : "#141417");
+  const background = readToken("--bg", theme === "dark" ? "#0c0c0e" : "#fbfbfc");
+  const foreground = readToken("--ink", theme === "dark" ? "#f3f3f5" : "#16161a");
   // Fallbacks mirror the per-theme --brand values in styles.css.
   const brand = readToken("--brand", theme === "dark" ? "#6be195" : "#167e3a");
   return {
