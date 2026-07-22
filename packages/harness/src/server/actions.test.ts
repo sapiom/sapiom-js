@@ -1,8 +1,15 @@
+import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
+import { PassThrough } from "node:stream";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createActionsRouter, type ActionsRouterOpts } from "./actions.js";
+import {
+  createActionsRouter,
+  resolveRunLocalBootstrapPath,
+  type ActionsRouterOpts,
+  type RunLocalChildProcess,
+} from "./actions.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,6 +39,65 @@ function parseNdjson(text: string): Array<Record<string, unknown>> {
     .map((l) => l.trim())
     .filter(Boolean)
     .map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
+/**
+ * A scripted stand-in for the run-local bootstrap child. `stdout`/`stderr` are
+ * real streams the test pushes lines into; `exit`/`error` are emitted via the
+ * inner emitter. `stdinChunks` records what the route wrote so a test can
+ * assert the request was forwarded. No real process is ever spawned.
+ */
+class FakeChild extends EventEmitter implements RunLocalChildProcess {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  readonly stdinChunks: string[] = [];
+  readonly stdin = new (class extends PassThrough {
+    constructor(private readonly parent: FakeChild) {
+      super();
+    }
+    override end(chunk?: unknown): this {
+      if (typeof chunk === "string") this.parent.stdinChunks.push(chunk);
+      return this;
+    }
+  })(this);
+
+  /** Emit a line on stdout (the route reads it via readline). */
+  emitLine(obj: unknown): void {
+    this.stdout.write(JSON.stringify(obj) + "\n");
+  }
+  /** Emit raw text on stdout (for the non-JSON-noise case). */
+  emitRaw(text: string): void {
+    this.stdout.write(text);
+  }
+  /** Close stdout then signal process exit. */
+  finish(code: number | null): void {
+    this.stdout.end();
+    this.stderr.end();
+    // Let the readline "line" handlers drain before the exit handler runs.
+    setImmediate(() => this.emit("exit", code));
+  }
+}
+
+/**
+ * A `runLocalSpawn` seam that hands back a {@link FakeChild} and a `whenSpawned`
+ * promise, so a test can await "the route has spawned the child and attached
+ * its stdout/exit/error listeners" before driving it — deterministic instead of
+ * racing on `setImmediate` against the HTTP round-trip.
+ */
+function spawnFake(): {
+  child: FakeChild;
+  spawn: () => FakeChild;
+  whenSpawned: Promise<FakeChild>;
+} {
+  const child = new FakeChild();
+  let resolve!: (c: FakeChild) => void;
+  const whenSpawned = new Promise<FakeChild>((r) => (resolve = r));
+  const spawn = (): FakeChild => {
+    // Resolve on the next tick so the route finishes wiring listeners first.
+    setImmediate(() => resolve(child));
+    return child;
+  };
+  return { child, spawn, whenSpawned };
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +423,255 @@ describe("createActionsRouter", () => {
       expect(res.status).toBe(503);
       expect(coreDeps.run).not.toHaveBeenCalled();
       expect(coreDeps.createClient).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── POST /api/runs/local ──────────────────────────────────────────────────
+
+  describe("POST /api/runs/local", () => {
+    it("streams per-step NDJSON then the terminal summary, forwarded verbatim", async () => {
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({
+        apiKey: null, // run-local needs no key — works signed out.
+        resolveWorkflow: () => null,
+        runLocalSpawn: spawn,
+      });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent", input: { name: "x" } }),
+      });
+
+      // Drive the scripted child once the route has wired its listeners.
+      await whenSpawned;
+      child.emitLine({
+        step: "greet",
+        attempt: 0,
+        input: { name: "x" },
+        status: "succeeded",
+        output: { greeting: "hi" },
+        logs: [],
+      });
+      child.emitLine({
+        kind: "summary",
+        outcome: "completed",
+        output: { greeting: "hi" },
+        unusedStubs: [{ step: "greet", key: "web.search" }],
+        stubWarnings: [],
+      });
+      child.finish(0);
+
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/x-ndjson");
+
+      const lines = parseNdjson(await res.text());
+      expect(lines[0]).toMatchObject({ step: "greet", status: "succeeded" });
+      expect(lines[1]).toEqual({
+        kind: "summary",
+        outcome: "completed",
+        output: { greeting: "hi" },
+        unusedStubs: [{ step: "greet", key: "web.search" }],
+        stubWarnings: [],
+      });
+
+      // The request was piped to the child's stdin as one JSON object.
+      expect(JSON.parse(child.stdinChunks.join(""))).toEqual({
+        sourceDir: "/proj/agent",
+        input: { name: "x" },
+        maxAttemptsPerStep: undefined,
+      });
+    });
+
+    it("surfaces unusedStubs/stubWarnings on the terminal line", async () => {
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+
+      await whenSpawned;
+      child.emitLine({
+        kind: "summary",
+        outcome: "failed",
+        unusedStubs: [{ step: "s", key: "models.coding.launch" }],
+        stubWarnings: ["s: web.search stub had the wrong shape"],
+      });
+      child.finish(0);
+
+      const lines = parseNdjson(await (await resPromise).text());
+      expect(lines[0]).toMatchObject({
+        outcome: "failed",
+        unusedStubs: [{ step: "s", key: "models.coding.launch" }],
+        stubWarnings: ["s: web.search stub had the wrong shape"],
+      });
+    });
+
+    it("forwards a summary still buffered when the process exit fires first", async () => {
+      // The race the route hardens against: `exit` can arrive before readline
+      // has drained the last stdout chunk. Emitting the summary and firing exit
+      // synchronously (without FakeChild.finish's setImmediate) reproduces it —
+      // the summary must still be forwarded, with no synthesized error appended.
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+
+      await whenSpawned;
+      child.emitLine({
+        kind: "summary",
+        outcome: "completed",
+        unusedStubs: [],
+        stubWarnings: [],
+      });
+      child.emit("exit", 0); // exit BEFORE stdout is closed/drained
+      child.stdout.end(); // readline "close" now fires → settle()
+      child.stderr.end();
+
+      const lines = parseNdjson(await (await resPromise).text());
+      // Exactly the one real summary — no trailing synthesized error line.
+      expect(lines).toEqual([
+        { kind: "summary", outcome: "completed", unusedStubs: [], stubWarnings: [] },
+      ]);
+    });
+
+    it("returns 400 when sourceDir is missing (no child spawned)", async () => {
+      const spawn = vi.fn(() => new FakeChild());
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const res = await fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input: {} }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.error).toBe("sourceDir is required");
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it("ignores non-JSON noise on stdout (forwards only well-formed lines)", async () => {
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+
+      await whenSpawned;
+      child.emitRaw("some esbuild warning to stdout\n"); // noise — dropped
+      child.emitLine({ kind: "summary", outcome: "completed", unusedStubs: [], stubWarnings: [] });
+      child.finish(0);
+
+      const lines = parseNdjson(await (await resPromise).text());
+      // parseNdjson JSON.parses every non-blank line, so a forwarded noise line
+      // would throw here — asserting exactly one (the summary) proves the route
+      // dropped the non-JSON line.
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ kind: "summary", outcome: "completed" });
+    });
+
+    it("synthesizes a terminal error line when the child crashes before emitting one", async () => {
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+
+      await whenSpawned;
+      child.stderr.write("Failed to bundle the agent.\n");
+      child.finish(1); // nonzero exit, no terminal line was written
+
+      const lines = parseNdjson(await (await resPromise).text());
+      expect(lines).toEqual([
+        {
+          kind: "error",
+          outcome: "failed",
+          error: "Failed to bundle the agent.",
+        },
+      ]);
+    });
+
+    it("does not double-report when both error and exit fire", async () => {
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+
+      await whenSpawned; // the route's error+exit listeners are now attached.
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("error", new Error("spawn ENOENT"));
+      child.emit("exit", null);
+
+      const lines = parseNdjson(await (await resPromise).text());
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ kind: "error", outcome: "failed" });
+    });
+
+    it("answers in-band with a terminal error line when the spawn itself throws", async () => {
+      start({
+        apiKey: null,
+        resolveWorkflow: () => null,
+        runLocalSpawn: () => {
+          throw new Error("node binary not found");
+        },
+      });
+
+      const res = await fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+      // The request itself is valid, so it's a 200 NDJSON stream whose single
+      // line is the terminal error.
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/x-ndjson");
+      const lines = parseNdjson(await res.text());
+      expect(lines).toEqual([
+        {
+          kind: "error",
+          outcome: "failed",
+          error: "node binary not found",
+        },
+      ]);
+    });
+  });
+
+  // ── bootstrap path resolution (pure) ──────────────────────────────────────
+
+  describe("resolveRunLocalBootstrapPath", () => {
+    it("resolves the built .js sibling from a dist actions module URL", () => {
+      const p = resolveRunLocalBootstrapPath(
+        "file:///app/packages/harness/dist/server/actions.js",
+      );
+      expect(p).toBe(
+        "/app/packages/harness/dist/core/run-local-bootstrap.js",
+      );
+    });
+
+    it("resolves the .ts sibling from a src actions module URL (dev/tsx)", () => {
+      const p = resolveRunLocalBootstrapPath(
+        "file:///app/packages/harness/src/server/actions.ts",
+      );
+      expect(p).toBe("/app/packages/harness/src/core/run-local-bootstrap.ts");
     });
   });
 });
