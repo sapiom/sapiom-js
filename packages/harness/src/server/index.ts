@@ -105,7 +105,6 @@ import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
 // (an identical helper); the runs router reuses it for its agents base URL.
-import { resolveCoreBaseUrl } from "../core/run-spend.js";
 
 /**
  * Codex has no hook system — its rollout file is polled into existence
@@ -730,7 +729,11 @@ export const startServer = async (
   // (base64 data URLs, up to ~13 MiB encoded) can be parsed — see
   // JSON_BODY_LIMIT_BYTES. This is the parser that actually gates every /api
   // route; the rest router mounts its own with the same limit for standalone use.
-  app.use("/api", createBootTokenMiddleware(options.bootToken), express.json({ limit: JSON_BODY_LIMIT_BYTES }));
+  app.use(
+    "/api",
+    createBootTokenMiddleware(options.bootToken),
+    express.json({ limit: JSON_BODY_LIMIT_BYTES }),
+  );
   app.use(
     "/api",
     createRestRouter({
@@ -812,7 +815,6 @@ export const startServer = async (
     createRunsRouter({
       apiKey: identity?.apiKey ?? null,
       baseUrl: resolveAgentsBaseUrl(),
-      coreBaseUrl: resolveCoreBaseUrl(),
     }),
   );
   app.use(
