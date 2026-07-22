@@ -113,7 +113,7 @@ test("tool card: mono invocation with a one-line result, expands to the raw outp
 
   await card.locator(".chat-card-header").click();
   // The tool output speaks the same slugs the canvas graph and Steps tab
-  // use — one vocabulary across chat, canvas, and steps (UX-22).
+  // use — one vocabulary across chat, canvas, and steps.
   await expect(card.locator(".chat-card-output")).toContainText("entry intake");
   await expect(card.locator(".chat-card-output")).toContainText("draft-lease, manual-review");
   await page.screenshot({ path: "web/e2e/screenshots/chat-tool-expanded.png", fullPage: true });

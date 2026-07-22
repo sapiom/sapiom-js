@@ -1,5 +1,5 @@
 /**
- * Code tab — "Trigger from your code" snippets (UP-03), mock-mode UI tests,
+ * Code tab — "Trigger from your code" snippets, mock-mode UI tests,
  * same fixtures as smoke.spec.ts:
  *   - "leasing" → deployed (definitionId: 4821, definitionSlug: "leasing"), the
  *     boot session's binding, so opening the Code tab shows the snippet panel.
@@ -85,6 +85,14 @@ test.describe("snippet content", () => {
     const code = page.getByTestId("snippet-code");
     await expect(code).toContainText("agents.run({");
     await expect(code).toContainText('definition: "leasing"');
+    // Security guard: the TS snippet must never leak auth material or
+    // internal endpoints.
+    const text = await code.textContent();
+    expect(text).not.toContain("Authorization");
+    expect(text).not.toContain("api.sapiom.ai");
+    expect(text).not.toContain("/triggers");
+    expect(text).not.toContain("Bearer");
+    expect(text).not.toMatch(/sk_[A-Za-z0-9]/);
   });
 
   test("the cURL tab shows the same endpoint with the placeholder key, never a real one", async ({ page }) => {
@@ -93,7 +101,12 @@ test.describe("snippet content", () => {
     const code = page.getByTestId("snippet-code");
     await expect(code).toContainText("/agents/v1/definitions/leasing/executions");
     await expect(code).toContainText("x-sapiom-api-key: YOUR_SAPIOM_API_KEY");
+    // Security guard: the cURL snippet must never leak auth material or
+    // internal endpoints.
     const text = await code.textContent();
+    expect(text).not.toContain("Authorization");
+    expect(text).not.toContain("api.sapiom.ai");
+    expect(text).not.toContain("/triggers");
     expect(text).not.toContain("Bearer");
     expect(text).not.toMatch(/sk_[A-Za-z0-9]/);
   });

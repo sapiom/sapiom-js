@@ -69,8 +69,8 @@ test("theme: defaults to dark, toggles to light, and the choice persists across 
 });
 
 test.describe("theme — system preference", () => {
-  // The design-eng skin boots dark by default (matching the draft-1 reference)
-  // regardless of the OS scheme, until the user makes an explicit choice.
+  // The Studio defaults to dark until the user sets a preference,
+  // regardless of the OS color scheme.
   test.use({ colorScheme: "light" });
 
   test("defaults to dark even when the system prefers light, absent a stored choice", async ({ page }) => {
@@ -518,7 +518,7 @@ test("command palette: a failed path read shows an error but still offers the ty
   await expect(page.getByTestId("command-palette-item-0")).toContainText("Open this path");
 });
 
-test("a past-session row opens the dead-session pane first; Resume is the explicit action (UX-06)", async ({ page }) => {
+test("a past-session row opens the dead-session pane first; Resume is the explicit action", async ({ page }) => {
   await page.getByTestId("history-trigger").click();
   await page.getByTestId("exited-session-sess-leasing").click();
 
@@ -556,12 +556,12 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   await expect(menu.getByText("Build the leasing pipeline")).toHaveCount(1);
   await expect(exited.locator(".past-session-tag")).toHaveText("resumable");
 
-  // WB-05: the list is global — rfq-workflows' past session shows without
+  // The list is global — rfq-workflows' past session shows without
   // switching directories.
   await expect(page.getByTestId("exited-session-sess-rfq")).toBeVisible();
 
-  // UP-06 / SAP-1632: a transcript entry carries branch, turn count, and
-  // relative time; and it is tagged archived.
+  // A transcript entry carries branch, turn count, and relative time;
+  // and it is tagged archived.
   const transcript = page.getByTestId("history-2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33");
   await expect(transcript.locator(".past-session-tag")).toHaveText("archived");
   await expect(transcript).toContainText("feat/screening-webhook");
@@ -636,7 +636,7 @@ test("one view only: there is no folders/groups toggle in the agent-primary rail
   await expect(page.getByTestId("workflow-onboarding-flow")).toBeVisible();
 });
 
-test.describe("held arrangement (WB-05)", () => {
+test.describe("held arrangement", () => {
   test("workspace collapse, right tab, and right-pane collapse survive a reload", async ({ page }) => {
     // Collapse the rfq workspace group (plain header toggles on click).
     await page.getByTestId("workspace-group-rfq-workflows").locator(".workspace-row-main").click();
@@ -659,7 +659,7 @@ test.describe("held arrangement (WB-05)", () => {
   });
 });
 
-test("rail tooltips fly to the right of the rail instead of covering sibling rows (UX-16)", async ({ page }) => {
+test("rail tooltips fly to the right of the rail instead of covering sibling rows", async ({ page }) => {
   await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").hover();
   const tip = page.locator(".app-tooltip");
   await expect(tip).toHaveAttribute("data-show", "true");
@@ -672,7 +672,7 @@ test("rail tooltips fly to the right of the rail instead of covering sibling row
   expect(tipBox!.x).toBeGreaterThanOrEqual(railBox!.x + railBox!.width);
 });
 
-test("Open in editor lives on workspace rows and the session menu (US-10)", async ({ page }) => {
+test("Open in editor lives on workspace rows and the session menu", async ({ page }) => {
   // Workspace folder header hover action.
   await page.getByTestId("workspace-group-acme-app").locator(".workspace-row-main").hover();
   await expect(page.getByTestId("workspace-open-editor-acme-app")).toBeVisible();
@@ -719,7 +719,7 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
 
   test("Enter on a session hit switches to it instead of starting a new one", async ({ page }) => {
     // Resume a different session first so switching back is observable
-    // (review pane first, then the explicit Resume — UX-06).
+    // (review pane first, then the explicit Resume).
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-resume").click();
@@ -819,7 +819,7 @@ test.describe("workflow actions", () => {
     expect(overflowing).toBe(false);
   });
 
-    test("Prod rides the wizard bar as its fifth step, gating and macro identity intact", async ({ page }) => {
+  test("Prod rides the wizard bar as its fifth step, gating and macro identity intact", async ({ page }) => {
     const openProd = page.getByTestId("macro-open_prod");
     await expect(openProd).toBeVisible();
     // Visible label is the compact "Prod"; the accessible name keeps the
@@ -830,7 +830,7 @@ test.describe("workflow actions", () => {
     await expect(page.getByTestId("workflow-macros")).toHaveCount(0);
   });
 
-    test("the canvas header stays fully on-screen even when the app is narrower than the default pane widths", async ({
+  test("the canvas header stays fully on-screen even when the app is narrower than the default pane widths", async ({
     page,
   }) => {
     // Rail (320 default, shrinkable to 180) + terminal/canvas floors (20rem
@@ -1393,7 +1393,7 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
     const local = page.getByTestId("session-step-local");
     await expect(local).toBeVisible();
     await expect(local.locator(".session-step-label")).toBeHidden();
-    // The bar's one emphasized verb never degrades to a bare glyph (UX-21).
+    // The bar's one emphasized verb never degrades to a bare glyph.
     await expect(page.getByTestId("session-step-deploy")).toBeVisible();
     await expect(page.getByTestId("session-step-deploy").locator(".session-step-label")).toBeVisible();
 
@@ -1643,7 +1643,7 @@ test("canvas controls: the board widget zooms; the subheader's expand lifts the 
   await expect(controls).toBeVisible();
 
   // The demo document posts its natural size and the app auto-fits on
-  // first render (UX-10): at this viewport the cascade is taller than the
+  // first render: at this viewport the cascade is taller than the
   // visible board, so the fitted rest zoom lands below 100% with the whole
   // graph clear of the docked controls. The Fit button is disabled at rest.
   const fit = page.getByTestId("canvas-fit");
@@ -1840,7 +1840,7 @@ test("an observed run renders per-step status and latency in the steps tab", asy
 test("an observed run renders its real steps even before anything is visualized", async ({ page }) => {
   // The scratch session ships no bundled doc, so nothing is visualized for it
   // (no graph). A run announcement alone must still surface real per-step
-  // truth in the Steps tab (WB-11) instead of "No steps yet". (The boot
+  // truth in the Steps tab instead of "No steps yet". (The boot
   // session opens on its board, which already posts a graph — the fallback is
   // exactly this no-graph path.)
   await page.getByTestId("workspace-focus-scratch").click();
@@ -1886,7 +1886,7 @@ test("a second run never erases the first: the run picker recalls past runs", as
   });
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
   await publishRun("exec-demo-1");
-  // Second run: the first run's record survives the new execution (WB-11).
+  // Second run: the first run's record survives the new execution.
   await publishRun("exec-demo-2");
 
   // The run chip becomes a picker with two observed runs: any past run is

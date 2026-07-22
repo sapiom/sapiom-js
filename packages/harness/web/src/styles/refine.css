@@ -1,11 +1,11 @@
 /* ==========================================================================
-   Draft-1 refinement layer
+   Studio refinement layer
    --------------------------------------------------------------------------
-   Loaded AFTER styles.css. Elevates the live workspace to the draft-1
-   reference's visual language while keeping every DOM node, class, and test
-   selector intact — this file only restyles.
+   Loaded AFTER styles.css. Applies the Studio's visual language while
+   keeping every DOM node, class, and test selector intact — this file
+   only restyles.
 
-   Draft-1 signatures applied here:
+   Visual signatures applied here:
      · dark-default, two-step etched surfaces on translucent hairlines
      · monochrome chrome; the brand green (--brand) reserved for focus / live / selection
      · Geist-Mono metadata with tabular-nums; 590 weights + tight tracking

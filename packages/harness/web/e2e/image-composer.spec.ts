@@ -1,8 +1,8 @@
 /**
- * Mock-mode UI test for the composer image-attach feature (SAP-1634, ported
- * from upstream 08af9eb). Runs against `vite dev` with VITE_MOCK=1 (see
- * playwright.config.ts) — no harness server. MockApi.attachImage records each
- * call on window.__HARNESS_TEST__.attachImageCalls, and MOCK_HARNESSES report
+ * Mock-mode UI test for the composer image-attach feature. Runs against
+ * `vite dev` with VITE_MOCK=1 (see playwright.config.ts) — no harness server.
+ * MockApi.attachImage records each call on
+ * window.__HARNESS_TEST__.attachImageCalls, and MOCK_HARNESSES report
  * claude-code (the boot session's harness) as imageInput:true, so the attach
  * affordance renders on the active session.
  */

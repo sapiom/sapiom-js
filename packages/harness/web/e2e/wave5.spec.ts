@@ -1,15 +1,15 @@
 /**
- * Wave 5 coverage — dialogs, palette, skills, error/empty states:
- *   - WB-12: scaffold path from the add dialog's Project mode
- *   - UX-05: palette section headers + fuzzy-match highlighting + past sessions
- *   - WB-14: MCP install prompts surfaced (copy fires mcp.install)
- *   - UP-05/US-10: registry-driven harness picker
- *   - WB-01: scan-folder-for-agents bulk discovery
- *   - UX-08: recent-path chips middle-truncate instead of hard-clipping
- *   - UX-11: dead-session metadata + exited canvas state
- *   - UX-12: no duplicated skill title, soft breaks stay one paragraph
- *   - UX-13: retry affordances on skills detail + directory picker errors
- *   - UX-19: overview mode shows the fresh-install canvas state
+ * Coverage — dialogs, palette, skills, error/empty states:
+ *   - scaffold path from the add dialog's Project mode
+ *   - palette section headers + fuzzy-match highlighting + past sessions
+ *   - MCP install prompts surfaced (copy fires mcp.install)
+ *   - registry-driven harness picker
+ *   - scan-folder-for-agents bulk discovery
+ *   - recent-path chips middle-truncate instead of hard-clipping
+ *   - dead-session metadata + exited canvas state
+ *   - no duplicated skill title, soft breaks stay one paragraph
+ *   - retry affordances on skills detail + directory picker errors
+ *   - overview mode shows the fresh-install canvas state
  */
 import { expect, test } from "@playwright/test";
 
@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Command palette (UX-05 + WB-05 palette half)
+// Command palette
 // ---------------------------------------------------------------------------
 
 test.describe("command palette sections and highlighting", () => {
@@ -64,7 +64,7 @@ test.describe("command palette sections and highlighting", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("add dialog (Project mode)", () => {
-  test("WB-12: a non-existent folder offers the scaffold action, which starts a session and prompts the agent", async ({
+  test("a non-existent folder offers the scaffold action, which starts a session and prompts the agent", async ({
     page,
   }) => {
     await page.getByTestId("add-workspace").click();
@@ -88,7 +88,7 @@ test.describe("add dialog (Project mode)", () => {
     });
   });
 
-  test("WB-01: scan folder for agents registers everything under the root and toasts the count", async ({ page }) => {
+  test("scan folder for agents registers everything under the root and toasts the count", async ({ page }) => {
     await page.getByTestId("add-workspace").click();
     const modal = page.locator(".modal-add-workspace");
     await modal.getByTestId("dir-picker-input").fill("/Users/demo");
@@ -99,7 +99,7 @@ test.describe("add dialog (Project mode)", () => {
     await expect(page.locator(".toast")).toContainText("Found 3 agent projects.");
   });
 
-  test("WB-14: the MCP setup prompts are copyable and fire mcp.install", async ({ page, context }) => {
+  test("the MCP setup prompts are copyable and fire mcp.install", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.getByTestId("add-workspace").click();
     const block = page.getByTestId("mcp-install");
@@ -121,7 +121,7 @@ test.describe("add dialog (Project mode)", () => {
     expect(events.some((e) => e.event === "mcp.install")).toBe(true);
   });
 
-  test("UP-05: the harness picker renders from the adapter registry", async ({ page }) => {
+  test("the harness picker renders from the adapter registry", async ({ page }) => {
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("new-session-btn").click();
     const trigger = page.getByTestId("harness-select");
@@ -154,7 +154,7 @@ test.describe("add dialog (Project mode)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Recent-path chips (UX-08)
+// Recent-path chips
 // ---------------------------------------------------------------------------
 
 test("recent-path chips middle-truncate long paths and keep the full path in the tooltip", async ({ page }) => {
@@ -167,7 +167,7 @@ test("recent-path chips middle-truncate long paths and keep the full path in the
 });
 
 // ---------------------------------------------------------------------------
-// Dead session context (UX-11)
+// Dead session context
 // ---------------------------------------------------------------------------
 
 test("the dead-session pane shows the record's real metadata and the canvas invites a resume", async ({ page }) => {
@@ -180,13 +180,13 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
   await expect(detail).toContainText("Claude Code");
   await expect(detail).toContainText("Ended");
 
-  // The right pane stops inviting a Visualize that cannot run (UX-11).
+  // The right pane stops inviting a Visualize that cannot run.
   await expect(page.getByTestId("canvas-empty-exited")).toContainText("Session ended");
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
-// Overview mode canvas (UX-19)
+// Overview mode canvas
 // ---------------------------------------------------------------------------
 
 test("overview mode shows the fresh-install canvas state, not the previous session's empty state", async ({
@@ -201,11 +201,11 @@ test("overview mode shows the fresh-install canvas state, not the previous sessi
 });
 
 // ---------------------------------------------------------------------------
-// Skills detail (UX-12 + UX-13)
+// Skills detail
 // ---------------------------------------------------------------------------
 
 test.describe("skills detail", () => {
-  test("UX-12: the body drops its duplicate H1 and soft breaks stay one paragraph", async ({ page }) => {
+  test("the body drops its duplicate H1 and soft breaks stay one paragraph", async ({ page }) => {
     await page.getByTestId("right-tab-skills").click();
     await page.getByTestId("skill-card-frontend-design").click();
 
@@ -218,7 +218,7 @@ test.describe("skills detail", () => {
     await expect(paragraph).toContainText("(component, page, or application) and describe");
   });
 
-  test("UX-13: a failed detail fetch offers a Retry alongside the back affordance", async ({ page }) => {
+  test("a failed detail fetch offers a Retry alongside the back affordance", async ({ page }) => {
     await page.goto("/?mockError=skill");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await page.getByTestId("right-tab-skills").click();
@@ -236,7 +236,7 @@ test.describe("skills detail", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Directory picker error retry (UX-13)
+// Directory picker error retry
 // ---------------------------------------------------------------------------
 
 test("the directory picker's read failure carries its own Retry", async ({ page }) => {

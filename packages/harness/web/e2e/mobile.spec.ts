@@ -2,7 +2,7 @@
  * Mobile shell (<=768px) — the three-pane layout folds to one column: the
  * center pane owns the viewport, the workspace rail opens as an overlay
  * drawer and the right pane as a bottom sheet, both reusing the desktop
- * collapse state (UX-01). Same mock fixtures as smoke.spec.ts.
+ * collapse state. Same mock fixtures as smoke.spec.ts.
  */
 import { expect, test } from "@playwright/test";
 import type { Locator } from "@playwright/test";

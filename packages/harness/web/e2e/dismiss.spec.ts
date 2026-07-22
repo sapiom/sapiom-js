@@ -103,7 +103,7 @@ test.describe("end-session confirm dialog", () => {
 
   test("opens with focus on the SAFE action (Keep session)", async ({ page }) => {
     await openConfirm(page);
-    // Enter must keep the session; ending it takes a deliberate move (UX-02).
+    // Enter must keep the session; ending it takes a deliberate move.
     await expect(page.getByRole("button", { name: "Keep session" })).toBeFocused();
   });
 

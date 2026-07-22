@@ -57,7 +57,7 @@ describe("parseNdjsonLine (deploy stream)", () => {
     });
   });
 
-  it("drops a bare `null` line instead of forwarding it (SAP-1778 review)", () => {
+  it("drops a bare `null` line instead of forwarding it", () => {
     // JSON.parse("null") === null: a stray null line must be silently dropped,
     // never handed to the deploy consumer (where it could throw downstream).
     expect(parseNdjsonLine<DeployStreamEvent>("null")).toBeUndefined();
