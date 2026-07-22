@@ -79,6 +79,13 @@ export default defineConfig({
       // (packages/harness/src/shared/types.ts) so the web and server always
       // build against one source of truth — no vendored copy to drift.
       "@shared/types": fileURLToPath(new URL("../src/shared/types.ts", import.meta.url)),
+      // The local-run mapper is a pure fn shared with the server (its canonical
+      // home is src/core/render-local-run.ts, per the ticket). The SPA imports
+      // the SAME implementation to map an offline stub run's NDJSON traces into
+      // the RunView the inspector renders — one mapper, no client/server drift.
+      // It pulls in only the `LocalStepTrace` *type* from agent-core (erased at
+      // build), so no agent-core runtime code enters the browser bundle.
+      "@shared/render-local-run": fileURLToPath(new URL("../src/core/render-local-run.ts", import.meta.url)),
       // The design system is a private package. Official builds (private
       // package installed) render branded; public clones fall back to a
       // committed neutral token set. See designSystemAlias() above.

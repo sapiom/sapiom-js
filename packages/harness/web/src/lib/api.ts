@@ -25,6 +25,8 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
+import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
+
 // Skill types (matched to the server-side SkillMeta/SkillDetail in
 // src/server/skills.ts — kept here rather than in shared/types.ts since they
 // are only consumed by the SPA, never by CLI or server logic).
@@ -37,6 +39,41 @@ export interface SkillMeta {
 export interface SkillDetail extends SkillMeta {
   body: string;
 }
+
+/**
+ * Body for `POST /api/runs/local` — run the agent project at `sourceDir`
+ * entirely offline against stub capabilities. `sourceDir` is the only required
+ * field; the rest are forwarded to the run-local bootstrap as-is. Needs no API
+ * key and makes no network call (zero cost) — mirrors the server's
+ * `RunLocalRequest` without importing a server module into the browser bundle.
+ */
+export interface RunLocalArgs {
+  /** Absolute path to the agent project directory (contains `index.ts`). */
+  sourceDir: string;
+  /** The workflow's entry-step input (optional; agent-core defaults it). */
+  input?: unknown;
+  /** Per-step attempt cap (optional; agent-core defaults it). */
+  maxAttemptsPerStep?: number;
+}
+
+/**
+ * One parsed line of the `/api/runs/local` NDJSON stream. Either a per-step
+ * trace (a {@link LocalStepTrace}, discriminated by the ABSENCE of `kind`) or a
+ * terminal line: a `summary` for a run that executed (carrying the outcome and
+ * the two stub-hygiene signals), or an `error` for a run that could not be
+ * invoked at all. The shapes mirror the bootstrap's own wire contract.
+ */
+export type RunLocalLine =
+  | ({ kind?: undefined } & LocalStepTrace)
+  | {
+      kind: "summary";
+      outcome: LocalRunOutcome;
+      output?: unknown;
+      error?: unknown;
+      unusedStubs: Array<{ step: string; key: string }>;
+      stubWarnings: string[];
+    }
+  | { kind: "error"; outcome: "failed"; error: string };
 
 import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
 
@@ -159,6 +196,15 @@ export interface HarnessApi {
    *  GET /api/runs/:id/state = inspect -> decode -> renderRunState. Poll
    *  after an execution.started bus message until the run is terminal. */
   getRunState(executionId: string): Promise<RunView>;
+  /**
+   * Run the workflow at `args.sourceDir` OFFLINE against stub capabilities and
+   * stream its NDJSON result (`POST /api/runs/local`): `onLine` is called once
+   * per parsed line, in order — each per-step {@link LocalStepTrace} as it
+   * arrives, then a terminal `summary` (or `error`) line. Resolves when the
+   * stream ends; rejects only on a transport failure (never on a failed *run* —
+   * a failed run is a normal terminal line). Fully offline: no key, no cost.
+   */
+  runLocal(args: RunLocalArgs, onLine: (line: RunLocalLine) => void): Promise<void>;
 }
 
 class RealApi implements HarnessApi {
@@ -293,6 +339,82 @@ class RealApi implements HarnessApi {
   getRunState(executionId: string): Promise<RunView> {
     return this.request<RunView>(`/api/runs/${encodeURIComponent(executionId)}/state`);
   }
+
+  async runLocal(args: RunLocalArgs, onLine: (line: RunLocalLine) => void): Promise<void> {
+    const res = await fetch("/api/runs/local", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": getBootToken(),
+      },
+      body: JSON.stringify(args),
+    });
+    // A 4xx here is a bad REQUEST (e.g. missing sourceDir) — the run never
+    // started, so there is no NDJSON body to read; surface it like any other
+    // API error. A failed *run* is NOT this path: it comes back 200 with a
+    // terminal `error`/`summary` line the caller handles in onLine.
+    if (!res.ok || !res.body) {
+      const body = await res.text().catch(() => "");
+      throw new ApiError(res.status, `POST /api/runs/local → ${res.status}${body ? `: ${body}` : ""}`, undefined);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const drain = (chunk: string, flush: boolean): void => {
+      buffer += chunk;
+      const { lines, rest } = splitNdjson(buffer, flush);
+      buffer = rest;
+      for (const raw of lines) {
+        const parsed = parseRunLocalLine(raw);
+        if (parsed) onLine(parsed);
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      drain(decoder.decode(value, { stream: true }), false);
+    }
+    // Flush the decoder + any trailing line without a newline terminator.
+    drain(decoder.decode(), true);
+  }
+}
+
+/**
+ * Split an NDJSON buffer into complete lines plus the unterminated remainder.
+ * When `flush` is true the whole buffer is treated as complete (end of stream),
+ * so a final line without a trailing newline is not lost. Pure — no I/O — so
+ * the incremental parsing is unit-testable without a live stream.
+ */
+export function splitNdjson(buffer: string, flush: boolean): { lines: string[]; rest: string } {
+  const parts = buffer.split("\n");
+  if (flush) {
+    return { lines: parts.filter((line) => line.trim() !== ""), rest: "" };
+  }
+  // The last element is either "" (buffer ended on a newline) or a partial line
+  // still being received — keep it in `rest` until its newline arrives.
+  const rest = parts.pop() ?? "";
+  return { lines: parts.filter((line) => line.trim() !== ""), rest };
+}
+
+/**
+ * Parse one NDJSON line into a {@link RunLocalLine}, or null for a line that
+ * isn't a JSON object (stray stdout noise the server may not have filtered).
+ * Defensive by design — a run-local child streams another program's stdout, so
+ * anything unrecognized degrades to "skip this line", never a throw.
+ */
+export function parseRunLocalLine(raw: string): RunLocalLine | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  // A contract line is a JSON OBJECT — reject null and arrays (a bare array or
+  // scalar is noise, not a trace/summary/error line).
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  return parsed as RunLocalLine;
 }
 
 const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -620,6 +742,46 @@ class MockApi implements HarnessApi {
       status: "completed",
       steps: executionId.includes("local") ? steps.map(({ costUsd: _costUsd, ...rest }) => rest) : steps,
     };
+  }
+
+  // A deterministic OFFLINE stub run: emits per-step traces (logs + IO, no
+  // cost/latency — a local trace carries none) then a terminal summary, spaced
+  // so the inspector visibly lights up step-by-step. Lets the mock/demo build
+  // and Playwright exercise the run-local inspector with no server, mirroring
+  // the real NDJSON stream's ordering (traces first, terminal line last).
+  async runLocal(_args: RunLocalArgs, onLine: (line: RunLocalLine) => void): Promise<void> {
+    const traces: LocalStepTrace[] = [
+      {
+        step: "intake",
+        attempt: 1,
+        input: { applicant: "Ada" },
+        status: "succeeded",
+        output: { ok: true },
+        logs: [{ level: "info", msg: "parsed application" }],
+      },
+      {
+        step: "screen",
+        attempt: 1,
+        input: { ok: true },
+        status: "succeeded",
+        output: { score: 720 },
+        logs: [{ level: "info", msg: "stubbed credit check" }],
+      },
+      {
+        step: "approve",
+        attempt: 1,
+        input: { score: 720 },
+        status: "succeeded",
+        output: { approved: true },
+        logs: [],
+      },
+    ];
+    for (const trace of traces) {
+      await delay(140);
+      onLine(trace);
+    }
+    await delay(140);
+    onLine({ kind: "summary", outcome: "completed", output: { approved: true }, unusedStubs: [], stubWarnings: [] });
   }
 }
 

@@ -1,11 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/api/schema/stryker-core.json",
-  "_comment": "Mutation testing for the harness's high-value PURE functions only: the run-state render mapper, the deploy trigger-snippet builder, and the step-context/link derivation. Each mutated file has a fast, co-located unit suite (see vitest.config.mutation.ts). Stateful/side-effecting code (server, pty, watchers, timer-driven poll controller), types, the index barrel, and cost surfaces slated for removal are deliberately NOT mutated. As the run-local mapper and deploy/run request builders land, add them here alongside their specs.",
+  "_comment": "Mutation testing for the harness's high-value PURE functions only: the prod + local run-state render mappers, the shared log-slice formatter, the deploy trigger-snippet builder, and the step-context/link derivation. Each mutated file has a fast, co-located unit suite (see vitest.config.mutation.ts). Stateful/side-effecting code (server, pty, watchers, timer-driven poll controller), types, the index barrel, and cost surfaces slated for removal are deliberately NOT mutated. As the deploy/run request builders land, add them here alongside their specs.",
   "testRunner": "vitest",
   "plugins": ["@stryker-mutator/vitest-runner"],
   "coverageAnalysis": "perTest",
   "mutate": [
     "src/core/render-run-state.ts",
+    "src/core/render-local-run.ts",
+    "src/core/render-log-slice.ts",
     "web/src/lib/generate-snippet.ts",
     "web/src/lib/extract-step-context.ts"
   ],

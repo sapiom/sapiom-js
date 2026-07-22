@@ -22,14 +22,11 @@ import type {
 } from "@sapiom/agent-core";
 
 import type { RunView, StepStatus, StepView } from "../shared/types.js";
-
-/**
- * Cap on the characters of a step's executor log buffer surfaced in `logSlice`.
- * The TAIL is kept (most recent lines) because failures surface at the end of a
- * log. This is a payload guard on the poll response; the debug-macro context
- * extractor does the final, smaller trim for prompt injection.
- */
-const LOG_SLICE_MAX = 4000;
+// The log-buffer formatter lives in its own dependency-free module so the
+// local-run mapper (imported by the browser SPA) can share the SAME formatter
+// WITHOUT dragging this file's `@sapiom/agent-core` runtime import — and its
+// `node:fs` reach — into the web bundle.
+import { toLogSlice } from "./render-log-slice.js";
 
 /**
  * Fold the run's lifecycle status into the four states the UI distinguishes.
@@ -88,37 +85,6 @@ function toLatencyMs(
   return delta >= 0 ? delta : undefined;
 }
 
-/** One executor log entry → a compact line. Accepts the `{ ts, level, msg }`
- *  wire shape (or `message`), a bare string, or anything else (stringified). */
-function formatLogEntry(entry: unknown): string {
-  if (typeof entry === "string") return entry;
-  if (entry !== null && typeof entry === "object") {
-    const e = entry as {
-      ts?: unknown;
-      level?: unknown;
-      msg?: unknown;
-      message?: unknown;
-    };
-    const parts = [e.ts, e.level, e.msg ?? e.message].filter(
-      (p): p is string | number =>
-        typeof p === "string" || typeof p === "number",
-    );
-    if (parts.length > 0) return parts.map(String).join(" ");
-  }
-  return String(entry);
-}
-
-/** Format the executor log buffer into a trimmed, tail-preserving slice, or
- *  `undefined` when there are no usable logs. */
-function toLogSlice(logs: unknown): string | undefined {
-  if (!Array.isArray(logs) || logs.length === 0) return undefined;
-  const text = logs.map(formatLogEntry).join("\n").trim();
-  if (text === "") return undefined;
-  return text.length > LOG_SLICE_MAX
-    ? text.slice(text.length - LOG_SLICE_MAX)
-    : text;
-}
-
 /** Map one projection step to its render view. Optional fields are assigned only
  *  when present so absence stays absent (not `undefined`) in the JSON payload. */
 function toStepView(step: StepProjection): StepView {
@@ -134,6 +100,14 @@ function toStepView(step: StepProjection): StepView {
   if (step.error?.message) view.error = step.error.message;
   const logSlice = toLogSlice(step.logs);
   if (logSlice !== undefined) view.logSlice = logSlice;
+  // Real per-step IO for the inspector's "Last run" block. The decoder
+  // collapses an absent input/output to `null` (its absence sentinel), so a
+  // `null` here means "the read carried nothing" — surfaced as ABSENT, never a
+  // fabricated payload. Any non-null value (including `0`, `false`, `""`) is a
+  // real payload and passes through. Capability, not model: these are the
+  // step's own values, with no provider/model surfaced.
+  if (step.input !== null) view.input = step.input;
+  if (step.output !== null) view.output = step.output;
   return view;
 }
 
