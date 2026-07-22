@@ -132,8 +132,9 @@ function formatValue(value: unknown): string {
  *   - Step / Status / Latency / Error  — from the {@link StepView}.
  *   - Input / Output                   — from `trace` (the step's real values).
  *   - Capabilities called              — from `trace.calls` (with a "stubbed"
- *                                        marker per call), falling back to the
- *                                        graph node's declared `capabilities`.
+ *                                        marker per call); an empty trace reads
+ *                                        "none", and only a MISSING trace falls
+ *                                        back to declared `capabilities`.
  *   - Unused stubs / Stub warnings     — run-level stub bookkeeping from a
  *                                        local (offline) run.
  *   - Logs                             — the step's tail-kept log slice.
@@ -171,17 +172,26 @@ export function extractStepContext(
     lines.push(`\nOutput:\n${formatValue(trace.output)}`);
   }
 
-  // Capabilities the step called. Runtime calls (from the trace) are the truth
-  // when present — each annotated with whether a stub served it — since that is
-  // what actually ran. Absent a call trace (a graph-only / pre-run ask), fall
-  // back to the step's DECLARED capabilities so the line is never silent about
-  // what the step is built to call. Capability ids only, never a model name.
-  const runtimeCalls = trace?.calls ?? [];
-  if (runtimeCalls.length > 0) {
-    lines.push("\nCapabilities called:");
-    for (const call of runtimeCalls) {
-      const marker = call.stubUsed ? " (stubbed)" : "";
-      lines.push(`  - ${call.capability}${marker}`);
+  // Capabilities the step called. The three states are honestly distinct:
+  //   - calls present + non-empty → the truth of what actually ran, each
+  //     annotated with whether a stub served it.
+  //   - calls present but EMPTY ([]) → the step ran and made zero capability
+  //     calls. That is real evidence ("it never called out"), NOT a missing
+  //     trace, so it must not borrow the declared-capabilities fallback.
+  //   - calls ABSENT (undefined) → there is no call trace at all (a graph-only
+  //     / pre-run ask), so fall back to the step's DECLARED capabilities to
+  //     say what it is built to call rather than stay silent.
+  // Capability ids only, never a model name.
+  const runtimeCalls = trace?.calls;
+  if (runtimeCalls !== undefined) {
+    if (runtimeCalls.length > 0) {
+      lines.push("\nCapabilities called:");
+      for (const call of runtimeCalls) {
+        const marker = call.stubUsed ? " (stubbed)" : "";
+        lines.push(`  - ${call.capability}${marker}`);
+      }
+    } else {
+      lines.push("\nCapabilities called: none (the step made zero capability calls).");
     }
   } else if (facts?.capabilities && facts.capabilities.length > 0) {
     lines.push("\nCapabilities declared (no call trace):");

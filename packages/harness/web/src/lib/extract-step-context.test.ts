@@ -231,12 +231,45 @@ describe("extractStepContext — capabilities called", () => {
     expect(ctx).not.toContain("records.read");
   });
 
-  it("omits the capabilities section entirely when neither calls nor declared exist", () => {
+  it("reports zero calls honestly when the trace ran but made none — NOT the declared fallback", () => {
+    // calls === [] means the step ran and called out to nothing. That is real
+    // evidence, so it must read as zero calls and must NOT borrow the
+    // declared-capabilities fallback (there IS a trace).
     const step: StepView = { id: "s1", name: "noop", status: "passed" };
-    expect(extractStepContext(step, { calls: [] }, { capabilities: [] })).not.toContain(
+    const ctx = extractStepContext(
+      step,
+      { calls: [] },
+      { capabilities: ["web.search", "records.read"] },
+    );
+    expect(ctx).toContain(
+      "Capabilities called: none (the step made zero capability calls).",
+    );
+    expect(ctx).not.toContain("Capabilities declared");
+    // Declared capabilities are never surfaced when a (zero-length) trace exists.
+    expect(ctx).not.toContain("- web.search");
+    expect(ctx).not.toContain("- records.read");
+  });
+
+  it("uses the declared fallback when the call trace is ABSENT (undefined), not empty", () => {
+    // calls === undefined means there is no call trace at all (graph-only /
+    // pre-run). Here the declared-capabilities fallback is the honest thing.
+    const step: StepView = { id: "s1", name: "research", status: "pending" };
+    const ctx = extractStepContext(step, undefined, {
+      capabilities: ["web.search", "records.read"],
+    });
+    expect(ctx).toContain("Capabilities declared (no call trace):");
+    expect(ctx).toContain("- web.search");
+    expect(ctx).toContain("- records.read");
+    expect(ctx).not.toContain("zero capability calls");
+  });
+
+  it("omits the capabilities section entirely only when there is neither a trace nor declared facts", () => {
+    const step: StepView = { id: "s1", name: "noop", status: "passed" };
+    // No trace at all + no declared capabilities → nothing to say.
+    expect(extractStepContext(step)).not.toContain("Capabilities");
+    expect(extractStepContext(step, undefined, { capabilities: [] })).not.toContain(
       "Capabilities",
     );
-    expect(extractStepContext(step)).not.toContain("Capabilities");
   });
 });
 
