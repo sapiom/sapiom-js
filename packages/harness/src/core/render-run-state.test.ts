@@ -259,6 +259,19 @@ describe("renderRunState — log slice", () => {
     expect(view.steps[0].logSlice).toBe("t0 info start\nt1 error kaboom");
   });
 
+  it("formats numeric log fields (e.g. a millisecond ts) into the line", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [
+        step({ logs: [{ ts: 1700000000000, level: "info", msg: "boot" }] }),
+      ],
+    });
+    // A numeric field (here a ms epoch) is kept and stringified — not dropped —
+    // so the whole `{ ts, level, msg }` line survives intact.
+    expect(view.steps[0].logSlice).toBe("1700000000000 info boot");
+  });
+
   it("accepts bare-string log entries", () => {
     const view = render({
       id: "e1",
