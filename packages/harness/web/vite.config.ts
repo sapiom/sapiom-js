@@ -13,11 +13,59 @@
  * The built SPA is emitted to ../dist/web and served statically by the
  * harness server.
  */
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, type AliasOptions } from "vite";
 import react from "@vitejs/plugin-react";
 
 const HARNESS_SERVER = "http://localhost:4100";
+
+const DS_PACKAGE = "@sapiom/design-system";
+const DS_NEUTRAL_DIR = fileURLToPath(new URL("./src/styles/ds-neutral", import.meta.url));
+
+/**
+ * Resolve the design-system seam: prefer the private `@sapiom/design-system`
+ * package when it's actually installed (official CI, authed to the private
+ * registry), and fall back to the committed neutral token set otherwise
+ * (public clones, this repo's own CI without the private registry).
+ *
+ * The only consumer is `styles.css`'s two CSS `@import "@sapiom/design-system/*"`
+ * lines, resolved through Vite's alias resolver. When the private package is
+ * present we DON'T alias the bare specifier at all — Vite resolves it to the
+ * real package in node_modules (branded tokens). When it's absent we alias it
+ * to `ds-neutral` (unbranded tokens) so the import still resolves and the app
+ * renders legibly. Either way `styles.css` is unchanged — the swap is 100% at
+ * the build seam.
+ *
+ * Rule: the private package and the neutral fallback expose the SAME token
+ * NAMES; only the values differ. Never redefine a token in `styles.css` (it
+ * bridges the upstream frontend var names onto these tokens via `var()` only).
+ *
+ * TODO(SAP-1773, CI): the "use the private package" half needs the official
+ * build to install `@sapiom/design-system` from the private registry before
+ * `build:web` (an authed `.npmrc`/registry step in the release workflow). That
+ * private-registry/publish infra is not set up in this repo; until it is,
+ * every build here resolves to the neutral fallback. Public clones must never
+ * install it — the package is `private: true`, off public npm, and no brand
+ * values are committed to this repo.
+ */
+function designSystemAlias(): AliasOptions {
+  const require = createRequire(import.meta.url);
+  let privatePackagePresent = false;
+  try {
+    // Probe for the package's manifest rather than its main entry: the design
+    // system is CSS-only (no JS main), so `resolve("@sapiom/design-system")`
+    // can throw ERR_PACKAGE_PATH_NOT_EXPORTED even when it IS installed.
+    require.resolve(`${DS_PACKAGE}/package.json`);
+    privatePackagePresent = true;
+  } catch {
+    privatePackagePresent = false;
+  }
+
+  // When present, add no alias — let Vite resolve the real package. When
+  // absent, redirect the bare specifier (and its subpaths) to ds-neutral.
+  return privatePackagePresent ? {} : { [DS_PACKAGE]: DS_NEUTRAL_DIR };
+}
 
 export default defineConfig({
   // The config lives in web/ but is invoked from the package root via
@@ -31,11 +79,10 @@ export default defineConfig({
       // (packages/harness/src/shared/types.ts) so the web and server always
       // build against one source of truth — no vendored copy to drift.
       "@shared/types": fileURLToPath(new URL("../src/shared/types.ts", import.meta.url)),
-      // The design system is a private package. Public builds resolve it to a
-      // committed neutral fallback so `@import "@sapiom/design-system/*"` in
-      // styles.css resolves and the app renders legibly; official builds swap
-      // this alias for the private package.
-      "@sapiom/design-system": fileURLToPath(new URL("./src/styles/ds-neutral", import.meta.url)),
+      // The design system is a private package. Official builds (private
+      // package installed) render branded; public clones fall back to a
+      // committed neutral token set. See designSystemAlias() above.
+      ...designSystemAlias(),
     },
   },
   build: {
