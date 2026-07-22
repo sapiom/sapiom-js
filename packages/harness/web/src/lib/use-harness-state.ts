@@ -312,6 +312,11 @@ export function useHarnessState(): HarnessStateHook {
       const observedAt = Date.now();
       const traces: LocalStepTrace[] = [];
       let outcome: LocalRunOutcome | undefined;
+      // Stub-hygiene signals from the terminal summary line (WB15-2). Held
+      // alongside outcome so each re-map through renderLocalRun carries them;
+      // absent until the summary lands, and renderLocalRun drops empties.
+      let unusedStubs: Array<{ step: string; key: string }> | undefined;
+      let stubWarnings: string[] | undefined;
 
       // Register the run so runsBySession surfaces it, and drop any explicit run
       // pick so the session follows this fresh run (mirrors startRunPolling).
@@ -328,7 +333,7 @@ export function useHarnessState(): HarnessStateHook {
       });
 
       const publish = (): void => {
-        const run = renderLocalRun(traces, { executionId, outcome });
+        const run = renderLocalRun(traces, { executionId, outcome, unusedStubs, stubWarnings });
         setRunsByExecution((prev) =>
           new Map(prev).set(executionId, { run, target: "local", workflowPath, observedAt }),
         );
@@ -340,6 +345,11 @@ export function useHarnessState(): HarnessStateHook {
       const onLine = (line: RunLocalLine): void => {
         if (line.kind === "summary") {
           outcome = line.outcome;
+          // Carry the stub-hygiene signals so the inspector can surface a no-op
+          // mock (unusedStubs) or a wrong-shape stub (stubWarnings). Passed
+          // straight through; renderLocalRun applies the honest-absence rule.
+          unusedStubs = line.unusedStubs;
+          stubWarnings = line.stubWarnings;
         } else if (line.kind === "error") {
           // The run could not be invoked (bad project / stub file). Represent it
           // as a failed run carrying one failed step so the inspector shows the

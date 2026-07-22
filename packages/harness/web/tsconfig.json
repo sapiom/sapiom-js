@@ -15,6 +15,7 @@
     "paths": {
       "@shared/types": ["../src/shared/types.ts"],
       "@shared/render-local-run": ["../src/core/render-local-run.ts"],
+      "@shared/stub-feedback": ["../src/core/stub-feedback.ts"],
       "@sapiom/design-system/*": ["./src/styles/ds-neutral/*"]
     }
   },

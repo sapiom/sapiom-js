@@ -86,6 +86,12 @@ export default defineConfig({
       // It pulls in only the `LocalStepTrace` *type* from agent-core (erased at
       // build), so no agent-core runtime code enters the browser bundle.
       "@shared/render-local-run": fileURLToPath(new URL("../src/core/render-local-run.ts", import.meta.url)),
+      // The stub-feedback derivations (stubbed-chip + read-only stub notice) are
+      // pure fns over RunView; the SPA imports the SAME canonical implementation
+      // the unit tests target so the inspector can never disagree with the tests.
+      // Types-only import of RunView (erased at build) — no server code enters
+      // the browser bundle.
+      "@shared/stub-feedback": fileURLToPath(new URL("../src/core/stub-feedback.ts", import.meta.url)),
       // The design system is a private package. Official builds (private
       // package installed) render branded; public clones fall back to a
       // committed neutral token set. See designSystemAlias() above.
