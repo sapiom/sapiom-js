@@ -39,6 +39,51 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "scene-to-video",
+      "name": "Scene → Images → Video",
+      "description": "Turn a scene description into a stitched short video: LLM shot list → per-shot keyframes → async image-to-video → stitch.",
+      "tags": ["generative", "video", "pipeline", "media"],
+      "sourcePath": "examples/scene-to-video",
+      "capabilities": ["models.run", "contentGeneration.images", "contentGeneration.video"],
+      "whatItDoes": "The richest onboarding template — a real multi-step generative pipeline. An LLM decomposes one scene into a style/identity bible plus an ordered shot list; each shot becomes a keyframe image (fan-out); each keyframe is animated into a short clip via an async image-to-video job that pauses the workflow until a FAL webhook resumes it; the clips are stitched into one video. Exercises three metered capabilities together and shows off async pause/resume + fan-out. A dryRun input returns the plan only, skipping the (higher-cost) image + video generation. Pricier than the other templates — the estimated per-run cost card will be visibly higher.",
+      "steps": [
+        {
+          "name": "decompose",
+          "description": "LLM turns the scene into a style/identity bible + an ordered shot list. Terminates here with the plan when dryRun is set.",
+          "capability": "models.run",
+          "next": ["keyframes"]
+        },
+        {
+          "name": "keyframes",
+          "description": "Generate one keyframe image per shot (fan-out), each persisted for a durable fileId.",
+          "capability": "contentGeneration.images",
+          "next": ["animate"]
+        },
+        {
+          "name": "animate",
+          "description": "Launch an async image-to-video job for one shot and pause until the FAL webhook resumes.",
+          "capability": "contentGeneration.video",
+          "next": ["collect"]
+        },
+        {
+          "name": "collect",
+          "description": "Record the finished clip, then loop back to animate the next shot or advance to stitch.",
+          "next": ["animate", "stitch"]
+        },
+        {
+          "name": "stitch",
+          "description": "Concat the clips into one video (FAL ffmpeg merge), async — pause until ready.",
+          "capability": "contentGeneration.video",
+          "next": ["finalize"]
+        },
+        {
+          "name": "finalize",
+          "description": "Return the stitched video's durable videoFileId + downloadUrl.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
