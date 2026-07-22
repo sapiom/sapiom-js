@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { terminalDeployEvent, type DeployStreamEvent } from "./api";
+import { parseNdjsonLine, terminalDeployEvent, type DeployStreamEvent } from "./api";
 
 describe("terminalDeployEvent", () => {
   it("returns the terminal ready event", () => {
@@ -46,5 +46,25 @@ describe("terminalDeployEvent", () => {
 
   it("synthesizes an error for an empty stream", () => {
     expect(terminalDeployEvent([])).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
+  });
+});
+
+describe("parseNdjsonLine (deploy stream)", () => {
+  it("parses a well-formed deploy event line", () => {
+    expect(parseNdjsonLine<DeployStreamEvent>('{"phase":"building","definitionId":"42"}')).toEqual({
+      phase: "building",
+      definitionId: "42",
+    });
+  });
+
+  it("drops a bare `null` line instead of forwarding it (SAP-1778 review)", () => {
+    // JSON.parse("null") === null: a stray null line must be silently dropped,
+    // never handed to the deploy consumer (where it could throw downstream).
+    expect(parseNdjsonLine<DeployStreamEvent>("null")).toBeUndefined();
+  });
+
+  it("drops blank and non-JSON noise lines", () => {
+    expect(parseNdjsonLine<DeployStreamEvent>("   ")).toBeUndefined();
+    expect(parseNdjsonLine<DeployStreamEvent>("Build succeeded in 12ms")).toBeUndefined();
   });
 });

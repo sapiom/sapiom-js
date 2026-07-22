@@ -488,19 +488,12 @@ class RealApi implements HarnessApi {
       buffer += chunk;
       let newline = buffer.indexOf("\n");
       while (newline !== -1) {
-        const raw = buffer.slice(0, newline).trim();
+        const raw = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        if (raw !== "") {
-          let parsed: T | undefined;
-          try {
-            parsed = JSON.parse(raw) as T;
-          } catch {
-            parsed = undefined; // non-JSON noise — skip.
-          }
-          if (parsed !== undefined) {
-            collected.push(parsed);
-            onLine?.(parsed);
-          }
+        const parsed = parseNdjsonLine<T>(raw);
+        if (parsed !== undefined) {
+          collected.push(parsed);
+          onLine?.(parsed);
         }
         newline = buffer.indexOf("\n");
       }
@@ -515,6 +508,27 @@ class RealApi implements HarnessApi {
     flush(decoder.decode() + "\n");
     return collected;
   }
+}
+
+/**
+ * Parse one NDJSON line from a generic stream (used by the deploy stream), or
+ * `undefined` for a line that carries no value: blank, non-JSON noise, OR a
+ * bare `null` (`JSON.parse("null")`). Rejecting `null` here — not just
+ * `undefined` — means a stray `null` line is dropped rather than forwarded to
+ * the consumer, which would otherwise receive it as an event and could throw
+ * downstream. Mirrors {@link parseRunLocalLine}'s null rejection. Pure — no
+ * I/O — so it is unit-testable without a live stream.
+ */
+export function parseNdjsonLine<T>(raw: string): T | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined; // non-JSON noise — skip.
+  }
+  return parsed === null ? undefined : (parsed as T);
 }
 
 /**
