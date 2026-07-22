@@ -55,10 +55,10 @@ const headerOf = (c: FetchCall, k: string) =>
   (c.init.headers as Record<string, string>)[k];
 
 // ---------------------------------------------------------------------------
-// tts.create / createSpeech()
+// textToSpeech.create / createSpeech()
 // ---------------------------------------------------------------------------
 
-describe("speech.tts.create()", () => {
+describe("speech.textToSpeech.create()", () => {
   it("POSTs /v1/text-to-speech/:voice with JSON body + credential and returns mapped result", async () => {
     const { transport, calls } = makeTransport([
       () =>
@@ -472,7 +472,7 @@ describe("speech.voices.list()", () => {
 // ---------------------------------------------------------------------------
 
 describe("speech — client wiring + credential", () => {
-  it("createClient().speech routes tts.create/soundEffects.create/voices.list with the credential", async () => {
+  it("createClient().speech routes textToSpeech.create/soundEffects.create/voices.list with the credential", async () => {
     const calls: FetchCall[] = [];
     const fetchMock = (async (
       input: Parameters<typeof globalThis.fetch>[0],
@@ -484,7 +484,7 @@ describe("speech — client wiring + credential", () => {
     }) as typeof globalThis.fetch;
 
     const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
-    await sapiom.speech.tts.create({ text: "Hello" });
+    await sapiom.speech.textToSpeech.create({ text: "Hello" });
     await sapiom.speech.soundEffects.create({ text: "thunder" });
     await sapiom.speech.voices.list();
 
@@ -510,7 +510,7 @@ describe("speech — client wiring + credential", () => {
     }) as typeof globalThis.fetch;
     const sapiom = createClient({ apiKey: "k", fetch: fetchMock });
 
-    await sapiom.speech.tts.create({ text: "REAL", params: { text: "INJECTED" } });
+    await sapiom.speech.textToSpeech.create({ text: "REAL", params: { text: "INJECTED" } });
 
     const body = JSON.parse(String(calls[0]!.init.body)) as { text: string };
     expect(body.text).toBe("REAL");
@@ -533,12 +533,12 @@ describe("speech — client wiring + credential", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Namespace exports (tts / soundEffects / voices)
+// Namespace exports (textToSpeech / soundEffects / voices)
 // ---------------------------------------------------------------------------
 
 describe("speech — namespace exports", () => {
-  it("tts.create is the same function as createSpeech", () => {
-    expect(speech.tts.create).toBe(speech.createSpeech);
+  it("textToSpeech.create is the same function as createSpeech", () => {
+    expect(speech.textToSpeech.create).toBe(speech.createSpeech);
   });
 
   it("soundEffects.create is the same function as createSoundEffect", () => {

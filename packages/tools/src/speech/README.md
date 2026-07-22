@@ -8,7 +8,7 @@ import { createClient } from "@sapiom/tools";
 const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
 
 // 1. Generate speech from text.
-const result = await sapiom.speech.tts.create({
+const result = await sapiom.speech.textToSpeech.create({
   text: "Hello, world!",
   voice: "Aria",          // optional — defaults to a standard voice
 });
@@ -23,7 +23,7 @@ sfx.url;                  // hosted audio URL
 
 // 3. List available voices.
 const { voices } = await sapiom.speech.voices.list();
-voices[0]?.voiceId;       // pass this as `voice` to tts.create
+voices[0]?.voiceId;       // pass this as `voice` to textToSpeech.create
 voices[0]?.name;
 ```
 
@@ -31,7 +31,7 @@ Ambient import works too:
 
 ```typescript
 import { speech } from "@sapiom/tools";
-const result = await speech.tts.create({ text: "Hello, world!" });
+const result = await speech.textToSpeech.create({ text: "Hello, world!" });
 ```
 
 ## Persisting audio with file storage
@@ -41,7 +41,7 @@ result then carries a `fileId` you can use to retrieve the file later via
 `fileStorage.getDownloadUrl(fileId)`.
 
 ```typescript
-const result = await sapiom.speech.tts.create({
+const result = await sapiom.speech.textToSpeech.create({
   text: "Hello, world!",
   storage: { visibility: "private" }, // or "public"
 });
@@ -56,13 +56,13 @@ result.storageError; // describes the failure; url is still usable
 ## Voices
 
 `voices.list()` returns the full catalog of voices available to your account.
-Pass the `voiceId` (or name) to `tts.create({ voice })` to choose one.
+Pass the `voiceId` (or name) to `textToSpeech.create({ voice })` to choose one.
 
 ```typescript
 const { voices } = await sapiom.speech.voices.list();
 const myVoice = voices.find((v) => v.name === "Rachel");
 if (myVoice) {
-  const result = await sapiom.speech.tts.create({
+  const result = await sapiom.speech.textToSpeech.create({
     text: "Hello from Rachel!",
     voice: myVoice.voiceId,
   });
@@ -71,11 +71,11 @@ if (myVoice) {
 
 ## Advanced parameters
 
-Both `tts.create` and `soundEffects.create` accept a `params` object that is
+Both `textToSpeech.create` and `soundEffects.create` accept a `params` object that is
 forwarded verbatim to the underlying capability (e.g. `stability`, `speed`, `seed`).
 
 ```typescript
-const result = await sapiom.speech.tts.create({
+const result = await sapiom.speech.textToSpeech.create({
   text: "Hello!",
   params: { stability: 0.75, speed: 0.9 },
 });
@@ -90,7 +90,7 @@ exported from `@sapiom/tools`.
 import { SpeechHttpError } from "@sapiom/tools";
 
 try {
-  await sapiom.speech.tts.create({ text: "Hello!" });
+  await sapiom.speech.textToSpeech.create({ text: "Hello!" });
 } catch (err) {
   if (err instanceof SpeechHttpError) {
     console.error(err.status, err.body);

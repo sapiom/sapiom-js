@@ -1423,10 +1423,10 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         ),
     },
     speech: {
-      tts: {
+      textToSpeech: {
         create: (input) =>
           Promise.resolve(
-            r("speech.tts.create", [input], () => ({
+            r("speech.textToSpeech.create", [input], () => ({
               url: "https://cdn.example.com/stub-audio.mp3",
               expiresAt: "2099-01-01T00:00:00Z",
             })) as SpeechResult,

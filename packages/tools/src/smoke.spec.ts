@@ -58,7 +58,7 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.memory.drop).toBe("function");
 
     expect(typeof sapiom.speech).toBe("object");
-    expect(typeof sapiom.speech.tts.create).toBe("function");
+    expect(typeof sapiom.speech.textToSpeech.create).toBe("function");
     expect(typeof sapiom.speech.soundEffects.create).toBe("function");
     expect(typeof sapiom.speech.voices.list).toBe("function");
 

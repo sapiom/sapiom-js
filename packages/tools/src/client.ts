@@ -366,7 +366,7 @@ export interface Sapiom {
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
     /** Generate speech audio from text. */
-    tts: {
+    textToSpeech: {
       create(input: SpeechCreateInput): Promise<SpeechResult>;
     };
     /** Generate sound effects from a text prompt. */
@@ -522,7 +522,7 @@ function bind(transport: Transport): Sapiom {
       getAll: (ref) => vault.getAll(ref, transport),
     },
     speech: {
-      tts: {
+      textToSpeech: {
         create: (input) => speech.createSpeech(input, transport),
       },
       soundEffects: {

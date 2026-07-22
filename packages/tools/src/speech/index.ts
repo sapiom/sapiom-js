@@ -3,14 +3,14 @@
  * The same speech tools your agents call over MCP, callable directly from code.
  *
  *   import { speech } from "@sapiom/tools";              // ambient auth
- *   const result = await speech.tts.create({ text: "Hello world" });
+ *   const result = await speech.textToSpeech.create({ text: "Hello world" });
  *   result.url;        // hosted audio URL
  *   result.fileId;     // present when `storage` was passed → use with fileStorage
  *
  *   const sfx = await speech.soundEffects.create({ text: "thunder clap" });
  *   const { voices } = await speech.voices.list();
  *
- * Or via an explicit client: `createClient({ apiKey }).speech.tts.create(...)`.
+ * Or via an explicit client: `createClient({ apiKey }).speech.textToSpeech.create(...)`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
@@ -227,7 +227,7 @@ export async function createSoundEffect(
 
 /**
  * List available voices. Returns the set of voices you can pass to
- * `tts.create({ voice })`. Failed requests throw {@link SpeechHttpError}.
+ * `textToSpeech.create({ voice })`. Failed requests throw {@link SpeechHttpError}.
  */
 export async function listVoices(
   transport: Transport = defaultTransport(),
@@ -248,7 +248,7 @@ export async function listVoices(
 // ----- Namespace exports -----
 
 /** Text-to-speech operations. */
-export const tts = { create: createSpeech };
+export const textToSpeech = { create: createSpeech };
 
 /** Sound effect generation. */
 export const soundEffects = { create: createSoundEffect };
