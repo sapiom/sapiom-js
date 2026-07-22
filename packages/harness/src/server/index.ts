@@ -103,6 +103,7 @@ import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
+import { createActionsRouter } from "./actions.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
 // (an identical helper); the runs router reuses it for its agents base URL.
 
@@ -815,6 +816,17 @@ export const startServer = async (
     createRunsRouter({
       apiKey: identity?.apiKey ?? null,
       baseUrl: resolveAgentsBaseUrl(),
+    }),
+  );
+  // Direct action macros (Deploy / Prod-run) — server-side, key never reaches
+  // the browser, no Claude Code. Resolves a workflow :id (its path) against the
+  // same live cache the rest router's findWorkflow uses.
+  app.use(
+    createActionsRouter({
+      apiKey: identity?.apiKey ?? null,
+      coreBaseUrl: resolveCoreBaseUrl(),
+      resolveWorkflow: (id) =>
+        workflowsCache.find((w) => w.path === id) ?? null,
     }),
   );
   app.use(
