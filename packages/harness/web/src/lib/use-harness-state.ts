@@ -15,6 +15,7 @@ import type {
 import type { HarnessEntry } from "@shared/types";
 
 import { ApiError, boundWorkflowPathOf, createApi, getBootToken, type FsListResponse, type HarnessApi } from "./api";
+import { type ConnectivityErrorInput } from "./connectivity";
 import { subscribeEvents } from "./events";
 
 const api = createApi();
@@ -51,6 +52,16 @@ export interface HarnessStateHook {
   state: AppState | null;
   loading: boolean;
   error: string | null;
+  /** The classifier-shaped facts about a failed boot fetch (HTTP status, or
+   *  network-throw flag) — null when the boot succeeded. Lets the shell tell an
+   *  offline boot from a rejected-credential boot from a generic failure and
+   *  show the matching recoverable state instead of a dead error screen. */
+  errorKind: ConnectivityErrorInput | null;
+  /** Re-runs the one-shot boot fetch (AppState + settings). The recovery path
+   *  for a failed boot: after regaining connectivity or once the server has
+   *  refreshed the held key, this re-hydrates the shell in place — no reload,
+   *  no lockout. Safe to call repeatedly; a success clears the error. */
+  reload: () => void;
   settings: HarnessSettings | null;
   bootToken: string;
   selectedWorkflowPath: string | null;
@@ -136,6 +147,12 @@ export function useHarnessState(): HarnessStateHook {
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Boot-error facts (HTTP status / network-throw flag), shaped for the
+  // connectivity classifier so the shell can pick a recoverable offline vs
+  // auth vs generic state instead of a dead "Failed to load" screen.
+  const [errorKind, setErrorKind] = useState<ConnectivityErrorInput | null>(null);
+  // Bumped by reload() to re-run the one-shot boot fetch (the recovery path).
+  const [reloadSeq, setReloadSeq] = useState(0);
   const [selectedWorkflowPath, setSelectedWorkflowPath] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionSummary[]>([]);
@@ -286,22 +303,42 @@ export function useHarnessState(): HarnessStateHook {
 
   useEffect(() => {
     let cancelled = false;
+    // A retry re-enters the loading state and clears the prior failure so the
+    // shell shows "reconnecting", not a stale error, while the refetch runs.
+    if (reloadSeq > 0) {
+      setLoading(true);
+      setError(null);
+      setErrorKind(null);
+    }
     Promise.all([api.getState(), api.getSettings()])
       .then(([appState, harnessSettings]) => {
         if (cancelled) return;
         setState(appState);
         setSettings(harnessSettings);
+        setErrorKind(null);
         if (appState.tasks) setTasks(appState.tasks);
         const running = appState.sessions.find((session) => session.status !== "exited");
         if (running) setActiveSessionId(running.id);
         if (appState.workflows[0]) setSelectedWorkflowPath(appState.workflows[0].path);
       })
-      .catch((err: unknown) => !cancelled && setError((err as Error).message))
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError((err as Error).message);
+        // An ApiError reached the server (401/403 = recoverable auth, 5xx =
+        // generic); anything else is a network-level throw the browser raises
+        // when it never got a response (offline / unreachable) — recorded as
+        // such so the classifier picks the offline state, not a dead end.
+        setErrorKind(err instanceof ApiError ? { status: err.status } : { networkError: true });
+      })
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadSeq]);
+
+  // Recovery path for a failed boot: re-run the one-shot fetch. Bumping the
+  // seq re-fires the boot effect above (which resets loading/error itself).
+  const reload = useCallback(() => setReloadSeq((n) => n + 1), []);
 
   // Switching sessions follows that session's own binding, INCLUDING clearing
   // the highlight when the new session has nothing bound — the rail must
@@ -588,6 +625,8 @@ export function useHarnessState(): HarnessStateHook {
     state,
     loading,
     error,
+    errorKind,
+    reload,
     settings,
     bootToken: getBootToken(),
     selectedWorkflowPath,
