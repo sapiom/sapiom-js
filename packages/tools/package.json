@@ -68,6 +68,11 @@
       "import": "./dist/esm/memory/index.js",
       "require": "./dist/cjs/memory/index.js"
     },
+    "./speech": {
+      "types": "./dist/cjs/speech/index.d.ts",
+      "import": "./dist/esm/speech/index.js",
+      "require": "./dist/cjs/speech/index.js"
+    },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",
       "import": "./dist/esm/stub/index.js",

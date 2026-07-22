@@ -126,6 +126,13 @@ import type {
   RecallResponse,
   ForgetInput,
 } from "./memory/index.js";
+import * as speech from "./speech/index.js";
+import type {
+  SpeechCreateInput,
+  SpeechResult,
+  SoundEffectInput,
+  VoicesResult,
+} from "./speech/index.js";
 import * as vault from "./vault/index.js";
 
 export interface Sapiom {
@@ -356,6 +363,21 @@ export interface Sapiom {
     getMany(ref: string, keys: string[]): Promise<Record<string, string>>;
     getAll(ref: string): Promise<Record<string, string>>;
   };
+  /** Text-to-speech, sound effects, and voice listing. */
+  readonly speech: {
+    /** Generate speech audio from text. */
+    textToSpeech: {
+      create(input: SpeechCreateInput): Promise<SpeechResult>;
+    };
+    /** Generate sound effects from a text prompt. */
+    soundEffects: {
+      create(input: SoundEffectInput): Promise<SpeechResult>;
+    };
+    /** List available voices. */
+    voices: {
+      list(): Promise<VoicesResult>;
+    };
+  };
   /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
@@ -498,6 +520,17 @@ function bind(transport: Transport): Sapiom {
       get: (ref, key) => vault.get(ref, key, transport),
       getMany: (ref, keys) => vault.getMany(ref, keys, transport),
       getAll: (ref) => vault.getAll(ref, transport),
+    },
+    speech: {
+      textToSpeech: {
+        create: (input) => speech.createSpeech(input, transport),
+      },
+      soundEffects: {
+        create: (input) => speech.createSoundEffect(input, transport),
+      },
+      voices: {
+        list: () => speech.listVoices(transport),
+      },
     },
     withAttribution: (attribution) =>
       bind(transport.withAttribution(attribution)),

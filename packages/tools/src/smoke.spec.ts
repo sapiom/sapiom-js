@@ -15,10 +15,12 @@ import {
   models,
   search,
   memory,
+  speech,
   Sandbox,
   Repository,
   SearchHttpError,
   MemoryHttpError,
+  SpeechHttpError,
 } from "./index.js";
 
 describe("@sapiom/tools public surface", () => {
@@ -55,6 +57,11 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.memory.forget).toBe("function");
     expect(typeof sapiom.memory.drop).toBe("function");
 
+    expect(typeof sapiom.speech).toBe("object");
+    expect(typeof sapiom.speech.textToSpeech.create).toBe("function");
+    expect(typeof sapiom.speech.soundEffects.create).toBe("function");
+    expect(typeof sapiom.speech.voices.list).toBe("function");
+
     expect(typeof sapiom.withAttribution).toBe("function");
   });
 
@@ -71,8 +78,10 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof models).toBe("object");
     expect(typeof search).toBe("object");
     expect(typeof memory).toBe("object");
+    expect(typeof speech).toBe("object");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor
     expect(typeof MemoryHttpError).toBe("function");
+    expect(typeof SpeechHttpError).toBe("function");
     expect(typeof Sandbox).toBe("function"); // class constructor
     expect(typeof Repository).toBe("function");
   });
