@@ -38,7 +38,12 @@ const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 // This module lives at either src/core/ (tsx dev, vitest) or dist/core/
 // (built) — both two directories below the package root.
 function packageRoot(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  // When embedded in Electron, an asarUnpack'd module still reports its
+  // app.asar (virtual) path via import.meta.url. Using that as a child
+  // process `cwd` fails with `spawn ENOTDIR` (app.asar is a file). Point at the
+  // unpacked twin — the desktop app must asarUnpack this package.
+  return root.replace(/([\\/])app\.asar([\\/])/, "$1app.asar.unpacked$2");
 }
 
 const RUNNER_SOURCE = `
