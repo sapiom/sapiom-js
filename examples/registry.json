@@ -600,6 +600,49 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "news-roundup",
+      "name": "Company News Roundup",
+      "description": "Search the web for a company's recent news, then publish a dated, illustrated roundup page to a small website for that company.",
+      "tags": ["news", "summarize", "images", "publish"],
+      "sourcePath": "examples/news-roundup",
+      "capabilities": [
+        "web.search",
+        "models.run",
+        "contentGeneration.images",
+        "fileStorage.upload",
+        "sandboxes.create",
+        "sandboxes.deployPreview"
+      ],
+      "whatItDoes": "For keeping a shareable news page for a company you care about, refreshed whenever you run it. You give it a company name and it searches the web (web.search) for that company's news from the last week. An LLM (models.run) picks the three-to-five most relevant articles and writes a plain-language summary and an image prompt for each, and it generates one illustration per article (contentGeneration.images). It saves the page and images to file storage, then rebuilds the company's website from storage in a sandbox and deploys it (sandboxes.deployPreview), handing back the live URL. Each run adds a new dated page without touching the earlier ones. If an image fails it becomes a text-only card, and if there's no news the run stops early instead of publishing an empty page.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Search the web for the company's news from the last week. If nothing comes back, stop early and report no news instead of publishing.",
+          "capability": "web.search",
+          "next": ["select"]
+        },
+        {
+          "name": "select",
+          "description": "Ask an LLM to pick the three-to-five most relevant articles and write a plain-language summary and an image prompt for each.",
+          "capability": "models.run",
+          "next": ["illustrate"]
+        },
+        {
+          "name": "illustrate",
+          "description": "Generate one image per selected article and save each to storage; an article whose image fails degrades to a text-only card.",
+          "capability": "contentGeneration.images",
+          "next": ["publish"]
+        },
+        {
+          "name": "publish",
+          "description": "Save the dated page, rebuild the company's site from storage in a sandbox, and deploy it — returning the live site and page URLs.",
+          "capability": "sandboxes.deployPreview",
+          "next": [],
+          "terminal": true
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,52 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You give it a company name. It searches the web for that company's news from the last week, asks an LLM to pick the three-to-five most relevant articles, and writes a plain-language summary and an illustration prompt for each. It generates one image per article, then publishes a dated roundup page to a small website for that company.\n\nEverything durable lives in file storage under a per-company prefix — one HTML page and its images per run. The website itself is disposable: every run rebuilds it from scratch out of storage, so losing it costs nothing, and each run just adds a new dated page without touching the earlier ones. The site is served from a sandbox that expires after a day and is recreated — with a new URL — on the next run.\n\nIf an image fails to generate, that article still shows up as a text-only card instead of failing the run. If the search turns up nothing for the company, it stops early and tells you rather than publishing an empty page.\n\nYou pay for the web search, the model that picks and summarizes the articles, and the images it generates — plus the short-lived sandbox that serves the site. A run that finds no news costs only the search.",
+  "useCases": [
+    "Keep a shareable news page for a company you track — a competitor, a partner, or a portfolio company — refreshed on a schedule.",
+    "Turn a week of scattered press coverage into one dated, illustrated summary you can send someone.",
+    "Run it for several companies so each gets its own standing news site, built and rebuilt automatically."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `companyName` — that's the only input. Each run adds a new dated page to that company's site and returns the live URL. The site is served from a sandbox with a 24-hour TTL, so its URL changes once the sandbox expires and is recreated on the next run — read the latest run's output for the current link instead of bookmarking one. To keep a company's page fresh, put it on a schedule (the shipped example runs weekly).\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"companyName\": \"Polsia\" }` to trace search → select → illustrate → publish for free against the committed stubs — nothing generated or deployed. (For a local run that exercises the real uploads, start the bundled upload sink first; see the README.) Or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "A published roundup",
+      "input": {
+        "companyName": "Polsia"
+      },
+      "output": {
+        "status": "published",
+        "siteUrl": "https://news-roundup-polsia-a1b2c3.sandbox.sapiom.ai",
+        "pageUrl": "https://news-roundup-polsia-a1b2c3.sandbox.sapiom.ai/pages/2026-07-22.html",
+        "articles": [
+          {
+            "title": "Polsia raises Series B to expand its logistics network",
+            "sourceUrl": "https://example.com/polsia-series-b",
+            "summary": "Polsia closed a Series B this week and says the funding will go toward opening two regional warehouses and doubling its delivery fleet.",
+            "imageUrl": "https://news-roundup-polsia-a1b2c3.sandbox.sapiom.ai/images/2026-07-22-1.png"
+          },
+          {
+            "title": "Polsia partners with a regional grocer on same-day delivery",
+            "sourceUrl": "https://example.com/polsia-grocery-pilot",
+            "summary": "A pilot with a regional grocery chain brings Polsia's same-day delivery to three new cities, its first move into groceries.",
+            "imageUrl": null
+          }
+        ]
+      }
+    },
+    {
+      "title": "No recent news found",
+      "input": {
+        "companyName": "Polsia"
+      },
+      "output": {
+        "status": "no-news",
+        "companyName": "Polsia"
+      }
+    }
+  ]
+}
