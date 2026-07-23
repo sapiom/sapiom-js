@@ -3,6 +3,43 @@
   "version": 1,
   "templates": [
     {
+      "id": "slack-notifier",
+      "name": "Slack Notifier",
+      "description": "Post a message to Slack using your own credential from the Vault — the 'bring your own API' on-ramp.",
+      "tags": ["integration", "starter", "slack"],
+      "sourcePath": "examples/slack-notifier",
+      "capabilities": ["vault"],
+      "whatItDoes": "Takes a message (and optional channel), reads your Slack credential from the Vault at runtime, and posts to Slack via a direct `fetch` — either `chat.postMessage` with a bot token or an incoming-webhook URL. The teaching template for connecting an external service: store a secret, read it at runtime, call an API. No secret is ever baked into code, and a dryRun / no-credential guard lets `run_local` trace the whole graph offline. Slack is just the hook — repoint the endpoint + Vault key to call any API.",
+      "steps": [
+        {
+          "name": "validate",
+          "description": "Check the message and resolve config (auth mode, channel).",
+          "next": ["post", "rejected"]
+        },
+        {
+          "name": "post",
+          "description": "Read the Slack credential from the Vault and post the message.",
+          "capability": "vault",
+          "next": ["posted", "failed"]
+        },
+        {
+          "name": "posted",
+          "description": "Return the post confirmation (channel + timestamp).",
+          "terminal": true
+        },
+        {
+          "name": "failed",
+          "description": "The Slack API call errored.",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Input failed validation; nothing was posted.",
+          "terminal": true
+        }
+      ]
+    },
+    {
       "id": "web-research-digest",
       "name": "Web Research Digest",
       "description": "Search the web for a topic and return a concise, sourced digest.",
