@@ -207,29 +207,33 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
   await expect(page.locator(".workflow-item")).toHaveCount(3);
 
   // "leasing" is deployed (has a definitionId) and is the focused agent /
-  // active tab's binding — the deploy-link macro is live.
-  const openProd = page.getByTestId("macro-open_prod");
+  // active tab's binding — action bar is live and Prod Run is enabled.
   await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
-  await expect(openProd).toBeEnabled();
+  const prodRun = page.getByTestId("session-step-run");
+  await expect(prodRun).toBeEnabled();
+
+  // The open_prod button has been removed from the action bar (SAP-1899);
+  // the "Go to dashboard" link now lives in the canvas header for deployed workflows.
+  await expect(page.getByTestId("macro-open_prod")).toHaveCount(0);
 
   // Focusing "rfq" (no live session) does NOT rebind the boot session or start
   // one silently — the main panel shows the honest "start a session" state, so
-  // there is no macro bar to gate yet.
+  // there is no action bar to gate yet.
   await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
   await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
   await expect(page.getByTestId("open-agent-empty")).toContainText("No running session for rfq");
-  await expect(openProd).toHaveCount(0);
+  await expect(prodRun).toHaveCount(0);
 
-  // Starting the session binds rfq (undeployed) and brings the macro bar live,
+  // Starting the session binds rfq (undeployed) and brings the action bar live,
   // now gated with a reason distinct from "no workflow selected".
   await page.getByTestId("open-agent-start-session").click();
   await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
-  await expect(openProd).toBeDisabled();
-  await expect(openProd).toHaveAttribute("aria-label", "Open prod: Not deployed yet");
+  await expect(prodRun).toBeDisabled();
+  await expect(prodRun).toHaveAttribute("aria-label", "Prod Run: Not deployed yet");
 
   // The gating reason survives the disabled state through the app tooltip
   // (data-tooltip) and the aria-label above — no hover-reveal panel involved.
-  await expect(openProd).toHaveAttribute("data-tooltip", "Open prod: Not deployed yet");
+  await expect(prodRun).toHaveAttribute("data-tooltip", "Prod Run: Not deployed yet");
   await page.screenshot({ path: "web/e2e/screenshots/workflow-macros-gated.png" });
 });
 
@@ -819,15 +823,29 @@ test.describe("workflow actions", () => {
     expect(overflowing).toBe(false);
   });
 
-  test("Prod rides the wizard bar as its fifth step, gating and macro identity intact", async ({ page }) => {
-    const openProd = page.getByTestId("macro-open_prod");
-    await expect(openProd).toBeVisible();
-    // Visible label is the compact "Prod"; the accessible name keeps the
-    // server macro's own label so intent stays explicit.
-    await expect(openProd).toHaveAttribute("aria-label", "Open prod");
-    await expect(openProd).toContainText("Prod");
+  test("action bar shows Local Run and Prod Run labels; Prod button is removed; Go to dashboard appears for deployed workflows", async ({
+    page,
+  }) => {
+    // The action bar now uses "Local Run" and "Prod Run" (SAP-1899).
+    const localBtn = page.getByTestId("session-step-local");
+    const runBtn = page.getByTestId("session-step-run");
+    await expect(localBtn).toBeVisible();
+    await expect(localBtn).toContainText("Local Run");
+    await expect(runBtn).toBeVisible();
+    await expect(runBtn).toContainText("Prod Run");
+
+    // The open_prod "Prod" button is removed from the action bar.
+    await expect(page.getByTestId("macro-open_prod")).toHaveCount(0);
+
     // Rail workflow rows still carry no macro strips — the wizard owns them.
     await expect(page.getByTestId("workflow-macros")).toHaveCount(0);
+
+    // The "Go to dashboard" link appears in the canvas header for deployed workflows.
+    // leasing is deployed (definitionId set) on load.
+    const dashLink = page.getByTestId("workflow-dashboard-link");
+    await expect(dashLink).toBeVisible();
+    await expect(dashLink).toHaveAttribute("href", /app\.sapiom\.ai\/workflows\//);
+    await expect(dashLink).toHaveAttribute("target", "_blank");
   });
 
   test("the canvas header stays fully on-screen even when the app is narrower than the default pane widths", async ({
@@ -1369,7 +1387,7 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
     expect(lastDirect?.req?.definitionId).toBe("4821");
   });
 
-  test("undeployed workflow: chip reads Draft; Run and Prod are gated with the deploy reason", async ({ page }) => {
+  test("undeployed workflow: chip reads Draft; Prod Run is gated with the deploy reason", async ({ page }) => {
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");

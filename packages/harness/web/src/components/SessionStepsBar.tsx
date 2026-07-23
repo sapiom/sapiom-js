@@ -24,10 +24,12 @@ interface SessionStepsBarProps {
  * as you ship. The only durable state is "deployed" (definitionId), shown as
  * the left-anchored status chip. Actions sit right-anchored, Deploy at the
  * right edge as the primary:
- *   Local  = run_local  (test run, capabilities stubbed)
- *   Prod   = open_prod  (dashboard link; needs a deploy)
- *   Run    = prod_run   (real cloud execution; needs a deploy)
- *   Deploy = deploy     (push + cloud build)
+ *   Local Run = run_local  (test run, capabilities stubbed)
+ *   Prod Run  = prod_run   (real cloud execution; needs a deploy)
+ *   Deploy    = deploy     (push + cloud build)
+ *
+ * The "Go to dashboard" affordance (open_prod equivalent) lives in the canvas
+ * header's WorkflowActionsHeader when a definitionId is set.
  */
 export function SessionStepsBar({
   workflow,
@@ -60,28 +62,15 @@ export function SessionStepsBar({
   }[] = [
     {
       id: "local",
-      label: "Local",
+      label: "Local Run",
       icon: "FlaskConical",
       macro: macroFor("run_local"),
       testId: "session-step-local",
       hint: "Test: run locally with every capability stubbed - no real calls.",
     },
     {
-      id: "prod",
-      label: "Prod",
-      // Globe, not the macro's ExternalLink: when the bar degrades to
-      // icon-only (narrow center pane) the icon alone must still say
-      // "the live production surface" - a bare external-link arrow reads
-      // as "some link".
-      icon: "Globe",
-      macro: macroFor("open_prod"),
-      testId: "macro-open_prod",
-      hint: "Open the deployed workflow in the Sapiom dashboard.",
-      needsDeploy: true,
-    },
-    {
       id: "run",
-      label: "Run",
+      label: "Prod Run",
       icon: "Play",
       macro: macroFor("prod_run"),
       testId: "session-step-run",
@@ -152,7 +141,7 @@ export function SessionStepsBar({
             funnelReason ??
             readyReason ??
             (action.macro ? macroDisabledReason(action.macro, workflow, activeSessionId) : null);
-          const a11yLabel = action.id === "prod" && action.macro ? action.macro.label : action.label;
+          const a11yLabel = action.label;
           return (
             <button
               key={action.id}
@@ -165,7 +154,7 @@ export function SessionStepsBar({
               onClick={() => {
                 if (!action.macro) return;
                 onRunMacro(action.macro);
-                if (action.id !== "prod") setPendingId(action.id);
+                setPendingId(action.id);
                 track("macro.invoked", { macroId: action.macro.id });
               }}
             >

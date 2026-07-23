@@ -256,6 +256,20 @@ export function WorkflowActionsHeader({
           Deployed
         </span>
       )}
+      {workflow.definitionId != null && (
+        <a
+          className="status-tag status-tag-action workflow-dashboard-link"
+          data-testid="workflow-dashboard-link"
+          href={`https://app.sapiom.ai/workflows/${workflow.definitionId}`}
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Go to dashboard"
+          data-tooltip="Open this workflow in the Sapiom dashboard"
+        >
+          <Icon name="ExternalLink" size={12} />
+          <span className="workflow-dashboard-link-label">Go to dashboard</span>
+        </a>
+      )}
       <button
         className={"macro-icon-btn canvas-refresh-btn" + (refreshing ? " is-refreshing" : "")}
         aria-label="Re-visualize"
