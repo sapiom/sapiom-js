@@ -54,6 +54,18 @@ describe("renderCanvasDocument", () => {
     expect(html).toContain("bootCanvasNodeClicks");
   });
 
+  it("bridges the harness gesture layer: the board hit-tests sapiom-canvas:pick / :hover", () => {
+    const html = renderCanvasDocument("<p>x</p>");
+    // The gesture layer overlays the iframe and swallows raw clicks, so the
+    // board must answer the forwarded pick/hover points, not just DOM clicks.
+    expect(html).toContain("sapiom-canvas:pick");
+    expect(html).toContain("sapiom-canvas:hover");
+    // Hit-testing the forwarded point is what makes a node still select.
+    expect(html).toContain("elementFromPoint");
+    // Hover answers the hit channel so the gesture layer shows a pointer cursor.
+    expect(html).toContain("sapiom-canvas:hit");
+  });
+
   it("makes canvas nodes read as clickable via cursor: pointer CSS", () => {
     const html = renderCanvasDocument("<p>x</p>");
     expect(html).toContain("cursor: pointer");

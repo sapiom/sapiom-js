@@ -4,32 +4,27 @@
  *
  * Pure and deterministic: no LLM, no I/O, no clock. Every field is derived from
  * the decoded projection, so the same function drives the polling path today and
- * a future WebSocket push (only the data source swaps, never this mapping). Cost
- * and latency are read straight from the projection and rendered statically — the
+ * a future WebSocket push (only the data source swaps, never this mapping).
+ * Latency is read straight from the projection and rendered statically — the
  * LLM is only ever invoked later by an explicit debug-macro press, never to
  * compute what's shown here.
  *
- * Honest absence is preserved end to end: a step with no cost on this read gets
- * no `costUsd` (not `0`), a still-running step gets no `latencyMs`, and a step
- * with no logs gets no `logSlice` — matching the SDK's "null cost is honest
- * absence, never a fabricated $0" contract.
+ * Honest absence is preserved end to end: a still-running step gets no
+ * `latencyMs`, and a step with no logs gets no `logSlice`. The inspector
+ * surfaces logs, latency, and pass/fail only — no cost.
  */
 import { isExecutionTerminal } from "@sapiom/agent-core";
 import type {
-  CostNode,
   ExecutionProjection,
   StepProjection,
 } from "@sapiom/agent-core";
 
 import type { RunView, StepStatus, StepView } from "../shared/types.js";
-
-/**
- * Cap on the characters of a step's executor log buffer surfaced in `logSlice`.
- * The TAIL is kept (most recent lines) because failures surface at the end of a
- * log. This is a payload guard on the poll response; the debug-macro context
- * extractor does the final, smaller trim for prompt injection.
- */
-const LOG_SLICE_MAX = 4000;
+// The log-buffer formatter lives in its own dependency-free module so the
+// local-run mapper (imported by the browser SPA) can share the SAME formatter
+// WITHOUT dragging this file's `@sapiom/agent-core` runtime import — and its
+// `node:fs` reach — into the web bundle.
+import { toLogSlice } from "./render-log-slice.js";
 
 /**
  * Fold the run's lifecycle status into the four states the UI distinguishes.
@@ -65,14 +60,6 @@ function toStepStatus(raw: string): StepStatus {
   return "pending";
 }
 
-/** Captured USD as a number; `undefined` on honest absence (null cost) or an
- *  unparseable amount — never a fabricated `0`. */
-function toCostUsd(cost: CostNode | null): number | undefined {
-  if (!cost) return undefined;
-  const n = Number(cost.capturedUsd);
-  return Number.isFinite(n) ? n : undefined;
-}
-
 /** `finishedAt − startedAt` in ms; `undefined` while still running (no finish)
  *  or when either timestamp is unparseable. A negative delta (clock skew) is
  *  dropped rather than shown as a misleading negative latency. */
@@ -88,37 +75,6 @@ function toLatencyMs(
   return delta >= 0 ? delta : undefined;
 }
 
-/** One executor log entry → a compact line. Accepts the `{ ts, level, msg }`
- *  wire shape (or `message`), a bare string, or anything else (stringified). */
-function formatLogEntry(entry: unknown): string {
-  if (typeof entry === "string") return entry;
-  if (entry !== null && typeof entry === "object") {
-    const e = entry as {
-      ts?: unknown;
-      level?: unknown;
-      msg?: unknown;
-      message?: unknown;
-    };
-    const parts = [e.ts, e.level, e.msg ?? e.message].filter(
-      (p): p is string | number =>
-        typeof p === "string" || typeof p === "number",
-    );
-    if (parts.length > 0) return parts.map(String).join(" ");
-  }
-  return String(entry);
-}
-
-/** Format the executor log buffer into a trimmed, tail-preserving slice, or
- *  `undefined` when there are no usable logs. */
-function toLogSlice(logs: unknown): string | undefined {
-  if (!Array.isArray(logs) || logs.length === 0) return undefined;
-  const text = logs.map(formatLogEntry).join("\n").trim();
-  if (text === "") return undefined;
-  return text.length > LOG_SLICE_MAX
-    ? text.slice(text.length - LOG_SLICE_MAX)
-    : text;
-}
-
 /** Map one projection step to its render view. Optional fields are assigned only
  *  when present so absence stays absent (not `undefined`) in the JSON payload. */
 function toStepView(step: StepProjection): StepView {
@@ -127,13 +83,29 @@ function toStepView(step: StepProjection): StepView {
     name: step.stepName,
     status: toStepStatus(step.status),
   };
-  const costUsd = toCostUsd(step.cost);
-  if (costUsd !== undefined) view.costUsd = costUsd;
   const latencyMs = toLatencyMs(step.startedAt, step.finishedAt);
   if (latencyMs !== undefined) view.latencyMs = latencyMs;
   if (step.error?.message) view.error = step.error.message;
   const logSlice = toLogSlice(step.logs);
   if (logSlice !== undefined) view.logSlice = logSlice;
+  // Real per-step IO for the inspector's "Last run" block. The decoder
+  // collapses an absent input/output to `null` (its absence sentinel), so a
+  // `null` here means "the read carried nothing" — surfaced as ABSENT, never a
+  // fabricated payload. Any non-null value (including `0`, `false`, `""`) is a
+  // real payload and passes through. Capability, not model: these are the
+  // step's own values, with no provider/model surfaced.
+  if (step.input !== null) view.input = step.input;
+  if (step.output !== null) view.output = step.output;
+  // `step.events` are capability execution events forwarded by dispatched
+  // capabilities (e.g. tool_use / thinking / result events from a coding run).
+  // They do NOT represent dotted workflow capability calls (search.webSearch,
+  // memory.append, etc.) with args/results in the StepCall format, so we
+  // cannot map them to StepView.calls without fabricating structure that isn't
+  // there. `calls` is left absent for prod steps. The inspector's
+  // input/output/logs already carry the step-level evidence for prod runs;
+  // per-call detail is a fast-follow that requires a server-side addition to
+  // the projection shape (emitting dotted-capability call records alongside
+  // their args/results at the step level).
   return view;
 }
 

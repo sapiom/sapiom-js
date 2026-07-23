@@ -118,7 +118,7 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
   const executionId = await core.createExecution(
     opts.definition.name,
     opts.definition.entry,
-    opts.input,
+    opts.input ?? {},
     {
       manifest: opts.manifest,
     },

@@ -1,17 +1,21 @@
 /**
- * ImageComposer — wraps the terminal pane with image-attach affordances so a
+ * ImageComposer — wraps the session pane with image-attach affordances so a
  * user can send a screenshot to the agent via file picker, clipboard paste, or
  * drag-and-drop.
  *
- * There is no rich text composer in the harness — the terminal IS the input —
- * so an attached image is relayed the way a CLI agent actually consumes one:
- * the server writes it into the project directory and injects its path into the
- * pty (see POST /api/sessions/:id/image). This component owns only the pre-send
- * UX: a client-side queue with thumbnails and remove-before-send, size/type
- * pre-flight, and the three ingest surfaces. It renders the attach UI only when
- * the active session's harness declares image support (GET /api/harnesses).
+ * There is no rich text pipeline for images in the harness — the terminal IS
+ * the input — so an attached image is relayed the way a CLI agent actually
+ * consumes one: the server writes it into the project directory and injects
+ * its path into the pty (see POST /api/sessions/:id/image). This component
+ * owns only the pre-send UX: a client-side queue with thumbnails and
+ * remove-before-send, size/type pre-flight, and the three ingest surfaces.
+ * It renders the attach UI only when the active session's harness declares
+ * image support (GET /api/harnesses) — against the harness-launch server
+ * (eebb95c), which predates the endpoint, the field is absent and the whole
+ * affordance self-hides. The queue is session-scoped so a paste or drop
+ * always lands on the active session's queue.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, JSX, ReactNode } from "react";
 import {
   ALLOWED_IMAGE_MEDIA_TYPES,
@@ -22,14 +26,22 @@ import {
 import { ApiError, type HarnessApi } from "../lib/api";
 import { Icon } from "./Icon";
 
+/**
+ * Opens the composer's file picker from anywhere inside the wrapped session
+ * pane (the session toolbar's attach button). Null when no ImageComposer wraps the
+ * consumer OR the session's harness lacks image support — consumers hide
+ * their affordance then instead of rendering a dead control.
+ */
+export const ImageAttachContext = createContext<(() => void) | null>(null);
+
 export interface ImageComposerProps {
   sessionId: string;
   /** The active session's harness — gates the attach UI on its image support. */
   harness: HarnessKind;
   api: HarnessApi;
-  /** Push a user-facing message (success + failure), same slot as skills/macros. */
+  /** Push a user-facing message (failures), same slot as skills/macros. */
   showToast: (message: string) => void;
-  /** The terminal pane this composer wraps. */
+  /** The session pane this composer wraps. */
   children: ReactNode;
 }
 
@@ -84,6 +96,8 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
 
   const imageSupported = useMemo(() => {
     if (!entries) return true; // optimistic until the registry loads
+    // No matching registry entry reads as unsupported, so the affordance never
+    // dangles without a route.
     return entries.find((e) => e.id === harness)?.imageInput ?? false;
   }, [entries, harness]);
 
@@ -105,7 +119,7 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
           continue;
         }
         if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
-          showToast(`${file.name || "image"} is ${humanBytes(file.size)} — over the ${humanBytes(MAX_IMAGE_UPLOAD_BYTES)} limit.`);
+          showToast(`${file.name || "image"} is ${humanBytes(file.size)}, over the ${humanBytes(MAX_IMAGE_UPLOAD_BYTES)} limit.`);
           continue;
         }
         try {
@@ -127,8 +141,8 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
   );
 
   // Clipboard paste: only intercept when the clipboard actually carries an
-  // image, so ordinary text paste still flows through to the terminal. Bound to
-  // the window because the focused element is xterm's hidden textarea.
+  // image, so ordinary text paste still flows through to the terminal.
+  // Bound to the window because the focused element is xterm's hidden textarea.
   useEffect(() => {
     if (!imageSupported) return;
     const onPaste = (e: ClipboardEvent): void => {
@@ -143,7 +157,7 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
           if (file) files.push(file);
         }
       }
-      if (files.length === 0) return; // not an image paste — leave it for the terminal
+      if (files.length === 0) return; // not an image paste — leave it for the pane
       e.preventDefault();
       void enqueueFiles(files);
     };
@@ -200,7 +214,11 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
     [enqueueFiles],
   );
 
-  // Harness can't take images — render just the terminal, no attach surface.
+  const openPicker = useCallback((): void => {
+    fileInputRef.current?.click();
+  }, []);
+
+  // Harness can't take images — render just the session pane, no attach surface.
   if (!imageSupported) return <>{children}</>;
 
   return (
@@ -212,7 +230,9 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <div className="image-composer-pane">{children}</div>
+      <ImageAttachContext.Provider value={openPicker}>
+        <div className="image-composer-pane">{children}</div>
+      </ImageAttachContext.Provider>
 
       {dragActive && (
         <div className="image-composer-dropzone" data-testid="image-composer-dropzone">
@@ -221,51 +241,39 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
         </div>
       )}
 
-      <div className="image-composer-bar">
-        <button
-          type="button"
-          className="image-composer-attach btn-ghost"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={sending}
-          data-testid="image-composer-attach"
-          aria-label="Attach an image"
-          title="Attach an image (or paste / drag-drop onto the terminal)"
-        >
-          <Icon name="Paperclip" size={14} />
-          <span>Attach image</span>
-        </button>
-
-        {queued.length > 0 && (
-          <>
-            <ul className="image-composer-thumbs" data-testid="image-composer-thumbs">
-              {queued.map((img) => (
-                <li key={img.id} className="image-composer-thumb" title={`${img.filename} · ${humanBytes(img.bytes)}`}>
-                  <img src={img.dataUrl} alt={img.filename} />
-                  <button
-                    type="button"
-                    className="image-composer-thumb-remove"
-                    onClick={() => removeQueued(img.id)}
-                    disabled={sending}
-                    aria-label={`Remove ${img.filename}`}
-                    data-testid="image-composer-thumb-remove"
-                  >
-                    <Icon name="X" size={11} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <button
-              type="button"
-              className="image-composer-send btn-primary"
-              onClick={() => void sendQueued()}
-              disabled={sending}
-              data-testid="image-composer-send"
-            >
-              {sending ? "Sending…" : `Send ${queued.length} to agent`}
-            </button>
-          </>
-        )}
-      </div>
+      {/* The queue strip appears only once something is queued — paste
+          and drag-drop feed the queue. No standalone attach button. */}
+      {queued.length > 0 && (
+        <div className="image-composer-bar">
+          <ul className="image-composer-thumbs" data-testid="image-composer-thumbs">
+            {queued.map((img) => (
+              <li key={img.id} className="image-composer-thumb" title={`${img.filename} · ${humanBytes(img.bytes)}`}>
+                <img src={img.dataUrl} alt={img.filename} />
+                <button
+                  type="button"
+                  className="image-composer-thumb-remove"
+                  onClick={() => removeQueued(img.id)}
+                  disabled={sending}
+                  aria-label={`Remove ${img.filename}`}
+                  data-tooltip={`Remove ${img.filename}`}
+                  data-testid="image-composer-thumb-remove"
+                >
+                  <Icon name="X" size={11} />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="image-composer-send btn-primary"
+            onClick={() => void sendQueued()}
+            disabled={sending}
+            data-testid="image-composer-send"
+          >
+            {sending ? "Sending…" : `Send ${queued.length} to agent`}
+          </button>
+        </div>
+      )}
 
       <input
         ref={fileInputRef}

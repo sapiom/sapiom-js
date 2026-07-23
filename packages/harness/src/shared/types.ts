@@ -381,46 +381,18 @@ export type BusMessage =
    * on /ws/events, which only the session with an open /ws/terminal socket
    * receives. Drives the SPA's per-tab busy pulse for background sessions.
    */
-  | { type: "session.activity"; harnessSessionId: string; at: string };
-
-// ---------------------------------------------------------------------------
-// Run spend (cost settled after execution, fetched from core surface)
-// ---------------------------------------------------------------------------
-
-/** Per-step cost summary from the spend endpoint. */
-export interface RunStepSpend {
-  name: string;
-  totalUsd: string;
-  entryCount: number;
-}
-
-/** Full spend summary for one execution, keyed by executionId. */
-export interface RunSpend {
-  executionId: string;
-  totalUsd: string;
-  settleState: string;
-  byStep: RunStepSpend[];
-}
-
-/**
- * One billable capability call within a run — the per-call drill-down behind a
- * step's cost ("why is this step costly"). Derived from the transactions
- * endpoint. Deliberately provider-AGNOSTIC: `capability` is a generic label
- * ("LLM", "sandbox", "web search") mapped server-side from the operation, so
- * neither the browser nor this file ever carries the upstream provider/model
- * name. Token counts are intentionally absent — the platform does not record
- * per-call tokens for gateway LLM calls (see SAP ticket for the backend work).
- */
-export interface RunCall {
-  /** Step this call is attributed to (workflowStepName ?? capability op). */
-  stepName: string;
-  /** Provider-agnostic capability label, e.g. "LLM" / "sandbox" / "web search". */
-  capability: string;
-  /** The capability operation, e.g. "generate" / "create" / "execute". */
-  op: string;
-  /** Captured USD for this single call. */
-  usd: string;
-}
+  | { type: "session.activity"; harnessSessionId: string; at: string }
+  /**
+   * Auth state changed — fired after a successful sign-in (`POST
+   * /api/auth/start`) or sign-out (`POST /api/auth/disconnect`). The SPA
+   * should refetch `/api/auth/status` (or `/api/state`) on receipt to update
+   * its auth UI without a full page reload.
+   */
+  | {
+      type: "auth.changed";
+      authenticated: boolean;
+      organizationName: string | null;
+    };
 
 // ---------------------------------------------------------------------------
 // Runtime analytics — live run render state (see core/render-run-state.ts)
@@ -434,6 +406,28 @@ export interface RunCall {
 // polling path today and a future WebSocket push (only the source swaps).
 
 /**
+ * One capability call a step made during the run. Capability-scoped and
+ * provider-agnostic: `capability` is a dotted capability id (e.g.
+ * `web.search`, `models.coding.run`) — never a provider or model name.
+ * `stubUsed` records whether this call was served by a supplied stub instead
+ * of a real capability call, which is the single most load-bearing fact when
+ * explaining a local (offline) run. Optional fields are ABSENT (not null)
+ * when the source does not carry the value — honest absence.
+ */
+export interface StepCall {
+  /** Dotted capability id (provider-agnostic — never a provider/model name). */
+  capability: string;
+  /** True when a supplied stub served this call rather than the real capability. */
+  stubUsed?: boolean;
+  /** The arguments the call was made with, when the source carries them. Any
+   *  JSON shape; ABSENT (not null) otherwise. */
+  args?: unknown;
+  /** The value the call returned — the served stub value for a local run, or
+   *  the capability result for a prod run. ABSENT when the source has no result. */
+  result?: unknown;
+}
+
+/**
  * A step's render status, folded from the raw projection step status into the
  * four states the canvas draws. `cancelled`/`failed` both fold to `failed`
  * (a cancelled step did not pass — mirrors run-local.ts); anything not yet
@@ -442,17 +436,15 @@ export interface RunCall {
 export type StepStatus = "pending" | "running" | "passed" | "failed";
 
 /** One step as the canvas renders it — status plus the deterministically
- *  derived cost/latency/error/log slice. Optional fields are ABSENT (not
+ *  derived latency/error/log slice. Optional fields are ABSENT (not
  *  `undefined`/`0`) when the decoded projection carries no value — honest
- *  absence, matching the SDK's cost-is-nullable philosophy. */
+ *  absence. The inspector surfaces logs, latency, and pass/fail only. */
 export interface StepView {
   /** Stable id for keyed rendering — the OTel span id, else a step-order key. */
   id: string;
   /** Human step label (the projection's stepName). */
   name: string;
   status: StepStatus;
-  /** Captured USD for this step; absent when the read carries no cost. */
-  costUsd?: number;
   /** finishedAt − startedAt in ms; absent while running or on bad timestamps. */
   latencyMs?: number;
   /** Terminal error message; present only for a failed step that recorded one. */
@@ -460,14 +452,61 @@ export interface StepView {
   /** Tail-preserving, character-capped executor log text — the debug-macro
    *  context source (trimmed further before injection). Absent when no logs. */
   logSlice?: string;
+  /** The resolved input the step actually ran on, when the source carries it
+   *  (populated by local stub runs today; a production run projection may
+   *  expose it in future). Any JSON shape. ABSENT — never `null`/`{}` — when
+   *  the source has no per-step input, so the inspector shows nothing rather
+   *  than fabricating a payload. */
+  input?: unknown;
+  /** The value the step produced, on the same honest-absence terms as
+   *  {@link StepView.input}: present only when the source captured a real
+   *  output, absent otherwise (a still-running or output-less step shows no
+   *  Output block). Any JSON shape. */
+  output?: unknown;
+  /** The capability calls this step made during the run, in call order. Each
+   *  entry is capability-scoped and provider-agnostic. Absent (never `[]`)
+   *  when the source records no call information for this step — honest
+   *  absence, mirroring `input`/`output`. A local run populates this from
+   *  the stub client's per-call sink; a prod run leaves it absent when the
+   *  step projection does not carry dotted-capability call records. */
+  calls?: StepCall[];
+}
+
+/** A supplied stub key that no capability call ever matched in its step — almost
+ *  always a typo or the wrong path form. Surfaced read-only in the inspector so a
+ *  no-op mock (a stub that silently served nothing) is visible instead of a
+ *  mystery. Mirrors agent-core's `UnusedStub` (consumed as-is). */
+export interface UnusedStubView {
+  step: string;
+  key: string;
 }
 
 /** A whole run as the canvas renders it. `status` is the run lifecycle folded
- *  to the four states the UI distinguishes; `steps` is order-preserving. */
+ *  to the four states the UI distinguishes; `steps` is order-preserving.
+ *
+ *  Stub fields are RUN-LEVEL and honest-absence: they are set only by
+ *  {@link renderLocalRun} for an offline stub run (prod runs from renderRunState
+ *  never carry them), and only when they carry real signal. A local run is
+ *  stub-served by construction — every `ctx.sapiom.*` call resolves from a stub —
+ *  so `stubbed` is the honest per-run truth the inspector marks each executed
+ *  step with (agent-core records no per-CALL stub attribution, so the chip lives
+ *  at the granularity the trace actually supports). `unusedStubs`/`stubWarnings`
+ *  come from the run's terminal NDJSON summary and are ABSENT (not `[]`) when
+ *  empty, so the read-only notice renders nothing when there is nothing wrong. */
 export interface RunView {
   executionId: string;
   status: "running" | "completed" | "failed" | "cancelled";
   steps: StepView[];
+  /** True when this run was served entirely by stub capabilities (an offline
+   *  local run). Absent for real (prod / local-backend) runs. Drives the
+   *  per-step "stubbed" chip. */
+  stubbed?: boolean;
+  /** Supplied stub keys that matched no capability call this run (likely a typo
+   *  / wrong path). Absent when none — never an empty array. */
+  unusedStubs?: UnusedStubView[];
+  /** Human-readable warnings about stub values that matched a key but had the
+   *  wrong shape (the silent-wrong-data trap). Absent when none. */
+  stubWarnings?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -515,8 +554,6 @@ export type UiEventName =
   | "visualize.triggered"
   | "consent.changed"
   | "session.created"
-  | "skill.viewed"
-  | "skill.used"
   | "mcp.install";
 
 export interface UiTrackRequest {
@@ -545,8 +582,6 @@ export type AnalyticsEventType =
   | "visualize.triggered"
   | "consent.changed"
   | "session.created"
-  | "skill.viewed"
-  | "skill.used"
   | "mcp.install";
 
 /**

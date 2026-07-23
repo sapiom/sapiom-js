@@ -24,7 +24,7 @@ export function TelemetryNotice({ onDismiss, onOpenSettings }: TelemetryNoticePr
     <div className="telemetry-notice" role="status" data-testid="telemetry-notice">
       <div className="telemetry-notice-body">
         <p className="telemetry-notice-text">
-          Analytics are <strong>on by default</strong> — usage events (including prompts and tool calls)
+          Analytics are <strong>on by default</strong>: usage events (including prompts and tool calls)
           are collected locally and sent to Sapiom to help improve the product. Change this any time in{" "}
           <button
             className="telemetry-notice-settings-link"

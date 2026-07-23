@@ -22,6 +22,34 @@ export function resolveAgentsBaseUrl(): string {
   );
 }
 
+/**
+ * Resolve the CORE surface base URL (`api.<env>`), distinct from the agents
+ * host (`tools.<env>`) resolved above. A run lives in the agents env, and any
+ * core-surface call for that run must target the MATCHING core env — otherwise
+ * a prod run queried against dev 401s. So we DERIVE the core host from the
+ * agents host (`tools.<env>` → `api.<env>`) rather than reading
+ * `SAPIOM_API_URL`, which in some setups points at a different env than the
+ * agents surface. An explicit `SAPIOM_CORE_URL` still wins for full control.
+ *
+ * Co-located with {@link resolveAgentsBaseUrl} (its sole dependency) so the two
+ * env-precedence helpers live together.
+ */
+export function resolveCoreBaseUrl(): string {
+  const override = process.env.SAPIOM_CORE_URL;
+  if (override) return override;
+  const agents = resolveAgentsBaseUrl();
+  try {
+    const url = new URL(agents);
+    if (url.hostname.startsWith("tools.")) {
+      url.hostname = `api.${url.hostname.slice("tools.".length)}`;
+      return url.origin;
+    }
+  } catch {
+    // Unparseable agents URL — fall through to the prod default.
+  }
+  return "https://api.sapiom.ai";
+}
+
 export interface DefinitionSlugResolver {
   resolve(definitionId: string): Promise<string | null>;
 }

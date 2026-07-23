@@ -1,18 +1,92 @@
 /**
- * Builds a compact, readable context block for a step — consumed by the
- * step-detail panel's debug macros and free-form ask. Pure and deterministic:
- * no I/O, no side effects. The block is prepended to whatever question a macro
- * or the user asks, so the agent gets the step's full context alongside the
- * question in a single injection.
+ * extractStepLinks — scan a step's output, log slice, and capability-call
+ * results for http(s) URLs, returning deduped, order-preserving entries with
+ * trailing punctuation stripped.
  *
- * Log slice is tail-kept and trimmed to LOG_CAP characters: when a log is long,
- * the most recent output (the tail) is the most relevant for debugging.
+ * Each entry is typed as either an "image" (the URL path ends with a common
+ * image extension) or "other" (all other URLs). Image entries render as
+ * clickable thumbnails; other entries render as labelled anchor links.
+ *
+ * Pure and unit-testable: no I/O, no side effects. The scanner serialises
+ * each source value to a string (same as formatValue below) so it can search
+ * for URLs embedded inside JSON objects without the caller pre-serialising
+ * anything. Trailing sentence punctuation (`.,;:)]}`) is stripped so a URL
+ * ending a sentence does not carry the closing character into the href.
+ *
+ * Provider rule: the function never inspects, names, or modifies the
+ * capability id — it only looks at the *result* values.
  */
-import type { RunCall, RunStepSpend, StepView } from "@shared/types";
-import { formatUsd } from "./format-usd";
 
-/** Maximum characters of log slice to include in the context block. */
+/**
+ * Debug-macro context builder for the run-inspector's step detail.
+ *
+ * The Studio's Debug / Explain / "why is this step slow" macros inject a
+ * prompt about the selected step into the active coding-agent session. Left to
+ * the step *name* alone, the agent has to re-derive everything ("what did this
+ * step actually receive, what did it return, what did it call?"). This module
+ * folds the rich per-step evidence the run trace exposes — the step's real
+ * input and output, the capability calls it made, and which of those were
+ * served by a stub — into a compact, deterministic context block that the
+ * macro prepends to its question. So "why did this step do X" carries the real
+ * evidence, not just a label.
+ *
+ * Pure and deterministic: no I/O, no side effects, no timestamps added here —
+ * the same inputs always produce the same block, which is what makes it
+ * unit- and mutation-testable in isolation. Callers append their own question.
+ *
+ * Provider rule: this block names **capabilities** (dotted ids like
+ * `web.search`, `records.read`), never the upstream provider or model behind a
+ * capability. The run trace and the graph are already capability-scoped; this
+ * module never reaches for a model name.
+ */
+import type { StepCall, StepView } from "@shared/types";
+
+/** Maximum characters of the log slice to include (tail-kept — see below). */
 const LOG_CAP = 3000;
+
+/** Maximum characters a single serialized input/output value may contribute.
+ *  Step payloads can be large; the agent needs the shape and the leading
+ *  content, not a multi-megabyte dump pasted into its prompt. */
+const VALUE_CAP = 2000;
+
+/**
+ * The rich per-step evidence the run trace exposes, in the shape the debug
+ * context consumes. A run-trace mapper (local-stub NDJSON → inspector, or the
+ * prod run-state read) populates it; every field is optional so the builder
+ * degrades honestly when a source carries no value (an offline stub run has
+ * input/output/calls; a prod read today may carry none of them).
+ *
+ * Mirrors the real per-step trace record the local runner emits — `input`,
+ * `output`, and the calls made — plus the run-level stub bookkeeping
+ * (`unusedStubs`, `stubWarnings`) that only a local (stub) run produces. It is
+ * intentionally NOT the agent-core type itself: the browser bundle does not
+ * import agent-core, so the mapper adapts that record into this
+ * transport-agnostic view.
+ */
+export interface StepTrace {
+  /** The value the step received. Absent when the trace carries no input. */
+  input?: unknown;
+  /** The value the step returned. Absent while running or when it threw. */
+  output?: unknown;
+  /** The capability calls the step made, in call order. Absent (not `[]`) when
+   *  the trace records no call information for this step. */
+  calls?: StepCall[];
+  /** Supplied stub keys that matched no capability call in this step — almost
+   *  always a typo or the wrong path form, so the mock silently did nothing.
+   *  Surfaced so "why did the stub not take effect" is answerable. */
+  unusedStubs?: string[];
+  /** Warnings about stub values that matched a key but had the wrong shape for
+   *  the capability (the silent-wrong-data trap). */
+  stubWarnings?: string[];
+}
+
+/** The step's declared capabilities, when the caller has the graph node for it
+ *  but no runtime call trace — used only as a fallback source for the
+ *  "capabilities involved" line so a pre-run or graph-only debug ask is not
+ *  silent about what the step is built to call. Provider-agnostic dotted ids. */
+export interface StepGraphFacts {
+  capabilities?: string[];
+}
 
 /**
  * Format latency for display: under 1 000 ms → "716ms", 1 000 ms+ → "1.4s".
@@ -23,17 +97,61 @@ export function formatLatency(ms: number): string {
 }
 
 /**
- * Build a compact context block describing a step's current state.
- * The block is always deterministic for a given StepView — no randomness,
- * no timestamps added here. Callers append their own question.
+ * Serialize an arbitrary step input/output value into a compact, readable
+ * one-or-more-line string, capped at {@link VALUE_CAP} characters. Objects and
+ * arrays are pretty-printed as JSON (2-space) so the agent sees their shape;
+ * strings pass through verbatim; anything JSON can't represent (a cycle, a
+ * bigint) falls back to `String(value)` so the builder never throws. When the
+ * result exceeds the cap it is head-kept (the shape and leading content matter
+ * most for a value) with an explicit truncation marker.
+ */
+function formatValue(value: unknown): string {
+  let text: string;
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2) ?? String(value);
+    } catch {
+      // Circular structure, bigint, or any other JSON-hostile value.
+      text = String(value);
+    }
+  }
+  if (text.length > VALUE_CAP) {
+    return `${text.slice(0, VALUE_CAP)}\n… (truncated, ${text.length} chars total)`;
+  }
+  return text;
+}
+
+/**
+ * Build a compact context block describing a step's current state plus the rich
+ * per-step evidence the run trace exposes.
  *
- * When `spend` is provided, a cost line is included so the agent's debug
- * context includes the step's billable cost alongside its logs and latency.
+ * The block is always deterministic for the same inputs — no randomness, no
+ * timestamps added here. Callers append their own question.
+ *
+ * Sections, each emitted only when it has real content (honest absence — no
+ * empty headers, no fabricated placeholders):
+ *   - Step / Status / Latency / Error  — from the {@link StepView}.
+ *   - Input / Output                   — from `trace` (the step's real values).
+ *   - Capabilities called              — from `trace.calls` (with a "stubbed"
+ *                                        marker per call); an empty trace reads
+ *                                        "none", and only a MISSING trace falls
+ *                                        back to declared `capabilities`.
+ *   - Unused stubs / Stub warnings     — run-level stub bookkeeping from a
+ *                                        local (offline) run.
+ *   - Logs                             — the step's tail-kept log slice.
+ *
+ * @param step  the step's render view (name, status, latency, error, logs).
+ * @param trace the rich per-step evidence (input/output/calls/stub info), when
+ *              a run trace is available. Omit for a graph-only / pre-run ask.
+ * @param facts the step's declared graph facts (capabilities), used only as a
+ *              fallback for the capabilities line when `trace.calls` is absent.
  */
 export function extractStepContext(
   step: StepView,
-  spend?: RunStepSpend,
-  calls?: RunCall[],
+  trace?: StepTrace,
+  facts?: StepGraphFacts,
 ): string {
   const lines: string[] = [];
 
@@ -44,31 +162,67 @@ export function extractStepContext(
     lines.push(`Latency: ${formatLatency(step.latencyMs)}`);
   }
 
-  if (spend != null) {
-    lines.push(
-      `Cost: ${formatUsd(spend.totalUsd)} across ${spend.entryCount} billable call(s)`,
-    );
-  }
-
-  // Per-call cost breakdown — the "why is this costly" detail. Each line is one
-  // billable capability call (provider-agnostic label + operation + USD). Token
-  // counts are intentionally not shown: the platform does not record per-call
-  // tokens for gateway LLM calls.
-  if (calls != null && calls.length > 0) {
-    lines.push("Cost breakdown (per call):");
-    for (const c of calls) {
-      lines.push(`  - ${c.capability} (${c.op}): ${formatUsd(c.usd)}`);
-    }
-  }
-
   if (step.status === "failed" && step.error) {
     lines.push(`Error: ${step.error}`);
   }
 
+  // Real per-step input/output — the "what did this step actually receive and
+  // return" evidence. Only present when the trace carries the value.
+  if (trace?.input !== undefined) {
+    lines.push(`\nInput:\n${formatValue(trace.input)}`);
+  }
+  if (trace?.output !== undefined) {
+    lines.push(`\nOutput:\n${formatValue(trace.output)}`);
+  }
+
+  // Capabilities the step called. The three states are honestly distinct:
+  //   - calls present + non-empty → the truth of what actually ran, each
+  //     annotated with whether a stub served it.
+  //   - calls present but EMPTY ([]) → the step ran and made zero capability
+  //     calls. That is real evidence ("it never called out"), NOT a missing
+  //     trace, so it must not borrow the declared-capabilities fallback.
+  //   - calls ABSENT (undefined) → there is no call trace at all (a graph-only
+  //     / pre-run ask), so fall back to the step's DECLARED capabilities to
+  //     say what it is built to call rather than stay silent.
+  // Capability ids only, never a model name.
+  const runtimeCalls = trace?.calls;
+  if (runtimeCalls !== undefined) {
+    if (runtimeCalls.length > 0) {
+      lines.push("\nCapabilities called:");
+      for (const call of runtimeCalls) {
+        const marker = call.stubUsed ? " (stubbed)" : "";
+        lines.push(`  - ${call.capability}${marker}`);
+      }
+    } else {
+      lines.push("\nCapabilities called: none (the step made zero capability calls).");
+    }
+  } else if (facts?.capabilities && facts.capabilities.length > 0) {
+    lines.push("\nCapabilities declared (no call trace):");
+    for (const capability of facts.capabilities) {
+      lines.push(`  - ${capability}`);
+    }
+  }
+
+  // Stub bookkeeping from a local (offline) run: a supplied stub that matched
+  // nothing (silent no-op) or matched with the wrong shape (silent wrong data)
+  // are the two traps a debug ask most needs surfaced.
+  if (trace?.unusedStubs && trace.unusedStubs.length > 0) {
+    lines.push("\nUnused stubs (supplied but matched no call):");
+    for (const key of trace.unusedStubs) {
+      lines.push(`  - ${key}`);
+    }
+  }
+  if (trace?.stubWarnings && trace.stubWarnings.length > 0) {
+    lines.push("\nStub warnings:");
+    for (const warning of trace.stubWarnings) {
+      lines.push(`  - ${warning}`);
+    }
+  }
+
   if (step.logSlice) {
     const raw = step.logSlice.trimEnd();
-    // Tail-keep: if the slice exceeds the cap, take the last LOG_CAP chars
-    // so the most recent output (most useful for debugging) is always present.
+    // Tail-keep: if the slice exceeds the cap, take the last LOG_CAP chars so
+    // the most recent output (most useful for debugging) is always present.
     const trimmed =
       raw.length > LOG_CAP ? raw.slice(raw.length - LOG_CAP) : raw;
     lines.push(`\nLogs:\n${trimmed}`);
@@ -77,24 +231,89 @@ export function extractStepContext(
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// extractStepLinks — URL extraction from step output / logs / call results
+// ---------------------------------------------------------------------------
+
+/** One extracted URL with its classification. */
+export interface StepLink {
+  /** The raw URL (trailing punctuation already stripped). */
+  url: string;
+  /** "image" when the URL path ends with a common raster/vector image
+   *  extension; "other" for all other URLs. */
+  kind: "image" | "other";
+}
+
+/** Common image extensions recognised for thumbnail rendering. */
+const IMAGE_EXTS = /\.(png|jpg|jpeg|webp|gif|svg)($|\?)/i;
+
+/** URL pattern — matches http:// and https:// URLs. The boundary after the
+ *  URL stops on whitespace or a trailing sentence-punctuation character.
+ *  Trailing punctuation (`.,;:)]}`) is stripped in a post-pass rather than
+ *  at the regex boundary so multi-character suffixes like ")." work. */
+const URL_RE = /https?:\/\/[^\s"'<>`\])\]]+/gi;
+
+/** Characters we strip from the end of a matched URL — sentence terminators
+ *  and closing delimiters that appear after a URL in prose / JSON strings. */
+const TRAILING_PUNCT = /[.,;:)\]}\s]+$/;
+
+/** Serialise an arbitrary value so the URL scanner can search inside objects
+ *  and arrays. Strings are returned verbatim; everything else is JSON-encoded
+ *  (falling back to String() on a non-serialisable value). */
+function serializeForScan(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 /**
- * Extract the distinct http(s) URLs a step surfaced in its logs — e.g. a
- * preview/deploy URL or a file-storage download link — so the step-detail panel
- * can render them as clickable links. Order-preserving + deduped; trailing
- * sentence/JSON punctuation is stripped so a URL logged inside `{"url":"…"}` or
- * a sentence still opens cleanly.
+ * Scan the step's output, log slice, and capability-call results for
+ * http(s) URLs, returning deduped, order-preserving entries. Trailing
+ * sentence punctuation is stripped from each URL. Each entry is typed as
+ * "image" or "other" based on the URL path suffix.
+ *
+ * Sources scanned IN ORDER (duplicates removed across all sources):
+ *   1. `step.output` (serialised)
+ *   2. `step.logSlice`
+ *   3. Each `step.calls[].result` (serialised per call, in call order)
+ *
+ * Pure: no I/O.
  */
-export function extractStepLinks(step: StepView): string[] {
-  const matches =
-    (step.logSlice ?? "").match(/https?:\/\/[^\s"'<>)\]}]+/g) ?? [];
+export function extractStepLinks(step: {
+  output?: unknown;
+  logSlice?: string;
+  calls?: Array<{ result?: unknown }>;
+}): StepLink[] {
   const seen = new Set<string>();
-  const urls: string[] = [];
-  for (const match of matches) {
-    const url = match.replace(/[.,;:!?]+$/, "");
-    if (url && !seen.has(url)) {
+  const results: StepLink[] = [];
+
+  const addFrom = (text: string): void => {
+    const matches = text.matchAll(URL_RE);
+    for (const [raw] of matches) {
+      const url = raw.replace(TRAILING_PUNCT, "");
+      if (!url || seen.has(url)) continue;
       seen.add(url);
-      urls.push(url);
+      const kind: "image" | "other" = IMAGE_EXTS.test(url) ? "image" : "other";
+      results.push({ url, kind });
+    }
+  };
+
+  if (step.output !== undefined) {
+    addFrom(serializeForScan(step.output));
+  }
+  if (step.logSlice) {
+    addFrom(step.logSlice);
+  }
+  if (step.calls) {
+    for (const call of step.calls) {
+      if (call.result !== undefined) {
+        addFrom(serializeForScan(call.result));
+      }
     }
   }
-  return urls;
+
+  return results;
 }

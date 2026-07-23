@@ -102,8 +102,6 @@ const UI_EVENT_NAMES: readonly UiEventName[] = [
   "visualize.triggered",
   "consent.changed",
   "session.created",
-  "skill.viewed",
-  "skill.used",
   "mcp.install",
 ];
 

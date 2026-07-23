@@ -95,64 +95,6 @@ describe("renderRunState — step id + name", () => {
   });
 });
 
-describe("renderRunState — cost", () => {
-  it("surfaces CAPTURED usd as a number (not authorized)", () => {
-    const view = render({
-      id: "e1",
-      status: "completed",
-      steps: [
-        step({
-          cost: {
-            authorizedUsd: "9.99",
-            capturedUsd: "1.20",
-            settleState: "final",
-          },
-        }),
-      ],
-    });
-    expect(view.steps[0].costUsd).toBe(1.2);
-  });
-
-  it("omits costUsd entirely on honest absence (no cost on the read)", () => {
-    const view = render({ id: "e1", status: "completed", steps: [step({})] });
-    expect(view.steps[0]).not.toHaveProperty("costUsd");
-  });
-
-  it("omits costUsd when the captured amount is unparseable", () => {
-    const view = render({
-      id: "e1",
-      status: "completed",
-      steps: [
-        step({
-          cost: {
-            authorizedUsd: "0",
-            capturedUsd: "n/a",
-            settleState: "final",
-          },
-        }),
-      ],
-    });
-    expect(view.steps[0]).not.toHaveProperty("costUsd");
-  });
-
-  it("keeps a genuine zero captured cost as 0 (not absent)", () => {
-    const view = render({
-      id: "e1",
-      status: "completed",
-      steps: [
-        step({
-          cost: {
-            authorizedUsd: "1.00",
-            capturedUsd: "0",
-            settleState: "pending",
-          },
-        }),
-      ],
-    });
-    expect(view.steps[0].costUsd).toBe(0);
-  });
-});
-
 describe("renderRunState — latency", () => {
   it("computes finishedAt − startedAt in ms", () => {
     const view = render({
@@ -259,6 +201,19 @@ describe("renderRunState — log slice", () => {
     expect(view.steps[0].logSlice).toBe("t0 info start\nt1 error kaboom");
   });
 
+  it("formats numeric log fields (e.g. a millisecond ts) into the line", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [
+        step({ logs: [{ ts: 1700000000000, level: "info", msg: "boot" }] }),
+      ],
+    });
+    // A numeric field (here a ms epoch) is kept and stringified — not dropped —
+    // so the whole `{ ts, level, msg }` line survives intact.
+    expect(view.steps[0].logSlice).toBe("1700000000000 info boot");
+  });
+
   it("accepts bare-string log entries", () => {
     const view = render({
       id: "e1",
@@ -300,6 +255,105 @@ describe("renderRunState — log slice", () => {
   });
 });
 
+describe("renderRunState — per-step input/output", () => {
+  it("surfaces a real per-step input", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ input: { topic: "otters" } })],
+    });
+    expect(view.steps[0].input).toEqual({ topic: "otters" });
+  });
+
+  it("surfaces a real per-step output", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ output: { facts: 3 } })],
+    });
+    expect(view.steps[0].output).toEqual({ facts: 3 });
+  });
+
+  it("omits input on honest absence (the read carried none → decoded null)", () => {
+    // decodeStep collapses a missing input to null; null is the absence
+    // sentinel and must render as ABSENT, not a fabricated `null` payload.
+    const view = render({ id: "e1", status: "completed", steps: [step({})] });
+    expect(view.steps[0]).not.toHaveProperty("input");
+  });
+
+  it("omits output on honest absence (decoded null)", () => {
+    const view = render({ id: "e1", status: "completed", steps: [step({})] });
+    expect(view.steps[0]).not.toHaveProperty("output");
+  });
+
+  it("keeps a falsy-but-real input (0) rather than dropping it", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ input: 0 })],
+    });
+    expect(view.steps[0].input).toBe(0);
+  });
+
+  it("keeps a falsy-but-real output (false) rather than dropping it", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ output: false })],
+    });
+    expect(view.steps[0].output).toBe(false);
+  });
+});
+
+describe("renderRunState — calls (prod steps)", () => {
+  // The step projection carries `events` (capability execution events forwarded
+  // by dispatched capabilities: tool_use/thinking/result from a coding run).
+  // These are NOT dotted workflow capability calls (search.webSearch,
+  // memory.append, etc.) with args/results in the StepCall format — they are
+  // execution-level trace events from the underlying capability engine. Mapping
+  // them to StepCall would fabricate structure that isn't there; `calls` is
+  // left absent for prod steps until the server-side projection adds explicit
+  // per-call records.
+  it("omits calls for a prod step with no events (honest absence)", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ events: [] })],
+    });
+    expect(view.steps[0]).not.toHaveProperty("calls");
+  });
+
+  it("omits calls for a prod step even when events are present (events are not capability calls)", () => {
+    // Events are execution-level trace events (tool_use, thinking, result) from
+    // dispatched capabilities, not dotted capability calls with args/results.
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [
+        step({
+          events: [
+            {
+              sourceId: "run-123",
+              sequence: 1,
+              kind: "tool_use",
+              payload: { tool: "bash", input: "ls" },
+              eventTs: "2026-01-01T00:00:01.000Z",
+            },
+            {
+              sourceId: "run-123",
+              sequence: 2,
+              kind: "result",
+              payload: { content: "file.ts" },
+              eventTs: "2026-01-01T00:00:02.000Z",
+            },
+          ],
+        }),
+      ],
+    });
+    expect(view.steps[0]).not.toHaveProperty("calls");
+  });
+});
+
 describe("renderRunState — whole run", () => {
   it("preserves step order", () => {
     const view = render({
@@ -336,7 +390,7 @@ describe("renderRunState — whole run", () => {
     expect(view.steps[0]).toEqual({ id: "s1", name: "s", status: "running" });
   });
 
-  it("maps a realistic cost-bearing completed run end to end", () => {
+  it("maps a realistic completed run end to end", () => {
     const view = render({
       id: "exec_0001",
       status: "completed",
@@ -349,11 +403,6 @@ describe("renderRunState — whole run", () => {
           spanId: "span_0001",
           startedAt: "2026-01-01T00:00:00.000Z",
           finishedAt: "2026-01-01T00:00:45.000Z",
-          cost: {
-            authorizedUsd: "0.50",
-            capturedUsd: "0.50",
-            settleState: "final",
-          },
         },
       ],
     });
@@ -365,7 +414,6 @@ describe("renderRunState — whole run", () => {
           id: "span_0001",
           name: "gather",
           status: "passed",
-          costUsd: 0.5,
           latencyMs: 45_000,
         },
       ],

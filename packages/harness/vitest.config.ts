@@ -13,9 +13,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
-      // Mirrors the "@shared/*" path alias in web/tsconfig.json so that web
-      // unit tests can import types from the shared contract without a server.
-      "@shared": fileURLToPath(new URL("src/shared", import.meta.url)),
+      // Resolve "@shared/types" to the package's canonical contract so web
+      // unit tests and server tests always build against the same source of
+      // truth. Mirrors the alias in web/vite.config.ts.
+      "@shared/types": fileURLToPath(new URL("src/shared/types.ts", import.meta.url)),
     },
   },
   test: {

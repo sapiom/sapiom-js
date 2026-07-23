@@ -4,14 +4,24 @@
  * target" matches, favoring contiguous runs and matches near the start.
  * Returns null when the query isn't a subsequence of the target at all.
  */
-export function fuzzyScore(query: string, target: string): number | null {
-  if (!query) return 0;
+
+export interface FuzzyMatch {
+  score: number;
+  /** Target indices the query characters landed on — the highlight spans. */
+  indices: number[];
+}
+
+/** Full match info (score + matched character positions) — the palette
+ *  bolds the matched characters, so it needs the indices, not just a rank. */
+export function fuzzyMatch(query: string, target: string): FuzzyMatch | null {
+  if (!query) return { score: 0, indices: [] };
   const q = query.toLowerCase();
   const t = target.toLowerCase();
 
   let score = 0;
   let targetIndex = 0;
   let consecutiveRun = 0;
+  const indices: number[] = [];
 
   for (let i = 0; i < q.length; i++) {
     const char = q[i];
@@ -23,8 +33,13 @@ export function fuzzyScore(query: string, target: string): number | null {
     score += consecutiveRun * 3; // reward contiguous runs
     if (foundAt === 0) score += 5; // reward matching right at the start
 
+    indices.push(foundAt);
     targetIndex = foundAt + 1;
   }
 
-  return score;
+  return { score, indices };
+}
+
+export function fuzzyScore(query: string, target: string): number | null {
+  return fuzzyMatch(query, target)?.score ?? null;
 }

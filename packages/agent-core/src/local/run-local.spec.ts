@@ -568,4 +568,41 @@ describe("runLocal", () => {
     expect(result.outcome).toBe("failed");
     expect(runs).toBe(2);
   });
+
+  // Prod parity: the server-side run defaults an absent input to {} (run.ts:63
+  // `const { definitionId, input = {} } = opts`). Local must match — an absent
+  // input must NOT reach the first step as undefined. A step that reads
+  // `input.topic?.trim()` would throw `Cannot read properties of undefined
+  // (reading 'topic')` if input is undefined.
+  it("defaults an absent input to {} so the first step never receives undefined", async () => {
+    let capturedInput: unknown;
+    const entry = defineStep({
+      name: "entry",
+      next: [],
+      terminal: true,
+      async run(input: { topic?: string } | undefined) {
+        capturedInput = input;
+        // mirrors the real failure mode: reading a property of what could be
+        // undefined if the default is missing
+        const trimmed = (input as { topic?: string })?.topic?.trim() ?? "(none)";
+        return terminate({ trimmed });
+      },
+    });
+    const def = defineAgent({
+      name: "no-input",
+      entry: "entry",
+      steps: { entry },
+    });
+
+    // NOTE: `input` is intentionally omitted — this is the scenario that
+    // previously crashed (undefined → Cannot read properties of undefined).
+    const result = await runLocal({
+      definition: def,
+      manifest: manifestFor(def),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(capturedInput).toEqual({});
+    expect(result.output).toEqual({ trimmed: "(none)" });
+  });
 });

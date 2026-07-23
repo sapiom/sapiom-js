@@ -5,7 +5,7 @@
  */
 import type { BusMessage } from "@shared/types";
 
-import { getBootToken, isMockMode } from "./api";
+import { DEMO_SESSION_ID, getBootToken, isDemoSeedEnabled, isMockMode } from "./api";
 import { MOCK_ACTIVITY_SESSION_ID } from "./mock-data";
 
 export type BusListener = (message: BusMessage) => void;
@@ -15,9 +15,25 @@ const RECONNECT_DELAY_MS = 2000;
  *  see `subscribeEvents`'s mock branch. Long enough that the tab strip has
  *  already rendered idle before the pulse appears. */
 const MOCK_ACTIVITY_DELAY_MS = 1200;
+/** Delay before the one-shot demo `execution.started` fires — long enough that
+ *  the chat pane has mounted (so its run-receipt logic seeds an empty
+ *  baseline and the completed run lands a fresh receipt), and short enough to
+ *  read as "on load". The executionId marks a prod run (see api.ts). */
+const DEMO_RUN_DELAY_MS = 700;
+const DEMO_EXECUTION_ID = "exec-leasing-prod-001";
 
 const mockListeners = new Set<BusListener>();
 let mockActivitySimulated = false;
+let demoRunSimulated = false;
+
+/**
+ * Mock mode only: lets other mock modules (api.ts's MockApi) publish a bus
+ * message to subscribers — e.g. the deterministic canvas.reload the demo
+ * Visualize flow fires. No-op with no listeners; never used in real mode.
+ */
+export function publishMockBusMessage(message: BusMessage): void {
+  mockListeners.forEach((listener) => listener(message));
+}
 
 /**
  * Test-only escape hatch, mock mode only: lets Playwright simulate a bus
@@ -55,6 +71,24 @@ export function subscribeEvents(onMessage: BusListener): () => void {
           }),
         );
       }, MOCK_ACTIVITY_DELAY_MS);
+    }
+    // Demo end-state: announce one completed prod run for the boot session, so
+    // the Steps overlay and the chat run receipt both populate on load from
+    // the authored run-state — the run pipeline the real server drives via
+    // ExecutionDetector, minus the server. Off under ?seed=0 (mechanics
+    // tests) and the fresh-install state (no boot session).
+    if (!demoRunSimulated && isDemoSeedEnabled()) {
+      demoRunSimulated = true;
+      setTimeout(() => {
+        mockListeners.forEach((listener) =>
+          listener({
+            type: "execution.started",
+            harnessSessionId: DEMO_SESSION_ID,
+            executionId: DEMO_EXECUTION_ID,
+            target: "prod",
+          }),
+        );
+      }, DEMO_RUN_DELAY_MS);
     }
     return () => mockListeners.delete(onMessage);
   }
