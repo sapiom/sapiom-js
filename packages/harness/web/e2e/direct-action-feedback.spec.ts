@@ -93,8 +93,12 @@ test.describe("Fix 2 — pending ring clears on terminal outcomes", () => {
     const localBtn = page.getByTestId("session-step-local");
     await expect(localBtn).toBeEnabled();
 
+    // Clicking Local Run opens the run-input dialog; confirm and run.
     await localBtn.click();
-    // Ring appears immediately (React boolean → "true").
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.getByTestId("run-input-submit").click();
+
+    // Ring appears once the run fires (after dialog confirm, React boolean → "true").
     await expect(localBtn).toHaveAttribute("data-pending", "true");
 
     // The mock local run streams 3 step traces (each ~140ms) + a summary.

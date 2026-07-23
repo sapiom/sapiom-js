@@ -62,6 +62,13 @@ interface CanvasPaneProps {
    *  navigating to a launched workflow is an explicit act on it, so it
    *  rebinds, same as running a macro against it. */
   onOpenWorkflow: (path: string) => void;
+  /**
+   * Called whenever a new canvas graph is posted for the bound workflow.
+   * App.tsx lifts this to maintain a per-workflow graph cache so the
+   * run-input dialog can prefill a skeleton from the entry step's fields.
+   * Called with `null` when the document is invalidated (session swap, reload).
+   */
+  onGraphChange?: (graph: import("../lib/canvas-graph").CanvasGraph | null) => void;
 }
 
 export function CanvasPane({
@@ -84,6 +91,7 @@ export function CanvasPane({
   onSelectRun,
   workflows,
   onOpenWorkflow,
+  onGraphChange,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -473,6 +481,16 @@ export function CanvasPane({
     setRestView({ zoom: 1, x: 0, y: 0 });
     userAdjustedRef.current = false;
   }, [sessionId, reloadKey]);
+
+  // Propagate graph changes to the parent (App) so it can maintain a
+  // per-workflow graph cache for the run-input dialog skeleton.
+  useEffect(() => {
+    onGraphChange?.(graph);
+  // onGraphChange is intentionally excluded: a stable callback ref from App
+  // won't change, but listing it would re-fire on every parent render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph]);
+
   const detailNode = graph && detailStepId ? (graph.nodes.find((n) => n.id === detailStepId) ?? null) : null;
   // The slide-out must not empty mid-flight: keep the LAST drilled step
   // rendered in the off-going pane so back reads as the detail sliding away,

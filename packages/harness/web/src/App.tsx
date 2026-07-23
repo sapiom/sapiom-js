@@ -29,6 +29,7 @@ import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
 import { ImageComposer } from "./components/ImageComposer";
+import { RunInputDialog } from "./components/RunInputDialog";
 import { SessionBar } from "./components/SessionBar";
 import { SessionStepsBar } from "./components/SessionStepsBar";
 import { SessionTabs } from "./components/SessionTabs";
@@ -40,6 +41,7 @@ import { TooltipLayer } from "./components/TooltipLayer";
 import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { ApiError, boundWorkflowPathOf } from "./lib/api";
+import type { CanvasGraph } from "./lib/canvas-graph";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
@@ -102,6 +104,19 @@ export const App = (): JSX.Element => {
   // Template gallery opened from the command palette (browse is reachable
   // from anywhere, not only the add dialog / welcome panel entries).
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  // Per-workflow canvas graph cache: updated via onGraphChange from CanvasPane
+  // so the run-input dialog can derive an entry-step skeleton.
+  const [graphByWorkflow, setGraphByWorkflow] = useState<Map<string, CanvasGraph>>(new Map());
+  // Pending run-input dialog: which workflow + run kind the user clicked on.
+  // Set when Local Run or Prod Run is clicked (instead of firing immediately);
+  // cleared on dialog close or after the run fires.
+  const [pendingRunDialog, setPendingRunDialog] = useState<{
+    workflowPath: string;
+    kind: "local" | "prod";
+    sessionId: string;
+    /** For prod runs, the definitionId (stringified). */
+    definitionId?: string;
+  } | null>(null);
   // User session renames (no server rename endpoint yet, so names persist
   // client-side with the rest of the UI arrangement). State
   // here so the tab strip and the header re-render together on a rename.
@@ -507,9 +522,14 @@ export const App = (): JSX.Element => {
           }
         } else if (direct === "prod-run") {
           if (workflow?.definitionId != null) {
-            // definitionId is present (the button is deploy-gated); the runs route
-            // wants it as a string.
-            void harness.startProdRun(sessionId, String(workflow.definitionId));
+            // Open the run-input dialog instead of firing immediately.
+            // The dialog submits with the parsed input once the user clicks Run.
+            setPendingRunDialog({
+              workflowPath: workflow.path,
+              kind: "prod",
+              sessionId,
+              definitionId: String(workflow.definitionId),
+            });
           } else {
             // The button is already disabled in SessionStepsBar when there's no
             // definitionId — this branch only fires if something bypasses the UI
@@ -526,7 +546,12 @@ export const App = (): JSX.Element => {
           if (!workflow) {
             harness.showToast("Select a workflow first.");
           } else {
-            void harness.runLocal(sessionId, workflow.path);
+            // Open the run-input dialog instead of firing immediately.
+            setPendingRunDialog({
+              workflowPath: workflow.path,
+              kind: "local",
+              sessionId,
+            });
           }
         }
         return;
@@ -872,6 +897,15 @@ export const App = (): JSX.Element => {
                 onInjectPrompt={(text) => {
                   if (harness.activeSessionId) void harness.injectInput(harness.activeSessionId, text);
                 }}
+                onGraphChange={(g) => {
+                  if (!rightPaneWorkflow) return;
+                  setGraphByWorkflow((prev) => {
+                    const next = new Map(prev);
+                    if (g) next.set(rightPaneWorkflow.path, g);
+                    else next.delete(rightPaneWorkflow.path);
+                    return next;
+                  });
+                }}
               />
             </div>
 
@@ -912,6 +946,22 @@ export const App = (): JSX.Element => {
           launchDir={activeSession?.cwd ?? state.launchDir ?? null}
           onClose={() => setTemplatesOpen(false)}
           onUse={handleUseTemplate}
+        />
+      )}
+
+      {pendingRunDialog && (
+        <RunInputDialog
+          workflowPath={pendingRunDialog.workflowPath}
+          kind={pendingRunDialog.kind}
+          graph={graphByWorkflow.get(pendingRunDialog.workflowPath) ?? null}
+          onRun={(input) => {
+            if (pendingRunDialog.kind === "local") {
+              void harness.runLocal(pendingRunDialog.sessionId, pendingRunDialog.workflowPath, input);
+            } else if (pendingRunDialog.definitionId) {
+              void harness.startProdRun(pendingRunDialog.sessionId, pendingRunDialog.definitionId, input);
+            }
+          }}
+          onClose={() => setPendingRunDialog(null)}
         />
       )}
 

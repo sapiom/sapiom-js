@@ -191,7 +191,10 @@ test.describe("Prod-run button — direct route, executionId → inspector, no p
     await expect(runBtn).toBeEnabled();
 
     const injectBefore = await captureInjectInputBefore(page);
+    // Clicking Prod Run opens the run-input dialog — click through it.
     await runBtn.click();
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.getByTestId("run-input-submit").click();
 
     // Wait for lastDirectAction to confirm the DIRECT route fired.
     const direct = await waitForDirectAction(page);
@@ -249,7 +252,10 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
     await expect(localBtn).toBeEnabled();
 
     const injectBefore = await captureInjectInputBefore(page);
+    // Clicking Local Run opens the run-input dialog — click through it.
     await localBtn.click();
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.getByTestId("run-input-submit").click();
 
     // Run-local streams offline stub traces; the Steps tab should show the run
     // without waiting for a prod execution.  MockApi.runLocal emits 3 step
@@ -296,7 +302,10 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
 
     const injectBefore = await captureInjectInputBefore(page);
 
+    // Clicking Local Run opens the run-input dialog — click through it.
     await page.getByTestId("session-step-local").click();
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.getByTestId("run-input-submit").click();
     await page.getByTestId("right-tab-steps").click();
 
     // The run note confirms this is the local (offline) run, not prod.

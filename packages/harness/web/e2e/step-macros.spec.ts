@@ -310,10 +310,13 @@ test.describe("debug macros — offline stub run", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await page.getByTestId("right-tab-steps").click();
 
-    // Trigger the local run.
+    // Trigger the local run via the run-input dialog.
     const btn = page.getByTestId("session-step-local");
     await expect(btn).toBeEnabled();
     await btn.click();
+    // The run-input dialog opens; click Run to confirm with the default input.
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.getByTestId("run-input-submit").click();
 
     // Wait for the run to complete.
     const chip = page.getByTestId("canvas-run-chip");

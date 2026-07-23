@@ -1368,8 +1368,11 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
 
     // Run fires the DIRECT prod-run route (no pty inject / user LLM credits):
     // it records lastDirectAction, never lastMacroRun, and carries leasing's
-    // definitionId as the runs route wants it (a string).
+    // definitionId as the runs route wants it (a string). Clicking opens the
+    // run-input dialog; click through it with the default input.
     await page.getByTestId("session-step-run").click();
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.getByTestId("run-input-submit").click();
     await page.waitForFunction(
       () =>
         (window as unknown as { __HARNESS_TEST__?: { lastDirectAction?: unknown } }).__HARNESS_TEST__

@@ -5847,6 +5847,57 @@ input {
 
 /* ── Templates journey v0: the "Start from a template" dialog ─────────────
    Anatomy mirrors the add/new-session dialog family (full-bleed header /
+/* Run-input dialog: a focused JSON editor for supplying workflow input
+   before a Local Run or Prod Run fires. Inherits the standard .modal
+   anatomy (header/body/footer separated by hairlines). The editor textarea
+   uses the mono font and keeps a fixed height to avoid jumping on content
+   changes — tall enough for a 6-field JSON object comfortably. */
+.modal-run-input {
+  width: 440px;
+}
+
+.modal-run-input .modal-header {
+  display: flex;
+  align-items: center;
+}
+
+.run-input-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  margin-top: var(--sp2);
+}
+
+/* Hint line: dimmed, meta-size, shows the entry step's expected fields. */
+.run-input-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+/* JSON editor: monospaced, fixed height, same border/bg as .modal-input. */
+.run-input-editor {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  padding: var(--sp2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+  transition: border-color var(--transition-fast);
+}
+
+.run-input-editor:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
    body / footer separated by hairlines) at a two-pane browse width: the
    curated list on the left, the picked template's real manifest on the
    right, the destination + confirm in the footer. Selection, hover, and

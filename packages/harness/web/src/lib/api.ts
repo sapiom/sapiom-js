@@ -996,7 +996,7 @@ class MockApi implements HarnessApi {
   // and Playwright exercise the run-local inspector with no server, mirroring
   // the real NDJSON stream's ordering (traces first, terminal line last).
   async runLocal(args: RunLocalArgs, onLine: (line: RunLocalLine) => void): Promise<void> {
-    this.recordDirectAction("runLocal", { sourceDir: args.sourceDir });
+    this.recordDirectAction("runLocal", { sourceDir: args.sourceDir, input: args.input });
     const traces: LocalStepTrace[] = [
       {
         step: "intake",
