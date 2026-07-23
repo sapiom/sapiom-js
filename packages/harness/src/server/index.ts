@@ -105,6 +105,10 @@ import { createFsRouter } from "./fs.js";
 import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
 import { createActionsRouter } from "./actions.js";
+import {
+  createAuthRouter,
+  createMutableAuthState,
+} from "./auth-routes.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
 // (an identical helper); the runs router reuses it for its agents base URL.
 
@@ -304,6 +308,15 @@ export const startServer = async (
   // recovers a 401 in place instead of locking the Studio.
   const apiKeyProvider = createApiKeyProvider(identity?.apiKey ?? null, {
     environment: process.env.SAPIOM_ENVIRONMENT,
+  });
+
+  // Mutable auth state — seeded from the boot-time identity and updated by the
+  // in-app auth routes (POST /api/auth/start, POST /api/auth/disconnect). The
+  // auth router mutates this on every sign-in/sign-out; GET /api/auth/status
+  // reads it directly so the SPA always sees the live state.
+  const authState = createMutableAuthState({
+    authenticated: identity !== null,
+    organizationName: identity?.organizationName ?? null,
   });
   const statePaths = resolveStatePaths(options.stateRoot);
   const machineId =
@@ -894,6 +907,20 @@ export const startServer = async (
       openUrl: async (url) => {
         await open(url);
       },
+    }),
+  );
+
+  // In-app auth routes: POST /api/auth/start, POST /api/auth/disconnect,
+  // GET /api/auth/status — reuse the CLI's performBrowserAuth flow so the
+  // web app can trigger sign-in without restarting the server. Sits under /api
+  // so the boot-token middleware mounted above already gates it.
+  app.use(
+    "/api",
+    createAuthRouter({
+      authState,
+      apiKeyProvider,
+      bus,
+      environment: process.env.SAPIOM_ENVIRONMENT,
     }),
   );
 
