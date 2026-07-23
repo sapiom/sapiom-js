@@ -5,7 +5,7 @@
  * Lifecycle mirrors bin.ts's SIGINT path: on quit we `server.close()` so all
  * live claude/codex PTYs are killed rather than orphaned.
  */
-import { app, dialog } from "electron";
+import { app, dialog, Menu } from "electron";
 import { createSetupWindow } from "./windows.js";
 import { boot, type BootResult } from "./boot.js";
 
@@ -35,6 +35,11 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    // No application menu — the harness SPA is the whole UI. Removes the
+    // File/Edit/View/Window/Help bar on Linux/Windows. (On macOS the top menu
+    // bar is OS-level and can't be removed; this leaves a bare default there —
+    // a proper minimal macOS menu with edit roles can be added in the mac phase.)
+    Menu.setApplicationMenu(null);
     const setupWin = createSetupWindow();
     try {
       bootResult = await boot(setupWin, devMode);
