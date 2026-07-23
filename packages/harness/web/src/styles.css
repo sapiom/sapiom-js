@@ -433,18 +433,12 @@ input {
   border-bottom: 1px solid var(--ui-line);
 }
 
-/* When a search row carries a trailing action (e.g. Skills' create-skill
-   button), the field itself must yield width instead of the row growing. */
+/* When a search row carries a trailing action, the field itself must yield
+   width instead of the row growing. */
 .rail-search .palette-trigger {
   flex: 1;
   min-width: 0;
   width: auto;
-}
-
-/* Trailing 1×1 action on a search row — same square recipe as skill-back/
-   theme-toggle, right-anchored by simply being last in the row. */
-.skills-create-btn {
-  flex-shrink: 0;
 }
 
 .palette-trigger {
@@ -1350,8 +1344,7 @@ input {
 @media (prefers-reduced-motion: reduce) {
   .workspace-caret,
   .disclosure-caret,
-  .canvas-step-caret,
-  .skill-card-caret {
+  .canvas-step-caret {
     transition: none;
   }
 }
@@ -5380,313 +5373,11 @@ input {
   margin-left: auto;
 }
 
-/* Both child panels (canvas-pane, rail-skills) must fill the slot fully.
-   canvas-pane and rail-skills both use display:flex/flex-direction:column
-   already; this makes them stretch to occupy the available height. */
-.right-pane-panel > .canvas-pane,
-.right-pane-panel > .rail-skills {
+/* The canvas-pane child panel must fill the slot fully. */
+.right-pane-panel > .canvas-pane {
   flex: 1;
   min-height: 0;
 }
-
-/* Skills panel ---------------------------------------------------------- */
-
-.rail-skills {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  padding: 0;
-}
-
-.rail-body {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.skills-list {
-  display: flex;
-  flex-direction: column;
-  /* Same list rhythm as the workspace tree: sp3 vertical inset so the first
-     and last rows never sit flush against the panel edges, sp1 between rows. */
-  padding: var(--sp3) var(--sp2);
-  gap: var(--sp1);
-}
-
-.skills-group {
-  margin-bottom: var(--sp2);
-}
-
-.skills-group-header {
-  font-size: var(--type-label);
-  font-weight: 510;
-  color: var(--text-faint);
-  padding: var(--sp1) var(--sp2);
-}
-
-.skill-card {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  width: 100%;
-  padding: var(--sp2);
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-dim);
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--transition-fast);
-}
-
-.skill-card-copy {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  flex: 1;
-  min-width: 0;
-}
-
-/* Navigation cue (caret contract): right chevron means "opens detail" —
-   hover-revealed like the tree rows' own trailing affordances. */
-.skill-card-caret {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-}
-
-.skill-card:hover .skill-card-caret,
-.skill-card:focus-visible .skill-card-caret {
-  opacity: 1;
-}
-
-.skill-card:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.skill-card:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.skill-card-name {
-  font-size: var(--type-ui);
-  font-weight: 560;
-  letter-spacing: -0.01em;
-  color: var(--text);
-  margin-bottom: 2px;
-}
-
-.skill-card-desc {
-  font-size: var(--type-label);
-  color: var(--text-faint);
-  line-height: 1.35;
-  white-space: normal;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.skills-loading,
-.skills-error,
-.skills-empty {
-  padding: var(--sp3) var(--pane-pad-x);
-  font-size: var(--type-label);
-  color: var(--text-faint);
-}
-
-.skills-error {
-  color: var(--red);
-}
-
-/* Filter field: the main nav's jump-field anatomy hosting a real input. */
-.skills-filter-field {
-  cursor: text;
-}
-
-.skills-filter-field input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-}
-
-.skills-filter-field input::placeholder {
-  color: var(--text-faint);
-}
-
-.skills-filter-field:focus-within {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-/* Skill detail view */
-
-.skill-detail {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-
-.skill-detail-header {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-/* Name + source badge as one group: the group (not the name alone) grows
-   to fill available space, so the badge sits immediately after the name —
-   not stranded against Use skill at the far right. */
-.skill-detail-title {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp1);
-  flex: 1;
-  min-width: 0;
-}
-
-.skill-detail-name {
-  min-width: 0;
-  font-size: var(--type-label);
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Use skill rides the header row, right-anchored — a primary action for
-   the one thing this view is for, not a separate actions band. */
-.skill-use-btn {
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-/* Gating reason: a slim conditional line under the header — present only
-   when the button is disabled, so nothing ever renders as dead space. */
-.skill-detail-reason {
-  flex: 0 0 auto;
-  padding: var(--sp1) var(--pane-pad-x) var(--sp2);
-  border-bottom: 1px solid var(--ui-line);
-  color: var(--text-faint);
-  font-size: var(--type-label);
-}
-
-/* Back: a square 1×1 icon button on the shared control size, not a padded
-   ghost pill — matches the theme-toggle/gear-btn recipe used everywhere
-   else an icon-only control sits in a header row. */
-.skill-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: var(--control-h-xs);
-  height: var(--control-h-xs);
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-dim);
-}
-
-.skill-back:hover:not(:disabled) {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.skill-back:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.skill-back:disabled {
-  opacity: 0.42;
-  cursor: default;
-}
-
-/* Skills source badge: flat .status-tag contract — a fact, not a box. */
-.skill-source-badge {
-  flex-shrink: 0;
-  color: var(--text-faint);
-}
-
-.skill-detail-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--sp4) var(--pane-pad-x);
-  min-height: 0;
-}
-
-/* Skill detail body — Markdown renderer's chat-* classes scoped for the narrower rail */
-
-.skill-detail-body {
-  font-size: var(--type-label);
-  line-height: 1.5;
-  color: var(--text-dim);
-}
-
-.skill-detail-body .chat-heading {
-  color: var(--text);
-  margin: 8px 0 4px;
-}
-
-.skill-detail-body h1.chat-heading {
-  font-size: var(--type-body);
-  font-weight: 700;
-  margin: 0 0 8px;
-}
-
-.skill-detail-body h2.chat-heading {
-  font-size: var(--type-ui);
-  font-weight: 600;
-  margin: 10px 0 6px;
-}
-
-.skill-detail-body h3.chat-heading {
-  font-size: var(--type-label);
-  font-weight: 600;
-}
-
-.skill-detail-body .chat-paragraph {
-  margin: 0 0 8px;
-  color: var(--text-dim);
-}
-
-.skill-detail-body .chat-code-block {
-  font-size: var(--type-meta);
-  margin: 6px 0;
-}
-
-.skill-detail-body .chat-list {
-  margin: 0 0 8px;
-  padding-left: 18px;
-  color: var(--text-dim);
-}
-
-.skill-detail-body .chat-list li {
-  margin-bottom: 2px;
-}
-
-.skill-detail-body .chat-inline-code {
-  font-size: var(--type-meta);
-}
-
-/* Skills footer */
 
 /* Scrollbars — thin thumb-only styling, matching the product's own
    (rgba(161, 161, 170, 0.75), 8px, no visible track) in both themes. */
@@ -5953,24 +5644,6 @@ input {
 
 .dir-picker-retry {
   flex: 0 0 auto;
-}
-
-/* skills detail error — icon, one message, Retry. */
-.skill-detail-error-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--sp3);
-  padding: var(--sp5) var(--pane-pad-x);
-  text-align: center;
-}
-
-.skill-detail-error-msg {
-  margin: 0;
-  max-width: 40ch;
-  font-size: var(--type-label);
-  line-height: 1.5;
-  color: var(--text-dim);
 }
 
 /* what the exited session's record actually knows — agent, runtime,

@@ -102,7 +102,6 @@ import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
-import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
 import { createActionsRouter } from "./actions.js";
 import {
@@ -860,7 +859,6 @@ export const startServer = async (
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
     createFsRouter(),
-    createSkillsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) =>

@@ -433,7 +433,7 @@ export function WorkflowsRail({
           <div className="connect-card-header">
             <span>Sessions</span>
             <button
-              className="skill-back connect-card-close"
+              className="theme-toggle connect-card-close"
               onClick={closeHistory}
               aria-label="Close"
               title="Close"

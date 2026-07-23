@@ -85,7 +85,7 @@ export function WorkflowActionsHeader({
     return (
       <div className="workflow-actions-header" data-testid="workflow-actions-header">
         <button
-          className="skill-back"
+          className="theme-toggle"
           data-testid="canvas-detail-back"
           onClick={onBack}
           aria-label="Back to the steps list"

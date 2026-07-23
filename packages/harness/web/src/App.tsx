@@ -10,14 +10,14 @@
  *     bar, terminal, and action bar. Session switching lives in the tab
  *     strip; the session bar is the active session's identity header.
  *  3. RIGHT PANEL — projections of the ACTIVE session's bound agent (Canvas |
- *     Steps | Code | Skills), session-keyed. The canvas stays mounted behind
- *     CSS when another tab is active so a running Visualize enrichment (and
- *     the graph-posting document) is never disturbed by a tab flip.
+ *     Steps | Code), session-keyed. The canvas stays mounted behind CSS when
+ *     another tab is active so a running Visualize enrichment (and the
+ *     graph-posting document) is never disturbed by a tab flip.
  *
  * The mapping invariant: rail focused agent == tab strip's agent == active
  * tab's bound agent == right panel's subject.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind, HarnessSession, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
 
@@ -32,7 +32,6 @@ import { ImageComposer } from "./components/ImageComposer";
 import { SessionBar } from "./components/SessionBar";
 import { SessionStepsBar } from "./components/SessionStepsBar";
 import { SessionTabs } from "./components/SessionTabs";
-import { SkillsPanel } from "./components/SkillsPanel";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesDialog } from "./components/TemplatesDialog";
 import { Terminal } from "./components/Terminal";
@@ -51,7 +50,7 @@ import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState, type ObservedRun } from "./lib/use-harness-state";
 
-type RightTab = "canvas" | "steps" | "code" | "skills";
+type RightTab = "canvas" | "steps" | "code";
 
 /**
  * Live sessions belonging to the focused subject, in tab order (oldest first,
@@ -88,13 +87,13 @@ export const App = (): JSX.Element => {
   // popover from outside SessionBar's own gear button.
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Right tab is part of the held arrangement: restored on reload.
-  const [rightTab, setRightTab] = useState<RightTab>(() => loadUiPrefs().rightTab ?? "canvas");
-  // Tracks whether Skills has ever been shown — once true, SkillsPanel stays
-  // mounted (hidden via CSS) so re-opening never triggers a refetch. A
-  // restored Skills tab must mount the panel from the first render.
-  const [skillsPanelEverShown, setSkillsPanelEverShown] = useState(rightTab === "skills");
-  // Same lazy-mount contract for the Code tab (Canvas | Steps |
-  // Code | Skills — Code is the bound agent's integration projection).
+  // Guard against a stored "skills" value (tab removed) — fall back to canvas.
+  const [rightTab, setRightTab] = useState<RightTab>(() => {
+    const stored = loadUiPrefs().rightTab;
+    return stored === "canvas" || stored === "steps" || stored === "code" ? stored : "canvas";
+  });
+  // Lazy-mount contract for the Code tab (Canvas | Steps | Code —
+  // Code is the bound agent's integration projection).
   const [codePanelEverShown, setCodePanelEverShown] = useState(rightTab === "code");
   // A PAST session under review: picked from the history menu, shown
   // in the terminal slot as a review pane — resuming/starting is the pane's
@@ -129,11 +128,6 @@ export const App = (): JSX.Element => {
   );
   const isMobile = useMobileShell();
 
-  // Stable function references for SkillsPanel props — prevents the panel's
-  // effects from refiring on every unrelated App re-render. Must be before any
-  // early return (React hooks must be called unconditionally).
-  const listSkills = useMemo(() => harness.api.listSkills.bind(harness.api), [harness.api]);
-  const getSkill = useMemo(() => harness.api.getSkill.bind(harness.api), [harness.api]);
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
@@ -780,8 +774,8 @@ export const App = (): JSX.Element => {
             />
           )}
 
-          {/* Right pane: Canvas | Steps | Code | Skills segmented switch +
-              panels. Collapsed via CSS (never unmounted) so a running Visualize
+          {/* Right pane: Canvas | Steps | Code segmented switch + panels.
+              Collapsed via CSS (never unmounted) so a running Visualize
               enrichment survives the collapse. */}
           <div className={"right-pane" + (rightCollapsed ? " is-collapsed" : "")}>
             <div className="right-pane-tabs" role="tablist" aria-label="Right pane">
@@ -815,19 +809,6 @@ export const App = (): JSX.Element => {
               >
                 Code
               </button>
-              <button
-                role="tab"
-                aria-selected={rightTab === "skills"}
-                className={"right-pane-tab" + (rightTab === "skills" ? " is-active" : "")}
-                onClick={() => {
-                  setRightTab("skills");
-                  setSkillsPanelEverShown(true);
-                }}
-                data-testid="right-tab-skills"
-              >
-                Skills
-              </button>
-
               <button
                 className="theme-toggle right-pane-collapse"
                 data-testid="right-collapse"
@@ -883,20 +864,6 @@ export const App = (): JSX.Element => {
               </div>
             )}
 
-            {(rightTab === "skills" || skillsPanelEverShown) && (
-              <div
-                className={"right-pane-panel" + (rightTab === "skills" ? "" : " is-hidden")}
-                data-testid="right-panel-skills"
-              >
-                <SkillsPanel
-                  listSkills={listSkills}
-                  getSkill={getSkill}
-                  isActive={rightTab === "skills"}
-                  activeSession={activeSession}
-                  onUseSkill={(sessionId, text) => void harness.useSkill(sessionId, text)}
-                />
-              </div>
-            )}
           </div>
         </div>
       </div>
