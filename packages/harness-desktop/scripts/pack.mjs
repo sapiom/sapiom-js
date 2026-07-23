@@ -29,7 +29,9 @@ rmSync(deployDir, { recursive: true, force: true });
 // in electron-builder.yml so the version is known without the devDep present.
 run("pnpm", ["--filter", "@sapiom/harness-desktop", "deploy", "--prod", "--legacy", deployDir], repoRoot);
 
-// The deploy copies package files; make sure the builder config + assets are there.
+// `pnpm deploy` honors .gitignore, which excludes dist/ + release/. Copy the
+// built app output, the builder config, and assets into the deploy dir.
+cpSync(join(pkgDir, "dist"), join(deployDir, "dist"), { recursive: true });
 cpSync(join(pkgDir, "electron-builder.yml"), join(deployDir, "electron-builder.yml"));
 cpSync(join(pkgDir, "assets"), join(deployDir, "assets"), { recursive: true });
 
