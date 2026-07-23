@@ -3988,6 +3988,53 @@ input {
   font-variant-numeric: tabular-nums;
 }
 
+/* Debug macros: an actions band under the run facts, set off by a hairline.
+   The macro buttons stack full-width (they inherit .btn-ghost / .btn-primary);
+   the free-form ask spans the full width below. These rules own only the band
+   layout and the textarea — all on shared inspector tokens, so the section
+   reads as native to the panel above it. */
+.canvas-inspector-macros {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  margin-top: var(--sp1);
+  padding-top: var(--sp2);
+  border-top: 1px solid var(--ui-line);
+}
+
+.canvas-inspector-macro-btn {
+  width: 100%;
+  text-align: left;
+}
+
+.canvas-inspector-freeform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.canvas-inspector-freeform-input {
+  width: 100%;
+  resize: vertical;
+  padding: var(--sp1) var(--sp2);
+  font: inherit;
+  font-size: var(--type-label);
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+}
+
+.canvas-inspector-freeform-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--ui-line-strong);
+}
+
+.canvas-inspector-freeform-ask {
+  align-self: flex-end;
+}
+
 .canvas-overview-desc {
   margin: 0;
   color: var(--text);

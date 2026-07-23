@@ -471,6 +471,15 @@ describe("extractStepLinks — URL extraction from output", () => {
   it("returns empty array when output is absent", () => {
     expect(extractStepLinks({})).toEqual([]);
   });
+
+  it("does not linkify non-http(s) schemes — javascript:, data:, file: produce no links", () => {
+    expect(extractStepLinks({ output: "javascript:alert(1)" })).toEqual([]);
+    expect(extractStepLinks({ output: "data:text/html,<script>alert(1)</script>" })).toEqual([]);
+    expect(extractStepLinks({ output: "file:///etc/passwd" })).toEqual([]);
+    // A safe URL alongside a dangerous scheme: only the http(s) one is linkified.
+    const links = extractStepLinks({ output: "see javascript:alert(1) or https://example.com/ok" });
+    expect(links.map((l) => l.url)).toEqual(["https://example.com/ok"]);
+  });
 });
 
 describe("extractStepLinks — URL extraction from logSlice", () => {
