@@ -112,6 +112,22 @@ export interface HarnessStateHook {
    */
   deploy: (workflowPath: string) => Promise<void>;
   /**
+   * Returns the error message from the last failed deploy for the given
+   * workflow path, or `null` if the last deploy succeeded (or no deploy has
+   * run for this path). Survives toast dismissal — the action bar uses this
+   * to show "Last deploy failed — retry Deploy" rather than "Not deployed yet"
+   * when a build has already been attempted and failed.
+   */
+  lastDeployErrorFor: (workflowPath: string) => string | null;
+  /**
+   * Monotonic counter bumped on every direct-action settle (deploy or run,
+   * success or failure). SessionStepsBar adds this to its `useEffect` deps so
+   * the pending ring clears on every settle — including re-deploys of an
+   * already-deployed workflow where neither `deployed` nor `lastDeployError`
+   * changes.
+   */
+  directActionSettleSeq: number;
+  /**
    * Start a real prod execution via the DIRECT route (Prod-run button) — no
    * Claude Code — then hand the returned `executionId` to the run-inspector
    * poller so the run shows up in the Steps tab exactly as a CLI-launched run
@@ -218,6 +234,22 @@ export function useHarnessState(): HarnessStateHook {
   // One-click preview loop: the server's PortDetector announces a
   // dev server the agent started; the session surfaces a Preview chip.
   const [previewBySession, setPreviewBySession] = useState<Map<string, { port: number; url: string }>>(new Map());
+  // Per-workflow deploy error: set when a deploy stream ends with phase:"error",
+  // cleared when a later deploy for that workflow succeeds. Keyed by workflow
+  // path — survives toast dismissal so the disabled-reason in the action bar
+  // stays accurate ("Last deploy failed — retry Deploy") instead of reverting
+  // to "Not deployed yet" which would be misleading.
+  const [lastDeployErrorByPath, setLastDeployErrorByPath] = useState<Map<string, string>>(new Map());
+  // Monotonic settle counter for direct actions: bumped each time a deploy or
+  // run (prod/local) reaches its terminal state — success OR failure. The
+  // SessionStepsBar adds this to its useEffect deps so the pending ring clears
+  // on EVERY settle, including re-deploys of an already-deployed workflow where
+  // `deployed` stays true and `lastDeployError` stays null (so neither dep
+  // flips on its own).
+  const [directActionSettleSeq, setDirectActionSettleSeq] = useState(0);
+  const bumpDirectActionSettleSeq = useCallback(() => {
+    setDirectActionSettleSeq((n) => n + 1);
+  }, []);
 
   // Monotonic count of explicit session switches. A resume that resolves
   // AFTER the user has already switched elsewhere must not yank them back —
@@ -386,9 +418,14 @@ export function useHarnessState(): HarnessStateHook {
         outcome = "failed";
         publish();
         setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      } finally {
+        // Signal settle so the SessionStepsBar clears the Local Run button's
+        // pending ring — the stream ended (success or failure), the button's
+        // "in flight" state is over.
+        bumpDirectActionSettleSeq();
       }
     },
-    [],
+    [bumpDirectActionSettleSeq],
   );
 
   const selectRun = useCallback(
@@ -758,18 +795,39 @@ export function useHarnessState(): HarnessStateHook {
         });
         if (terminal.phase === "ready") {
           setToast("Deployed to Sapiom.");
+          // Clear any prior deploy error for this workflow — it succeeded.
+          setLastDeployErrorByPath((prev) => {
+            if (!prev.has(workflowPath)) return prev;
+            const next = new Map(prev);
+            next.delete(workflowPath);
+            return next;
+          });
           // A successful deploy links/rebuilds the agent — re-read the registry
           // so definitionId (the Draft→Deployed truth) and the deploy-gated
           // actions update without waiting on a bus refresh.
           await refreshWorkflows();
         } else if (terminal.phase === "error") {
-          setToast(terminal.hint ? `Deploy failed: ${terminal.message} (${terminal.hint})` : `Deploy failed: ${terminal.message}`);
+          const msg = terminal.hint
+            ? `Deploy failed: ${terminal.message} (${terminal.hint})`
+            : `Deploy failed: ${terminal.message}`;
+          setToast(msg);
+          // Persist the failure so the action bar can distinguish "last deploy
+          // failed" from "never deployed" after the toast is dismissed.
+          setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
         }
       } catch (err) {
-        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
+        setToast(msg);
+        // An exception from the deploy stream (e.g. network error) also counts
+        // as a deploy failure — persist so the action bar reflects it.
+        setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
+      } finally {
+        // Signal that a deploy action settled (success or failure) so the
+        // SessionStepsBar can clear its pending ring for this button.
+        bumpDirectActionSettleSeq();
       }
     },
-    [refreshWorkflows],
+    [refreshWorkflows, bumpDirectActionSettleSeq],
   );
 
   // Prod-run via the direct route: start the execution server-side, then feed
@@ -782,9 +840,14 @@ export function useHarnessState(): HarnessStateHook {
         startRunPolling(sessionId, executionId, "prod");
       } catch (err) {
         setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+      } finally {
+        // Signal settle so the SessionStepsBar clears its pending ring for
+        // the Prod Run button — the run has been handed off to the poller
+        // (or failed), either way the "in flight" state for the button is done.
+        bumpDirectActionSettleSeq();
       }
     },
-    [startRunPolling],
+    [startRunPolling, bumpDirectActionSettleSeq],
   );
 
   const startAuth = useCallback(async (): Promise<AuthStartResponse> => {
@@ -811,6 +874,11 @@ export function useHarnessState(): HarnessStateHook {
   const showToast = useCallback((message: string): void => {
     setToast(message);
   }, []);
+
+  const lastDeployErrorFor = useCallback(
+    (workflowPath: string): string | null => lastDeployErrorByPath.get(workflowPath) ?? null,
+    [lastDeployErrorByPath],
+  );
 
   const listDir = useCallback((path?: string): Promise<FsListResponse> => api.listDir(path), []);
 
@@ -847,6 +915,8 @@ export function useHarnessState(): HarnessStateHook {
     runLocal,
     injectInput,
     showToast,
+    lastDeployErrorFor,
+    directActionSettleSeq,
     listDir,
     lastMessage,
     runsBySession,

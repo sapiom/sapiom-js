@@ -499,14 +499,35 @@ export const App = (): JSX.Element => {
       // a no-op, never a silent revert to the Claude Code path.
       const direct = directActionKind(macro.id);
       if (direct !== null) {
-        if (direct === "deploy" && workflow) {
-          void harness.deploy(workflow.path);
-        } else if (direct === "prod-run" && workflow?.definitionId != null) {
-          // definitionId is present (the button is deploy-gated); the runs route
-          // wants it as a string.
-          void harness.startProdRun(sessionId, String(workflow.definitionId));
-        } else if (direct === "run-local" && workflow) {
-          void harness.runLocal(sessionId, workflow.path);
+        if (direct === "deploy") {
+          if (!workflow) {
+            harness.showToast("Select a workflow first.");
+          } else {
+            void harness.deploy(workflow.path);
+          }
+        } else if (direct === "prod-run") {
+          if (workflow?.definitionId != null) {
+            // definitionId is present (the button is deploy-gated); the runs route
+            // wants it as a string.
+            void harness.startProdRun(sessionId, String(workflow.definitionId));
+          } else {
+            // The button is already disabled in SessionStepsBar when there's no
+            // definitionId — this branch only fires if something bypasses the UI
+            // gate (e.g. a direct keyboard call). Toast the reason explicitly so
+            // it is never silent.
+            const lastErr = workflow ? harness.lastDeployErrorFor(workflow.path) : null;
+            harness.showToast(
+              lastErr
+                ? "Last deploy failed — retry Deploy."
+                : "This agent isn't deployed yet — deploy it first.",
+            );
+          }
+        } else if (direct === "run-local") {
+          if (!workflow) {
+            harness.showToast("Select a workflow first.");
+          } else {
+            void harness.runLocal(sessionId, workflow.path);
+          }
         }
         return;
       }
@@ -668,6 +689,9 @@ export const App = (): JSX.Element => {
                 macros={state.macros}
                 onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
                 preview={harness.previewBySession.get(activeSession.id) ?? null}
+                lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
+                authenticated={state.authenticated}
+                directActionSettleSeq={harness.directActionSettleSeq}
               />
             )}
             <div className="terminal-slot">
