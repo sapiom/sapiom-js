@@ -27,8 +27,15 @@ const repoRoot = dirname(dirname(pkgDir)); // sapiom-js
 const deployDir = join(realpathSync(os.tmpdir()), "sapiom-harness-desktop-pack");
 const outputDir = join(pkgDir, "release");
 const platform = process.argv[2] ?? "--linux";
+const isWindows = process.platform === "win32";
 
-const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: "inherit" });
+// On Windows, `pnpm`/`electron-builder` are `.cmd` shims. `execFileSync` can't
+// resolve them (no PATHEXT lookup), and since CVE-2024-27980 Node refuses to
+// spawn `.cmd`/`.bat` without `shell: true` at all. Run through the shell there
+// so cmd.exe resolves the shim; a plain exec stays the default on POSIX. (CI
+// runner paths have no spaces, so the shell's arg joining is safe here.)
+const run = (cmd, args, cwd) =>
+  execFileSync(cmd, args, { cwd, stdio: "inherit", shell: isWindows });
 
 console.log(`[pack] pnpm deploy → ${deployDir}`);
 rmSync(deployDir, { recursive: true, force: true });
@@ -44,7 +51,13 @@ cpSync(join(pkgDir, "electron-builder.yml"), join(deployDir, "electron-builder.y
 cpSync(join(pkgDir, "assets"), join(deployDir, "assets"), { recursive: true });
 
 console.log(`[pack] electron-builder ${platform} → ${outputDir}`);
-const electronBuilder = join(pkgDir, "node_modules", ".bin", "electron-builder");
+// The `.bin` entry is `electron-builder.cmd` on Windows, `electron-builder` on POSIX.
+const electronBuilder = join(
+  pkgDir,
+  "node_modules",
+  ".bin",
+  isWindows ? "electron-builder.cmd" : "electron-builder",
+);
 run(electronBuilder, [platform, `-c.directories.output=${outputDir}`], deployDir);
 
 console.log(`[pack] done → ${outputDir}`);
