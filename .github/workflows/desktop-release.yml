@@ -52,16 +52,19 @@ jobs:
           - os: macos-14 # Apple Silicon; builds an arm64 .dmg + .zip
             packflag: "--mac"
             artifact_glob: "packages/harness-desktop/release/*.dmg,packages/harness-desktop/release/*.zip"
-          - os: windows-latest
+          # Pinned to windows-2022 (VS 2022 / v17). windows-latest rolled to an
+          # image with Visual Studio 18, whose version node-gyp's VS detection
+          # doesn't recognize ("unknown version undefined") → the node-pty
+          # rebuild can't find a usable compiler. VS 2022 is fully supported.
+          - os: windows-2022
             packflag: "--win"
             artifact_glob: "packages/harness-desktop/release/*.exe"
 
     runs-on: ${{ matrix.os }}
-    # Windows packaging isn't wired yet (pack.mjs invokes the electron-builder
-    # bin via execFileSync on a bare path — needs the .cmd/shell on Windows;
-    # that's Phase 6). Keep it in the matrix to observe its status, but never
-    # let it fail the release. Remove this once Phase 6 makes Windows first-class.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    # Windows stays non-blocking while we bring it up (Phase 6). Keep it in the
+    # matrix to observe its status, but never let it fail the release. Remove
+    # this once Windows is first-class.
+    continue-on-error: ${{ startsWith(matrix.os, 'windows') }}
     timeout-minutes: 40
 
     steps:
