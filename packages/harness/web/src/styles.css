@@ -3581,6 +3581,114 @@ input {
   color: var(--text-faint);
 }
 
+/* -------------------------------------------------------------------------
+   Links block — clickable URL list scanned from output/logs/call results.
+   Image URLs render as small thumbnails; other URLs render as labelled links.
+   Both are anchors that open in a new tab (rel="noreferrer").
+   ------------------------------------------------------------------------- */
+
+.canvas-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+/* Clickable thumbnail wrapper: a bordered image chip that keeps a sane size.
+   --radius-md rounds the corners consistently with the inspector's cards. */
+.canvas-link-thumb-wrap {
+  display: inline-flex;
+  align-items: flex-start;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  text-decoration: none;
+  transition: border-color var(--transition-fast);
+  max-width: 200px;
+}
+
+.canvas-link-thumb-wrap:hover {
+  border-color: var(--ui-line-strong);
+}
+
+.canvas-link-thumb-wrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.canvas-link-thumb {
+  display: block;
+  max-width: 200px;
+  max-height: 120px;
+  object-fit: cover;
+}
+
+/* Non-image URL row: icon + "Open" label. Matches the inspector's compact
+   row language (type-meta, text-dim at rest, text on hover). */
+.canvas-link-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+  max-width: 100%;
+}
+
+.canvas-link-item:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.canvas-link-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.canvas-link-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* -------------------------------------------------------------------------
+   Capability calls block — per-step call trace (local/offline runs only).
+   Each call: capability id chip + optional "(stubbed)" chip + per-call
+   result disclosure. The result disclosure reuses .canvas-run-logs for
+   consistent spacing and the pre's inset/border treatment.
+   ------------------------------------------------------------------------- */
+
+.canvas-capability-calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.canvas-capability-call {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  padding: var(--sp2) var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.canvas-capability-call-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  flex-wrap: wrap;
+}
+
+/* The per-call result disclosure inherits .canvas-run-logs summary/pre rules
+   and only overrides the top-margin spacing within a call card. */
+.canvas-capability-call-result {
+  margin-top: var(--sp1);
+}
+
 .canvas-detail-kind {
   flex: 0 0 auto;
   padding: 2px 8px;
@@ -3878,6 +3986,53 @@ input {
 .canvas-inspector-run-meta {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* Debug macros: an actions band under the run facts, set off by a hairline.
+   The macro buttons stack full-width (they inherit .btn-ghost / .btn-primary);
+   the free-form ask spans the full width below. These rules own only the band
+   layout and the textarea — all on shared inspector tokens, so the section
+   reads as native to the panel above it. */
+.canvas-inspector-macros {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  margin-top: var(--sp1);
+  padding-top: var(--sp2);
+  border-top: 1px solid var(--ui-line);
+}
+
+.canvas-inspector-macro-btn {
+  width: 100%;
+  text-align: left;
+}
+
+.canvas-inspector-freeform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.canvas-inspector-freeform-input {
+  width: 100%;
+  resize: vertical;
+  padding: var(--sp1) var(--sp2);
+  font: inherit;
+  font-size: var(--type-label);
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+}
+
+.canvas-inspector-freeform-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--ui-line-strong);
+}
+
+.canvas-inspector-freeform-ask {
+  align-self: flex-end;
 }
 
 .canvas-overview-desc {

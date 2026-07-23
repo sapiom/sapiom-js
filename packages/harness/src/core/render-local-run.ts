@@ -39,6 +39,7 @@ import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import type {
   RunView,
+  StepCall,
   StepStatus,
   StepView,
   UnusedStubView,
@@ -135,6 +136,20 @@ function toStepView(trace: LocalStepTrace): StepView {
   if (trace.error?.message) view.error = trace.error.message;
   const logSlice = toLogSlice(trace.logs);
   if (logSlice !== undefined) view.logSlice = logSlice;
+  // Per-step capability calls from the stub client. Honest absence: only a
+  // non-empty list reaches the view (an empty list means no calls were made —
+  // but absence on the trace means the sink was never wired, so we leave it
+  // absent too). The StubCallRecord shape maps directly onto StepCall.
+  if (trace.calls && trace.calls.length > 0) {
+    view.calls = trace.calls.map(
+      (c): StepCall => ({
+        capability: c.capability,
+        stubUsed: c.stubUsed,
+        args: c.args,
+        result: c.result,
+      }),
+    );
+  }
   return view;
 }
 

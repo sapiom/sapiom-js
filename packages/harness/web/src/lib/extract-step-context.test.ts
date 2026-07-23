@@ -13,6 +13,7 @@ import type { StepView } from "@shared/types";
 
 import {
   extractStepContext,
+  extractStepLinks,
   formatLatency,
   type StepTrace,
 } from "./extract-step-context";
@@ -408,5 +409,171 @@ describe("extractStepContext — full block", () => {
       expect(at, `expected "${marker}" present and in order`).toBeGreaterThan(cursor);
       cursor = at;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractStepLinks — URL extraction, dedup, punctuation-strip, image vs other
+// ---------------------------------------------------------------------------
+
+describe("extractStepLinks — URL extraction from output", () => {
+  it("returns an empty array when output has no URLs", () => {
+    expect(extractStepLinks({ output: { score: 720 } })).toEqual([]);
+  });
+
+  it("extracts a plain https URL from a string output", () => {
+    const links = extractStepLinks({ output: "see https://example.com/report for details" });
+    expect(links).toHaveLength(1);
+    expect(links[0].url).toBe("https://example.com/report");
+    expect(links[0].kind).toBe("other");
+  });
+
+  it("extracts URLs embedded in a JSON object output", () => {
+    const links = extractStepLinks({
+      output: { url: "https://cdn.example.com/photo.png", text: "image" },
+    });
+    expect(links.some((l) => l.url === "https://cdn.example.com/photo.png")).toBe(true);
+  });
+
+  it("classifies image-extension URLs as kind='image'", () => {
+    const exts = ["png", "jpg", "jpeg", "webp", "gif", "svg"];
+    for (const ext of exts) {
+      const links = extractStepLinks({ output: `https://cdn.example.com/asset.${ext}` });
+      expect(links[0].kind, `${ext} should be image`).toBe("image");
+    }
+  });
+
+  it("classifies non-image URLs as kind='other'", () => {
+    const links = extractStepLinks({ output: "https://api.example.com/results" });
+    expect(links[0].kind).toBe("other");
+  });
+
+  it("strips trailing sentence punctuation from matched URLs", () => {
+    const inputs = [
+      "Visit https://example.com/report.",
+      "See https://example.com/report,",
+      "Link: https://example.com/report;",
+      "Click https://example.com/report)",
+      "Done https://example.com/report]",
+      "Go https://example.com/report}",
+    ];
+    for (const input of inputs) {
+      const links = extractStepLinks({ output: input });
+      expect(links[0].url, `input: ${input}`).toBe("https://example.com/report");
+    }
+  });
+
+  it("does not strip non-punctuation from the end of URLs", () => {
+    const links = extractStepLinks({ output: "https://example.com/path?q=1&r=2" });
+    expect(links[0].url).toBe("https://example.com/path?q=1&r=2");
+  });
+
+  it("returns empty array when output is absent", () => {
+    expect(extractStepLinks({})).toEqual([]);
+  });
+
+  it("does not linkify non-http(s) schemes — javascript:, data:, file: produce no links", () => {
+    expect(extractStepLinks({ output: "javascript:alert(1)" })).toEqual([]);
+    expect(extractStepLinks({ output: "data:text/html,<script>alert(1)</script>" })).toEqual([]);
+    expect(extractStepLinks({ output: "file:///etc/passwd" })).toEqual([]);
+    // A safe URL alongside a dangerous scheme: only the http(s) one is linkified.
+    const links = extractStepLinks({ output: "see javascript:alert(1) or https://example.com/ok" });
+    expect(links.map((l) => l.url)).toEqual(["https://example.com/ok"]);
+  });
+});
+
+describe("extractStepLinks — URL extraction from logSlice", () => {
+  it("extracts URLs from the log slice", () => {
+    const links = extractStepLinks({ logSlice: "INFO: uploaded to https://storage.example.com/file.pdf" });
+    expect(links[0].url).toBe("https://storage.example.com/file.pdf");
+    expect(links[0].kind).toBe("other");
+  });
+
+  it("extracts image URL from logs and classifies it correctly", () => {
+    const links = extractStepLinks({ logSlice: "Generated: https://cdn.example.com/thumb.jpg" });
+    expect(links[0].kind).toBe("image");
+  });
+});
+
+describe("extractStepLinks — URL extraction from call results", () => {
+  it("extracts URLs from a call's result", () => {
+    const links = extractStepLinks({
+      calls: [{ result: { url: "https://files.example.com/output.pdf" } }],
+    });
+    expect(links[0].url).toBe("https://files.example.com/output.pdf");
+  });
+
+  it("extracts URLs from multiple calls in order", () => {
+    const links = extractStepLinks({
+      calls: [
+        { result: "https://cdn.example.com/a.png" },
+        { result: "https://cdn.example.com/b.png" },
+      ],
+    });
+    expect(links[0].url).toBe("https://cdn.example.com/a.png");
+    expect(links[1].url).toBe("https://cdn.example.com/b.png");
+  });
+
+  it("skips calls with no result", () => {
+    const links = extractStepLinks({
+      calls: [{ result: undefined }, { result: "https://example.com/page" }],
+    });
+    expect(links).toHaveLength(1);
+    expect(links[0].url).toBe("https://example.com/page");
+  });
+});
+
+describe("extractStepLinks — ordering and deduplication", () => {
+  it("scans output first, then logs, then call results (order-preserving)", () => {
+    const links = extractStepLinks({
+      output: "https://example.com/from-output",
+      logSlice: "https://example.com/from-logs",
+      calls: [{ result: "https://example.com/from-call" }],
+    });
+    expect(links[0].url).toBe("https://example.com/from-output");
+    expect(links[1].url).toBe("https://example.com/from-logs");
+    expect(links[2].url).toBe("https://example.com/from-call");
+  });
+
+  it("deduplicates across all sources — the first occurrence wins", () => {
+    const links = extractStepLinks({
+      output: "https://example.com/shared-url",
+      logSlice: "also https://example.com/shared-url here",
+      calls: [{ result: "https://example.com/shared-url" }],
+    });
+    expect(links.filter((l) => l.url === "https://example.com/shared-url")).toHaveLength(1);
+  });
+
+  it("extracts multiple distinct URLs from the same source", () => {
+    const links = extractStepLinks({
+      output: "first https://example.com/a second https://example.com/b done",
+    });
+    expect(links).toHaveLength(2);
+    expect(links[0].url).toBe("https://example.com/a");
+    expect(links[1].url).toBe("https://example.com/b");
+  });
+
+  it("returns an empty array when there are no URLs anywhere", () => {
+    expect(
+      extractStepLinks({
+        output: { score: 720 },
+        logSlice: "INFO: done with no links",
+        calls: [{ result: { ok: true } }],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("extractStepLinks — image-extension classification", () => {
+  it("treats an image URL with a query string as image kind", () => {
+    const links = extractStepLinks({ output: "https://cdn.example.com/img.webp?w=200" });
+    expect(links[0].kind).toBe("image");
+  });
+
+  it("does not classify non-image paths that contain image words as image kind", () => {
+    // Path text that contains '.png' but not as an extension (e.g. a directory
+    // called 'png-output') should NOT be classified as image.
+    const links = extractStepLinks({ output: "https://example.com/png-output/result" });
+    expect(links[0].kind).toBe("other");
   });
 });

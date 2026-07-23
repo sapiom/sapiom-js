@@ -22,7 +22,7 @@ import {
   parseCorrelationId,
   STEP_COMPLETION_OUTCOME,
 } from "@sapiom/agent-runtime";
-import { createStubClient } from "@sapiom/tools/stub";
+import { createStubClient, type StubCallRecord } from "@sapiom/tools/stub";
 
 import type { StubFile } from "./stubs.js";
 
@@ -42,6 +42,12 @@ export interface LocalStepTrace {
   directive?: NextStepDirective;
   error?: { name: string; message: string; stack?: string };
   logs: LogEntry[];
+  /** Capability calls the step's stub client served, in call order. Each entry
+   *  records the dotted capability id, the arguments, and the stub return value.
+   *  Absent when the step made no capability calls (the step ran but called
+   *  nothing, or the trace was constructed without a calls sink). Never an
+   *  empty array — honest absence. */
+  calls?: StubCallRecord[];
 }
 
 export class LocalStubDispatcher implements StepDispatcher {
@@ -109,11 +115,15 @@ export class LocalStubDispatcher implements StepDispatcher {
       usedKeys = new Set<string>();
       this.usedKeysByStep.set(request.stepName, usedKeys);
     }
+    // Per-step calls sink: collects each stub-served capability call so the
+    // inspector can show exactly what the step called and what it received back.
+    const stepCalls: StubCallRecord[] = [];
     const sapiom = createStubClient({
       overrides,
       signals: this.signals,
       usedKeys,
       warnings: this.stubWarnings,
+      calls: stepCalls,
     });
 
     const ctx = {
@@ -134,14 +144,16 @@ export class LocalStubDispatcher implements StepDispatcher {
       directive = await step.run(request.input, ctx);
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
-      this.trace.push({
+      const traceEntry: LocalStepTrace = {
         step: request.stepName,
         attempt: request.attempt,
         input: request.input,
         status: "threw",
         error: { name: e.name, message: e.message, stack: e.stack },
         logs,
-      });
+      };
+      if (stepCalls.length > 0) traceEntry.calls = stepCalls;
+      this.trace.push(traceEntry);
       await this.core.completeDispatchedStep(
         {
           protocol: 1,
@@ -157,7 +169,7 @@ export class LocalStubDispatcher implements StepDispatcher {
     }
 
     const { output, wire } = splitDirective(directive);
-    this.trace.push({
+    const traceEntry: LocalStepTrace = {
       step: request.stepName,
       attempt: request.attempt,
       input: request.input,
@@ -165,7 +177,9 @@ export class LocalStubDispatcher implements StepDispatcher {
       output,
       directive,
       logs,
-    });
+    };
+    if (stepCalls.length > 0) traceEntry.calls = stepCalls;
+    this.trace.push(traceEntry);
     const payload: StepCompletionPayload = {
       protocol: 1,
       correlationId: request.correlationId,

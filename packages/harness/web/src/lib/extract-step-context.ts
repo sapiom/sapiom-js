@@ -1,4 +1,23 @@
 /**
+ * extractStepLinks — scan a step's output, log slice, and capability-call
+ * results for http(s) URLs, returning deduped, order-preserving entries with
+ * trailing punctuation stripped.
+ *
+ * Each entry is typed as either an "image" (the URL path ends with a common
+ * image extension) or "other" (all other URLs). Image entries render as
+ * clickable thumbnails; other entries render as labelled anchor links.
+ *
+ * Pure and unit-testable: no I/O, no side effects. The scanner serialises
+ * each source value to a string (same as formatValue below) so it can search
+ * for URLs embedded inside JSON objects without the caller pre-serialising
+ * anything. Trailing sentence punctuation (`.,;:)]}`) is stripped so a URL
+ * ending a sentence does not carry the closing character into the href.
+ *
+ * Provider rule: the function never inspects, names, or modifies the
+ * capability id — it only looks at the *result* values.
+ */
+
+/**
  * Debug-macro context builder for the run-inspector's step detail.
  *
  * The Studio's Debug / Explain / "why is this step slow" macros inject a
@@ -20,7 +39,7 @@
  * capability. The run trace and the graph are already capability-scoped; this
  * module never reaches for a model name.
  */
-import type { StepView } from "@shared/types";
+import type { StepCall, StepView } from "@shared/types";
 
 /** Maximum characters of the log slice to include (tail-kept — see below). */
 const LOG_CAP = 3000;
@@ -29,22 +48,6 @@ const LOG_CAP = 3000;
  *  Step payloads can be large; the agent needs the shape and the leading
  *  content, not a multi-megabyte dump pasted into its prompt. */
 const VALUE_CAP = 2000;
-
-/**
- * One capability call a step made during the run, as the debug context reports
- * it. Deliberately capability-scoped and provider-agnostic: `capability` is a
- * dotted capability id (e.g. `web.search`, `models.coding.run`) — never a
- * provider/model name. `stubUsed` records whether this call was served by a
- * supplied stub instead of a real capability call, which is the single most
- * load-bearing fact when explaining a local (offline) run: a step that
- * "succeeded" against a stub did not exercise the real capability.
- */
-export interface StepCall {
-  /** Dotted capability id this call targeted (provider-agnostic). */
-  capability: string;
-  /** True when a supplied stub served this call rather than the real capability. */
-  stubUsed?: boolean;
-}
 
 /**
  * The rich per-step evidence the run trace exposes, in the shape the debug
@@ -226,4 +229,91 @@ export function extractStepContext(
   }
 
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// extractStepLinks — URL extraction from step output / logs / call results
+// ---------------------------------------------------------------------------
+
+/** One extracted URL with its classification. */
+export interface StepLink {
+  /** The raw URL (trailing punctuation already stripped). */
+  url: string;
+  /** "image" when the URL path ends with a common raster/vector image
+   *  extension; "other" for all other URLs. */
+  kind: "image" | "other";
+}
+
+/** Common image extensions recognised for thumbnail rendering. */
+const IMAGE_EXTS = /\.(png|jpg|jpeg|webp|gif|svg)($|\?)/i;
+
+/** URL pattern — matches http:// and https:// URLs. The boundary after the
+ *  URL stops on whitespace or a trailing sentence-punctuation character.
+ *  Trailing punctuation (`.,;:)]}`) is stripped in a post-pass rather than
+ *  at the regex boundary so multi-character suffixes like ")." work. */
+const URL_RE = /https?:\/\/[^\s"'<>`\])\]]+/gi;
+
+/** Characters we strip from the end of a matched URL — sentence terminators
+ *  and closing delimiters that appear after a URL in prose / JSON strings. */
+const TRAILING_PUNCT = /[.,;:)\]}\s]+$/;
+
+/** Serialise an arbitrary value so the URL scanner can search inside objects
+ *  and arrays. Strings are returned verbatim; everything else is JSON-encoded
+ *  (falling back to String() on a non-serialisable value). */
+function serializeForScan(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * Scan the step's output, log slice, and capability-call results for
+ * http(s) URLs, returning deduped, order-preserving entries. Trailing
+ * sentence punctuation is stripped from each URL. Each entry is typed as
+ * "image" or "other" based on the URL path suffix.
+ *
+ * Sources scanned IN ORDER (duplicates removed across all sources):
+ *   1. `step.output` (serialised)
+ *   2. `step.logSlice`
+ *   3. Each `step.calls[].result` (serialised per call, in call order)
+ *
+ * Pure: no I/O.
+ */
+export function extractStepLinks(step: {
+  output?: unknown;
+  logSlice?: string;
+  calls?: Array<{ result?: unknown }>;
+}): StepLink[] {
+  const seen = new Set<string>();
+  const results: StepLink[] = [];
+
+  const addFrom = (text: string): void => {
+    const matches = text.matchAll(URL_RE);
+    for (const [raw] of matches) {
+      const url = raw.replace(TRAILING_PUNCT, "");
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const kind: "image" | "other" = IMAGE_EXTS.test(url) ? "image" : "other";
+      results.push({ url, kind });
+    }
+  };
+
+  if (step.output !== undefined) {
+    addFrom(serializeForScan(step.output));
+  }
+  if (step.logSlice) {
+    addFrom(step.logSlice);
+  }
+  if (step.calls) {
+    for (const call of step.calls) {
+      if (call.result !== undefined) {
+        addFrom(serializeForScan(call.result));
+      }
+    }
+  }
+
+  return results;
 }

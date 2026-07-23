@@ -96,6 +96,16 @@ function toStepView(step: StepProjection): StepView {
   // step's own values, with no provider/model surfaced.
   if (step.input !== null) view.input = step.input;
   if (step.output !== null) view.output = step.output;
+  // `step.events` are capability execution events forwarded by dispatched
+  // capabilities (e.g. tool_use / thinking / result events from a coding run).
+  // They do NOT represent dotted workflow capability calls (search.webSearch,
+  // memory.append, etc.) with args/results in the StepCall format, so we
+  // cannot map them to StepView.calls without fabricating structure that isn't
+  // there. `calls` is left absent for prod steps. The inspector's
+  // input/output/logs already carry the step-level evidence for prod runs;
+  // per-call detail is a fast-follow that requires a server-side addition to
+  // the projection shape (emitting dotted-capability call records alongside
+  // their args/results at the step level).
   return view;
 }
 
