@@ -412,7 +412,79 @@ export type BusMessage =
       status: RunView["status"];
     }
   /** The run could not be started or streamed (auth, upstream, or decode). */
-  | { type: "spine.error"; spineRunId: string; error: string };
+  | { type: "spine.error"; spineRunId: string; error: string }
+  // -------------------------------------------------------------------------
+  // Assistant streaming contract (SAP-1807) — the formalized layer over the
+  // spine spike. The Assistant's tools ARE named Sapiom workflows; dispatching
+  // one runs it ON OUR ACCOUNT and streams the exchange over this bus. Where
+  // `spine.*` carries a raw run's step transitions, `assistant.*` carries the
+  // conversation the pane renders: a tool call, the assistant turn it streams,
+  // its terminal result, and graceful errors. `dispatchId` correlates every
+  // message of one dispatch and — like `spineRunId` — is minted BEFORE the
+  // cloud run exists, so a start failure still routes to the right listener.
+  // The contract S4 (pane) and S5 (tool wiring) build against.
+  // -------------------------------------------------------------------------
+  /**
+   * The assistant is invoking a named tool (a Sapiom workflow) with `input`.
+   * Emitted once per dispatch, before the run is enqueued.
+   */
+  | {
+      type: "assistant.tool_call";
+      dispatchId: string;
+      tool: string;
+      input: Record<string, unknown>;
+    }
+  /**
+   * One incremental frame of an assistant turn, scoped by `turnId` within the
+   * dispatch. Folds onto the pane's turn reducer with no translation (see
+   * {@link AssistantTurnFrame}).
+   */
+  | {
+      type: "assistant.turn";
+      dispatchId: string;
+      turnId: string;
+      frame: AssistantTurnFrame;
+    }
+  /**
+   * The tool run reached a terminal state. `ok` is the dispatch outcome;
+   * `executionId`/`status` are present once the cloud run materialized (absent
+   * on a start failure — honest absence, never a fake id).
+   */
+  | {
+      type: "assistant.tool_result";
+      dispatchId: string;
+      tool: string;
+      ok: boolean;
+      executionId?: string;
+      status?: RunView["status"];
+    }
+  /**
+   * The dispatch could not complete (unknown tool, not signed in, upstream, or
+   * decode). The app surfaces it as an error turn and stays usable — the spine
+   * never blocks the Studio.
+   */
+  | { type: "assistant.error"; dispatchId: string; error: string };
+
+// ---------------------------------------------------------------------------
+// Assistant streaming contract — turn shape (see BusMessage assistant.* above)
+// ---------------------------------------------------------------------------
+
+/** Who authored an assistant-conversation turn. `user` is the person;
+ *  `assistant` is the Sapiom-run helper. */
+export type AssistantTurnRole = "user" | "assistant";
+
+/**
+ * One incremental frame of an assistant turn. A turn opens with `started`,
+ * grows via zero or more `delta`s, and closes with `completed`. Deliberately
+ * mirrors the pane's turn reducer (`web/src/lib/assistant-stream.ts`) so a bus
+ * turn folds onto the rendered conversation with a source change only — the
+ * `turnId` on the bus message is that reducer's join `id`, and `started`'s
+ * `text` seeds a turn that arrives whole (e.g. the user's own prompt).
+ */
+export type AssistantTurnFrame =
+  | { kind: "started"; role: AssistantTurnRole; text?: string }
+  | { kind: "delta"; text: string }
+  | { kind: "completed" };
 
 // ---------------------------------------------------------------------------
 // Intelligence spine — streamed frame shape (see BusMessage spine.* above)
