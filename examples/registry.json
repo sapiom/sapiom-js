@@ -365,6 +365,55 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "scheduled-compliance-audit",
+      "name": "Scheduled Compliance Audit + Attestation",
+      "description": "On a schedule, it audits your resources against a policy, waits for a person to sign off, then archives the signed attestation.",
+      "tags": ["compliance", "scheduled", "human-in-the-loop", "attestation"],
+      "sourcePath": "examples/scheduled-compliance-audit",
+      "capabilities": [
+        "web.scrape",
+        "models.run",
+        "fileStorage.upload",
+        "fileStorage.getDownloadUrl"
+      ],
+      "whatItDoes": "For a recurring policy audit you need a signed record of. On each tick it reads the current state of the resources you point it at — a config page, a status endpoint, a policy doc — and hands that state and your policy to an LLM (models.run) that returns an overall verdict plus one check per requirement, with evidence and a fix for each failure. Then it pauses and waits for a person to sign off, costing nothing while idle. Only an explicit approval archives the signed attestation to durable file storage (fileStorage) and hands back a download link — because an attestation records that a human reviewed and approved, it is never filed automatically. Decline and the findings come back, but nothing is archived. A dryRun flag returns the whole attestation as a preview without archiving.",
+      "steps": [
+        {
+          "name": "collect",
+          "description": "Read the current state of each resource with a scrape, keeping the error as missing evidence when a page won't load.",
+          "capability": "web.scrape",
+          "next": ["audit"]
+        },
+        {
+          "name": "audit",
+          "description": "Hand the collected state and your policy to an LLM to produce a verdict and one evidence-cited check per requirement.",
+          "capability": "models.run",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Pause and wait for a human sign-off signal, costing nothing while idle (resumes at 'onSignoff').",
+          "next": ["onSignoff"]
+        },
+        {
+          "name": "onSignoff",
+          "description": "Read the sign-off reply: an explicit approve archives the attestation, anything else backs out with nothing filed.",
+          "next": ["archive", "rejected"]
+        },
+        {
+          "name": "archive",
+          "description": "Write the signed attestation to durable file storage and return its file id and download link; a dry run skips the upload.",
+          "capability": "fileStorage.upload",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Sign-off was declined — return the audit findings, having archived nothing.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
