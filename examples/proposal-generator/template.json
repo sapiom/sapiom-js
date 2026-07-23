@@ -1,0 +1,52 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Turn an inbound request into a client-ready quote without the copy-paste. You give it the requirement — a brief, an RFP, a description of what the client wants — and an LLM (`models.run`) drafts a proposal: a title, a summary, a scope list, and priced line items. Your code, not the model, totals the numbers.\n\nIt then renders that draft into a real PDF. A throwaway sandbox (`ctx.sapiom.sandboxes`) lays the quote out with a small Node script and the file lands in your file storage (`ctx.sapiom.fileStorage`), so you get a durable link you can share. The sandbox is torn down as soon as the render is done.\n\nBefore anything reaches the client, it pauses. It emails your approver a summary and the PDF link, then waits on a real approval signal (`pauseUntilSignal`) — the run costs nothing while it sits idle, for minutes or days. Approve it and it emails the finished proposal to the client; reject it and it stops with the draft still on file. The one outward action — the client email — only happens after a person says yes.\n\nYou pay for the model reasoning, the sandbox render, the file storage, and the emails. The waiting is free.",
+  "useCases": [
+    "Answer an inbound RFP or brief with a priced, formatted PDF quote instead of a hand-built doc.",
+    "Keep a human in the loop — review and approve every proposal before it goes to the client.",
+    "Give sales or an agency a repeatable quote flow: same structure, same sign-off, every time."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page with your request. Your $5 signup credit covers first runs.\n\nThis workflow pauses once and waits for a real approval, so you drive it as it runs. It drafts the proposal, renders the PDF, emails your approver, then pauses. Send the decision with the MCP `workflow_signal` tool: signal `proposal.decision`, `correlationId` set to the run's executionId, payload `{ \"decision\": \"approve\" }` to email the client (or `{ \"decision\": \"reject\" }` to stop). Set an `approver` and a client `email` (or pass `config.APPROVER_EMAIL` / `config.CLIENT_EMAIL`) so the notifications have somewhere to go; pass `dryRun: true` to run the whole thing but skip the client email.\n\nPrefer to work from the code? Run it locally with `run_local` — it stubs the capabilities and auto-resumes the pause (a resume with no decision takes the safe reject branch, and the stubbed sandbox skips the real byte upload), so the whole graph traces end to end for free. Then edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Draft, render, approve, and send a quote",
+      "input": {
+        "request": "We need a marketing website: 5 pages, a blog, a contact form, and basic SEO. Launch in 6 weeks.",
+        "client": {
+          "name": "Dana Lee",
+          "company": "Northwind Coffee",
+          "email": "dana@northwind.example.com"
+        },
+        "from": { "company": "Acme Studio" },
+        "currency": "USD",
+        "taxRate": 0.08,
+        "approver": "owner@acme.example.com"
+      },
+      "output": {
+        "sent": true,
+        "dryRun": false,
+        "outcome": "sent",
+        "quoteNumber": "Q-3F9A2C",
+        "total": 12960
+      }
+    },
+    {
+      "title": "Rejected at review — nothing goes to the client",
+      "input": {
+        "request": "Quote a one-day logo refresh.",
+        "client": { "name": "Sam", "email": "sam@example.com" },
+        "approver": "owner@acme.example.com"
+      },
+      "output": {
+        "sent": false,
+        "outcome": "rejected",
+        "quoteNumber": "Q-8B1D40"
+      }
+    }
+  ]
+}

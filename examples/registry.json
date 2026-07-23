@@ -367,6 +367,175 @@
       ]
     },
     {
+      "id": "proposal-generator",
+      "name": "Proposal / Quote Generator",
+      "description": "Draft a client proposal from a request, render it to a PDF, then wait for a person to approve it before it emails the client.",
+      "tags": ["sales", "pdf", "approval", "human-in-the-loop"],
+      "sourcePath": "examples/proposal-generator",
+      "capabilities": [
+        "models.run",
+        "sandboxes.create",
+        "fileStorage.upload",
+        "email.send"
+      ],
+      "whatItDoes": "For turning an inbound request into a client-ready quote without building the doc by hand. You give it the requirement and an LLM (models.run) drafts a proposal — a title, a summary, a scope list, and priced line items — then your code, not the model, totals the numbers. It renders that draft into a real PDF in a throwaway sandbox and saves the file, so you get a link you can share. Before anything reaches the client it emails your approver a summary and pauses, costing nothing while it waits. Approve it and it emails the finished proposal to the client; reject it and it stops with the draft still on file. The one outward step only runs after a person says yes.",
+      "steps": [
+        {
+          "name": "draft",
+          "description": "An LLM turns the request into a structured proposal — title, summary, scope, and priced line items — then the totals are computed in code, not trusted from the model.",
+          "capability": "models.run",
+          "next": ["render"]
+        },
+        {
+          "name": "render",
+          "description": "Spin up a sandbox, lay the proposal out as a PDF with a small Node script, save the file to storage, then tear the sandbox down.",
+          "capability": "sandboxes.create",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Email the approver a summary and the PDF link, then pause and wait for their decision — costing nothing while idle (resumes at 'onDecision').",
+          "capability": "email.send",
+          "next": ["onDecision"]
+        },
+        {
+          "name": "onDecision",
+          "description": "Read the approval reply: approve emails the client, anything else stops safely with nothing sent.",
+          "next": ["send", "rejected"]
+        },
+        {
+          "name": "send",
+          "description": "The one outward step — email the approved proposal to the client. A dry run skips the send.",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Rejected at review — nothing goes to the client, and the draft PDF stays on file.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "pr-review-bot",
+      "name": "PR Review Bot",
+      "description": "When a pull request opens, a coding agent reviews the code and flags missing tests, then posts the review to your email or Slack.",
+      "tags": ["coding-agent", "review", "pause-resume", "webhook"],
+      "sourcePath": "examples/pr-review-bot",
+      "capabilities": ["models.coding", "models.run", "email.send", "vault.get"],
+      "whatItDoes": "An always-on first-pass reviewer for your pull requests. It registers a PR webhook and then waits, costing nothing while idle — it can sit for days between reviews. When a PR is opened, the run wakes with the PR as its input: a coding agent checks the code out in a sandbox and reads the diff, told to look hardest at test coverage and list any change that shipped without a matching test. It reviews, it doesn't edit — nothing is pushed. A model then turns those raw notes into a short, structured review — a verdict, a summary, and the missing tests — and posts it to your email or, using a bot token you keep in the Vault, a Slack channel.",
+      "steps": [
+        {
+          "name": "watch",
+          "description": "Registers a PR webhook and how to resume this run, then pauses and waits for a pull request — costing nothing while idle.",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Wakes when a PR opens; its input is the PR payload. A coding agent checks the code out and analyzes the diff, flagging changes that lack tests.",
+          "capability": "models.coding",
+          "next": ["assess"]
+        },
+        {
+          "name": "assess",
+          "description": "A model turns the coding agent's raw findings into a structured review — a verdict, a summary, and the list of missing tests.",
+          "capability": "models.run",
+          "next": ["reportEmail", "reportSlack"]
+        },
+        {
+          "name": "reportEmail",
+          "description": "Emails the review to the configured recipient.",
+          "capability": "email.send",
+          "next": ["posted", "failed"]
+        },
+        {
+          "name": "reportSlack",
+          "description": "Reads your Slack bot token from the Vault and posts the review to the configured channel.",
+          "capability": "vault.get",
+          "next": ["posted", "failed"]
+        },
+        {
+          "name": "posted",
+          "description": "Return the result — the channel used and the verdict.",
+          "terminal": true
+        },
+        {
+          "name": "failed",
+          "description": "The send errored; return the error.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "research-to-microsite",
+      "name": "Research → Micro-Site Publisher",
+      "description": "Research a topic across the web, then build and deploy a shareable live report site — not just a document.",
+      "tags": ["research", "coding-agent", "sandbox", "publish"],
+      "sourcePath": "examples/research-to-microsite",
+      "capabilities": [
+        "web.search",
+        "web.scrape",
+        "models.run",
+        "models.coding",
+        "sandboxes.deployPreview",
+        "domains.dns.create"
+      ],
+      "whatItDoes": "For when you want research to end in something you can link to, not a doc. It searches the web for your topic and reads the top sources for their full text. An LLM (models.run) turns those into a structured, cited report — a title, a summary, and a few sections that reference where each claim came from. Then a coding agent (models.coding) builds a self-contained static site from that report, and the run deploys it to a public URL (sandboxes.deployPreview). Point a domain you own at it and it adds a free CNAME so the site answers on your subdomain; skip the domain and the preview URL is the deliverable. The coding build can take minutes, so build launches it and the run pauses until it's ready — costing nothing while it works. Pass dryRun to get the report back without building or deploying anything.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Take the topic and run one web search for candidate sources.",
+          "capability": "web.search",
+          "next": ["scrape"]
+        },
+        {
+          "name": "scrape",
+          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
+          "capability": "web.scrape",
+          "next": ["synthesize"]
+        },
+        {
+          "name": "synthesize",
+          "description": "Hand the sources to an LLM to write a structured, cited report. A dry run stops here and returns the report.",
+          "capability": "models.run",
+          "next": ["build", "drafted"]
+        },
+        {
+          "name": "build",
+          "description": "Launch a coding agent to build a self-contained static site from the report, then pause until it finishes — costing nothing while it works.",
+          "capability": "models.coding",
+          "next": ["publish"]
+        },
+        {
+          "name": "publish",
+          "description": "Re-attach the coding agent's sandbox and deploy the site to a stable public URL.",
+          "capability": "sandboxes.deployPreview",
+          "next": ["mapDomain", "live", "failed"]
+        },
+        {
+          "name": "mapDomain",
+          "description": "If a domain you own is configured, point a subdomain at the live site with a free CNAME; otherwise this is skipped.",
+          "capability": "domains.dns.create",
+          "next": ["live"]
+        },
+        {
+          "name": "live",
+          "description": "Return the live URL, the custom URL when one was mapped, the report title, and the sources.",
+          "terminal": true
+        },
+        {
+          "name": "failed",
+          "description": "The build or the deploy failed; return the stage and the logs.",
+          "terminal": true
+        },
+        {
+          "name": "drafted",
+          "description": "The dry-run off-ramp: the report was computed but nothing was built or deployed.",
+          "terminal": true
+        }
+      ]
+    },
+    {
       "id": "cold-outreach-engine",
       "name": "Cold Outreach Personalization Engine",
       "description": "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip follow-ups that stop the moment someone replies.",
