@@ -87,8 +87,11 @@ export function ConnectivityScreen({
     setAuthProgress({ status: "pending" });
     try {
       await onStartAuth();
-      // Server returns immediately with { started: true }; auth.changed bus
-      // message will drive the parent to retry/reload.
+      // POST /api/auth/start returns { started: true } as soon as the browser
+      // window opens — NOT when sign-in completes. Reset to idle so the button
+      // is available for retry; auth.changed { authenticated: true } (which
+      // unmounts this screen entirely) is the only success signal.
+      setAuthProgress({ status: "idle" });
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Could not start sign-in. Try again.";

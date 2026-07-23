@@ -326,6 +326,93 @@ describe("auth.changed state update logic", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ConnectivityScreen.handleConnect — cancel/failure reset (regression guard)
+// ---------------------------------------------------------------------------
+
+/**
+ * Regression guard for the stuck "Connecting…" spinner on the
+ * connectivity/auth-error screen (Fix 1).
+ *
+ * The screen has no `authenticated` prop to drive a reset, so the only reset
+ * path is inside handleConnect itself. POST /api/auth/start returns
+ * { started: true } when the browser window opens — NOT when sign-in
+ * completes. We must reset to idle immediately after the await so the button
+ * is available for retry if the user cancels or the flow fails server-side.
+ * auth.changed { authenticated: true } (which unmounts the screen) is the
+ * only success signal.
+ *
+ * We test the pure state-machine logic in isolation (no React/jsdom needed).
+ */
+describe("ConnectivityScreen.handleConnect — cancel/failure reset", () => {
+  type AuthScreenProgress =
+    | { status: "idle" }
+    | { status: "pending" }
+    | { status: "error"; message: string };
+
+  /**
+   * Models the handleConnect function logic from ConnectivityScreen.
+   * Accepts an onStartAuth stub and returns the terminal progress state.
+   */
+  const runHandleConnect = async (
+    onStartAuth: () => Promise<{ started: boolean }>,
+  ): Promise<AuthScreenProgress> => {
+    let progress: AuthScreenProgress = { status: "pending" };
+    try {
+      await onStartAuth();
+      // POST /api/auth/start returning { started: true } only means the browser
+      // opened — reset to idle so the button is available for retry on cancel.
+      progress = { status: "idle" };
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Could not start sign-in. Try again.";
+      progress = { status: "error", message };
+    }
+    return progress;
+  };
+
+  it("resets to idle after onStartAuth resolves — no stuck spinner on cancel/failure", async () => {
+    // Simulates: browser opens (started: true), user cancels, server later
+    // broadcasts auth.changed { authenticated: false }. The screen must be
+    // in idle (button available for retry), NOT stuck in pending.
+    const onStartAuth = vi.fn().mockResolvedValue({ started: true });
+    const progress = await runHandleConnect(onStartAuth);
+    expect(progress.status).toBe("idle");
+  });
+
+  it("remains retryable after auth.changed { authenticated: false } following a cancel", async () => {
+    // auth.changed { authenticated: false } arrives after cancel — the
+    // ConnectivityScreen stays mounted (parent only unmounts on true).
+    // The screen must show the Connect button, not the spinner.
+    const onStartAuth = vi.fn().mockResolvedValue({ started: true });
+    const progressAfterOpen = await runHandleConnect(onStartAuth);
+    // Simulate auth.changed { authenticated: false } (screen stays up):
+    // since progress is already idle, the button is available.
+    expect(progressAfterOpen.status).toBe("idle");
+    // A second attempt can proceed — not blocked by a stale pending state.
+    const progressAfterRetry = await runHandleConnect(onStartAuth);
+    expect(progressAfterRetry.status).toBe("idle");
+  });
+
+  it("sets error state when onStartAuth rejects", async () => {
+    const onStartAuth = vi.fn().mockRejectedValue(new Error("Network error"));
+    const progress = await runHandleConnect(onStartAuth);
+    expect(progress.status).toBe("error");
+    if (progress.status === "error") {
+      expect(progress.message).toBe("Network error");
+    }
+  });
+
+  it("falls back to generic message when rejection is not an Error instance", async () => {
+    const onStartAuth = vi.fn().mockRejectedValue("string rejection");
+    const progress = await runHandleConnect(onStartAuth);
+    expect(progress.status).toBe("error");
+    if (progress.status === "error") {
+      expect(progress.message).toBe("Could not start sign-in. Try again.");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ApiError — shapes the auth methods rely on
 // ---------------------------------------------------------------------------
 

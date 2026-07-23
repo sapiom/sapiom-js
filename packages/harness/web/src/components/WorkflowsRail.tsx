@@ -9,9 +9,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import type { AuthStartResponse } from "../lib/api";
-
-import type { FsListResponse } from "../lib/api";
+import type { AuthStartResponse, FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
