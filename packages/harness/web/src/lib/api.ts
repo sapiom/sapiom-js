@@ -1045,6 +1045,20 @@ class MockApi implements HarnessApi {
     const building: DeployStreamEvent = { phase: "building", definitionId: "mock-def" };
     onEvent?.(building);
     await delay(400);
+    // Test-only failure mode: `?mockError=deploy` makes the stream end with a
+    // phase:"error" terminal event so Playwright can exercise the deploy-failed
+    // affordance (lastDeployError persists, chip reads "Deploy failed",
+    // prod-run disabled-reason reads "Last deploy failed — retry Deploy").
+    if (mockErrorTargets().has("deploy")) {
+      const failed: DeployStreamEvent = {
+        phase: "error",
+        code: "BUILD_FAILED",
+        message: "mock build error",
+        hint: "check your workflow definition",
+      };
+      onEvent?.(failed);
+      return failed;
+    }
     const ready: DeployStreamEvent = {
       phase: "ready",
       definitionId: "mock-def",

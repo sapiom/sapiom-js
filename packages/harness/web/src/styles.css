@@ -1039,6 +1039,15 @@ input {
   color: var(--brand);
 }
 
+/* Deploy-failed affordance: the chip reads "Deploy failed" and uses the
+   warning hue — distinct from both the neutral Draft state and the brand
+   Deployed state. Uses the shared --text-warning token (amber) so it
+   respects the theme and prefers-reduced-motion is inherited from the
+   existing motion rules above. */
+.session-lifecycle-chip[data-deploy-error] {
+  color: var(--text-warning);
+}
+
 .session-actions {
   display: flex;
   align-items: center;
