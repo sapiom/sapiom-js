@@ -76,8 +76,8 @@ export type RunLocalLine =
       outcome: LocalRunOutcome;
       output?: unknown;
       error?: unknown;
-      unusedStubs: Array<{ step: string; key: string }>;
-      stubWarnings: string[];
+      unusedStubs?: Array<{ step: string; key: string }>;
+      stubWarnings?: string[];
     }
   | { kind: "error"; outcome: "failed"; error: string };
 
@@ -1074,7 +1074,7 @@ class MockApi implements HarnessApi {
       onLine(trace);
     }
     await delay(140);
-    onLine({ kind: "summary", outcome: "completed", output: { approved: true }, unusedStubs: [], stubWarnings: [] });
+    onLine({ kind: "summary", outcome: "completed", output: { approved: true } });
   }
 
   // The direct actions have no network in mock mode: they synthesize the same

@@ -1,5 +1,5 @@
 /**
- * Run-inspector e2e coverage (SAP-1787).
+ * Run-inspector e2e coverage.
  *
  * Contract under test — two scenarios, no network, no agent binary:
  *
@@ -147,7 +147,7 @@ test.describe("offline stub run — run-local inspector", () => {
     // Seed a RunView with hygiene signals for the next getRunState poll.
     // The same StubNoticeSection({run}) path renders for both local and prod
     // runs — the notice is run-level and target-agnostic.
-    const hygienieRunView: RunView = {
+    const hygieneRunView: RunView = {
       executionId: "exec-hygiene-test",
       status: "completed",
       // stubbed:true is normally set by renderLocalRun but is a valid RunView
@@ -159,7 +159,7 @@ test.describe("offline stub run — run-local inspector", () => {
       unusedStubs: [{ step: "intake", key: "contentGeneration.images.create" }],
       stubWarnings: ["intake: stub for records.read had wrong shape"],
     };
-    await seedRunState(page, "exec-hygiene-test", hygienieRunView);
+    await seedRunState(page, "exec-hygiene-test", hygieneRunView);
 
     await publish(page, {
       type: "execution.started",
