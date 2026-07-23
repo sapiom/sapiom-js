@@ -22,12 +22,10 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 
-test("the composer's + is the ONE attach entry — no duplicate standalone button", async ({ page }) => {
-  // The chat composer's + (wired to the pane-level picker via
-  // ImageAttachContext) is the only attach control on an image-capable
-  // session; the old standalone "Attach image" button below the composer is
-  // gone, and the queue strip only appears once something is queued.
-  await expect(page.getByTestId("composer-attach")).toBeVisible();
+test("no standalone attach button at idle — the queue strip only appears once something is queued", async ({ page }) => {
+  // Images are attached via paste, drag-and-drop, or the hidden file input.
+  // No standalone attach button renders at idle; the queue strip only appears
+  // once something is queued.
   await expect(page.getByTestId("image-composer-attach")).toHaveCount(0);
   await expect(page.locator(".image-composer-bar")).toHaveCount(0);
   await page.screenshot({ path: "web/e2e/screenshots/image-composer-idle.png" });

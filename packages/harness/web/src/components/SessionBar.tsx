@@ -56,10 +56,6 @@ interface SessionBarProps {
   /** Push a message onto the app's toast rail — the ⋯ menu's Copy path
    *  confirms the same way the rail's copy action does. */
   onToast: (message: string) => void;
-  /** Which surface the session slot is showing. State lives in App — both
-   *  surfaces stay mounted there so a flip never tears down the pty. */
-  agentView: "chat" | "terminal";
-  onSetAgentView: (view: "chat" | "terminal") => void;
 }
 
 /**
@@ -82,8 +78,6 @@ export function SessionBar({
   onCloseSession,
   onOpenInEditor,
   onToast,
-  agentView,
-  onSetAgentView,
 }: SessionBarProps): JSX.Element {
   // Ending a live session kills a real PTY — the option opens a confirm dialog.
   const [confirmingClose, setConfirmingClose] = useState(false);
@@ -225,39 +219,6 @@ export function SessionBar({
           <span className="session-context-none">No active session</span>
         )}
       </div>
-
-      {/* Chat | Terminal switch for the live session slot — icon-only
-          segments on the header's shared icon-button scale. Hidden for the
-          overview, past-session review, and dead sessions, where neither
-          surface is showing. */}
-      {!overviewMode && !reviewTitle && !openedAgentName && activeSession && activeSession.status !== "exited" && (
-        <div className="session-view-toggle" role="group" aria-label="Session view">
-          <button
-            type="button"
-            className="theme-toggle session-view-btn"
-            data-testid="agent-tab-chat"
-            aria-pressed={agentView === "chat"}
-            aria-controls="agent-panel-chat"
-            aria-label="Chat"
-            data-tooltip="Chat"
-            onClick={() => onSetAgentView("chat")}
-          >
-            <Icon name="MessageSquare" size={14} />
-          </button>
-          <button
-            type="button"
-            className="theme-toggle session-view-btn"
-            data-testid="agent-tab-terminal"
-            aria-pressed={agentView === "terminal"}
-            aria-controls="agent-panel-terminal"
-            aria-label="Terminal"
-            data-tooltip="Terminal"
-            onClick={() => onSetAgentView("terminal")}
-          >
-            <Icon name="SquareTerminal" size={14} />
-          </button>
-        </div>
-      )}
 
       {/* Session options as a ⋯ menu (never in overview, review, or opened-
           agent mode — destructive session actions there would read as closing

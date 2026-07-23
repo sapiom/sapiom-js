@@ -359,11 +359,11 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     ).toHaveCount(1);
 
     // Start runs the create+bind path in rfq's OWN folder (never borrowing the
-    // acme-app session), and the workbench goes live.
+    // acme-app session), and the workbench goes live with the terminal.
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toHaveText("rfq-workflows");
     await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
-    await expect(page.getByTestId("chat-input")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.locator(".session-tab")).toHaveCount(1);
   });
 

@@ -105,9 +105,9 @@ function transcript(): ScriptLine[] {
     { text: green("⏺") + " " + bold("Read") + "(sapiom.json)\r\n", delayMs: 600 },
     { text: dim("  ⎿  Read 42 lines") + "\r\n\r\n", delayMs: 500 },
     {
-      // Same workflow, same slugs, same counting rule as mock-chat.ts and
-      // the canvas graph: leasing = 4 typed steps + 2 exits. The
-      // chain is pre-broken so no pane width splits a step name mid-word.
+      // Same workflow, same slugs, same counting rule as the canvas graph:
+      // leasing = 4 typed steps + 2 exits. The chain is pre-broken so no
+      // pane width splits a step name mid-word.
       text:
         green("⏺") +
         " Found workflow " +
@@ -132,7 +132,7 @@ function transcript(): ScriptLine[] {
       delayMs: 700,
     },
     // The prod run after Visualize — the CLI transcript matches the other
-    // surfaces' end-state (Steps and chat receipt show the same run).
+    // surfaces' end-state (the Steps tab shows the same run).
     { text: bold("> ") + "Run it on prod\r\n\r\n", delayMs: 800 },
     { text: green("⏺") + " " + bold("Bash") + "(sapiom agents run --target prod)\r\n", delayMs: 700 },
     { text: dim("  ⎿  Started execution exec-leasing-prod-001") + "\r\n\r\n", delayMs: 600 },

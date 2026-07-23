@@ -12,9 +12,8 @@
  * It renders the attach UI only when the active session's harness declares
  * image support (GET /api/harnesses) — against the harness-launch server
  * (eebb95c), which predates the endpoint, the field is absent and the whole
- * affordance self-hides. In the Studio the composer wraps BOTH session
- * surfaces (chat + terminal): the queue is session-scoped, not surface-scoped,
- * so a paste lands on the same queue whichever view is showing.
+ * affordance self-hides. The queue is session-scoped so a paste or drop
+ * always lands on the active session's queue.
  */
 import { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, JSX, ReactNode } from "react";
@@ -29,7 +28,7 @@ import { Icon } from "./Icon";
 
 /**
  * Opens the composer's file picker from anywhere inside the wrapped session
- * pane (the chat composer's + button). Null when no ImageComposer wraps the
+ * pane (the session toolbar's attach button). Null when no ImageComposer wraps the
  * consumer OR the session's harness lacks image support — consumers hide
  * their affordance then instead of rendering a dead control.
  */
@@ -142,7 +141,7 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
   );
 
   // Clipboard paste: only intercept when the clipboard actually carries an
-  // image, so ordinary text paste still flows through to the terminal/chat.
+  // image, so ordinary text paste still flows through to the terminal.
   // Bound to the window because the focused element is xterm's hidden textarea.
   useEffect(() => {
     if (!imageSupported) return;
@@ -242,9 +241,8 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
         </div>
       )}
 
-      {/* The queue strip appears only once something is queued — the ONE
-          attach entry is the chat composer's + (ImageAttachContext); paste
-          and drag-drop feed the same queue. No duplicate attach button. */}
+      {/* The queue strip appears only once something is queued — paste
+          and drag-drop feed the queue. No standalone attach button. */}
       {queued.length > 0 && (
         <div className="image-composer-bar">
           <ul className="image-composer-thumbs" data-testid="image-composer-thumbs">

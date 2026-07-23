@@ -75,16 +75,6 @@ test("session bar menu opens uncropped at the header's right cluster", async ({ 
   await expectUncropped(page, page.getByTestId("session-menu-popover"));
 });
 
-test("composer provider menu opens uncropped above the composer", async ({ page }) => {
-  await page.getByTestId("composer-agent").click();
-  await expectUncropped(page, page.getByTestId("composer-provider-menu"));
-});
-
-test("composer library opens uncropped above the composer", async ({ page }) => {
-  await page.getByTestId("composer-library").click();
-  await expectUncropped(page, page.getByTestId("composer-library-menu"));
-});
-
 test("harness picker opens uncropped over the new-session dialog", async ({ page }) => {
   await page.getByTestId("history-trigger").click();
   await page.getByTestId("new-session-btn").click();
