@@ -1,0 +1,146 @@
+name: Desktop Release
+
+# Builds the @sapiom/harness-desktop installers on each OS's own runner and
+# attaches them to a GitHub Release. Separate from publish.yml (that ships the
+# @sapiom/harness NPM package via OIDC) — desktop installers are a different
+# artifact type with a different toolchain (electron-builder + a native
+# node-pty rebuild per platform), so they get their own workflow and their own
+# tag namespace (`harness-desktop-v*`) that never triggers the npm publish.
+#
+# Phase 4 = UNSIGNED multi-OS build. macOS is the required shipping target, so
+# it's exercised here early (on a hosted macos-14 runner) rather than deferred:
+# a `.dmg` that *builds and rebuilds node-pty* on a real Mac is the thing we're
+# de-risking. Code signing + notarization (mac) and EV signing (win) come in
+# Phases 5–6 and layer on top of this same build.
+#
+# Trigger:
+#   - push a tag `harness-desktop-v1.2.3`  → build all OSes + publish a Release
+#   - workflow_dispatch (manual)           → build all OSes, artifacts only
+#     (no tag ⇒ no Release; download them from the run's Artifacts).
+
+on:
+  push:
+    tags:
+      - "harness-desktop-v*"
+  workflow_dispatch:
+
+# Don't cancel an in-progress release build for the same ref: half-published
+# release assets are worse than a slightly stale queue.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      # Build every OS even if one fails — a Linux failure must not hide the
+      # macOS result (or vice-versa). Windows is additionally non-blocking below.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            packflag: "--linux"
+            # Anything under release/ that's a shippable Linux installer.
+            artifact_glob: "packages/harness-desktop/release/*.AppImage,packages/harness-desktop/release/*.deb"
+          - os: macos-14 # Apple Silicon; builds an arm64 .dmg + .zip
+            packflag: "--mac"
+            artifact_glob: "packages/harness-desktop/release/*.dmg,packages/harness-desktop/release/*.zip"
+          - os: windows-latest
+            packflag: "--win"
+            artifact_glob: "packages/harness-desktop/release/*.exe"
+
+    runs-on: ${{ matrix.os }}
+    # Windows packaging isn't wired yet (pack.mjs invokes the electron-builder
+    # bin via execFileSync on a bare path — needs the .cmd/shell on Windows;
+    # that's Phase 6). Keep it in the matrix to observe its status, but never
+    # let it fail the release. Remove this once Phase 6 makes Windows first-class.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # pnpm version comes from package.json `packageManager` — keep every
+        # workflow in sync with it (same as test.yml / publish.yml).
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Node 22 (LTS) — matches the test.yml matrix. NOT the dev box's Node
+          # 26, which breaks Electron's binary extraction + electron-rebuild.
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        # onlyBuiltDependencies (pnpm-workspace.yaml) lets electron/node-pty/
+        # esbuild run their postinstall — electron downloads its binary here.
+        run: pnpm install --frozen-lockfile
+
+      - name: Build harness + desktop (topological)
+        # `...` builds @sapiom/harness-desktop AND its workspace deps
+        # (@sapiom/harness → its dist/web SPA) in dependency order.
+        run: pnpm --filter "@sapiom/harness-desktop..." build
+
+      - name: Package installers
+        # Invoke pack.mjs directly (not the `dist` script) so we control the
+        # platform flag and skip the script's redundant single-package build.
+        # electron-builder's npmRebuild recompiles node-pty against the Electron
+        # ABI for THIS OS as part of packaging.
+        env:
+          # Phase 4 is UNSIGNED. Without this, electron-builder on macOS auto-
+          # discovers any keychain identity and tries to sign — which fails (or
+          # worse, half-signs) on a runner with no Developer ID cert. Signing is
+          # switched on deliberately in Phase 5. No-op on Linux/Windows.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: node packages/harness-desktop/scripts/pack.mjs ${{ matrix.packflag }}
+
+      - name: List built artifacts
+        # `shell: bash` runs under git-bash on the Windows runner too, so one ls works.
+        shell: bash
+        run: ls -la packages/harness-desktop/release
+
+      # Always upload to the run's Artifacts so workflow_dispatch (untagged)
+      # builds are downloadable and testable — this is how you grab the unsigned
+      # macOS .dmg to test on a Mac before signing exists.
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-desktop-${{ matrix.os }}
+          path: |
+            packages/harness-desktop/release/*.AppImage
+            packages/harness-desktop/release/*.deb
+            packages/harness-desktop/release/*.dmg
+            packages/harness-desktop/release/*.zip
+            packages/harness-desktop/release/*.exe
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Collect every OS's artifacts and attach them to the GitHub Release — only
+  # on a real tag push (workflow_dispatch has no tag, so it stops at Artifacts).
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/harness-desktop-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/update the GitHub Release and upload assets
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Unsigned pre-release until Phases 5–6 add signing/notarization.
+          prerelease: true
+          fail_on_unmatched_files: false
+          files: dist-artifacts/**/*
+          body: |
+            Unsigned desktop installers built by CI (Phase 4).
+
+            > ⚠️ These builds are **not yet code-signed or notarized**. On macOS,
+            > Gatekeeper will require right-click → Open the first time; on
+            > Windows, SmartScreen will warn. Signing arrives in Phases 5–6.
