@@ -46,7 +46,12 @@ export const SAMPLE_PROJECT_NAME = "order-triage";
 /** Locate @sapiom/agent-core's bundled templates dir (no `__dirname` in ESM). */
 function agentCoreTemplatesDir(): string {
   const entry = nodeRequire.resolve("@sapiom/agent-core");
-  return path.resolve(path.dirname(entry), "..", "..", "templates");
+  const dir = path.resolve(path.dirname(entry), "..", "..", "templates");
+  // Embedded in Electron, require.resolve reports the app.asar (virtual) path;
+  // scaffold()'s cpSync can't opendir inside the asar archive (ENOTDIR), so
+  // point at the unpacked twin. No-op under the CLI (real filesystem path).
+  // The desktop host must asarUnpack node_modules (it unpacks all of them).
+  return dir.replace(/([\\/])app\.asar([\\/])/, "$1app.asar.unpacked$2");
 }
 
 function tryGit(cwd: string, args: string[]): boolean {
