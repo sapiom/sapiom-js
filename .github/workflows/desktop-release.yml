@@ -79,6 +79,17 @@ jobs:
           node-version: "22.x"
           cache: "pnpm"
 
+      - name: Use Python 3.11 (node-gyp needs distutils)
+        # electron-builder rebuilds node-pty from source where no matching
+        # prebuilt exists (macOS/arm64, Windows). Its bundled node-gyp@9 imports
+        # `distutils`, which Python 3.12+ removed (PEP 632) — and the macOS/
+        # Windows runners default to 3.12+. Pinning 3.11 (which still ships
+        # distutils) fixes the rebuild without upgrading node-gyp. No-op on
+        # Linux, which uses node-pty's prebuilt binary and never compiles.
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install dependencies
         # onlyBuiltDependencies (pnpm-workspace.yaml) lets electron/node-pty/
         # esbuild run their postinstall — electron downloads its binary here.
