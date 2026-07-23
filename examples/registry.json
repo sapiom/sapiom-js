@@ -365,6 +365,41 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "durable-backfill",
+      "name": "Durable Backfill / Long-Job Runner",
+      "description": "Process a huge dataset in resumable chunks, checkpointing progress so the job survives restarts and picks up where it left off.",
+      "tags": ["durable", "backfill", "batch", "cron"],
+      "sourcePath": "examples/durable-backfill",
+      "capabilities": [
+        "database.get",
+        "sandboxes.create",
+        "sandboxes.exec",
+        "fileStorage.upload",
+        "fileStorage.getDownloadUrl",
+        "fileStorage.list",
+        "fileStorage.delete"
+      ],
+      "whatItDoes": "For long jobs that are too big for one pass — a backfill, a migration, a reprocess. It walks the dataset one chunk at a time. Each chunk's work runs in a sandbox that gets the dataset's connection string and the chunk's range, and after every chunk it writes a checkpoint to file storage and pauses until a heartbeat wakes it for the next one — so nothing runs and nothing is billed while it waits. Progress survives restarts: start a fresh run with the same job id and it reads the checkpoint and resumes mid-dataset. Leave the database handle unset (or pass dryRun) and it counts each chunk in-process, so you can trace the whole loop for free.",
+      "steps": [
+        {
+          "name": "plan",
+          "description": "Works out the job — dataset size, chunk size, and a stable job id — then resumes from a saved checkpoint if one exists for that id.",
+          "next": ["process"]
+        },
+        {
+          "name": "process",
+          "description": "Processes the current chunk in a sandbox, saves a result file and rewrites the checkpoint, then pauses for the next heartbeat — or finishes once the last chunk is done.",
+          "capability": "sandboxes.exec",
+          "next": ["finalize"]
+        },
+        {
+          "name": "finalize",
+          "description": "Writes a manifest of the run and returns a summary.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
