@@ -264,7 +264,7 @@ describe("macroDisabledReason — existing gating not regressed", () => {
       label: "Test",
       icon: "icon",
       requiresWorkflow: false,
-      action: { kind: "inject", template: "test" },
+      action: { kind: "inject", text: "test" },
       ...overrides,
     } as MacroDef;
   }
@@ -282,7 +282,7 @@ describe("macroDisabledReason — existing gating not regressed", () => {
   }
 
   it("returns null when all conditions met", () => {
-    const macro = makeMacro({ requiresWorkflow: true, action: { kind: "inject", template: "x" } });
+    const macro = makeMacro({ requiresWorkflow: true, action: { kind: "inject", text: "x" } });
     const wf = makeWorkflow();
     expect(macroDisabledReason(macro, wf, "sess-1")).toBeNull();
   });
@@ -293,7 +293,7 @@ describe("macroDisabledReason — existing gating not regressed", () => {
   });
 
   it("non-open-url + no session: returns 'Start a session first'", () => {
-    const macro = makeMacro({ requiresWorkflow: false, action: { kind: "inject", template: "x" } });
+    const macro = makeMacro({ requiresWorkflow: false, action: { kind: "inject", text: "x" } });
     expect(macroDisabledReason(macro, null, null)).toBe("Start a session first");
   });
 
