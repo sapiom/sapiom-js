@@ -365,6 +365,60 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "nl-db-query-endpoint",
+      "name": "Natural-Language DB Query Endpoint",
+      "description": "Deploy a live endpoint that turns a plain-English question into a read-only SQL query and returns the answer.",
+      "tags": ["database", "sql", "endpoint", "llm"],
+      "sourcePath": "examples/nl-db-query-endpoint",
+      "capabilities": ["database.get", "models.run", "sandboxes.deployPreview", "vault.get"],
+      "whatItDoes": "For giving your team a question box over a read-only database. One run stands up a live endpoint; then anyone can POST a plain-English question to it. It reads the connection string from a Sapiom database handle, previews the translation on a sample question so a bad path fails before anything ships, then writes a small server into a sandbox and exposes it at a stable URL. Each request asks an LLM for a single SELECT, checks it, and runs it inside a READ ONLY transaction Postgres enforces — with a statement timeout and a row cap, so a write can't slip through. The server's own key is read from the vault at deploy time, never baked into source.",
+      "steps": [
+        {
+          "name": "validate",
+          "description": "Checks the input (a database handle or connection string) and resolves config.",
+          "next": ["resolve", "rejected"]
+        },
+        {
+          "name": "resolve",
+          "description": "Reads the target Postgres connection string from a Sapiom database handle to inject into the endpoint.",
+          "capability": "database.get",
+          "next": ["plan"]
+        },
+        {
+          "name": "plan",
+          "description": "Previews the pipeline: translates the sample question into SQL with an LLM.",
+          "capability": "models.run",
+          "next": ["guard"]
+        },
+        {
+          "name": "guard",
+          "description": "Applies the read-only guardrail to the sample SQL; anything that isn't a single read-only statement is rejected.",
+          "next": ["deploy", "rejected"]
+        },
+        {
+          "name": "deploy",
+          "description": "Writes the endpoint server into a sandbox and exposes it at a stable URL, injecting DATABASE_URL and a vault-read API key.",
+          "capability": "sandboxes.deployPreview",
+          "next": ["deployed", "deploy_failed"]
+        },
+        {
+          "name": "deployed",
+          "description": "The endpoint is live — returns its URL and the previewed sample query.",
+          "terminal": true
+        },
+        {
+          "name": "deploy_failed",
+          "description": "The deploy failed — surfaces the deployPreview logs.",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Input or the sample SQL failed the guardrail; nothing was deployed.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
