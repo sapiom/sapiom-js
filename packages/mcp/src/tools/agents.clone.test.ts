@@ -87,6 +87,7 @@ describe("sapiom_dev_agents_clone tool", () => {
       {
         templateId: "web-research-digest",
         forkId: undefined,
+        definitionId: undefined,
         targetDir: "/tmp/proj",
       },
       expect.anything(),
@@ -96,6 +97,37 @@ describe("sapiom_dev_agents_clone tool", () => {
     expect(out.hint).toContain("sapiom_dev_agents_link");
     // The credential must never surface in the tool output.
     expect(res.content[0].text).not.toContain("x-access-token");
+  });
+
+  it("clones by definitionId, normalizing a number input to a string, and hints no link needed", async () => {
+    vi.mocked(clone).mockResolvedValue({
+      definitionId: "253",
+      repoFullName: "Sapiom-Platform/ag-uuid-1",
+      defaultBranch: "main",
+      targetDir: "/tmp/proj",
+      tokenExpiresAt: "2026-07-07T01:00:00.000Z",
+    });
+    const { server, handlers } = createMockServer();
+    register(server, env);
+
+    const res = await handlers.get("sapiom_dev_agents_clone")!({
+      dir: "/tmp/proj",
+      definitionId: 253,
+    });
+
+    expect(clone).toHaveBeenCalledWith(
+      {
+        templateId: undefined,
+        forkId: undefined,
+        definitionId: "253",
+        targetDir: "/tmp/proj",
+      },
+      expect.anything(),
+    );
+    const out = parse(res);
+    expect(out.definitionId).toBe("253");
+    expect(out.hint).toContain("no link needed");
+    expect(out.hint).not.toContain("sapiom_dev_agents_link");
   });
 
   it("returns a structured error when not authenticated", async () => {

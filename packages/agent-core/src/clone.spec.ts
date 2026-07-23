@@ -1,9 +1,11 @@
 /**
- * Unit tests for `clone` (the template-clone handoff, SAP-1357).
+ * Unit tests for `clone` (the template-clone handoff, SAP-1357, and the
+ * definitionId clone-a-deployed-workflow path, SAP-1839).
  *
- * Fully offline: global.fetch is mocked for the fork + clone-token calls, and the
- * git clone is injected as a fake that only records its inputs and materializes an
- * empty target dir. The filesystem (a temp dir) is the only real dependency.
+ * Fully offline: global.fetch is mocked for the fork/clone-token/definitions
+ * calls, and the git clone is injected as a fake that only records its inputs
+ * and materializes an empty target dir. The filesystem (a temp dir) is the
+ * only real dependency.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -46,6 +48,12 @@ const TOKEN_BODY = {
   repoFullName: 'Sapiom-Platform/sapiom-fork-abc',
   defaultBranch: 'main',
   cloneUrl: 'https://x-access-token:ghs_secretTOKEN@github.com/Sapiom-Platform/sapiom-fork-abc.git',
+  expiresAt: '2026-07-07T01:00:00.000Z',
+};
+const DEFINITION_TOKEN_BODY = {
+  repoFullName: 'Sapiom-Platform/ag-uuid-1',
+  defaultBranch: 'main',
+  cloneUrl: 'https://x-access-token:ghs_secretTOKEN@github.com/Sapiom-Platform/ag-uuid-1.git',
   expiresAt: '2026-07-07T01:00:00.000Z',
 };
 
@@ -134,7 +142,50 @@ describe('clone', () => {
     }
   });
 
-  it('rejects when neither templateId nor forkId is given', async () => {
+  it('clones by definitionId directly (no fork step), and pre-links sapiom.json', async () => {
+    const spy = mockFetch([{ status: 200, body: DEFINITION_TOKEN_BODY }]);
+    const base = makeTmp();
+    const target = path.join(base, 'project');
+    const rec = recordingClone();
+    try {
+      const result = await clone(
+        { definitionId: '253', targetDir: target, cloneRepo: rec.fn },
+        client,
+      );
+
+      // Hits the definitions clone-token endpoint directly — no fork call.
+      const urls = spy.mock.calls.map((c) => (c as [string])[0]);
+      expect(urls).toEqual(['https://example.com/v1/workflows/definitions/253/clone-token']);
+
+      expect(rec.calls).toHaveLength(1);
+      expect(rec.calls[0].cloneUrl).toBe(DEFINITION_TOKEN_BODY.cloneUrl);
+      expect(rec.calls[0].branch).toBe('main');
+
+      // Result carries the definitionId, no forkId/templateId, no credential.
+      expect(result).toMatchObject({
+        definitionId: '253',
+        repoFullName: 'Sapiom-Platform/ag-uuid-1',
+        defaultBranch: 'main',
+        targetDir: target,
+      });
+      expect(result.forkId).toBeUndefined();
+      expect(result.templateId).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain('ghs_secretTOKEN');
+
+      // sapiom.json is pre-linked: definitionId present, no forkId, no token.
+      const cfg = JSON.parse(readFileSync(path.join(target, CONFIG_FILE), 'utf8'));
+      expect(cfg).toEqual({
+        repoFullName: 'Sapiom-Platform/ag-uuid-1',
+        defaultBranch: 'main',
+        definitionId: '253',
+      });
+      expect(JSON.stringify(cfg)).not.toContain('ghs_secretTOKEN');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects when none of templateId, forkId, or definitionId is given', async () => {
     const spy = mockFetch([{ status: 200, body: {} }]);
     await expect(clone({ targetDir: '/tmp/whatever', cloneRepo: () => {} }, client)).rejects.toMatchObject({
       code: 'BAD_INPUT',
@@ -142,9 +193,21 @@ describe('clone', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('rejects when both templateId and forkId are given', async () => {
+  it('rejects when more than one of templateId, forkId, or definitionId is given', async () => {
     await expect(
       clone({ templateId: 't', forkId: 'f', targetDir: '/tmp/whatever', cloneRepo: () => {} }, client),
+    ).rejects.toMatchObject({ code: 'BAD_INPUT' });
+    await expect(
+      clone(
+        { templateId: 't', definitionId: '1', targetDir: '/tmp/whatever', cloneRepo: () => {} },
+        client,
+      ),
+    ).rejects.toMatchObject({ code: 'BAD_INPUT' });
+    await expect(
+      clone(
+        { forkId: 'f', definitionId: '1', targetDir: '/tmp/whatever', cloneRepo: () => {} },
+        client,
+      ),
     ).rejects.toMatchObject({ code: 'BAD_INPUT' });
   });
 

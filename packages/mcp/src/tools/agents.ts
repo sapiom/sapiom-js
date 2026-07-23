@@ -348,9 +348,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     server,
     "sapiom_dev_agents_clone",
     [
-      "Materialize a Sapiom workflow template as a local project — the 'use this template' handoff. Given a template id (from the gallery) it forks the template into a repo you own; given an existing fork id it re-clones that fork. Either way it mints a short-lived, repo-scoped clone credential, git-clones the repo into <dir>, and writes sapiom.json recording the fork.",
-      "After cloning: read the project's AGENTS.md, then run sapiom_dev_agents_link (associate/create the tenant definition) → _deploy (creates the engine definition) → _run → _inspect. The clone appears under 'my workflows' in the dashboard immediately; the build shows once you deploy.",
-      "Pass exactly one of templateId or forkId. The clone credential is single-repo, read-only, and ~1h-lived — it is used for the clone and discarded (never stored in sapiom.json).",
+      "Materialize a Sapiom workflow locally. Given a template id (from the gallery) it forks the template into a repo you own; given an existing fork id it re-clones that fork; given a deployed workflow's definitionId it clones the engine's live build-repo source directly (no fork step, always current) and pre-links the checkout. Either way it mints a short-lived, repo-scoped clone credential, git-clones the repo into <dir>, and writes sapiom.json recording the provenance.",
+      "After cloning: read the project's AGENTS.md, then _deploy → _run → _inspect. Run sapiom_dev_agents_link first too, UNLESS you cloned by definitionId — that path already writes sapiom.json's definitionId, so the checkout is pre-linked and link would be redundant. The clone appears under 'my workflows' in the dashboard immediately; the build shows once you deploy.",
+      "Pass exactly one of templateId, forkId, or definitionId. The clone credential is single-repo, read-only, and ~1h-lived — it is used for the clone and discarded (never stored in sapiom.json).",
     ].join("\n"),
     {
       dir: z
@@ -363,27 +363,42 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .string()
         .optional()
         .describe(
-          "Registry template id to fork then clone (e.g. 'web-research-digest'). Mutually exclusive with forkId.",
+          "Registry template id to fork then clone (e.g. 'web-research-digest'). Mutually exclusive with forkId and definitionId.",
         ),
       forkId: z
         .string()
         .optional()
         .describe(
-          "Existing fork id to clone (skips the fork step). Mutually exclusive with templateId.",
+          "Existing fork id to clone (skips the fork step). Mutually exclusive with templateId and definitionId.",
+        ),
+      definitionId: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe(
+          "Deployed workflow's definition id to pull local (e.g. from the dashboard URL or a prior link/deploy). Clones the engine's current build-repo source directly, skipping the fork step, and pre-links the checkout (sapiom.json is written with this id, so sapiom_dev_agents_link is not needed before deploy). Accepts a number or string — the engine id is a bigint. Mutually exclusive with templateId and forkId.",
         ),
     },
-    async ({ dir, templateId, forkId }) => {
+    async ({ dir, templateId, forkId, definitionId }) => {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
         const result = await clone(
-          { templateId, forkId, targetDir: dir },
+          {
+            templateId,
+            forkId,
+            // Normalize the harness's number-typed definitionId to agent-core's
+            // string convention at this boundary — see clone.ts's module
+            // docstring for the full drift note (SAP-1839).
+            definitionId:
+              definitionId === undefined ? undefined : String(definitionId),
+            targetDir: dir,
+          },
           client,
         );
-        return ok({
-          ...result,
-          hint: `Cloned into ${result.targetDir}. Next: read its AGENTS.md, then sapiom_dev_agents_link → _deploy → _run → _inspect.`,
-        });
+        const hint = result.definitionId
+          ? `Cloned into ${result.targetDir}. Already linked to definition ${result.definitionId} — read its AGENTS.md, then _deploy → _run → _inspect (no link needed).`
+          : `Cloned into ${result.targetDir}. Next: read its AGENTS.md, then sapiom_dev_agents_link → _deploy → _run → _inspect.`;
+        return ok({ ...result, hint });
       } catch (err) {
         return fail(err);
       }
