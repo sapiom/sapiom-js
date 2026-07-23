@@ -28,6 +28,15 @@ import {
   capabilityCallData,
   type AnalyticsHolder,
 } from "./analytics.js";
+import { VERSION } from "../_generated/version.js";
+
+/**
+ * Client marker stamped on EVERY request so the gateway can tell SDK traffic
+ * from raw HTTP (drop-in provider SDK / curl). The gateway bins this to
+ * `client:sdk` on its /v2 routing metrics; the exact value carries the version
+ * for logs. Survives the edge→gateway hop (not in the edge strip-list).
+ */
+const CLIENT_MARKER = `sapiom-tools/${VERSION}`;
 
 /**
  * Per-request attribution recorded with the gateway transaction. Every field is
@@ -235,6 +244,7 @@ export class Transport {
         ...init,
         headers: {
           [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
+          "x-sapiom-client": CLIENT_MARKER,
           ...attributionToHeaders(this.attribution),
           ...(init.headers ?? {}),
         },
