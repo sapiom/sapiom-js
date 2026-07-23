@@ -1771,8 +1771,7 @@ input {
 
 /* Background-task states (see CanvasPane) ------------------------------- */
 
-.canvas-task-activity,
-.canvas-task-failed {
+.canvas-task-activity {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1840,31 +1839,6 @@ input {
 /* The newest line is what's happening right now — everything above is history. */
 .canvas-task-lines li:last-child {
   color: var(--text-dim);
-}
-
-.canvas-task-error {
-  max-width: 340px;
-  max-height: 160px;
-  width: 100%;
-  overflow: auto;
-  margin: 0;
-  padding: 8px 10px;
-  text-align: left;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-faint);
-  background: var(--bg-inset, rgba(128, 128, 128, 0.08));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-
-.canvas-task-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* Shared buttons ------------------------------------------------------- */

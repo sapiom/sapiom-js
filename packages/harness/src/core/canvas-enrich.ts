@@ -1,35 +1,37 @@
 /**
- * The AI enrichment runner: spawns ONE bounded, headless agent task per
- * workflow (via TaskManager) that reads the workflow's step bodies and
- * returns the JSON `CanvasEnrichment` contract — never HTML, never a file
- * write. On success the validated enrichment is persisted to the workflow's
- * cache file and the render file is rebuilt with it merged in; on any
- * parse/validation failure the enrichment is discarded whole and the base
- * render stands (core/canvas-enrichment.ts's contract). Task-process
- * failures surface through the task record itself (the pane's error state +
- * Retry), never as HTML on disk.
+ * Tier-2 canvas enrichment (SAP-1800): the OPT-IN annotation layer over the
+ * deterministic Tier-1 render.
  *
- * Triggering (see server/index.ts):
- * - bind / session create → `ensureFresh`: spawn only when no cache entry
- *   matches the current source fingerprint; every skip reason is silent.
- * - the visualize macro → `forceRefresh`: drop the extraction + enrichment
- *   caches, re-render the base immediately, re-enrich; refusals propagate
- *   (an already-running enrichment for this workflow → 409 via the macros
- *   router, exactly like any other double-fired background macro).
+ * The producer is the Sapiom `enrich-canvas` workflow, run ON OUR ACCOUNT via
+ * {@link EnrichCanvasClient} — NOT a headless `claude -p` task on the user's
+ * Claude Code tokens. Given the extracted graph plus the workflow's source
+ * bodies, the workflow returns the JSON `CanvasEnrichment` contract
+ * (core/canvas-enrichment.ts); on success the validated enrichment is persisted
+ * to the workflow's cache file and the render file is rebuilt with it merged in
+ * (the write alone hot-reloads any open pane via the canvas watcher).
  *
- * Dedupe is per WORKFLOW, not per session: TaskManager refuses a second
- * running task with the same macroId + workflowPath regardless of which
- * session asked (see TaskAlreadyRunningError) — two panes bound to the same
- * workflow can never race its cache/render files.
+ * Tier-1 is unkillable, so enrichment failure has no total-failure state:
+ * - It NEVER auto-fires. The only trigger is the explicit `visualize` macro
+ *   (`forceRefresh`) — there is no bind/session-create `ensureFresh` anymore.
+ * - On ANY failure — not signed in, workflow not deployed/configured, upstream
+ *   error, timeout, or invalid output — the enrichment is discarded whole and
+ *   the base render already on disk stands. Nothing surfaces as an error to the
+ *   pane; the user sees the honest Tier-1 structure.
+ *
+ * Dedupe is per WORKFLOW: a second force refresh while one is still in flight
+ * for the same workflow rejects with {@link TaskAlreadyRunningError} (→ 409 via
+ * the macros router) before any cache/render mutation, so a double-click
+ * Visualize is a true no-op.
  */
-import type { BackgroundTask, HarnessKind } from "../shared/types.js";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+
 import { extractWorkflowGraphCached, invalidateExtractionCache, type CachedExtraction } from "./canvas-cache.js";
+import { listSourceFiles } from "./canvas-interconnections.js";
 import type { CanvasGraph } from "./canvas-graph.js";
 import {
-  ENRICHMENT_LIMITS,
   normalizeCanvasEnrichmentCandidate,
   parseCanvasEnrichment,
-  readEnrichmentCacheFile,
   removeEnrichmentCacheFile,
   writeEnrichmentCacheFile,
 } from "./canvas-enrichment.js";
@@ -38,166 +40,114 @@ import {
   renderWorkflowRenderFile,
   type RenderableWorkflow,
 } from "./canvas-render.js";
-import type { RunTaskRequest } from "./task-manager.js";
-import { TaskAlreadyRunningError, TaskNotSupportedError } from "./task-manager.js";
+import type { EnrichCanvasClient } from "./enrich-canvas-client.js";
+import { TaskAlreadyRunningError } from "./task-manager.js";
 
-/** The macro identity enrichment tasks run under — the pane's Retry re-fires
- *  this macro, which routes back through forceRefresh. */
-export const ENRICHMENT_MACRO_ID = "visualize";
+/** Label the in-flight guard rejects under — surfaced as the 409 message. */
 const ENRICHMENT_TASK_LABEL = "Visualize";
-/** Hard turn cap: read a few step files, answer. A run that needs more than
- *  this is off the rails, not thorough. */
-const ENRICHMENT_MAX_TURNS = 8;
-const DEFAULT_ENRICHMENT_MODEL = "sonnet";
 
-/** Model the enrichment task runs on — overridable per install. */
-export function enrichmentModel(env: NodeJS.ProcessEnv = process.env): string {
-  return env.SAPIOM_HARNESS_VISUALIZE_MODEL || DEFAULT_ENRICHMENT_MODEL;
-}
+/** Per-file cap when reading step bodies to hand the workflow — a source file
+ *  larger than this is skipped rather than blown up into the prompt. */
+const MAX_STEP_BODY_FILE_BYTES = 128 * 1024;
+/** Total cap across all step bodies — bounds the workflow input regardless of
+ *  how many source files the project has. */
+const MAX_STEP_BODY_TOTAL_BYTES = 200 * 1024;
 
 /**
- * Builds the one-shot enrichment prompt: the extracted graph inline (the AI
- * annotates THIS structure — it never invents nodes), pointed at the step
- * sources for semantics, with the JSON contract and its hard limits stated
- * verbatim so a well-behaved run needs no retry.
+ * Reads the workflow's own `.ts`/`.tsx` source bodies (the step `run()` bodies
+ * live here), keyed by workflow-relative path — the material the Sapiom
+ * workflow annotates against. Bounded per-file and in total so a large project
+ * can't produce an unbounded workflow input. Uses the same source walk the
+ * extraction fingerprint uses ({@link listSourceFiles}).
  */
-export function buildEnrichmentPrompt(graph: CanvasGraph, workflowDir: string): string {
-  const L = ENRICHMENT_LIMITS;
-  return `You are annotating an already-rendered workflow diagram. The diagram's structure below is fixed — you only supply short text annotations, as one JSON object.
-
-Extracted workflow graph:
-${JSON.stringify(graph, null, 2)}
-
-Read the step run() bodies in ${workflowDir} to understand what each step actually does (what it calls, what it decides, why it branches), then RETURN ONLY a JSON object matching this schema — no prose before or after, no markdown required, and DO NOT write or modify any files:
-
-{
-  "summary": "what this workflow does, one line (max ${L.summary} chars)",
-  "nodeDetails": { "<nodeId>": { "sublabel": "short annotation shown in the node (max ${L.sublabel} chars)", "description": "one sentence, shown on hover (max ${L.description} chars)" } },
-  "edgeLabels": { "<fromNodeId>-><toNodeId>": "intent/condition name (max ${L.edgeLabel} chars)" },
-  "notes": ["up to ${L.noteCount} facts worth knowing, each max ${L.note} chars"],
-  "layoutHints": { "groups": [{ "label": "group name (max ${L.groupLabel} chars)", "nodeIds": ["..."] }], "laneOrder": { "<layerIndex>": ["nodeId", "..."] } },
-  "crossWorkflow": "how this workflow ties into the project's other workflows, if it does (max ${L.crossWorkflow} chars)"
-}
-
-Rules:
-- Every field is optional — omit what you have nothing useful for (omit, don't write null). Empty strings are worse than omissions.
-- Use ONLY node ids that appear in the graph above.
-- Length limits are hard caps and oversize strings get truncated mid-sentence — aim comfortably under each limit.
-- Your final message must be exactly the JSON object.`;
-}
-
-/**
- * Pulls the JSON object out of a task's final result text — either fenced
- * (\`\`\`json ... \`\`\`) or raw, tolerating prose around it by falling back to
- * the outermost {...} span. Null when nothing parses.
- */
-export function extractEnrichmentJson(text: string): unknown | null {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
-  const candidates = [fenced?.[1], text];
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first !== -1 && last > first) candidates.push(text.slice(first, last + 1));
-  for (const candidate of candidates) {
-    if (!candidate) continue;
+export async function readWorkflowStepBodies(dir: string): Promise<Record<string, string>> {
+  const files = await listSourceFiles(dir);
+  const bodies: Record<string, string> = {};
+  let total = 0;
+  for (const file of files) {
+    if (total >= MAX_STEP_BODY_TOTAL_BYTES) break;
+    let content: string;
     try {
-      const parsed: unknown = JSON.parse(candidate.trim());
-      if (typeof parsed === "object" && parsed !== null) return parsed;
+      const stat = await fs.stat(file);
+      if (stat.size > MAX_STEP_BODY_FILE_BYTES) continue;
+      content = await fs.readFile(file, "utf8");
     } catch {
-      // Try the next candidate shape.
+      continue; // a file that vanished/won't read is just omitted
     }
+    const rel = path.relative(dir, file) || path.basename(file);
+    bodies[rel] = content;
+    total += content.length;
   }
-  return null;
-}
-
-/** The slice of TaskManager the runner uses — injectable for tests. */
-export interface EnrichmentTaskRunner {
-  run(req: RunTaskRequest): Promise<BackgroundTask>;
-  onStatusChange(listener: (task: BackgroundTask) => void): () => void;
-  /** Returns true when an enrichment task for this workflow is currently
-   *  running — checked before cache destruction in forceRefresh so a
-   *  double-click Visualize is a true no-op, not a half-destroyed cache. */
-  isRunning(macroId: string, workflowPath: string): boolean;
+  return bodies;
 }
 
 /** The session shape the coordinator needs — satisfied by HarnessSession. */
 export interface EnrichmentSession {
-  id: string;
   cwd: string;
-  harness: HarnessKind;
   boundWorkflowPath: string | null;
 }
 
 export interface EnrichmentCoordinatorOptions {
-  tasks: EnrichmentTaskRunner;
+  /** Runs the `enrich-canvas` workflow on our account and awaits its output. */
+  client: EnrichCanvasClient;
+  /**
+   * The deployed `enrich-canvas` definition id (env-resolved at the wiring
+   * site). Null/empty disables enrichment entirely — Tier-1 renders and the
+   * force refresh is a base re-render with no annotation pass.
+   */
+  definitionId: string | null;
   /** Rebuilds the workflow's render file (with the just-persisted enrichment
    *  merged) after a successful run — the write alone hot-reloads any open
    *  pane via the canvas watcher. */
   rerender?: (cwd: string, workflow: RenderableWorkflow) => Promise<void>;
+  /** Reads the workflow's step bodies for the workflow input. Injectable for
+   *  tests — defaults to {@link readWorkflowStepBodies}. */
+  readStepBodies?: (dir: string) => Promise<Record<string, string>>;
   /** Injectable for tests — defaults to the real cached extraction. */
   extractCached?: (dir: string) => Promise<CachedExtraction>;
-  env?: NodeJS.ProcessEnv;
   now?: () => string;
   onError?: (message: string) => void;
 }
 
 export class CanvasEnrichmentCoordinator {
-  private readonly tasks: EnrichmentTaskRunner;
+  private readonly client: EnrichCanvasClient;
+  private readonly definitionId: string | null;
   private readonly rerender: (cwd: string, workflow: RenderableWorkflow) => Promise<void>;
+  private readonly readStepBodies: (dir: string) => Promise<Record<string, string>>;
   private readonly extractCached: (dir: string) => Promise<CachedExtraction>;
-  private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => string;
   private readonly onError: (message: string) => void;
+  /** Workflow paths with an enrichment run currently in flight — the per-workflow
+   *  dedupe guard, replacing the TaskManager's cross-session dedupe. */
+  private readonly inFlight = new Set<string>();
 
   constructor(options: EnrichmentCoordinatorOptions) {
-    this.tasks = options.tasks;
+    this.client = options.client;
+    this.definitionId = options.definitionId && options.definitionId.trim() !== "" ? options.definitionId : null;
     this.rerender = options.rerender ?? (async (cwd, workflow) => void (await renderWorkflowRenderFile(cwd, workflow)));
+    this.readStepBodies = options.readStepBodies ?? readWorkflowStepBodies;
     this.extractCached = options.extractCached ?? extractWorkflowGraphCached;
-    this.env = options.env ?? process.env;
     this.now = options.now ?? (() => new Date().toISOString());
     this.onError = options.onError ?? ((message) => console.error(`[harness] ${message}`));
   }
 
   /**
-   * The bind/create trigger: spawn an enrichment task unless a cached
-   * enrichment already matches the workflow's current sources. Silent on
-   * every expected refusal — unbound session, failed extraction, fresh
-   * cache, an enrichment already in flight for this workflow, a harness
-   * with no headless mode, even a spawn failure (logged) — because nothing
-   * here was user-initiated and a bind must never fail on enrichment's
-   * account.
-   */
-  async ensureFresh(session: EnrichmentSession, workflows: readonly RenderableWorkflow[]): Promise<void> {
-    const bound = this.resolveBound(session, workflows);
-    if (!bound) return;
-    try {
-      const { result, fingerprint } = await this.extractCached(bound.path);
-      if (!result.ok) return;
-      const entry = await readEnrichmentCacheFile(enrichmentCacheFileFor(session.cwd, bound.path));
-      if (entry && entry.sourceFingerprint === fingerprint) return;
-      await this.spawn(session, bound, result.graph, fingerprint);
-    } catch (err) {
-      if (err instanceof TaskAlreadyRunningError || err instanceof TaskNotSupportedError) return;
-      this.onError(`canvas enrichment (auto) failed to start: ${(err as Error).message}`);
-    }
-  }
-
-  /**
-   * The visualize macro: invalidate both caches, re-render the base diagram
-   * immediately (instant feedback, honest content — no leftover enrichment
-   * from sources that may have changed), then re-enrich. Refusals propagate
-   * to the macros router (TaskAlreadyRunningError → 409,
-   * TaskNotSupportedError → 400). Unbound session: just a no-op, matching
-   * the deterministic render's own unbound contract.
+   * The visualize macro (the ONLY trigger — enrichment never auto-fires):
+   * invalidate both caches, re-render the base diagram immediately (instant
+   * feedback, honest content), then kick off the Sapiom enrichment in the
+   * background and return. The pane hot-reloads if/when annotations land; a
+   * failure leaves the freshly-rendered Tier-1 base untouched.
    *
-   * The already-running check happens BEFORE any cache destruction so that a
-   * double-click Visualize is a true no-op: the second call rejects with
-   * TaskAlreadyRunningError and the caches and render are left exactly as
-   * the still-running enrichment will need them.
+   * The in-flight check happens BEFORE any cache destruction so a double-click
+   * Visualize is a true no-op: the second call rejects with
+   * {@link TaskAlreadyRunningError} (→ 409) and the caches/render are left
+   * exactly as the still-running enrichment will need them. Unbound session:
+   * a no-op, matching the deterministic render's own unbound contract.
    */
   async forceRefresh(session: EnrichmentSession, workflows: readonly RenderableWorkflow[]): Promise<void> {
     const bound = this.resolveBound(session, workflows);
     if (!bound) return;
-    if (this.tasks.isRunning(ENRICHMENT_MACRO_ID, bound.path)) {
+    if (this.inFlight.has(bound.path)) {
       throw new TaskAlreadyRunningError(ENRICHMENT_TASK_LABEL);
     }
     invalidateExtractionCache(bound.path);
@@ -205,7 +155,14 @@ export class CanvasEnrichmentCoordinator {
     await this.rerender(session.cwd, bound);
     const { result, fingerprint } = await this.extractCached(bound.path);
     if (!result.ok) return;
-    await this.spawn(session, bound, result.graph, fingerprint);
+    // Enrichment not configured (no deployed definition id): Tier-1 stands, no
+    // annotation pass. Silent — an unconfigured install is not an error state.
+    if (!this.definitionId) return;
+
+    this.inFlight.add(bound.path);
+    void this.enrich(session, bound, result.graph, fingerprint).finally(() => {
+      this.inFlight.delete(bound.path);
+    });
   }
 
   private resolveBound(
@@ -215,49 +172,43 @@ export class CanvasEnrichmentCoordinator {
     return session.boundWorkflowPath ? workflows.find((w) => w.path === session.boundWorkflowPath) : undefined;
   }
 
-  private async spawn(
+  /**
+   * Read the step bodies, run `enrich-canvas` on our account, and persist a
+   * valid result. Non-throwing: every failure routes to `onError` (logged) and
+   * leaves the base render standing — there is no pane-visible failure state.
+   */
+  private async enrich(
     session: EnrichmentSession,
     workflow: RenderableWorkflow,
     graph: CanvasGraph,
     fingerprint: string,
   ): Promise<void> {
-    const task = await this.tasks.run({
-      macroId: ENRICHMENT_MACRO_ID,
-      label: ENRICHMENT_TASK_LABEL,
-      harnessSessionId: session.id,
-      harness: session.harness,
-      cwd: session.cwd,
-      prompt: buildEnrichmentPrompt(graph, workflow.path),
-      workflowPath: workflow.path,
-      model: enrichmentModel(this.env),
-      maxTurns: ENRICHMENT_MAX_TURNS,
-    });
-
-    // Subscribed synchronously right after run() resolves — the process's
-    // exit can only arrive via a later event-loop turn, so the terminal
-    // status can't be missed.
-    const unsubscribe = this.tasks.onStatusChange((update) => {
-      if (update.id !== task.id || update.status === "running") return;
-      unsubscribe();
-      if (update.status !== "completed") return; // pane shows the failure; nothing to persist
-      void this.persist(session.cwd, workflow, graph, fingerprint, update.resultText).catch((err: unknown) => {
-        this.onError(`canvas enrichment persist failed: ${(err as Error).message}`);
-      });
-    });
+    try {
+      const stepBodies = await this.readStepBodies(workflow.path);
+      const result = await this.client.run(this.definitionId as string, { graph, stepBodies });
+      if (!result.ok) {
+        this.onError(
+          `canvas enrichment for ${workflow.path} did not complete (${result.status}: ${result.error}) — base render stands`,
+        );
+        return;
+      }
+      await this.persist(session.cwd, workflow, graph, fingerprint, result.output);
+    } catch (err) {
+      this.onError(`canvas enrichment failed: ${(err as Error).message}`);
+    }
   }
 
-  /** Completed task → parse → validate → cache file → re-render. Any parse
-   *  or validation failure discards the enrichment whole; the base render
-   *  already on disk stands untouched. */
+  /** Completed run → normalize → validate → cache file → re-render. Any
+   *  validation failure discards the enrichment whole; the base render already
+   *  on disk stands untouched. */
   private async persist(
     cwd: string,
     workflow: RenderableWorkflow,
     graph: CanvasGraph,
     fingerprint: string,
-    resultText: string | null,
+    output: unknown,
   ): Promise<void> {
-    const candidate = resultText ? extractEnrichmentJson(resultText) : null;
-    const enrichment = candidate ? parseCanvasEnrichment(normalizeCanvasEnrichmentCandidate(candidate)) : null;
+    const enrichment = parseCanvasEnrichment(normalizeCanvasEnrichmentCandidate(output));
     if (!enrichment) {
       this.onError(`canvas enrichment for ${workflow.path} returned invalid output — discarded, base render stands`);
       return;

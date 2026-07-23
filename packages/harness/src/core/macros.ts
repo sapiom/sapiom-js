@@ -55,12 +55,14 @@ export const DEFAULT_MACROS: MacroDef[] = [
     },
   },
   {
-    // One-click force refresh of the bound workflow's canvas: re-runs the
-    // deterministic, zero-LLM structure render (core/canvas-render.ts —
-    // instant, cache-invalidated) AND re-spawns the bounded AI enrichment
-    // task (core/canvas-enrich.ts, a headless background run that returns
-    // validated JSON annotations, never HTML) — all server-side, without
-    // touching the session's pty. A cheap no-op when the session is unbound.
+    // One-click refresh of the bound workflow's canvas: re-runs the
+    // deterministic, zero-LLM Tier-1 structure render (core/canvas-render.ts —
+    // instant, cache-invalidated) AND kicks off the opt-in Tier-2 enrichment
+    // on our Sapiom account (core/canvas-enrich.ts → the enrich-canvas
+    // workflow, returning validated JSON annotations, 0 user Claude tokens) —
+    // all server-side, without touching the session's pty. A failed or
+    // unconfigured enrichment degrades silently to Tier-1; a cheap no-op when
+    // the session is unbound.
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",
