@@ -12,7 +12,7 @@ import {
   type Server as HttpServer,
 } from "node:http";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { WebSocketServer } from "ws";
@@ -565,6 +565,34 @@ export const startServer = async (
     await workflowRegistry.scan(session.cwd);
     const after = await workflowRegistry.list();
     workflowsCache = after;
+
+    // Auto-bind: if this session is still unbound, find the workflow at or
+    // directly under its cwd and bind it — same mechanism as
+    // PATCH /api/sessions/:id/workflow (setBoundWorkflowPath +
+    // writeSessionContext + renderCanvas). Only runs once: the guard
+    // `!session.boundWorkflowPath` is false on every subsequent rescan once
+    // the session is bound, so this is idempotent and never overrides an
+    // explicit/persisted binding.
+    if (!session.boundWorkflowPath) {
+      const cwdSep = session.cwd + sep;
+      const candidate =
+        after.find((w) => w.path === session.cwd) ??
+        after
+          .filter((w) => w.path.startsWith(cwdSep))
+          .sort((a, b) => a.path.length - b.path.length)[0] ??
+        null;
+      if (candidate) {
+        sessionManager.setBoundWorkflowPath(session.id, candidate.path);
+        // Re-read: setBoundWorkflowPath mutates the session object in place,
+        // so the session reference we already hold already carries the new
+        // binding — pass it directly, same as the PATCH handler does.
+        await writeSessionContext(session);
+        await renderCanvas(session).catch((err: unknown) => {
+          console.error("[harness] auto-bind canvas render failed:", err);
+        });
+      }
+    }
+
     if (workflowListsEqual(before, after)) return;
     await Promise.all(sessionManager.list().map((s) => writeSessionContext(s)));
     bus.publish({ type: "workflows.changed" });
