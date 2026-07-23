@@ -1,0 +1,59 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Keep a table of leads or customers, each with a line of context, and this turns every row into its own piece of media. On a schedule it reads the table and, per row, generates a personalized marketing image or a short clip, saves it, and emails that person a link to their own asset.\n\nIt forks on the medium you choose. For images it makes them all at once. For video it works one row at a time: each clip is an async job, and the run pauses until a webhook says that clip is ready before starting the next — so a long batch survives the wait instead of holding a connection open. The prompt for each row is built from that row's context, so nothing is generic.\n\nThe first run seeds a small demo table so it works immediately; point `dbHandle` at your own table when you're ready. Set `dryRun` and it reads the rows and shows the prompt each would get, generating and sending nothing.\n\nYou pay for the media it generates — one image, or one clip, per row. Video costs more than images, so keep `limit` small while you try it. The emails and the table are effectively free.",
+  "useCases": [
+    "Send every lead in a table a marketing image built from their own interests, on a daily cadence.",
+    "Generate a short personalized clip per customer for a launch or a win-back campaign.",
+    "Preview the per-row prompts with dryRun before spending anything on generation."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nIt runs on a seeded demo table out of the box, so a first run needs no input. `medium` picks `image` (default, cheaper, made all at once) or `video` (async, one row at a time, pricier). `limit` caps how many rows you render per run (default 3, max 25) — keep it small for video. Set `dryRun: true` to read the rows and the prompt each would get without generating or emailing anything. Point `dbHandle` at your own table (columns: `name`, `email`, `context`) once you're past the demo. On a live run it emails each row's address, so use `dryRun` or a test table first.\n\nTo run it on a cadence, attach the `schedule` (default `0 9 * * *`) as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the whole graph for free, or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Plan only (dryRun — no billed generation, no email)",
+      "input": {
+        "medium": "image",
+        "limit": 3,
+        "style": "warm, editorial",
+        "dryRun": true
+      },
+      "output": {
+        "dryRun": true,
+        "medium": "image",
+        "planned": [
+          {
+            "recipientId": 1,
+            "name": "Ada Lovelace",
+            "email": "ada@example.com",
+            "prompt": "A personalized marketing image for Ada Lovelace. Theme: loves vintage computing and long-distance cycling. Style: warm, editorial. No text, no watermark."
+          }
+        ]
+      }
+    },
+    {
+      "title": "Live image batch",
+      "input": {
+        "medium": "image",
+        "limit": 3,
+        "aspectRatio": "1:1"
+      },
+      "output": {
+        "medium": "image",
+        "schedule": "0 9 * * *",
+        "rendered": 3,
+        "delivered": 3,
+        "recipients": [
+          {
+            "recipientId": 1,
+            "to": "ada@example.com",
+            "messageId": "msg_abc123"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -193,6 +193,52 @@
       ]
     },
     {
+      "id": "personalized-media-at-scale",
+      "name": "Personalized Media at Scale",
+      "description": "Read a table of leads and, per row, generate a personalized image or short clip, store it, and email each person a link — on a schedule.",
+      "tags": ["marketing", "generative", "media", "scheduled"],
+      "sourcePath": "examples/personalized-media-at-scale",
+      "capabilities": [
+        "database.get",
+        "database.create",
+        "contentGeneration.images",
+        "contentGeneration.video",
+        "email.send"
+      ],
+      "whatItDoes": "For a marketer with a list of leads or customers who each deserve something made just for them. It reads a table where every row has a name, an email, and a line of context, and turns each row into its own asset. Pick images (contentGeneration.images) and it makes them all at once; pick video (contentGeneration.video) and it renders one short clip per row, each an async job it waits on before starting the next. Every asset is saved, then emailed to that row's address with a link. The prompt for each row is built from that row's context, so nothing is generic. A dryRun flag returns the rows and the prompt each would get without generating or sending anything.",
+      "steps": [
+        {
+          "name": "fetch",
+          "description": "Read up to `limit` recipient rows from a database table, seeding a demo table on the first run. If you set dryRun, it stops here and returns the rows and their prompts.",
+          "capability": "database.get",
+          "next": ["renderImages", "renderClip"]
+        },
+        {
+          "name": "renderImages",
+          "description": "For the image medium: make one personalized image per row, all at once, and save each.",
+          "capability": "contentGeneration.images",
+          "next": ["deliver"]
+        },
+        {
+          "name": "renderClip",
+          "description": "For the video medium: launch a short clip for one row, then pause until it finishes.",
+          "capability": "contentGeneration.video",
+          "next": ["collectClip"]
+        },
+        {
+          "name": "collectClip",
+          "description": "Save the finished clip, then loop back for the next row, or move on once every row is done.",
+          "next": ["renderClip", "deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Email each recipient a link to their own asset; a dry run generates and sends nothing.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
+    },
+    {
       "id": "preview-keep-alive",
       "name": "Preview Keep-Alive",
       "description": "A cron heartbeat that checks a sandbox preview and, when it has gone down, redeploys it for you — no human needed.",
