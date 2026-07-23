@@ -21,7 +21,7 @@ repurpose ─▶ graphics ─▶ clip ─▶ collectClip ─▶ package ─▶ d
   (`Promise.all`), each persisted (`storage`) for a durable `fileId`.
 - **clip** — launches an async image-to-video job from the first graphic and
   `pauseUntilSignal`s on it. The `pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: 'collectClip' }`
-  declaration is the graph edge; the FAL webhook fires the signal to resume `collectClip`.
+  declaration is the graph edge; the video-generation webhook fires the signal to resume `collectClip`.
 - **collectClip** — records the finished clip.
 - **package** — renders the whole pack as one markdown doc and uploads it to file
   storage (`upload` → PUT the bytes → `getDownloadUrl`). The upload is best-effort:

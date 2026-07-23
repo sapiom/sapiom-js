@@ -27,7 +27,7 @@ import { VIDEO_RESULT_SIGNAL, type VideoResultPayload } from "@sapiom/tools";
  *      out in-process, each persisted for a durable `fileId`.
  *   3. clip — animate the first quote graphic into a short teaser clip: launch an
  *      async image-to-video job (`video.launch`) and `pauseUntilSignal` on it; the
- *      FAL webhook resumes `collectClip` when the clip is ready.
+ *      video-generation webhook resumes `collectClip` when the clip is ready.
  *   4. collectClip — record the finished clip.
  *   5. package — assemble the whole pack as one markdown document and upload it to
  *      file storage (`fileStorage.upload`) for a durable `fileId` + download URL.
@@ -88,7 +88,7 @@ interface RepurposeInput {
   deliverTo?: string;
   /** Cron cadence this pipeline is meant to run on (carried + reported). */
   schedule?: string;
-  /** Optional FAL image-to-video model id, passed through verbatim to `video.launch`. */
+  /** Optional image-to-video model id (advanced), passed through verbatim to `video.launch`. */
   model?: string;
   /** When true, generate the copy only — skip graphics, clip, upload, and email. */
   dryRun?: boolean;
@@ -111,8 +111,8 @@ interface Shared extends Record<string, unknown> {
 type Ctx = AgentExecutionContext<Shared>;
 
 /**
- * Default FAL image-to-video model. Kling 2.1 Pro is chosen for quality; swap for a
- * budget model (Wan i2v, Seedance i2v) via the `model` input.
+ * Default image-to-video model, chosen for quality; swap for a budget model via the
+ * `model` input. Model ids are an advanced, evolving surface passed through verbatim.
  */
 const DEFAULT_VIDEO_MODEL = "fal-ai/kling-video/v2.1/pro/image-to-video";
 /** Aspect ratio for the graphics + teaser clip. */
@@ -362,7 +362,7 @@ const clip = defineStep({
   name: "clip",
   next: [],
   // Async pause/resume: the launched video job fires VIDEO_RESULT_SIGNAL on
-  // completion (the FAL webhook), resuming `collectClip` with the clip's result.
+  // completion (the video-generation webhook), resuming `collectClip` with the clip's result.
   pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: "collectClip" },
   async run(_input: unknown, ctx: Ctx) {
     const pack = must(ctx.shared.get("pack"), "pack");

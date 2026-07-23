@@ -19,8 +19,8 @@ repurpose ──▶ graphics ──▶ clip ──▶ collectClip ──▶ pack
 2. **graphics** — one quote-graphic image per pull-quote (`images.create`),
    **fanned out** concurrently, each persisted for a durable `fileId`.
 3. **clip** — animates the first quote graphic into a short teaser: launches an
-   async image-to-video job (`video.launch`) and pauses on it; the FAL webhook
-   resumes `collectClip` when the clip is ready.
+   async image-to-video job (`video.launch`) and pauses on it; the video-generation
+   webhook resumes `collectClip` when the clip is ready.
 4. **collectClip** — records the finished clip.
 5. **package** — assembles the whole pack as one markdown document and uploads it
    to file storage (`fileStorage.upload`) for a durable `fileId` + download URL.
@@ -29,7 +29,7 @@ repurpose ──▶ graphics ──▶ clip ──▶ collectClip ──▶ pack
 
 Input: `{ "source": "<your blog post or transcript>", "title": "..." }`.
 Optional: `audience`, `numQuotes` (default 2, max 4), `deliverTo`, `schedule`
-(a cron string), `model` (a FAL image-to-video id), and `dryRun` (copy only).
+(a cron string), `model` (an advanced image-to-video model id), and `dryRun` (copy only).
 
 ## Delivery
 
@@ -65,9 +65,10 @@ keep `numQuotes` small for real runs.
 
 ## Model choice
 
-`clip` defaults to Kling 2.1 Pro image-to-video (`fal-ai/kling-video/v2.1/pro/image-to-video`)
-for quality. Pass a cheaper model via the `model` input (e.g. a Wan or Seedance
-i2v id) to trade quality for cost. Model ids are passed through verbatim.
+`clip` defaults to a high-quality image-to-video model. Pass a cheaper model via
+the `model` input to trade quality for cost. Model ids are an advanced, evolving
+surface and are passed through verbatim — most callers omit `model` and take the
+default.
 
 ## Files
 
