@@ -246,19 +246,6 @@ test.describe("pending spinner clears on success", () => {
 
 test.describe("connectivity screen auth surface", () => {
   /**
-   * The ConnectivityScreen is shown when the boot fetch fails with a 401
-   * (status: "auth"). In mock mode the boot always succeeds, so we simulate
-   * this by publishing a synthetic bus-level state change that triggers the
-   * auth screen via page.evaluate. The simplest verifiable path is to assert
-   * the ConnectivityScreen's Connect affordance directly via the component's
-   * own testids using page injection.
-   *
-   * Approach: mount the ConnectivityScreen in the live app via a DOM injection
-   * that inserts the element into the harness root. Since Playwright doesn't
-   * have access to React internals, we verify the auth screen behavior through
-   * the data-testid attributes that are present when the screen IS rendered —
-   * this is a structural assertion, not a live render test.
-   *
    * For the actual D5 cancel/failure regression: the unit tests in
    * auth.test.ts cover the state-machine logic (ConnectivityScreen.handleConnect
    * resets to idle after onStartAuth resolves). The e2e assertion here guards
@@ -335,11 +322,8 @@ test.describe("profile menu auth affordances", () => {
     const popover = page.getByTestId("settings-popover");
     await expect(popover).toBeVisible();
 
-    // The auth section is always present in the settings popover — either
-    // Connect (unauthenticated) or Disconnect (authenticated).
-    const hasAuth =
-      (await page.getByTestId("settings-connect-btn").count()) > 0 ||
-      (await page.getByTestId("settings-disconnect-btn").count()) > 0;
-    expect(hasAuth).toBe(true);
+    // The mock boots authenticated, so the Disconnect button is the expected
+    // auth surface — the popover shows the signed-in state by default.
+    await expect(page.getByTestId("settings-disconnect-btn")).toBeVisible();
   });
 });
