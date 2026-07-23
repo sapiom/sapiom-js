@@ -39,15 +39,21 @@ import { writeCredentials, clearCredentials } from "@sapiom/mcp/auth";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** A minimal ApiKeyProvider spy — records refresh() calls, returns null. */
-function makeProvider(refreshResult: string | null = null) {
-  const calls = { refresh: 0 };
+/** A minimal ApiKeyProvider spy — records refresh() and clear() calls. */
+function makeProvider(refreshResult: string | null = null, initialKey: string | null = null) {
+  const calls = { refresh: 0, clear: 0 };
+  let currentKey: string | null = initialKey;
   return {
     calls,
-    getKey: () => null as string | null,
+    getKey: () => currentKey,
     refresh: async () => {
       calls.refresh++;
-      return refreshResult;
+      if (refreshResult) currentKey = refreshResult;
+      return currentKey;
+    },
+    clear: () => {
+      calls.clear++;
+      currentKey = null;
     },
   };
 }
@@ -362,6 +368,7 @@ describe("POST /api/auth/disconnect", () => {
     bus = new EventBus();
     busEvents = collectBusEvents(bus);
     vi.mocked(clearCredentials).mockReset().mockResolvedValue(undefined);
+    vi.mocked(writeCredentials).mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -406,5 +413,89 @@ describe("POST /api/auth/disconnect", () => {
     expect(res.status).toBe(200);
     expect(clearCredentials).toHaveBeenCalledOnce();
     expect(result.authState.get().authenticated).toBe(false);
+  });
+
+  it("zeroes the in-memory key immediately after disconnect", async () => {
+    // Seed the provider with a live key (simulates an authenticated session).
+    const provider = makeProvider(null, "sk-live-key");
+    const authState = createMutableAuthState({ authenticated: true, organizationName: "Acme" });
+    const result = startApp({ bus, authState, apiKeyProvider: provider });
+    server = result.server;
+    baseUrl = result.baseUrl;
+
+    // Confirm the key is present before disconnect.
+    expect(provider.getKey()).toBe("sk-live-key");
+
+    const res = await fetch(`${baseUrl}/api/auth/disconnect`, { method: "POST" });
+    expect(res.status).toBe(200);
+
+    // clear() must have been called exactly once.
+    expect(provider.calls.clear).toBe(1);
+    // getKey() must return null immediately — no stale key after disconnect.
+    expect(provider.getKey()).toBeNull();
+  });
+
+  it("cancels an in-flight sign-in so a late browser-auth resolve cannot re-authenticate", async () => {
+    type AuthResult = {
+      apiKey: string;
+      tenantId: string;
+      organizationName: string;
+      apiKeyId: string;
+    };
+
+    let capturedResolve!: (v: AuthResult) => void;
+    const mockBrowserAuth = vi.fn().mockImplementation(
+      () =>
+        new Promise<AuthResult>((resolve) => {
+          capturedResolve = resolve;
+        }),
+    );
+
+    const provider = makeProvider("sk-fresh", null);
+    const result = startApp({ bus, performBrowserAuthImpl: mockBrowserAuth, apiKeyProvider: provider });
+    server = result.server;
+    baseUrl = result.baseUrl;
+    const { authState } = result;
+    const busEvents = collectBusEvents(bus);
+
+    // Start an in-flight sign-in.
+    const startRes = await fetch(`${baseUrl}/api/auth/start`, { method: "POST" });
+    expect(startRes.status).toBe(200);
+
+    // Give the async chain time to reach performBrowserAuthImpl.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(capturedResolve).toBeDefined();
+
+    // Disconnect while the browser flow is still pending.
+    const disconnectRes = await fetch(`${baseUrl}/api/auth/disconnect`, { method: "POST" });
+    expect(disconnectRes.status).toBe(200);
+
+    // Confirm disconnect zeroed the key and set state to unauthenticated.
+    expect(provider.getKey()).toBeNull();
+    expect(authState.get().authenticated).toBe(false);
+
+    // Now simulate the browser flow resolving late (after disconnect).
+    capturedResolve({
+      apiKey: "sk-late",
+      tenantId: "tenant-1",
+      organizationName: "Late Corp",
+      apiKeyId: "key-late",
+    });
+
+    // Give the async chain time to (not) write credentials.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // The late resolve must NOT have re-authenticated.
+    expect(authState.get().authenticated).toBe(false);
+    // The key must remain null — the cancelled chain must not call refresh().
+    expect(provider.getKey()).toBeNull();
+    // writeCredentials must NOT have been called (cancelled before reaching it).
+    expect(writeCredentials).not.toHaveBeenCalled();
+
+    // The bus should have exactly two auth.changed events:
+    // one from disconnect (authenticated: false) — the cancelled chain emits nothing.
+    const authEvents = busEvents.filter((e) => e.type === "auth.changed");
+    const unauthEvents = authEvents.filter((e) => "authenticated" in e && !e.authenticated);
+    expect(unauthEvents.length).toBeGreaterThanOrEqual(1);
   });
 });

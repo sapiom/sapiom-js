@@ -47,6 +47,13 @@ export interface ApiKeyProvider {
    * reported by returning the existing value.
    */
   refresh(): Promise<string | null>;
+  /**
+   * Unconditionally zero the in-memory key (sets it to null). Called on
+   * disconnect so that {@link getKey} returns null immediately — distinct from
+   * {@link refresh}, whose `if (latest)` guard deliberately preserves the
+   * cached key when the credential store has nothing to offer.
+   */
+  clear(): void;
 }
 
 /** Overridable reads for the credential store — a test seam. Defaults hit the
@@ -111,18 +118,24 @@ export function createApiKeyProvider(
       }
       return current;
     },
+    clear(): void {
+      current = null;
+    },
   };
 }
 
 /**
  * Adapt a plain `string | null` API key into an {@link ApiKeyProvider} whose
- * `refresh()` is a no-op. Lets call sites that only ever have a static key
- * (tests, callers with no credential store) share the one provider-shaped
- * contract without special-casing.
+ * `refresh()` is a no-op and `clear()` is a no-op. Lets call sites that only
+ * ever have a static key (tests, callers with no credential store) share the
+ * one provider-shaped contract without special-casing.
  */
 export function staticApiKeyProvider(key: string | null): ApiKeyProvider {
   return {
     getKey: () => key,
     refresh: () => Promise.resolve(key),
+    clear: () => {
+      /* static key — clear is a no-op */
+    },
   };
 }

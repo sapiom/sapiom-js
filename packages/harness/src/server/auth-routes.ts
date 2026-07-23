@@ -15,7 +15,7 @@
  *
  *   POST /api/auth/disconnect
  *     ↳ clearCredentials(...)
- *     ↳ provider.set(null)
+ *     ↳ provider.clear()
  *     ↳ bus.publish({ type: "auth.changed", authenticated: false })
  *
  *   GET /api/auth/status
@@ -81,6 +81,13 @@ export interface AuthKeyTarget {
    * provider's in-memory key matches the freshly written credential.
    */
   refresh(): Promise<string | null>;
+  /**
+   * Unconditionally zero the in-memory key (sets it to null). Called on
+   * disconnect so that the provider returns null immediately — distinct from
+   * {@link refresh}, whose guard deliberately keeps the cached key when the
+   * store has nothing to offer.
+   */
+  clear(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +135,9 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
   // Track any in-flight start() call so a second concurrent POST /api/auth/start
   // returns a clear error rather than racing two browser-open flows.
   let pendingAuth: Promise<void> | null = null;
+  // Set to true by disconnect while a start is in flight so the async chain
+  // can bail before writing credentials / refreshing / broadcasting authenticated.
+  let pendingCancelled = false;
 
   // ---------------------------------------------------------------------------
   // GET /api/auth/status — live auth state (not the boot-time snapshot)
@@ -153,6 +163,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
     // know when it completes.
     res.json({ started: true });
 
+    pendingCancelled = false;
     pendingAuth = (async () => {
       try {
         const env = await resolveEnvironment(
@@ -160,6 +171,11 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
         );
 
         const result = await performBrowserAuthImpl(env.appURL, env.apiURL);
+
+        // If disconnect arrived while the browser flow was in progress, treat
+        // the resolved result as cancelled — do not write credentials, do not
+        // adopt the key, do not broadcast authenticated.
+        if (pendingCancelled) return;
 
         // Write credentials.json — same as cli/auth.ts's ensureAuthenticated,
         // reusing the same file and format so the CLI and Studio share one store.
@@ -211,19 +227,21 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
         environment ?? process.env.SAPIOM_ENVIRONMENT,
       );
 
+      // If a sign-in is in flight, neutralize it so a late browser-auth resolve
+      // cannot re-authenticate after we've disconnected.
+      if (pendingAuth !== null) {
+        pendingCancelled = true;
+      }
+
       // Clear the credential store — the next refresh() call will find nothing.
       await clearCredentials(env.name);
 
-      // The provider's refresh() now reads an empty credential entry and will
-      // leave current key as-is (per api-key-provider.ts's contract: a missing
-      // key does NOT clobber the cached one). We force-clear by adopting null
-      // through a direct assignment is not available on the provider interface.
-      // The safe workaround: after clearCredentials, the NEXT api call will 401
-      // and the refresh will fail to find a key — the provider's current value
-      // is stale but will be exposed honestly on the next upstream 401.
-      //
-      // For the auth state broadcast (what the SPA cares about), we always flip
-      // to unauthenticated immediately regardless.
+      // Zero the in-memory key immediately so getKey() returns null right away.
+      // This is distinct from refresh(), whose `if (latest)` guard deliberately
+      // keeps the cached key when the store has nothing to offer — we want an
+      // unconditional zero on disconnect.
+      apiKeyProvider.clear();
+
       authState.set({ authenticated: false, organizationName: null });
       bus.publish({
         type: "auth.changed",
