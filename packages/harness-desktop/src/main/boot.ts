@@ -24,11 +24,13 @@ import {
   CODEX_INSTALL_COMMAND,
   type HarnessServer,
   type HarnessIdentity,
+  type DoctorReport,
 } from "@sapiom/harness";
 import { augmentProcessPath } from "./env.js";
 import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
-import { BOOT_PROGRESS, BOOT_ERROR, CONSENT_SUBMIT, type BootProgress, type BootErrorPayload } from "./ipc.js";
+import { installClaudeCode } from "./agent-install.js";
+import { BOOT_PROGRESS, BOOT_ERROR, CONSENT_SUBMIT, RETRY, type BootProgress, type BootErrorPayload } from "./ipc.js";
 
 export interface BootResult {
   server: HarnessServer;
@@ -144,6 +146,63 @@ async function chooseLaunchDir(devMode: boolean, firstRun: boolean): Promise<str
   return lastValid;
 }
 
+/**
+ * Guarantee at least one coding agent is available, starting from a doctor
+ * report that found none. First attempts an automatic install of the default
+ * agent (Claude Code) into the per-user npm prefix; if doctor still finds
+ * nothing afterwards, drops to a retryable guided-install screen and loops
+ * until the user installs one manually (or closes the window).
+ */
+async function ensureAgentAvailable(setupWin: BrowserWindow, initialReport: DoctorReport): Promise<DoctorReport> {
+  let report = initialReport;
+
+  // Attempt 1: automatic install (streams npm's output to the setup window).
+  progress(setupWin, { phase: "installing-agent", message: "Installing Claude Code…", status: "active" });
+  let autoInstallSucceeded = false;
+  try {
+    const result = await installClaudeCode((line) => {
+      progress(setupWin, { phase: "installing-agent", message: line, status: "active" });
+    });
+    autoInstallSucceeded = result.ok;
+    if (!result.ok) {
+      // Non-fatal: fall through to re-doctor (a PATH-resolvable agent may still
+      // exist) and, failing that, the guided fallback below.
+      progress(setupWin, {
+        phase: "installing-agent",
+        message: `Automatic setup didn't complete (npm exit ${result.code ?? "?"}).`,
+        status: "error",
+      });
+    }
+  } catch (err) {
+    progress(setupWin, {
+      phase: "installing-agent",
+      message: err instanceof Error ? err.message : String(err),
+      status: "error",
+    });
+  }
+
+  report = await runDoctor();
+
+  // Guided fallback: loop on user retries until an agent appears on PATH.
+  while (report.availableHarnesses.length === 0) {
+    bootError(setupWin, {
+      message: autoInstallSucceeded
+        ? "Installed your coding agent, but it wasn't detected."
+        : "Couldn't set up your coding agent automatically.",
+      detail:
+        `Install one manually, then click Retry:\n` +
+        `  Claude Code:  ${CLAUDE_INSTALL_COMMAND}\n` +
+        `  Codex:        ${CODEX_INSTALL_COMMAND}\n\n` +
+        `(Requires Node.js — https://nodejs.org)`,
+      retryable: true,
+    });
+    await new Promise<void>((resolve) => ipcMain.handleOnce(RETRY, () => resolve()));
+    progress(setupWin, { phase: "doctor", message: "Re-checking…", status: "active" });
+    report = await runDoctor();
+  }
+  return report;
+}
+
 export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<BootResult> {
   progress(setupWin, { phase: "starting", message: "Starting Sapiom…", status: "active" });
 
@@ -155,19 +214,13 @@ export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<B
   progress(setupWin, { phase: "doctor", message: "Checking your environment…", status: "active" });
   let report = await runDoctor();
 
-  // 3. Agent presence. Phase 3 replaces this block with an auto-install; for
-  //    now, if no agent is found, surface a guided-install error (retryable).
-  if (report.availableHarnesses.length === 0) {
-    bootError(setupWin, {
-      message: "No coding agent found.",
-      detail:
-        `Install one, then click Retry:\n  Claude Code:  ${CLAUDE_INSTALL_COMMAND}\n  Codex:        ${CODEX_INSTALL_COMMAND}`,
-      retryable: true,
-    });
-    // Re-run doctor when the user retries.
-    await new Promise<void>((resolve) => ipcMain.handleOnce("boot:retry", () => resolve()));
-    report = await runDoctor();
-    if (report.availableHarnesses.length === 0) throw new Error("No coding agent available after retry.");
+  // 3. Agent presence. If no coding agent is on PATH, auto-install the default
+  //    (Claude Code) behind a "Setting up…" screen, then re-run doctor; on
+  //    failure, fall back to a retryable guided-install screen. Dev-only
+  //    SAPIOM_FORCE_NO_AGENT=1 forces this branch to exercise auto-install.
+  const forceNoAgent = devMode && process.env.SAPIOM_FORCE_NO_AGENT === "1";
+  if (forceNoAgent || report.availableHarnesses.length === 0) {
+    report = await ensureAgentAvailable(setupWin, report);
   }
   progress(setupWin, { phase: "doctor", message: `Found: ${report.availableHarnesses.join(", ")}`, status: "done" });
 

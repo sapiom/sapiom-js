@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@sapiom/harness": "workspace:^",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "npm": "^10.9.0"
   },
   "devDependencies": {
     "@electron/notarize": "^2.5.0",
