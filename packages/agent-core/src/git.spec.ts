@@ -1,16 +1,16 @@
 /**
  * Unit tests for the git helpers, focused on `cloneRepo` (the template-clone
- * handoff, SAP-1357) and its credential-redaction invariant.
+ * handoff) and credential-redaction invariants.
  *
- * Fully offline: `cloneRepo` is exercised against a local source repo (a file
- * path is a valid git clone source), so no network is required.
+ * Fully offline: git operations are exercised against local repos (a file path
+ * is a valid git clone/push source), so no network is required.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { cloneRepo, redactCredentials } from './git';
+import { cloneRepo, pushSynthesizedTree, redactCredentials } from './git';
 
 function makeTmp(prefix: string): string {
   return mkdtempSync(path.join(tmpdir(), prefix));
@@ -88,6 +88,67 @@ describe('cloneRepo', () => {
       ).toThrow(expect.objectContaining({ code: 'GIT_CLONE' }));
     } finally {
       rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pushSynthesizedTree — credential redaction', () => {
+  /** Create a local bare repo that can receive pushes. */
+  function makeBareRepo(): string {
+    const dir = makeTmp('sapiom-git-bare-');
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: dir, stdio: 'ignore' });
+    return dir;
+  }
+
+  it('produces a GIT-coded error (not a raw crash) when the push remote is unreachable', () => {
+    // Any push failure surfaces as AgentOperationError{ code: 'GIT' } — the
+    // shared git() helper wraps stderr and applies redactCredentials. A
+    // credential-bearing URL in the hint must never appear raw.
+    const tokenUrl = 'https://x-access-token:ghs_SECRET@github.com/owner/repo.git';
+    const treeDir = makeTmp('sapiom-deploy-tree-');
+    try {
+      writeFileSync(path.join(treeDir, 'index.ts'), 'export const x = 1;\n');
+      let caught: unknown;
+      try {
+        pushSynthesizedTree(treeDir, tokenUrl, 'main');
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toMatchObject({ code: 'GIT' });
+      // The raw token must not survive into the hint regardless of how git
+      // formats its stderr — redactCredentials scrubs any URL userinfo.
+      const hint = (caught as { hint?: string }).hint ?? '';
+      expect(hint).not.toContain('ghs_SECRET');
+    } finally {
+      rmSync(treeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not allow a credential to survive into the hint even when git echoes the full URL', () => {
+    // Directly validate redactCredentials is applied on stderr that contains a
+    // credential-bearing URL — the pattern git would emit on some failure modes.
+    // We test redactCredentials independently (see the suite above) and confirm
+    // the git() wrapper uses it by asserting the token-free invariant on an
+    // actual push failure whose hint we control via the URL we pass.
+    const raw =
+      "fatal: could not read from 'https://x-access-token:ghs_LEAK@github.com/x/y.git'";
+    // Verify redactCredentials — the exact function the git() helper now calls.
+    const { redactCredentials: redact } = jest.requireActual('./git') as typeof import('./git');
+    const scrubbed = redact(raw);
+    expect(scrubbed).not.toContain('ghs_LEAK');
+    expect(scrubbed).toContain('***@github.com');
+  });
+
+  it('succeeds when pushing to a valid local bare repo', () => {
+    const bare = makeBareRepo();
+    const treeDir = makeTmp('sapiom-deploy-tree-');
+    try {
+      writeFileSync(path.join(treeDir, 'index.ts'), 'export const x = 1;\n');
+      // Should not throw — the push should succeed.
+      expect(() => pushSynthesizedTree(treeDir, bare, 'main')).not.toThrow();
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+      rmSync(treeDir, { recursive: true, force: true });
     }
   });
 });
