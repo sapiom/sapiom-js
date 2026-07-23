@@ -37,6 +37,9 @@ interface CanvasOverviewPanelProps {
   onDeselect: () => void;
   /** Collapses the overview to its ⓘ reopen affordance (overview mode only). */
   onCollapse: () => void;
+  /** Inject a prompt into the active terminal session (forwarded to the step
+   *  inspector's debug macros). Absent when no session is live. */
+  onInjectPrompt?: (text: string) => void;
 }
 
 /**
@@ -61,6 +64,7 @@ export function CanvasOverviewPanel({
   onOpenSteps,
   onDeselect,
   onCollapse,
+  onInjectPrompt,
 }: CanvasOverviewPanelProps): JSX.Element {
   const panelRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
@@ -260,6 +264,7 @@ export function CanvasOverviewPanel({
               onSelectStep={onSelectStep}
               workflows={workflows}
               onOpenWorkflow={onOpenWorkflow}
+              onInjectPrompt={onInjectPrompt}
             />
           ) : (
             overview && (

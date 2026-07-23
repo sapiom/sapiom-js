@@ -1020,6 +1020,7 @@ export function CanvasPane({
               }}
               onDeselect={() => setSelectedNodeId(null)}
               onCollapse={() => setOverviewOpen(false)}
+              onInjectPrompt={onInjectPrompt}
             />
           )}
           </div>
