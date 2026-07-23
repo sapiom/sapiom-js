@@ -1,0 +1,41 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You hand it a meeting transcript and it does the CRM busywork for you: it works out who the call was with, what to change on their record, and what everyone agreed to do next. It takes the transcript either way — a run passes one in directly (a nightly job over yesterday's calls), or you set `webhook: true` and it waits for your note-taker to push one in.\n\nThe graph is four steps. `intake` takes the transcript — and when it's told to wait for a webhook, it pauses and costs nothing until one arrives. `extract` (`models.run`, the live x402-served model) reads the transcript and returns structured data: the contact, the CRM fields to update (deal stage, next step), and the action items, each with an owner and due date when the call actually named them. `upsert` writes to a small Postgres CRM store the template owns — it updates the contact's row (keyed by email, falling back to company) without wiping fields the call didn't mention, and records each action item under a stable id. `summary` writes a markdown recap — fields updated, action items split into new vs. already tracked — and emails it to the rep.\n\nThe stable id on each action item is the point. Re-process the same transcript, or send a lightly-edited one, and the item is recorded once, not twice — so the CRM store and the recap show what's genuinely new. A `dryRun` computes the recap and returns it without touching the database or sending mail, so you can trace the whole flow for free before it writes or delivers anything.\n\nYou pay for the model reasoning on each run and a small database footprint — the waiting is free, and the email is cheap.",
+  "useCases": [
+    "Turn a sales call transcript into an updated contact record and a clean action-item list, without hand-copying anything.",
+    "Let a note-taker push transcripts in as calls end — the run waits at $0 until one arrives, then processes it.",
+    "Keep a running CRM store of contacts and open action items across every meeting, deduped so nothing is logged twice."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nFeed it the notes as `transcript` (plain text). Set who gets the recap with `deliverTo`, or store a default under the `meeting-notes-crm` vault ref (key `RECIPIENT`) — it's read at runtime, never saved into the run. Pass `meetingDate` (ISO) to stamp the contact's last-meeting time, and `dryRun: true` to compute the recap and get it back without writing to the database or sending mail.\n\nThis template can also **pause and wait for a webhook**: run it with `webhook: true` and no transcript, and it suspends at $0 until your note-taker pushes one. Send the transcript with the MCP `workflow_signal` tool (or the API) using the signal name `transcript.ready` and a payload of `{ \"transcript\": \"...\" }` — there is no one-click signal button yet.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole intake → extract → upsert → summary flow for free (capabilities stubbed, database and delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Extract a short call, preview only (dry run)",
+      "input": {
+        "dryRun": true,
+        "transcript": "Call with Dana Ruiz, VP Eng at Northwind. She confirmed budget for the Q3 rollout and wants a security review before signing. I'll send the SOC 2 report by Friday and Dana will loop in their CISO next week. Deal looks like it's moving to contract stage.",
+        "meetingDate": "2026-07-22"
+      },
+      "output": {
+        "delivered": false,
+        "dryRun": true,
+        "reason": "dry-run",
+        "to": null,
+        "subject": "CRM updated: Northwind — 2 new action item(s)",
+        "contact": {
+          "name": "Dana Ruiz",
+          "email": null,
+          "company": "Northwind",
+          "title": "VP Eng"
+        },
+        "newCount": 2,
+        "existingCount": 0,
+        "summary": "# Meeting notes → CRM\n\n**Contact:** Dana Ruiz — VP Eng, Northwind\n**Deal stage:** contract\n**Next step:** Send SOC 2 report, then security review before signing\n\nDana confirmed Q3 rollout budget and wants a security review before signing.\n\n## Action items (2 new, 0 already tracked)\n### New (2)\n- Send the SOC 2 report _(me, due Friday)_\n- Loop in the CISO _(Dana, due next week)_\n\n### Already tracked (0)\n_None._"
+      }
+    }
+  ]
+}

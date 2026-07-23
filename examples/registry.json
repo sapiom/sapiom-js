@@ -365,6 +365,40 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "meeting-notes-crm",
+      "name": "Meeting Notes to CRM Updater",
+      "description": "Take a meeting transcript, pull out the contact, the CRM fields to update, and the action items, write them to a database, and email a summary.",
+      "tags": ["crm", "sales", "transcript", "pause-resume"],
+      "sourcePath": "examples/meeting-notes-crm",
+      "capabilities": ["models.run", "database.get", "database.create", "email.send"],
+      "whatItDoes": "For turning what was said on a call into an updated CRM record without hand-copying anything. It takes the transcript either way: a run hands it one directly, or you set `webhook: true` and it pauses at $0 until your note-taker pushes one as the `transcript.ready` signal. An LLM (`models.run`) reads the transcript and returns structured data — the contact the call was with, the fields to change (deal stage, next step), and the action items with owners and due dates. It writes them to a small Postgres store it owns, updating the contact's row without wiping fields the call didn't mention and recording each action item under a stable id so a re-run logs it once. Then it emails a recap that splits action items into new versus already tracked. A dryRun computes the recap and returns it without touching the database or sending mail.",
+      "steps": [
+        {
+          "name": "intake",
+          "description": "Takes the transcript — passed in directly, or, with webhook set, pauses at $0 until a note-taker pushes one via the transcript.ready signal.",
+          "next": ["extract"]
+        },
+        {
+          "name": "extract",
+          "description": "Hands the transcript to an LLM to pull the contact, the CRM fields to update, and the action items as structured JSON.",
+          "capability": "models.run",
+          "next": ["upsert"]
+        },
+        {
+          "name": "upsert",
+          "description": "Writes to a Postgres CRM store: updates the contact's row without wiping unmentioned fields, and records each action item under a stable id. Skipped on a dry run.",
+          "capability": "database.get",
+          "next": ["summary"]
+        },
+        {
+          "name": "summary",
+          "description": "Writes a markdown recap — fields updated, action items new vs. already tracked — and emails it. A dry run, or a run with no recipient, returns it without sending.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
