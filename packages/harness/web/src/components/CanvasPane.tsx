@@ -510,7 +510,14 @@ export function CanvasPane({
     if (!sessionId || (isMockMode() && !hasMockCanvasDoc(sessionId))) return;
     if (frameLoading) return;
     frameRef.current?.contentWindow?.postMessage(
-      { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
+      {
+        type: "sapiom:run-state",
+        // The board only needs name/id/status/latency — never ship step
+        // logs/inputs/outputs/stub-values into the served document.
+        steps: run.steps.map((s) => ({ name: s.name, id: s.id, status: s.status, latencyMs: s.latencyMs })),
+        status: run.status,
+        target: runTarget,
+      },
       "*",
     );
   }, [run, runTarget, sessionId, frameLoading]);
@@ -1005,7 +1012,12 @@ export function CanvasPane({
               // after the hold timer), so call the raw post directly.
               if (run && runTarget && sessionId && (!isMockMode() || hasMockCanvasDoc(sessionId))) {
                 frameRef.current?.contentWindow?.postMessage(
-                  { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
+                  {
+                    type: "sapiom:run-state",
+                    steps: run.steps.map((s) => ({ name: s.name, id: s.id, status: s.status, latencyMs: s.latencyMs })),
+                    status: run.status,
+                    target: runTarget,
+                  },
                   "*",
                 );
               }
