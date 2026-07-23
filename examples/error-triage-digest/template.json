@@ -1,0 +1,50 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You point it at your errors and it turns the noise into one readable digest. It takes them either way: a cron-triggered run hands it a batch (or a URL to pull one from), or you set `webhook: true` and it waits for your error pipeline to push a batch in.\n\nThe graph is four steps. `collect` gathers the batch — and when it's told to wait for a webhook, it pauses and costs nothing until one arrives. `triage` (`models.run`, the live x402-served model) clusters the raw entries into a handful of distinct issues, each with a stable fingerprint that strips out volatile bits like ids and line numbers, so the same recurring error always lands on the same key. `dedupe` looks each fingerprint up in a small Postgres store the digest owns: ones it has never seen are new, the rest are recurring, and it updates their running totals. `digest` writes the markdown — new issues first, recurring below — and emails it.\n\nThe dedup store is the point. Without it, a daily digest re-alerts on the same known error every morning; with it, new problems stand out and the familiar ones fade into a counted summary. A `dryRun` computes the digest and returns it without touching the database or sending mail, so you can trace the whole flow for free before it writes or delivers anything.\n\nYou pay for the model reasoning on each run and a small database footprint — the waiting is free, and the emails are cheap.",
+  "useCases": [
+    "Wake up to one triaged digest of overnight errors instead of a thousand raw alerts.",
+    "Surface only genuinely new failures — let recurring, already-known errors collapse into a counted summary.",
+    "Ingest errors either way: push them in from a webhook, or pull a batch on a schedule."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nFeed it a batch as `errors` (an array of `{ message, level?, service?, stack? }`), or a `pullUrl` it GETs the batch from on each run. Set who gets the digest with `deliverTo`, or store a default under the `error-triage-digest` vault ref (key `RECIPIENT`) — it's read at runtime, never saved into the run. Pass `dryRun: true` to compute the digest and get it back without writing to the database or sending mail. To run it daily, attach the `schedule` as a cron trigger on the deployed workflow.\n\nThis template can also **pause and wait for a webhook**: run it with `webhook: true` and no batch, and it suspends at $0 until your pipeline pushes one. Send the batch with the MCP `workflow_signal` tool (or the API) using the signal name `errors.pushed` and a payload of `{ \"errors\": [ ... ] }` — there is no one-click signal button yet.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole collect → triage → dedupe → digest flow for free (capabilities stubbed, database and delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Triage a small batch, preview only (dry run)",
+      "input": {
+        "dryRun": true,
+        "errors": [
+          {
+            "message": "TypeError: Cannot read properties of undefined (reading 'id') at checkout.js:42",
+            "level": "error",
+            "service": "checkout"
+          },
+          {
+            "message": "TypeError: Cannot read properties of undefined (reading 'id') at checkout.js:42",
+            "level": "error",
+            "service": "checkout"
+          },
+          {
+            "message": "Timeout after 30000ms calling payments.charge",
+            "level": "error",
+            "service": "payments"
+          }
+        ]
+      },
+      "output": {
+        "delivered": false,
+        "dryRun": true,
+        "reason": "dry-run",
+        "to": null,
+        "subject": "Error triage digest: 2 new, 0 recurring",
+        "newCount": 2,
+        "recurringCount": 0,
+        "digest": "# Error triage digest\n\nTriaged **3** entries into **2** new and **0** recurring issue(s).\n\n## 🔴 New issues (2)\n- **[high] Undefined read in checkout** — Reading `id` off an undefined object in checkout.js. (2 this batch)\n  `TypeError: Cannot read properties of undefined (reading 'id') at checkout.js:42`\n- **[medium] Payment charge timeout** — payments.charge exceeds its 30s timeout. (1 this batch)\n  `Timeout after 30000ms calling payments.charge`\n\n## 🔁 Recurring issues (0)\n_None._"
+      }
+    }
+  ]
+}

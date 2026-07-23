@@ -365,6 +365,45 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "error-triage-digest",
+      "name": "Error / Log Triage Digest",
+      "description": "Ingest errors by webhook or a scheduled pull, cluster and summarize them with an LLM, dedupe against a database, and email a daily digest.",
+      "tags": ["errors", "triage", "digest", "dedupe", "scheduled"],
+      "sourcePath": "examples/error-triage-digest",
+      "capabilities": [
+        "models.run",
+        "database.get",
+        "database.create",
+        "email.send"
+      ],
+      "whatItDoes": "For turning a noisy error stream into one digest that tells you what's actually new. It takes a batch of errors two ways from the same entry: a cron-triggered run pulls one in (or is handed one), or with `webhook: true` it pauses at $0 until your pipeline pushes one as the `errors.pushed` signal. An LLM (`models.run`) clusters the raw entries into a handful of issues, each with a stable fingerprint that strips out volatile ids and line numbers. It looks each fingerprint up in a Postgres store it owns (`database`): unseen ones are new, the rest are recurring with their running totals updated — so the daily digest surfaces new problems instead of re-alerting on known ones. Then it emails a markdown digest, new issues first. A dryRun computes the digest without touching the database or sending mail.",
+      "steps": [
+        {
+          "name": "collect",
+          "description": "Gather the error batch — take it directly, GET it from a pull URL, or pause at $0 until a webhook pushes one via the errors.pushed signal.",
+          "next": ["triage"]
+        },
+        {
+          "name": "triage",
+          "description": "Hand the raw errors to an LLM to cluster them into distinct issues, each with a stable fingerprint, a severity, and an occurrence count.",
+          "capability": "models.run",
+          "next": ["dedupe"]
+        },
+        {
+          "name": "dedupe",
+          "description": "Look each fingerprint up in a Postgres store: never-seen ones are new, the rest are recurring, and their running totals are updated. Skipped on a dry run.",
+          "capability": "database.get",
+          "next": ["digest"]
+        },
+        {
+          "name": "digest",
+          "description": "Write a markdown digest — new issues first, recurring below — and email it. A dry run, or a run with no recipient, returns it without sending.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
