@@ -19,6 +19,7 @@ import {
   boundWorkflowPathOf,
   createApi,
   getBootToken,
+  type AuthStartResponse,
   type FsListResponse,
   type HarnessApi,
   type RunLocalLine,
@@ -174,6 +175,19 @@ export interface HarnessStateHook {
   /** The underlying API client — exposed so consumers (e.g. SkillsPanel) can
    *  call methods (listSkills, getSkill) not surfaced as dedicated hook fns. */
   api: HarnessApi;
+  /**
+   * Kick off the browser OAuth sign-in flow (`POST /api/auth/start`). Returns
+   * `{ started: true }` immediately; the sign-in completes asynchronously and
+   * the state updates when the `auth.changed` bus message arrives. Throws on a
+   * 409 (flow already in progress) or other HTTP errors.
+   */
+  startAuth(): Promise<AuthStartResponse>;
+  /**
+   * Sign out and clear stored credentials (`POST /api/auth/disconnect`).
+   * Updates `AppState.authenticated`/`organizationName` via the `auth.changed`
+   * bus message that the server broadcasts after disconnecting.
+   */
+  disconnect(): Promise<void>;
 }
 
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
@@ -548,6 +562,19 @@ export function useHarnessState(): HarnessStateHook {
             });
           }, BUSY_WINDOW_MS),
         );
+      } else if (message.type === "auth.changed") {
+        // Real-time auth state update from the server — update AppState in
+        // place so SettingsPopover, WorkflowsRail, and deploy gating all
+        // react without a full reload or polling.
+        setState((prev) =>
+          prev
+            ? {
+                ...prev,
+                authenticated: message.authenticated,
+                organizationName: message.organizationName,
+              }
+            : prev,
+        );
       }
     });
   }, [refreshWorkflows, startRunPolling]);
@@ -766,6 +793,18 @@ export function useHarnessState(): HarnessStateHook {
     [startRunPolling],
   );
 
+  const startAuth = useCallback(async (): Promise<AuthStartResponse> => {
+    return api.startAuth();
+  }, []);
+
+  const disconnect = useCallback(async (): Promise<void> => {
+    try {
+      await api.disconnect();
+    } catch (err) {
+      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+    }
+  }, []);
+
   const dismissToast = useCallback(() => setToast(null), []);
 
   // Unlike runMacro (which swallows errors into a toast), injectInput lets the
@@ -839,5 +878,7 @@ export function useHarnessState(): HarnessStateHook {
     busySessionIds,
     tasks,
     api,
+    startAuth,
+    disconnect,
   };
 }
