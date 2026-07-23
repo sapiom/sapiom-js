@@ -224,6 +224,7 @@ export const App = (): JSX.Element => {
         status={status === "online" ? "error" : status}
         onRetry={harness.reload}
         detail={harness.error}
+        onStartAuth={status === "auth" ? harness.startAuth : undefined}
       />
     );
   }
@@ -578,6 +579,8 @@ export const App = (): JSX.Element => {
           onToggleTelemetry={async (next) => {
             await harness.updateSettings({ telemetryOptIn: next });
           }}
+          onStartAuth={harness.startAuth}
+          onDisconnect={harness.disconnect}
           settingsOpen={settingsOpen}
           onSetSettingsOpen={setSettingsOpen}
         />

@@ -9,7 +9,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import type { FsListResponse } from "../lib/api";
+import type { AuthStartResponse, FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
@@ -78,6 +78,10 @@ interface WorkflowsRailProps {
   authenticated: boolean;
   organizationName: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  /** Kick off the browser OAuth flow for the in-app Connect button. */
+  onStartAuth: () => Promise<AuthStartResponse>;
+  /** Sign out and clear credentials. */
+  onDisconnect: () => Promise<void>;
   settingsOpen: boolean;
   onSetSettingsOpen: (open: boolean) => void;
 }
@@ -295,6 +299,8 @@ export function WorkflowsRail({
   authenticated,
   organizationName,
   onToggleTelemetry,
+  onStartAuth,
+  onDisconnect,
   settingsOpen,
   onSetSettingsOpen,
 }: WorkflowsRailProps): JSX.Element {
@@ -580,6 +586,8 @@ export function WorkflowsRail({
           consentSource={consentSource}
           consentEnvReason={consentEnvReason}
           onToggleTelemetry={onToggleTelemetry}
+          onStartAuth={onStartAuth}
+          onDisconnect={onDisconnect}
           settingsOpen={settingsOpen}
           onSetSettingsOpen={onSetSettingsOpen}
           overviewSelected={overviewSelected}
@@ -626,6 +634,12 @@ export function WorkflowsRail({
  * live-auth dot, and a switch/account menu. Identity binds at server start,
  * so every menu action is a real surface — never a fake account switcher.
  */
+/** In-progress sign-in state tracked inside ProfileRow (and its sub-component). */
+type ProfileAuthProgress =
+  | { status: "idle" }
+  | { status: "pending" }
+  | { status: "error"; message: string };
+
 function ProfileRow({
   authenticated,
   organizationName,
@@ -633,6 +647,8 @@ function ProfileRow({
   consentSource,
   consentEnvReason,
   onToggleTelemetry,
+  onStartAuth,
+  onDisconnect,
   settingsOpen,
   onSetSettingsOpen,
   overviewSelected,
@@ -644,20 +660,55 @@ function ProfileRow({
   consentSource?: AppState["consentSource"];
   consentEnvReason?: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  onStartAuth: () => Promise<AuthStartResponse>;
+  onDisconnect: () => Promise<void>;
   settingsOpen: boolean;
   onSetSettingsOpen: (open: boolean) => void;
   overviewSelected: boolean;
   onSelectOverview: () => void;
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [authProgress, setAuthProgress] = useState<ProfileAuthProgress>({ status: "idle" });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const closeSettings = useCallback(() => onSetSettingsOpen(false), [onSetSettingsOpen]);
 
   const demo = isMockMode();
-  const name = demo ? "Demo workspace" : authenticated ? (organizationName ?? "Signed in") : "Not signed in";
-  const meta = demo ? "no account connected" : authenticated ? "Sapiom account" : "connect to get started";
+  const isPending = authProgress.status === "pending";
+
+  // When auth.changed arrives and authenticated flips to true, clear pending.
+  if (authenticated && authProgress.status === "pending") {
+    setAuthProgress({ status: "idle" });
+  }
+
+  const name = demo
+    ? "Demo workspace"
+    : isPending
+      ? "Connecting…"
+      : authenticated
+        ? (organizationName ?? "Signed in")
+        : "Not signed in";
+  const meta = demo
+    ? "no account connected"
+    : isPending
+      ? "opening browser"
+      : authenticated
+        ? "Sapiom account"
+        : "connect to get started";
   const initial = (demo ? "D" : (organizationName ?? "S")).charAt(0).toUpperCase();
+
+  const handleConnectFromMenu = async (): Promise<void> => {
+    closeMenu();
+    setAuthProgress({ status: "pending" });
+    try {
+      await onStartAuth();
+      // Server returns immediately — auth completes via auth.changed bus message.
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Could not start sign-in. Try again.";
+      setAuthProgress({ status: "error", message });
+    }
+  };
 
   return (
     <div className="rail-footer-row rail-profile-wrap">
@@ -677,7 +728,7 @@ function ProfileRow({
           <span className="rail-profile-name">{name}</span>
           <span className="rail-profile-meta">{meta}</span>
         </span>
-        <span className="identity-dot" data-authenticated={demo ? false : authenticated} />
+        <span className="identity-dot" data-authenticated={demo ? false : authenticated} data-pending={isPending} />
         <Icon name="ChevronDown" size={13} />
       </button>
 
@@ -697,6 +748,8 @@ function ProfileRow({
           consentSource={consentSource}
           consentEnvReason={consentEnvReason}
           onToggleTelemetry={onToggleTelemetry}
+          onStartAuth={onStartAuth}
+          onDisconnect={onDisconnect}
         />
       </AnchoredPopover>
 
@@ -746,24 +799,51 @@ function ProfileRow({
           <Icon name="Settings" size={13} />
           Settings
         </button>
-        <button
-          role="menuitem"
-          className="profile-menu-item"
-          data-testid="profile-switch-account"
-          disabled={!demo && authenticated}
-          title={
-            !demo && authenticated
-              ? "Identity binds when the server starts. Sign out at app.sapiom.ai or clear ~/.sapiom/credentials.json, then restart the Studio server."
-              : "Sign in at app.sapiom.ai, then start the Studio server. It picks up the cached credential."
-          }
-          onClick={() => {
-            window.open(SAPIOM_DASHBOARD_URL, "_blank", "noopener,noreferrer");
-            closeMenu();
-          }}
-        >
-          <Icon name="Plug" size={13} />
-          {demo || !authenticated ? "Connect Sapiom account" : "Switch account"}
-        </button>
+        {!demo && !authenticated && (
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            data-testid="profile-connect-account"
+            disabled={isPending}
+            onClick={() => void handleConnectFromMenu()}
+          >
+            <Icon name="Plug" size={13} />
+            {isPending ? "Connecting…" : "Connect account"}
+          </button>
+        )}
+        {!demo && authenticated && (
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            data-testid="profile-disconnect-account"
+            onClick={() => {
+              void onDisconnect();
+              closeMenu();
+            }}
+          >
+            <Icon name="LogOut" size={13} />
+            Disconnect
+          </button>
+        )}
+        {demo && (
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            data-testid="profile-switch-account"
+            onClick={() => {
+              window.open(SAPIOM_DASHBOARD_URL, "_blank", "noopener,noreferrer");
+              closeMenu();
+            }}
+          >
+            <Icon name="Plug" size={13} />
+            Connect Sapiom account
+          </button>
+        )}
+        {authProgress.status === "error" && (
+          <p className="profile-menu-auth-error" data-testid="profile-auth-error">
+            {authProgress.message}
+          </p>
+        )}
       </AnchoredPopover>
     </div>
   );

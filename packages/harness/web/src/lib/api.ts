@@ -188,7 +188,37 @@ export function getBootToken(): string {
   return new URLSearchParams(window.location.search).get("token") ?? "";
 }
 
+/** Response from GET /api/auth/status — live auth state from the server. */
+export interface AuthStatusResponse {
+  authenticated: boolean;
+  organizationName: string | null;
+}
+
+/** Response from POST /api/auth/start — async kick-off only. */
+export interface AuthStartResponse {
+  started: boolean;
+}
+
 export interface HarnessApi {
+  /**
+   * Kick off the browser OAuth flow (`POST /api/auth/start`). Returns
+   * immediately with `{ started: true }` — the actual sign-in is async and
+   * completes via the `auth.changed` event bus message (or by polling
+   * `authStatus()`). A 409 response means a sign-in is already in progress.
+   */
+  startAuth(): Promise<AuthStartResponse>;
+  /**
+   * Sign out and clear stored credentials (`POST /api/auth/disconnect`).
+   * Resolves with `{ ok: true }` on success. If a sign-in is in flight on the
+   * server, it will be cancelled.
+   */
+  disconnect(): Promise<{ ok: true }>;
+  /**
+   * Query the live auth state (`GET /api/auth/status`). Use this to poll for
+   * sign-in completion if the `auth.changed` bus message is unavailable, or as
+   * a one-shot check on mount.
+   */
+  authStatus(): Promise<AuthStatusResponse>;
   getState(): Promise<AppState>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
   listSessions(): Promise<HarnessSession[]>;
@@ -253,6 +283,18 @@ export interface HarnessApi {
 }
 
 class RealApi implements HarnessApi {
+  startAuth(): Promise<AuthStartResponse> {
+    return this.request<AuthStartResponse>("/api/auth/start", { method: "POST" });
+  }
+
+  disconnect(): Promise<{ ok: true }> {
+    return this.request<{ ok: true }>("/api/auth/disconnect", { method: "POST" });
+  }
+
+  authStatus(): Promise<AuthStatusResponse> {
+    return this.request<AuthStatusResponse>("/api/auth/status");
+  }
+
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(path, {
       ...init,
@@ -584,6 +626,55 @@ const delay = (ms = 180): Promise<void> => new Promise((resolve) => setTimeout(r
 
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
 class MockApi implements HarnessApi {
+  // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
+  // can drive the full sign-in flow deterministically without a real browser.
+  private _authenticated = false;
+  private _organizationName: string | null = null;
+
+  async startAuth(): Promise<AuthStartResponse> {
+    // Record the call for Playwright assertions (same pattern as runMacro/deploy).
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastAuthStart: Date.now() };
+    }
+    // Simulate a brief browser round-trip then flip to authenticated.
+    // The real server is async (returns immediately, resolves via bus), but
+    // the mock resolves the whole flow inline so tests can `await startAuth()`
+    // and immediately see the new state via `authStatus()` — no polling needed.
+    await delay(300);
+    this._authenticated = true;
+    this._organizationName = "Mock Workspace";
+    // Publish an auth.changed bus message so any open subscriptions update.
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({
+        type: "auth.changed",
+        authenticated: true,
+        organizationName: "Mock Workspace",
+      });
+    });
+    return { started: true };
+  }
+
+  async disconnect(): Promise<{ ok: true }> {
+    await delay(200);
+    this._authenticated = false;
+    this._organizationName = null;
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({
+        type: "auth.changed",
+        authenticated: false,
+        organizationName: null,
+      });
+    });
+    return { ok: true };
+  }
+
+  async authStatus(): Promise<AuthStatusResponse> {
+    await delay(120);
+    return { authenticated: this._authenticated, organizationName: this._organizationName };
+  }
+
+
   // `?mockState=fresh` = brand-new install: nothing yet, firstRun set — see isFreshMockState().
   private readonly fresh = isFreshMockState();
   // `?mockConsentSource=prompted` mirrors a user who answered yes at the TTY prompt:

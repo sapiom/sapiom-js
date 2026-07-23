@@ -17,9 +17,11 @@
  *    banner just tells the truth about why live actions may not complete, and
  *    clears itself the moment connectivity returns.
  */
+import { useState } from "react";
 import type { JSX } from "react";
 
 import type { ConnectivityStatus } from "../lib/connectivity";
+import type { AuthStartResponse } from "../lib/api";
 import { Icon } from "./Icon";
 
 interface ConnectivityScreenProps {
@@ -33,6 +35,13 @@ interface ConnectivityScreenProps {
   /** The raw error text, shown as a muted secondary line for the generic
    *  error case (never the primary message — that stays human). */
   detail?: string | null;
+  /**
+   * For the `auth` state only: kick off the browser OAuth sign-in flow so
+   * the user can connect an account directly from this screen without
+   * needing to restart the server. Optional — when absent, the screen shows
+   * the standard Retry affordance only.
+   */
+  onStartAuth?: () => Promise<AuthStartResponse>;
 }
 
 /** Per-state copy: what's true, and the single move that recovers. Absence is
@@ -58,13 +67,38 @@ const SCREEN_COPY: Record<
   },
 };
 
+type AuthScreenProgress =
+  | { status: "idle" }
+  | { status: "pending" }
+  | { status: "error"; message: string };
+
 export function ConnectivityScreen({
   status,
   onRetry,
   retrying = false,
   detail,
+  onStartAuth,
 }: ConnectivityScreenProps): JSX.Element {
   const copy = SCREEN_COPY[status];
+  const [authProgress, setAuthProgress] = useState<AuthScreenProgress>({ status: "idle" });
+
+  const handleConnect = async (): Promise<void> => {
+    if (!onStartAuth) return;
+    setAuthProgress({ status: "pending" });
+    try {
+      await onStartAuth();
+      // POST /api/auth/start returns { started: true } as soon as the browser
+      // window opens — NOT when sign-in completes. Reset to idle so the button
+      // is available for retry; auth.changed { authenticated: true } (which
+      // unmounts this screen entirely) is the only success signal.
+      setAuthProgress({ status: "idle" });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Could not start sign-in. Try again.";
+      setAuthProgress({ status: "error", message });
+    }
+  };
+
   return (
     <div
       className="app-status connectivity-screen"
@@ -92,10 +126,41 @@ export function ConnectivityScreen({
           className="btn-primary connectivity-screen-retry"
           data-testid="connectivity-retry"
           onClick={onRetry}
-          disabled={retrying}
+          disabled={retrying || authProgress.status === "pending"}
         >
           {retrying ? "Reconnecting…" : "Retry"}
         </button>
+        {/* Auth state: offer an in-app Connect account affordance alongside Retry. */}
+        {status === "auth" && onStartAuth && (
+          <div className="connectivity-screen-auth-section">
+            {authProgress.status === "pending" ? (
+              <span
+                className="connectivity-auth-pending"
+                data-testid="connectivity-auth-pending"
+              >
+                <Icon name="Loader" size={14} />
+                Opening browser&hellip; waiting for sign-in
+              </span>
+            ) : (
+              <button
+                className="btn-secondary connectivity-connect-btn"
+                data-testid="connectivity-connect-btn"
+                onClick={() => void handleConnect()}
+              >
+                <Icon name="Plug" size={14} />
+                Connect account
+              </button>
+            )}
+            {authProgress.status === "error" && (
+              <span
+                className="connectivity-auth-error"
+                data-testid="connectivity-auth-error"
+              >
+                {authProgress.message}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
