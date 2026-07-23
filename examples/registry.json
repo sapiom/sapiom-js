@@ -191,6 +191,48 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "preview-keep-alive",
+      "name": "Preview Keep-Alive",
+      "description": "A durable cron heartbeat that relaunches a dead sandbox preview — self-healing, no human redeploy.",
+      "tags": ["sandbox", "self-healing", "cron"],
+      "sourcePath": "examples/preview-keep-alive",
+      "capabilities": [
+        "sandboxes.deployPreview",
+        "sandboxes.attach",
+        "database.get",
+        "vault.get"
+      ],
+      "whatItDoes": "On each scheduled run, probes a preview's health path. If healthy, it's a terminal no-op — so it never stacks a second process onto a live one. If down, it re-attaches the target sandbox and calls deployPreview (source fs) to rebuild + restart the uploaded code at the same stable URL, with env assembled from a Postgres handle and vault secrets read at runtime. One deployed definition keeps N previews alive — one schedule each.",
+      "steps": [
+        {
+          "name": "check",
+          "description": "Probe the preview's health path; route to heal only when it's down.",
+          "next": ["healthy", "heal"]
+        },
+        {
+          "name": "healthy",
+          "description": "App is serving — terminal no-op.",
+          "terminal": true
+        },
+        {
+          "name": "heal",
+          "description": "Re-attach the sandbox and redeploy the fs source; assemble env from database.get + vault.get.",
+          "capability": "sandboxes.deployPreview",
+          "next": ["healed", "heal_failed"]
+        },
+        {
+          "name": "healed",
+          "description": "Relaunch succeeded — report url/status.",
+          "terminal": true
+        },
+        {
+          "name": "heal_failed",
+          "description": "Relaunch failed — surface the deployPreview logs.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
