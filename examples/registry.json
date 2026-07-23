@@ -39,6 +39,38 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "eval-gate",
+      "name": "Eval Gate",
+      "description": "An LLM-judge quality gate — score an output against your rubric, then branch publish/revise on a threshold.",
+      "tags": ["evals", "quality-gate", "llm-judge", "composition"],
+      "sourcePath": "examples/eval-gate",
+      "capabilities": ["llm.generate"],
+      "whatItDoes": "Renders a judge prompt from YOUR rubric, calls an LLM via ctx.sapiom.models.run, and parses a [0,1] score. A pure gate step branches publish vs revise on score >= threshold; the terminal steps return { decision, score, threshold, rationale } — you decide what publish/revise mean. We own the harness (default judge prompt + score parser); the rubric is yours, so it doubles as an eval-authoring on-ramp. Because it's a deployable agent, a parent workflow can launch it as a child to self-grade its own output and branch on the returned decision.",
+      "steps": [
+        {
+          "name": "judge",
+          "description": "Build the judge prompt from your rubric, call the LLM (models.run), parse the score.",
+          "capability": "llm.generate",
+          "next": ["gate"]
+        },
+        {
+          "name": "gate",
+          "description": "Pure branch: score >= threshold ⇒ publish, else revise. No capability call.",
+          "next": ["publish", "revise"]
+        },
+        {
+          "name": "publish",
+          "description": "Terminal: output met the threshold. Return { decision: 'publish', score, … }.",
+          "terminal": true
+        },
+        {
+          "name": "revise",
+          "description": "Terminal: output below the threshold. Return { decision: 'revise', score, … }.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
