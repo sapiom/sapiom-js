@@ -305,6 +305,55 @@ describe("renderRunState — per-step input/output", () => {
   });
 });
 
+describe("renderRunState — calls (prod steps)", () => {
+  // The step projection carries `events` (capability execution events forwarded
+  // by dispatched capabilities: tool_use/thinking/result from a coding run).
+  // These are NOT dotted workflow capability calls (search.webSearch,
+  // memory.append, etc.) with args/results in the StepCall format — they are
+  // execution-level trace events from the underlying capability engine. Mapping
+  // them to StepCall would fabricate structure that isn't there; `calls` is
+  // left absent for prod steps until the server-side projection adds explicit
+  // per-call records.
+  it("omits calls for a prod step with no events (honest absence)", () => {
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [step({ events: [] })],
+    });
+    expect(view.steps[0]).not.toHaveProperty("calls");
+  });
+
+  it("omits calls for a prod step even when events are present (events are not capability calls)", () => {
+    // Events are execution-level trace events (tool_use, thinking, result) from
+    // dispatched capabilities, not dotted capability calls with args/results.
+    const view = render({
+      id: "e1",
+      status: "completed",
+      steps: [
+        step({
+          events: [
+            {
+              sourceId: "run-123",
+              sequence: 1,
+              kind: "tool_use",
+              payload: { tool: "bash", input: "ls" },
+              eventTs: "2026-01-01T00:00:01.000Z",
+            },
+            {
+              sourceId: "run-123",
+              sequence: 2,
+              kind: "result",
+              payload: { content: "file.ts" },
+              eventTs: "2026-01-01T00:00:02.000Z",
+            },
+          ],
+        }),
+      ],
+    });
+    expect(view.steps[0]).not.toHaveProperty("calls");
+  });
+});
+
 describe("renderRunState — whole run", () => {
   it("preserves step order", () => {
     const view = render({

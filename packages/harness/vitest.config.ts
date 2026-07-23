@@ -13,11 +13,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
-      // Mirrors the "@shared/types" alias in web/vite.config.ts +
-      // web/tsconfig.json: the web unit tests import the runtime contract from
-      // the vendored copy. Re-pointing this at the package's own shared
-      // contract is a follow-up (tracked alongside the vite/tsconfig aliases).
-      "@shared/types": fileURLToPath(new URL("web/src/lib/harness-types.ts", import.meta.url)),
+      // Resolve "@shared/types" to the package's canonical contract so web
+      // unit tests and server tests always build against the same source of
+      // truth. Mirrors the alias in web/vite.config.ts.
+      "@shared/types": fileURLToPath(new URL("src/shared/types.ts", import.meta.url)),
     },
   },
   test: {

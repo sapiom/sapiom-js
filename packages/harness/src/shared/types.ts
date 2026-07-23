@@ -406,6 +406,28 @@ export type BusMessage =
 // polling path today and a future WebSocket push (only the source swaps).
 
 /**
+ * One capability call a step made during the run. Capability-scoped and
+ * provider-agnostic: `capability` is a dotted capability id (e.g.
+ * `web.search`, `models.coding.run`) — never a provider or model name.
+ * `stubUsed` records whether this call was served by a supplied stub instead
+ * of a real capability call, which is the single most load-bearing fact when
+ * explaining a local (offline) run. Optional fields are ABSENT (not null)
+ * when the source does not carry the value — honest absence.
+ */
+export interface StepCall {
+  /** Dotted capability id (provider-agnostic — never a provider/model name). */
+  capability: string;
+  /** True when a supplied stub served this call rather than the real capability. */
+  stubUsed?: boolean;
+  /** The arguments the call was made with, when the source carries them. Any
+   *  JSON shape; ABSENT (not null) otherwise. */
+  args?: unknown;
+  /** The value the call returned — the served stub value for a local run, or
+   *  the capability result for a prod run. ABSENT when the source has no result. */
+  result?: unknown;
+}
+
+/**
  * A step's render status, folded from the raw projection step status into the
  * four states the canvas draws. `cancelled`/`failed` both fold to `failed`
  * (a cancelled step did not pass — mirrors run-local.ts); anything not yet
@@ -441,6 +463,13 @@ export interface StepView {
    *  output, absent otherwise (a still-running or output-less step shows no
    *  Output block). Any JSON shape. */
   output?: unknown;
+  /** The capability calls this step made during the run, in call order. Each
+   *  entry is capability-scoped and provider-agnostic. Absent (never `[]`)
+   *  when the source records no call information for this step — honest
+   *  absence, mirroring `input`/`output`. A local run populates this from
+   *  the stub client's per-call sink; a prod run leaves it absent when the
+   *  step projection does not carry dotted-capability call records. */
+  calls?: StepCall[];
 }
 
 /** A supplied stub key that no capability call ever matched in its step — almost

@@ -254,6 +254,119 @@ describe("renderLocalRun — stub signal (WB15-2)", () => {
   });
 });
 
+describe("renderLocalRun — calls", () => {
+  it("maps a trace with one call to view.calls with all four fields", () => {
+    const view = renderLocalRun([
+      trace({
+        calls: [
+          {
+            capability: "search.webSearch",
+            stubUsed: true,
+            args: [{ query: "otters" }],
+            result: { answer: "otters float on backs" },
+          },
+        ],
+      }),
+    ]);
+    expect(view.steps[0].calls).toEqual([
+      {
+        capability: "search.webSearch",
+        stubUsed: true,
+        args: [{ query: "otters" }],
+        result: { answer: "otters float on backs" },
+      },
+    ]);
+  });
+
+  it("maps multiple calls in order", () => {
+    const view = renderLocalRun([
+      trace({
+        calls: [
+          {
+            capability: "memory.append",
+            stubUsed: true,
+            args: [{ content: "hello" }],
+            result: { id: "stub-memory-1" },
+          },
+          {
+            capability: "memory.recall",
+            stubUsed: true,
+            args: [{ query: "hello" }],
+            result: { results: [], count: 0 },
+          },
+        ],
+      }),
+    ]);
+    expect(view.steps[0].calls).toHaveLength(2);
+    expect(view.steps[0].calls![0].capability).toBe("memory.append");
+    expect(view.steps[0].calls![1].capability).toBe("memory.recall");
+  });
+
+  it("omits calls when the trace has none (honest absence)", () => {
+    const view = renderLocalRun([trace({ calls: undefined })]);
+    expect(view.steps[0]).not.toHaveProperty("calls");
+  });
+
+  it("omits calls when the trace calls array is empty (no calls made)", () => {
+    // An empty array on the trace means the stub client was wired but the step
+    // made zero calls — that is real evidence and must not fabricate [].
+    const view = renderLocalRun([trace({ calls: [] })]);
+    expect(view.steps[0]).not.toHaveProperty("calls");
+  });
+
+  it("carries a falsy-but-real result (false) rather than dropping it", () => {
+    const view = renderLocalRun([
+      trace({
+        calls: [
+          {
+            capability: "vault.get",
+            stubUsed: true,
+            args: ["ref", "key"],
+            result: false as unknown,
+          },
+        ],
+      }),
+    ]);
+    expect(view.steps[0].calls![0].result).toBe(false);
+  });
+
+  it("carries a null result as a real value (null is a valid stub return)", () => {
+    const view = renderLocalRun([
+      trace({
+        calls: [
+          {
+            capability: "vault.get",
+            stubUsed: true,
+            args: ["ref", "key"],
+            result: null,
+          },
+        ],
+      }),
+    ]);
+    expect(view.steps[0].calls![0]).toHaveProperty("result");
+    expect(view.steps[0].calls![0].result).toBeNull();
+  });
+
+  it("surfaces calls for a threw step too (calls happened before the throw)", () => {
+    const view = renderLocalRun([
+      trace({
+        status: "threw",
+        error: { name: "Error", message: "boom" },
+        calls: [
+          {
+            capability: "search.scrape",
+            stubUsed: true,
+            args: [{ url: "https://x.test" }],
+            result: { markdown: "(stub)" },
+          },
+        ],
+      }),
+    ]);
+    expect(view.steps[0].calls).toHaveLength(1);
+    expect(view.steps[0].calls![0].capability).toBe("search.scrape");
+  });
+});
+
 describe("renderLocalRun — whole run", () => {
   it("preserves trace order", () => {
     const view = renderLocalRun([

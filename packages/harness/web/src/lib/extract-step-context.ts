@@ -20,7 +20,7 @@
  * capability. The run trace and the graph are already capability-scoped; this
  * module never reaches for a model name.
  */
-import type { StepView } from "@shared/types";
+import type { StepCall, StepView } from "@shared/types";
 
 /** Maximum characters of the log slice to include (tail-kept — see below). */
 const LOG_CAP = 3000;
@@ -29,22 +29,6 @@ const LOG_CAP = 3000;
  *  Step payloads can be large; the agent needs the shape and the leading
  *  content, not a multi-megabyte dump pasted into its prompt. */
 const VALUE_CAP = 2000;
-
-/**
- * One capability call a step made during the run, as the debug context reports
- * it. Deliberately capability-scoped and provider-agnostic: `capability` is a
- * dotted capability id (e.g. `web.search`, `models.coding.run`) — never a
- * provider/model name. `stubUsed` records whether this call was served by a
- * supplied stub instead of a real capability call, which is the single most
- * load-bearing fact when explaining a local (offline) run: a step that
- * "succeeded" against a stub did not exercise the real capability.
- */
-export interface StepCall {
-  /** Dotted capability id this call targeted (provider-agnostic). */
-  capability: string;
-  /** True when a supplied stub served this call rather than the real capability. */
-  stubUsed?: boolean;
-}
 
 /**
  * The rich per-step evidence the run trace exposes, in the shape the debug
