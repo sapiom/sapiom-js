@@ -160,8 +160,8 @@ test("dragging the top edge resizes the panel and persists; double-click resets 
   await page.mouse.move(x, y - 40, { steps: 8 });
   await page.mouse.move(x, y - 80, { steps: 8 });
   await page.mouse.up();
-  // Poll for the resize to settle — the handler's state update + re-render can
-  // lag a frame behind mouse-up, which reading the box once made flaky.
+  // Poll for the grown height rather than reading it once — defensive against a
+  // frame of settle after mouse-up.
   await expect
     .poll(async () => (await panel.boundingBox())?.height ?? 0)
     .toBeGreaterThan(before + 40);

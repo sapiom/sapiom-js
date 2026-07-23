@@ -140,7 +140,8 @@ export function CanvasOverviewPanel({
     try {
       handle.setPointerCapture(e.pointerId);
     } catch {
-      // Synthetic events have no active pointer; move tracking still works.
+      // Synthetic events (and some headless envs) have no active pointer, so
+      // capture may throw — the window listeners below track the drag anyway.
     }
     setResizing(true);
     const startY = e.clientY;
@@ -151,13 +152,15 @@ export function CanvasOverviewPanel({
     const onUp = (): void => {
       setResizing(false);
       persistManual();
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
-      handle.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
-    handle.addEventListener("pointercancel", onUp);
+    // Track on window, not the handle: once the pointer leaves the 6px handle
+    // the moves must still land, whether or not pointer capture took hold.
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   const handleResizeKey = (e: React.KeyboardEvent<HTMLDivElement>): void => {
