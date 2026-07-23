@@ -1,0 +1,47 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You give it a niche and a subscriber list. Every week it searches the web, reads the top results, and writes that week's issue — a subject line, a short intro, a few curated sections that link back to their sources, and a header image to go with it. Then it emails the issue to your list.\n\nThe graph is five steps: `search` (web.search) finds candidates, `scrape` reads them for full text, `write` (`models.run`, the live x402-served model) curates and writes the issue plus a header-image prompt, `header` (`contentGeneration.images`) generates the image, and `deliver` emails each subscriber their own copy. Scrapes fail routinely on paywalls and timeouts — when one does, it keeps the search snippet and writes from the survivors. The header image is best-effort: if it doesn't come back, the issue goes out without it. A `dryRun` flag writes and renders the full issue and returns it as a preview without emailing anyone, and the subscriber list is read from the Sapiom vault at runtime rather than stored in the run.\n\nIts simpler sibling is `scheduled-research-brief`: fork that for a private, one-recipient brief with no image. Fork this one when the deliverable is a published-feeling newsletter that goes out to a whole list on a cadence.\n\nYou pay for the web search, the scrapes, the model writing the issue, and the header image on each run — the emails are cheap, and a dry run still writes and illustrates the issue but sends nothing.",
+  "useCases": [
+    "Run a niche newsletter on autopilot — it researches, writes, and illustrates each issue so you only review and hit send.",
+    "Turn a topic you follow into a weekly email your subscribers get without you drafting anything by hand.",
+    "See how web search, scraping, LLM writing, image generation, and list email compose in one agent, with a safe dry-run preview."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `niche` (what to write about) and a `newsletterName`. Set who receives it with the `subscribers` input (a list of emails), or store a default list under the `newsletter-autopilot` vault ref (key `SUBSCRIBERS`, comma- or newline-separated) — it's read at runtime, never saved into the run. Pass `dryRun: true` to write and illustrate the issue and get it back without emailing anyone. To run it weekly, attach the `schedule` as a cron trigger on the deployed workflow (it defaults to Mondays at 08:00).\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole search → scrape → write → header → deliver flow for free (capabilities stubbed, delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "A weekly issue on indie game development",
+      "input": {
+        "niche": "indie game development",
+        "newsletterName": "Pixel Weekly",
+        "schedule": "0 8 * * 1",
+        "dryRun": true
+      },
+      "output": {
+        "niche": "indie game development",
+        "schedule": "0 8 * * 1",
+        "delivered": false,
+        "dryRun": true,
+        "reason": "dry-run",
+        "recipients": 0,
+        "subject": "Pixel Weekly: what shipped in indie games this week",
+        "headerImageUrl": "https://files.sapiom.ai/…/header.png",
+        "body": "# Pixel Weekly: what shipped in indie games this week\n\nA quieter week for launches, but two engine updates worth your time...\n\n## A solo dev's roguelike hits 1.0 [1]\n...\n\n## Sources\n1. [Roguelike 1.0 launch](https://example.com/launch)\n2. [Engine 5.4 release notes](https://example.com/engine)",
+        "sources": [
+          {
+            "title": "Roguelike 1.0 launch",
+            "url": "https://example.com/launch"
+          },
+          {
+            "title": "Engine 5.4 release notes",
+            "url": "https://example.com/engine"
+          }
+        ]
+      }
+    }
+  ]
+}

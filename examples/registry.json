@@ -365,6 +365,46 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "newsletter-autopilot",
+      "name": "Newsletter Autopilot",
+      "description": "On a weekly schedule, it researches a niche, writes and illustrates the issue, and emails it to your subscriber list.",
+      "tags": ["newsletter", "scheduled", "llm", "email"],
+      "sourcePath": "examples/newsletter-autopilot",
+      "capabilities": ["web.search", "models.run", "contentGeneration.images"],
+      "whatItDoes": "For running a niche newsletter without drafting each issue by hand. It searches the web for your niche, then reads the top results for their full text. It hands those sources to an LLM (models.run) to curate the strongest items and write the issue — a subject line, an intro, a few sections that cite their sources, and a header-image prompt. It generates that header image, then emails each subscriber their own copy. Give it a cron schedule and it publishes on its own, defaulting to Mondays at 08:00. A dryRun flag writes and illustrates the full issue and returns it without emailing anyone, so you can review before it goes out.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Search the web for the niche and collect candidate sources.",
+          "capability": "web.search",
+          "next": ["scrape"]
+        },
+        {
+          "name": "scrape",
+          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
+          "capability": "web.search",
+          "next": ["write"]
+        },
+        {
+          "name": "write",
+          "description": "Hand the sources to an LLM to curate them and write this week's issue: a subject, a body that cites each source, and a header-image prompt.",
+          "capability": "models.run",
+          "next": ["header"]
+        },
+        {
+          "name": "header",
+          "description": "Generate a header image for the issue; if none comes back, the issue still goes out without it.",
+          "capability": "contentGeneration.images",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Email each subscriber their own copy; a dry run, or a run with no subscribers set, returns the issue without sending.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
