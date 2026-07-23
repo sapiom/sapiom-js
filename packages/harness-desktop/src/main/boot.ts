@@ -5,7 +5,7 @@
  * `startServer`/`runDoctor`/`ensureAuthenticated`/settings via the re-export
  * surface added in `@sapiom/harness` — the npx CLI stays the untouched backup.
  */
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -125,33 +125,34 @@ function isDir(p: string | undefined): p is string {
 }
 
 /**
- * The directory the coding agent opens in. NEVER the app's own cwd (that would
- * open the agent inside the install dir). Precedence:
- *   1. SAPIOM_LAUNCH_DIR env (explicit dev/testing override)
- *   2. native folder picker on first run / when no valid recent dir (real flow)
- *   3. most recent *valid* project dir
- *   4. the user's home directory
+ * `~/.sapiom/harness` — mirrors the harness's HARNESS_HOME (its state root and
+ * where the sample project is seeded). Used as the default project root so the
+ * seeded sample shows up in the workflows rail, and so a non-technical user is
+ * never asked to pick a folder.
  */
-async function chooseLaunchDir(devMode: boolean, firstRun: boolean): Promise<string> {
+function defaultProjectRoot(): string {
+  return path.join(os.homedir(), ".sapiom", "harness");
+}
+
+/**
+ * The directory the coding agent opens in. NEVER the app's own cwd (that would
+ * open the agent inside the install dir), and NEVER an OS folder picker — a
+ * one-click user shouldn't have to choose a path. Precedence:
+ *   1. SAPIOM_LAUNCH_DIR env (explicit dev/testing override)
+ *   2. most recent *valid* project dir (returning users)
+ *   3. the default project root under ~/.sapiom (first launch / new project)
+ */
+async function chooseLaunchDir(): Promise<string> {
   const override = process.env.SAPIOM_LAUNCH_DIR;
   if (isDir(override)) return override;
 
   const settings = await loadSettings();
   const lastValid = settings.recentDirs?.find(isDir);
+  if (lastValid) return lastValid;
 
-  // Dev: never block on a native dialog and never fall back to the app cwd.
-  if (devMode) return lastValid ?? os.homedir();
-
-  if (firstRun || !lastValid) {
-    const result = await dialog.showOpenDialog({
-      title: "Choose a project folder",
-      properties: ["openDirectory", "createDirectory"],
-      defaultPath: lastValid ?? os.homedir(),
-    });
-    if (!result.canceled && result.filePaths[0]) return result.filePaths[0];
-    return lastValid ?? os.homedir();
-  }
-  return lastValid;
+  const dir = defaultProjectRoot();
+  await fs.promises.mkdir(dir, { recursive: true });
+  return dir;
 }
 
 /**
@@ -263,9 +264,9 @@ export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<B
   // 6. Consent (native, not TTY).
   const { telemetryOptIn, consentSource } = await decideConsent(setupWin, devMode, firstRun);
 
-  // 7. Project folder.
-  progress(setupWin, { phase: "choosing-folder", message: "Choosing your project folder…", status: "active" });
-  const launchDir = await chooseLaunchDir(devMode, firstRun);
+  // 7. Project folder (defaulted under ~/.sapiom — no picker).
+  progress(setupWin, { phase: "choosing-folder", message: "Preparing your workspace…", status: "active" });
+  const launchDir = await chooseLaunchDir();
   await recordRecentDir(launchDir);
 
   // 8. Boot the harness server.

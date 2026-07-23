@@ -29,7 +29,7 @@ const PHASE_LABEL: Record<BootProgress["phase"], string> = {
   "installing-agent": "Setting up your coding agent…",
   auth: "Signing you in…",
   consent: "One quick question…",
-  "choosing-folder": "Choosing your project folder…",
+  "choosing-folder": "Preparing your workspace…",
   launching: "Launching…",
   ready: "Ready.",
 };
