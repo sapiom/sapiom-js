@@ -80,6 +80,7 @@ import {
   renderWorkflowRenderFile,
 } from "../core/canvas-render.js";
 import { CanvasEnrichmentCoordinator } from "../core/canvas-enrich.js";
+import { createEnrichCanvasClient } from "../core/enrich-canvas-client.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
 import {
   createDefinitionSlugResolver,
@@ -149,6 +150,17 @@ const NDJSON_RETENTION_SWEEP_MS = 6 * 60 * 60 * 1_000; // every 6 hours
  */
 function resolveSpineWorkflowId(): string {
   return process.env.SAPIOM_SPINE_WORKFLOW_ID ?? "";
+}
+
+/**
+ * The deployed `enrich-canvas` workflow (SAP-1800) run on our account for
+ * Tier-2 canvas enrichment. Env-resolved, not baked in — point it at the
+ * deployed definition via `SAPIOM_HARNESS_ENRICH_CANVAS_DEFINITION_ID`. Absent
+ * an override the coordinator skips the annotation pass entirely and the
+ * deterministic Tier-1 render stands (0 user Claude tokens either way).
+ */
+function resolveEnrichCanvasWorkflowId(): string {
+  return process.env.SAPIOM_HARNESS_ENRICH_CANVAS_DEFINITION_ID ?? "";
 }
 
 export interface HarnessServerOptions {
@@ -647,13 +659,20 @@ export const startServer = async (
     return found;
   };
 
-  // The AI enrichment layer over the deterministic renders: one bounded
-  // headless task per workflow (spawned on bind when no fresh cache exists,
-  // or by the visualize macro's force refresh), whose validated JSON output
-  // is persisted per-workflow and merged into the render on completion —
-  // the render write alone hot-reloads any open pane via the canvas watcher.
+  // Tier-2 canvas enrichment (SAP-1800): the OPT-IN annotation layer over the
+  // deterministic Tier-1 renders. The producer is the Sapiom `enrich-canvas`
+  // workflow run ON OUR ACCOUNT (held key) — never a headless `claude -p` task
+  // on the user's Claude Code tokens. It fires ONLY on the visualize macro
+  // (never on bind); its validated JSON output is persisted per-workflow and
+  // merged into the render (the write alone hot-reloads any open pane), and any
+  // failure degrades silently to the Tier-1 render.
   const enrichment = new CanvasEnrichmentCoordinator({
-    tasks: taskManager,
+    client: createEnrichCanvasClient({
+      apiKey: identity?.apiKey ?? null,
+      coreBaseUrl: resolveCoreBaseUrl(),
+      agentsBaseUrl: resolveAgentsBaseUrl(),
+    }),
+    definitionId: resolveEnrichCanvasWorkflowId(),
     rerender: async (cwd, workflow) => {
       await renderWorkflowRenderFile(cwd, workflow);
     },
@@ -663,21 +682,19 @@ export const startServer = async (
   // always against the live workflowsCache, never an LLM in the render
   // itself; a cheap no-op for an unbound session (the canvas router serves
   // the empty state on its own). Never throws (see core/canvas-render.ts);
-  // best-effort, like every other canvas write here. The bind path
-  // (PATCH /sessions/:id/workflow → rest.ts) and the UNPROMPTED call sites
-  // (session-create/boot auto-render, via autoRenderCanvas — which won't
-  // replace a workflow's existing render with an error panel when its
-  // extraction fails) also kick the enrichment freshness check afterwards:
-  // instant base diagram now, annotations merged in when the task lands.
+  // best-effort, like every other canvas write here. Tier-2 enrichment does
+  // NOT auto-fire on these paths anymore (SAP-1800): bind and the UNPROMPTED
+  // call sites (session-create/boot auto-render — which won't replace a
+  // workflow's existing render with an error panel when its extraction fails)
+  // render only the deterministic Tier-1 structure. Enrichment is opt-in, via
+  // the visualize macro alone.
   const renderCanvas = async (session: HarnessSession): Promise<void> => {
     await renderCanvasForSession(session, workflowsCache);
-    await enrichment.ensureFresh(session, workflowsCache);
   };
   const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
     await renderCanvasForSession(session, workflowsCache, {
       preserveExistingOnFailure: true,
     });
-    await enrichment.ensureFresh(session, workflowsCache);
   };
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch(
@@ -865,10 +882,11 @@ export const startServer = async (
       getBoundWorkflowPath: (harnessSessionId) =>
         sessionManager.get(harnessSessionId)?.boundWorkflowPath ?? null,
       // The visualize macro is a FORCE refresh, not a plain re-render:
-      // invalidate the extraction + enrichment caches, re-render the base
-      // instantly, re-spawn the enrichment task. Its refusals map to the
-      // router's existing error handling (already running → 409, codex
-      // session → 400).
+      // invalidate the extraction + enrichment caches, re-render the Tier-1
+      // base instantly, then kick off the opt-in Sapiom enrichment on our
+      // account. A double-fire while one is in flight maps to the router's
+      // existing 409 (already running); the enrichment itself never fails the
+      // pane — it degrades to the Tier-1 render.
       renderCanvas: async (harnessSessionId) => {
         const session = sessionManager.get(harnessSessionId);
         if (session) await enrichment.forceRefresh(session, workflowsCache);

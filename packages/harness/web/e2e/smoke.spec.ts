@@ -1239,89 +1239,9 @@ test.describe("background-task canvas states", () => {
     await expect(page.locator(".canvas-iframe")).toBeVisible();
   });
 
-  test("failure view is full-screen (no iframe behind it) — unchanged from before", async ({
-    page,
-  }) => {
-    // Get an iframe up first, then trigger a failure.
-    await page.route("**/canvas/sess-boot/**", async (route) => {
-      await route.fulfill({
-        contentType: "text/html",
-        body: "<html><body>diagram</body></html>",
-      });
-    });
-    await page.evaluate(() => {
-      (
-        window as unknown as {
-          __HARNESS_TEST__: { publish: (message: unknown) => void };
-        }
-      ).__HARNESS_TEST__.publish({
-        type: "canvas.reload",
-        harnessSessionId: "sess-boot",
-      });
-    });
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-
-    await publish(page, {
-      ...baseTask,
-      status: "failed",
-      endedAt: new Date().toISOString(),
-      exitCode: 1,
-      errorTail: "Connection lost",
-    });
-
-    // Failure state replaces everything — iframe gone, failure panel shown.
-    await expect(page.getByTestId("canvas-task-failed")).toBeVisible();
-    await expect(page.locator(".canvas-iframe")).toHaveCount(0);
-
-    await page.screenshot({
-      path: "web/e2e/screenshots/canvas-failure-fullscreen.png",
-    });
-  });
-
-  test("a failed task shows the error tail with retry and dismiss affordances", async ({
-    page,
-  }) => {
-    await publish(page, {
-      ...baseTask,
-      status: "failed",
-      endedAt: new Date().toISOString(),
-      exitCode: 1,
-      errorTail: "API connection lost",
-    });
-
-    const failed = page.getByTestId("canvas-task-failed");
-    await expect(failed).toBeVisible();
-    await expect(failed).toContainText("Visualize failed");
-    await expect(failed).toContainText("API connection lost");
-    await page.screenshot({
-      path: "web/e2e/screenshots/canvas-task-failed.png",
-    });
-
-    // Retry re-fires the same macro (MockApi records it for us to read back)
-    // — for an enrichment task that's the visualize force refresh.
-    await page.getByTestId("canvas-task-retry").click();
-    await page.waitForFunction(
-      () =>
-        (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } })
-          .__HARNESS_TEST__?.lastMacroRun,
-    );
-    const lastRun = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __HARNESS_TEST__: { lastMacroRun?: { id: string } };
-          }
-        ).__HARNESS_TEST__.lastMacroRun,
-    );
-    expect(lastRun?.id).toBe("visualize");
-
-    // Dismiss hides the failure panel and returns the pane to its usual state.
-    await page.getByTestId("canvas-task-dismiss").click();
-    await expect(page.getByTestId("canvas-task-failed")).toHaveCount(0);
-    await expect(page.locator(".canvas-empty")).toContainText(
-      "Nothing generated yet",
-    );
-  });
+  // NOTE (SAP-1800): the "Visualize failed" total-failure view was removed —
+  // Tier-2 enrichment now runs as a Sapiom workflow that degrades silently to
+  // the Tier-1 render, so there is no canvas-task-failed state to assert.
 });
 
 test.describe("resizable panes", () => {

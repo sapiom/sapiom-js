@@ -78,11 +78,6 @@ export function CanvasPane({
   // True while the iframe is (re)loading its document — a skeleton overlays
   // it so a load/render in progress never reads as a blank pane.
   const [frameLoading, setFrameLoading] = useState(true);
-  // Failed-task panels the user has explicitly dismissed (client-side only —
-  // the task record itself stays in the server's list).
-  const [dismissedTaskIds, setDismissedTaskIds] = useState<Set<string>>(
-    new Set(),
-  );
 
   // Keep the ref current on every render so onLoad (which captures it by ref)
   // always reads the freshest value.
@@ -222,11 +217,11 @@ export function CanvasPane({
   // Background-task state for THIS session's pane, scoped to the CURRENT
   // binding: a task that carries a workflowPath only surfaces while the pane
   // is showing that workflow — switching the binding mid-run must not bleed
-  // another workflow's activity (or failure) into this one's pane. Tasks
-  // without a workflowPath keep the plain per-session scoping. A running
-  // task shows the live activity view; otherwise the most recently finished
-  // task, if it failed and hasn't been dismissed, shows the failure view
-  // with a retry.
+  // another workflow's activity into this one's pane. Tasks without a
+  // workflowPath keep the plain per-session scoping. A running task shows the
+  // live activity view. There is no failure view: Tier-2 enrichment can't fail
+  // the pane (SAP-1800) — a failed enrichment degrades silently to the Tier-1
+  // render, so the canvas never shows a "Visualize failed" state.
   const sessionTasks = tasks.filter(
     (task) =>
       task.harnessSessionId === sessionId &&
@@ -234,18 +229,6 @@ export function CanvasPane({
   );
   const runningTask =
     sessionTasks.find((task) => task.status === "running") ?? null;
-  const latestFinished = sessionTasks
-    .filter((task) => task.status !== "running")
-    .sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""))[0];
-  const failedTask =
-    !runningTask &&
-    latestFinished?.status === "failed" &&
-    !dismissedTaskIds.has(latestFinished.id)
-      ? latestFinished
-      : null;
-  const retryMacro = failedTask
-    ? (macros.find((macro) => macro.id === failedTask.macroId) ?? null)
-    : null;
 
   // The header's action IS Visualize now — one click re-fires the same macro
   // that generated what's already on screen; the pane itself swaps in the
@@ -297,39 +280,6 @@ export function CanvasPane({
       {!sessionId ? (
         <div className="canvas-empty">
           Start a session to see its canvas here.
-        </div>
-      ) : failedTask ? (
-        <div className="canvas-task-failed" data-testid="canvas-task-failed">
-          <p className="canvas-task-title">
-            <Icon name="TriangleAlert" size={14} /> {failedTask.label} failed.
-          </p>
-          {failedTask.errorTail && (
-            <pre className="canvas-task-error">{failedTask.errorTail}</pre>
-          )}
-          <div className="canvas-task-actions">
-            {retryMacro && (
-              <button
-                className="btn-primary"
-                data-testid="canvas-task-retry"
-                onClick={() => onRunMacro(retryMacro)}
-              >
-                Retry
-              </button>
-            )}
-            <button
-              className="btn-ghost"
-              data-testid="canvas-task-dismiss"
-              onClick={() =>
-                setDismissedTaskIds((prev) => {
-                  const next = new Set(prev);
-                  next.add(failedTask.id);
-                  return next;
-                })
-              }
-            >
-              Dismiss
-            </button>
-          </div>
         </div>
       ) : runningTask && !hasGeneratedContent ? (
         <div
