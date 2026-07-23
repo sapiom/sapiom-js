@@ -25,7 +25,7 @@ import { HARNESS_LABELS, historyRowMeta } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 
-const SAPIOM_DASHBOARD_URL = "https://app.sapiom.ai";
+const SAPIOM_DASHBOARD_URL = "https://app.sapiom.ai/workflows";
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
