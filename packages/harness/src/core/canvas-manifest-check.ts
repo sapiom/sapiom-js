@@ -84,7 +84,15 @@ export function runManifestCheck(sourceDir: string): Promise<ManifestCheckResult
       ["--input-type=module", "-e", RUNNER_SOURCE],
       {
         cwd: packageRoot(),
-        env: { ...process.env, SAPIOM_CANVAS_CHECK_SOURCE_DIR: sourceDir },
+        env: {
+          ...process.env,
+          SAPIOM_CANVAS_CHECK_SOURCE_DIR: sourceDir,
+          // When embedded in Electron, `process.execPath` is the Electron
+          // binary, which would try to launch `-e <src>` as an app. This flag
+          // makes it behave as plain Node. No-op under the CLI (real node), and
+          // only set when actually running inside Electron.
+          ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        },
         timeout: CHECK_TIMEOUT_MS,
         maxBuffer: MAX_BUFFER_BYTES,
       },
