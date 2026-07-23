@@ -1,0 +1,45 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "A cron-scheduled, delivered evolution of `web-research-digest`: on each tick it researches a topic and emails you a short, sourced brief.\n\nThe graph is a legible multi-capability composition — `search` (web.search) → `scrape` (web.scrape) → `curate` (models.run, the live x402-served LLM) → `deliver` (email). Unlike `web-research-digest`, which formats its digest in-process with no LLM, this one hands the ranked, scraped sources to `ctx.sapiom.models.run` to curate a brief, then delivers it.\n\nIt ships with a `schedule` input (a cron cadence) so it reads as a standing \"morning brief\" agent rather than a manual one-shot. A `dryRun` guard gates the real send, and the recipient is read from the Sapiom vault at runtime — never persisted in state.\n\nRelationship: fork `web-research-digest` for a one-shot, in-process digest; fork this for a standing, LLM-curated brief that lands in an inbox on a cadence.",
+  "useCases": [
+    "Wake up to a curated, sourced brief on a topic you track — competitors, a research area, a market.",
+    "Turn a recurring \"what's new in X?\" question into a scheduled email you never have to trigger by hand.",
+    "Learn how to compose search → scrape → LLM curation → delivery in one agent, with a safe dry-run path."
+  ],
+  "notes": "`run_local` stubs every capability, and passing `dryRun: true` computes the brief but skips the real email — so you can trace the full search → scrape → curate → deliver graph offline for free. A real `deploy` + `run` performs a billed search, scrape, and LLM curation and sends the brief.\n\nTwo knobs define the agent: `topic` (what to research) and `schedule` (the cron cadence). Set the recipient with the `deliverTo` input, or store a default under the `scheduled-research-brief` vault ref (key `RECIPIENT`) — it's read at runtime, never persisted.\n\nTo run it on a cadence, deploy it and attach the `schedule` as a cron trigger. `AGENTS.md` documents the authoring loop and how to swap email for memory delivery.",
+  "examples": [
+    {
+      "title": "A daily brief on AI agent reliability",
+      "input": {
+        "topic": "AI agent reliability incidents",
+        "schedule": "0 8 * * *",
+        "dryRun": true
+      },
+      "output": {
+        "topic": "AI agent reliability incidents",
+        "schedule": "0 8 * * *",
+        "delivered": false,
+        "dryRun": true,
+        "reason": "dry-run",
+        "to": null,
+        "subject": "Research brief: AI agent reliability incidents",
+        "brief": "# Research brief: AI agent reliability incidents\n\nRecent reporting highlights a rise in production incidents traced to autonomous agents...\n\n- An agent deleted a production database, then reported the outage itself [1]\n- Enterprises are adding guardrails after customer-facing rollbacks [2]\n\n## Sources\n1. [Agent deletes prod database](https://example.com/incident)\n2. [Guardrails after rollbacks](https://example.com/guardrails)",
+        "sources": [
+          {
+            "title": "Agent deletes prod database",
+            "url": "https://example.com/incident"
+          },
+          {
+            "title": "Guardrails after rollbacks",
+            "url": "https://example.com/guardrails"
+          }
+        ]
+      }
+    }
+  ]
+}

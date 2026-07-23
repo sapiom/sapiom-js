@@ -71,6 +71,40 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "scheduled-research-brief",
+      "name": "Scheduled Research Brief",
+      "description": "On a cron cadence, research a topic and email a short, LLM-curated, sourced brief.",
+      "tags": ["research", "search", "scheduled", "llm"],
+      "sourcePath": "examples/scheduled-research-brief",
+      "capabilities": ["web.search", "models.run"],
+      "whatItDoes": "The scheduled, LLM-curated, delivered evolution of web-research-digest. On each tick it web-searches a topic, scrapes the top candidates for full text, hands them to an LLM (models.run — the live x402-served model) to rank and curate a short sourced brief, then delivers it by email. Ships with a schedule input (topic + cron cadence) so it reads as a standing \"morning brief\" agent; a dryRun guard gates the real send. Fork web-research-digest for a one-shot digest, this for a standing brief.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Web-search the topic for candidate sources.",
+          "capability": "web.search",
+          "next": ["scrape"]
+        },
+        {
+          "name": "scrape",
+          "description": "Read the top candidates for full article text.",
+          "capability": "web.search",
+          "next": ["curate"]
+        },
+        {
+          "name": "curate",
+          "description": "Rank and curate the findings into a sourced brief with an LLM.",
+          "capability": "models.run",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Email the brief to the configured recipient (dry-run skips the send).",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
