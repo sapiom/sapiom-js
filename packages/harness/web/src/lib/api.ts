@@ -1004,8 +1004,25 @@ class MockApi implements HarnessApi {
   // Scripted completed run for the demo leasing workflow. Per-step latency
   // and pass/fail only — the run inspector surfaces logs, latency, and
   // status, never cost.
+  //
+  // Test-only override: Playwright can set
+  //   window.__MOCK_RUN_STATE__[executionId] = RunView
+  // before announcing an execution.started to exercise run states (failed,
+  // running, stub hygiene signals) that the default fixture doesn't cover.
+  // The override is consumed once and cleared so subsequent polls use the
+  // default — mirrors __MOCK_INJECT_FAIL_ONCE__'s established pattern.
   async getRunState(executionId: string): Promise<RunView> {
     await delay(120);
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __MOCK_RUN_STATE__?: Record<string, RunView>;
+      };
+      const override = win.__MOCK_RUN_STATE__?.[executionId];
+      if (override) {
+        delete win.__MOCK_RUN_STATE__![executionId];
+        return override;
+      }
+    }
     return {
       executionId,
       status: "completed",
