@@ -397,6 +397,26 @@ export function CanvasPane({
         // drill now, never a side effect of a click on the board.
         const id = (data as { id?: unknown }).id;
         if (typeof id === "string") setSelectedNodeId(id);
+      } else if (data.type === "sapiom:node-click") {
+        // Reverse click channel from the SERVED canvas board (the SVG DAG
+        // rendered by canvas-svg.ts + canvas-run-state.ts). The served
+        // board identifies nodes by step label (data-step-name), not the
+        // graph node id, so resolve by label to get the stable id for the
+        // inspector. Fall back to matching by id in case the label was used
+        // directly as the id (older documents / degenerate labels).
+        const stepName = (data as { stepName?: unknown }).stepName;
+        if (typeof stepName === "string") {
+          setGraph((g) => {
+            if (g) {
+              const matched =
+                g.nodes.find((n) => n.label === stepName) ??
+                g.nodes.find((n) => n.id === stepName) ??
+                null;
+              if (matched) setSelectedNodeId(matched.id);
+            }
+            return g;
+          });
+        }
       } else if (data.type === "sapiom-canvas:hit") {
         const overNode = typeof (data as { id?: unknown }).id === "string";
         setHoveredNode(overNode);
@@ -475,6 +495,30 @@ export function CanvasPane({
       "*",
     );
   }, [detailStepId, selectedNodeId]);
+
+  // Run-state bridge: post live run status into the served canvas board so its
+  // SVG nodes animate (is-running / is-passed / is-failed / is-pending). The
+  // served board listens for { type: "sapiom:run-state", steps, status, target }
+  // (see packages/harness/src/core/canvas-run-state.ts: bootCanvasRunState /
+  // applyRunStateToCanvas). We only post to a real served board — never when the
+  // iframe is absent, in mock mode with no bundled doc, or while the frame is
+  // still loading (the onLoad re-post below catches that case).
+  const postRunStateToFrame = useCallback((): void => {
+    if (!run || !runTarget) return;
+    // Guard: only post when the served board is actually mounted. Mirror the
+    // sessionHasServableDoc / showingFrame guards used for the iframe element.
+    if (!sessionId || (isMockMode() && !hasMockCanvasDoc(sessionId))) return;
+    if (frameLoading) return;
+    frameRef.current?.contentWindow?.postMessage(
+      { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
+      "*",
+    );
+  }, [run, runTarget, sessionId, frameLoading]);
+
+  useEffect(() => {
+    postRunStateToFrame();
+  }, [postRunStateToFrame]);
+
   const overview =
     postedOverview ??
     (isMockMode() && boundWorkflow ? MOCK_CANVAS_OVERVIEWS[boundWorkflow.path] : undefined);
@@ -955,6 +999,16 @@ export function CanvasPane({
                 { type: "sapiom-canvas:view", zoom, x: pan.x, y: pan.y },
                 "*",
               );
+              // Re-apply any active run state so a reload / late mount shows
+              // the current animation immediately without waiting for the next
+              // run update. frameLoading is still true at this point (it clears
+              // after the hold timer), so call the raw post directly.
+              if (run && runTarget && sessionId && (!isMockMode() || hasMockCanvasDoc(sessionId))) {
+                frameRef.current?.contentWindow?.postMessage(
+                  { type: "sapiom:run-state", steps: run.steps, status: run.status, target: runTarget },
+                  "*",
+                );
+              }
             }}
           />
           {/* Gesture surface over the sandboxed document: drag pans, wheel
