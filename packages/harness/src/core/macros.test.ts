@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { DEFAULT_MACROS } from "./macros.js";
 
 describe("DEFAULT_MACROS", () => {
-  it("defines exactly the 5 action-rail macros, matching the SPA's MOCK_MACROS ids", () => {
+  it("defines the 5 registered macros (open_prod is served by the API but is no longer an action-rail button)", () => {
     expect(DEFAULT_MACROS.map((m) => m.id)).toEqual([
       "run_local",
       "deploy",

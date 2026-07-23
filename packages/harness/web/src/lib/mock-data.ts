@@ -216,13 +216,6 @@ export const MOCK_MACROS: MacroDef[] = [
     requiresWorkflow: true,
   },
   {
-    id: "open_prod",
-    label: "Open prod",
-    icon: "ExternalLink",
-    action: { kind: "open-url", url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}" },
-    requiresWorkflow: true,
-  },
-  {
     // One-click force refresh: deterministic re-render + AI enrichment task
     // re-spawn, all server-side — no LLM in the render itself, no pty
     // involved. Matches the real DEFAULT_MACROS contract (src/core/macros.ts).
