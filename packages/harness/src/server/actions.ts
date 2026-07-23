@@ -219,8 +219,9 @@ function readDefinitionId(
 
 /**
  * Map an {@link AgentOperationError} (or any thrown value) to a terminal deploy
- * stream event — the credential hint is dropped, only the machine code/message
- * survive (no key material, no provider names).
+ * stream event. The hint is forwarded — it is safe to do so because git errors
+ * are redacted at source (credentials stripped before they reach the hint field),
+ * so no key material can reach the browser via this path.
  */
 function toDeployErrorEvent(
   err: unknown,
@@ -230,6 +231,7 @@ function toDeployErrorEvent(
       phase: "error",
       code: err.code,
       message: err.message,
+      ...(err.hint !== undefined ? { hint: err.hint } : {}),
     };
   }
   return {

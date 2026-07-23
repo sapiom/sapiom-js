@@ -15,6 +15,23 @@ import { GatewayClient } from './client.js';
 import { AgentOperationError } from './errors.js';
 import { assertDeployable, pushSynthesizedTree } from './git.js';
 
+/**
+ * Whether a git push error looks like an auth failure — a short-lived push
+ * credential may have expired between the mint and the push (e.g. a slow
+ * bundle). Matches the patterns git reports for HTTP 401/403 and credential
+ * rejection, checking the already-redacted hint so the match is safe to log.
+ */
+function isPushAuthError(err: unknown): boolean {
+  if (!(err instanceof AgentOperationError) || err.code !== 'GIT') return false;
+  const text = ((err.hint ?? '') + ' ' + err.message).toLowerCase();
+  return (
+    text.includes('authentication failed') ||
+    text.includes('could not read from') ||
+    text.includes('the requested url returned error: 401') ||
+    text.includes('the requested url returned error: 403')
+  );
+}
+
 interface BuildRun {
   id?: string;
   buildRunId?: string;
@@ -106,7 +123,20 @@ async function deployOperation(opts: DeployOptions, client: GatewayClient): Prom
       path.join(treeDir, 'package.json'),
       JSON.stringify({ name: 'agent-definition', private: true, type: 'module', dependencies }, null, 2) + '\n',
     );
-    pushSynthesizedTree(treeDir, pushUrl, branch);
+    try {
+      pushSynthesizedTree(treeDir, pushUrl, branch);
+    } catch (pushErr) {
+      // The push credential is short-lived; re-mint once and retry when the
+      // failure looks like an auth rejection (HTTP 401/403, "Authentication
+      // failed", "could not read from"). Non-auth failures (non-fast-forward,
+      // DNS, no-commits) surface immediately with no retry.
+      if (!isPushAuthError(pushErr)) throw pushErr;
+      const { pushUrl: freshPushUrl } = await client.post<{ pushUrl: string }>(
+        `/definitions/${definitionId}/push-credentials`,
+        {},
+      );
+      pushSynthesizedTree(treeDir, freshPushUrl, branch);
+    }
   } finally {
     rmSync(treeDir, { recursive: true, force: true });
   }
@@ -122,6 +152,16 @@ async function deployOperation(opts: DeployOptions, client: GatewayClient): Prom
 
   const final = await pollBuild(client, definitionId, buildRunId);
   if (final.status !== 'ready') {
+    if (final.status === 'superseded') {
+      // A newer deploy replaced this one while the build was in flight —
+      // expected when the user re-deploys quickly. Surface a distinct code so
+      // the UI can treat this as informational rather than a hard failure.
+      throw new AgentOperationError({
+        code: 'BUILD_SUPERSEDED',
+        message: 'A newer deploy superseded this build.',
+        step: 'build',
+      });
+    }
     throw new AgentOperationError({
       code: 'BUILD_FAILED',
       message: `Build ${final.status}.`,
