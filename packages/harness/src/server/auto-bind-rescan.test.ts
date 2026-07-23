@@ -405,4 +405,46 @@ describe("auto-bind on rescan (SAP-1897)", () => {
       expect(framesAfterSecondRescan).toBe(framesAfterBind);
     },
   );
+
+  it(
+    "auto-binds when workflow already exists at session.cwd before the session starts (on-start rescan)",
+    { retry: 1, timeout: 20_000 },
+    async () => {
+      // Scaffold the workflow BEFORE the server starts and the session is created.
+      // This reproduces the cloned/deployed-template scenario: the watcher is armed
+      // with the workflow already present as its baseline snapshot, so it never fires
+      // onChange for it.  Without the on-start rescan the session would stay unbound
+      // indefinitely; with it, the one-time rescan in the "running" branch picks it up.
+      await scaffoldWorkflow(cwd);
+
+      const port = await startTestServer();
+      events = await collectEvents(port);
+
+      // Create the session — its cwd already contains the workflow.
+      const session = await server!.sessionManager.create({
+        cwd,
+        harness: "claude-code",
+      });
+
+      // The on-start rescan must auto-bind without any file-change event from the watcher.
+      await vi.waitFor(
+        async () => {
+          const sessions = await listSessions(port);
+          const s = sessions.find((x) => x.id === session.id);
+          expect(s?.boundWorkflowPath).toBe(cwd);
+        },
+        { timeout: 8_000, interval: 150 },
+      );
+
+      // The binding must also be broadcast as a session.status frame.
+      expect(
+        events.messages.some(
+          (m) =>
+            m.type === "session.status" &&
+            m.session.id === session.id &&
+            m.session.boundWorkflowPath === cwd,
+        ),
+      ).toBe(true);
+    },
+  );
 });

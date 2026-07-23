@@ -610,6 +610,15 @@ export const startServer = async (
     if (session.status === "running") {
       canvasWatcher.start(session.id, session.cwd);
       workspaceWatcher.start(session.id, session.cwd);
+      // The workspace watcher only fires onChange on a LATER change, so a session
+      // that starts in a folder where the workflow already exists (a cloned/deployed
+      // template) would never trigger the initial rescan — and so never auto-bind.
+      // Run it once on start so pre-existing workflows bind too. Idempotent: the
+      // auto-bind is guarded by !boundWorkflowPath, so a resumed/already-bound
+      // session is untouched.
+      void rescanWorkspaceForSession(session.id).catch((err: unknown) => {
+        console.error("[harness] initial workspace rescan failed:", err);
+      });
     } else if (session.status === "exited") {
       canvasWatcher.stop(session.id);
       workspaceWatcher.stop(session.id);
