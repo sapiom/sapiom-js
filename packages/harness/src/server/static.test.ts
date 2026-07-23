@@ -15,16 +15,22 @@ import { createStaticRouter } from "./static.js";
 // deep-route fallback), and an unbuilt tree degrades to the placeholder rather
 // than 404ing — so the launch-critical `build → serve → npx` path can't
 // silently regress.
+//
+// SAP-1898: the router also bakes `window.__HARNESS__ = { token }` into every
+// HTML response so the SPA can always read the boot token without depending on
+// the `?token=` query param (which is lost on navigation/reload).
 // ---------------------------------------------------------------------------
+
+const TEST_BOOT_TOKEN = "test-boot-token-abc123";
 
 describe("createStaticRouter", () => {
   let server: ReturnType<express.Express["listen"]>;
   let baseUrl: string;
   const tmpDirs: string[] = [];
 
-  function start(webDir: string): void {
+  function start(webDir: string, bootToken = TEST_BOOT_TOKEN): void {
     const app = express();
-    app.use(createStaticRouter(webDir));
+    app.use(createStaticRouter(webDir, bootToken));
     server = app.listen(0);
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
@@ -83,6 +89,54 @@ describe("createStaticRouter", () => {
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(html).toContain("<title>Sapiom Studio</title>");
+    });
+
+    // SAP-1898: boot-token injection
+    it("injects window.__HARNESS__ script with the boot token before </head>", async () => {
+      start(makeBuiltWebDir(), TEST_BOOT_TOKEN);
+
+      const res = await fetch(`${baseUrl}/`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+
+      // The script must be present and contain the token JSON-encoded.
+      expect(html).toContain("window.__HARNESS__");
+      expect(html).toContain(JSON.stringify(TEST_BOOT_TOKEN));
+      // The script must appear before </head> so it runs before SPA modules load.
+      const scriptPos = html.indexOf("window.__HARNESS__");
+      const headClosePos = html.indexOf("</head>");
+      expect(scriptPos).toBeGreaterThan(-1);
+      expect(headClosePos).toBeGreaterThan(-1);
+      expect(scriptPos).toBeLessThan(headClosePos);
+    });
+
+    it("injects window.__HARNESS__ on deep SPA routes too (navigation/reload safety)", async () => {
+      start(makeBuiltWebDir(), TEST_BOOT_TOKEN);
+
+      const res = await fetch(`${baseUrl}/some/client/route`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("window.__HARNESS__");
+      expect(html).toContain(JSON.stringify(TEST_BOOT_TOKEN));
+    });
+
+    it("JSON-escapes the boot token so special characters cannot break the script block", async () => {
+      // A token containing characters that could break a bare string interpolation.
+      const weirdToken = 'tok"en</script><script>evil';
+      start(makeBuiltWebDir(), weirdToken);
+
+      const res = await fetch(`${baseUrl}/`);
+      const html = await res.text();
+      // The raw string must NOT appear verbatim — it must be JSON-escaped.
+      expect(html).not.toContain(weirdToken);
+      // The safe (< → <) encoded form must be present in the page.
+      const safeJson = JSON.stringify({ token: weirdToken }).replace(/</g, "\\u003c");
+      expect(html).toContain(safeJson);
+      // The </script> breakout sequence from the token must not appear literally
+      // — it would terminate the injected script block early and allow XSS.
+      // The < is Unicode-escaped to < (inert to JSON.parse, opaque to
+      // the HTML parser), so the raw sequence can never appear verbatim.
+      expect(html).not.toContain("</script><script>evil");
     });
   });
 
