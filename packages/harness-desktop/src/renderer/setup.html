@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>Sapiom</title>
+    <link rel="stylesheet" href="./setup.css" />
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">Sapiom</div>
+      <h1 id="status" data-status="active">Starting Sapiom…</h1>
+      <p id="detail" class="detail"></p>
+
+      <section id="consent" class="consent" hidden>
+        <label class="consent-row">
+          <input type="checkbox" id="telemetry" checked />
+          <span>Share anonymous usage data to help improve Sapiom (optional).</span>
+        </label>
+        <button id="consent-continue" class="btn">Continue</button>
+      </section>
+
+      <section id="error" class="error" hidden>
+        <pre id="error-message" class="error-message"></pre>
+        <button id="retry" class="btn" hidden>Retry</button>
+      </section>
+    </main>
+    <script type="module" src="./setup.js"></script>
+  </body>
+</html>

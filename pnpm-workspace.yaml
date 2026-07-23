@@ -3,5 +3,11 @@ packages:
 
 # node-pty needs its postinstall (chmods spawn-helper +x); pnpm skips build
 # scripts by default, which leaves it silently non-functional on fresh installs.
+# electron/esbuild need their postinstall too (electron downloads its binary;
+# without this the desktop app's `electron` runtime is missing). @electron/rebuild
+# recompiles node-pty against Electron's ABI during packaging.
 onlyBuiltDependencies:
   - node-pty
+  - electron
+  - esbuild
+  - '@electron/rebuild'
