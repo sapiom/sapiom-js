@@ -1,0 +1,47 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "An LLM-judge quality gate — score an output against **your** rubric, then branch the next step on the score. The template for building your own evals.\n\nThe `judge` step renders a prompt from your rubric, calls an LLM via `ctx.sapiom.models.run` (the metered x402 models path), and parses a `[0,1]` score from the reply (prefers a JSON `{score, rationale}`, falls back to a bare number, clamps to `[0,1]`, tolerates a 0–100 answer). A pure `gate` step then branches `publish` vs `revise` on `score >= threshold`. The terminal steps return `{ decision, score, threshold, rationale }` — you decide what publish/revise *mean*.\n\nWe own the harness (the default judge prompt + the score parser); the rubric is yours. Swap the rubric, tune the threshold, pick a judge model — that's the whole authoring loop for a custom eval.\n\n**Self-grading composition.** Because the eval-gate is a deployable agent, a parent workflow can launch it as a **child** on its own output (POST `/v1/workflows/executions`), pause at $0 for the returned decision, and branch ship/regenerate — the canonical self-grading-workflow pattern. See the README.",
+  "useCases": [
+    "Gate an LLM-generated draft on a quality bar before it's published or sent.",
+    "Build your own eval: write a rubric, tune a threshold, pick a judge model — no scorer framework to learn.",
+    "Self-grade a workflow's output by calling the eval-gate as a child and branching on the decision."
+  ],
+  "notes": "`run_local` stubs the `llm.generate` (`models.run`) capability, so you can trace the full graph offline for free. The default stub reply carries no number and `parseScore` throws on that (by design), so supply a stub score to trace the graph — a high `output` score → `publish`, a low one → `revise`. See `AGENTS.md`/`README.md` for the exact stub. A real `deploy` + `run` performs a billed judge call and returns the decision from a real score.\n\nTo build your own eval, edit three things in `index.ts`: the **rubric** (the criteria the judge scores against — passed as input), the **threshold** (the pass bar, default 0.7), and the **model** (the judge-model alias). To self-grade, wire the eval-gate as a child of your workflow — the composition snippet in `README.md`/`AGENTS.md` POSTs to `/v1/workflows/executions` and pauses for the child's decision, guarded by a `dryRun` flag so `run_local` stays offline.",
+  "examples": [
+    {
+      "title": "High score → publish",
+      "input": {
+        "input": "Write a one-line product tagline for a privacy-first email app.",
+        "output": "Inbox peace, finally — email that never reads your mail.",
+        "rubric": "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
+        "threshold": 0.7
+      },
+      "output": {
+        "decision": "publish",
+        "score": 0.9,
+        "threshold": 0.7,
+        "rationale": "Concise, mentions privacy, reads naturally."
+      }
+    },
+    {
+      "title": "Low score → revise",
+      "input": {
+        "input": "Write a one-line product tagline for a privacy-first email app.",
+        "output": "The best email application in the entire world for everyone everywhere.",
+        "rubric": "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
+        "threshold": 0.7
+      },
+      "output": {
+        "decision": "revise",
+        "score": 0.3,
+        "threshold": 0.7,
+        "rationale": "Does not mention privacy and reads as generic hype."
+      }
+    }
+  ]
+}
