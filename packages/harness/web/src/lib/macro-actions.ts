@@ -10,10 +10,12 @@
  *   - `prod_run`  → POST /api/runs                  ({ executionId } → inspector)
  *   - `run_local` → POST /api/runs/local            (offline stub-run NDJSON)
  *
- * Every other macro is untouched: `open_prod` (open-url), `visualize`
- * (render-canvas), and any inject macro — including the Debug / Explain /
- * free-form prompt-inserts surfaced through the composer library — still go
- * through their existing path.
+ * Every other macro is untouched: `visualize` (render-canvas), and any inject
+ * macro — including the Debug / Explain / free-form prompt-inserts surfaced
+ * through the composer library — still go through their existing path.
+ * `open_prod` (open-url) is no longer surfaced in the SPA action bar; the
+ * "open in dashboard" affordance moved to the canvas header as a static link,
+ * so this routing path is not exercised by any UI button.
  *
  * This module is the single source of truth for that split so the wiring at the
  * call site stays a thin `switch`, and the mapping is unit-testable without a
