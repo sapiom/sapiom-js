@@ -365,6 +365,72 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "cold-outreach-engine",
+      "name": "Cold Outreach Personalization Engine",
+      "description": "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip follow-ups that stop the moment someone replies.",
+      "tags": ["outreach", "sales", "drip", "personalization"],
+      "sourcePath": "examples/cold-outreach-engine",
+      "capabilities": [
+        "email.domain.search",
+        "email.find",
+        "web.scrape",
+        "models.run",
+        "email.verify",
+        "database.get",
+        "database.create",
+        "email.send"
+      ],
+      "whatItDoes": "For turning a raw list of target companies into personalized outreach that follows up on its own. It finds a real contact at each company with Hunter, reads their website, and asks the live model (`models.run`) to write one specific opener per prospect. It verifies every address and drops the ones that would bounce before anything sends. Then it sends the first touch and pauses — idling at $0 between touches, waking on its own to send the next, but dropping anyone who replies so they never get a follow-up. Everything it sends is logged to a Postgres store it owns, and a `dryRun` returns the plan and every opener without sending a thing.",
+      "steps": [
+        {
+          "name": "enrich",
+          "description": "Resolve a real contact for each lead with Hunter — look up the named person, or surface a decision-maker when you only have the company.",
+          "capability": "email.domain.search",
+          "next": ["scrape"]
+        },
+        {
+          "name": "scrape",
+          "description": "Read each company's website for a few lines of context to personalize with.",
+          "capability": "web.scrape",
+          "next": ["personalize"]
+        },
+        {
+          "name": "personalize",
+          "description": "Ask the live model to write one specific opener per prospect, falling back to a safe generic line when it returns nothing usable.",
+          "capability": "models.run",
+          "next": ["verify"]
+        },
+        {
+          "name": "verify",
+          "description": "Check each address for deliverability and drop the ones that would bounce before anything sends.",
+          "capability": "email.verify",
+          "next": ["launch"]
+        },
+        {
+          "name": "launch",
+          "description": "Persist the campaign roster to a Postgres store the engine owns, then start the drip. A dry run stops here and returns the full plan without sending or persisting.",
+          "capability": "database.create",
+          "next": ["send"]
+        },
+        {
+          "name": "send",
+          "description": "Deliver the current touch to everyone still active and log it, then pause at $0 until the drip interval elapses or a prospect replies.",
+          "capability": "email.send",
+          "next": ["advance", "done"]
+        },
+        {
+          "name": "advance",
+          "description": "Wake on the reply-or-timeout, mark anyone who replied as done, then loop back for the next touch or end the run.",
+          "next": ["send", "done"]
+        },
+        {
+          "name": "done",
+          "description": "Return the campaign summary — who was enriched, how many were deliverable, what was sent, and who replied.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }

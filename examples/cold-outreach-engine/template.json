@@ -1,0 +1,48 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You hand it a list of companies — a domain each, optionally a person — and it does the whole cold-outreach prep and follow-up for you. It finds a real contact at each company with Hunter (`findEmail` when you name the person, `domainSearch` for a decision-maker when you don't), reads each company's website for a few lines of context, and asks the live model (`models.run`) to write one specific opener per prospect. Before anything sends, it checks each address for deliverability and drops the ones that would bounce.\n\nThen it runs the sequence itself. It sends the first touch — the personalized opener plus your ask — and pauses. The wait between touches is durable: the run idles at $0 for the drip interval and wakes on its own to send the next touch, but the moment a prospect replies it drops them from the sequence so they never get a follow-up meant for someone who ignored you. A short default sequence ships in the box — an opener, a bump, and a breakup — and you can pass your own.\n\nEverything it does is logged to a small Postgres store the engine owns, so the campaign roster, every touch, and who replied outlive the run. A `dryRun` does all the research and writes every opener, then returns the plan without sending, persisting, or waiting — so you can read the openers before a single email goes out.\n\nYou pay for the enrichment, one scrape per company, one model call, and the emails — the waiting between touches is free.",
+  "useCases": [
+    "Turn a raw list of target companies into personalized, deliverability-checked first emails.",
+    "Run a multi-touch drip that follows up on its own cadence and stops the instant someone replies.",
+    "Keep a durable log of who you contacted, what you sent, and who answered — across runs."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it `leads` — an array of `{ domain, company?, fullName? }` — and it enriches, personalizes, verifies, and starts the drip. Set `senderName` for the signature, `sequence` to override the default three touches, and `dripIntervalDays` for the gap between them (default 3). Pass `dryRun: true` to research and write every opener and get the plan back **without sending, persisting, or waiting** — the best first run.\n\nThis template **pauses between touches** and resumes on its own when the interval passes. To end the drip early when a prospect replies, fire the `reply.received` signal with the MCP `workflow_signal` tool (or the API), passing `{ \"email\": \"prospect@their-co.com\" }` and the run's `executionId` as the `correlationId` — there is no one-click signal button yet. To run it on a cadence over a fresh lead batch, attach the `schedule` as a cron trigger on the deployed workflow.\n\nPrefer to work from the code? Run it locally with `run_local` and `dryRun: true` to trace enrich → scrape → personalize → verify for free (capabilities stubbed), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Research + personalize one lead, preview only (dry run)",
+      "input": {
+        "dryRun": true,
+        "senderName": "Dana",
+        "leads": [
+          {
+            "domain": "acme.com",
+            "company": "Acme",
+            "fullName": "Jordan Rivera"
+          }
+        ]
+      },
+      "output": {
+        "campaign": "cold-outreach",
+        "dryRun": true,
+        "reason": "dry-run",
+        "touches": 3,
+        "enriched": 1,
+        "deliverable": 1,
+        "plan": [
+          {
+            "email": "jordan@acme.com",
+            "company": "Acme",
+            "deliverable": true,
+            "verifyStatus": "valid",
+            "firstLine": "Saw Acme just opened its platform API — the kind of move that usually means outreach volume is about to jump."
+          }
+        ]
+      }
+    }
+  ]
+}
