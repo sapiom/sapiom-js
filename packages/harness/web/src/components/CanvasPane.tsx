@@ -168,7 +168,14 @@ export function CanvasPane({
   }, [graphSize]);
 
   const fitView = useCallback((): void => {
-    const fit = computeFit() ?? { zoom: 1, x: 0, y: 0 };
+    const fit = computeFit();
+    // If the pane is too small or the graph has not yet posted its size
+    // (computeFit returns null), bail out rather than resetting zoom to the
+    // identity. This prevents the ResizeObserver from zeroing out a previously
+    // computed fit when the canvas-visual element transitions back from an
+    // off-stage (hidden) surface — the pane's measured rect is transiently
+    // small during the CSS transition, which would otherwise force zoom=1.
+    if (!fit) return;
     // An explicit fit hands the view back to auto-follow: subsequent pane
     // resizes keep it fitted until the user moves the view again.
     userAdjustedRef.current = false;

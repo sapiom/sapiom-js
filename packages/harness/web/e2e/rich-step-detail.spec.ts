@@ -48,7 +48,12 @@ const loadBoard = async (page: Page): Promise<void> => {
 const pickNode = async (page: Page, nodeId: string): Promise<void> => {
   const node = page.frameLocator(".canvas-iframe").locator(`[data-node-id="${nodeId}"]`);
   await expect(node).toBeVisible();
-  await expect(page.getByTestId("canvas-zoom-reset")).not.toHaveText("100%");
+  // Wait for the frame skeleton to disappear before clicking: the skeleton
+  // overlays the gesture layer and absorbs the click, so the pick never
+  // reaches the canvas document. Under CI load (many parallel tests hitting
+  // one Vite server) the iframe can take several seconds to load; 15s covers
+  // worst-case parallelism without a fixed-sleep.
+  await expect(page.getByTestId("canvas-loading")).not.toBeVisible({ timeout: 15000 });
   const box = await node.boundingBox();
   if (!box) throw new Error(`${nodeId} node has no bounding box`);
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
