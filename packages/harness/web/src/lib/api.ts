@@ -27,20 +27,7 @@ import type {
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
-import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_SKILLS, MOCK_SKILL_BODIES, MOCK_WORKFLOWS } from "./mock-data";
-
-// Skill types (matched to the server-side SkillMeta/SkillDetail in
-// src/server/skills.ts — kept here rather than in shared/types.ts since they
-// are only consumed by the SPA, never by CLI or server logic).
-export interface SkillMeta {
-  id: string;
-  name: string;
-  description: string;
-  source: "package" | "user";
-}
-export interface SkillDetail extends SkillMeta {
-  body: string;
-}
+import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
 
 /**
  * Body for `POST /api/runs/local` — run the agent project at `sourceDir`
@@ -84,7 +71,7 @@ export type RunLocalLine =
 // ---------------------------------------------------------------------------
 // Direct-action wire shapes (matched to src/server/actions.ts). SPA-only — the
 // browser consumes these streams but never the server modules that emit them,
-// so (like SkillMeta above) they live here rather than in shared/types.ts.
+// so they live here rather than in shared/types.ts.
 // ---------------------------------------------------------------------------
 
 /**
@@ -140,10 +127,10 @@ export function isDemoSeedEnabled(): boolean {
 }
 
 /**
- * Mock mode only: `?mockError=listDir,skill` forces the named operations to
+ * Mock mode only: `?mockError=listDir` forces the named operations to
  * reject, so Playwright can exercise the error states of surfaces that talk to
- * the filesystem/skill APIs (directory picker, command-palette path mode,
- * skill detail) without a real server. Comma-separated; unknown names ignored.
+ * the filesystem API (directory picker, command-palette path mode) without a
+ * real server. Comma-separated; unknown names ignored.
  */
 export function mockErrorTargets(): Set<string> {
   if (!isMockMode()) return new Set();
@@ -247,10 +234,6 @@ export interface HarnessApi {
   /** Seeds (or reuses) the bundled example project; the caller follows up
    *  with a normal createSession against the returned root. */
   seedSampleProject(): Promise<SampleProjectSeedResponse>;
-  /** List all discoverable skills (package + user). */
-  listSkills(): Promise<SkillMeta[]>;
-  /** Fetch the full detail (including markdown body) for a single skill. */
-  getSkill(id: string): Promise<SkillDetail>;
   /** Live run render state (upstream feat/harness-runtime-analytics):
    *  GET /api/runs/:id/state = inspect -> decode -> renderRunState. Poll
    *  after an execution.started bus message until the run is terminal. */
@@ -413,14 +396,6 @@ class RealApi implements HarnessApi {
 
   seedSampleProject(): Promise<SampleProjectSeedResponse> {
     return this.request<SampleProjectSeedResponse>("/api/sample-project", { method: "POST" });
-  }
-
-  listSkills(): Promise<SkillMeta[]> {
-    return this.request<SkillMeta[]>("/api/skills");
-  }
-
-  getSkill(id: string): Promise<SkillDetail> {
-    return this.request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`);
   }
 
   getRunState(executionId: string): Promise<RunView> {
@@ -978,27 +953,6 @@ class MockApi implements HarnessApi {
       win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastSampleSeed: response };
     }
     return response;
-  }
-
-  async listSkills(): Promise<SkillMeta[]> {
-    await delay(150);
-    // Test-only escape hatch: record the call count for Playwright assertions.
-    if (typeof window !== "undefined") {
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
-      const prev = (win.__HARNESS_TEST__?.listSkillsCallCount as number) ?? 0;
-      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), listSkillsCallCount: prev + 1 };
-    }
-    return MOCK_SKILLS;
-  }
-
-  async getSkill(id: string): Promise<SkillDetail> {
-    await delay(100);
-    if (mockErrorTargets().has("skill")) {
-      throw new ApiError(500, `GET /api/skills/${id} → 500 (mock)`, "Could not load this skill");
-    }
-    const found = MOCK_SKILLS.find((s) => s.id === id);
-    if (!found) throw new ApiError(404, `GET /api/skills/${id} → 404`, `Unknown skill '${id}'`);
-    return { ...found, body: MOCK_SKILL_BODIES[id] ?? `# ${found.name}\n\n${found.description}` };
   }
 
   // Scripted completed run for the demo leasing workflow. Per-step latency

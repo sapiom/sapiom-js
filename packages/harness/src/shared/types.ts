@@ -525,8 +525,6 @@ export type UiEventName =
   | "visualize.triggered"
   | "consent.changed"
   | "session.created"
-  | "skill.viewed"
-  | "skill.used"
   | "mcp.install";
 
 export interface UiTrackRequest {
@@ -555,8 +553,6 @@ export type AnalyticsEventType =
   | "visualize.triggered"
   | "consent.changed"
   | "session.created"
-  | "skill.viewed"
-  | "skill.used"
   | "mcp.install";
 
 /**

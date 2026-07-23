@@ -240,8 +240,7 @@ body {
 }
 
 /* Pane content eases in rather than hard-cutting. */
-.canvas-frame-wrap,
-.right-pane-panel:not(.is-hidden) .skills-panel {
+.canvas-frame-wrap {
   animation: refine-content-in var(--base, 0.22s) var(--ease) both;
 }
 
@@ -344,7 +343,6 @@ body {
     transform: none;
   }
   .canvas-frame-wrap,
-  .right-pane-panel:not(.is-hidden) .skills-panel,
   .modal,
   .command-palette,
   .settings-popover {

@@ -134,12 +134,6 @@ export interface HarnessStateHook {
    * by showing the reason inline rather than as a toast.
    */
   injectInput: (sessionId: string, text: string) => Promise<void>;
-  /**
-   * Populates the terminal's input line with `text` WITHOUT submitting
-   * (submit:false). Shows a toast on success; sets the toast on failure
-   * (same as runMacro) since callers fire this from click handlers.
-   */
-  useSkill: (sessionId: string, text: string) => Promise<void>;
   /** Expose the toast setter so panels can push their own toasts. */
   showToast: (message: string) => void;
   listDir: (path?: string) => Promise<FsListResponse>;
@@ -172,8 +166,8 @@ export interface HarnessStateHook {
    *  then kept fresh by `task.status` frames. Drives the canvas pane's
    *  activity/failure states. */
   tasks: BackgroundTask[];
-  /** The underlying API client — exposed so consumers (e.g. SkillsPanel) can
-   *  call methods (listSkills, getSkill) not surfaced as dedicated hook fns. */
+  /** The underlying API client — exposed for consumers that need methods not
+   *  surfaced as dedicated hook fns. */
   api: HarnessApi;
   /**
    * Kick off the browser OAuth sign-in flow (`POST /api/auth/start`). Returns
@@ -814,18 +808,6 @@ export function useHarnessState(): HarnessStateHook {
     await api.injectInput(sessionId, { text, submit: true });
   }, []);
 
-  // Populates the terminal input line without submitting (submit:false).
-  // Failures go to the toast slot rather than propagating — same pattern as
-  // runMacro, since callers fire this from a click handler without awaiting.
-  const useSkill = useCallback(async (sessionId: string, text: string): Promise<void> => {
-    try {
-      await api.injectInput(sessionId, { text, submit: false });
-      setToast("Typed into the terminal. Edit and press Enter.");
-    } catch (err) {
-      setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
-    }
-  }, []);
-
   const showToast = useCallback((message: string): void => {
     setToast(message);
   }, []);
@@ -864,7 +846,6 @@ export function useHarnessState(): HarnessStateHook {
     startProdRun,
     runLocal,
     injectInput,
-    useSkill,
     showToast,
     listDir,
     lastMessage,

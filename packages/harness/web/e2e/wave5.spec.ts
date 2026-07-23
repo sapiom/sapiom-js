@@ -201,41 +201,6 @@ test("overview mode shows the fresh-install canvas state, not the previous sessi
 });
 
 // ---------------------------------------------------------------------------
-// Skills detail
-// ---------------------------------------------------------------------------
-
-test.describe("skills detail", () => {
-  test("the body drops its duplicate H1 and soft breaks stay one paragraph", async ({ page }) => {
-    await page.getByTestId("right-tab-skills").click();
-    await page.getByTestId("skill-card-frontend-design").click();
-
-    const detail = page.getByTestId("skill-detail");
-    await expect(detail).toBeVisible();
-    // The header names the skill; the body must not repeat it as an H1.
-    await expect(detail.locator(".skill-detail-body h1")).toHaveCount(0);
-    // The fixture's soft-broken sentence renders as ONE paragraph.
-    const paragraph = detail.locator(".chat-paragraph", { hasText: "aesthetic direction" });
-    await expect(paragraph).toContainText("(component, page, or application) and describe");
-  });
-
-  test("a failed detail fetch offers a Retry alongside the back affordance", async ({ page }) => {
-    await page.goto("/?mockError=skill");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("right-tab-skills").click();
-    await page.getByTestId("skill-card-code-review").click();
-
-    const errorView = page.getByTestId("skill-detail-error");
-    await expect(errorView).toBeVisible();
-    await expect(errorView).toContainText("Could not load this skill");
-
-    // Retry refires the fetch (still failing here — the error state stays,
-    // which is the honest outcome while the fault persists).
-    await page.getByTestId("skill-detail-retry").click();
-    await expect(page.getByTestId("skill-detail-error")).toBeVisible();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Directory picker error retry
 // ---------------------------------------------------------------------------
 

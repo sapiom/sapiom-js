@@ -11,7 +11,7 @@
 export interface UiPrefs {
   railCollapsed?: boolean;
   rightCollapsed?: boolean;
-  rightTab?: "canvas" | "steps" | "code" | "skills";
+  rightTab?: "canvas" | "steps" | "code";
   /** Workspace cwds the user collapsed in the rail tree. */
   collapsedCwds?: string[];
   /** The agent NEW sessions default to — set from the composer's provider

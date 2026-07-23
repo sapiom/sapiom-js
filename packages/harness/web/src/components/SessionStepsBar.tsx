@@ -143,8 +143,7 @@ export function SessionStepsBar({
           // Inject-kind actions type into the session's pty — a session that
           // is still starting (or parked on a trust prompt) would 409 the
           // click into an after-the-fact toast. Disable with the reason up
-          // front instead (same gate SkillsPanel uses); open-url actions
-          // never touch the pty and stay live.
+          // front; open-url actions never touch the pty and stay live.
           const readyReason =
             !sessionReady && action.macro && action.macro.action.kind !== "open-url"
               ? "Session is starting"
