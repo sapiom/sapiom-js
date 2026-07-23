@@ -9,14 +9,22 @@
 //
 // Usage: node scripts/pack.mjs [--linux|--mac|--win]   (default --linux)
 import { execFileSync } from "node:child_process";
-import { cpSync, rmSync } from "node:fs";
+import { cpSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as os from "node:os";
 
 const pkgDir = dirname(dirname(fileURLToPath(import.meta.url))); // packages/harness-desktop
 const repoRoot = dirname(dirname(pkgDir)); // sapiom-js
-const deployDir = join(os.tmpdir(), "sapiom-harness-desktop-pack");
+// realpath the tmp base: on macOS os.tmpdir() is `/var/folders/…`, a symlink to
+// `/private/var/folders/…` (one level deeper). `pnpm deploy` writes the app
+// package into `.pnpm/node_modules` as a RELATIVE symlink whose `../` count
+// encodes the deploy dir's depth; electron-builder then realpaths the dir to
+// the `/private` form (one level deeper), so that `../` chain lands one level
+// short and the stat ENOENTs (`node_modules/.pnpm/node_modules/@sapiom/…`).
+// Canonicalizing the base up front makes pnpm and electron-builder agree.
+// No-op on Linux (`/tmp` isn't behind a symlink).
+const deployDir = join(realpathSync(os.tmpdir()), "sapiom-harness-desktop-pack");
 const outputDir = join(pkgDir, "release");
 const platform = process.argv[2] ?? "--linux";
 
