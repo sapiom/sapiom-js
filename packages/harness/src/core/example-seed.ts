@@ -58,6 +58,31 @@ function tryGit(cwd: string, args: string[]): boolean {
   }
 }
 
+/**
+ * Best-effort `npm install` in the freshly-scaffolded project. The Canvas
+ * step-graph extraction esbuild-bundles the project, so without its declared
+ * deps (`@sapiom/agent`, `zod`, …) installed the very first render fails with
+ * "Could not resolve …". Installing here means a freshly-seeded project opens
+ * with a working Canvas instead of an error the user has to ask the agent to
+ * fix. Non-fatal: if npm is missing or offline, seeding still succeeds and the
+ * Canvas falls back to its existing "ask your agent to fix it" prompt.
+ * `shell: true` lets Windows resolve the `npm.cmd` shim; cwd (which may contain
+ * spaces) is passed via options, not the command line, so it stays safe.
+ */
+function tryInstallDependencies(projectDir: string): boolean {
+  try {
+    execFileSync("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], {
+      cwd: projectDir,
+      stdio: "ignore",
+      shell: process.platform === "win32",
+      timeout: 120_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Fold the demo customizations (index.ts, sapiom.json) into the scaffold's initial commit. */
 function commitCustomizations(projectDir: string): void {
   if (!existsSync(path.join(projectDir, ".git"))) return;
@@ -241,6 +266,10 @@ export interface SeedExampleProjectOptions {
   versions?: ResolvedVersions;
   /** Overrides where the scaffold templates live (tests). */
   templatesDir?: string;
+  /** Run `npm install` in the freshly-scaffolded project so the Canvas can
+   *  bundle it on first render. Defaults to true; set false in tests to keep
+   *  them offline/fast. Ignored on reuse (nothing is re-scaffolded). */
+  installDependencies?: boolean;
 }
 
 export interface SeedExampleProjectResult {
@@ -252,6 +281,10 @@ export interface SeedExampleProjectResult {
   created: boolean;
   /** Whether a git repo with an initial commit was created (false on reuse or when `git` is unavailable). */
   gitInitialized: boolean;
+  /** Whether `npm install` succeeded for the freshly-scaffolded project (false
+   *  on reuse, or when npm is missing/offline — the Canvas then degrades to its
+   *  "ask your agent to fix it" prompt on first render). */
+  dependenciesInstalled: boolean;
 }
 
 /**
@@ -286,7 +319,7 @@ export async function seedExampleProject(options: SeedExampleProjectOptions): Pr
 
   if (alreadySeeded && !options.force) {
     await writeCanvasPair(false);
-    return { root, projectDir, created: false, gitInitialized: false };
+    return { root, projectDir, created: false, gitInitialized: false, dependenciesInstalled: false };
   }
 
   // Wipe a stale copy before rescaffolding — scaffold() refuses a non-empty dir.
@@ -309,9 +342,15 @@ export async function seedExampleProject(options: SeedExampleProjectOptions): Pr
 
   await fs.writeFile(path.join(projectDir, "index.ts"), ORDER_TRIAGE_INDEX_TS, "utf8");
   writeConfig(projectDir, { name: SAMPLE_PROJECT_NAME });
+
+  // Install deps BEFORE the initial commit so the (gitignored) node_modules is
+  // present for the Canvas's first bundle, while staying out of git history.
+  const dependenciesInstalled =
+    (options.installDependencies ?? true) ? tryInstallDependencies(projectDir) : false;
+
   commitCustomizations(projectDir);
 
   await writeCanvasPair(true);
 
-  return { root, projectDir, created: true, gitInitialized: result.gitInitialized };
+  return { root, projectDir, created: true, gitInitialized: result.gitInitialized, dependenciesInstalled };
 }

@@ -30,6 +30,7 @@ import { augmentProcessPath } from "./env.js";
 import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
 import { installClaudeCode } from "./agent-install.js";
+import { installRuntimeShims } from "./runtime-shims.js";
 import { BOOT_PROGRESS, BOOT_ERROR, CONSENT_SUBMIT, RETRY, type BootProgress, type BootErrorPayload } from "./ipc.js";
 
 export interface BootResult {
@@ -213,8 +214,12 @@ async function ensureAgentAvailable(setupWin: BrowserWindow, initialReport: Doct
 export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<BootResult> {
   progress(setupWin, { phase: "starting", message: "Starting Sapiom…", status: "active" });
 
-  // 1. PATH — must precede doctor so `which claude` works in a GUI app.
-  augmentProcessPath(agentBinDir());
+  // 1. PATH — must precede doctor so `which claude` works in a GUI app. Also
+  //    materialize node/npm shims (Electron-as-Node) and put them first, so the
+  //    embedded harness can `npm install` the seeded project (and run project
+  //    tooling) with no system Node/npm.
+  const runtimeShimDir = installRuntimeShims();
+  augmentProcessPath(agentBinDir(), runtimeShimDir);
   resolveTargetEnvironment();
 
   // 2. Doctor.

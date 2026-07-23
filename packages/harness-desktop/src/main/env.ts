@@ -33,6 +33,8 @@ function candidateBinDirs(agentBinDir: string): string[] {
     "/opt/homebrew/bin", // macOS Apple Silicon Homebrew
     "/usr/bin",
     "/bin",
+    "/usr/sbin", // some setups keep node/npm here (this dev box does)
+    "/sbin",
     path.join(home, ".local", "bin"), // where `claude` often installs (and does on this box)
     path.join(home, ".npm-global", "bin"),
   ];
@@ -44,10 +46,12 @@ function candidateBinDirs(agentBinDir: string): string[] {
  * app-controlled npm --prefix install target (Phase 3); pass it so a freshly
  * auto-installed `claude` is found on the same launch.
  */
-export function augmentProcessPath(agentBinDir: string): string {
+export function augmentProcessPath(agentBinDir: string, runtimeShimDir?: string): string {
   const sep = isWindows ? ";" : ":";
   const existing = (process.env.PATH ?? "").split(sep).filter(Boolean);
-  const prepend = candidateBinDirs(agentBinDir);
+  // The Electron-as-Node shim dir goes FIRST so `node`/`npm` resolve to the
+  // bundled runtime regardless of what (if anything) the user has installed.
+  const prepend = [...(runtimeShimDir ? [runtimeShimDir] : []), ...candidateBinDirs(agentBinDir)];
   const seen = new Set<string>();
   const merged = [...prepend, ...existing].filter((dir) => {
     if (seen.has(dir)) return false;

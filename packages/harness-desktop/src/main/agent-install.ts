@@ -31,7 +31,7 @@ const require = createRequire(import.meta.url);
  * `bin.npm` field, and join it onto npm's dir — asar-safe (resolve returns the
  * unpacked path under Electron) and robust to npm changing its bin layout.
  */
-function resolveNpmCli(): string {
+export function resolveNpmCli(): string {
   const pkgJsonPath = require.resolve("npm/package.json");
   const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
     bin?: { npm?: string };
