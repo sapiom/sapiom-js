@@ -6110,15 +6110,6 @@ input {
   color: var(--accent-foreground);
 }
 
-/* Honest curation note: the list is a pin, not a live gallery. */
-.templates-pin-note {
-  margin: auto 0 0;
-  padding: var(--sp3) var(--sp2) var(--sp1);
-  font-size: var(--type-micro);
-  color: var(--text-faint);
-  line-height: 1.5;
-}
-
 /* ── Preview pane: real manifest fields only ── */
 .template-detail {
   display: flex;

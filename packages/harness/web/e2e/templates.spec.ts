@@ -31,7 +31,7 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
     await expect(page.getByTestId("templates-dialog")).toBeVisible();
   });
 
-  test("browse: the two clonable gallery ids, the two bundled starters, and the honest pin note", async ({
+  test("browse: the two clonable gallery ids and the two bundled starters", async ({
     page,
   }) => {
     // Exactly the real clonable slugs — nothing invented.
@@ -39,8 +39,6 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
     await expect(page.getByTestId("template-row-hello-agent")).toBeVisible();
     await expect(page.getByTestId("template-row-default")).toBeVisible();
     await expect(page.getByTestId("template-row-coding-pause")).toBeVisible();
-    // Browse is server-gated (no listing API): the list says it's a pin.
-    await expect(page.getByTestId("templates-pin-note")).toContainText("harness 0.1.4");
 
     await page.screenshot({ path: "web/e2e/screenshots/templates-dialog.png", fullPage: true });
   });

@@ -4,7 +4,6 @@ import type { JSX, RefObject } from "react";
 import {
   GALLERY_TEMPLATES,
   STARTER_TEMPLATES,
-  TEMPLATES_PIN,
   templateDirSuggestion,
   type StudioTemplate,
 } from "../lib/templates";
@@ -129,12 +128,6 @@ export function TemplatesDialog({ launchDir, onClose, onUse, triggerRef }: Templ
                 onSelect={select}
               />
             ))}
-            {/* Honest curation: no listing API exists yet, so
-                this index is a pin, and the note says which one. */}
-            <p className="templates-pin-note" data-testid="templates-pin-note">
-              Pinned from the harness {TEMPLATES_PIN.harnessVersion} gallery. Live browse is
-              dashboard only until a listing API ships.
-            </p>
           </div>
 
           <TemplateDetail template={selected} />
