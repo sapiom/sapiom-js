@@ -3,6 +3,43 @@
   "version": 1,
   "templates": [
     {
+      "id": "slack-notifier",
+      "name": "Slack Notifier",
+      "description": "Post a message to Slack using your own credential from the Vault — the 'bring your own API' on-ramp.",
+      "tags": ["integration", "starter", "slack"],
+      "sourcePath": "examples/slack-notifier",
+      "capabilities": ["vault"],
+      "whatItDoes": "Takes a message (and optional channel), reads your Slack credential from the Vault at runtime, and posts to Slack via a direct `fetch` — either `chat.postMessage` with a bot token or an incoming-webhook URL. The teaching template for connecting an external service: store a secret, read it at runtime, call an API. No secret is ever baked into code, and a dryRun / no-credential guard lets `run_local` trace the whole graph offline. Slack is just the hook — repoint the endpoint + Vault key to call any API.",
+      "steps": [
+        {
+          "name": "validate",
+          "description": "Check the message and resolve config (auth mode, channel).",
+          "next": ["post", "rejected"]
+        },
+        {
+          "name": "post",
+          "description": "Read the Slack credential from the Vault and post the message.",
+          "capability": "vault",
+          "next": ["posted", "failed"]
+        },
+        {
+          "name": "posted",
+          "description": "Return the post confirmation (channel + timestamp).",
+          "terminal": true
+        },
+        {
+          "name": "failed",
+          "description": "The Slack API call errored.",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Input failed validation; nothing was posted.",
+          "terminal": true
+        }
+      ]
+    },
+    {
       "id": "web-research-digest",
       "name": "Web Research Digest",
       "description": "Search the web for a topic and return a concise, sourced digest.",
@@ -36,6 +73,163 @@
         {
           "name": "greet",
           "description": "Validate the input and return a greeting.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "wait-for-webhook",
+      "name": "Wait-for-Webhook",
+      "description": "Durable pause/resume — start a slow external job, suspend at $0 until a webhook callback fires, then decide.",
+      "tags": ["durable", "pause-resume", "webhook", "async"],
+      "sourcePath": "examples/wait-for-webhook",
+      "capabilities": ["llm.generate"],
+      "whatItDoes": "Starts a slow external async job and registers a resume contract, then suspends the run indefinitely at $0 via pauseUntilSignal — no polling, no held worker, no billed idle time. When an external webhook/callback fires the signal, the run resumes exactly where it left off: the callback payload becomes the resumed step's input, an LLM summarizes it, and the run branches to accept or reject. The sharpest showcase of the platform's durability differentiator.",
+      "steps": [
+        {
+          "name": "kickoff",
+          "description": "Start the external async job, register the resume contract, then pause until the callback signal (resumes at 'decide').",
+          "next": ["decide"]
+        },
+        {
+          "name": "decide",
+          "description": "Resume target — its input is the callback payload; summarize it with an LLM and branch.",
+          "capability": "llm.generate",
+          "next": ["accept", "reject"]
+        },
+        {
+          "name": "accept",
+          "description": "Terminal branch: the callback result was accepted.",
+          "terminal": true
+        },
+        {
+          "name": "reject",
+          "description": "Terminal branch: the callback result was rejected.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "scheduled-research-brief",
+      "name": "Scheduled Research Brief",
+      "description": "On a cron cadence, research a topic and email a short, LLM-curated, sourced brief.",
+      "tags": ["research", "search", "scheduled", "llm"],
+      "sourcePath": "examples/scheduled-research-brief",
+      "capabilities": ["web.search", "models.run"],
+      "whatItDoes": "The scheduled, LLM-curated, delivered evolution of web-research-digest. On each tick it web-searches a topic, scrapes the top candidates for full text, hands them to an LLM (models.run — the live x402-served model) to rank and curate a short sourced brief, then delivers it by email. Ships with a schedule input (topic + cron cadence) so it reads as a standing \"morning brief\" agent; a dryRun guard gates the real send. Fork web-research-digest for a one-shot digest, this for a standing brief.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Web-search the topic for candidate sources.",
+          "capability": "web.search",
+          "next": ["scrape"]
+        },
+        {
+          "name": "scrape",
+          "description": "Read the top candidates for full article text.",
+          "capability": "web.search",
+          "next": ["curate"]
+        },
+        {
+          "name": "curate",
+          "description": "Rank and curate the findings into a sourced brief with an LLM.",
+          "capability": "models.run",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Email the brief to the configured recipient (dry-run skips the send).",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "scene-to-video",
+      "name": "Scene → Images → Video",
+      "description": "Turn a scene description into a stitched short video: LLM shot list → per-shot keyframes → async image-to-video → stitch.",
+      "tags": ["generative", "video", "pipeline", "media"],
+      "sourcePath": "examples/scene-to-video",
+      "capabilities": [
+        "models.run",
+        "contentGeneration.images",
+        "contentGeneration.video"
+      ],
+      "whatItDoes": "The richest onboarding template — a real multi-step generative pipeline. An LLM decomposes one scene into a style/identity bible plus an ordered shot list; each shot becomes a keyframe image (fan-out); each keyframe is animated into a short clip via an async image-to-video job that pauses the workflow until a FAL webhook resumes it; the clips are stitched into one video. Exercises three metered capabilities together and shows off async pause/resume + fan-out. A dryRun input returns the plan only, skipping the (higher-cost) image + video generation. Pricier than the other templates — the estimated per-run cost card will be visibly higher.",
+      "steps": [
+        {
+          "name": "decompose",
+          "description": "LLM turns the scene into a style/identity bible + an ordered shot list. Terminates here with the plan when dryRun is set.",
+          "capability": "models.run",
+          "next": ["keyframes"]
+        },
+        {
+          "name": "keyframes",
+          "description": "Generate one keyframe image per shot (fan-out), each persisted for a durable fileId.",
+          "capability": "contentGeneration.images",
+          "next": ["animate"]
+        },
+        {
+          "name": "animate",
+          "description": "Launch an async image-to-video job for one shot and pause until the FAL webhook resumes.",
+          "capability": "contentGeneration.video",
+          "next": ["collect"]
+        },
+        {
+          "name": "collect",
+          "description": "Record the finished clip, then loop back to animate the next shot or advance to stitch.",
+          "next": ["animate", "stitch"]
+        },
+        {
+          "name": "stitch",
+          "description": "Concat the clips into one video (FAL ffmpeg merge), async — pause until ready.",
+          "capability": "contentGeneration.video",
+          "next": ["finalize"]
+        },
+        {
+          "name": "finalize",
+          "description": "Return the stitched video's durable videoFileId + downloadUrl.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "preview-keep-alive",
+      "name": "Preview Keep-Alive",
+      "description": "A durable cron heartbeat that relaunches a dead sandbox preview — self-healing, no human redeploy.",
+      "tags": ["sandbox", "self-healing", "cron"],
+      "sourcePath": "examples/preview-keep-alive",
+      "capabilities": [
+        "sandboxes.deployPreview",
+        "sandboxes.attach",
+        "database.get",
+        "vault.get"
+      ],
+      "whatItDoes": "On each scheduled run, probes a preview's health path. If healthy, it's a terminal no-op — so it never stacks a second process onto a live one. If down, it re-attaches the target sandbox and calls deployPreview (source fs) to rebuild + restart the uploaded code at the same stable URL, with env assembled from a Postgres handle and vault secrets read at runtime. One deployed definition keeps N previews alive — one schedule each.",
+      "steps": [
+        {
+          "name": "check",
+          "description": "Probe the preview's health path; route to heal only when it's down.",
+          "next": ["healthy", "heal"]
+        },
+        {
+          "name": "healthy",
+          "description": "App is serving — terminal no-op.",
+          "terminal": true
+        },
+        {
+          "name": "heal",
+          "description": "Re-attach the sandbox and redeploy the fs source; assemble env from database.get + vault.get.",
+          "capability": "sandboxes.deployPreview",
+          "next": ["healed", "heal_failed"]
+        },
+        {
+          "name": "healed",
+          "description": "Relaunch succeeded — report url/status.",
+          "terminal": true
+        },
+        {
+          "name": "heal_failed",
+          "description": "Relaunch failed — surface the deployPreview logs.",
           "terminal": true
         }
       ]
