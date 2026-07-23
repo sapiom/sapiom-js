@@ -39,7 +39,14 @@ export interface BootResult {
   url: string;
 }
 
+/** Gated boot tracing (`SAPIOM_BOOT_DEBUG=1`) — prints each step to stderr so a
+ *  stuck onboarding can be pinpointed without a visible setup window. */
+function debug(msg: string): void {
+  if (process.env.SAPIOM_BOOT_DEBUG === "1") console.error(`[boot] ${msg}`);
+}
+
 function progress(setupWin: BrowserWindow, p: BootProgress): void {
+  debug(`progress ${p.phase}/${p.status}: ${p.message}`);
   if (!setupWin.isDestroyed()) setupWin.webContents.send(BOOT_PROGRESS, p);
 }
 function bootError(setupWin: BrowserWindow, e: BootErrorPayload): void {
@@ -228,9 +235,20 @@ export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<B
   const machineId = await getOrCreateMachineId();
   const firstRun = (await loadSettings()).recentDirs.length === 0;
 
-  // 5. Auth (cached credential returns immediately; fresh opens the browser).
+  // 5. Auth. Probe for a cached credential first (non-interactive) so we can
+  //    show the right message: a cached credential signs in instantly; without
+  //    one we must open the browser and tell the user to complete sign-in there
+  //    (otherwise the window just sits on a vague "Signing you in…").
   progress(setupWin, { phase: "auth", message: "Signing you in…", status: "active" });
-  const identity: HarnessIdentity | null = await ensureAuthenticated({ interactive: true });
+  let identity: HarnessIdentity | null = await ensureAuthenticated({ interactive: false });
+  if (!identity) {
+    progress(setupWin, {
+      phase: "auth",
+      message: "Connect to Sapiom in the browser window that just opened, then come back here.",
+      status: "active",
+    });
+    identity = await ensureAuthenticated({ interactive: true });
+  }
   progress(setupWin, {
     phase: "auth",
     message: identity ? `Signed in: ${identity.organizationName}` : "Continuing without sign-in",

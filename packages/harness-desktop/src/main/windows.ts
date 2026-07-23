@@ -17,7 +17,19 @@ export function createSetupWindow(): BrowserWindow {
       preload: setupPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
+      // The setup window loads only our own bundled HTML (no remote/user
+      // content), and its preload is ESM. Electron won't load an ESM preload in
+      // a sandboxed renderer (sandboxed preloads must be CommonJS), so disable
+      // the sandbox here — safe for this trusted local page. contextIsolation
+      // stays on. Without this the bridge never loads and onboarding stalls at
+      // the consent prompt (renderer can't send CONSENT_SUBMIT).
+      sandbox: false,
     },
+  });
+  // Surface a failing preload loudly: without the bridge the renderer can't
+  // show progress or send consent, which silently stalls the whole onboarding.
+  win.webContents.on("preload-error", (_e, preloadPath, error) => {
+    console.error(`[setup] preload failed to load: ${preloadPath}\n${error?.stack ?? error}`);
   });
   void win.loadFile(setupHtmlPath());
   return win;

@@ -16,7 +16,7 @@
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "pnpm run build && node scripts/pack.mjs",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@sapiom/harness": "workspace:^",

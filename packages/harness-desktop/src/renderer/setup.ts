@@ -3,7 +3,7 @@
  * `window.sapiomSetup` bridge exposed by the preload. Renders the boot
  * progress, a first-run telemetry consent prompt, and an error/retry state.
  */
-import type { SetupBridge } from "../preload/setup.js";
+import type { SetupBridge } from "../preload/setup.mjs";
 import type { BootProgress, BootErrorPayload } from "../main/ipc.js";
 
 declare global {

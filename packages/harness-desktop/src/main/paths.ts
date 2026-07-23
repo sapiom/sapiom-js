@@ -22,7 +22,9 @@ export function setupHtmlPath(): string {
   return path.join(mainDir, "..", "renderer", "setup.html");
 }
 
-/** This app's preload script for the setup window. */
+/** This app's preload script for the setup window. `.mjs`: the preload is ESM,
+ *  and Electron only loads an ESM preload from a `.mjs` file (with sandbox off
+ *  on the window). */
 export function setupPreloadPath(): string {
-  return path.join(mainDir, "..", "preload", "setup.js");
+  return path.join(mainDir, "..", "preload", "setup.mjs");
 }
