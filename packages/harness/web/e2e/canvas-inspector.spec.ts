@@ -152,13 +152,20 @@ test("dragging the top edge resizes the panel and persists; double-click resets 
   const x = handleBox.x + handleBox.width / 2;
   const y = handleBox.y + handleBox.height / 2;
 
-  // Drag up 80px: the panel grows (clamped to half the pane).
+  // Drag up 80px: the panel grows (clamped to half the pane). Move in two
+  // segments with several steps so every pointermove reaches the resize
+  // handler even under CI load.
   await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(x, y - 80, { steps: 4 });
+  await page.mouse.move(x, y - 40, { steps: 8 });
+  await page.mouse.move(x, y - 80, { steps: 8 });
   await page.mouse.up();
+  // Poll for the resize to settle — the handler's state update + re-render can
+  // lag a frame behind mouse-up, which reading the box once made flaky.
+  await expect
+    .poll(async () => (await panel.boundingBox())?.height ?? 0)
+    .toBeGreaterThan(before + 40);
   const grown = (await panel.boundingBox())?.height ?? 0;
-  expect(grown).toBeGreaterThan(before + 40);
 
   // The manual height persists in ui-prefs alongside the rest of the
   // arrangement.
