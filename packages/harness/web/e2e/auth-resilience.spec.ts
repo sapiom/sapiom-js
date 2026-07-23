@@ -27,10 +27,12 @@
  * Implementation notes:
  *   - Tests run in mock mode (VITE_MOCK=1, as configured in playwright.config.ts)
  *     so no harness server or real network is needed.
- *   - The 401 is triggered via ?mockBoot401=1, a query-param flag read by
- *     MockApi.getState() on its first call. The param is consumed exactly once
- *     (via a window flag) so clicking Retry drives a normal success, matching
- *     the real server-side withKeyRefreshRetry behaviour.
+ *   - The 401 is triggered via ?mockBoot401=1, a query-param read by
+ *     MockApi.getState(). A per-page call counter (`__MOCK_BOOT_401_CALL_COUNT__`)
+ *     makes the SECOND call throw (the real boot fetch under React 18 StrictMode's
+ *     double-effect invocation), and all subsequent calls (Retry) succeed — matching
+ *     the real server-side withKeyRefreshRetry behaviour without touching the SPA
+ *     outside of VITE_MOCK=1 mode.
  *   - The offline/online events are dispatched inside page.evaluate() which
  *     runs in the page context — the browser-native events reach the
  *     useConnectivity hook's event listeners exactly as a real network drop
