@@ -1,18 +1,28 @@
 /**
  * SAP-1784: Direct-action buttons (Deploy / Prod-run / Run-local) route to
  * the mocked harness-server routes and NEVER write to the Claude Code pty.
- * Contrast tests prove inject-macros (Visualize / free-form) STILL go through
- * `runMacro` and write to the pty, confirming the direct/inject split.
+ * Contrast tests prove macros (Visualize / free-form) STILL go through
+ * `runMacro`, confirmed by `lastMacroRun`, while direct routes set
+ * `lastDirectAction` — the two slots are exclusive.
+ *
+ * Architecture note: the Visualize macro uses `action: { kind: "render-canvas" }`,
+ * NOT `kind: "inject"`. The server's macro handler calls `renderCanvas()`, not
+ * `injectInput()`, for render-canvas macros. In mock mode `MockApi.runMacro`
+ * records `lastMacroRun` as the proof that the macro path fired — asserting
+ * `lastInjectInput` for a visualize click would be architecturally wrong.
  *
  * All three direct-action assertions and the macro contrast run in mock mode
  * (VITE_MOCK=1 — see playwright.config.ts) against in-memory fixtures; no
  * real server, no real agent process, no real API key.
  *
  * The escape hatches:
- *  - `__HARNESS_TEST__.lastDirectAction` — set by MockApi.deploy() and .run();
- *    NEVER set by runMacro/injectInput (that's the test: only direct routes
- *    set it).
+ *  - `__HARNESS_TEST__.lastDirectAction` — set by MockApi.deploy(), .run(),
+ *    and .runLocal(); NEVER set by runMacro/injectInput (that's the test: only
+ *    direct routes set it).
  *  - `__HARNESS_TEST__.lastMacroRun` — set by MockApi.runMacro() only.
+ *    For Visualize this IS the pty-inject signal: the server dispatches the
+ *    macro, which triggers `renderCanvas()` (not `injectInput()`), signalled
+ *    by `lastMacroRun`.
  *  - `__HARNESS_TEST__.lastInjectInput` — set by MockApi.injectInput() only.
  *    Direct actions must leave this unset (or unchanged from before the click).
  *
@@ -65,13 +75,17 @@ async function captureInjectInputBefore(page: import("@playwright/test").Page): 
   return hook?.lastInjectInput ? JSON.stringify(hook.lastInjectInput) : undefined;
 }
 
-/** Assert that `lastInjectInput` did not change from the before-snapshot, proving no pty write occurred. */
+/**
+ * Assert that `lastInjectInput` did not change from the before-snapshot,
+ * proving no pty write occurred. This must be called AFTER `waitForDirectAction`
+ * has already resolved — the mock's direct-action delay (≥180-200ms) means any
+ * concurrent `injectInput` call would have settled by then, so no extra timeout
+ * is needed: the action resolving IS the synchronisation point.
+ */
 async function assertNoPtyWrite(
   page: import("@playwright/test").Page,
   beforeSnapshot: string | undefined,
 ): Promise<void> {
-  // Give the action a moment to settle before reading back the hook.
-  await page.waitForTimeout(300);
   const hook = await readTestHook(page);
   const afterSnapshot = hook?.lastInjectInput ? JSON.stringify(hook.lastInjectInput) : undefined;
   expect(afterSnapshot).toBe(beforeSnapshot);
@@ -252,11 +266,19 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
     // probe whichever the fixture delivers.
     await expect(page.locator("[data-testid^='canvas-run-step-'], [data-testid^='canvas-step-row-']").first()).toBeVisible({ timeout: 5_000 });
 
+    // lastDirectAction must record "runLocal" — proof the DIRECT route fired,
+    // not a pty inject. waitForDirectAction resolves only after MockApi.runLocal
+    // records the action (≥180-200ms delay), ensuring any concurrent injectInput
+    // would have settled before assertNoPtyWrite reads back the hook.
+    const direct = await waitForDirectAction(page);
+    expect(direct.action).toBe("runLocal");
+
     // lastMacroRun must be absent — run-local is a direct route.
     const hook = await readTestHook(page);
     expect(hook?.lastMacroRun).toBeUndefined();
 
-    // No pty write: injectInput was never called.
+    // No pty write: injectInput was never called. Called after waitForDirectAction
+    // so any concurrent injectInput has already settled — no timeout needed.
     await assertNoPtyWrite(page, injectBefore);
   });
 
@@ -280,21 +302,28 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
     // The run note confirms this is the local (offline) run, not prod.
     await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("local run", { timeout: 5_000 });
 
+    // lastDirectAction must record "runLocal" — proof the DIRECT route fired.
+    // Resolving waitForDirectAction also ensures any concurrent injectInput
+    // has settled (mock delay ≥180-200ms), so assertNoPtyWrite needs no timeout.
+    const direct = await waitForDirectAction(page);
+    expect(direct.action).toBe("runLocal");
+
     // Local runs carry no latency (no real clock — stubs respond instantly in
     // mock mode), so the Step rows must NOT show a cost value anywhere.
     const stepsArea = page.locator(".canvas-frame-wrap");
     await expect(stepsArea).not.toContainText("$");
 
-    // No pty write.
+    // No pty write. Called after waitForDirectAction — the action settling is
+    // the synchronisation point; no extra timeout required.
     await assertNoPtyWrite(page, injectBefore);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 4. Contrast — inject macros (Visualize) STILL go through runMacro + pty
+// 4. Contrast — macros (Visualize) STILL go through runMacro (NOT direct route)
 // ---------------------------------------------------------------------------
 
-test.describe("Contrast: inject macros use runMacro (NOT the direct route)", () => {
+test.describe("Contrast: macros use runMacro (NOT the direct route)", () => {
   test("Visualize CTA fires runMacro, sets lastMacroRun, never sets lastDirectAction", async ({ page }) => {
     // Switch to a session with no bundled canvas doc so the empty-state CTA
     // is available (the boot session opens on its board, which hides it).
@@ -305,7 +334,7 @@ test.describe("Contrast: inject macros use runMacro (NOT the direct route)", () 
     // No prior direct action from this fresh page load.
     expect(ctaBefore?.lastDirectAction).toBeUndefined();
 
-    // Click the one-click Visualize CTA (inject/render-canvas macro path).
+    // Click the one-click Visualize CTA (render-canvas macro path — NOT inject).
     const cta = page.getByTestId("canvas-visualize-cta");
     await expect(cta).toBeEnabled();
     await cta.click();
@@ -317,7 +346,7 @@ test.describe("Contrast: inject macros use runMacro (NOT the direct route)", () 
     const hook = await readTestHook(page);
     expect(hook?.lastMacroRun?.id).toBe("visualize");
 
-    // The direct-action hatch must NEVER be set — Visualize is an inject/
+    // The direct-action hatch must NEVER be set — Visualize is a
     // render-canvas macro, NOT a direct server action.
     expect(hook?.lastDirectAction).toBeUndefined();
   });
@@ -357,7 +386,7 @@ test.describe("Contrast: inject macros use runMacro (NOT the direct route)", () 
     const hookAfterDeploy = await readTestHook(page);
     expect(hookAfterDeploy?.lastMacroRun).toBeUndefined();
 
-    // Step 2: fire the Visualize CTA on the scratch session (inject path).
+    // Step 2: fire the Visualize CTA on the scratch session (render-canvas macro path).
     await page.getByTestId("workspace-focus-scratch").click();
     const cta = page.getByTestId("canvas-visualize-cta");
     await expect(cta).toBeEnabled();
