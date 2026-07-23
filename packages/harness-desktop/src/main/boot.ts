@@ -8,6 +8,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -41,6 +42,26 @@ function progress(setupWin: BrowserWindow, p: BootProgress): void {
 }
 function bootError(setupWin: BrowserWindow, e: BootErrorPayload): void {
   if (!setupWin.isDestroyed()) setupWin.webContents.send(BOOT_ERROR, e);
+}
+
+/**
+ * Resolve a concrete free localhost port. We must NOT use startServer's
+ * `port: 0` (ephemeral): the harness builds the agent's SAPIOM_HARNESS_INGEST_URL
+ * from the *requested* port at construction time (before the socket binds), so
+ * `port: 0` yields `http://127.0.0.1:0/ingest` — the SessionStart hook then
+ * POSTs to port 0, never reaches the harness, and the session never becomes
+ * "ready" (blocking Use-skill / image inject). A concrete port avoids that.
+ */
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
 }
 
 /** The bin dir where the app-managed npm --prefix install lands the agent (Phase 3). */
@@ -177,8 +198,9 @@ export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<B
     /* best-effort pre-warm; PTY spawn will surface a real failure later */
   });
   const bootToken = randomBytes(32).toString("hex");
+  const port = await findFreePort();
   const server = await startServer({
-    port: 0,
+    port,
     host: "127.0.0.1",
     bootToken,
     telemetryOptIn,
