@@ -129,8 +129,14 @@ describe("createStaticRouter", () => {
       const html = await res.text();
       // The raw string must NOT appear verbatim — it must be JSON-escaped.
       expect(html).not.toContain(weirdToken);
-      // The JSON-encoded form must be present.
-      expect(html).toContain(JSON.stringify(weirdToken));
+      // The safe (< → <) encoded form must be present in the page.
+      const safeJson = JSON.stringify({ token: weirdToken }).replace(/</g, "\\u003c");
+      expect(html).toContain(safeJson);
+      // The </script> breakout sequence from the token must not appear literally
+      // — it would terminate the injected script block early and allow XSS.
+      // The < is Unicode-escaped to < (inert to JSON.parse, opaque to
+      // the HTML parser), so the raw sequence can never appear verbatim.
+      expect(html).not.toContain("</script><script>evil");
     });
   });
 

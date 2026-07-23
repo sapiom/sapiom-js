@@ -4,7 +4,7 @@
  * `pnpm build:web`), so the server is still useful for API/WS-only testing.
  *
  * Boot-token injection: every HTML response has a `<script>` block baked in
- * before `</head>` that sets `window.__HARNESS__ = { token: "<bootToken>" }`.
+ * before `</head>` that sets `window.__HARNESS__ = { token: ${bootToken} }`.
  * This lets `getBootToken()` (web/src/lib/api.ts) resolve the token without
  * relying on the `?token=` query param — which is lost on navigation/reload
  * and caused every /api POST to 401 after the first page load (SAP-1898).
@@ -40,7 +40,8 @@ const PLACEHOLDER_HTML = `<!doctype html>
  * it contains characters that could break a bare string interpolation.
  */
 function buildTokenScript(bootToken: string): string {
-  return `<script>window.__HARNESS__ = ${JSON.stringify({ token: bootToken })};</script>`;
+  const safeJson = JSON.stringify({ token: bootToken }).replace(/</g, "\\u003c");
+  return `<script>window.__HARNESS__ = ${safeJson};</script>`;
 }
 
 /**
