@@ -1,5 +1,5 @@
 /**
- * Auth-resilience Playwright e2e (SAP-1786).
+ * Auth-resilience Playwright e2e.
  *
  * Scope: RESILIENCE only — recovery from a transient 401 and graceful
  * offline degrade/recover. This is DISTINCT from auth.spec.ts (D7), which

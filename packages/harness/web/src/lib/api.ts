@@ -694,22 +694,22 @@ class MockApi implements HarnessApi {
 
   async getState(): Promise<AppState> {
     await delay();
-    // Test-only 401 simulation: `?mockBoot401=1` in the URL makes the FIRST
-    // boot fetch fail with a rejected credential (status 401). Consumed exactly
-    // once via a window flag set on first read — cleared immediately so the
-    // very next call (triggered by clicking Retry on the ConnectivityScreen)
-    // succeeds and the app loads normally. This lets the e2e suite assert that
-    // a 401 boot never produces a lockout: the ConnectivityScreen appears, Retry
-    // recovers, and the full shell renders.
+    // Test-only 401 simulation: `?mockBoot401=1` in the URL makes the boot
+    // fetch fail with a rejected credential (status 401) on the second
+    // getState() call only — the real boot fetch under React 18 StrictMode's
+    // double-effect invocation. The first (StrictMode's discarded run) and
+    // third+ (Retry) calls succeed normally. This lets the e2e suite assert
+    // that a 401 boot never produces a lockout: the ConnectivityScreen appears,
+    // Retry recovers, and the full shell renders. The counter is monotonic and
+    // is never cleared.
     if (typeof window !== "undefined") {
       const win = window as unknown as {
         __MOCK_BOOT_401_CALL_COUNT__?: number;
       };
       const boot401 = new URLSearchParams(window.location.search).get("mockBoot401") === "1";
       if (boot401) {
-        // React 18 StrictMode (dev) runs effects twice; the FIRST run is always
-        // discarded (its cleanup sets cancelled=true). The SECOND call is the
-        // real boot fetch whose result the shell actually displays.
+        // NOTE: relies on React 18 StrictMode's double-invoke of the boot effect;
+        // valid only in VITE_MOCK=1 + the Vite dev server.
         // Strategy: count calls. Fail on call #2 (the real boot fetch). Calls
         // #1 (StrictMode's discarded run) and #3+ (Retry) succeed normally.
         // This lets the e2e assert: 401 → ConnectivityScreen → Retry → shell.
