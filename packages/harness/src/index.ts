@@ -45,4 +45,4 @@ export { ensureAuthenticated } from "./cli/auth.js";
 export type { HarnessIdentity } from "./cli/auth.js";
 export { getOrCreateMachineId } from "./cli/machine-id.js";
 export { ensureSpawnHelperExecutable } from "./core/session-manager.js";
-export { loadSettings, recordRecentDir } from "./cli/settings.js";
+export { loadSettings, recordRecentDir, hasStoredSettings } from "./cli/settings.js";

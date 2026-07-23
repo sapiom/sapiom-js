@@ -19,6 +19,7 @@ import {
   getOrCreateMachineId,
   loadSettings,
   recordRecentDir,
+  hasStoredSettings,
   startServer,
   CLAUDE_INSTALL_COMMAND,
   CODEX_INSTALL_COMMAND,
@@ -237,9 +238,17 @@ export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<B
   }
   progress(setupWin, { phase: "doctor", message: `Found: ${report.availableHarnesses.join(", ")}`, status: "done" });
 
-  // 4. Machine id + first-run (read BEFORE recordRecentDir, like bin.ts).
+  // 4. Machine id + first-run. "First run" means the user has never completed
+  //    onboarding — i.e. no settings file has ever been persisted — NOT "has no
+  //    recent dirs". Keying on recentDirs (as this once did) re-ran the whole
+  //    first-run experience — the telemetry consent prompt included — for a
+  //    RETURNING user whose recent dirs had all been pruned as dead (deleted or
+  //    moved projects, see pruneDeadRecentDirs), so the app "always ran as first
+  //    run". hasStoredSettings is the same signal the CLI's consent flow keys
+  //    on. Read BEFORE recordRecentDir below creates the settings file (after
+  //    that it is always true).
   const machineId = await getOrCreateMachineId();
-  const firstRun = (await loadSettings()).recentDirs.length === 0;
+  const firstRun = !(await hasStoredSettings());
 
   // 5. Auth. Probe for a cached credential first (non-interactive) so we can
   //    show the right message: a cached credential signs in instantly; without
