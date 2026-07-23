@@ -28,6 +28,15 @@ import {
   capabilityCallData,
   type AnalyticsHolder,
 } from "./analytics.js";
+import { VERSION } from "../_generated/version.js";
+
+/**
+ * Client marker stamped on EVERY request so the gateway can tell SDK traffic
+ * from raw HTTP (drop-in provider SDK / curl). The gateway bins this to
+ * `client:sdk` on its /v2 routing metrics; the exact value carries the version
+ * for logs. Survives the edge→gateway hop (not in the edge strip-list).
+ */
+const CLIENT_MARKER = `sapiom-tools/${VERSION}`;
 
 /**
  * Per-request attribution recorded with the gateway transaction. Every field is
@@ -43,9 +52,15 @@ export interface Attribution {
    * @deprecated A free-form agent id (a label, not the resolved agent). Prefer omitting.
    */
   agentId?: string;
-  /** Trace id this call is attributed to (nests under `parentSpanId`). */
+  /** Core trace id to link this call's transaction to — must reference an existing Core trace. */
   traceId?: string;
-  /** Parent span id this call nests under, within `traceId`. */
+  /**
+   * Activity trace this call's span nests under (the customer-facing execution trace). A distinct,
+   * client-minted id — kept separate from `traceId` (the Core transaction trace) so the two never
+   * collide on one header.
+   */
+  activityTraceId?: string;
+  /** Parent span id this call nests under, within `activityTraceId`. */
   parentSpanId?: string;
   /** Id of the run/execution this call belongs to. */
   executionId?: string;
@@ -102,6 +117,7 @@ function attributionToHeaders(a: Attribution): Record<string, string> {
   if (a.agentName) h["x-sapiom-agent-name"] = a.agentName;
   if (a.agentId) h["x-sapiom-agent-id"] = a.agentId;
   if (a.traceId) h["x-sapiom-trace-id"] = a.traceId;
+  if (a.activityTraceId) h["x-sapiom-activity-trace-id"] = a.activityTraceId;
   if (a.parentSpanId) h["x-sapiom-parent-span-id"] = a.parentSpanId;
   if (a.executionId) h["x-sapiom-execution-id"] = a.executionId;
   // 0 is a valid first-step ordinal — guard on undefined, not falsiness.
@@ -124,6 +140,8 @@ export function attributionFromEnv(): Attribution {
   if (process.env.SAPIOM_AGENT_NAME)
     a.agentName = process.env.SAPIOM_AGENT_NAME;
   if (process.env.SAPIOM_TRACE_ID) a.traceId = process.env.SAPIOM_TRACE_ID;
+  if (process.env.SAPIOM_ACTIVITY_TRACE_ID)
+    a.activityTraceId = process.env.SAPIOM_ACTIVITY_TRACE_ID;
   if (process.env.SAPIOM_PARENT_SPAN_ID)
     a.parentSpanId = process.env.SAPIOM_PARENT_SPAN_ID;
   if (process.env.SAPIOM_EXECUTION_ID)
@@ -226,6 +244,7 @@ export class Transport {
         ...init,
         headers: {
           [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
+          "x-sapiom-client": CLIENT_MARKER,
           ...attributionToHeaders(this.attribution),
           ...(init.headers ?? {}),
         },

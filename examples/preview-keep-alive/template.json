@@ -1,0 +1,54 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "A sandbox preview isn't an always-on host. The sandbox can stay \"running\" while the app process inside it gets recycled, and the preview URL starts returning 502 until someone redeploys. A plain health-check cron only tells you it's down — it doesn't fix it. This template does the fixing.\n\nOn each scheduled run it probes the app's health path (default `/health`, 8-second timeout). If the app responds, the run is a no-op and stops — that guard is deliberate, so it never stacks a second process onto a live one and collides on the port. If the app is down, it re-attaches the sandbox and redeploys the code that's already there, restarting it at the same URL with no human involved.\n\nThe target comes from the schedule input, so one deployed copy keeps as many previews alive as you have schedules. When an app needs configuration to come up cleanly, the relaunch env is built at heal time: a port and literal values, an optional `DATABASE_URL` pulled from a Sapiom Postgres handle (`database.get`), and named secrets read from the vault (`vault.get`) — never stored in the schedule.\n\nYou pay for the sandbox itself and for a redeploy only when the app is actually down. The health check between runs is cheap, and a healthy run does no work at all.",
+  "useCases": [
+    "Keep a sandbox-hosted preview reachable through process recycles, with no manual redeploy.",
+    "Run one deployed copy as the heartbeat for many previews — one schedule per app.",
+    "Relaunch an app that needs a DATABASE_URL and a startup secret, injected from a DB handle and the vault at run time."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive each run a `sandboxName` and the preview `url` (and usually a `start` command) so it knows what to keep alive. It only heals a sandbox that still exists — the uploaded code is what gets rebuilt. A fully deleted sandbox has to be re-created with a full deploy first; after that, this keeps it up. Any startup secret goes in `vaultInject` (an `ENV_VAR -> vault key` map) and is read from the vault at run time, so the secret lives in the vault, never in the schedule input.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true, ... }` to trace the whole heal branch for free — it skips the network probe, assembles the env, and reports the injected env key names without redeploying. Or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Keep a preview alive (real relaunch on failure)",
+      "input": {
+        "sandboxName": "my-app",
+        "url": "https://your-preview-hash.preview.bl.run",
+        "start": "node server.js",
+        "port": 3000,
+        "dbHandle": "my-app-db",
+        "vaultRef": "my-app",
+        "vaultInject": {
+          "SAPIOM_API_KEY": "sapiom_api_key"
+        }
+      },
+      "output": {
+        "healed": true,
+        "dryRun": false,
+        "status": "deployed",
+        "url": "https://your-preview-hash.preview.bl.run",
+        "envKeys": null
+      }
+    },
+    {
+      "title": "Trace the heal branch offline (run_local)",
+      "input": {
+        "sandboxName": "my-app",
+        "url": "https://your-preview-hash.preview.bl.run",
+        "start": "node server.js",
+        "dryRun": true
+      },
+      "output": {
+        "healed": true,
+        "dryRun": true,
+        "status": "dry-run",
+        "url": "https://your-preview-hash.preview.bl.run",
+        "envKeys": ["PORT"]
+      }
+    }
+  ]
+}

@@ -1,5 +1,36 @@
 # @sapiom/tools
 
+## 0.22.0
+
+### Minor Changes
+
+- 68d2352: New `llm` capability — routed LLM calls through the gateway's `/v2` routing front-end: `llm.run` (synchronous `POST /v2/anthropic/v1/messages`; `model` names a Sapiom routing label (omit for the account's `default_label`), capacity-aware with per-label never-fail fallback, billed against the caller's Sapiom API key at the edge), `llm.submit` (deferred-start `POST /v2/route/async`; returns a pausable `DispatchHandle` that grants a single-use link when capacity frees), and `llm.redeem` (spend the granted link). Exported on the client (`ctx.sapiom.llm`), the barrel, a `./llm` subpath, and the stub client.
+
+  Sessions (Surface B, `/v2/sessions`) — the REST resource replacing the async+grant lane: `llm.createSession` (reserve deferred capacity from a plain JSON body: `label`|`model`, `deadlineMinutes`, `budget{maxTokens, ttlMinutes}`, optional webhook; returns a pausable `LlmSessionHandle` firing `LLM_SESSION_READY_SIGNAL`), `llm.getSession` (poll `pending → ready → active → expired|exhausted|failed`), `llm.callSession` (REPEATABLE drop-in calls against the session-scoped Anthropic/OpenAI paths with the normal Sapiom credential — no single-use token; ends with clean `session_expired`/`session_exhausted` terminals), and `llm.releaseSession` (early release). `submit`/`redeem` keep working until the migration completes. Stubbed in the stub client.
+
+## 0.21.0
+
+### Minor Changes
+
+- d00b9e3: Add `speech` capability: text-to-speech, sound effect generation, and voice listing.
+
+  - `speech.textToSpeech.create({ text, voice?, storage?, params? })` — generate speech audio from text. Returns `url`, `expiresAt`, and `fileId` (when `storage` is passed).
+  - `speech.soundEffects.create({ text, durationSeconds?, storage?, params? })` — generate a sound effect from a text prompt.
+  - `speech.voices.list()` — list available voices (returns `voiceId` and `name` per entry).
+  - `SpeechHttpError` — error class (with `status` and `body`) thrown on non-2xx responses, re-exported from the barrel.
+  - Subpath export `@sapiom/tools/speech` available for direct imports.
+  - `storage` param on `textToSpeech.create` and `soundEffects.create` persists audio to Sapiom file storage; the result carries `fileId` for durable retrieval via `fileStorage.getDownloadUrl(fileId)`.
+
+## 0.20.1
+
+### Patch Changes
+
+- ebb0342: Forward activity-trace context on capability and model calls. `Attribution` gains `activityTraceId`, `parentSpanId`, `executionId`, and `stepOrder` — emitted as `x-sapiom-activity-trace-id` / `x-sapiom-parent-span-id` / `x-sapiom-execution-id` / `x-sapiom-step-order`, and read ambiently from the matching `SAPIOM_*` env vars (`attributionFromEnv`) — so calls nest under the calling run and step. Applied once at the shared transport, so every capability inherits it.
+
+  `activityTraceId` is deliberately a **separate field/header from `traceId`**: `traceId` (`x-sapiom-trace-id`) remains the Core transaction trace, while `activityTraceId` (`x-sapiom-activity-trace-id`) is the client-minted activity/execution trace — kept apart so the two never collide on one header.
+
+  Deprecates `agentName`, `agentId`, and `traceExternalId` (a free-form label / legacy correlation field). They still forward for backward compatibility.
+
 ## 0.20.0
 
 ### Minor Changes

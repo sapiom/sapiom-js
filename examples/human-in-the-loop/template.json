@@ -1,0 +1,78 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "The \"ask before you commit\" pattern. The agent does the reversible work first — it reads the request, ranks your candidates by fit, and emails the approver a recommendation — then pauses and waits for a human decision. Nothing has been committed yet.\n\nSay no and it reverts to a safe state and stops. Say yes and it enters a ranked fallback loop: it makes a provisional, non-binding offer to the top candidate, pauses for their reply, and on a decline or timeout moves down to the next one. The single irreversible action only happens once a human approved *and* a candidate accepted. If the whole list declines, or there's no one to contact, it escalates to a person instead of failing silently.\n\nThe two waits are real durable pauses (`pauseUntilSignal`) — the run suspends until the right signal arrives, however long that takes.\n\nYou pay for the model reasoning and the emails. The waiting is free — a paused run costs nothing.",
+  "useCases": [
+    "Require human sign-off before an agent spends money, books something, or signs a contract.",
+    "Fill a request from a ranked shortlist — offer it to your top pick first, then fall down the list until someone accepts.",
+    "Hand off to a person when the agent can't close the loop, instead of failing silently."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nThis workflow pauses twice and waits for a real signal, so you drive it as it runs. First it pauses for the approver's decision; send the approval with the MCP `workflow_signal` tool: signal `approval.decision`, `correlationId` set to the run's executionId, payload `{ \"decision\": \"approve\" }` (or `{ \"decision\": \"reject\" }` to stop). After approval it pauses on the offer; send signal `candidate.confirm` with payload `{ \"decision\": \"accept\" }` to commit, or `{ \"decision\": \"decline\" }` to fall through to the next candidate.\n\nPrefer to work from the code? Run it locally with `run_local` — it stubs the capabilities and auto-resumes both pauses (a resume with no decision takes the safe branch, and the dryRun guard makes the commit a no-op), so the whole graph traces end to end for free. Then edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Rank, approve, and commit to the top candidate",
+      "input": {
+        "request": "Find someone to repaint the lobby by Friday, quality over price.",
+        "candidates": [
+          {
+            "id": "a",
+            "name": "Acme Painting",
+            "email": "acme@example.com",
+            "attributes": {
+              "rating": 4.8,
+              "price": 1200,
+              "availability": "Thu"
+            }
+          },
+          {
+            "id": "b",
+            "name": "Budget Coats",
+            "email": "budget@example.com",
+            "attributes": {
+              "rating": 3.9,
+              "price": 700,
+              "availability": "Fri"
+            }
+          }
+        ],
+        "approver": "approver@example.com",
+        "escalateTo": "ops@example.com"
+      },
+      "output": {
+        "committed": true,
+        "dryRun": false,
+        "outcome": "committed",
+        "selected": {
+          "id": "a",
+          "name": "Acme Painting"
+        },
+        "notified": 1
+      }
+    },
+    {
+      "title": "Approved, but every candidate declined — escalate",
+      "input": {
+        "request": "Find someone to repaint the lobby by Friday.",
+        "candidates": [
+          {
+            "id": "a",
+            "name": "Acme Painting",
+            "email": "acme@example.com"
+          }
+        ],
+        "approver": "approver@example.com",
+        "escalateTo": "ops@example.com"
+      },
+      "output": {
+        "committed": false,
+        "outcome": "escalated",
+        "reason": "exhausted",
+        "considered": 1
+      }
+    }
+  ]
+}

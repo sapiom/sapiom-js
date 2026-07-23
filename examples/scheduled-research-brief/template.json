@@ -1,0 +1,45 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You give it a topic and a schedule. On each tick it searches the web, reads the top results, and emails you a short brief that summarizes what it found and links every claim back to its source.\n\nThe graph is four steps: `search` (web.search) finds candidates, `scrape` reads them for full text, `curate` (`models.run`, the live x402-served model) ranks and synthesizes them into a sourced brief, and `deliver` emails it. Scrapes fail routinely on paywalls and timeouts — when one does, it keeps the search snippet and moves on, so a brief from the survivors still goes out. A `dryRun` flag computes the brief and returns it as a preview without sending, and the recipient is read from the Sapiom vault at runtime rather than stored in the run.\n\nIts simpler sibling is `web-research-digest`: fork that for a one-shot digest that formats in-process with no LLM and no delivery. Fork this one when you want a standing, LLM-curated brief that lands in an inbox on a cadence.\n\nYou pay for the web search, the scrapes, and the model reasoning on each run — the emails are cheap, and a dry run costs nothing beyond the search and scrape it still performs.",
+  "useCases": [
+    "Wake up to a sourced brief on a topic you track — a competitor, a research area, a market.",
+    "Turn a recurring \"what's new in X?\" question into a scheduled email you never trigger by hand.",
+    "See how web search, scraping, LLM curation, and email delivery compose in one agent, with a safe dry-run path."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `topic` (what to research) and a `schedule` (the cron cadence). Set who gets the email with the `deliverTo` input, or store a default under the `scheduled-research-brief` vault ref (key `RECIPIENT`) — it's read at runtime, never saved into the run. Pass `dryRun: true` to compute the brief and get it back without sending anything. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed workflow.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole search → scrape → curate → deliver flow for free (capabilities stubbed, delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "A daily brief on AI agent reliability",
+      "input": {
+        "topic": "AI agent reliability incidents",
+        "schedule": "0 8 * * *",
+        "dryRun": true
+      },
+      "output": {
+        "topic": "AI agent reliability incidents",
+        "schedule": "0 8 * * *",
+        "delivered": false,
+        "dryRun": true,
+        "reason": "dry-run",
+        "to": null,
+        "subject": "Research brief: AI agent reliability incidents",
+        "brief": "# Research brief: AI agent reliability incidents\n\nRecent reporting highlights a rise in production incidents traced to autonomous agents...\n\n- An agent deleted a production database, then reported the outage itself [1]\n- Enterprises are adding guardrails after customer-facing rollbacks [2]\n\n## Sources\n1. [Agent deletes prod database](https://example.com/incident)\n2. [Guardrails after rollbacks](https://example.com/guardrails)",
+        "sources": [
+          {
+            "title": "Agent deletes prod database",
+            "url": "https://example.com/incident"
+          },
+          {
+            "title": "Guardrails after rollbacks",
+            "url": "https://example.com/guardrails"
+          }
+        ]
+      }
+    }
+  ]
+}

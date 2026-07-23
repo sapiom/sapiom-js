@@ -1,0 +1,46 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Post a message to Slack using a token you keep in the Sapiom Vault. Slack is the hook, but the real lesson is transferable: store a secret, read it at runtime, call an API. Swap Slack for anything else by changing the `fetch` URL and the Vault key.\n\nIt runs two steps. `validate` checks the message and settles the config — which credential to use and, for bot mode, which channel. `post` reads the token with `ctx.sapiom.vault.get(\"slack\", …)` and calls Slack directly: either `chat.postMessage` with a bot token, which returns the channel and message timestamp, or an incoming-webhook URL, where the channel is fixed by the URL. The token is never written into the code.\n\nYou can trace the whole thing before you have a token. `run_local` runs in dryRun mode, and a missing credential behaves the same way — the graph runs validate → post end to end and returns `posted: false` with `skipped` telling you why, without touching the network.\n\nNothing here calls a paid model. You pay only for the metered Vault read; the Slack call goes out on your own token, so it costs you nothing on Sapiom.",
+  "useCases": [
+    "Send a Slack notification from a workflow — a deploy finished, a run failed, a threshold was crossed.",
+    "Learn the 'bring your own API' pattern: put a credential in the Vault, then call any external service with it.",
+    "Fork it and repoint the endpoint and Vault key to notify Discord, PagerDuty, or your own webhook instead."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nThis one needs a secret before it can post for real. After it deploys, store your Slack credential in the Vault under the ref `slack`: key `bot_token` for the default bot mode (a Slack bot token with `chat:write`), or `webhook_url` for webhook mode (an incoming-webhook URL). Until you set it, runs trace the full graph and return `posted: false, skipped: \"no-credential\"` instead of failing. For bot mode, also pass a `channel` (like `#general`); webhook mode carries the channel in the URL. To point this at another service, change the `fetch` URL and the Vault key in `index.ts` and store that API's key under the matching ref.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow for free (it skips the network and stubs the Vault), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Post to a channel with a bot token",
+      "input": {
+        "message": "Deploy finished :rocket:",
+        "channel": "#general"
+      },
+      "output": {
+        "posted": true,
+        "skipped": null,
+        "via": "bot",
+        "channel": "C0123456789",
+        "ts": "1700000000.000100"
+      }
+    },
+    {
+      "title": "Local trace with no token set (dryRun)",
+      "input": {
+        "message": "hello from slack-notifier",
+        "channel": "#general",
+        "dryRun": true
+      },
+      "output": {
+        "posted": false,
+        "skipped": "dryRun",
+        "via": "bot",
+        "channel": "#general",
+        "ts": null
+      }
+    }
+  ]
+}

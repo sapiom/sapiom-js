@@ -1,0 +1,21 @@
+{
+  "name": "@sapiom/example-cold-outreach-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sapiom agent template: enrich a lead list with Hunter, scrape each company site, write personalized first lines (models.run), verify deliverability, then drip touches with durable waits between them.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\""
+  },
+  "dependencies": {
+    "@sapiom/agent": "^0.6.5",
+    "@sapiom/tools": "^0.20.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.2"
+  }
+}

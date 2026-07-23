@@ -44,7 +44,8 @@ const call = (transport: Transport) =>
 describe("Attribution → forwarded x-sapiom-* headers (once, all capabilities)", () => {
   it("forwards traceId/parentSpanId/executionId/stepOrder on every capability call", async () => {
     const { transport, calls } = makeTransport({
-      traceId: "t1",
+      traceId: "core-1",
+      activityTraceId: "act-1",
       parentSpanId: "s1",
       executionId: "e1",
       stepOrder: 3,
@@ -52,7 +53,9 @@ describe("Attribution → forwarded x-sapiom-* headers (once, all capabilities)"
 
     await call(transport);
 
-    expect(headerOf(calls[0]!, "x-sapiom-trace-id")).toBe("t1");
+    // Core transaction trace and activity trace ride SEPARATE headers — they never collide.
+    expect(headerOf(calls[0]!, "x-sapiom-trace-id")).toBe("core-1");
+    expect(headerOf(calls[0]!, "x-sapiom-activity-trace-id")).toBe("act-1");
     expect(headerOf(calls[0]!, "x-sapiom-parent-span-id")).toBe("s1");
     expect(headerOf(calls[0]!, "x-sapiom-execution-id")).toBe("e1");
     expect(headerOf(calls[0]!, "x-sapiom-step-order")).toBe("3");
@@ -84,6 +87,7 @@ describe("attributionFromEnv (in-sandbox ambient channel)", () => {
     process.env = { ...saved };
     for (const k of [
       "SAPIOM_TRACE_ID",
+      "SAPIOM_ACTIVITY_TRACE_ID",
       "SAPIOM_PARENT_SPAN_ID",
       "SAPIOM_EXECUTION_ID",
       "SAPIOM_STEP_ORDER",
@@ -99,13 +103,15 @@ describe("attributionFromEnv (in-sandbox ambient channel)", () => {
   });
 
   it("reads the trace env vars, including step-order 0", () => {
-    process.env.SAPIOM_TRACE_ID = "t1";
+    process.env.SAPIOM_TRACE_ID = "core-1";
+    process.env.SAPIOM_ACTIVITY_TRACE_ID = "act-1";
     process.env.SAPIOM_PARENT_SPAN_ID = "s1";
     process.env.SAPIOM_EXECUTION_ID = "e1";
     process.env.SAPIOM_STEP_ORDER = "0";
 
     expect(attributionFromEnv()).toEqual({
-      traceId: "t1",
+      traceId: "core-1",
+      activityTraceId: "act-1",
       parentSpanId: "s1",
       executionId: "e1",
       stepOrder: 0,

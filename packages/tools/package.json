@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/tools",
-  "version": "0.20.0",
+  "version": "0.22.0",
   "description": "Typed client for Sapiom capabilities (sandboxes, repositories, agent, file storage, …) — the same tools your agents call over MCP, callable from your code, auth'd to your tenant.",
   "license": "MIT",
   "author": "Sapiom",
@@ -32,6 +32,11 @@
       "types": "./dist/cjs/models/index.d.ts",
       "import": "./dist/esm/models/index.js",
       "require": "./dist/cjs/models/index.js"
+    },
+    "./llm": {
+      "types": "./dist/cjs/llm/index.d.ts",
+      "import": "./dist/esm/llm/index.js",
+      "require": "./dist/cjs/llm/index.js"
     },
     "./file-storage": {
       "types": "./dist/cjs/file-storage/index.d.ts",
@@ -67,6 +72,11 @@
       "types": "./dist/cjs/memory/index.d.ts",
       "import": "./dist/esm/memory/index.js",
       "require": "./dist/cjs/memory/index.js"
+    },
+    "./speech": {
+      "types": "./dist/cjs/speech/index.d.ts",
+      "import": "./dist/esm/speech/index.js",
+      "require": "./dist/cjs/speech/index.js"
     },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",

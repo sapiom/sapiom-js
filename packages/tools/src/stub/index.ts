@@ -31,10 +31,21 @@ import type {
   RunStatus,
 } from "../models/index.js";
 import { AGENTS_RESULT_SIGNAL } from "../agents/index.js";
+import {
+  LLM_ROUTE_RESULT_SIGNAL,
+  LLM_SESSION_READY_SIGNAL,
+} from "../llm/index.js";
 import type {
   AgentRunResult,
   RunHandle as AgentRunHandle,
 } from "../agents/index.js";
+import type {
+  LlmGrantLink,
+  LlmRouteHandle,
+  LlmRouteResultPayload,
+  LlmSession,
+  LlmSessionHandle,
+} from "../llm/index.js";
 import type { Sapiom } from "../client.js";
 import { Repository } from "../repositories/index.js";
 import { Sandbox } from "../sandboxes/index.js";
@@ -90,6 +101,7 @@ import type {
   MemoryMetadata,
   MemoryMetadataValue,
 } from "../memory/index.js";
+import type { SpeechResult, VoicesResult } from "../speech/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -839,6 +851,131 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         }));
       },
     },
+    llm: {
+      run: <T = Record<string, unknown>>(spec: {
+        request: Record<string, unknown>;
+        model?: string;
+        complexity?: number;
+      }) =>
+        Promise.resolve(
+          r("llm.run", [spec], () => ({
+            id: "stub-msg",
+            type: "message",
+            role: "assistant",
+            model: spec.model ?? "smart",
+            content: [{ type: "text", text: "(stub) llm reply" }],
+            stop_reason: "end_turn",
+          })) as T,
+        ),
+      submit: (spec) => {
+        const executionId = `stub-exec-${++launchSeq}`;
+        const stubLink: LlmGrantLink = {
+          anthropicBaseUrl: "https://llm.local",
+          apiKey: "sapiom-grant-stub",
+          model: spec.model ?? "smart",
+          expiresAtMs: 4102444800000,
+          usage: "single_request",
+        };
+        const payload = r("llm.submit", [spec], () => ({
+          executionId,
+          status: "granted" as const,
+          link: stubLink,
+          error: null,
+        })) as LlmRouteResultPayload;
+        const handle: LlmRouteHandle = {
+          executionId,
+          dispatch: {
+            correlationId: executionId,
+            resultSignal: LLM_ROUTE_RESULT_SIGNAL,
+          },
+          status: () =>
+            Promise.resolve(
+              payload.status === "granted"
+                ? ("granted" as const)
+                : ("failed" as const),
+            ),
+          wait: () => Promise.resolve(payload),
+        };
+        // Register the resume payload so a local `pauseUntilSignal` on this handle
+        // resolves with an LlmRouteResultPayload.
+        return dispatchable(handle, opts.signals);
+      },
+      redeem: <T = Record<string, unknown>>(
+        link: LlmGrantLink,
+        request: Record<string, unknown>,
+      ) =>
+        Promise.resolve(
+          r("llm.redeem", [link, request], () => ({
+            id: "stub-msg",
+            type: "message",
+            role: "assistant",
+            model: link.model,
+            content: [{ type: "text", text: "(stub) llm reply" }],
+            stop_reason: "end_turn",
+          })) as T,
+        ),
+      createSession: (spec = {}) => {
+        const sessionId = `stub-sess-${++launchSeq}`;
+        const session = (): LlmSession =>
+          r("llm.createSession", [spec], () => ({
+            sessionId,
+            state: "ready" as const,
+            model: spec.label ?? spec.model ?? "smart",
+            baseUrls: {
+              anthropic: `https://llm.local/v2/sessions/${sessionId}/anthropic`,
+              openai: `https://llm.local/v2/sessions/${sessionId}/openai/v1`,
+            },
+            expiresAtMs: 4102444800000,
+            budget: {
+              maxTokens: spec.budget?.maxTokens ?? null,
+              usedTokens: 0,
+              ttlMinutes: spec.budget?.ttlMinutes ?? null,
+            },
+          })) as LlmSession;
+        const handle: LlmSessionHandle = {
+          sessionId,
+          dispatch: {
+            correlationId: sessionId,
+            resultSignal: LLM_SESSION_READY_SIGNAL,
+          },
+          get: () => Promise.resolve(session()),
+          wait: () => Promise.resolve(session()),
+        };
+        // Register the resume payload so a local `pauseUntilSignal` on this
+        // handle resolves with the ready session.
+        return dispatchable(handle, opts.signals, session);
+      },
+      getSession: (sessionId) =>
+        Promise.resolve(
+          r("llm.getSession", [sessionId], () => ({
+            sessionId,
+            state: "ready" as const,
+            model: "smart",
+          })) as LlmSession,
+        ),
+      callSession: <T = Record<string, unknown>>(
+        session: LlmSessionHandle | LlmSession | string,
+        request: Record<string, unknown>,
+        callOpts: { shape?: "anthropic" | "openai" } = {},
+      ) =>
+        Promise.resolve(
+          r("llm.callSession", [session, request, callOpts], () => ({
+            id: "stub-msg",
+            type: "message",
+            role: "assistant",
+            model: "smart",
+            content: [{ type: "text", text: "(stub) llm reply" }],
+            stop_reason: "end_turn",
+          })) as T,
+        ),
+      releaseSession: (session) =>
+        Promise.resolve(
+          r("llm.releaseSession", [session], () => ({
+            sessionId: typeof session === "string" ? session : session.sessionId,
+            state: "expired" as const,
+          })) as LlmSession,
+        ),
+    },
     fileStorage: {
       upload: (input) =>
         Promise.resolve(
@@ -914,12 +1051,12 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 contentType: "video/mp4",
                 // mirror the real behavior: a fileId only when storage was requested.
                 ...(input.storage
-                    ? {
-                        fileId: "stub-file",
-                        downloadUrl: "https://content.local/stub-download",
-                        downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
-                      }
-                    : {}),
+                  ? {
+                      fileId: "stub-file",
+                      downloadUrl: "https://content.local/stub-download",
+                      downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
+                    }
+                  : {}),
               },
             })) as VideoGenerationResult,
           ),
@@ -933,12 +1070,12 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 url: "https://content.local/stub-video.mp4",
                 contentType: "video/mp4",
                 ...(input.storage
-                    ? {
-                        fileId: "stub-file",
-                        downloadUrl: "https://content.local/stub-download",
-                        downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
-                      }
-                    : {}),
+                  ? {
+                      fileId: "stub-file",
+                      downloadUrl: "https://content.local/stub-download",
+                      downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
+                    }
+                  : {}),
               },
             }),
           ) as VideoGenerationResult;
@@ -1496,6 +1633,34 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         Promise.resolve(
           r("vault.getAll", [ref], () => ({})) as Record<string, string>,
         ),
+    },
+    speech: {
+      textToSpeech: {
+        create: (input) =>
+          Promise.resolve(
+            r("speech.textToSpeech.create", [input], () => ({
+              url: "https://cdn.example.com/stub-audio.mp3",
+              expiresAt: "2099-01-01T00:00:00Z",
+            })) as SpeechResult,
+          ),
+      },
+      soundEffects: {
+        create: (input) =>
+          Promise.resolve(
+            r("speech.soundEffects.create", [input], () => ({
+              url: "https://cdn.example.com/stub-sfx.mp3",
+              expiresAt: "2099-01-01T00:00:00Z",
+            })) as SpeechResult,
+          ),
+      },
+      voices: {
+        list: () =>
+          Promise.resolve(
+            r("speech.voices.list", [], () => ({
+              voices: [{ voiceId: "stub-voice", name: "Stub Voice" }],
+            })) as VoicesResult,
+          ),
+      },
     },
     withAttribution: () => client,
     // The stub makes no HTTP calls and creates no analytics emitter — nothing

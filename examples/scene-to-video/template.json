@@ -1,0 +1,57 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Give it one scene description and it produces a short, multi-shot video with a consistent look across shots. An LLM (`models.run`) writes a style guide and breaks the scene into an ordered shot list, then image and video generation turn that plan into finished clips.\n\nThe work runs as a durable pipeline. It makes all the keyframe images at once, then animates them one clip at a time: each video job runs in the background and the workflow pauses until a webhook says the clip is ready. Running the clips in sequence keeps a paused step always waiting before its job can finish. When every clip is collected, a merge job stitches them into a single video.\n\nSet `dryRun` and it stops right after planning, returning the shot list without generating anything.\n\nThis is the priciest template in the gallery. A full run pays for one LLM call, one image per shot, one image-to-video clip per shot, and the merge job — so start with a small `numShots`. The plan-only run costs just the one LLM call.",
+  "useCases": [
+    "Turn a story or scene idea into a short, multi-shot video that keeps one style across shots.",
+    "Prototype an ad, teaser, or social clip from a one-line brief.",
+    "Plan the shot list first with dryRun, then run the full pipeline once you like it."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\n`scene` is the only required input. Set `dryRun: true` to stop after planning and see the shot list without paying for any images or video. A full run is the priciest in the gallery — it bills the LLM plan, one image per shot, one image-to-video clip per shot, and a merge job — so keep `numShots` small (default 3, max 6). It animates one shot at a time and picks up each finished clip on its own; you don't send any signal. It defaults to Kling 2.1 Pro for the video; pass a cheaper `model` (a Wan or Seedance image-to-video id) to trade quality for cost.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the whole graph for free, or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Plan only (dryRun — no billed generation)",
+      "input": {
+        "scene": "a paper boat drifting down a rain-soaked city gutter at night",
+        "numShots": 3,
+        "dryRun": true
+      },
+      "output": {
+        "dryRun": true,
+        "bible": "Moody neo-noir night scene: a small white paper boat on dark rain-slicked asphalt, amber streetlight reflections, shallow depth of field, 35mm anamorphic look, cool blue shadows.",
+        "shots": [
+          {
+            "image_prompt": "Moody neo-noir night scene... Close-up of the paper boat entering a flooded gutter, raindrops rippling the surface.",
+            "motion_prompt": "The paper boat; drifts into frame on the current; slow push-in; 6s; amber streetlight; anamorphic neo-noir.",
+            "duration": 6,
+            "transition": "cut"
+          }
+        ]
+      }
+    },
+    {
+      "title": "Full run",
+      "input": {
+        "scene": "a paper boat drifting down a rain-soaked city gutter at night",
+        "numShots": 3,
+        "aspectRatio": "16:9"
+      },
+      "output": {
+        "videoFileId": "file_abc123",
+        "downloadUrl": "https://files.sapiom.ai/download/file_abc123?sig=...",
+        "shots": [
+          {
+            "image_prompt": "...",
+            "motion_prompt": "...",
+            "duration": 6,
+            "transition": "cut"
+          }
+        ]
+      }
+    }
+  ]
+}

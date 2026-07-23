@@ -1,0 +1,47 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Some work hinges on a slow external job — a render farm, a batch export, a third-party screening service — that finishes on its own schedule and calls you back when it's done. This workflow starts that job and then waits for the callback, instead of holding a worker open or polling in a loop.\n\nThe `kickoff` step tells the external job how to reach this exact run, then pauses (`pauseUntilSignal`). The run suspends until the webhook fires — that can be minutes, hours, or days. When it does, the callback payload becomes `decide`'s input, a model summarizes it, and the run branches to accept or reject. Anything set before the pause is waiting in `ctx.shared` when it resumes.\n\nPausing is free — a suspended run isn't billed while it waits. The only paid call is the model summary in `decide`.",
+  "useCases": [
+    "Wait on a slow third-party job — screening, rendering, a batch export — that calls back hours later.",
+    "Gate a workflow on an approval or result delivered by webhook.",
+    "Bridge an async provider whose result arrives by callback, then branch on the outcome."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nA deployed run pauses at `kickoff` and waits for the callback. Instead of a real webhook, send the signal yourself with the MCP `workflow_signal` tool: `{ \"signal\": \"webhook.callback\", \"correlationId\": \"<executionId of the paused run>\", \"payload\": { \"status\": \"succeeded\", \"result\": { ... } } }`. The `payload` becomes `decide`'s input, and a `status` of `failed` or `error` makes it reject. With no `CALLBACK_REGISTER_URL` set (or `DRY_RUN`), it runs offline and skips the live job.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow — kickoff, pause, decide, branch — for free, or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Callback reports success",
+      "input": {
+        "job": {
+          "kind": "render",
+          "assetId": "abc123"
+        },
+        "config": {}
+      },
+      "output": {
+        "jobId": "dry-run",
+        "decision": "accept",
+        "summary": "The external job completed and returned a usable result."
+      }
+    },
+    {
+      "title": "Callback reports failure",
+      "input": {
+        "job": {
+          "kind": "render",
+          "assetId": "abc123"
+        }
+      },
+      "output": {
+        "jobId": "dry-run",
+        "decision": "reject",
+        "summary": "The external job reported a failure status.",
+        "reasons": ["status=\"failed\""]
+      }
+    }
+  ]
+}

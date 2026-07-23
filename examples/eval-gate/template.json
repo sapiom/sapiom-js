@@ -1,0 +1,47 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "An LLM-judge quality gate. You bring the rubric; it handles the scoring and the branch. Pass it the case, the output to grade, your criteria, and a pass bar, and it tells you whether the output is good enough — and why.\n\nThe judge step renders a prompt from your rubric and makes one metered LLM call through `ctx.sapiom.models.run`, then reads a 0-to-1 score out of the reply. It prefers a JSON `{score, rationale}`, falls back to a bare number, clamps to `[0,1]`, and handles a judge that answered on a 0–100 scale. The gate step is pure logic: score at or above the threshold goes to publish, below goes to revise. The two terminal steps hand back `{ decision, score, threshold, rationale }`, and what those decisions mean is up to you.\n\nThe judge prompt and score parser are the only new code; the rubric, the threshold, and the judge model are all yours to change. Because it's a deployable workflow, a parent can also launch it as a child to grade its own output and branch on the result.\n\nYou pay for the one judge model call per run. There's nothing else to meter.",
+  "useCases": [
+    "Gate an LLM-generated draft on a quality bar before it gets published or sent.",
+    "Build your own eval by writing a rubric and setting a threshold, with no scorer framework to learn.",
+    "Self-grade a workflow's output by running this as a child and branching on the decision it returns."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a run input: the `input` (the case), the `output` to grade, your `rubric` string, and optionally a `threshold` (default 0.7) and a judge `model`. The rubric is where all your opinion about quality lives — raise the threshold to be stricter, lower it to let more through.\n\nPrefer to work from the code? Run it locally with `run_local` to trace both branches for free — but the default stub reply carries no number and the parser throws on that by design, so supply a stub score (a high one routes to publish, a low one to revise). Then edit the rubric and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "High score → publish",
+      "input": {
+        "input": "Write a one-line product tagline for a privacy-first email app.",
+        "output": "Inbox peace, finally — email that never reads your mail.",
+        "rubric": "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
+        "threshold": 0.7
+      },
+      "output": {
+        "decision": "publish",
+        "score": 0.9,
+        "threshold": 0.7,
+        "rationale": "Concise, mentions privacy, reads naturally."
+      }
+    },
+    {
+      "title": "Low score → revise",
+      "input": {
+        "input": "Write a one-line product tagline for a privacy-first email app.",
+        "output": "The best email application in the entire world for everyone everywhere.",
+        "rubric": "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
+        "threshold": 0.7
+      },
+      "output": {
+        "decision": "revise",
+        "score": 0.3,
+        "threshold": 0.7,
+        "rationale": "Does not mention privacy and reads as generic hype."
+      }
+    }
+  ]
+}

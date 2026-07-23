@@ -1,0 +1,49 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "**The Brain** coordinates a fleet of workflows. On their own, each member fires on its own schedule and does its own job, and nothing notices when one silently misses a run or a launch never reports back. The brain is the piece that watches the whole: it reasons about the fleet and launches the right member, but never does irreversible work itself.\n\nEach run is a four-step loop: scan, assess, actuate, report. Scan reads the brain's own event log — a Postgres database it owns via `database` — and folds it into plain facts about each member: hasn't run today, past its cadence, or launched with no result. Assess hands those facts to a model that may only pick from a fixed list of moves, and the answer is re-checked in code before anything happens; any request text is treated as data to sort, never instructions to follow. Actuate runs the plan behind guardrails so a launch is skipped if the member already ran today, is still in flight, or the run has hit its launch cap. Report posts a briefing to a Slack channel and writes the run back into the log.\n\nOut of the box it orchestrates a two-member demo fleet that both launch `hello-agent`, so the whole loop runs without any other setup. Two modes make it safe to try: a dry run traces the full loop while skipping every network side effect, and observe-only does everything real but launches nothing — the briefing just shows what it would have launched.\n\nYou pay for one model call per run, plus whatever the child workflows it launches cost. The Postgres event log and the Slack briefing are cheap, and tracing the loop with a dry run is free.",
+  "useCases": [
+    "Coordinate a set of workflows so one brain notices when a member silently missed its cadence and relaunches it.",
+    "Give a model a limited say in orchestration — it picks a move from a fixed list, and code does anything irreversible.",
+    "Watch a fleet in observe-only mode first, posting a briefing of what it would launch before you let it launch anything."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nOut of the box it orchestrates a two-member demo fleet that both launch `hello-agent`, so it runs end to end with nothing else deployed. To point it at your own fleet, deploy those child workflows first and pass your `fleet` in the run input — a child can't be launched until it has been deployed. For the Slack briefing, store a bot token in the Vault under the `slack` handle (`vault.get`) and pass a `briefingChannelId`; without them it just logs the briefing. Run it with `{ \"observeOnly\": true }` to have it report what it would launch without launching anything.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the whole scan → assess → actuate → report loop for free — the real model call still runs, only the network side effects are skipped — or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Trace the full loop offline (run_local)",
+      "input": {
+        "dryRun": true,
+        "now": "2026-07-22T14:00:00.000Z"
+      },
+      "output": {
+        "lookedAt": 2,
+        "launched": [
+          "launch_member → hello-agent (dryrun-hello-agent-launch_member-daily-greeter-2026-07-22)",
+          "launch_member → hello-agent (dryrun-hello-agent-launch_member-weekly-greeter-2026-07-22)"
+        ],
+        "needsHuman": [],
+        "cursor": 0
+      }
+    },
+    {
+      "title": "Report what it would launch, without launching (observe-only)",
+      "input": {
+        "observeOnly": true,
+        "briefingChannelId": "C0EXAMPLE",
+        "now": "2026-07-22T14:00:00.000Z"
+      },
+      "output": {
+        "lookedAt": 2,
+        "launched": [
+          "would launch: hello-agent for daily-greeter",
+          "would launch: hello-agent for weekly-greeter"
+        ],
+        "needsHuman": []
+      }
+    }
+  ]
+}
