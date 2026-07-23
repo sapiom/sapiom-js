@@ -328,7 +328,7 @@ describe("auto-bind on rescan (SAP-1897)", () => {
 
   it(
     "is idempotent — a second rescan does not re-bind or emit redundant events",
-    { retry: 1, timeout: 20_000 },
+    { retry: 1, timeout: 25_000 },
     async () => {
       const port = await startTestServer();
       const session = await server!.sessionManager.create({
@@ -338,41 +338,71 @@ describe("auto-bind on rescan (SAP-1897)", () => {
 
       events = await collectEvents(port);
 
-      // Scaffold the workflow at cwd.
-      await scaffoldWorkflow(cwd);
+      // Scaffold the first workflow as a SUBDIRECTORY of cwd (not at cwd itself).
+      // This is deliberate: when the first workflow lives at `cwd/first-agent`,
+      // the watcher's fingerprint is "cwd/first-agent".  Adding a sibling
+      // `cwd/second-agent` later changes the fingerprint to
+      // "cwd/first-agent|cwd/second-agent", which fires a real onChange.
+      // (If the workflow were at cwd itself, the fingerprint walk stops there
+      // and never descends into any sub-directory, so adding a nested entry
+      // would NOT change the fingerprint and the watcher would never fire.)
+      const firstWorkflow = join(cwd, "first-agent");
+      await scaffoldWorkflow(firstWorkflow);
 
-      // Wait for the initial auto-bind to land.
+      // Wait for the initial auto-bind to land (session binds to firstWorkflow).
       await vi.waitFor(
         async () => {
           const s = await listSessions(port);
           expect(s.find((x) => x.id === session.id)?.boundWorkflowPath).toBe(
-            cwd,
+            firstWorkflow,
           );
         },
         { timeout: 8_000, interval: 150 },
       );
 
-      // Count session.status frames for our session.
+      // Count session.status frames after the first (real) bind.
       const framesAfterBind = events.messages.filter(
         (m) => m.type === "session.status" && m.session.id === session.id,
       ).length;
       expect(framesAfterBind).toBeGreaterThan(0);
 
-      // Touch the workspace to force another rescan.
-      await writeFile(join(cwd, "dummy.txt"), "touch");
-      await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      // Force a REAL second rescan: scaffold a second (peer) workflow directory
+      // under cwd.  The workspace watcher is fingerprint-based — it fires
+      // onChange only when the SET of sapiom.json-bearing directories changes.
+      // Adding a sibling directory changes the fingerprint and guarantees a
+      // rescan fires; the `!session.boundWorkflowPath` guard is now false, so
+      // the auto-bind code runs but does NOT re-bind.
+      const secondWorkflow = join(cwd, "second-agent");
+      await scaffoldWorkflow(secondWorkflow);
 
-      // Verify the binding is unchanged and no NEW session.status frame was emitted
-      // for the already-bound session on account of a second bind attempt.
+      // Wait for the second workflow to appear in the registry — this confirms
+      // the workspace watcher detected the structural change, fired onChange,
+      // and `rescanWorkspaceForSession` completed.
+      await vi.waitFor(
+        async () => {
+          const res = await fetch(
+            `http://127.0.0.1:${port}/api/workflows`,
+            { headers: { "X-Harness-Token": "test-token" } },
+          );
+          const workflows = (await res.json()) as Array<{ path: string }>;
+          expect(workflows.some((w) => w.path === secondWorkflow)).toBe(true);
+        },
+        { timeout: 10_000, interval: 200 },
+      );
+
+      // The binding must remain on the FIRST workflow — the
+      // `!session.boundWorkflowPath` guard (now false) prevented any re-bind.
+      const sessions = await listSessions(port);
+      expect(
+        sessions.find((x) => x.id === session.id)?.boundWorkflowPath,
+      ).toBe(firstWorkflow);
+
+      // No NEW session.status frames should have been emitted for a bind
+      // attempt on account of the second rescan (the guard prevented it).
       const framesAfterSecondRescan = events.messages.filter(
         (m) => m.type === "session.status" && m.session.id === session.id,
       ).length;
       expect(framesAfterSecondRescan).toBe(framesAfterBind);
-
-      const sessions = await listSessions(port);
-      expect(
-        sessions.find((x) => x.id === session.id)?.boundWorkflowPath,
-      ).toBe(cwd);
     },
   );
 });

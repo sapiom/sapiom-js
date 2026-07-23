@@ -12,7 +12,7 @@ import {
   type Server as HttpServer,
 } from "node:http";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { WebSocketServer } from "ws";
@@ -574,7 +574,7 @@ export const startServer = async (
     // the session is bound, so this is idempotent and never overrides an
     // explicit/persisted binding.
     if (!session.boundWorkflowPath) {
-      const cwdSep = session.cwd + "/";
+      const cwdSep = session.cwd + sep;
       const candidate =
         after.find((w) => w.path === session.cwd) ??
         after
