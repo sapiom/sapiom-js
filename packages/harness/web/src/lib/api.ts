@@ -71,7 +71,7 @@ export type RunLocalLine =
 // ---------------------------------------------------------------------------
 // Direct-action wire shapes (matched to src/server/actions.ts). SPA-only — the
 // browser consumes these streams but never the server modules that emit them,
-// so (like SkillMeta above) they live here rather than in shared/types.ts.
+// so they live here rather than in shared/types.ts.
 // ---------------------------------------------------------------------------
 
 /**
