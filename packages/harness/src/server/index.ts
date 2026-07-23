@@ -1144,12 +1144,32 @@ export const startServer = async (
       // linger ref'd in the background after shutdown completes.
       if (shutdownTimerHandle !== undefined) clearTimeout(shutdownTimerHandle);
       void batcher.close();
+      // wss.close() stops NEW upgrades but never terminates the connections
+      // already open — and httpServer.close() then waits indefinitely for those
+      // sockets to drain. The main window's live /ws/events and /ws/terminal
+      // connections (plus any keep-alive HTTP socket) would therefore hang
+      // close() forever, so Electron's before-quit never reaches app.quit() and
+      // the process lingers as a zombie still holding the single-instance lock —
+      // which blocks the next launch (it hangs on "Starting Sapiom…"). Force
+      // each client shut, drop keep-alive HTTP conns, and bound the final wait
+      // so shutdown always completes.
+      for (const client of terminalWss.clients) client.terminate();
+      for (const client of eventsWss.clients) client.terminate();
       terminalWss.close();
       eventsWss.close();
-      await new Promise<void>((resolve, reject) => {
+      httpServer.closeAllConnections?.();
+      const HTTP_CLOSE_TIMEOUT_MS = 3_000;
+      await new Promise<void>((resolve) => {
+        let httpCloseTimer: ReturnType<typeof setTimeout> | undefined =
+          setTimeout(() => {
+            httpCloseTimer = undefined;
+            resolve();
+          }, HTTP_CLOSE_TIMEOUT_MS);
+        httpCloseTimer.unref?.();
         httpServer.close((err) => {
-          if (err) reject(err);
-          else resolve();
+          if (err) console.error("[harness] httpServer.close error:", err);
+          if (httpCloseTimer !== undefined) clearTimeout(httpCloseTimer);
+          resolve();
         });
       });
     },
