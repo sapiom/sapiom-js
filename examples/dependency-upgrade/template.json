@@ -1,0 +1,34 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You give it a repo and a schedule. On each tick a coding agent clones the repo into a fresh sandbox and bumps its dependencies, then the workflow re-attaches that same sandbox and runs your real test suite in it. What happens next depends entirely on the result: a red build is archived and dropped, a green build gets a model risk assessment of the changed dependencies, and only a green build within your risk bar gets pushed.\n\nThe graph is `plan → bump → verify → assess → publish | held | rejected`. `bump` (`models.coding`) is a long-running coding agent, so the workflow suspends at $0 while it works and resumes only when it finishes. `verify` (`sandboxes.exec`) installs and tests in the sandbox — a non-zero exit routes straight to `rejected`. `assess` (`models.run`) rates the upgrade low/medium/high; anything above `maxAutoRisk` is `held` for a human instead of pushed. Every outcome — published, held, or rejected — writes a triage report to file storage (`fileStorage.upload`), so you keep a durable record of what changed and why it did or didn't ship.\n\nThe push is the only irreversible step, so it sits behind a `dryRun` guard: with `dryRun: true` every step runs but the push and the report upload are skipped, so you can trace the whole flow for free.\n\nYou pay for the coding agent's run, the sandbox time your tests take, and the one risk-assessment model call — a dry run costs nothing beyond the coding run it still performs.",
+  "useCases": [
+    "Keep a repo's dependencies current on a cron without a human babysitting each bump.",
+    "Gate every automated upgrade on your real test suite, so nothing lands on a red build.",
+    "Hold major or broad upgrades for review while low-risk bumps push on their own."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `repoSlug` (an in-network repo the coding agent clones and upgrades). Set `testCommand` (default `npm test`) and `installCommand` (default `npm install`) to match the project, and `maxAutoRisk` (default `medium`) to control what pushes on its own versus what waits for you. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed workflow. Pass `dryRun: true` to trace the whole graph without pushing or uploading anything.\n\nPrefer to work from the code? Run it locally with `run_local` (pass `{ \"repoSlug\": \"my-app\", \"dryRun\": true }`) to trace plan → bump → verify → assess → publish for free — capabilities are stubbed and the push is skipped — or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "A dry-run triage of a repo's upgrade",
+      "input": {
+        "repoSlug": "my-app",
+        "testCommand": "npm test",
+        "maxAutoRisk": "medium",
+        "dryRun": true
+      },
+      "output": {
+        "decision": "publish",
+        "pushed": false,
+        "dryRun": true,
+        "risk": "low",
+        "reportFileId": null,
+        "summary": "Patch and minor bumps across dev dependencies; no major versions, narrow blast radius."
+      }
+    }
+  ]
+}

@@ -365,6 +365,63 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "dependency-upgrade",
+      "name": "Dependency Upgrade",
+      "description": "On a schedule, a coding agent bumps a repo's dependencies in a sandbox, runs the tests, and pushes only when the build is green.",
+      "tags": ["dependencies", "coding-agent", "scheduled", "ci"],
+      "sourcePath": "examples/dependency-upgrade",
+      "capabilities": [
+        "models.coding",
+        "sandboxes.exec",
+        "models.run",
+        "fileStorage.upload",
+        "repositories.pushFromSandbox"
+      ],
+      "whatItDoes": "For keeping a project's dependencies current without a human driving each bump. On each scheduled run a coding agent (`models.coding`) clones your repo into a sandbox and upgrades its dependencies, and because that run is long the workflow pauses at $0 until it finishes. It then re-attaches the same sandbox and runs your real test suite there (`sandboxes.exec`) — a red build is dropped, never pushed. A green build gets a model risk rating of the changed dependencies (`models.run`); anything above your risk bar is held for a person instead of pushed. When it does push, it commits the bumped branch straight from the sandbox. Every run — pushed, held, or dropped — archives a triage report to file storage (`fileStorage.upload`) so you can see what changed and why it did or didn't ship.",
+      "steps": [
+        {
+          "name": "plan",
+          "description": "Resolves the repo and the install and test commands and checks the input; with no repo it stops right away.",
+          "next": ["bump", "rejected"]
+        },
+        {
+          "name": "bump",
+          "description": "Launches a coding agent to bump the repo's dependencies in a sandbox, then pauses until the run finishes.",
+          "capability": "models.coding",
+          "next": ["verify"]
+        },
+        {
+          "name": "verify",
+          "description": "Re-attaches that sandbox and runs the install and test suite there; a failed run or a red build is rejected.",
+          "capability": "sandboxes.exec",
+          "next": ["assess", "rejected"]
+        },
+        {
+          "name": "assess",
+          "description": "Asks a model to rate the upgrade's risk from the dependency diff, holding anything above your bar.",
+          "capability": "models.run",
+          "next": ["publish", "held"]
+        },
+        {
+          "name": "publish",
+          "description": "Pushes the bumped branch from the sandbox and archives the triage report.",
+          "capability": "repositories.pushFromSandbox",
+          "terminal": true
+        },
+        {
+          "name": "held",
+          "description": "The build was green but the risk was too high, so it archives the report and waits for a human.",
+          "capability": "fileStorage.upload",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "The coding run failed or the tests were red, so it archives the report and pushes nothing.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
