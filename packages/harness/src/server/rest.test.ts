@@ -1104,4 +1104,29 @@ describe("skills router — real server mount proof", () => {
       true,
     );
   });
+
+  it("hides user skills from the list by default (showUserSkills off)", async () => {
+    const skillDir = path.join(skillsRoot, "my-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: My Skill\ndescription: Test skill\n---\n\nBody here.",
+    );
+
+    // Separate mount WITHOUT the opt-in flag — the default the real server uses.
+    const app = express();
+    app.use("/api", createBootTokenMiddleware(BOOT_TOKEN));
+    app.use(createSkillsRouter({ userSkillsRoot: skillsRoot }));
+    const defaultServer = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => defaultServer.once("listening", resolve));
+    const { port } = defaultServer.address() as AddressInfo;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/skills`, { headers: TOKEN_HEADER });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Array<{ id: string; source: string }>;
+      expect(body.some((s) => s.source === "user")).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => defaultServer.close(() => resolve()));
+    }
+  });
 });

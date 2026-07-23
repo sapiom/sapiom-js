@@ -37,15 +37,30 @@ import type {
   ModelRunResult,
   ModelRunHandle,
 } from "./models/index.js";
-import {
-  run as agentsRun,
-  launch as agentsLaunch,
-} from "./agents/index.js";
+import { run as agentsRun, launch as agentsLaunch } from "./agents/index.js";
 import type {
   AgentRunSpec,
   AgentRunResult,
   RunHandle as AgentRunHandle,
 } from "./agents/index.js";
+import {
+  run as llmRun,
+  submit as llmSubmit,
+  redeem as llmRedeem,
+  createSession as llmCreateSession,
+  getSession as llmGetSession,
+  callSession as llmCallSession,
+  releaseSession as llmReleaseSession,
+} from "./llm/index.js";
+import type {
+  LlmRunSpec,
+  LlmSubmitSpec,
+  LlmRouteHandle,
+  LlmGrantLink,
+  LlmSessionCreateSpec,
+  LlmSession,
+  LlmSessionHandle,
+} from "./llm/index.js";
 import * as fileStorage from "./file-storage/index.js";
 import type {
   UploadInput,
@@ -169,6 +184,38 @@ export interface Sapiom {
     run(spec: AgentRunSpec): Promise<AgentRunResult>;
     /** Launch a deployed agent; pass the handle to `pauseUntilSignal` to suspend on it. */
     launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
+  };
+  /**
+   * Routed LLM calls through the gateway's `/v2` routing front-end. `run` is the
+   * synchronous paid call (`/v2/route/direct` — selector + capacity-aware LB,
+   * executed inline); `submit` is the deferred-start seam (`/v2/route/async` —
+   * the gateway grants a single-use link when a model has room, escalating
+   * toward run-now as the deadline nears); `redeem` spends the link.
+   */
+  readonly llm: {
+    /** One routed LLM call, executed immediately and returned inline. */
+    run<T = Record<string, unknown>>(spec: LlmRunSpec): Promise<T>;
+    /** Submit a routed call; pass the handle to `pauseUntilSignal` to suspend on it. */
+    submit(spec: LlmSubmitSpec): Promise<LlmRouteHandle>;
+    /** Spend a granted link: POST the (re-sent) request to /v1/messages with it. */
+    redeem<T = Record<string, unknown>>(
+      link: LlmGrantLink,
+      request: Record<string, unknown>,
+    ): Promise<T>;
+    /** Create a session (Surface B): reserve deferred capacity; poll or pause until ready. */
+    createSession(spec?: LlmSessionCreateSpec): Promise<LlmSessionHandle>;
+    /** Fetch a session by id (tenant-scoped). */
+    getSession(sessionId: string): Promise<LlmSession>;
+    /** Call a ready session — REPEATABLE until its TTL/budget terminal (410). */
+    callSession<T = Record<string, unknown>>(
+      session: LlmSessionHandle | LlmSession | string,
+      request: Record<string, unknown>,
+      opts?: { shape?: "anthropic" | "openai" },
+    ): Promise<T>;
+    /** Release a session early (idempotent) — frees the reserved capacity. */
+    releaseSession(
+      session: LlmSessionHandle | LlmSession | string,
+    ): Promise<LlmSession>;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -426,6 +473,16 @@ function bind(transport: Transport): Sapiom {
     agents: {
       run: (spec) => agentsRun(spec, transport),
       launch: (spec) => agentsLaunch(spec, transport),
+    },
+    llm: {
+      run: (spec) => llmRun(spec, transport),
+      submit: (spec) => llmSubmit(spec, transport),
+      redeem: (link, request) => llmRedeem(link, request, transport),
+      createSession: (spec) => llmCreateSession(spec, transport),
+      getSession: (sessionId) => llmGetSession(sessionId, transport),
+      callSession: (session, request, opts) =>
+        llmCallSession(session, request, opts, transport),
+      releaseSession: (session) => llmReleaseSession(session, transport),
     },
     fileStorage: {
       upload: (input) => fileStorage.upload(input, transport),

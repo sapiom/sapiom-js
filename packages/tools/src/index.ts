@@ -71,10 +71,23 @@ export * as schedules from "./schedules/index.js";
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { AgentRunResultPayload } from "./agents/index.js";
 // Validate an AgentRunResultPayload at the resume boundary.
+export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";
+
+// llm — routed LLM calls through the gateway's /v2 routing front-end: `run`
+// (synchronous direct), `submit` (deferred-start; pausable handle), `redeem`,
+// and the sessions resource (`createSession`/`getSession`/`callSession`/
+// `releaseSession` — deferred capacity, repeatable calls).
+export * as llm from "./llm/index.js";
+// Surfaced top-level for the static `pause: { signal }` decl on an llm step.
+export { LLM_ROUTE_RESULT_SIGNAL, LLM_SESSION_READY_SIGNAL } from "./llm/index.js";
+// The shape a step resumed from `pauseUntilSignal(llmHandle, …)` receives as
+// input — annotate the resumed step with it instead of hand-rolling the shape.
+export type { LlmRouteResultPayload } from "./llm/index.js";
+// Validate an LlmRouteResultPayload at the resume boundary.
 export {
-  agentResultSchema,
-  AgentResultSchemaError,
-} from "./agents/index.js";
+  llmRouteResultSchema,
+  LlmRouteResultSchemaError,
+} from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";

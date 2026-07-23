@@ -112,6 +112,9 @@ describe("capabilityCall()", () => {
     expect(headerOf(calls[0]!, "x-api-key")).toBe("test-key");
     expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
     expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
+    // Every request carries the SDK client marker so the gateway can tell SDK
+    // traffic from raw HTTP (bins to client:sdk on its /v2 metrics).
+    expect(headerOf(calls[0]!, "x-sapiom-client")).toMatch(/^sapiom-tools\//);
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       url: "https://example.com",
     });

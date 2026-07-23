@@ -83,8 +83,8 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
  * @sapiom/tools without updating this). Bump alongside notable releases.
  */
 const VERSION_FALLBACK = {
-  agent: "0.6.5",
-  tools: "0.20.1",
+  agent: "0.6.6",
+  tools: "0.21.0",
 };
 
 /** The zod major the authoring SDK is built against. */
