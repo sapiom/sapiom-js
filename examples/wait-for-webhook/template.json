@@ -1,0 +1,41 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Durable pause/resume around any slow external callback — the sharpest showcase of the platform's durability differentiator, and the direct counter to \"agents are too expensive to run.\"\n\nThe `kickoff` step starts a slow external async job and registers a resume contract, then the run **suspends indefinitely at $0** via `pauseUntilSignal` — no polling loop, no held worker, no billed idle time. It can wait minutes, hours, or days. When the external world fires the signal (a webhook/callback), the run resumes exactly where it left off: the callback payload becomes the resumed `decide` step's *input*, an LLM (`ctx.sapiom.models.run`) summarizes it, and the run branches to `accept` or `reject`. Everything set before the pause survives in `ctx.shared`.\n\n`pauseUntilSignal` is a runtime primitive, not a metered capability. The only billed call is the model summary in `decide`.",
+  "useCases": [
+    "Wait on a slow third-party job (screening, rendering, batch export) that calls back hours later — at $0 while idle.",
+    "Gate a workflow on an external human/system approval delivered by webhook.",
+    "Bridge an async provider whose result arrives via callback, then branch on the outcome."
+  ],
+  "notes": "`run_local` traces the full graph offline for free: with no `CALLBACK_REGISTER_URL` configured (or `DRY_RUN` set), the `dryRun` guard skips the live external POST, and the local runner auto-resumes the pause — so you see `kickoff → paused → decide → accept|reject` without any external dependency.\n\nA real `deploy` + `run` pauses for real. To resume it in dev, fire the signal via the MCP `signal_workflow` / `workflow_signal` tool with `{ \"signal\": \"webhook.callback\", \"correlationId\": \"<executionId>\", \"payload\": { \"status\": \"succeeded\", \"result\": { ... } } }` — the `payload` becomes `decide`'s input. This is the manual stand-in for the real webhook. See `README.md` and `AGENTS.md`.",
+  "examples": [
+    {
+      "title": "Callback reports success",
+      "input": {
+        "job": { "kind": "render", "assetId": "abc123" },
+        "config": {}
+      },
+      "output": {
+        "jobId": "dry-run",
+        "decision": "accept",
+        "summary": "The external job completed and returned a usable result."
+      }
+    },
+    {
+      "title": "Callback reports failure",
+      "input": {
+        "job": { "kind": "render", "assetId": "abc123" }
+      },
+      "output": {
+        "jobId": "dry-run",
+        "decision": "reject",
+        "summary": "The external job reported a failure status.",
+        "reasons": ["status=\"failed\""]
+      }
+    }
+  ]
+}
