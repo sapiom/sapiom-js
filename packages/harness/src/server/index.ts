@@ -242,7 +242,7 @@ function workflowListsEqual(
 ): boolean {
   if (a.length !== b.length) return false;
   const key = (w: WorkflowInfo): string =>
-    `${w.path} ${w.name} ${w.definitionId ?? ""} ${w.source}`;
+    `${w.path}\u0000${w.name}\u0000${w.definitionId ?? ""}\u0000${w.source}`;
   const setA = new Set(a.map(key));
   return b.every((w) => setA.has(key(w)));
 }
