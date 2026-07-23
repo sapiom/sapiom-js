@@ -49,11 +49,14 @@ function candidateBinDirs(agentBinDir: string): string[] {
 export function augmentProcessPath(agentBinDir: string, runtimeShimDir?: string): string {
   const sep = isWindows ? ";" : ":";
   const existing = (process.env.PATH ?? "").split(sep).filter(Boolean);
-  // The Electron-as-Node shim dir goes FIRST so `node`/`npm` resolve to the
-  // bundled runtime regardless of what (if anything) the user has installed.
-  const prepend = [...(runtimeShimDir ? [runtimeShimDir] : []), ...candidateBinDirs(agentBinDir)];
+  // The Electron-as-Node shim dir goes LAST — a fallback for a machine with no
+  // Node/npm at all. It must NOT shadow the user's real `node`: the agent runs
+  // via `#!/usr/bin/env node`, and forcing it onto Electron-as-Node destabilizes
+  // it and every subprocess it spawns. Real node/npm (found via the candidate
+  // dirs or the inherited PATH) win; the shims only fill a genuine gap.
+  const append = runtimeShimDir ? [runtimeShimDir] : [];
   const seen = new Set<string>();
-  const merged = [...prepend, ...existing].filter((dir) => {
+  const merged = [...candidateBinDirs(agentBinDir), ...existing, ...append].filter((dir) => {
     if (seen.has(dir)) return false;
     seen.add(dir);
     return true;

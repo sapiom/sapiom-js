@@ -250,7 +250,7 @@ export async function boot(setupWin: BrowserWindow, devMode: boolean): Promise<B
   if (!identity) {
     progress(setupWin, {
       phase: "auth",
-      message: "Connect to Sapiom in the browser window that just opened, then come back here.",
+      message: "Opening your browser — sign in to Sapiom to continue, then come back here.",
       status: "active",
     });
     identity = await ensureAuthenticated({ interactive: true });
