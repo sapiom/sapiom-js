@@ -365,6 +365,58 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "content-repurposing-pipeline",
+      "name": "Content Repurposing Pipeline",
+      "description": "Turn one blog post or transcript into a tweet thread, LinkedIn post, newsletter, quote graphics, and a short clip — then email the whole pack.",
+      "tags": ["content", "marketing", "media", "scheduled"],
+      "sourcePath": "examples/content-repurposing-pipeline",
+      "capabilities": [
+        "models.run",
+        "contentGeneration.images",
+        "contentGeneration.video",
+        "fileStorage",
+        "email.send"
+      ],
+      "whatItDoes": "For marketers and creators who write once and want to publish everywhere. You give it a blog post or a transcript. An LLM rewrites that one source into every channel at once — a tweet thread, a LinkedIn post, a newsletter, pull-quotes to render, and a short video script. It makes a quote graphic for each pull-quote, all at once, then animates the first one into a short teaser clip, pausing while the video job runs and costing nothing until it's ready. It gathers everything into one markdown pack, saves a durable copy to file storage, and emails it to you. Pass dryRun and it stops after writing the copy, so you can read the angles before paying for any images or video. Give it a schedule and it runs on its own against your latest post.",
+      "steps": [
+        {
+          "name": "repurpose",
+          "description": "An LLM rewrites your source into every channel at once: the tweet thread, LinkedIn post, newsletter, pull-quotes, and a video script. If you set dryRun, it stops here and returns the copy.",
+          "capability": "models.run",
+          "next": ["graphics"]
+        },
+        {
+          "name": "graphics",
+          "description": "Make one quote graphic per pull-quote, all at once, and save each one.",
+          "capability": "contentGeneration.images",
+          "next": ["clip"]
+        },
+        {
+          "name": "clip",
+          "description": "Launch a video job that animates the first quote graphic into a short teaser clip, then pause until it finishes.",
+          "capability": "contentGeneration.video",
+          "next": ["collectClip"]
+        },
+        {
+          "name": "collectClip",
+          "description": "Save the finished teaser clip.",
+          "next": ["package"]
+        },
+        {
+          "name": "package",
+          "description": "Assemble the whole pack as one markdown document and upload it to file storage for a durable download link.",
+          "capability": "fileStorage",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Email the pack to your recipient, or return it when no recipient is set. Ends the run with a summary of everything produced.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
