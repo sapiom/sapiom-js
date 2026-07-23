@@ -83,7 +83,7 @@
       "description": "Durable pause/resume — start a slow external job, suspend at $0 until a webhook callback fires, then decide.",
       "tags": ["durable", "pause-resume", "webhook", "async"],
       "sourcePath": "examples/wait-for-webhook",
-      "capabilities": ["llm.generate"],
+      "capabilities": ["models.run"],
       "whatItDoes": "Starts a slow external async job and registers a resume contract, then suspends the run indefinitely at $0 via pauseUntilSignal — no polling, no held worker, no billed idle time. When an external webhook/callback fires the signal, the run resumes exactly where it left off: the callback payload becomes the resumed step's input, an LLM summarizes it, and the run branches to accept or reject. The sharpest showcase of the platform's durability differentiator.",
       "steps": [
         {
@@ -94,7 +94,7 @@
         {
           "name": "decide",
           "description": "Resume target — its input is the callback payload; summarize it with an LLM and branch.",
-          "capability": "llm.generate",
+          "capability": "models.run",
           "next": ["accept", "reject"]
         },
         {
@@ -240,19 +240,19 @@
       "description": "Do reversible work, pause for a human approval signal before committing, then commit via a ranked sequential-fallback loop.",
       "tags": ["approval", "human-in-the-loop", "hitl", "fallback"],
       "sourcePath": "examples/human-in-the-loop",
-      "capabilities": ["llm.generate", "email.send"],
+      "capabilities": ["models.run", "email.send"],
       "whatItDoes": "The \"ask before you commit/spend\" pattern. The agent does reversible prep — parse the request (models.run), rank the candidates by fit, and notify the approver (email) — then blocks on a durable pauseUntilSignal so the run survives the wait at $0. A reject reverts to a safe state and terminates. An approve enters a ranked sequential-fallback loop: a provisional (non-committing) offer to the top candidate, a pause for their confirm, and on decline/timeout it advances to the next candidate. The single irreversible/expensive action lands in commit only after a human approved AND a candidate accepted; exhausting the ranked list escalates to a human instead of silently failing.",
       "steps": [
         {
           "name": "parse",
           "description": "Parse the free-text request into structured intent with an LLM.",
-          "capability": "llm.generate",
+          "capability": "models.run",
           "next": ["rank"]
         },
         {
           "name": "rank",
           "description": "Rank the candidates by fit (not just cost) with an LLM.",
-          "capability": "llm.generate",
+          "capability": "models.run",
           "next": ["notifyApprover"]
         },
         {
@@ -302,13 +302,13 @@
       "description": "An LLM-judge quality gate — score an output against your rubric, then branch publish/revise on a threshold.",
       "tags": ["evals", "quality-gate", "llm-judge", "composition"],
       "sourcePath": "examples/eval-gate",
-      "capabilities": ["llm.generate"],
+      "capabilities": ["models.run"],
       "whatItDoes": "Renders a judge prompt from YOUR rubric, calls an LLM via ctx.sapiom.models.run, and parses a [0,1] score. A pure gate step branches publish vs revise on score >= threshold; the terminal steps return { decision, score, threshold, rationale } — you decide what publish/revise mean. We own the harness (default judge prompt + score parser); the rubric is yours, so it doubles as an eval-authoring on-ramp. Because it's a deployable agent, a parent workflow can launch it as a child to self-grade its own output and branch on the returned decision.",
       "steps": [
         {
           "name": "judge",
           "description": "Build the judge prompt from your rubric, call the LLM (models.run), parse the score.",
-          "capability": "llm.generate",
+          "capability": "models.run",
           "next": ["gate"]
         },
         {
