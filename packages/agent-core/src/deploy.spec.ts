@@ -71,7 +71,7 @@ describe('deploy — push retry on auth failure', () => {
   let pushHead: jest.Mock;
 
   beforeEach(() => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const git = require('./git.js') as { pushSynthesizedTree: jest.Mock; pushHead: jest.Mock };
     pushSynthesizedTree = git.pushSynthesizedTree;
     pushHead = git.pushHead;
@@ -104,7 +104,7 @@ describe('deploy — push retry on auth failure', () => {
       ],
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     const result = await deploy(
       { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
@@ -139,7 +139,7 @@ describe('deploy — push retry on auth failure', () => {
       pushCredentials: [() => ({ pushUrl: 'https://host/repo.git' })],
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
@@ -181,7 +181,7 @@ describe('deploy — push retry on auth failure', () => {
       ],
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
@@ -200,7 +200,7 @@ describe('deploy — superseded build messaging', () => {
   let pushSynthesizedTree: jest.Mock;
 
   beforeEach(() => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const git = require('./git.js') as { pushSynthesizedTree: jest.Mock; pushHead: jest.Mock };
     pushSynthesizedTree = git.pushSynthesizedTree;
     pushSynthesizedTree.mockReset().mockImplementation(() => {
@@ -219,7 +219,7 @@ describe('deploy — superseded build messaging', () => {
       pollBuild: () => ({ status: 'superseded' }),
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
@@ -238,7 +238,7 @@ describe('deploy — superseded build messaging', () => {
       pollBuild: () => ({ status: 'failed', error: { message: 'Compilation error.' } }),
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     await expect(
       deploy(
@@ -258,7 +258,7 @@ describe('deploy — superseded build messaging', () => {
       pollBuild: () => ({ status: 'ready' }),
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { deploy } = require('./deploy.js') as typeof import('./deploy.js');
     const result = await deploy(
       { projectDir: makeTmpDir(), definitionId: 'def_1', branch: 'main' },
