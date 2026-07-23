@@ -13,7 +13,7 @@ import { getOrchestrationAnalytics, telemetryErrorCode } from './analytics.js';
 import { bundleForDeploy } from './bundle.js';
 import { GatewayClient } from './client.js';
 import { AgentOperationError } from './errors.js';
-import { assertDeployable, pushSynthesizedTree } from './git.js';
+import { assertDeployable, pushHead, pushSynthesizedTree } from './git.js';
 
 /**
  * Whether a git push error looks like an auth failure — a short-lived push
@@ -135,7 +135,11 @@ async function deployOperation(opts: DeployOptions, client: GatewayClient): Prom
         `/definitions/${definitionId}/push-credentials`,
         {},
       );
-      pushSynthesizedTree(treeDir, freshPushUrl, branch);
+      // The tree is already init'd + committed — only repeat the push with the
+      // fresh credential. Calling pushSynthesizedTree again would re-run
+      // git init/add/commit on an already-committed dir and fail with
+      // "nothing to commit" before the push ever fires.
+      pushHead(treeDir, freshPushUrl, branch);
     }
   } finally {
     rmSync(treeDir, { recursive: true, force: true });

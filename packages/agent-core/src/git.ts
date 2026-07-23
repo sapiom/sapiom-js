@@ -79,8 +79,7 @@ export interface CloneRepoOptions {
 
 /**
  * Clone a per-fork repo from a token-bearing URL into `targetDir` and check out
- * `branch`. The template-clone handoff (SAP-1357) uses this to materialize a fork
- * locally.
+ * `branch`. Used during the template-clone handoff to materialize a fork locally.
  *
  * Security: the credential is redacted from any error output, and after a
  * successful clone the origin remote is rewritten to the tokenless HTTPS URL so

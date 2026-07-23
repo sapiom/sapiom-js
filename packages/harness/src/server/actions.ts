@@ -5,7 +5,7 @@
  *
  * These are the "direct" replacements for the old CLI/agent-driven macros: the
  * harness server calls the Sapiom backend itself (via {@link deploy} / {@link run}
- * from @sapiom/agent-core), so an action never spawns Claude Code and never
+ * from @sapiom/agent-core), so an action never spawns a subprocess agent and never
  * consumes the user's LLM credits. The Sapiom API key is held server-side and
  * never forwarded to the browser — exactly like {@link createRunsRouter}: the
  * SPA hits these local `/api/*` routes (no key in the request) and the router
@@ -293,7 +293,7 @@ async function withKeyRefreshRetry<T>(
  *   - `POST /api/runs/local` — NDJSON offline stub-run trace + summary.
  *
  * Deploy and prod-run run server-side with the held API key; run-local is fully
- * offline and needs no key. None of them ever involve Claude Code.
+ * offline and needs no key. None of them ever involve an AI coding agent.
  */
 export function createActionsRouter(opts: ActionsRouterOpts): Router {
   const router = Router();

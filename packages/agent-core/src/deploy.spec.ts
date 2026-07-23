@@ -19,6 +19,7 @@ import { AgentOperationError } from './errors';
 jest.mock('./git.js', () => ({
   assertDeployable: jest.fn(),
   pushSynthesizedTree: jest.fn(),
+  pushHead: jest.fn(),
 }));
 
 jest.mock('./bundle.js', () => ({
@@ -67,12 +68,15 @@ import type { GatewayClient } from './client';
 
 describe('deploy — push retry on auth failure', () => {
   let pushSynthesizedTree: jest.Mock;
+  let pushHead: jest.Mock;
 
   beforeEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const git = require('./git.js') as { pushSynthesizedTree: jest.Mock };
+    const git = require('./git.js') as { pushSynthesizedTree: jest.Mock; pushHead: jest.Mock };
     pushSynthesizedTree = git.pushSynthesizedTree;
+    pushHead = git.pushHead;
     pushSynthesizedTree.mockReset();
+    pushHead.mockReset();
   });
 
   afterEach(() => {
@@ -80,19 +84,18 @@ describe('deploy — push retry on auth failure', () => {
   });
 
   it('retries the push once with a fresh credential on an auth-class GIT error', async () => {
-    // First push throws an auth-class error (synchronously — the real function is sync).
-    // Second push succeeds.
+    // First push (pushSynthesizedTree) throws an auth-class error.
+    // The retry must call pushHead (not pushSynthesizedTree again) — the tree is
+    // already init'd + committed; only the push step must repeat.
     const authErr = new AgentOperationError({
       code: 'GIT',
       message: 'git push failed.',
       hint: 'Authentication failed for https://***@github.com/owner/repo.git',
     });
-    let pushCallCount = 0;
     pushSynthesizedTree.mockImplementation(() => {
-      pushCallCount += 1;
-      if (pushCallCount === 1) throw authErr;
-      // second call succeeds
+      throw authErr;
     });
+    // pushHead succeeds on the retry (default mock: returns undefined)
 
     const client = makeClient({
       pushCredentials: [
@@ -112,11 +115,14 @@ describe('deploy — push retry on auth failure', () => {
     // push-credentials was minted twice (initial + re-mint on auth failure).
     const calls = client.post.mock.calls as Array<[string, ...unknown[]]>;
     expect(calls.filter(([p]) => p.includes('push-credentials'))).toHaveLength(2);
-    // pushSynthesizedTree was called twice (first attempt + retry).
-    expect(pushSynthesizedTree).toHaveBeenCalledTimes(2);
-    // Second push used the fresh URL.
-    const secondPushUrl = pushSynthesizedTree.mock.calls[1][1] as string;
-    expect(secondPushUrl).toContain('NEW_TOKEN');
+    // Initial attempt used pushSynthesizedTree (init + add + commit + push).
+    expect(pushSynthesizedTree).toHaveBeenCalledTimes(1);
+    // Retry used pushHead — NOT a second pushSynthesizedTree — to avoid
+    // re-committing an already-committed tree.
+    expect(pushHead).toHaveBeenCalledTimes(1);
+    // Retry push used the fresh URL.
+    const retryPushUrl = pushHead.mock.calls[0][1] as string;
+    expect(retryPushUrl).toContain('NEW_TOKEN');
   });
 
   it('does NOT retry on a non-auth push failure', async () => {
@@ -146,6 +152,8 @@ describe('deploy — push retry on auth failure', () => {
     const calls = client.post.mock.calls as Array<[string, ...unknown[]]>;
     expect(calls.filter(([p]) => p.includes('push-credentials'))).toHaveLength(1);
     expect(pushSynthesizedTree).toHaveBeenCalledTimes(1);
+    // pushHead must never be called — no retry occurred.
+    expect(pushHead).not.toHaveBeenCalled();
   });
 
   it('surfaces the retry push error when both the first and retry push fail', async () => {
@@ -159,10 +167,11 @@ describe('deploy — push retry on auth failure', () => {
       message: 'git push failed.',
       hint: 'could not read from remote repository (retry)',
     });
-    let callCount = 0;
     pushSynthesizedTree.mockImplementation(() => {
-      callCount += 1;
-      throw callCount === 1 ? authErr : retryErr;
+      throw authErr;
+    });
+    pushHead.mockImplementation(() => {
+      throw retryErr;
     });
 
     const client = makeClient({
@@ -181,7 +190,9 @@ describe('deploy — push retry on auth failure', () => {
       ),
     ).rejects.toMatchObject({ code: 'GIT', hint: expect.stringContaining('retry') });
 
-    expect(pushSynthesizedTree).toHaveBeenCalledTimes(2);
+    // First attempt: pushSynthesizedTree; retry: pushHead — each called once.
+    expect(pushSynthesizedTree).toHaveBeenCalledTimes(1);
+    expect(pushHead).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -190,11 +201,12 @@ describe('deploy — superseded build messaging', () => {
 
   beforeEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const git = require('./git.js') as { pushSynthesizedTree: jest.Mock };
+    const git = require('./git.js') as { pushSynthesizedTree: jest.Mock; pushHead: jest.Mock };
     pushSynthesizedTree = git.pushSynthesizedTree;
     pushSynthesizedTree.mockReset().mockImplementation(() => {
       // no-op: push succeeds
     });
+    git.pushHead.mockReset();
   });
 
   afterEach(() => {
