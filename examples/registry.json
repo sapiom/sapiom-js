@@ -39,6 +39,44 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "the-brain",
+      "name": "The Brain",
+      "description": "A fleet orchestrator meta-workflow — a brain that scans its fleet, chooses a play from a fixed allow-list, and launches the right child workflow.",
+      "tags": ["orchestration", "agents-managing-agents", "meta-workflow"],
+      "sourcePath": "examples/the-brain",
+      "capabilities": [
+        "models.run",
+        "database.get",
+        "database.create",
+        "vault.get"
+      ],
+      "whatItDoes": "The flagship \"agents managing agents\" template: a meta-workflow that coordinates a fleet of child workflows through a scan → assess → actuate → report loop. Deterministic code senses (folds a Postgres-backed event bus into crisp situations like no_child_ran_today / cooldown_due / stale_no_result) and acts (launches children behind six guardrails with per-day idempotency); a constrained LLM only chooses a \"play\" from a fixed allow-list, re-validated in code. A brain is not another limb — it reasons about the whole picture and launches the right member, never doing irreversible work itself. Ships with dryRun (trace the loop offline) and observeOnly (report what it would launch without launching).",
+      "steps": [
+        {
+          "name": "scan",
+          "description": "Read the event bus, fold the log into cadence facts, compute deterministic situations.",
+          "capability": "database.get",
+          "next": ["assess"]
+        },
+        {
+          "name": "assess",
+          "description": "Hand the situations to a constrained LLM that may only pick a play from a fixed allow-list; re-validate the JSON.",
+          "capability": "models.run",
+          "next": ["actuate"]
+        },
+        {
+          "name": "actuate",
+          "description": "Execute the plan behind six guardrails; launch each due member as a child workflow and append a member.launched row.",
+          "next": ["report"]
+        },
+        {
+          "name": "report",
+          "description": "Post a briefing to a low-noise channel, append a brain.briefing row, advance the cursor, terminate.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
