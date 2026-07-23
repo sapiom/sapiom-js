@@ -365,6 +365,50 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "scheduled-db-insight-report",
+      "name": "Scheduled DB Snapshot to Insight Report",
+      "description": "On a schedule, query a database, write the narrative and render charts, then email the insight report.",
+      "tags": ["scheduled", "database", "analytics", "report"],
+      "sourcePath": "examples/scheduled-db-insight-report",
+      "capabilities": [
+        "database.get",
+        "database.create",
+        "models.run",
+        "sandboxes.create",
+        "fileStorage.upload",
+        "fileStorage.getDownloadUrl",
+        "email.send",
+        "vault.get"
+      ],
+      "whatItDoes": "The standing \"metrics email\" you'd otherwise assemble by hand. On each tick it runs a set of read-only SQL queries and turns every result into a metric — a labeled series or a single number. A model (`models.run`) reads those numbers and writes a short report: a summary, a few insights that cite the figures, and a line on what to watch. Then it spins up a sandbox, renders the series into an SVG bar chart with a tiny dependency-free script, and hosts that chart in file storage so the report can link to it. Finally it emails the whole thing. With no config it introspects the database's own catalog — rows per table, size — so it reports on any database immediately; pass your own `queries` to report on real data. A `dryRun` reports on sample metrics and skips the send.",
+      "steps": [
+        {
+          "name": "snapshot",
+          "description": "Runs the read-only queries against the database and normalizes each result into a metric — a labeled series or a scalar KPI.",
+          "capability": "database.get",
+          "next": ["narrate"]
+        },
+        {
+          "name": "narrate",
+          "description": "Hands the metrics to a model to write a short markdown report — a summary, insights that cite the numbers, and what to watch.",
+          "capability": "models.run",
+          "next": ["chart"]
+        },
+        {
+          "name": "chart",
+          "description": "Renders the series into an SVG bar chart inside a sandbox, hosts it in file storage, and takes a shareable link.",
+          "capability": "sandboxes.create",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Emails the report — narrative, chart link, and a metrics table. A dry run or a missing recipient returns it as a preview instead.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
