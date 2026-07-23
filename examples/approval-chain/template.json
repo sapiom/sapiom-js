@@ -1,0 +1,55 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "A durable, sequential multi-party sign-off **saga**: an ordered chain of approvers (e.g. legal → finance → the CEO) must each approve a subject — a contract, a budget, a policy change — **in order**, with reminders and timeout escalation between gates, and compensation if anyone rejects.\n\nEach gate is a durable `pauseUntilSignal`: the run presents the request to the current approver (`ctx.sapiom.email`), then **suspends at $0** until that party fires `approval.decision`. An `approve` advances to the next gate (or finalises on the last); a `reject` walks a **saga compensation** — notifying everyone who already signed off that the chain was cancelled — so a half-signed contract is never left behind.\n\nBetween gates, a resume with no decision (the pause `timeoutMs`, an auto-resume, or an explicit `{ decision: 'remind' }`) is a reminder tick: re-notify the current approver and re-pause, up to `maxReminders`, after which the silent gate escalates to a human channel. An explicit `{ decision: 'timeout' }` escalates immediately.\n\nThe canonical chain state — the current gate, who has approved, the full transition trail — lives in `ctx.shared`, which survives every pause. When a `ledgerHandle` is set, each transition is ALSO appended to a durable Postgres table via the `database` capability, so the sign-off record outlives the run and stays queryable. The ledger is best-effort: no handle, a `dryRun`, or an unreachable DB degrades to `ctx.shared` + logs and never breaks the chain. `pauseUntilSignal` is a runtime primitive, not a metered capability; the billed calls are the notifications and the ledger's database.",
+  "useCases": [
+    "Route a contract, budget, or policy change through a fixed sequence of sign-offs, one party at a time.",
+    "Nudge a slow approver on a schedule and escalate to a human when a gate goes silent, instead of stalling forever.",
+    "Unwind a partially-approved chain safely (saga compensation) the moment any party rejects.",
+    "Keep a durable, queryable audit trail of who approved what, and when, in your own Postgres."
+  ],
+  "notes": "`run_local` stubs the capabilities and auto-resumes each pause with no payload, so the default offline trace walks present → reminder(s) → escalate to a terminal for free — with no `ledgerHandle`, no live Postgres is touched. Set a small `maxReminders` (default 2) so the offline trace terminates quickly.\n\nA real `deploy` + `run` pauses for real at each gate. To drive it in dev, fire the signals via the MCP `signal_workflow` / `workflow_signal` tool with `correlationId` = the paused run's `executionId`. Approve a gate: `{ \"signal\": \"approval.decision\", \"correlationId\": \"<executionId>\", \"payload\": { \"decision\": \"approve\" } }` — repeat once per approver to reach `finalize`. Send `{ \"decision\": \"reject\" }` to walk the compensation path, or `{ \"decision\": \"remind\" }` / `{ \"decision\": \"timeout\" }` to exercise the reminder / escalation branches.\n\nTo persist the audit trail to Postgres, pass a `ledgerHandle` (or `config.LEDGER_HANDLE`) and run deployed with `dryRun: false`; verify the rows land in the `approval_chain_ledger` table. See `README.md` and `AGENTS.md`.",
+  "examples": [
+    {
+      "title": "Two-party contract sign-off, both approve",
+      "input": {
+        "subject": "Master Services Agreement v3",
+        "approvers": [
+          { "id": "legal", "name": "Legal", "email": "legal@example.com" },
+          { "id": "finance", "name": "Finance", "email": "finance@example.com" }
+        ],
+        "escalateTo": "ops@example.com",
+        "maxReminders": 2
+      },
+      "output": {
+        "committed": true,
+        "dryRun": false,
+        "outcome": "completed",
+        "subject": "Master Services Agreement v3",
+        "notified": 2
+      }
+    },
+    {
+      "title": "Finance rejects after legal approved — compensate",
+      "input": {
+        "subject": "Q3 marketing budget increase",
+        "approvers": [
+          { "id": "legal", "name": "Legal", "email": "legal@example.com" },
+          { "id": "finance", "name": "Finance", "email": "finance@example.com" }
+        ],
+        "escalateTo": "ops@example.com"
+      },
+      "output": {
+        "committed": false,
+        "outcome": "rejected",
+        "subject": "Q3 marketing budget increase",
+        "rejectedBy": "finance",
+        "compensated": 1
+      }
+    }
+  ]
+}

@@ -365,6 +365,58 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "approval-chain",
+      "name": "Multi-Party Approval Chain (Saga)",
+      "description": "A durable sequential sign-off chain — pause-per-gate approvals with reminders, timeout escalation, and compensation on rejection.",
+      "tags": ["approval", "saga", "pause-resume", "durable"],
+      "sourcePath": "examples/approval-chain",
+      "capabilities": ["email.send", "database.create"],
+      "whatItDoes": "Routes a subject — a contract, a budget, a policy change — through an ordered chain of approvers (e.g. legal → finance → the CEO) who must each sign off IN ORDER. Every gate is a durable pauseUntilSignal: the run emails the current approver and suspends at $0 until they fire approval.decision, then advances to the next gate. A reject walks a saga compensation — notifying everyone who already approved that the chain was cancelled — so a half-signed contract is never left behind. Between gates, a resume with no decision (the pause timeoutMs, an auto-resume, or an explicit remind) is a reminder tick that re-notifies and re-pauses, up to maxReminders, after which a silent gate escalates to a human channel. The canonical chain state lives in ctx.shared and survives every pause; when a ledgerHandle is set, each transition is also appended to a durable Postgres table (the database capability) as a best-effort, queryable audit trail. pauseUntilSignal is a runtime primitive, not a metered capability — the billed calls are the notifications and the ledger database.",
+      "steps": [
+        {
+          "name": "start",
+          "description": "Resolve the subject, the ordered approvers, and the escalation / ledger / reminder settings; initialise the chain state. An empty chain escalates.",
+          "capability": "database.create",
+          "next": ["present", "escalate"]
+        },
+        {
+          "name": "present",
+          "description": "Record the gate as pending and email the current approver, then pause until the approval signal (resumes at 'decide').",
+          "capability": "email.send",
+          "next": ["decide"]
+        },
+        {
+          "name": "decide",
+          "description": "Resume target — its input is the approval payload; approve advances to the next gate or finalises, reject compensates, timeout/no-response escalates, and any other resume is a reminder tick.",
+          "next": ["present", "remind", "finalize", "compensate", "escalate"]
+        },
+        {
+          "name": "remind",
+          "description": "Email a reminder to the current approver, then pause again on the same gate (resumes at 'decide').",
+          "capability": "email.send",
+          "next": ["decide"]
+        },
+        {
+          "name": "finalize",
+          "description": "The single irreversible action — reached only after every party approved; a dryRun guard makes it a no-op offline.",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "compensate",
+          "description": "Saga rollback: someone rejected — notify everyone who already approved that the chain was cancelled.",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "escalate",
+          "description": "Terminal branch: a gate went silent or timed out — escalate to a human channel.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
