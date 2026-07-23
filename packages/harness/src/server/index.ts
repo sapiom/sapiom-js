@@ -1118,7 +1118,7 @@ export const startServer = async (
   // NOTE: mount additional routers above this line — the static/SPA fallback
   // below is a catch-all and must stay last.
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
-  app.use(createStaticRouter(webDir));
+  app.use(createStaticRouter(webDir, options.bootToken));
 
   app.use(
     (
