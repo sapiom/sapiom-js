@@ -158,9 +158,15 @@ test.describe("cost-removed guard", () => {
   // -------------------------------------------------------------------------
   // Network sentinel — no /spend or /transactions calls during a full
   // run+inspect session flow.
+  //
+  // The route interception is registered BEFORE page.goto so that any
+  // /spend or /transactions call fired synchronously at page load is caught.
   // -------------------------------------------------------------------------
   test("no /spend or /transactions calls are made during a full run+inspect flow", async ({ page }) => {
+    // Arm the sentinel before navigation so page-load calls are captured.
     const sentinel = armNetworkSentinel(page);
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
 
     // Load the board and trigger a prod run
     await loadBoard(page);
@@ -240,14 +246,19 @@ test.describe("cost-removed guard", () => {
     // Wait for the run-state mock poll to settle (~120ms in MockApi)
     await page.waitForTimeout(300);
 
-    // Pick the credit-check node via the iframe gesture layer
+    // Pick the credit-check node via the iframe gesture layer.
+    // Wait for auto-fit to complete (zoom-reset reads something other than
+    // "100%") before reading the bounding box, matching the pickNode pattern
+    // in canvas-inspector.spec.ts. A null box after that guard is an error,
+    // not a silent skip — a silent skip would let the later inspector
+    // assertion time out with a confusing message.
     const frame = page.frameLocator(".canvas-iframe");
     const node = frame.locator('[data-node-id="credit-check"]');
     await expect(node).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("canvas-zoom-reset")).not.toHaveText("100%");
     const box = await node.boundingBox();
-    if (box) {
-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    }
+    if (!box) throw new Error("credit-check node has no bounding box");
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 
     const inspector = page.getByTestId("canvas-step-inspector");
     await expect(inspector).toBeVisible({ timeout: 5_000 });
@@ -385,9 +396,15 @@ test.describe("cost-removed guard", () => {
 
   // -------------------------------------------------------------------------
   // End-to-end: full run+inspect flow — canvas, steps, code, settings
+  //
+  // The route interception is registered BEFORE page.goto so that any
+  // /spend or /transactions call fired synchronously at page load is caught.
   // -------------------------------------------------------------------------
   test("full run+inspect flow surfaces no cost affordances and makes no cost calls", async ({ page }) => {
+    // Arm the sentinel before navigation so page-load calls are captured.
     const sentinel = armNetworkSentinel(page);
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
 
     // Load board and trigger run
     await loadBoard(page);
