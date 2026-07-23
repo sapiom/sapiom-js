@@ -1,0 +1,49 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "**The Brain** is a fleet orchestrator — a meta-workflow that coordinates a fleet of child workflows. It is the flagship \"agents managing agents\" pattern: a brain is not another limb, it consumes the fleet's events, reasons about the whole picture, and launches the right child, never doing irreversible work itself.\n\nEach run is a four-step loop, `scan → assess → actuate → report`:\n\n- **scan** — reads its own event bus (a Postgres DB the brain owns via `database`), folds the log into cadence/idempotency facts, and computes crisp **deterministic \"situations\"** per member: `no_child_ran_today` (a daily member missed today), `cooldown_due` (a periodic member is past its cadence), `stale_no_result` (a launch never reported back). The event log *is* the memory of what the brain already did; a monotonic cursor tracks \"what's new\".\n- **assess** — hands the situations to `models.run` with a system prompt that permits ONLY a fixed allow-list of **\"plays\"** (`launch_member`, `escalate_to_human`, `no_action`). The output is minified JSON re-validated against the allow-list; a deterministic fallback covers bad/empty JSON. Any human/request text is treated as untrusted data to classify, never instructions to follow (the prompt-injection boundary).\n- **actuate** — executes the plan deterministically behind **six guardrails**: allow-list re-check, drop `no_action`, escalate-only (no launch), only-surfaced-targets (`validTargets`), per-day cooldown from the ledger, single-open (never stack a launch on an in-flight member), and a fan-out cap (`MAX_LAUNCHES_PER_RUN`). Each launch carries an idempotency key `<play>-<target>-<yyyy-mm-dd>` and appends a `member.launched` event row.\n- **report** — posts a briefing to a low-noise channel, appends a `brain.briefing` row, advances the cursor, and terminates.\n\nThe key idea throughout: deterministic code senses and acts, a constrained LLM only *chooses* from a fixed allow-list, and every irreversible action is guard-railed.",
+  "useCases": [
+    "Coordinate a fleet of independent workflows so one 'brain' notices when a member silently missed its cadence and relaunches it.",
+    "Give an LLM a constrained say in orchestration — it picks a play from a fixed allow-list, code does the irreversible part.",
+    "Run a self-auditing meta-workflow that folds a durable event log into situations and acts idempotently, once per day per member."
+  ],
+  "notes": "**Constrained-LLM boundary.** The model in `assess` may ONLY pick from `ALLOWED_PLAYS`; `parsePlan()` re-validates every play and target and falls back to a deterministic plan on bad/empty JSON. Combined with `validTargets`, this is the only thing between a bad model output (or an injected request) and an unwanted launch — never let the model name a raw definitionId or channel, only an allow-listed play against a surfaced member.\n\n**Known platform gap — raw-fetch child launch.** `ctx.sapiom.agents.launch` posts to a `/agents/v1` route that 404s on the deployed backend today, so children are launched by a raw `POST https://api.sapiom.ai/v1/workflows/executions` with `x-api-key`, resolving slug→definitionId from a cached `/definitions` list plus a static fallback map (`DEF_IDS`). This template copies that pattern rather than fighting it; migrate to `agents.launch` when it is fixed.\n\n**definitionIds are environment-specific.** A child's definitionId doesn't exist until it is deployed. Deploy your child workflows first (the default fleet uses `hello-agent` as a trivial stand-in), then seed their slug→definitionId into `DEF_IDS` — or rely on the live `/definitions` lookup if it lists them.\n\n**Offline tracing.** `run_local` with `{ \"dryRun\": true }` traces the full `scan → assess → actuate → report` graph: raw Postgres/Slack/child-launch I/O is skipped, while the real `models.run` call still runs. `{ \"observeOnly\": true }` does everything real but launches nothing — the briefing shows what it WOULD launch. With no API key, `launchChild` returns a synthetic execution id.\n\n**Slim `ctx.shared`.** Large cross-step payloads silently stall the cloud engine — the brain passes only compact ids/counts/plan across steps and re-reads bulk data (event rows) in-step. See `AGENTS.md` for the authoring loop.",
+  "examples": [
+    {
+      "title": "Trace the full loop offline (run_local)",
+      "input": {
+        "dryRun": true,
+        "now": "2026-07-22T14:00:00.000Z"
+      },
+      "output": {
+        "lookedAt": 2,
+        "launched": [
+          "launch_member → hello-agent (dryrun-hello-agent-launch_member-daily-greeter-2026-07-22)",
+          "launch_member → hello-agent (dryrun-hello-agent-launch_member-weekly-greeter-2026-07-22)"
+        ],
+        "needsHuman": [],
+        "cursor": 0
+      }
+    },
+    {
+      "title": "Report what it would launch, without launching (observe-only)",
+      "input": {
+        "observeOnly": true,
+        "briefingChannelId": "C0EXAMPLE",
+        "now": "2026-07-22T14:00:00.000Z"
+      },
+      "output": {
+        "lookedAt": 2,
+        "launched": [
+          "would launch: hello-agent for daily-greeter",
+          "would launch: hello-agent for weekly-greeter"
+        ],
+        "needsHuman": []
+      }
+    }
+  ]
+}
