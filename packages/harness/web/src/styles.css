@@ -5898,6 +5898,7 @@ input {
   outline-offset: 2px;
 }
 
+/* The modal-templates dialog lays out its sections (header /
    body / footer separated by hairlines) at a two-pane browse width: the
    curated list on the left, the picked template's real manifest on the
    right, the destination + confirm in the footer. Selection, hover, and

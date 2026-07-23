@@ -1,5 +1,5 @@
 /**
- * E2E tests for the run-input dialog (SAP-1920):
+ * E2E tests for the run-input dialog:
  *  - Clicking Local Run / Prod Run opens the dialog (not a direct fire).
  *  - Dialog opens prefilled (default: '{}' when no last-used, no graph).
  *  - User can type custom JSON and run — dialog fires with that input.

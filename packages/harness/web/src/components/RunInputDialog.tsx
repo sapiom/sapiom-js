@@ -14,7 +14,7 @@
  * entries. The textarea variant (.run-input-editor) is defined in styles.css.
  */
 import { useEffect, useRef, useState } from "react";
-import type { JSX, RefObject } from "react";
+import type { JSX } from "react";
 
 import type { CanvasGraph } from "../lib/canvas-graph";
 import { stepInputFields } from "../lib/canvas-graph";
@@ -120,8 +120,6 @@ export interface RunInputDialogProps {
   /** Called when the user confirms the run — receives the parsed input. */
   onRun: (input: unknown) => void;
   onClose: () => void;
-  /** The button that opened the dialog — Escape returns focus to it. */
-  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 export function RunInputDialog({
@@ -130,7 +128,6 @@ export function RunInputDialog({
   graph,
   onRun,
   onClose,
-  triggerRef,
 }: RunInputDialogProps): JSX.Element {
   const [value, setValue] = useState<string>(() => computeInitialValue(workflowPath, graph));
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -143,7 +140,7 @@ export function RunInputDialog({
     textareaRef.current?.select();
   }, []);
 
-  useDismissable(true, { onDismiss: onClose, containerRef: panelRef, triggerRef });
+  useDismissable(true, { onDismiss: onClose, containerRef: panelRef });
 
   const fieldHint = buildFieldHint(graph);
   const title = kind === "local" ? "Local Run" : "Prod Run";
@@ -163,15 +160,9 @@ export function RunInputDialog({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Enter alone submits (like a normal form); Cmd/Ctrl+Enter also submits
-    // (the "power user" shortcut). Shift+Enter stays as a newline.
-    if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey || e.currentTarget.tagName !== "TEXTAREA")) {
-      e.preventDefault();
-      submit();
-      return;
-    }
-    // Cmd/Ctrl+Enter always submits (inside textarea, only way to do both).
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    // Cmd/Ctrl+Enter submits; Shift+Enter inserts a newline; plain Enter is a
+    // newline too (the editor holds multi-line JSON, so Enter must not run).
+    if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       submit();
     }
