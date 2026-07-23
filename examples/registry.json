@@ -39,6 +39,68 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "human-in-the-loop",
+      "name": "Human-in-the-Loop Approval",
+      "description": "Do reversible work, pause for a human approval signal before committing, then commit via a ranked sequential-fallback loop.",
+      "tags": ["approval", "human-in-the-loop", "hitl", "fallback"],
+      "sourcePath": "examples/human-in-the-loop",
+      "capabilities": ["llm.generate", "email.send"],
+      "whatItDoes": "The \"ask before you commit/spend\" pattern. The agent does reversible prep — parse the request (models.run), rank the candidates by fit, and notify the approver (email) — then blocks on a durable pauseUntilSignal so the run survives the wait at $0. A reject reverts to a safe state and terminates. An approve enters a ranked sequential-fallback loop: a provisional (non-committing) offer to the top candidate, a pause for their confirm, and on decline/timeout it advances to the next candidate. The single irreversible/expensive action lands in commit only after a human approved AND a candidate accepted; exhausting the ranked list escalates to a human instead of silently failing.",
+      "steps": [
+        {
+          "name": "parse",
+          "description": "Parse the free-text request into structured intent with an LLM.",
+          "capability": "llm.generate",
+          "next": ["rank"]
+        },
+        {
+          "name": "rank",
+          "description": "Rank the candidates by fit (not just cost) with an LLM.",
+          "capability": "llm.generate",
+          "next": ["notifyApprover"]
+        },
+        {
+          "name": "notifyApprover",
+          "description": "Email the approver the ranked recommendation, then pause until the approval signal (resumes at 'onDecision').",
+          "capability": "email.send",
+          "next": ["onDecision"]
+        },
+        {
+          "name": "onDecision",
+          "description": "Resume target — its input is the approval payload; approve enters the offer loop, reject reverts, no candidates escalates.",
+          "next": ["offer", "escalate", "revert"]
+        },
+        {
+          "name": "revert",
+          "description": "Terminal branch: rejected — revert to a safe state, nothing committed.",
+          "terminal": true
+        },
+        {
+          "name": "offer",
+          "description": "Provisional (non-committing) offer to the top-ranked candidate, then pause until their confirm (resumes at 'resolve').",
+          "capability": "email.send",
+          "next": ["resolve"]
+        },
+        {
+          "name": "resolve",
+          "description": "Resume target — its input is the confirm payload; accept commits, decline/timeout advances to the next candidate or escalates when exhausted.",
+          "next": ["commit", "offer", "escalate"]
+        },
+        {
+          "name": "commit",
+          "description": "The single irreversible/expensive action — reached only after approval AND a candidate accept; a dryRun guard makes it a no-op offline.",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "escalate",
+          "description": "Terminal branch: ranked list exhausted (or no candidates) — escalate to a human channel.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,63 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "The \"ask before you commit/spend\" pattern: do some reversible work, then **pause for a human approval signal** before committing an irreversible or expensive action — and once approved, act via a **ranked sequential-fallback loop** (try candidates in order until one accepts, escalating if the list runs out).\n\nThe agent does its reversible prep first — parse the request (`ctx.sapiom.models.run`), rank the candidates by fit (not just cost), and notify the approver (`ctx.sapiom.email`) with the recommendation — then blocks on `pauseUntilSignal({ signal: 'approval.decision' })`, suspending the run at $0 with no compute burning. A `reject` reverts to a safe state and terminates; an `approve` enters the confirmation loop.\n\nIn the loop, the agent makes a *provisional* (non-committing) offer to the top candidate and pauses on `candidate.confirm`. An `accept` performs the single irreversible action (`commit`) and notifies the non-selected; a `decline`/`timeout` advances to the next candidate. Exhausting the ranked list escalates to a human channel instead of silently failing.\n\nNothing irreversible or billed happens until a human approves AND a candidate accepts. `pauseUntilSignal` is a runtime primitive, not a metered capability; the billed calls are the model reasoning and the notifications.",
+  "useCases": [
+    "Gate an expensive or irreversible action (a spend, a booking, a contract) on explicit human approval before it runs.",
+    "Fill a request from a ranked shortlist — offer to the best fit first and fall back down the list until someone accepts.",
+    "Escalate to a human when automation can't close the loop, instead of failing silently."
+  ],
+  "notes": "`run_local` stubs the capabilities and auto-resumes both pauses. A resume with no explicit decision takes the SAFE branch (nothing commits), and the `dryRun` guard makes `commit`'s irreversible action a no-op — so the whole graph traces end to end for free before a billed deploy.\n\nA real `deploy` + `run` pauses for real. To drive it in dev, fire the signals via the MCP `signal_workflow` / `workflow_signal` tool. Approve: `{ \"signal\": \"approval.decision\", \"correlationId\": \"<executionId>\", \"payload\": { \"decision\": \"approve\" } }`. Then accept: `{ \"signal\": \"candidate.confirm\", \"correlationId\": \"<executionId>\", \"payload\": { \"decision\": \"accept\" } }`. Send `{ \"decision\": \"decline\" }` on `candidate.confirm` to exercise the fallback to the next candidate. See `README.md` and `AGENTS.md`.",
+  "examples": [
+    {
+      "title": "Rank, approve, and commit to the top candidate",
+      "input": {
+        "request": "Find someone to repaint the lobby by Friday, quality over price.",
+        "candidates": [
+          {
+            "id": "a",
+            "name": "Acme Painting",
+            "email": "acme@example.com",
+            "attributes": { "rating": 4.8, "price": 1200, "availability": "Thu" }
+          },
+          {
+            "id": "b",
+            "name": "Budget Coats",
+            "email": "budget@example.com",
+            "attributes": { "rating": 3.9, "price": 700, "availability": "Fri" }
+          }
+        ],
+        "approver": "approver@example.com",
+        "escalateTo": "ops@example.com"
+      },
+      "output": {
+        "committed": true,
+        "dryRun": false,
+        "outcome": "committed",
+        "selected": { "id": "a", "name": "Acme Painting" },
+        "notified": 1
+      }
+    },
+    {
+      "title": "Approved, but every candidate declined — escalate",
+      "input": {
+        "request": "Find someone to repaint the lobby by Friday.",
+        "candidates": [
+          { "id": "a", "name": "Acme Painting", "email": "acme@example.com" }
+        ],
+        "approver": "approver@example.com",
+        "escalateTo": "ops@example.com"
+      },
+      "output": {
+        "committed": false,
+        "outcome": "escalated",
+        "reason": "exhausted",
+        "considered": 1
+      }
+    }
+  ]
+}
