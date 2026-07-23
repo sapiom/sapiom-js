@@ -694,6 +694,32 @@ class MockApi implements HarnessApi {
 
   async getState(): Promise<AppState> {
     await delay();
+    // Test-only 401 simulation: `?mockBoot401=1` in the URL makes the FIRST
+    // boot fetch fail with a rejected credential (status 401). Consumed exactly
+    // once via a window flag set on first read — cleared immediately so the
+    // very next call (triggered by clicking Retry on the ConnectivityScreen)
+    // succeeds and the app loads normally. This lets the e2e suite assert that
+    // a 401 boot never produces a lockout: the ConnectivityScreen appears, Retry
+    // recovers, and the full shell renders.
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __MOCK_BOOT_401_CALL_COUNT__?: number;
+      };
+      const boot401 = new URLSearchParams(window.location.search).get("mockBoot401") === "1";
+      if (boot401) {
+        // React 18 StrictMode (dev) runs effects twice; the FIRST run is always
+        // discarded (its cleanup sets cancelled=true). The SECOND call is the
+        // real boot fetch whose result the shell actually displays.
+        // Strategy: count calls. Fail on call #2 (the real boot fetch). Calls
+        // #1 (StrictMode's discarded run) and #3+ (Retry) succeed normally.
+        // This lets the e2e assert: 401 → ConnectivityScreen → Retry → shell.
+        const prev = win.__MOCK_BOOT_401_CALL_COUNT__ ?? 0;
+        win.__MOCK_BOOT_401_CALL_COUNT__ = prev + 1;
+        if (prev + 1 === 2) {
+          throw new ApiError(401, "GET /api/state → 401: credential rejected (mock)", "credential rejected");
+        }
+      }
+    }
     // mockConsentSource query param lets Playwright exercise all chip states:
     //   ?mockConsentSource=env-forced-off  → "analytics off (env)" chip
     //   ?mockConsentSource=default-silent  → shows TelemetryNotice
