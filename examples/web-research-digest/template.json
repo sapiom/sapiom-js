@@ -5,17 +5,19 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "longDescription": "Search the web for a topic and return a concise, sourced digest — the onboarding flagship for one metered capability with an obvious output.\n\nThe `search` step calls the Sapiom `web.search` capability (`ctx.sapiom.search.webSearch`), which returns a synthesized answer plus ranked results. The `summarize` step then formats that answer and its source links into a markdown digest **in-process** — no LLM call — and returns `{ topic, digest, sources }`.\n\nOne metered call, a legible \"it did a thing\" result. A good first template to fork when you want to see a real capability run end to end.",
+  "longDescription": "Give it a topic and it searches the web and hands you a short digest with sources. It's the onboarding starting point — one capability, one clear output — and a good template to fork when you want to see a real capability run before building something bigger.\\n\\nThe `search` step calls Sapiom's `web.search` capability, which returns a synthesized answer plus ranked results. The `summarize` step formats that answer and its links into a markdown digest in the run — no model call — and returns `{ topic, digest, sources }`. If you pass an empty topic, it skips the search and hands back an empty digest instead of failing.\\n\\nYou pay for the one web search. The formatting step is free.",
   "useCases": [
     "Get a quick, sourced briefing on an unfamiliar topic before a meeting.",
     "Turn a research question into a shareable markdown digest with citations.",
-    "Learn how to wire a single metered capability into a agent you can extend."
+    "Learn how one metered capability wires into an agent you can extend — add a step to store or fan out the results."
   ],
-  "notes": "`run_local` stubs the `web.search` capability, so you can trace the full graph offline for free before deploying. A real `deploy` + `run` performs a billed web search.\n\nTo extend it, add a step after `summarize` — e.g. store the digest with `ctx.sapiom.memory.*`, or fan out one search per subtopic. `AGENTS.md` in this directory has the authoring loop.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\\n\\nPass a `topic` when you run it, for example `{ \"topic\": \"what is an LLM agent?\" }`. Each run does one billed web search and returns the digest plus its sources.\\n\\nPrefer to work from the code? Run it locally with `run_local` — the web search is stubbed, so you can trace the whole graph for free — or edit and deploy it with the Sapiom MCP.",
   "examples": [
     {
       "title": "Research an unfamiliar term",
-      "input": { "topic": "what is an LLM agent?" },
+      "input": {
+        "topic": "what is an LLM agent?"
+      },
       "output": {
         "topic": "what is an LLM agent?",
         "digest": "# Research digest: what is an LLM agent?\n\nAn LLM agent is a system that uses a large language model to decide and take actions...\n\n## Sources\n1. [What are LLM agents?](https://example.com/llm-agents)\n2. [Agents overview](https://example.com/agents-overview)",
