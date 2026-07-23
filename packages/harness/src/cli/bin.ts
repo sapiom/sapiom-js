@@ -2,11 +2,16 @@
 /**
  * sapiom-harness CLI entry (workstream W4).
  *
- * Flow: doctor → auth (reuse @sapiom/mcp browser OAuth) → consent (first run)
- * → generate boot token → startServer → open browser → print a startup banner.
+ * Flow: doctor → auth (non-blocking: reuse cached credential if present, skip
+ * browser OAuth at boot) → consent (first run) → generate boot token →
+ * startServer → open browser → print a startup banner.
  *
- * Flags: [dir] (default cwd), --port, --no-auth, --no-telemetry, --no-open,
- * --no-session, --dev.
+ * The Studio launches unauthenticated when no cached credential exists; the
+ * web app drives sign-in (D4/D5). Use --login to trigger an interactive
+ * browser OAuth before the server starts.
+ *
+ * Flags: [dir] (default cwd), --port, --login, --no-auth, --no-telemetry,
+ * --no-open, --no-session, --dev.
  */
 import * as path from "node:path";
 import * as crypto from "node:crypto";
@@ -28,6 +33,7 @@ import { startServer, type HarnessServer } from "../server/index.js";
 interface CliOptions {
   dir: string;
   port: number;
+  login: boolean;
   noAuth: boolean;
   noTelemetry: boolean;
   noOpen: boolean;
@@ -38,6 +44,7 @@ interface CliOptions {
 function parseArgs(argv: string[]): CliOptions {
   let dir: string | undefined;
   let port = DEFAULT_PORT;
+  let login = false;
   let noAuth = false;
   let noTelemetry = false;
   let noOpen = false;
@@ -55,6 +62,9 @@ function parseArgs(argv: string[]): CliOptions {
         port = Number(value);
         break;
       }
+      case "--login":
+        login = true;
+        break;
       case "--no-auth":
         noAuth = true;
         break;
@@ -84,6 +94,7 @@ function parseArgs(argv: string[]): CliOptions {
   return {
     dir: path.resolve(dir ?? process.cwd()),
     port,
+    login,
     noAuth,
     noTelemetry,
     noOpen,
@@ -107,8 +118,8 @@ function printBanner(opts: {
     : "not authenticated";
 
   console.log("");
-  console.log("  Sapiom Harness");
-  console.log("  --------------");
+  console.log("  Sapiom Studio");
+  console.log("  -------------");
   console.log(`  directory   ${opts.dir}`);
   console.log(`  auth        ${authLine}`);
   console.log(`  telemetry   ${opts.telemetryOptIn ? "on" : "off"}`);
@@ -147,7 +158,14 @@ const main = async (): Promise<void> => {
 
   const machineId = await getOrCreateMachineId();
 
-  const identity = await ensureAuthenticated({ interactive: true, noAuth: options.noAuth });
+  // Auth is non-blocking at boot: use a cached credential if one exists, but
+  // never open a browser at startup. The Studio launches unauthenticated and
+  // the web app drives sign-in (D4/D5). Pass --login to run an interactive
+  // browser OAuth before the server starts.
+  const identity = await ensureAuthenticated({
+    interactive: options.login,
+    noAuth: options.noAuth,
+  });
   // A cached credential signs you in with no visible prompt at all — call it
   // out explicitly so "auth silently worked" doesn't read as "nothing
   // happened" (a fresh login is its own visible browser flow already).
