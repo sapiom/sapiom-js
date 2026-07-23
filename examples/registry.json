@@ -465,6 +465,75 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "research-to-microsite",
+      "name": "Research → Micro-Site Publisher",
+      "description": "Research a topic across the web, then build and deploy a shareable live report site — not just a document.",
+      "tags": ["research", "coding-agent", "sandbox", "publish"],
+      "sourcePath": "examples/research-to-microsite",
+      "capabilities": [
+        "web.search",
+        "web.scrape",
+        "models.run",
+        "models.coding",
+        "sandboxes.deployPreview",
+        "domains.dns.create"
+      ],
+      "whatItDoes": "For when you want research to end in something you can link to, not a doc. It searches the web for your topic and reads the top sources for their full text. An LLM (models.run) turns those into a structured, cited report — a title, a summary, and a few sections that reference where each claim came from. Then a coding agent (models.coding) builds a self-contained static site from that report, and the run deploys it to a public URL (sandboxes.deployPreview). Point a domain you own at it and it adds a free CNAME so the site answers on your subdomain; skip the domain and the preview URL is the deliverable. The coding build can take minutes, so build launches it and the run pauses until it's ready — costing nothing while it works. Pass dryRun to get the report back without building or deploying anything.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Take the topic and run one web search for candidate sources.",
+          "capability": "web.search",
+          "next": ["scrape"]
+        },
+        {
+          "name": "scrape",
+          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
+          "capability": "web.scrape",
+          "next": ["synthesize"]
+        },
+        {
+          "name": "synthesize",
+          "description": "Hand the sources to an LLM to write a structured, cited report. A dry run stops here and returns the report.",
+          "capability": "models.run",
+          "next": ["build", "drafted"]
+        },
+        {
+          "name": "build",
+          "description": "Launch a coding agent to build a self-contained static site from the report, then pause until it finishes — costing nothing while it works.",
+          "capability": "models.coding",
+          "next": ["publish"]
+        },
+        {
+          "name": "publish",
+          "description": "Re-attach the coding agent's sandbox and deploy the site to a stable public URL.",
+          "capability": "sandboxes.deployPreview",
+          "next": ["mapDomain", "live", "failed"]
+        },
+        {
+          "name": "mapDomain",
+          "description": "If a domain you own is configured, point a subdomain at the live site with a free CNAME; otherwise this is skipped.",
+          "capability": "domains.dns.create",
+          "next": ["live"]
+        },
+        {
+          "name": "live",
+          "description": "Return the live URL, the custom URL when one was mapped, the report title, and the sources.",
+          "terminal": true
+        },
+        {
+          "name": "failed",
+          "description": "The build or the deploy failed; return the stage and the logs.",
+          "terminal": true
+        },
+        {
+          "name": "drafted",
+          "description": "The dry-run off-ramp: the report was computed but nothing was built or deployed.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
