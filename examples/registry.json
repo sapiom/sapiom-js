@@ -367,6 +367,56 @@
       ]
     },
     {
+      "id": "proposal-generator",
+      "name": "Proposal / Quote Generator",
+      "description": "Draft a client proposal from a request, render it to a PDF, then wait for a person to approve it before it emails the client.",
+      "tags": ["sales", "pdf", "approval", "human-in-the-loop"],
+      "sourcePath": "examples/proposal-generator",
+      "capabilities": [
+        "models.run",
+        "sandboxes.create",
+        "fileStorage.upload",
+        "email.send"
+      ],
+      "whatItDoes": "For turning an inbound request into a client-ready quote without building the doc by hand. You give it the requirement and an LLM (models.run) drafts a proposal — a title, a summary, a scope list, and priced line items — then your code, not the model, totals the numbers. It renders that draft into a real PDF in a throwaway sandbox and saves the file, so you get a link you can share. Before anything reaches the client it emails your approver a summary and pauses, costing nothing while it waits. Approve it and it emails the finished proposal to the client; reject it and it stops with the draft still on file. The one outward step only runs after a person says yes.",
+      "steps": [
+        {
+          "name": "draft",
+          "description": "An LLM turns the request into a structured proposal — title, summary, scope, and priced line items — then the totals are computed in code, not trusted from the model.",
+          "capability": "models.run",
+          "next": ["render"]
+        },
+        {
+          "name": "render",
+          "description": "Spin up a sandbox, lay the proposal out as a PDF with a small Node script, save the file to storage, then tear the sandbox down.",
+          "capability": "sandboxes.create",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Email the approver a summary and the PDF link, then pause and wait for their decision — costing nothing while idle (resumes at 'onDecision').",
+          "capability": "email.send",
+          "next": ["onDecision"]
+        },
+        {
+          "name": "onDecision",
+          "description": "Read the approval reply: approve emails the client, anything else stops safely with nothing sent.",
+          "next": ["send", "rejected"]
+        },
+        {
+          "name": "send",
+          "description": "The one outward step — email the approved proposal to the client. A dry run skips the send.",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Rejected at review — nothing goes to the client, and the draft PDF stays on file.",
+          "terminal": true
+        }
+      ]
+    },
+    {
       "id": "pr-review-bot",
       "name": "PR Review Bot",
       "description": "When a pull request opens, a coding agent reviews the code and flags missing tests, then posts the review to your email or Slack.",
