@@ -39,6 +39,38 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "wait-for-webhook",
+      "name": "Wait-for-Webhook",
+      "description": "Durable pause/resume — start a slow external job, suspend at $0 until a webhook callback fires, then decide.",
+      "tags": ["durable", "pause-resume", "webhook", "async"],
+      "sourcePath": "examples/wait-for-webhook",
+      "capabilities": ["llm.generate"],
+      "whatItDoes": "Starts a slow external async job and registers a resume contract, then suspends the run indefinitely at $0 via pauseUntilSignal — no polling, no held worker, no billed idle time. When an external webhook/callback fires the signal, the run resumes exactly where it left off: the callback payload becomes the resumed step's input, an LLM summarizes it, and the run branches to accept or reject. The sharpest showcase of the platform's durability differentiator.",
+      "steps": [
+        {
+          "name": "kickoff",
+          "description": "Start the external async job, register the resume contract, then pause until the callback signal (resumes at 'decide').",
+          "next": ["decide"]
+        },
+        {
+          "name": "decide",
+          "description": "Resume target — its input is the callback payload; summarize it with an LLM and branch.",
+          "capability": "llm.generate",
+          "next": ["accept", "reject"]
+        },
+        {
+          "name": "accept",
+          "description": "Terminal branch: the callback result was accepted.",
+          "terminal": true
+        },
+        {
+          "name": "reject",
+          "description": "Terminal branch: the callback result was rejected.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
