@@ -5,7 +5,7 @@
  *
  * These are the "direct" replacements for the old CLI/agent-driven macros: the
  * harness server calls the Sapiom backend itself (via {@link deploy} / {@link run}
- * from @sapiom/agent-core), so an action never spawns Claude Code and never
+ * from @sapiom/agent-core), so an action never spawns a subprocess agent and never
  * consumes the user's LLM credits. The Sapiom API key is held server-side and
  * never forwarded to the browser — exactly like {@link createRunsRouter}: the
  * SPA hits these local `/api/*` routes (no key in the request) and the router
@@ -219,8 +219,9 @@ function readDefinitionId(
 
 /**
  * Map an {@link AgentOperationError} (or any thrown value) to a terminal deploy
- * stream event — the credential hint is dropped, only the machine code/message
- * survive (no key material, no provider names).
+ * stream event. The hint is forwarded — it is safe to do so because git errors
+ * are redacted at source (credentials stripped before they reach the hint field),
+ * so no key material can reach the browser via this path.
  */
 function toDeployErrorEvent(
   err: unknown,
@@ -230,6 +231,7 @@ function toDeployErrorEvent(
       phase: "error",
       code: err.code,
       message: err.message,
+      ...(err.hint !== undefined ? { hint: err.hint } : {}),
     };
   }
   return {
@@ -291,7 +293,7 @@ async function withKeyRefreshRetry<T>(
  *   - `POST /api/runs/local` — NDJSON offline stub-run trace + summary.
  *
  * Deploy and prod-run run server-side with the held API key; run-local is fully
- * offline and needs no key. None of them ever involve Claude Code.
+ * offline and needs no key. None of them ever involve an AI coding agent.
  */
 export function createActionsRouter(opts: ActionsRouterOpts): Router {
   const router = Router();
