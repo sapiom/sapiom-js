@@ -76,8 +76,8 @@ export type RunLocalLine =
       outcome: LocalRunOutcome;
       output?: unknown;
       error?: unknown;
-      unusedStubs: Array<{ step: string; key: string }>;
-      stubWarnings: string[];
+      unusedStubs?: Array<{ step: string; key: string }>;
+      stubWarnings?: string[];
     }
   | { kind: "error"; outcome: "failed"; error: string };
 
@@ -1004,8 +1004,25 @@ class MockApi implements HarnessApi {
   // Scripted completed run for the demo leasing workflow. Per-step latency
   // and pass/fail only — the run inspector surfaces logs, latency, and
   // status, never cost.
+  //
+  // Test-only override: Playwright can set
+  //   window.__MOCK_RUN_STATE__[executionId] = RunView
+  // before announcing an execution.started to exercise run states (failed,
+  // running, stub hygiene signals) that the default fixture doesn't cover.
+  // The override is consumed once and cleared so subsequent polls use the
+  // default — mirrors __MOCK_INJECT_FAIL_ONCE__'s established pattern.
   async getRunState(executionId: string): Promise<RunView> {
     await delay(120);
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __MOCK_RUN_STATE__?: Record<string, RunView>;
+      };
+      const override = win.__MOCK_RUN_STATE__?.[executionId];
+      if (override) {
+        delete win.__MOCK_RUN_STATE__![executionId];
+        return override;
+      }
+    }
     return {
       executionId,
       status: "completed",
@@ -1057,7 +1074,7 @@ class MockApi implements HarnessApi {
       onLine(trace);
     }
     await delay(140);
-    onLine({ kind: "summary", outcome: "completed", output: { approved: true }, unusedStubs: [], stubWarnings: [] });
+    onLine({ kind: "summary", outcome: "completed", output: { approved: true } });
   }
 
   // The direct actions have no network in mock mode: they synthesize the same

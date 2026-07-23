@@ -1,5 +1,5 @@
 /**
- * Mock-tier Playwright e2e for the in-app auth flow (SAP-1843).
+ * Mock-tier Playwright e2e for the in-app auth flow.
  *
  * Runs in mock mode (VITE_MOCK=1) — no harness server, no real browser
  * OAuth, no network. MockApi.startAuth() completes the full sign-in inline
