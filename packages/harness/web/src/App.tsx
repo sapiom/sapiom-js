@@ -15,6 +15,7 @@ import type { HarnessKind, MacroDef, WorkflowInfo } from "@shared/types";
 import { BrandHeader } from "./components/BrandHeader";
 import { CanvasPane } from "./components/CanvasPane";
 import { CommandPalette } from "./components/CommandPalette";
+import { ConversationPane } from "./components/ConversationPane";
 import { DeadSessionPane } from "./components/DeadSessionPane";
 import { ImageComposer } from "./components/ImageComposer";
 import { SessionBar } from "./components/SessionBar";
@@ -26,7 +27,7 @@ import { Toast } from "./components/Toast";
 import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowActionStrip } from "./components/WorkflowActionStrip";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { boundWorkflowPathOf } from "./lib/api";
+import { boundWorkflowPathOf, isConversationPreview } from "./lib/api";
 import { useElementTopOffset } from "./lib/use-element-top-offset";
 import { resolveMacroUrl } from "./lib/macro-gating";
 import { CANVAS_MIN, RAIL_MIN, usePaneWidths } from "./lib/use-pane-widths";
@@ -317,7 +318,12 @@ export const App = (): JSX.Element => {
             onSetSettingsOpen={setSettingsOpen}
           />
           <div className="terminal-slot">
-            {activeSession?.status === "exited" ? (
+            {isConversationPreview() ? (
+              <ConversationPane
+                sessionId={harness.activeSessionId}
+                token={harness.bootToken}
+              />
+            ) : activeSession?.status === "exited" ? (
               <DeadSessionPane
                 session={activeSession}
                 onResume={() => void harness.resumeSession(activeSession.id)}
