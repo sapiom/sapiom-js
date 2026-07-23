@@ -1,0 +1,71 @@
+appId: ai.sapiom.harness
+productName: Sapiom
+copyright: Copyright © Sapiom
+# Pinned because packaging runs against a `pnpm deploy --prod` dir that has no
+# `electron` devDep for electron-builder to infer the version from. Keep in sync
+# with the `electron` devDependency.
+electronVersion: 33.4.11
+
+directories:
+  output: release
+  buildResources: assets
+
+# Default file globbing packs production node_modules + package.json. We add
+# our built output explicitly and keep source/maps out of the bundle.
+files:
+  - "dist/**/*"
+  - "package.json"
+  - "!**/*.map"
+  - "!**/*.ts"
+
+asar: true
+# Unpack ALL node_modules. The harness's Canvas check spawns a subprocess under
+# ELECTRON_RUN_AS_NODE=1 — plain Node with NO asar support — that imports
+# @sapiom/agent-core and its full transitive tree (@sapiom/agent, zod, esbuild,
+# …) and bundles the workflow. Plain Node can only resolve files that exist on
+# disk, so the entire dependency tree must be unpacked, not just @sapiom/*.
+# (Also covers node-pty's spawn-helper, which must be chmod'd +x / exec'd, and
+# makes packageRoot()/webDir real on-disk dirs.) The app's own dist/ stays
+# packed in app.asar.
+asarUnpack:
+  - "**/node_modules/**"
+
+# Rebuild node-pty against Electron's ABI during packaging.
+npmRebuild: true
+electronLanguages:
+  - en-US
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+  icon: assets/icon.png
+  # Clean artifact + package name (the npm name "@sapiom/harness-desktop" is an
+  # invalid .deb name and produces a bad "release/@sapiom/…" path).
+  artifactName: sapiom-${version}-${arch}.${ext}
+  executableName: sapiom
+  maintainer: Sapiom <team@sapiom.ai>
+  synopsis: One-click Sapiom harness — run your coding agent on Sapiom.
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  icon: assets/icon.png
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
+  # notarize: set true + APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID in Phase 5.
+
+win:
+  target:
+    - nsis
+  icon: assets/icon.png
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

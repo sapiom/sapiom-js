@@ -3,13 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "description": "Electron desktop app that wraps the Sapiom harness — a one-click install that auto-sets-up and runs the harness in a native window. The npx CLI (@sapiom/harness) remains the backup; this is a second host over the same startServer().",
+  "homepage": "https://sapiom.ai",
+  "author": {
+    "name": "Sapiom",
+    "email": "team@sapiom.ai"
+  },
   "type": "module",
   "main": "./dist/main/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-renderer.mjs",
     "dev": "pnpm run build && electron . --dev",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "dist": "pnpm run build && electron-builder",
+    "dist": "pnpm run build && node scripts/pack.mjs",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "clean": "rm -rf dist"
   },
