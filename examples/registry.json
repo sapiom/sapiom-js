@@ -365,6 +365,56 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "pr-review-bot",
+      "name": "PR Review Bot",
+      "description": "When a pull request opens, a coding agent reviews the code and flags missing tests, then posts the review to your email or Slack.",
+      "tags": ["coding-agent", "review", "pause-resume", "webhook"],
+      "sourcePath": "examples/pr-review-bot",
+      "capabilities": ["models.coding", "models.run", "email.send", "vault.get"],
+      "whatItDoes": "An always-on first-pass reviewer for your pull requests. It registers a PR webhook and then waits, costing nothing while idle — it can sit for days between reviews. When a PR is opened, the run wakes with the PR as its input: a coding agent checks the code out in a sandbox and reads the diff, told to look hardest at test coverage and list any change that shipped without a matching test. It reviews, it doesn't edit — nothing is pushed. A model then turns those raw notes into a short, structured review — a verdict, a summary, and the missing tests — and posts it to your email or, using a bot token you keep in the Vault, a Slack channel.",
+      "steps": [
+        {
+          "name": "watch",
+          "description": "Registers a PR webhook and how to resume this run, then pauses and waits for a pull request — costing nothing while idle.",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Wakes when a PR opens; its input is the PR payload. A coding agent checks the code out and analyzes the diff, flagging changes that lack tests.",
+          "capability": "models.coding",
+          "next": ["assess"]
+        },
+        {
+          "name": "assess",
+          "description": "A model turns the coding agent's raw findings into a structured review — a verdict, a summary, and the list of missing tests.",
+          "capability": "models.run",
+          "next": ["reportEmail", "reportSlack"]
+        },
+        {
+          "name": "reportEmail",
+          "description": "Emails the review to the configured recipient.",
+          "capability": "email.send",
+          "next": ["posted", "failed"]
+        },
+        {
+          "name": "reportSlack",
+          "description": "Reads your Slack bot token from the Vault and posts the review to the configured channel.",
+          "capability": "vault.get",
+          "next": ["posted", "failed"]
+        },
+        {
+          "name": "posted",
+          "description": "Return the result — the channel used and the verdict.",
+          "terminal": true
+        },
+        {
+          "name": "failed",
+          "description": "The send errored; return the error.",
+          "terminal": true
+        }
+      ]
     }
   ]
 }
