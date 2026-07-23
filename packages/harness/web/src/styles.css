@@ -1195,7 +1195,7 @@ input {
   line-height: 1.6;
 }
 
-/* Optional mono eyebrow above the title (the chat empty's "Session agent"). */
+/* Optional mono eyebrow above the title (the empty-state's "Session agent"). */
 .empty-state-eyebrow {
   color: var(--text-faint);
   font-family: var(--font-mono);
@@ -5632,7 +5632,7 @@ input {
   min-height: 0;
 }
 
-/* Skill detail body — chat-* markdown classes scoped for the narrower rail */
+/* Skill detail body — Markdown renderer's chat-* classes scoped for the narrower rail */
 
 .skill-detail-body {
   font-size: var(--type-label);
@@ -6364,7 +6364,7 @@ input {
   overflow-wrap: anywhere;
 }
 
-/* The notes are manifest markdown — reuse the chat renderer's classes at
+/* The notes are manifest markdown — reuse the Markdown renderer's classes at
    this pane's meta scale. */
 .template-notes {
   font-size: var(--type-meta);

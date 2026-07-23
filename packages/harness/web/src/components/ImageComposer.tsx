@@ -28,7 +28,7 @@ import { Icon } from "./Icon";
 
 /**
  * Opens the composer's file picker from anywhere inside the wrapped session
- * pane (the chat composer's + button). Null when no ImageComposer wraps the
+ * pane (the session toolbar's attach button). Null when no ImageComposer wraps the
  * consumer OR the session's harness lacks image support — consumers hide
  * their affordance then instead of rendering a dead control.
  */
@@ -141,7 +141,7 @@ export const ImageComposer = ({ sessionId, harness, api, showToast, children }: 
   );
 
   // Clipboard paste: only intercept when the clipboard actually carries an
-  // image, so ordinary text paste still flows through to the terminal/chat.
+  // image, so ordinary text paste still flows through to the terminal.
   // Bound to the window because the focused element is xterm's hidden textarea.
   useEffect(() => {
     if (!imageSupported) return;
