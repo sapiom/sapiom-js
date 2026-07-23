@@ -65,6 +65,9 @@ function refreshingProvider(
       }
       return Promise.resolve(current);
     },
+    clear: () => {
+      current = null;
+    },
   };
   return provider;
 }

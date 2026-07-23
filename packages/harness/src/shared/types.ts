@@ -381,7 +381,18 @@ export type BusMessage =
    * on /ws/events, which only the session with an open /ws/terminal socket
    * receives. Drives the SPA's per-tab busy pulse for background sessions.
    */
-  | { type: "session.activity"; harnessSessionId: string; at: string };
+  | { type: "session.activity"; harnessSessionId: string; at: string }
+  /**
+   * Auth state changed — fired after a successful sign-in (`POST
+   * /api/auth/start`) or sign-out (`POST /api/auth/disconnect`). The SPA
+   * should refetch `/api/auth/status` (or `/api/state`) on receipt to update
+   * its auth UI without a full page reload.
+   */
+  | {
+      type: "auth.changed";
+      authenticated: boolean;
+      organizationName: string | null;
+    };
 
 // ---------------------------------------------------------------------------
 // Runtime analytics — live run render state (see core/render-run-state.ts)

@@ -104,6 +104,46 @@ describe("createApiKeyProvider", () => {
     expect(refreshed).toBe("sk-just-logged-in");
     expect(provider.getKey()).toBe("sk-just-logged-in");
   });
+
+  it("clear() sets the in-memory key to null unconditionally", () => {
+    const provider = createApiKeyProvider("sk-live", {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv: () => Promise.resolve("sk-live"),
+    });
+
+    expect(provider.getKey()).toBe("sk-live");
+    provider.clear();
+    expect(provider.getKey()).toBeNull();
+  });
+
+  it("clear() is a no-op on an already-null key", () => {
+    const provider = createApiKeyProvider(null, {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv: () => Promise.resolve(null),
+    });
+
+    expect(provider.getKey()).toBeNull();
+    provider.clear(); // must not throw
+    expect(provider.getKey()).toBeNull();
+  });
+
+  it("refresh() after clear() does NOT re-adopt a non-null store value (clear is permanent until refresh finds a key)", async () => {
+    // This test documents that refresh() WILL re-adopt a key after clear()
+    // if the store has one — clear() only zeros in-memory; the store is
+    // separate and managed by clearCredentials().
+    const provider = createApiKeyProvider("sk-live", {
+      resolveEnvironmentName: () => Promise.resolve("production"),
+      readApiKeyForEnv: () => Promise.resolve("sk-live"),
+    });
+
+    provider.clear();
+    expect(provider.getKey()).toBeNull();
+
+    // refresh() re-reads the store and adopts the key again.
+    const refreshed = await provider.refresh();
+    expect(refreshed).toBe("sk-live");
+    expect(provider.getKey()).toBe("sk-live");
+  });
 });
 
 describe("staticApiKeyProvider", () => {
@@ -118,5 +158,12 @@ describe("staticApiKeyProvider", () => {
     const provider = staticApiKeyProvider(null);
     expect(provider.getKey()).toBeNull();
     expect(await provider.refresh()).toBeNull();
+  });
+
+  it("clear() is a no-op (static provider does not mutate)", () => {
+    const provider = staticApiKeyProvider("sk-fixed");
+    expect(() => provider.clear()).not.toThrow();
+    // Key is unchanged — static provider has no mutable state.
+    expect(provider.getKey()).toBe("sk-fixed");
   });
 });
