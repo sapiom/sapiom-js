@@ -22,6 +22,13 @@ on:
   push:
     tags:
       - "harness-desktop-v*"
+    # TEMP (Phase 4 bring-up): also build on pushes to the feature branch so we
+    # can iterate without minting throwaway tags/releases. The `release` job is
+    # gated on a tag ref, so branch pushes build + upload artifacts only — no
+    # GitHub Release is created. REMOVE this `branches:` block before merge;
+    # real releases are cut from `harness-desktop-v*` tags.
+    branches:
+      - "ewan/feat/harness-desktop"
   workflow_dispatch:
 
 # Don't cancel an in-progress release build for the same ref: half-published
