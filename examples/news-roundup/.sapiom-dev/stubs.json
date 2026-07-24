@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "steps": {
+    "search": {
+      "search.webSearch": {
+        "query": "stub",
+        "results": [
+          { "title": "Polsia raises Series A", "url": "https://news.example/polsia-a", "snippet": "Polsia announced a funding round..." },
+          { "title": "Polsia launches product", "url": "https://news.example/polsia-b", "snippet": "The company launched..." },
+          { "title": "Polsia bakery Berlin", "url": "https://blog.example/bakery", "snippet": "Unrelated bakery blog..." },
+          { "title": "Polsia hires CTO", "url": "https://news.example/polsia-c", "snippet": "Polsia announced a new CTO..." }
+        ]
+      }
+    },
+    "select": {
+      "models.run": {
+        "runId": "r1",
+        "status": "completed",
+        "output": "[{\"title\":\"Polsia raises Series A\",\"url\":\"https://news.example/polsia-a\",\"summary\":\"Polsia raised new funding. This gives the company money to grow.\",\"imagePrompt\":\"A friendly illustration of a growing plant in a pot of coins\"},{\"title\":\"Polsia launches product\",\"url\":\"https://news.example/polsia-b\",\"summary\":\"Polsia released a new product. Customers can use it today.\",\"imagePrompt\":\"A gift box opening with light rays\"},{\"title\":\"Polsia hires CTO\",\"url\":\"https://news.example/polsia-c\",\"summary\":\"Polsia hired a new technology chief. They will lead the engineering team.\",\"imagePrompt\":\"A person joining a team around a table, flat illustration\"}]",
+        "result": null,
+        "error": null
+      }
+    },
+    "illustrate": {
+      "contentGeneration.images.create": {
+        "images": [{ "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }]
+      },
+      "fileStorage.upload": {
+        "fileId": "img-stub",
+        "uploadUrl": "http://127.0.0.1:4599/put",
+        "expiresAt": "2099-01-01T00:00:00Z",
+        "requiredHeaders": { "content-type": "image/png" }
+      }
+    },
+    "publish": {
+      "fileStorage.upload": {
+        "fileId": "page-stub",
+        "uploadUrl": "http://127.0.0.1:4599/put",
+        "expiresAt": "2099-01-01T00:00:00Z",
+        "requiredHeaders": { "content-type": "text/html" }
+      },
+      "fileStorage.list": {
+        "files": [
+          { "fileId": "page-stub", "fileName": "news-roundup/polsia/pages/2026-07-22.html", "contentType": "text/html", "visibility": "public", "status": "uploaded", "fileSize": "1000", "createdAt": "2026-07-22T00:00:00Z", "downloadRequestCount": 0 },
+          { "fileId": "img-stub", "fileName": "news-roundup/polsia/images/2026-07-22-1.png", "contentType": "image/png", "visibility": "public", "status": "uploaded", "fileSize": "100", "createdAt": "2026-07-22T00:00:00Z", "downloadRequestCount": 0 }
+        ],
+        "limit": 100, "offset": 0, "hasMore": false
+      },
+      "fileStorage.getDownloadUrl": {
+        "downloadUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "expiresAt": "2099-01-01T00:00:00Z"
+      },
+      "sandboxes.get": { "name": "news-roundup-polsia", "source": "agent", "status": "running", "tier": "s", "url": null, "workspaceRoot": "/workspace", "expiresAt": null, "createdAt": "2026-07-22T00:00:00Z", "updatedAt": "2026-07-22T00:00:00Z" },
+      "sandbox.uploadFile": null,
+      "sandbox.deployPreview": { "url": "https://news-roundup-polsia.preview.example", "status": "deployed", "logs": "" }
+    }
+  }
+}
