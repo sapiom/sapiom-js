@@ -14,26 +14,3 @@ export class ContentGenerationHttpError extends Error {
     this.body = body;
   }
 }
-
-/**
- * Return the response when 2xx, otherwise throw a {@link ContentGenerationHttpError}.
- * Parses the error body as JSON when possible; falls back to raw text.
- */
-export async function ensureOk(
-  response: Response,
-  errorPrefix: string,
-): Promise<Response> {
-  if (response.ok) return response;
-  let body: unknown;
-  const text = await response.text().catch(() => "");
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-  throw new ContentGenerationHttpError(
-    `${errorPrefix}: ${response.status} ${text}`,
-    response.status,
-    body,
-  );
-}
