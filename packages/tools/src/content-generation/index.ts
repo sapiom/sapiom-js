@@ -25,21 +25,10 @@ import {
   defaultTransport,
   resolveCoreBaseUrl,
 } from "../_client/index.js";
-import { resolveServiceUrl } from "../_client/service-url.js";
-import { ensureOk, ContentGenerationHttpError } from "./errors.js";
+import { ContentGenerationHttpError } from "./errors.js";
 import type { DispatchHandle } from "../dispatch.js";
 
 export { ContentGenerationHttpError };
-
-/**
- * Base URL for the still-provider-direct video ops (deferred — async/poll, SAP-1117).
- * The routed `images.create` verb does NOT use this; it resolves the single Core
- * base URL at call time via {@link resolveCoreBaseUrl} (SAP-1116).
- */
-const DEFAULT_BASE_URL = resolveServiceUrl(
-  "fal",
-  process.env.SAPIOM_CONTENT_GENERATION_URL,
-);
 
 /**
  * Capability-stable signal a video launch fires when the video reaches a terminal
@@ -167,11 +156,6 @@ function mapResult(raw: RawImageResult): ImageGenerationResult {
 
 // ----- Capability operations -----
 
-/** Encode a model id into a URL path, preserving its `/` separators. */
-function modelToPath(model: string): string {
-  return model.split("/").filter(Boolean).map(encodeURIComponent).join("/");
-}
-
 /**
  * Guard a prompt value: throw a clear error before a paid job is submitted when
  * the prompt is absent, empty, or not a string. A JS caller passing `null`,
@@ -250,9 +234,15 @@ export async function createImage(
 export const images = { create: createImage };
 
 // ----- Video (async) -----
+//
+// Routed (SAP-1927): the submit goes through the shared {@link capabilityCall}
+// seam to `POST /v1/capabilities/content.generation.video` on the single Core base
+// URL — no direct fal host, no SDK-side `fal-ai/*` default (the router's adapter
+// owns model defaulting/aliasing). Video is async, so the router returns a
+// {@link VideoDispatchHandle}, not the result; completion is out-of-band — poll the
+// handle's `responseUrl` (the Sapiom-hosted queue URL the router hands back) until
+// the asset is ready.
 
-/** Default video model when the caller doesn't pick one. */
-const DEFAULT_VIDEO_MODEL = "fal-ai/veo3/fast";
 /** How often to poll for the async result, and when to give up. Caller-overridable. */
 const DEFAULT_VIDEO_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_VIDEO_TIMEOUT_MS = 5 * 60_000;
@@ -327,11 +317,15 @@ interface RawVideoResult {
   [key: string]: unknown;
 }
 
-/** The async submit handle: a queue id + the Sapiom URL to poll for the result. */
-interface QueueHandle {
-  request_id?: string;
-  response_url?: string;
-  status_url?: string;
+/**
+ * The router's normalized async-dispatch handle (camelCase — the fal adapter maps
+ * fal's snake_case queue fields away, `servedBy` stripped at the public boundary):
+ * a queue id plus the Sapiom-hosted URLs to poll for the result / status.
+ */
+interface VideoDispatchHandle {
+  requestId?: string;
+  responseUrl?: string;
+  statusUrl?: string;
 }
 
 function mapVideo(raw: RawMedia): GeneratedVideo {
@@ -356,49 +350,38 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Generate a video from a prompt. Video generation is asynchronous: this submits the
- * job, then polls the result through Sapiom until it's ready and returns it — so you
- * `await` it just like {@link createImage}, it just takes longer. Pass `storage` to
- * persist the output (the returned `video` then carries `fileId`). Throws
- * {@link ContentGenerationHttpError} on a failed submit, or an `Error` if the result
- * isn't ready within `timeoutMs`.
+ * Map a {@link VideoCreateInput} to the router's `VideoCreateRequest` DTO. Mirrors
+ * {@link createImage}: `model` is a body field the router's adapter turns into the
+ * provider path (and defaults when omitted), and `params` rides as a NESTED field
+ * (not spread) so the adapter forwards it verbatim. `!= null` keeps a JS caller's
+ * explicit null off the wire; `storage` uses a truthy check so `storage: null` is
+ * "no storage" rather than a null field. The poll-timing options
+ * (`pollIntervalMs`/`timeoutMs`) are SDK-local and never sent.
  */
-export async function createVideo(
-  input: VideoCreateInput,
-  transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
-): Promise<VideoGenerationResult> {
-  assertPrompt(input.prompt);
-  const path = modelToPath(input.model || DEFAULT_VIDEO_MODEL);
-
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    ...input.params,
-  };
-  // Truthy check (not `!== undefined`) so `storage: null` is treated as "no storage".
+function buildVideoRequest(input: VideoCreateInput): Record<string, unknown> {
+  const body: Record<string, unknown> = { prompt: input.prompt };
+  if (input.model != null) body.model = input.model;
   if (input.storage) body.storage = input.storage;
+  if (input.params != null) body.params = input.params;
+  return body;
+}
 
-  // Submit — for an async model Sapiom returns a queue handle, not the result.
-  const submitRes = await ensureOk(
-    await transport.fetch(`${baseUrl}/run/${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to submit video generation",
-  );
-  const handle = (await submitRes.json()) as QueueHandle;
-  if (!handle.response_url) {
-    throw new Error("Video submit did not return a result URL to poll");
-  }
-
-  // Poll the result THROUGH Sapiom until it's ready. The poll is what persists the
-  // output when `storage` was requested, so `fileId` is filled in by the time it returns.
-  const intervalMs = input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS;
-  const timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS;
+/**
+ * Poll a routed video handle's `responseUrl` (the Sapiom-hosted queue URL) until the
+ * asset is ready, then return the mapped result. The poll is what persists the output
+ * when `storage` was requested, so `fileId` is filled in by the time it returns.
+ * Throws once `timeoutMs` elapses with no result.
+ */
+async function pollVideoResult(
+  transport: Transport,
+  responseUrl: string,
+  requestId: string,
+  timeoutMs: number,
+  pollMs: number,
+): Promise<VideoGenerationResult> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await transport.fetch(handle.response_url, { method: "GET" });
+    const res = await transport.fetch(responseUrl, { method: "GET" });
     if (res.ok) {
       const raw = (await res.json()) as RawVideoResult;
       if (raw.video?.url) return mapVideoResult(raw);
@@ -412,10 +395,55 @@ export async function createVideo(
         // best-effort drain
       }
     }
-    await sleep(intervalMs);
+    await sleep(pollMs);
   }
   throw new Error(
-    `Video generation did not complete within ${timeoutMs}ms (request id: ${handle.request_id ?? "unknown"})`,
+    `Video generation did not complete within ${timeoutMs}ms (request id: ${requestId})`,
+  );
+}
+
+/**
+ * Generate a video from a prompt. Video generation is asynchronous: this submits the
+ * job, then polls the result through Sapiom until it's ready and returns it — so you
+ * `await` it just like {@link createImage}, it just takes longer. Pass `storage` to
+ * persist the output (the returned `video` then carries `fileId`). Throws
+ * {@link ContentGenerationHttpError} on a failed submit, or an `Error` if the result
+ * isn't ready within `timeoutMs`.
+ *
+ * Routed (SAP-1927): the submit goes through the shared {@link capabilityCall} seam
+ * to `POST /v1/capabilities/content.generation.video` on the single Core base URL,
+ * which returns a {@link VideoDispatchHandle}; the SDK then polls the handle's routed
+ * `responseUrl`. No direct fal host, no SDK-side `fal-ai/*` default.
+ */
+export async function createVideo(
+  input: VideoCreateInput,
+  transport: Transport = defaultTransport(),
+  baseUrl: string = resolveCoreBaseUrl(),
+): Promise<VideoGenerationResult> {
+  assertPrompt(input.prompt);
+
+  // Submit — for an async capability the router returns a dispatch handle, not the result.
+  const handle = await capabilityCall<VideoDispatchHandle>(
+    "content.generation.video",
+    buildVideoRequest(input),
+    {
+      transport,
+      baseUrl,
+      makeError: (message, status, errorBody) =>
+        new ContentGenerationHttpError(message, status, errorBody),
+      errorPrefix: "Failed to submit video generation",
+    },
+  );
+  if (!handle.responseUrl) {
+    throw new Error("Video submit did not return a result URL to poll");
+  }
+
+  return pollVideoResult(
+    transport,
+    handle.responseUrl,
+    handle.requestId ?? "unknown",
+    input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS,
+    input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS,
   );
 }
 
@@ -502,64 +530,41 @@ export function toVideoResumePayload(
 export async function launchVideo(
   input: VideoCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<VideoLaunchHandle> {
   assertPrompt(input.prompt);
-  const path = modelToPath(input.model || DEFAULT_VIDEO_MODEL);
 
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    ...input.params,
-  };
-  if (input.storage) body.storage = input.storage;
-
-  // Submit — includes the workflow resume token header so the service can resume
-  // the paused step when the job completes (no-op outside a workflow context).
-  const submitRes = await ensureOk(
-    await transport.fetch(`${baseUrl}/run/${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...workflowResumeHeaders(transport.resumeToken),
-      },
-      body: JSON.stringify(body),
-    }),
-    "Failed to submit video generation",
+  // Submit through the router, carrying the workflow resume token header so the
+  // gateway can resume the paused step when the job completes (no-op outside a
+  // workflow context — no token, no header). The `/v1` router forwards the header
+  // downstream so `pauseUntilSignal` still resumes through the routed path (SAP-1927).
+  const handle = await capabilityCall<VideoDispatchHandle>(
+    "content.generation.video",
+    buildVideoRequest(input),
+    {
+      transport,
+      baseUrl,
+      headers: workflowResumeHeaders(transport.resumeToken),
+      makeError: (message, status, errorBody) =>
+        new ContentGenerationHttpError(message, status, errorBody),
+      errorPrefix: "Failed to submit video generation",
+    },
   );
-  const handle = (await submitRes.json()) as QueueHandle;
-  if (!handle.response_url) {
+  if (!handle.responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");
   }
 
-  const requestId = handle.request_id ?? "unknown";
-  const responseUrl = handle.response_url;
+  const requestId = handle.requestId ?? "unknown";
+  const responseUrl = handle.responseUrl;
 
-  const wait = async ({
+  const wait = ({
     timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS,
     pollMs = input.pollIntervalMs ?? DEFAULT_VIDEO_POLL_INTERVAL_MS,
   }: {
     timeoutMs?: number;
     pollMs?: number;
-  } = {}): Promise<VideoGenerationResult> => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const res = await transport.fetch(responseUrl, { method: "GET" });
-      if (res.ok) {
-        const raw = (await res.json()) as RawVideoResult;
-        if (raw.video?.url) return mapVideoResult(raw);
-      } else {
-        try {
-          await res.body?.cancel();
-        } catch {
-          // best-effort drain
-        }
-      }
-      await sleep(pollMs);
-    }
-    throw new Error(
-      `Video generation did not complete within ${timeoutMs}ms (request id: ${requestId})`,
-    );
-  };
+  } = {}): Promise<VideoGenerationResult> =>
+    pollVideoResult(transport, responseUrl, requestId, timeoutMs, pollMs);
 
   return {
     requestId,

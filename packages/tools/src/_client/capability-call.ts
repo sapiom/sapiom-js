@@ -54,6 +54,14 @@ export interface CapabilityCallOptions {
   makeError: (message: string, status: number, body: unknown) => Error;
   /** Human-readable prefix for the thrown error's message. */
   errorPrefix: string;
+  /**
+   * Extra request headers merged into the routed call (over `content-type`, under
+   * the credential/attribution the Transport injects). An async-dispatch launch
+   * uses this to carry `x-sapiom-workflow-token` so the router forwards the resume
+   * token to the gateway and a paused workflow step still resumes (SAP-1927).
+   * Omit for the common case.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -75,7 +83,7 @@ export async function capabilityCall<Res>(
     `${baseUrl}/v1/capabilities/${id}`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...opts.headers },
       body: JSON.stringify(req),
     },
     { authHeader: "x-api-key" },
