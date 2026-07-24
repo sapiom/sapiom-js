@@ -108,8 +108,8 @@ export const App = (): JSX.Element => {
   // Per-workflow canvas graph cache: updated via onGraphChange from CanvasPane
   // so the run-input dialog can derive an entry-step skeleton.
   const [graphByWorkflow, setGraphByWorkflow] = useState<Map<string, CanvasGraph>>(new Map());
-  // Pending run-input dialog: opened reactively (run failed with a missing-input
-  // error) or proactively (user clicked "Edit input"). Cleared on dialog close.
+  // Pending run-input dialog: opened reactively when a run fails with a
+  // missing-input error. Cleared on dialog close.
   const [pendingRunDialog, setPendingRunDialog] = useState<{
     workflowPath: string;
     kind: "local" | "prod";
@@ -119,7 +119,7 @@ export const App = (): JSX.Element => {
     /**
      * When the dialog is opened because a run failed input validation: the
      * field names extracted from the error. Passed to RunInputDialog so it can
-     * build a prefill skeleton. Undefined for a proactive "Edit input" open
+     * build a prefill skeleton. Undefined when no specific fields were named
      * (uses the standard last-used > skeleton priority).
      */
     prefillFields?: string[];
@@ -783,21 +783,6 @@ export const App = (): JSX.Element => {
                 lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
                 authenticated={state.authenticated}
                 directActionSettleSeq={harness.directActionSettleSeq}
-                onEditInput={() => {
-                  // Proactive "Edit input" open: no prefillFields — standard
-                  // last-used > skeleton priority applies.
-                  setPendingRunDialog({
-                    workflowPath: boundWorkflow.path,
-                    // Use the run kind most relevant for the workflow's current
-                    // state: prod when deployed, local otherwise.
-                    kind: boundWorkflow.definitionId != null ? "prod" : "local",
-                    sessionId: harness.activeSessionId ?? "",
-                    definitionId:
-                      boundWorkflow.definitionId != null
-                        ? String(boundWorkflow.definitionId)
-                        : undefined,
-                  });
-                }}
                 onDeploy={() => {
                   void harness.deploy(boundWorkflow.path);
                 }}

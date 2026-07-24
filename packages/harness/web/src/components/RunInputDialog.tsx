@@ -1,7 +1,6 @@
 /**
- * Run-input dialog — opened proactively via "Edit input", or reactively when
- * a run fails because required fields were missing. Lets users supply the
- * entry-step input as JSON.
+ * Run-input dialog — opened reactively when a run fails because required
+ * fields were missing. Lets users supply the entry-step input as JSON.
  *
  * Prefill priority (highest to lowest):
  *   1. An explicit prefill skeleton built from detected missing fields (passed

@@ -37,12 +37,6 @@ interface SessionStepsBarProps {
    */
   directActionSettleSeq: number;
   /**
-   * Opens the run-input dialog proactively so the user can inspect or edit
-   * the last-used input before the next run. Called when the user clicks the
-   * "Edit input" affordance. When undefined the affordance is not rendered.
-   */
-  onEditInput?: () => void;
-  /**
    * Fires a deploy action — delegated from the deployment popover's Deploy /
    * Redeploy / Retry buttons so the popover doesn't duplicate deploy logic.
    */
@@ -73,7 +67,6 @@ export function SessionStepsBar({
   lastDeployError,
   authenticated,
   directActionSettleSeq,
-  onEditInput,
   onDeploy,
 }: SessionStepsBarProps): JSX.Element {
   const macroFor = (id: string): MacroDef | undefined => macros.find((m) => m.id === id);
@@ -201,22 +194,6 @@ export function SessionStepsBar({
       )}
 
       <div className="session-actions">
-        {/* Proactive "Edit input" affordance: opens the run-input dialog so the
-            user can inspect or change the last-used input before the next run.
-            Rendered only when a handler is provided (i.e. a workflow is bound). */}
-        {onEditInput && (
-          <button
-            type="button"
-            className="btn-ghost session-step session-edit-input"
-            data-testid="session-edit-input"
-            data-tooltip="Edit the run input (JSON) before the next run"
-            aria-label="Edit input"
-            onClick={onEditInput}
-          >
-            <Icon name="Pencil" size={14} />
-            <span className="session-step-label">Edit input</span>
-          </button>
-        )}
         {actions.map((action) => {
           // Auth gate: actions requiring authentication are disabled when not
           // signed in — never a silent dead-click. Local Run (no needsAuth) is

@@ -13,19 +13,16 @@
  *   - If the re-run succeeds (or fails for a non-input reason), the dialog
  *     closes and the existing result/error UI handles it.
  *
- *  Edit input affordance:
- *   - The "Edit input" button opens the dialog proactively, prefilled from
- *     last-used (or {}) — standard priority, no prefillFields.
- *   - Cancel closes without running.
- *   - Escape closes without running.
+ *  The dialog is reached ONLY via the run-first failure path — there is no
+ *  proactive "Edit input" affordance.
  *
- *  Validation (reachable via Edit input):
+ *  Validation (reachable via the reactive dialog):
  *   - Invalid JSON shows an inline error; the run does NOT fire.
  *   - The error message includes an example JSON object.
  *   - The error clears when the user edits the JSON.
  *
  *  Last-used persistence:
- *   - After a dialog run, reopening via "Edit input" shows the previous input.
+ *   - After a dialog run, the next direct run uses the stored input.
  *
  * All tests run in mock mode (VITE_MOCK=1) with no real server.
  * Mock escape hatches:
@@ -98,6 +95,10 @@ test.describe("run-first: no dialog for a clean run", () => {
     // Wait for the action to settle.
     const direct = await waitForDirectAction(page);
     expect(direct.action).toBe("run");
+  });
+
+  test("the 'Edit input' button does not exist in the action bar", async ({ page }) => {
+    await expect(page.getByTestId("session-edit-input")).not.toBeAttached();
   });
 });
 
@@ -195,64 +196,27 @@ test.describe("run-first: input-validation failure opens dialog reactively", () 
     );
     expect(reRun).toBeDefined();
   });
-});
 
-// ---------------------------------------------------------------------------
-// Edit input affordance — proactive dialog open
-// ---------------------------------------------------------------------------
+  test("Escape closes the reactive dialog without firing a run", async ({ page }) => {
+    await page.goto("/?seed=0&mockError=runLocalInput");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.getByTestId("session-steps")).toBeVisible();
 
-test.describe("Edit input affordance", () => {
-  test("the 'Edit input' button is visible in the action bar", async ({ page }) => {
-    await expect(page.getByTestId("session-edit-input")).toBeVisible();
-  });
-
-  test("clicking 'Edit input' opens the dialog prefilled from last-used (or {})", async ({
-    page,
-  }) => {
-    await page.getByTestId("session-edit-input").click();
+    await page.getByTestId("session-step-local").click();
 
     const dialog = page.getByTestId("run-input-dialog");
-    await expect(dialog).toBeVisible({ timeout: 3_000 });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-    // No last-used input, no graph skeleton — editor shows {}.
-    const editor = page.getByTestId("run-input-editor");
-    const value = await editor.inputValue();
-    expect(() => JSON.parse(value)).not.toThrow();
-
-    // Cancel closes the dialog without firing.
-    await page.getByRole("button", { name: "Cancel" }).click();
-    await expect(dialog).not.toBeVisible({ timeout: 2_000 });
-
-    // No run was fired.
-    const hook = await readTestHook(page);
-    expect(hook?.lastDirectAction).toBeUndefined();
-  });
-
-  test("Escape closes the dialog opened via Edit input without firing", async ({ page }) => {
-    await page.getByTestId("session-edit-input").click();
-    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    // The first directAction fired (the initial failed run); record it.
+    const hookBefore = await readTestHook(page);
+    const countBefore = hookBefore?.directActions?.length ?? 1;
 
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("run-input-dialog")).not.toBeVisible({ timeout: 2_000 });
+    await expect(dialog).not.toBeVisible({ timeout: 2_000 });
 
-    const hook = await readTestHook(page);
-    expect(hook?.lastDirectAction).toBeUndefined();
-  });
-
-  test("submitting from Edit input fires the run with the entered input", async ({ page }) => {
-    await page.getByTestId("session-edit-input").click();
-    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
-
-    const editor = page.getByTestId("run-input-editor");
-    await editor.fill('{"topic": "birds"}');
-    await page.getByTestId("run-input-submit").click();
-
-    await expect(page.getByTestId("run-input-dialog")).not.toBeVisible({ timeout: 2_000 });
-
-    // The run fires — since leasing is deployed, the dialog prefers prod.
-    const direct = await waitForDirectAction(page);
-    expect(direct.action).toBe("run");
-    expect(direct.req.input).toEqual({ topic: "birds" });
+    // No additional run should have fired after Escape.
+    const hookAfter = await readTestHook(page);
+    expect(hookAfter?.directActions?.length ?? 0).toBe(countBefore);
   });
 });
 
@@ -260,10 +224,14 @@ test.describe("Edit input affordance", () => {
 // Validation — invalid JSON shows inline error, no run fires
 // ---------------------------------------------------------------------------
 
-test.describe("JSON validation (via Edit input)", () => {
+test.describe("JSON validation (via reactive dialog)", () => {
   test("invalid JSON shows inline error and does NOT fire the run", async ({ page }) => {
-    await page.getByTestId("session-edit-input").click();
-    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.goto("/?seed=0&mockError=runLocalInput");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.getByTestId("session-steps")).toBeVisible();
+
+    await page.getByTestId("session-step-local").click();
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 5_000 });
 
     const editor = page.getByTestId("run-input-editor");
     await editor.fill("{bad json");
@@ -278,14 +246,19 @@ test.describe("JSON validation (via Edit input)", () => {
     // Dialog must still be open.
     await expect(page.getByTestId("run-input-dialog")).toBeVisible();
 
-    // No direct action should have fired.
+    // No additional direct action should have fired after the submit attempt.
     const hook = await readTestHook(page);
-    expect(hook?.lastDirectAction).toBeUndefined();
+    // Only the initial failed run should be recorded (1 action).
+    expect(hook?.directActions?.length ?? 0).toBe(1);
   });
 
   test("error clears when the user edits the JSON", async ({ page }) => {
-    await page.getByTestId("session-edit-input").click();
-    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    await page.goto("/?seed=0&mockError=runLocalInput");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.getByTestId("session-steps")).toBeVisible();
+
+    await page.getByTestId("session-step-local").click();
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 5_000 });
 
     const editor = page.getByTestId("run-input-editor");
     await editor.fill("{bad");
@@ -303,38 +276,28 @@ test.describe("JSON validation (via Edit input)", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("last-used input persists for the next run", () => {
-  test("after a dialog run, Edit input shows the previous input", async ({ page }) => {
-    // Open via Edit input, enter a value, and submit.
-    await page.getByTestId("session-edit-input").click();
-    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
-    await page.getByTestId("run-input-editor").fill('{"topic": "cats"}');
-    await page.getByTestId("run-input-submit").click();
-    await expect(page.getByTestId("run-input-dialog")).not.toBeVisible();
-
-    // Wait for the run to settle.
-    await waitForDirectAction(page);
-
-    // Reopen via Edit input — should show the last-used input.
-    await page.getByTestId("session-edit-input").click();
-    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
-
-    const editorValue = await page.getByTestId("run-input-editor").inputValue();
-    const parsed = JSON.parse(editorValue);
-    expect(parsed).toEqual({ topic: "cats" });
-
-    await page.keyboard.press("Escape");
-  });
-
   test("after a dialog run, the next direct Local Run uses the stored input", async ({ page }) => {
-    // Save an input via Edit input.
-    await page.getByTestId("session-edit-input").click();
-    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
+    // Trigger the reactive dialog, enter a value, and submit.
+    await page.goto("/?seed=0&mockError=runLocalInput");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.getByTestId("session-steps")).toBeVisible();
+
+    await page.getByTestId("session-step-local").click();
+    await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 5_000 });
     await page.getByTestId("run-input-editor").fill('{"topic": "birds"}');
     await page.getByTestId("run-input-submit").click();
     await expect(page.getByTestId("run-input-dialog")).not.toBeVisible();
-    await waitForDirectAction(page);
 
-    // Clear the recorded action list so we can identify the fresh direct run.
+    // Wait for the re-run to settle.
+    await page.waitForFunction(
+      () => {
+        const actions = (window as unknown as HarnessTestWindow).__HARNESS_TEST__?.directActions;
+        return actions && actions.length >= 2;
+      },
+      { timeout: 8_000 },
+    );
+
+    // Clear the recorded action list so we can identify the next fresh direct run.
     await page.evaluate(() => {
       const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
       if (win.__HARNESS_TEST__) {
@@ -342,6 +305,11 @@ test.describe("last-used input persists for the next run", () => {
         win.__HARNESS_TEST__["directActions"] = [];
       }
     });
+
+    // Navigate away from the mock-error URL so the next Local Run succeeds directly.
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.getByTestId("session-steps")).toBeVisible();
 
     // Direct Local Run should use the stored {"topic": "birds"}.
     await page.getByTestId("session-step-local").click();
