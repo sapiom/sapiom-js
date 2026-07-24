@@ -1,8 +1,8 @@
 /**
- * Mock-mode UI test for the composer image-attach feature (SAP-1634). Runs
- * against `vite dev` with VITE_MOCK=1 (see playwright.config.ts) — no harness
- * server. MockApi.attachImage records each call on
- * window.__HARNESS_TEST__.attachImageCalls, and MockApi.listHarnesses reports
+ * Mock-mode UI test for the composer image-attach feature. Runs against
+ * `vite dev` with VITE_MOCK=1 (see playwright.config.ts) — no harness server.
+ * MockApi.attachImage records each call on
+ * window.__HARNESS_TEST__.attachImageCalls, and MOCK_HARNESSES report
  * claude-code (the boot session's harness) as imageInput:true, so the attach
  * affordance renders on the active session.
  */
@@ -22,8 +22,12 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 
-test("the attach affordance shows on an image-capable session", async ({ page }) => {
-  await expect(page.getByTestId("image-composer-attach")).toBeVisible();
+test("no standalone attach button at idle — the queue strip only appears once something is queued", async ({ page }) => {
+  // Images are attached via paste, drag-and-drop, or the hidden file input.
+  // No standalone attach button renders at idle; the queue strip only appears
+  // once something is queued.
+  await expect(page.getByTestId("image-composer-attach")).toHaveCount(0);
+  await expect(page.locator(".image-composer-bar")).toHaveCount(0);
   await page.screenshot({ path: "web/e2e/screenshots/image-composer-idle.png" });
 });
 

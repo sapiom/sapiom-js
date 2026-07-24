@@ -1,0 +1,21 @@
+{
+  "name": "@sapiom/example-personalized-media-at-scale",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sapiom agent template: read a table of leads, generate a personalized image or short clip per row, store it, and email each recipient a link — on a schedule.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\""
+  },
+  "dependencies": {
+    "@sapiom/agent": "^0.6.0",
+    "@sapiom/tools": "^0.20.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.2"
+  }
+}

@@ -3,11 +3,11 @@
  *
  * Runs in mock mode (VITE_MOCK=1) — no harness server required.
  * Uses mockConsentSource and mockEnvReason query params to exercise all
- * chip states without a real server.
+ * consent states without a real server.
  *
  * Coverage:
- *   - Telemetry chip in BrandHeader (on / off / env states)
- *   - Chip click opens settings popover
+ *   - Consent setting in the settings popover (off / on / env-forced-off);
+ *     the account menu carries NO analytics chip anymore
  *   - TelemetryNotice shown for "default-silent", dismissed permanently
  *   - TelemetryNotice NOT shown for other consent sources
  *   - track("consent.changed") fires on toggle
@@ -41,66 +41,80 @@ async function getTrackEvents(page: import("@playwright/test").Page) {
   });
 }
 
-test.describe("telemetry chip in BrandHeader", () => {
-  test("shows 'analytics off' chip when telemetryOptIn is false (stored-explicit)", async ({ page }) => {
+// Consent lives in the settings popover, reached through the account menu.
+const openSettings = async (page: import("@playwright/test").Page): Promise<void> => {
+  await page.getByTestId("brand-identity").click();
+  await expect(page.getByTestId("profile-menu")).toBeVisible();
+  await page.getByTestId("settings-trigger").click();
+  await expect(page.getByTestId("settings-popover")).toBeVisible();
+};
+
+test.describe("consent setting in the settings popover", () => {
+  test("the account menu carries no analytics chip; consent lives in settings", async ({ page }) => {
+    await page.goto("/?mockConsentSource=stored-explicit");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    // The chip is gone from every surface, including the account menu.
+    await page.getByTestId("brand-identity").click();
+    await expect(page.getByTestId("profile-menu")).toBeVisible();
+    await expect(page.getByTestId("telemetry-chip")).toHaveCount(0);
+
+    // The setting itself is one more click away, in the settings popover.
+    await page.getByTestId("settings-trigger").click();
+    await expect(page.getByTestId("settings-popover")).toBeVisible();
+    await expect(page.getByTestId("telemetry-toggle")).toBeVisible();
+  });
+
+  test("stored-explicit off: the toggle is off and editable", async ({ page }) => {
     // Default mock: telemetryOptIn=false, consentSource=stored-explicit.
     await page.goto("/?mockConsentSource=stored-explicit");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    const chip = page.getByTestId("telemetry-chip");
-    await expect(chip).toBeVisible();
-    await expect(chip).toHaveAttribute("data-state", "off");
-    await expect(chip.locator(".telemetry-chip-label")).toHaveText("analytics off");
+    await openSettings(page);
+    const toggle = page.getByTestId("telemetry-toggle");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toBeEnabled();
+    await expect(page.getByTestId("telemetry-env-note")).toHaveCount(0);
   });
 
-  test("shows 'analytics off (env)' chip when consentSource is env-forced-off", async ({ page }) => {
+  test("env-forced-off: the toggle is off, locked, and the note names the env var", async ({ page }) => {
     await page.goto("/?mockConsentSource=env-forced-off&mockEnvReason=SAPIOM_TELEMETRY_DISABLED");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    const chip = page.getByTestId("telemetry-chip");
-    await expect(chip).toHaveAttribute("data-state", "env");
-    await expect(chip.locator(".telemetry-chip-label")).toHaveText("analytics off (env)");
+    await openSettings(page);
+    const toggle = page.getByTestId("telemetry-toggle");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toBeDisabled();
+    // A locked control always says why and names the way out.
+    const note = page.getByTestId("telemetry-env-note");
+    await expect(note).toBeVisible();
+    await expect(note).toContainText("$SAPIOM_TELEMETRY_DISABLED");
+    await expect(note).toContainText("Unset it");
   });
 
-  test("shows 'analytics on' chip when consentSource is prompted (user said yes)", async ({ page }) => {
+  test("prompted: the toggle reflects the yes answered at the CLI", async ({ page }) => {
     // "prompted" sets telemetryOptIn:true in the mock — mirrors a user who answered yes at the CLI.
     await page.goto("/?mockConsentSource=prompted");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    const chip = page.getByTestId("telemetry-chip");
-    await expect(chip).toHaveAttribute("data-state", "on");
-    await expect(chip.locator(".telemetry-chip-label")).toHaveText("analytics on");
+    await openSettings(page);
+    const toggle = page.getByTestId("telemetry-toggle");
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(toggle).toBeEnabled();
+    await expect(page.getByTestId("telemetry-env-note")).toHaveCount(0);
   });
 
-  test("chip click opens the settings popover", async ({ page }) => {
+  test("the toggle reflects live telemetryOptIn after switching it on", async ({ page }) => {
     await page.goto("/?mockConsentSource=stored-explicit");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    // Settings popover should not be visible yet.
-    await expect(page.getByTestId("settings-popover")).toHaveCount(0);
+    await openSettings(page);
+    const toggle = page.getByTestId("telemetry-toggle");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await toggle.click();
 
-    // Click the chip.
-    await page.getByTestId("telemetry-chip").click();
-
-    // Settings popover should now be open.
-    await expect(page.getByTestId("settings-popover")).toBeVisible();
-  });
-
-  test("chip reflects live telemetryOptIn — toggles on when the toggle is switched on", async ({ page }) => {
-    await page.goto("/?mockConsentSource=stored-explicit");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-
-    const chip = page.getByTestId("telemetry-chip");
-    await expect(chip).toHaveAttribute("data-state", "off");
-
-    // Open settings and toggle telemetry on.
-    await page.getByTestId("settings-trigger").click();
-    await expect(page.getByTestId("settings-popover")).toBeVisible();
-    await page.getByTestId("telemetry-toggle").click();
-
-    // Wait for the chip to update (settings PATCH is async in mock).
-    await expect(chip).toHaveAttribute("data-state", "on", { timeout: 3_000 });
-    await expect(chip.locator(".telemetry-chip-label")).toHaveText("analytics on");
+    // The settings PATCH is async in mock; the switch settles on.
+    await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: 3_000 });
   });
 });
 
@@ -167,6 +181,7 @@ test.describe("UI event tracking (track() calls)", () => {
   });
 
   test("telemetry toggle emits track('consent.changed') with optIn value", async ({ page }) => {
+    await page.getByTestId("brand-identity").click();
     await page.getByTestId("settings-trigger").click();
     await expect(page.getByTestId("settings-popover")).toBeVisible();
 
@@ -182,6 +197,7 @@ test.describe("UI event tracking (track() calls)", () => {
 
   test("new session creation emits track('session.created')", async ({ page }) => {
     // Open new session modal.
+    await page.getByTestId("history-trigger").click();
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
 

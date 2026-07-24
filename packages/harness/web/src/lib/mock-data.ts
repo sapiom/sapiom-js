@@ -2,28 +2,48 @@
  * Fixture data for `VITE_MOCK=1` — lets the SPA render fully without a
  * running harness server (see MockApi in ./api).
  */
-import type {
-  HarnessSession,
-  HarnessSettings,
-  MacroDef,
-  SessionSummary,
-  WorkflowInfo,
-} from "@shared/types";
-import type { SkillMeta } from "./api";
+import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
 
 const now = Date.now();
-const minutesAgo = (n: number): string =>
-  new Date(now - n * 60_000).toISOString();
-const daysAgo = (n: number): string =>
-  new Date(now - n * 24 * 60 * 60_000).toISOString();
+const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
+const daysAgo = (n: number): string => new Date(now - n * 24 * 60 * 60_000).toISOString();
 
 /** The directory the harness itself was launched from (`npx @sapiom/harness [dir]`). */
+/** Demo-only canvas overview content (the real renderer emits this inside
+ * its own document; live mode therefore renders no app-side panel). */
+export const MOCK_CANVAS_OVERVIEWS: Record<
+  string,
+  { description: string; stats: string; notes: string[] }
+> = {
+  "/Users/demo/acme-app/leasing": {
+    description: "Handles lease applications end to end: screening, credit check, and approval routing.",
+    // Counting rule shared with the Steps tab (canvas-graph's graphCounts):
+    // pipeline steps exclude the two terminal exits, counted separately.
+    stats: "4 steps · 2 exits · intake entry",
+    notes: [
+      "Applications default to manual review when the score field is missing.",
+      "Only scores of 620 and above auto-draft a lease; everything else escalates.",
+      "Both terminal steps are marked terminal-success in the graph.",
+    ],
+  },
+};
+
 export const MOCK_LAUNCH_DIR = "/Users/demo/acme-app";
+
+/** The ONLY mock sessions with a real bundled canvas document under
+ *  public/canvas/<id>/. The canvas pane must never mount an iframe for any
+ *  other mock session — on the static Pages build that URL is GitHub's 404
+ *  page, which would render inside the pane. Add a folder AND its id here
+ *  together, never one without the other. */
+export const MOCK_CANVAS_SESSIONS: readonly string[] = ["sess-boot"];
+
+export function hasMockCanvasDoc(sessionId: string): boolean {
+  return MOCK_CANVAS_SESSIONS.includes(sessionId);
+}
 
 /** Where MockApi.seedSampleProject pretends the example project landed —
  *  mirrors the real HARNESS_PATHS.sampleProject location. */
-export const MOCK_SAMPLE_PROJECT_ROOT =
-  "/Users/demo/.sapiom/harness/sample-project";
+export const MOCK_SAMPLE_PROJECT_ROOT = "/Users/demo/.sapiom/harness/sample-project";
 
 export const MOCK_SESSIONS: HarnessSession[] = [
   {
@@ -69,44 +89,54 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     ready: false,
   },
   {
-    id: "sess-bg",
+    id: "sess-leasing-2",
     agentSessionId: "1a2b3c4d-5e6f-4a71-8b2c-3d4e5f6a7b8c",
-    boundWorkflowPath: null,
+    // A SECOND live session bound to leasing, so the focused agent's main-panel
+    // tab strip is visibly multi-session on load: sess-boot is the active tab,
+    // this one is the background tab. It is also MOCK_ACTIVITY_SESSION_ID, so
+    // its tab carries the busy pulse shortly after load — the pulse only means
+    // anything on a tab you are not already looking at.
+    boundWorkflowPath: "/Users/demo/acme-app/leasing",
     harness: "claude-code",
-    // A second running session, not the active tab on load — demonstrates the
-    // tab strip (multiple live tabs) and the busy pulse (see
-    // MOCK_ACTIVITY_SESSION_ID in ./events), which only means anything on a
-    // tab you're not already looking at. cwd is deliberately "scratch" (no
-    // workflow lives there) so it doesn't move "onboarding-flow" out of the
-    // rail's "Other" group — see smoke.spec.ts's workspace-tree test.
-    cwd: "/Users/demo/scratch",
-    title: "scratch",
+    cwd: MOCK_LAUNCH_DIR,
+    title: "acme-app",
     status: "running",
-    // Later than sess-boot's createdAt (minutesAgo(1)) — tabs sort
-    // oldest-first, so this deliberately keeps boot as tab 1, scratch as
-    // tab 2 (see smoke.spec.ts's Cmd+1/Cmd+2 test).
+    // Later than sess-boot's createdAt (minutesAgo(1)) — tabs sort oldest-first,
+    // so this keeps boot as tab 1 and this one as tab 2 (see smoke.spec.ts's
+    // Cmd+1/Cmd+2 test).
     createdAt: minutesAgo(0),
     lastActiveAt: minutesAgo(0),
     ready: true,
   },
+  {
+    id: "sess-bg",
+    agentSessionId: "2c3d4e5f-6a7b-4c81-9d2e-3f4a5b6c7d8e",
+    boundWorkflowPath: null,
+    harness: "claude-code",
+    // A live session in a folder with NO agent (a bare scaffold session) — the
+    // rail's one focusable folder row. cwd is deliberately "scratch" so it
+    // keeps its own bare-folder group and never moves "onboarding-flow" out of
+    // "No workspace" (see smoke.spec.ts's workspace-tree test).
+    cwd: "/Users/demo/scratch",
+    title: "scratch",
+    status: "running",
+    createdAt: minutesAgo(3),
+    lastActiveAt: minutesAgo(3),
+    ready: true,
+  },
 ];
 
-/** The mock session `subscribeEvents` periodically fires simulated
- *  `session.activity` pings for — see ./events.ts. Exercises the tab strip's
- *  busy pulse on a background (non-active) tab without a real pty. */
-export const MOCK_ACTIVITY_SESSION_ID = "sess-bg";
+/** The mock session `subscribeEvents` fires one simulated `session.activity`
+ *  ping for shortly after load — see ./events.ts. It is the FOCUSED agent's
+ *  background tab (sess-leasing-2), so the tab strip's busy pulse shows on a
+ *  tab you are not already looking at, without a real pty. */
+export const MOCK_ACTIVITY_SESSION_ID = "sess-leasing-2";
 
 /** Fake filesystem for the new-session directory picker (GET /api/fs/list). Keys are absolute paths. */
 export const MOCK_FS_TREE: Record<string, string[]> = {
   "/": ["Users"],
   "/Users": ["demo"],
-  "/Users/demo": [
-    "acme-app",
-    "rfq-workflows",
-    "onboarding-flow",
-    "claims-triage",
-    "scratch",
-  ],
+  "/Users/demo": ["acme-app", "rfq-workflows", "onboarding-flow", "scratch"],
   "/Users/demo/acme-app": ["leasing", "src", "docs"],
   "/Users/demo/acme-app/leasing": [],
   "/Users/demo/acme-app/src": [],
@@ -115,7 +145,6 @@ export const MOCK_FS_TREE: Record<string, string[]> = {
   "/Users/demo/rfq-workflows/src": [],
   "/Users/demo/rfq-workflows/tests": [],
   "/Users/demo/onboarding-flow": [],
-  "/Users/demo/claims-triage": [],
   "/Users/demo/scratch": [],
 };
 
@@ -137,6 +166,10 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       title: "Wire the screening webhook",
       lastActiveAt: daysAgo(1),
       source: "transcript",
+      // Rich-meta fields: present on this entry (exercises the rich meta
+      // line), absent on the others (exercises the graceful degradation).
+      gitBranch: "feat/screening-webhook",
+      messageCount: 12,
     },
   ],
   "/Users/demo/rfq-workflows": [
@@ -153,40 +186,11 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
 };
 
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
-  {
-    name: "leasing",
-    path: "/Users/demo/acme-app/leasing",
-    definitionId: 4821,
-    definitionSlug: "lease-abstractor",
-    source: "scan",
-  },
-  {
-    name: "rfq",
-    path: "/Users/demo/rfq-workflows",
-    definitionId: null,
-    definitionSlug: null,
-    source: "scan",
-  },
+  { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821, definitionSlug: "leasing", source: "scan" },
+  { name: "rfq", path: "/Users/demo/rfq-workflows", definitionId: null, definitionSlug: null, source: "scan" },
   // Deployed like "leasing" but with a much longer name — exercises the
   // canvas header's deployed-dot staying pinned regardless of name length.
-  {
-    name: "onboarding-flow",
-    path: "/Users/demo/onboarding-flow",
-    definitionId: 9001,
-    definitionSlug: "onboarding-flow",
-    source: "connect",
-  },
-  // Deployed (has a definitionId) but its slug hasn't resolved — e.g. the
-  // harness isn't signed into the account that owns it. The snippet panel must
-  // fall back to the project name (this `name`) and show the "inferred" note,
-  // never a fill-in placeholder in the read-only slug field.
-  {
-    name: "claims-triage",
-    path: "/Users/demo/claims-triage",
-    definitionId: 7314,
-    definitionSlug: null,
-    source: "connect",
-  },
+  { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: 9001, definitionSlug: "onboarding-flow", source: "connect" },
 ];
 
 export const MOCK_MACROS: MacroDef[] = [
@@ -194,43 +198,21 @@ export const MOCK_MACROS: MacroDef[] = [
     id: "run_local",
     label: "Run local",
     icon: "Play",
-    action: {
-      kind: "inject",
-      text: "cd {{workflow.path}} && sapiom agents run --target local",
-      submit: true,
-    },
+    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target local", submit: true },
     requiresWorkflow: true,
   },
   {
     id: "deploy",
     label: "Deploy",
     icon: "Cloud",
-    action: {
-      kind: "inject",
-      text: "cd {{workflow.path}} && sapiom agents deploy",
-      submit: true,
-    },
+    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents deploy", submit: true },
     requiresWorkflow: true,
   },
   {
     id: "prod_run",
     label: "Prod run",
     icon: "Zap",
-    action: {
-      kind: "inject",
-      text: "cd {{workflow.path}} && sapiom agents run --target prod",
-      submit: true,
-    },
-    requiresWorkflow: true,
-  },
-  {
-    id: "open_prod",
-    label: "Open prod",
-    icon: "ExternalLink",
-    action: {
-      kind: "open-url",
-      url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}",
-    },
+    action: { kind: "inject", text: "cd {{workflow.path}} && sapiom agents run --target prod", submit: true },
     requiresWorkflow: true,
   },
   {
@@ -245,87 +227,69 @@ export const MOCK_MACROS: MacroDef[] = [
   },
 ];
 
-export const MOCK_SETTINGS: HarnessSettings = {
-  telemetryOptIn: false,
-  recentDirs: [
-    "/Users/demo/acme-app",
-    "/Users/demo/rfq-workflows",
-    "/Users/demo/onboarding-flow",
-  ],
-};
-
-export const MOCK_SKILLS: SkillMeta[] = [
+/** Adapter registry fixture (GET /api/harnesses): mirrors the upstream
+ *  HARNESS_ADAPTER_INFOS shape and order as of harness 0.1.4 — the two
+ *  spawnable adapters installed (a healthy dev machine), the experimental
+ *  and external ones present but not launchable, exactly as the server
+ *  reports them. The installMcpPrompt strings are the per-agent copy-paste
+ *  Sapiom MCP setup instructions the server ships for each adapter. */
+export const MOCK_HARNESSES: HarnessEntry[] = [
   {
-    id: "sapiom-agent-authoring",
-    name: "Agent Authoring",
-    description:
-      "Build, test, and deploy a Sapiom agent — a controlled, multi-step, deployable automation.",
-    source: "package",
+    id: "claude-code",
+    label: "Claude Code",
+    mode: "embedded",
+    experimental: false,
+    installed: true,
+    installMcpPrompt:
+      "Add the Sapiom MCP server to this project: run `claude mcp add sapiom --transport http https://api.sapiom.ai/v1/mcp`, restart the session, then run /mcp to confirm the sapiom tools are listed.",
+    // Mirrors the upstream adapter descriptors: claude-code and
+    // codex read images from a file path, so the composer offers attach.
+    imageInput: true,
   },
   {
-    id: "frontend-design",
-    name: "Frontend Design",
-    description:
-      "Create distinctive, production-grade frontend interfaces with high design quality.",
-    source: "user",
+    id: "codex",
+    label: "Codex CLI",
+    mode: "embedded",
+    experimental: false,
+    installed: true,
+    installMcpPrompt:
+      'Add the Sapiom MCP server to Codex: in ~/.codex/config.toml add an [mcp_servers.sapiom] entry with url = "https://api.sapiom.ai/v1/mcp", then restart Codex and confirm the sapiom tools are listed.',
+    imageInput: true,
+  },
+  // The rest of the registry, honestly non-launchable: the pickers list them
+  // disabled with the reason in a tooltip (no fabricated availability).
+  {
+    id: "pi",
+    label: "pi",
+    mode: "embedded",
+    experimental: true,
+    installed: false,
+    installMcpPrompt: "",
+    imageInput: false,
   },
   {
-    id: "code-review",
-    name: "Code Review",
-    description:
-      "Systematic review of code changes for correctness, style, and security.",
-    source: "user",
+    id: "opencode",
+    label: "opencode",
+    mode: "embedded",
+    experimental: true,
+    installed: false,
+    installMcpPrompt: "",
+    imageInput: false,
+  },
+  {
+    id: "conductor",
+    label: "Conductor",
+    mode: "external",
+    experimental: false,
+    installed: false,
+    installMcpPrompt: "",
+    imageInput: false,
   },
 ];
 
-export const MOCK_SKILL_BODIES: Record<string, string> = {
-  "sapiom-agent-authoring": `# Agent Authoring
-
-A Sapiom **agent** is a small TypeScript project you author with your coding agent: a
-\`defineAgent({ name, entry, steps })\` where each step's \`run(input, ctx)\` does work.
-
-## Quick start
-
-\`\`\`bash
-sapiom agents init my-agent
-cd my-agent
-sapiom agents run --target local
-\`\`\`
-
-## Steps
-
-Each step is a pure function that receives input and returns a directive:
-
-- \`continue(output)\` — advance to the next step
-- \`wait(signal)\` — pause until a signal arrives
-- \`complete(result)\` — finish the agent run
-`,
-  "frontend-design": `# Frontend Design
-
-Create distinctive, production-grade frontend interfaces with high design quality.
-
-## Principles
-
-- **Typography**: Choose fonts that are beautiful and unique
-- **Color**: Commit to a cohesive aesthetic with CSS variables
-- **Motion**: Use animations for micro-interactions
-- **Composition**: Unexpected layouts, asymmetry, generous negative space
-
-## Getting started
-
-Tell the agent what you want to build — component, page, or application —
-and describe the aesthetic direction (minimal, editorial, industrial, etc.).
-`,
-  "code-review": `# Code Review
-
-Systematic review of code changes for correctness, style, and security.
-
-## Checklist
-
-- [ ] Logic is correct (no off-by-one, null dereference, race conditions)
-- [ ] Error paths are handled
-- [ ] Types are sound — no \`any\` without justification
-- [ ] No debug artifacts (console.log, TODO, commented-out code)
-- [ ] Tests cover the happy path and key error cases
-`,
+export const MOCK_SETTINGS: HarnessSettings = {
+  telemetryOptIn: false,
+  recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-workflows", "/Users/demo/onboarding-flow"],
 };
+
+

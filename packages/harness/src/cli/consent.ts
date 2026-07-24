@@ -15,7 +15,7 @@ import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 const DEFAULT_TELEMETRY_OPT_IN = true;
 
 const CONSENT_COPY = `
-Sapiom Harness collects usage analytics locally and, with telemetry on,
+Sapiom Studio collects usage analytics locally and, with telemetry on,
 sends them to Sapiom to improve the product:
   - the prompts you send and the tool calls your agent makes
   - session start/stop lifecycle events

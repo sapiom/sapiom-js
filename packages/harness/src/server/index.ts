@@ -12,7 +12,7 @@ import {
   type Server as HttpServer,
 } from "node:http";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { WebSocketServer } from "ws";
@@ -85,6 +85,7 @@ import {
   resolveAgentsBaseUrl,
 } from "../core/definition-slug-resolver.js";
 import { createBootTokenMiddleware } from "./auth.js";
+import { createApiKeyProvider } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -101,11 +102,14 @@ import { createCanvasRouter } from "./canvas.js";
 import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
-import { createSkillsRouter } from "./skills.js";
 import { createRunsRouter } from "./runs.js";
+import { createActionsRouter } from "./actions.js";
+import {
+  createAuthRouter,
+  createMutableAuthState,
+} from "./auth-routes.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
 // (an identical helper); the runs router reuses it for its agents base URL.
-import { resolveCoreBaseUrl } from "../core/run-spend.js";
 
 /**
  * Codex has no hook system — its rollout file is polled into existence
@@ -238,7 +242,7 @@ function workflowListsEqual(
 ): boolean {
   if (a.length !== b.length) return false;
   const key = (w: WorkflowInfo): string =>
-    `${w.path} ${w.name} ${w.definitionId ?? ""} ${w.source}`;
+    `${w.path}\u0000${w.name}\u0000${w.definitionId ?? ""}\u0000${w.source}`;
   const setA = new Set(a.map(key));
   return b.every((w) => setA.has(key(w)));
 }
@@ -296,6 +300,23 @@ export const startServer = async (
 ): Promise<HarnessServer> => {
   const host = options.host ?? "127.0.0.1";
   const identity = options.identity ?? null;
+  // The single source of truth for the Sapiom API key (`sk_…`) that Studio
+  // actions authenticate with — distinct from the per-boot boot token that only
+  // gates the local /api surface. Seeded from the boot-time identity; its
+  // refresh() re-reads the shared credential store so a rotated/re-logged-in key
+  // recovers a 401 in place instead of locking the Studio.
+  const apiKeyProvider = createApiKeyProvider(identity?.apiKey ?? null, {
+    environment: process.env.SAPIOM_ENVIRONMENT,
+  });
+
+  // Mutable auth state — seeded from the boot-time identity and updated by the
+  // in-app auth routes (POST /api/auth/start, POST /api/auth/disconnect). The
+  // auth router mutates this on every sign-in/sign-out; GET /api/auth/status
+  // reads it directly so the SPA always sees the live state.
+  const authState = createMutableAuthState({
+    authenticated: identity !== null,
+    organizationName: identity?.organizationName ?? null,
+  });
   const statePaths = resolveStatePaths(options.stateRoot);
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
@@ -544,6 +565,34 @@ export const startServer = async (
     await workflowRegistry.scan(session.cwd);
     const after = await workflowRegistry.list();
     workflowsCache = after;
+
+    // Auto-bind: if this session is still unbound, find the workflow at or
+    // directly under its cwd and bind it — same mechanism as
+    // PATCH /api/sessions/:id/workflow (setBoundWorkflowPath +
+    // writeSessionContext + renderCanvas). Only runs once: the guard
+    // `!session.boundWorkflowPath` is false on every subsequent rescan once
+    // the session is bound, so this is idempotent and never overrides an
+    // explicit/persisted binding.
+    if (!session.boundWorkflowPath) {
+      const cwdSep = session.cwd + sep;
+      const candidate =
+        after.find((w) => w.path === session.cwd) ??
+        after
+          .filter((w) => w.path.startsWith(cwdSep))
+          .sort((a, b) => a.path.length - b.path.length)[0] ??
+        null;
+      if (candidate) {
+        sessionManager.setBoundWorkflowPath(session.id, candidate.path);
+        // Re-read: setBoundWorkflowPath mutates the session object in place,
+        // so the session reference we already hold already carries the new
+        // binding — pass it directly, same as the PATCH handler does.
+        await writeSessionContext(session);
+        await renderCanvas(session).catch((err: unknown) => {
+          console.error("[harness] auto-bind canvas render failed:", err);
+        });
+      }
+    }
+
     if (workflowListsEqual(before, after)) return;
     await Promise.all(sessionManager.list().map((s) => writeSessionContext(s)));
     bus.publish({ type: "workflows.changed" });
@@ -556,16 +605,38 @@ export const startServer = async (
     },
   });
 
+  // Sessions that have already had their one-time on-start workspace rescan.
+  // onStatusChange also fires on later status broadcasts (including the
+  // bind/unbind frames setBoundWorkflowPath emits), so this guard keeps the
+  // rescan to the FIRST transition to running — otherwise it re-fires on every
+  // bind change and would re-bind a session the user just unbound.
+  const rescannedOnStart = new Set<string>();
+
   sessionManager.onStatusChange((session) => {
     bus.publish({ type: "session.status", session });
     if (session.status === "running") {
       canvasWatcher.start(session.id, session.cwd);
       workspaceWatcher.start(session.id, session.cwd);
+      // The workspace watcher captures the workflows already present at start as
+      // its baseline and only fires onChange on a LATER change — so a session
+      // that starts in a folder where the workflow already exists (a
+      // cloned/deployed template) never triggers a rescan and never auto-binds.
+      // Run the rescan ONCE on start to cover that case; the watcher covers
+      // workflows that appear afterward. Auto-bind stays guarded by
+      // !boundWorkflowPath, so an already-bound/resumed session is untouched.
+      if (!rescannedOnStart.has(session.id)) {
+        rescannedOnStart.add(session.id);
+        void rescanWorkspaceForSession(session.id).catch((err: unknown) => {
+          console.error("[harness] initial workspace rescan failed:", err);
+        });
+      }
     } else if (session.status === "exited") {
       canvasWatcher.stop(session.id);
       workspaceWatcher.stop(session.id);
       portDetector.reset(session.id);
       executionDetector.reset(session.id);
+      // Let a resumed session get a fresh on-start rescan.
+      rescannedOnStart.delete(session.id);
       // The generated config dir is dead once the pty is: every file in it
       // is regenerated by buildLaunchOpts on resume, and the agent's last
       // emit.cjs execution (SessionEnd) happens before its process exits.
@@ -730,7 +801,11 @@ export const startServer = async (
   // (base64 data URLs, up to ~13 MiB encoded) can be parsed — see
   // JSON_BODY_LIMIT_BYTES. This is the parser that actually gates every /api
   // route; the rest router mounts its own with the same limit for standalone use.
-  app.use("/api", createBootTokenMiddleware(options.bootToken), express.json({ limit: JSON_BODY_LIMIT_BYTES }));
+  app.use(
+    "/api",
+    createBootTokenMiddleware(options.bootToken),
+    express.json({ limit: JSON_BODY_LIMIT_BYTES }),
+  );
   app.use(
     "/api",
     createRestRouter({
@@ -810,15 +885,30 @@ export const startServer = async (
   };
   app.use(
     createRunsRouter({
-      apiKey: identity?.apiKey ?? null,
+      // Pass the provider (not a static key) so the live-status path can refresh
+      // the API key on a 401 and retry, recovering instead of locking.
+      apiKey: apiKeyProvider,
       baseUrl: resolveAgentsBaseUrl(),
-      coreBaseUrl: resolveCoreBaseUrl(),
+    }),
+  );
+  // Direct action macros (Deploy / Prod-run) — server-side, key never reaches
+  // the browser, no Claude Code. Resolves a workflow :id (its path) against the
+  // same live cache the rest router's findWorkflow uses.
+  app.use(
+    createActionsRouter({
+      // Pass the provider (not a static key) so deploy/prod-run authenticate
+      // with the live key and can refresh + retry on a rejected key, recovering
+      // instead of locking — matching the runs router above.
+      apiKey: apiKeyProvider,
+      // coreBaseUrl omitted: the router self-defaults via resolveCoreBaseUrl()
+      // (see actions.ts), which derives the core host from the agents env.
+      resolveWorkflow: (id) =>
+        workflowsCache.find((w) => w.path === id) ?? null,
     }),
   );
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
     createFsRouter(),
-    createSkillsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) =>
@@ -865,6 +955,20 @@ export const startServer = async (
       openUrl: async (url) => {
         await open(url);
       },
+    }),
+  );
+
+  // In-app auth routes: POST /api/auth/start, POST /api/auth/disconnect,
+  // GET /api/auth/status — reuse the CLI's performBrowserAuth flow so the
+  // web app can trigger sign-in without restarting the server. Sits under /api
+  // so the boot-token middleware mounted above already gates it.
+  app.use(
+    "/api",
+    createAuthRouter({
+      authState,
+      apiKeyProvider,
+      bus,
+      environment: process.env.SAPIOM_ENVIRONMENT,
     }),
   );
 
@@ -1036,7 +1140,7 @@ export const startServer = async (
   // NOTE: mount additional routers above this line — the static/SPA fallback
   // below is a catch-all and must stay last.
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
-  app.use(createStaticRouter(webDir));
+  app.use(createStaticRouter(webDir, options.bootToken));
 
   app.use(
     (

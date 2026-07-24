@@ -1,0 +1,79 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You give it a topic. It searches the web, reads the top sources for full text, and has an LLM write a structured, cited report — a title, a summary, and a handful of sections that reference where each claim came from. Then it does the part a research tool usually leaves to you: it hands the report to a coding agent that builds a self-contained static site, deploys it, and gives you back a URL you can send someone.\n\nThe build is a real coding-agent run, so it can take minutes. The `build` step launches it and pauses on its result — the run costs nothing while the agent works and wakes up at `publish` when the site is ready. `publish` re-attaches the sandbox the agent built in and deploys it to a stable preview URL. If you point a domain you own at it, `mapDomain` adds a free CNAME so the site answers at `report.your-domain.dev` instead; skip the domain and the preview URL is the deliverable.\n\nSet `dryRun: true` and it stops after writing the report and returns it — no build, no deploy, no DNS. That's the free path `run_local` traces end to end before you spend anything.\n\nYou pay for the web search, the scrapes, the model that writes the report, and the coding agent that builds the site — the pause while the build runs, and the DNS record, are free. A dry run costs only the search, scrape, and report.",
+  "useCases": [
+    "Turn a research question into a live, linkable report site — for a market, a competitor, or a technology — instead of a doc.",
+    "Publish a sourced explainer your team or customers can open in a browser, complete with clickable citations.",
+    "Stand up a one-page micro-site on a topic and, optionally, map it onto a subdomain you own."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `topic` (what to research) and, optionally, an `audience` to tune the tone. To publish under your own domain, register/own the domain in Sapiom first, then pass `customDomain` (a domain you own) and an optional `subdomain` (defaults to `www`) — it adds a free CNAME to the live site. Leave the domain off and you still get a shareable preview URL. Pass `dryRun: true` to get the report back without building or deploying anything.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"topic\": \"...\", \"dryRun\": true }` to trace search → scrape → synthesize and read the report for free (capabilities stubbed, nothing built), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Preview the report before publishing",
+      "input": {
+        "topic": "the state of on-device AI in 2026",
+        "audience": "developers",
+        "dryRun": true
+      },
+      "output": {
+        "published": false,
+        "dryRun": true,
+        "topic": "the state of on-device AI in 2026",
+        "report": {
+          "title": "On-Device AI in 2026",
+          "tagline": "Smaller models, bigger reach — inference moves to the edge.",
+          "summary": "On-device inference has crossed from demo to default for a growing class of apps...",
+          "sections": [
+            {
+              "heading": "What changed",
+              "body": "Quantized small models now run acceptably on consumer hardware [1], and toolchains ship first-class on-device runtimes [2]."
+            }
+          ],
+          "sources": [
+            {
+              "title": "Small models on the edge",
+              "url": "https://example.com/edge"
+            },
+            {
+              "title": "On-device runtimes",
+              "url": "https://example.com/runtimes"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Publish a live site under a custom domain",
+      "input": {
+        "topic": "the state of on-device AI in 2026",
+        "audience": "developers",
+        "customDomain": "your-domain.dev",
+        "subdomain": "report"
+      },
+      "output": {
+        "published": true,
+        "topic": "the state of on-device AI in 2026",
+        "title": "On-Device AI in 2026",
+        "tagline": "Smaller models, bigger reach — inference moves to the edge.",
+        "liveUrl": "https://research-to-microsite-abc123.preview.sapiom.ai",
+        "customUrl": "https://report.your-domain.dev",
+        "sandboxName": "research-to-microsite-abc123",
+        "sources": [
+          {
+            "title": "Small models on the edge",
+            "url": "https://example.com/edge"
+          },
+          {
+            "title": "On-device runtimes",
+            "url": "https://example.com/runtimes"
+          }
+        ]
+      }
+    }
+  ]
+}

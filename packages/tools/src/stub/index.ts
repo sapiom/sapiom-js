@@ -109,6 +109,18 @@ export type StubOverrides = Record<
   unknown | ((...args: unknown[]) => unknown)
 >;
 
+/** A single capability call record pushed into the calls sink. */
+export interface StubCallRecord {
+  /** Dotted capability id (provider-agnostic — never a provider/model name). */
+  capability: string;
+  /** Always true: every call from a stub client was served by a stub. */
+  stubUsed: true;
+  /** The arguments passed to the capability call. */
+  args: unknown[];
+  /** The value the stub returned for this call. */
+  result: unknown;
+}
+
 export interface StubClientOptions {
   overrides?: StubOverrides;
   /**
@@ -133,6 +145,13 @@ export interface StubClientOptions {
    * the wrong shape.
    */
   warnings?: Set<string>;
+  /**
+   * When provided, every resolved capability call is pushed here as a
+   * {@link StubCallRecord}. A local runner creates this array per-step and
+   * attaches it to the step's trace so the inspector can show "what did each
+   * step actually call (and receive back from the stub)".
+   */
+  calls?: StubCallRecord[];
 }
 
 // Module-scoped so correlation ids are unique across launches within a run.
@@ -196,22 +215,45 @@ function handleMethods(proto: object): Set<string> {
  * honor both its own key and the shared result key (see {@link dispatchedKeys}).
  * Only the candidate that actually matches is consulted (and thus recorded as
  * used), so unmatched-key reporting stays precise.
+ *
+ * When `callsSink` is provided, every resolved call is pushed as a
+ * {@link StubCallRecord} so the inspector can show what each step called.
+ * `capability` is the primary path (first candidate, which is the dotted
+ * capability id the caller wrote — e.g. `search.webSearch`, `memory.append`).
  */
 function resolve(
   overrides: StubOverrides,
   paths: string | string[],
   args: unknown[],
   fallback: () => unknown,
+  callsSink?: StubCallRecord[],
+  capabilityOverride?: string,
 ): unknown {
-  for (const path of typeof paths === "string" ? [paths] : paths) {
+  const pathList = typeof paths === "string" ? [paths] : paths;
+  for (const path of pathList) {
     if (Object.prototype.hasOwnProperty.call(overrides, path)) {
       const o = overrides[path];
-      return typeof o === "function"
-        ? (o as (...a: unknown[]) => unknown)(...args)
-        : o;
+      const result =
+        typeof o === "function"
+          ? (o as (...a: unknown[]) => unknown)(...args)
+          : o;
+      callsSink?.push({
+        capability: capabilityOverride ?? pathList[0],
+        stubUsed: true,
+        args,
+        result,
+      });
+      return result;
     }
   }
-  return fallback();
+  const result = fallback();
+  callsSink?.push({
+    capability: capabilityOverride ?? pathList[0],
+    stubUsed: true,
+    args,
+    result,
+  });
+  return result;
 }
 
 /**
@@ -250,7 +292,11 @@ function recordingOverrides(
 /** Coerce a resolved value (override or default; plain JSON or an existing stub
  *  handle) into a Repository handle, so stubbing a handle-returning capability
  *  with plain JSON never strips the handle's instance methods. */
-function asRepository(data: unknown, overrides: StubOverrides): Repository {
+function asRepository(
+  data: unknown,
+  overrides: StubOverrides,
+  callsSink?: StubCallRecord[],
+): Repository {
   const d = (data ?? {}) as {
     slug?: string;
     cloneUrl?: string;
@@ -264,15 +310,21 @@ function asRepository(data: unknown, overrides: StubOverrides): Repository {
       status: d.status,
     },
     overrides,
+    callsSink,
   );
 }
 
 /** Sandbox counterpart to {@link asRepository}. */
-function asSandbox(data: unknown, overrides: StubOverrides): Sandbox {
+function asSandbox(
+  data: unknown,
+  overrides: StubOverrides,
+  callsSink?: StubCallRecord[],
+): Sandbox {
   const d = (data ?? {}) as { name?: string; workspaceRoot?: string };
   return stubSandbox(
     { name: d.name ?? "stub-sandbox", workspaceRoot: d.workspaceRoot },
     overrides,
+    callsSink,
   );
 }
 
@@ -298,6 +350,7 @@ function asRepositoryList(
   data: unknown,
   overrides: StubOverrides,
   warnings?: Set<string>,
+  callsSink?: StubCallRecord[],
 ): Repository[] {
   if (!Array.isArray(data)) {
     warnings?.add(
@@ -318,7 +371,7 @@ function asRepositoryList(
           `[{ "slug": "..." }], not [[{ ... }]].`,
       );
     }
-    return asRepository(el, overrides);
+    return asRepository(el, overrides, callsSink);
   });
 }
 
@@ -339,6 +392,7 @@ function makeHandle(
   data: Record<string, unknown>,
   overrides: StubOverrides,
   defaults: Record<string, (args: unknown[]) => unknown>,
+  callsSink?: StubCallRecord[],
 ): unknown {
   return new Proxy(data, {
     get(target, prop) {
@@ -359,8 +413,12 @@ function makeHandle(
       if (methods.has(key)) {
         return (...args: unknown[]): Promise<unknown> =>
           Promise.resolve(
-            resolve(overrides, `${type}.${key}`, args, () =>
-              defaults[key]?.(args),
+            resolve(
+              overrides,
+              `${type}.${key}`,
+              args,
+              () => defaults[key]?.(args),
+              callsSink,
             ),
           );
       }
@@ -390,6 +448,7 @@ const SANDBOX_METHOD_DEFAULTS: Record<string, (args: unknown[]) => unknown> = {
 function stubRepository(
   data: { slug: string; cloneUrl: string; status?: string },
   overrides: StubOverrides,
+  callsSink?: StubCallRecord[],
 ): Repository {
   return makeHandle(
     "repository",
@@ -401,12 +460,14 @@ function stubRepository(
     },
     overrides,
     REPO_METHOD_DEFAULTS,
+    callsSink,
   ) as Repository;
 }
 
 function stubSandbox(
   data: { name: string; workspaceRoot?: string },
   overrides: StubOverrides,
+  callsSink?: StubCallRecord[],
 ): Sandbox {
   return makeHandle(
     "sandbox",
@@ -414,10 +475,14 @@ function stubSandbox(
     { name: data.name, workspaceRoot: data.workspaceRoot ?? "/workspace" },
     overrides,
     SANDBOX_METHOD_DEFAULTS,
+    callsSink,
   ) as Sandbox;
 }
 
-function stubCodingResult(overrides: StubOverrides): CodingRunResult {
+function stubCodingResult(
+  overrides: StubOverrides,
+  callsSink?: StubCallRecord[],
+): CodingRunResult {
   return {
     runId: "stub-run",
     status: "completed" as RunStatus,
@@ -437,7 +502,7 @@ function stubCodingResult(overrides: StubOverrides): CodingRunResult {
       },
     },
     error: null,
-    sandbox: stubSandbox({ name: "stub-sandbox" }, overrides),
+    sandbox: stubSandbox({ name: "stub-sandbox" }, overrides, callsSink),
   };
 }
 
@@ -445,6 +510,7 @@ function stubRunHandle(
   overrides: StubOverrides,
   correlationId: string,
   result: CodingRunResult,
+  callsSink?: StubCallRecord[],
 ): RunHandle {
   const handle = {
     runId: correlationId,
@@ -459,6 +525,7 @@ function stubRunHandle(
     handle as unknown as Record<string, unknown>,
     overrides,
     {},
+    callsSink,
   ) as RunHandle;
 }
 
@@ -490,6 +557,7 @@ function stubModelRunHandle(
   overrides: StubOverrides,
   correlationId: string,
   result: ModelRunResult,
+  callsSink?: StubCallRecord[],
 ): ModelRunHandle {
   const handle = {
     runId: correlationId,
@@ -503,6 +571,7 @@ function stubModelRunHandle(
     handle as unknown as Record<string, unknown>,
     overrides,
     {},
+    callsSink,
   ) as ModelRunHandle;
 }
 
@@ -602,7 +671,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     paths: string | string[],
     args: unknown[],
     fallback: () => unknown,
-  ) => resolve(overrides, paths, args, fallback);
+    capabilityOverride?: string,
+  ) => resolve(overrides, paths, args, fallback, opts.calls, capabilityOverride);
 
   // Per-client memory state: namespace → (id → record). See the `memory`
   // capability below for what is and isn't simulated.
@@ -618,9 +688,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     keys: string | string[],
   ): CodingRunResult => {
     const res = r(keys, [spec], () =>
-      stubCodingResult(overrides),
+      stubCodingResult(overrides, opts.calls),
     ) as CodingRunResult;
-    return { ...res, sandbox: asSandbox(res.sandbox, overrides) };
+    return { ...res, sandbox: asSandbox(res.sandbox, overrides, opts.calls) };
   };
 
   // Default (instant) agent result — no sandbox to re-wrap, so it's the resolved
@@ -640,12 +710,14 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               name: sandboxOpts?.name ?? "stub-sandbox",
             })),
             overrides,
+            opts.calls,
           ),
         ),
       attach: (name, attachOpts) =>
         asSandbox(
           r("sandboxes.attach", [name, attachOpts], () => ({ name })),
           overrides,
+          opts.calls,
         ),
       get: (name, getOpts) =>
         Promise.resolve(
@@ -666,6 +738,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           asRepository(
             r("repositories.create", [slug], () => ({ slug })),
             overrides,
+            opts.calls,
           ),
         ),
       get: (slug) =>
@@ -673,6 +746,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           asRepository(
             r("repositories.get", [slug], () => ({ slug })),
             overrides,
+            opts.calls,
           ),
         ),
       list: () =>
@@ -681,6 +755,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             r("repositories.list", [], () => []),
             overrides,
             opts.warnings,
+            opts.calls,
           ),
         ),
       delete: (slug) =>
@@ -694,6 +769,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             cloneUrl,
           })),
           overrides,
+          opts.calls,
         ),
     },
     models: {
@@ -707,7 +783,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         };
         // The resume payload IS the result (no live handles to strip).
         return dispatchable(
-          stubModelRunHandle(overrides, correlationId, result),
+          stubModelRunHandle(overrides, correlationId, result, opts.calls),
           opts.signals,
           () => result,
         );
@@ -728,7 +804,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           // `toResumePayload` maps the live result to a `CodingResultPayload` (an
           // `executionEnvironment` reference, not a live sandbox handle).
           return dispatchable(
-            stubRunHandle(overrides, correlationId, result),
+            stubRunHandle(overrides, correlationId, result, opts.calls),
             opts.signals,
             () => toResumePayload(result),
           );

@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/harness",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Sapiom Harness — a CLI-launched local web app that runs your coding agent (Claude Code, Codex) in a Sapiom-configured environment: MCP pre-wired, workflows tracked, one-click deploy/run, and a live canvas for previews.",
   "keywords": [
     "sapiom",
@@ -50,6 +50,7 @@
     "start": "node dist/cli/bin.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:mutation": "stryker run",
     "test:ui": "playwright test --config web/e2e/playwright.config.ts",
     "test:canvas": "playwright test --config e2e/playwright.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
@@ -74,6 +75,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.30",
     "@types/react": "^19.0.0",
