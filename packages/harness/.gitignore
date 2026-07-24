@@ -1,0 +1,4 @@
+# Mutation testing (StrykerJS)
+.stryker-tmp/
+reports/
+stryker.log

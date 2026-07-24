@@ -38,8 +38,8 @@ export interface HarnessAdapterBase {
   /**
    * Per-agent prompt text guiding the user through installing and
    * configuring the Sapiom MCP server (`@sapiom/mcp`) for this harness.
-   * Consumed by the skills-panel Install MCP modal. Returns the text string
-   * directly — callers may render it as preformatted text.
+   * Rendered in the Install MCP modal. Returns the text string directly —
+   * callers may render it as preformatted text.
    */
   installMcpPrompt(): string;
   /**

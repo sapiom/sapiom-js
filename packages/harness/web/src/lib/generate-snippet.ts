@@ -1,7 +1,7 @@
 /**
  * generateSnippet — pure builder for the "trigger from your code" snippets shown
- * after a deploy (the F1 panel). No I/O, no React — just strings — so it is
- * unit- and mutation-testable in isolation.
+ * for a deployed agent (the Ship-area snippet panel). No I/O, no React — just
+ * strings — so it is unit-testable in isolation.
  *
  * Both snippets are two doorways to the SAME endpoint: the SDK's
  * `agents.run({ definition, input })` and the raw cURL below both POST to

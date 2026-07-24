@@ -1,280 +1,333 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { JSX } from "react";
-import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types";
+import type { HarnessSession } from "@shared/types";
 
-import type { FsListResponse } from "../lib/api";
-import { track } from "../lib/track";
-import { useDismissable } from "../lib/use-dismissable";
+import { HARNESS_LABELS } from "../lib/history-meta";
+import { AnchoredPopover } from "./AnchoredPopover";
+import { EndSessionConfirm } from "./EndSessionConfirm";
+import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
-import { NewSessionModal } from "./NewSessionModal";
-import { SettingsPopover } from "./SettingsPopover";
 
-interface SessionBarProps {
-  sessions: HarnessSession[];
-  activeSessionId: string | null;
-  onSelectSession: (id: string) => void;
-  onResumeHistory: (summary: SessionSummary) => void;
-  history: SessionSummary[];
-  historyLoading: boolean;
-  onOpenHistory: (cwd: string) => void;
-  recentDirs: string[];
-  launchDir: string | null;
-  listDir: (path?: string) => Promise<FsListResponse>;
-  onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
-  /** The active session's bound workflow name ("working on X" chip), if any. */
-  boundWorkflowName: string | null;
-  authenticated: boolean;
-  organizationName: string | null;
-  telemetryOptIn: boolean;
-  onToggleTelemetry: (next: boolean) => Promise<void>;
-  /** Session ids with terminal output in roughly the last ~3s — renders a
-   *  busy pulse on that session's tab regardless of whether it's active. */
-  busySessionIds: Set<string>;
-  /** Controlled open state for the settings popover — lifted to App so the
-   *  telemetry chip in BrandHeader can open it from outside SessionBar. */
-  settingsOpen: boolean;
-  onSetSettingsOpen: (open: boolean) => void;
+/** One labeled state for the session, not a bare dot: what the user reads is
+ *  the SESSION's condition — distinct from the agent's Draft/Deployed chip on
+ *  the subheader, which describes the workflow, not this terminal. */
+function sessionStateLabel(session: HarnessSession, busy: boolean): string {
+  if (session.status === "exited") return "exited";
+  if (busy) return "busy";
+  if (session.status === "running") return "live";
+  return session.status;
 }
 
+/** The workspace a session belongs to is its directory's basename — the
+ *  same label the rail's workspace group carries. */
+function workspaceLabelOf(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+interface SessionBarProps {
+  /** The main panel is showing the Overview/intro, not a session. */
+  overviewMode?: boolean;
+  /** Set while an agent is open whose workspace has no live session: the
+   *  header names that agent (matching the "start a session" pane below), and
+   *  the session verbs drop out since there is no session to act on. */
+  openedAgentName?: string | null;
+  /** Set while a PAST session is under review: the header shows its
+   *  title instead of the active session's, matching the pane below. */
+  reviewTitle?: string | null;
+  /** The session the main panel is showing, if any. */
+  activeSession: HarnessSession | null;
+  /** The session's display name (session-name.ts: rename > transcript title
+   *  > folder basename) — what the header title shows and rename edits. */
+  sessionName: string | null;
+  /** Persists a user rename (client-side). */
+  onRenameSession: (id: string, name: string) => void;
+  /** The active session's bound workflow name ("working on X" chip), if any. */
+  boundWorkflowName: string | null;
+  /** The active session produced terminal output in roughly the last ~3s. */
+  busy: boolean;
+  /** Set while the rail is collapsed — renders the expand affordance first. */
+  onExpandRail: (() => void) | null;
+  /** Set while the right pane is collapsed — renders the expand affordance last. */
+  onExpandRight: (() => void) | null;
+  /** Ends a live session — kills its PTY; it stays resumable from history when it has an agent session id. */
+  onCloseSession: (id: string) => void;
+  /** Opens the session's directory in the user's editor. */
+  onOpenInEditor: (path: string) => void;
+  /** Push a message onto the app's toast rail — the ⋯ menu's Copy path
+   *  confirms the same way the rail's copy action does. */
+  onToast: (message: string) => void;
+}
+
+/**
+ * Compact context header for the main panel — like Claude Code's own header:
+ * which agent, which session, where, and its live status. Session SWITCHING
+ * and creation live in the tab strip below it; this is purely the
+ * active session's identity and state.
+ */
 export function SessionBar({
-  sessions,
-  activeSessionId,
-  onSelectSession,
-  onResumeHistory,
-  history,
-  historyLoading,
-  onOpenHistory,
-  recentDirs,
-  launchDir,
-  listDir,
-  onCreateSession,
+  overviewMode = false,
+  openedAgentName = null,
+  reviewTitle = null,
+  activeSession,
+  sessionName,
+  onRenameSession,
   boundWorkflowName,
-  authenticated,
-  organizationName,
-  telemetryOptIn,
-  onToggleTelemetry,
-  busySessionIds,
-  settingsOpen,
-  onSetSettingsOpen,
+  busy,
+  onExpandRail,
+  onExpandRight,
+  onCloseSession,
+  onOpenInEditor,
+  onToast,
 }: SessionBarProps): JSX.Element {
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
-
-  const historyWrapRef = useRef<HTMLDivElement>(null);
-  const historyTriggerRef = useRef<HTMLButtonElement>(null);
-  const settingsWrapRef = useRef<HTMLDivElement>(null);
-  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
-  const newSessionTriggerRef = useRef<HTMLButtonElement>(null);
-
-  const closeHistory = useCallback(() => setHistoryOpen(false), []);
-  const closeSettings = useCallback(() => onSetSettingsOpen(false), [onSetSettingsOpen]);
-  useDismissable(historyOpen, {
-    onDismiss: closeHistory,
-    containerRef: historyWrapRef,
-    triggerRef: historyTriggerRef,
-  });
-  useDismissable(settingsOpen, {
-    onDismiss: closeSettings,
-    containerRef: settingsWrapRef,
-    triggerRef: settingsTriggerRef,
-  });
-
-  // One tab per live session, oldest-first — a stable order Cmd+1..9 relies
-  // on (App.tsx computes the same ordering for the keyboard shortcut) and
-  // that keeps a tab from jumping around the strip as sessions update.
-  const tabs = useMemo(
-    () =>
-      sessions.filter((session) => session.status !== "exited").sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-    [sessions],
-  );
-  // Reachable from the history menu even though they're not "running" — so a
-  // session that died stays selectable (to inspect/resume/close it) instead
-  // of only being escapable. Kept out of the tab strip itself so it doesn't
-  // fill up with dead tabs.
-  const exitedSessions = sessions.filter((session) => session.status === "exited");
-
-  const toggleHistory = (): void => {
-    const next = !historyOpen;
-    setHistoryOpen(next);
-    if (next) {
-      const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
-      const cwd = activeSession?.cwd ?? recentDirs[0];
-      if (cwd) onOpenHistory(cwd);
-    }
+  // Ending a live session kills a real PTY — the option opens a confirm dialog.
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Inline rename in the header title (the ⋯ menu's "Rename session" —
+  // client-side persistence).
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeMenu = (): void => setMenuOpen(false);
+  const commitRename = (): void => {
+    if (activeSession) onRenameSession(activeSession.id, renameDraft);
+    setRenaming(false);
   };
 
   return (
     <div className="session-bar">
-      <div className="session-tabs" role="tablist" data-testid="session-tabs">
-        {tabs.map((session) => {
-          const isActive = session.id === activeSessionId;
-          return (
-            <button
-              key={session.id}
-              role="tab"
-              aria-selected={isActive}
-              className={"session-tab" + (isActive ? " is-active" : "")}
-              data-testid={`session-tab-${session.id}`}
-              onClick={() => {
-                onSelectSession(session.id);
-                track("session.switched", {}, session.id);
-              }}
-            >
-              <span className="session-dot" data-status={session.status} />
-              <span className="session-tab-title">{session.title}</span>
-              {busySessionIds.has(session.id) && (
-                <span
-                  className="session-tab-busy"
-                  data-testid={`session-tab-busy-${session.id}`}
-                  aria-hidden="true"
-                />
-              )}
-              {isActive && boundWorkflowName && (
-                <span className="session-workflow-chip" data-testid="session-workflow-chip">
-                  ▸ working on {boundWorkflowName}
-                </span>
-              )}
-            </button>
-          );
-        })}
-
+      {onExpandRail && (
         <button
-          ref={newSessionTriggerRef}
-          className="session-tab-add"
-          data-testid="new-session-btn"
-          onClick={() => setModalOpen(true)}
-          aria-label="New session"
-          title="New session"
+          className="gear-btn"
+          data-testid="rail-expand"
+          aria-label="Expand workspace panel"
+          title="Expand workspace panel"
+          onClick={onExpandRail}
         >
-          <Icon name="Plus" size={14} />
+          <Icon name="Menu" size={15} />
         </button>
+      )}
+
+      <div
+        className="session-context"
+        data-testid="session-context"
+        data-session-id={activeSession?.id ?? ""}
+      >
+        {overviewMode ? (
+          <>
+            <Icon name="Radio" size={13} />
+            <span className="session-context-title" data-testid="session-context-title">
+              Overview
+            </span>
+          </>
+        ) : openedAgentName ? (
+          /* An agent is open with no live session in its workspace — the
+             header names it (matching the pane below) and carries an honest
+             "no session" tag, no live status and no session verbs. */
+          <>
+            <Icon name="Zap" size={13} />
+            <span className="session-context-title" data-testid="session-context-title">
+              {openedAgentName}
+            </span>
+            <span
+              className="status-tag session-status-tag session-context-status"
+              data-testid="session-status-tag"
+              data-status="none"
+              data-tooltip="No running session for this agent. Start one to work on it."
+            >
+              no session
+            </span>
+          </>
+        ) : reviewTitle ? (
+          /* Past-session review: the header mirrors the pane below —
+             nothing is running here, so no live status and no session verbs. */
+          <>
+            <Icon name="History" size={13} />
+            <span className="session-context-title" data-testid="session-context-title">
+              {reviewTitle}
+            </span>
+            <span
+              className="status-tag session-status-tag session-context-status"
+              data-testid="session-status-tag"
+              data-status="exited"
+              data-tooltip="A past session under review. Resume it from the pane below."
+            >
+              <span className="session-dot" data-status="exited" />
+              past
+            </span>
+          </>
+        ) : activeSession ? (
+          /* Compact identity: harness glyph + session name only. The
+             workspace and full path live in the hover tooltip so the header
+             never bleeds — nothing here competes with the terminal below. */
+          <>
+            <HarnessBrandIcon kind={activeSession.harness} size={13} />
+            {renaming ? (
+              <input
+                className="group-name-input session-rename-input session-context-rename"
+                data-testid="session-rename-input"
+                value={renameDraft}
+                autoFocus
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename();
+                  if (e.key === "Escape") setRenaming(false);
+                }}
+                onBlur={commitRename}
+              />
+            ) : (
+              <span
+                className="session-context-title"
+                data-testid="session-context-title"
+                data-tooltip={`${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`}
+              >
+                {sessionName ?? activeSession.title}
+              </span>
+            )}
+            {boundWorkflowName && (
+              <span
+                className="session-workflow-chip"
+                data-testid="session-workflow-chip"
+                data-tooltip={`Bound to ${boundWorkflowName}; shown in Canvas`}
+              >
+                · {boundWorkflowName}
+              </span>
+            )}
+            <span
+              className="status-tag session-status-tag session-context-status"
+              data-testid="session-status-tag"
+              data-status={activeSession.status}
+              data-tooltip={
+                busy
+                  ? "The agent produced output in the last few seconds"
+                  : activeSession.status === "running"
+                    ? "Session is live; the terminal is connected"
+                    : activeSession.status === "exited"
+                      ? "Session ended; resume it from the dead-session pane or history"
+                      : "Session is starting"
+              }
+            >
+              {busy ? (
+                <span className="session-busy" data-testid="session-busy" aria-hidden="true" />
+              ) : (
+                <span className="session-dot" data-status={activeSession.status} />
+              )}
+              {sessionStateLabel(activeSession, busy)}
+            </span>
+          </>
+        ) : (
+          <span className="session-context-none">No active session</span>
+        )}
       </div>
 
-      <div className="session-history-wrap" ref={historyWrapRef}>
-        <button
-          ref={historyTriggerRef}
-          className="session-history-trigger"
-          data-testid="history-trigger"
-          onClick={toggleHistory}
-          aria-label="Session history"
-          title="Session history"
-        >
-          <Icon name="History" size={14} />
-          {exitedSessions.length > 0 && (
-            <span className="session-history-badge" data-testid="session-history-badge">
-              {exitedSessions.length}
-            </span>
-          )}
-        </button>
-
-        {historyOpen && (
-          <div className="session-dropdown-menu" data-testid="history-menu">
-            <div className="session-dropdown-section">Exited</div>
-            {exitedSessions.length === 0 && <div className="session-dropdown-empty">No exited sessions</div>}
-            {exitedSessions.map((session) => (
+      {/* Session options as a ⋯ menu (never in overview, review, or opened-
+          agent mode — destructive session actions there would read as closing
+          the view, or act on a session the header isn't even showing). */}
+      {!overviewMode && !reviewTitle && !openedAgentName && activeSession && (
+        <div className="session-menu-wrap">
+          <button
+            ref={menuTriggerRef}
+            className="theme-toggle"
+            data-testid="session-menu"
+            aria-label="Session options"
+            data-tooltip="Session options"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            <Icon name="MoreHorizontal" size={14} />
+          </button>
+          {/* Portaled (AnchoredPopover) so no header/pane overflow can crop it. */}
+          <AnchoredPopover
+            open={menuOpen}
+            anchorRef={menuTriggerRef}
+            onDismiss={closeMenu}
+            placement="down-end"
+            className="session-menu"
+            role="menu"
+            testid="session-menu-popover"
+          >
               <button
-                key={session.id}
-                data-testid={`exited-session-${session.id}`}
-                className={"session-dropdown-item" + (session.id === activeSessionId ? " is-selected" : "")}
+                role="menuitem"
+                className="profile-menu-item"
                 onClick={() => {
-                  onSelectSession(session.id);
-                  setHistoryOpen(false);
+                  // Same confirm/failure pair as the rail's copy action
+                  // One verb, one micro-interaction.
+                  void navigator.clipboard
+                    ?.writeText(activeSession.cwd)
+                    .then(() => onToast("Path copied."))
+                    .catch(() => onToast("Couldn't copy the path."));
+                  closeMenu();
                 }}
               >
-                <span className="session-dot" data-status={session.status} />
-                <span className="session-item-title">{session.title}</span>
-                <span className="session-item-cwd">{session.cwd}</span>
+                <Icon name="Copy" size={13} />
+                Copy path
               </button>
-            ))}
-
-            <div className="session-dropdown-section">History</div>
-            {historyLoading && <div className="session-dropdown-empty">Loading…</div>}
-            {!historyLoading && history.length === 0 && (
-              <div className="session-dropdown-empty">No past sessions for this directory</div>
-            )}
-            {!historyLoading &&
-              history.map((summary) => (
+              <button
+                role="menuitem"
+                className="profile-menu-item"
+                data-testid="session-rename"
+                onClick={() => {
+                  setRenameDraft(sessionName ?? activeSession.title);
+                  setRenaming(true);
+                  closeMenu();
+                }}
+              >
+                <Icon name="Pencil" size={13} />
+                Rename session
+              </button>
+              <button
+                role="menuitem"
+                className="profile-menu-item"
+                data-testid="session-open-editor"
+                onClick={() => {
+                  onOpenInEditor(activeSession.cwd);
+                  closeMenu();
+                }}
+              >
+                <Icon name="Code" size={13} />
+                Open in editor
+              </button>
+              {activeSession.status !== "exited" && (
                 <button
-                  key={summary.agentSessionId}
-                  className="session-dropdown-item"
-                  data-testid={`history-${summary.agentSessionId}`}
+                  role="menuitem"
+                  className="profile-menu-item session-menu-danger"
+                  data-testid="session-end-btn"
                   onClick={() => {
-                    onResumeHistory(summary);
-                    setHistoryOpen(false);
+                    closeMenu();
+                    setConfirmingClose(true);
                   }}
                 >
-                  <span className="session-item-title">{summary.title}</span>
-                  <span className="session-item-meta" data-testid={`history-meta-${summary.agentSessionId}`}>
-                    {historyRowMeta(summary)}
-                  </span>
+                  <Icon name="X" size={13} />
+                  End session…
                 </button>
-              ))}
-          </div>
-        )}
-      </div>
+              )}
+          </AnchoredPopover>
+        </div>
+      )}
 
-      <div className="settings-wrap" ref={settingsWrapRef}>
+      {onExpandRight && (
         <button
-          ref={settingsTriggerRef}
           className="gear-btn"
-          aria-label="Settings"
-          data-testid="settings-trigger"
-          onClick={() => onSetSettingsOpen(!settingsOpen)}
+          data-testid="right-expand"
+          aria-label="Expand canvas panel"
+          title="Expand canvas panel"
+          onClick={onExpandRight}
         >
-          <Icon name="Settings" size={16} />
+          <Icon name="List" size={15} />
         </button>
-        {settingsOpen && (
-          <SettingsPopover
-            authenticated={authenticated}
-            organizationName={organizationName}
-            telemetryOptIn={telemetryOptIn}
-            onToggleTelemetry={onToggleTelemetry}
-            onClose={() => onSetSettingsOpen(false)}
-          />
-        )}
-      </div>
+      )}
 
-      {modalOpen && (
-        <NewSessionModal
-          recentDirs={recentDirs}
-          launchDir={launchDir}
-          listDir={listDir}
-          onClose={() => setModalOpen(false)}
-          onCreate={onCreateSession}
-          triggerRef={newSessionTriggerRef}
+      {confirmingClose && activeSession && (
+        <EndSessionConfirm
+          triggerRef={menuTriggerRef}
+          onCancel={() => setConfirmingClose(false)}
+          onConfirm={() => {
+            setConfirmingClose(false);
+            onCloseSession(activeSession.id);
+          }}
         />
       )}
     </div>
   );
-}
-
-/**
- * The meta line under a history row's title — the differentiators that let a
- * user tell otherwise-similar rows apart (branch, turn count, when it was last
- * active). Falls back to the harness name so the line is never empty.
- */
-function historyRowMeta(summary: SessionSummary): string {
-  const parts: string[] = [];
-  if (summary.gitBranch) parts.push(summary.gitBranch);
-  if (typeof summary.messageCount === "number") {
-    parts.push(`${summary.messageCount} ${summary.messageCount === 1 ? "turn" : "turns"}`);
-  }
-  parts.push(formatRelativeTime(summary.lastActiveAt));
-  if (parts.length === 1) parts.unshift(summary.harness);
-  return parts.join(" · ");
-}
-
-/** Compact "time ago" for last-active timestamps, falling back to a locale
- * date string for anything a day or more old (or an unparseable value). */
-function formatRelativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return iso;
-  const seconds = Math.round((Date.now() - then) / 1000);
-  if (seconds < 45) return "just now";
-  if (seconds < 90) return "1 min ago";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return new Date(iso).toLocaleDateString();
 }

@@ -15,7 +15,10 @@ import { defineConfig, devices } from "@playwright/test";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..", "..");
 
-const PORT = 5299;
+// Fixed default port, overridable via E2E_PORT so several checkouts/worktrees
+// can run the suite side by side without colliding on one port (each run owns
+// its own Vite dev server). CI leaves it unset and gets the stable default.
+const PORT = Number(process.env.E2E_PORT) || 5299;
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({

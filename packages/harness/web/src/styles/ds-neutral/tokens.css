@@ -1,0 +1,181 @@
+/* ============================================================================
+   Neutral design tokens — public fallback.
+   ----------------------------------------------------------------------------
+   This file is the DEFAULT token layer the public build imports (via the
+   `@sapiom/design-system` -> ./ds-neutral resolve alias). It supplies a
+   complete, unbranded token set so `styles.css` resolves its
+   `@import "@sapiom/design-system/tokens.css"` and the app builds and renders
+   legibly with no private assets present.
+
+   Values here are deliberately NEUTRAL: a generic grayscale surface/ink ramp
+   plus a single restrained accent. It carries NO proprietary palette. Official
+   builds swap this alias for the private package, which supplies the branded
+   values against the same token names; nothing else in the app changes.
+
+   Layers (kept parallel to the private source, names only):
+     1. semantic  — what a token MEANS (--bg, --ink, --line, state hues…)
+     2. aliases   — shadcn-standard names <-> the vanilla vocabulary
+     3. scales    — spacing, radii, type, motion, layout (theme-independent)
+
+   Color carries meaning ONLY for state (severity, status, live). Both themes
+   target legible contrast.
+   ============================================================================ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* surfaces (recessed -> raised) */
+  --bg:   #0c0c0e;   /* app background / content well              */
+  --list: #0e0e11;   /* the middle list well (one step off chrome) */
+  --s1:   #131316;   /* chrome + raised cards                       */
+  --s2:   #1a1a1e;   /* inset controls, bubbles                     */
+  --s3:   #232327;   /* deepest inset                              */
+
+  /* hairlines + hover washes */
+  --line:   rgba(255, 255, 255, 0.08);
+  --line-2: rgba(255, 255, 255, 0.14);
+  --hl:     rgba(255, 255, 255, 0.05);
+  --hl-2:   rgba(255, 255, 255, 0.1);
+
+  /* ink (text) — the faintest step still clears comfortable contrast */
+  --ink:       #f3f3f5;
+  --ink-muted: #a6a6ae;
+  --ink-faint: #83838d;
+
+  /* primary action (inverted in dark: light chip, dark ink) */
+  --btn:     #f3f3f5;
+  --btn-ink: #0c0c0e;
+
+  /* semantic state — the only hue-bearing tokens in the base set */
+  --red:   #e05a57;  --red-text:   #efa6a3;   /* severity: high / destructive */
+  --amber: #d99a34;  --amber-text: #e8c58a;    /* severity: medium / warning   */
+  --green: #3bb56f;  --green-text: #8fdcac;    /* status: keep / live / success */
+  --slate: #8a8a94;                            /* neutral status               */
+
+  --shadow:   0 24px 64px -20px rgba(0, 0, 0, 0.6);
+  --scrim-bg: rgba(4, 4, 6, 0.55);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg:   #fbfbfc;
+  --list: #f3f3f5;
+  --s1:   #ffffff;
+  --s2:   #f2f2f4;
+  --s3:   #eaeaee;
+
+  --line:   rgba(18, 18, 22, 0.08);
+  --line-2: rgba(18, 18, 22, 0.15);
+  --hl:     rgba(18, 18, 22, 0.04);
+  --hl-2:   rgba(18, 18, 22, 0.075);
+
+  --ink:       #16161a;
+  --ink-muted: #55555f;
+  --ink-faint: #6b6b75;
+
+  --btn:     #16161a;
+  --btn-ink: #ffffff;
+
+  --red:   #cf3d39;  --red-text:   #ab2925;
+  --amber: #b57a12;  --amber-text: #855700;
+  --green: #219d57;  --green-text: #0f7740;
+  --slate: #77777f;
+
+  --shadow:   0 24px 64px -28px rgba(20, 20, 28, 0.28);
+  --scrim-bg: rgba(24, 24, 30, 0.32);
+}
+
+/* --------------------------------------------------------------------------
+   shadcn / Tailwind-standard aliases — same values, industry-standard names,
+   so alias-driven components theme themselves from this one source.
+   -------------------------------------------------------------------------- */
+:root,
+[data-theme="dark"],
+[data-theme="light"] {
+  --background:             var(--bg);
+  --foreground:             var(--ink);
+  --card:                   var(--s1);
+  --card-foreground:        var(--ink);
+  --popover:                var(--s1);
+  --popover-foreground:     var(--ink);
+  --muted:                  var(--s2);
+  --muted-foreground:       var(--ink-muted);
+  --border-soft:            var(--line);
+  --border-strong:          var(--line-2);
+  --border:                 var(--border-soft);
+  --input:                  var(--border-soft);
+  --ring:                   var(--ink-muted);
+  --primary:                var(--btn);
+  --primary-foreground:     var(--btn-ink);
+  --secondary:              var(--s2);
+  --secondary-foreground:   var(--ink);
+  --accent:                 var(--hl-2);
+  --accent-foreground:      var(--ink);
+  --destructive:            var(--red);
+  --destructive-foreground: var(--btn-ink);
+}
+
+/* --------------------------------------------------------------------------
+   Scales — theme-independent. Spacing on a 4/8/12/16/24/32/48/64 ramp; an
+   ease-out spring for motion, fast for hovers.
+   -------------------------------------------------------------------------- */
+:root {
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --type-title: 1.5rem;
+  --type-h2: 1rem;
+  --type-metric: 1.5rem;
+  --type-body: 14px;
+  --type-ui: 13px;
+  --type-label: 12px;
+  --type-meta: 11px;
+  --type-micro: 10px;
+
+  --sp1: 4px;  --sp2: 8px;  --sp3: 12px; --sp4: 16px;
+  --sp5: 24px; --sp6: 32px; --sp7: 48px; --sp8: 64px;
+
+  --r-sm: 6px; --r: 10px; --r-lg: 14px; --r-xl: 16px; --radius: var(--r);
+
+  /* Product geometry — shared by buttons, inputs, tabs, lists, tables. */
+  --header-h: 56px;
+  --pane-header-h: var(--header-h);
+  --control-h: 40px;
+  --control-h-sm: 36px;
+  --control-h-xs: 32px;
+  --row-h: 56px;
+  --row-h-sm: 48px;
+  --row-h-xs: 40px;
+  --icon: 40px;
+  --icon-sm: 32px;
+  --icon-lg: 44px;
+  --card-pad: clamp(20px, 2vw, 28px);
+  --assistant-measure: 52rem;
+  --assistant-measure-ide: 40.625rem;
+  --assistant-textarea-min: 64px;
+  --command-input-h: var(--row-h);
+  --command-row-h: var(--row-h-sm);
+  --overlay-radius: calc(var(--r-xl) + 12px);
+  --ui-line: var(--border-soft);
+  --ui-line-strong: var(--border-strong);
+  --active-shade: color-mix(in srgb, var(--ink) 8%, transparent);
+  --nested-shade: color-mix(in srgb, var(--ink) 11%, transparent);
+  --surface-base: var(--bg);
+  --surface-raised: var(--s1);
+  --surface-inset: var(--s2);
+  --surface-hover: var(--hl);
+  --surface-selected: var(--active-shade);
+  --flow-grid-dot: color-mix(in srgb, var(--ink) 22%, transparent);
+  --table-indent: calc(var(--sp5) + 32px);
+  --shadow-soft: 0 12px 32px -18px color-mix(in srgb, var(--ink) 28%, transparent);
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);  /* ease-out spring for entering */
+  --fast: 0.13s;                           /* hovers          */
+  --base: 0.22s;                           /* standard        */
+  --slow: 0.34s;                           /* panels          */
+
+  /* layout rails shared by the app shells */
+  --rail: 264px; --panel: 400px; --detail: min(520px, 40vw); --drawer: min(580px, 94vw);
+}

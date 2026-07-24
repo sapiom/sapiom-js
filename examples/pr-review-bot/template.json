@@ -1,0 +1,40 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": { "name": "Sapiom", "url": "https://sapiom.ai/" },
+  "longDescription": "A review bot that wakes up when someone opens a pull request. It waits on a webhook and costs nothing while idle — it can sit for days between reviews and only spends once a PR arrives.\n\nWhen one does, a coding agent checks the code out in a sandbox and reads the diff, with a standing instruction to look hardest at test coverage: for every behavior the change touches, does a matching test exist? It reviews, it doesn't edit — nothing is pushed. A model then turns the agent's raw notes into a short, structured review — a verdict, a summary, and a plain list of the tests that are missing.\n\nThe review goes to wherever you want it: your email, or a Slack channel using a bot token you keep in the Vault (read only at runtime, never in code). You pay for the coding review, the model summary, and the delivery — the waiting is free.",
+  "useCases": [
+    "Catch pull requests that add or change behavior without adding tests, before a human reviewer does.",
+    "Give a small team an always-on first-pass reviewer that posts to the channel they already watch.",
+    "Wire a repo's PR webhook to a durable bot that costs nothing between reviews."
+  ],
+  "notes": "**Use this template.** Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nThis workflow **pauses and waits for a PR**. A real run suspends at `watch` at $0 until a pull request is opened. In dev there's no one-click signal button yet — fire the `pr.opened` signal yourself with the MCP `workflow_signal` tool (or the API), passing the paused run's `executionId` as the `correlationId` and the PR as the `payload`. See the README for the exact shape.\n\nTo deliver to Slack instead of email, set `\"via\": \"slack\"` with `\"to\": \"#your-channel\"`, and store a Slack bot token in the Vault under ref `slack`, key `bot_token`. Without it the run still completes — it just skips the post.\n\n**Prefer to work from the code?** Run it locally with `run_local` to trace the whole flow for free (it uses a built-in sample PR), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Watch a repo, review to email",
+      "input": {
+        "repo": { "owner": "acme", "name": "api" },
+        "via": "email",
+        "to": "eng@example.com",
+        "config": { "WEBHOOK_REGISTER_URL": "https://hooks.example.com/register" }
+      }
+    },
+    {
+      "title": "A PR opens (the resume signal payload)",
+      "input": {
+        "repo": { "owner": "acme", "name": "api" },
+        "number": 42,
+        "title": "Add avatar upload endpoint",
+        "branch": "feat/avatar-upload",
+        "baseBranch": "main",
+        "diff": "diff --git a/src/users/avatar.ts b/src/users/avatar.ts\n+export async function uploadAvatar(userId, file) { ... }"
+      },
+      "output": {
+        "posted": true,
+        "skipped": null,
+        "via": "email",
+        "verdict": "request_changes"
+      }
+    }
+  ]
+}

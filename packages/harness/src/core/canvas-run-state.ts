@@ -146,11 +146,15 @@ export function bootCanvasRunState(): void {
 /**
  * Wires the reverse click channel: iframe → parent.
  *
- * Adds ONE delegated click listener on `document`. When the click target is
- * inside a `.canvas-node[data-step-name]` element, reads the `data-step-name`
- * attribute and posts `{ type: "sapiom:node-click", stepName }` to the parent
- * window. The parent validates the message type and maps the step name to the
- * current RunView to open the step-detail panel.
+ * Adds a delegated `click` listener on `document` AND a `message` listener for
+ * the harness gesture layer's `sapiom-canvas:pick` / `sapiom-canvas:hover`.
+ * The gesture layer overlays the iframe (for pan / zoom) and swallows raw
+ * clicks, so the direct listener alone never fires in the harness; the layer
+ * instead forwards the click/hover point, which we hit-test with
+ * `elementFromPoint`. Either path resolves the `.canvas-node[data-step-name]`
+ * under the point and posts `{ type: "sapiom:node-click", stepName }` to the
+ * parent (hover answers `{ type: "sapiom-canvas:hit", id }` for the cursor).
+ * The parent maps the step name to the current RunView to open the inspector.
  *
  * Uses a delegated listener (one listener on document) rather than per-node
  * listeners so it works even when the SVG is replaced (e.g. after a
@@ -159,17 +163,40 @@ export function bootCanvasRunState(): void {
  * Stringified into the iframe template by `canvas-template.ts`.
  */
 export function bootCanvasNodeClicks(): void {
+  // Resolve the step name of the `.canvas-node[data-step-name]` at or above an
+  // element (null when the point/target is not on a node).
+  function stepNameAt(target: Element | null): string | null {
+    const node = target && target.closest ? target.closest(".canvas-node[data-step-name]") : null;
+    return node ? node.getAttribute("data-step-name") : null;
+  }
+  function emitNodeClick(target: Element | null): void {
+    const stepName = stepNameAt(target);
+    if (stepName) {
+      window.parent.postMessage({ type: "sapiom:node-click", stepName: stepName }, "*");
+    }
+  }
+  // Direct clicks on the board — the path when nothing overlays the iframe.
   document.addEventListener("click", function (e) {
-    if (!e || !e.target) return;
-    const node = /** @type {Element} */ (e.target as Element).closest(
-      ".canvas-node[data-step-name]",
-    );
-    if (!node) return;
-    const stepName = node.getAttribute("data-step-name");
-    if (!stepName) return;
-    window.parent.postMessage(
-      { type: "sapiom:node-click", stepName: stepName },
-      "*",
-    );
+    if (e && e.target) emitNodeClick(/** @type {Element} */ (e.target as Element));
+  });
+  // The harness renders a gesture layer OVER this iframe (for pan / zoom), so
+  // raw clicks never reach this document. That layer forwards a click as
+  // `{ type: "sapiom-canvas:pick", x, y }` and hovers as
+  // `{ type: "sapiom-canvas:hover", x, y }` in this frame's coordinate space —
+  // the iframe never transforms, so a frame-local point IS a viewport point.
+  // Hit-test with elementFromPoint so a node still selects on click, and answer
+  // hovers with `{ type: "sapiom-canvas:hit", id }` so the layer shows a
+  // pointer cursor over nodes (and keeps a node's selection on click).
+  window.addEventListener("message", function (e) {
+    const d = e && e.data;
+    if (!d) return;
+    if (d.type === "sapiom-canvas:pick") {
+      emitNodeClick(document.elementFromPoint(d.x, d.y));
+    } else if (d.type === "sapiom-canvas:hover") {
+      window.parent.postMessage(
+        { type: "sapiom-canvas:hit", id: stepNameAt(document.elementFromPoint(d.x, d.y)) },
+        "*",
+      );
+    }
   });
 }

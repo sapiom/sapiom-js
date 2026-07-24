@@ -11,11 +11,15 @@ function git(args: string[], cwd: string): string {
   try {
     return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   } catch (err) {
-    const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
+    const raw = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
+    // Redact any embedded credential (e.g. a token-bearing push URL echoed by
+    // git into stderr) before it reaches the caller, the CLI, or the browser
+    // stream. Applies to every git command so no path can leak a token.
+    const hint = redactCredentials(raw || (err instanceof Error ? err.message : String(err)));
     throw new AgentOperationError({
       code: 'GIT',
       message: `git ${args[0]} failed.`,
-      hint: stderr || (err instanceof Error ? err.message : String(err)),
+      hint,
     });
   }
 }
@@ -75,8 +79,7 @@ export interface CloneRepoOptions {
 
 /**
  * Clone a per-fork repo from a token-bearing URL into `targetDir` and check out
- * `branch`. The template-clone handoff (SAP-1357) uses this to materialize a fork
- * locally.
+ * `branch`. Used during the template-clone handoff to materialize a fork locally.
  *
  * Security: the credential is redacted from any error output, and after a
  * successful clone the origin remote is rewritten to the tokenless HTTPS URL so

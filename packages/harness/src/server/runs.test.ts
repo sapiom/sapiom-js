@@ -3,6 +3,7 @@ import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createRunsRouter } from "./runs.js";
+import type { ApiKeyProvider } from "../core/api-key-provider.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -15,6 +16,50 @@ function makeFetch(status: number, body: unknown): typeof fetch {
     ok: status >= 200 && status < 300,
     json: () => Promise.resolve(body),
   } as Response);
+}
+
+/** One mock Response for a given status/body. */
+function response(status: number, body: unknown): Response {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    json: () => Promise.resolve(body),
+  } as Response;
+}
+
+/** A fetch that returns each queued Response in order (last one repeats). */
+function makeSequencedFetch(responses: Response[]): typeof fetch {
+  let i = 0;
+  return vi.fn().mockImplementation(() => {
+    const res = responses[Math.min(i, responses.length - 1)];
+    i += 1;
+    return Promise.resolve(res);
+  });
+}
+
+/** A provider whose refresh() swaps to `refreshedKey` exactly once. */
+function refreshingProvider(
+  initialKey: string | null,
+  refreshedKey: string | null,
+): ApiKeyProvider & { refreshCalls: number } {
+  let current = initialKey;
+  let refreshed = false;
+  const provider = {
+    refreshCalls: 0,
+    getKey: () => current,
+    refresh: () => {
+      provider.refreshCalls += 1;
+      if (!refreshed) {
+        refreshed = true;
+        current = refreshedKey;
+      }
+      return Promise.resolve(current);
+    },
+    clear: () => {
+      current = null;
+    },
+  };
+  return provider;
 }
 
 /**
@@ -117,6 +162,51 @@ describe("createRunsRouter", () => {
       const body = (await res.json()) as Record<string, unknown>;
       expect(body.error).toBe("harness is not signed in to Sapiom");
       expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("GET /api/runs/:executionId/state — refresh-on-401 via provider", () => {
+    it("recovers a 401 by refreshing the API key and retrying, returning 200", async () => {
+      // A provider (not a static key) is what the real server passes; a 401 on
+      // the first upstream call refreshes to a newer key and the retry succeeds.
+      const fetchImpl = makeSequencedFetch([
+        response(401, { error: "unauthorized" }),
+        response(200, VALID_EXECUTION_DOC),
+      ]);
+      const provider = refreshingProvider("sk-stale", "sk-fresh");
+      start({
+        apiKey: provider,
+        baseUrl: "https://agents.test",
+        fetchImpl,
+      });
+
+      const res = await fetch(`${baseUrl}/api/runs/exec_invoice_002/state`);
+      expect(res.status).toBe(200);
+
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.executionId).toBe("exec_invoice_002");
+      expect(provider.refreshCalls).toBe(1);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("authenticates upstream with the provider's held API key (identity.apiKey), not the boot token", async () => {
+      const fetchImpl = makeFetch(200, VALID_EXECUTION_DOC);
+      const provider = refreshingProvider("sk-held-key", "sk-unused");
+      start({
+        apiKey: provider,
+        baseUrl: "https://agents.test",
+        fetchImpl,
+      });
+
+      await fetch(`${baseUrl}/api/runs/exec_invoice_002/state`);
+
+      // The upstream call carried the held sk_ key in the API-key header — never
+      // the local boot token (which only gates the harness's own /api surface).
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "https://agents.test/agents/v1/executions/exec_invoice_002",
+        { headers: { "x-sapiom-api-key": "sk-held-key" } },
+      );
+      expect(provider.refreshCalls).toBe(0);
     });
   });
 });

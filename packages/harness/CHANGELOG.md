@@ -1,5 +1,66 @@
 # @sapiom/harness
 
+## 0.1.6
+
+### Patch Changes
+
+- b6b9d16: Add a server-side actions router with direct Deploy and Prod-run routes:
+
+  - `POST /api/workflows/:id/deploy` deploys a linked agent and streams build status as NDJSON (a `building` line up front, then a terminal `ready`/`error` line).
+  - `POST /api/runs` `{ definitionId, input }` starts an execution and returns `{ executionId }`.
+
+  Both run entirely server-side with the held API key (never exposed to the browser) and require no coding-agent session, so an action consumes no LLM credits.
+
+- b6b9d16: Enrich the step debug/explain context with the run's real per-step evidence. When you ask the agent to debug or explain a step from the run inspector, the injected context now folds in the step's actual input and output, the capabilities it called (with a marker for any served by a stub), and — for offline runs — supplied stubs that matched nothing or carried the wrong shape, on top of the step's status, latency, error, and logs. Every section is emitted only when the trace carries it (no fabricated placeholders), and the context names capabilities, never a model, so "why did this step do X" carries the real evidence instead of just the step name.
+- b6b9d16: Extend the expired/rotated API key recovery to the Deploy and Prod-run actions. When one of these actions is rejected as unauthorized, the Studio now re-reads your cached credentials and retries once — so signing in again (in the CLI or elsewhere) unblocks Deploy/Prod-run in place, matching the live-run status path, instead of every action staying stuck on the stale key until a restart.
+- b6b9d16: The Harness Studio presents your coding agent in a terminal view.
+- b6b9d16: Studio run and step-inspection hardening:
+
+  - Auto-bind a session to the workflow in its folder the moment the session starts, not only when a file later changes — so the canvas and Run actions light up immediately for an existing workflow.
+  - Animate the canvas board (per-step running / passed / failed status) during both local and production runs.
+  - Never let a direct action (Local Run / Prod Run / Deploy) fail silently: surface the reason on a blocked click, clear the in-flight indicator when the action settles, and distinguish "deploy failed — retry" from "not deployed yet".
+  - Enrich the step inspector: per-step input/output and logs, the capability calls a step made (with the served stub values on offline runs), and clickable preview / download / research links found in a step's output — all shown when you click into a step.
+
+- b6b9d16: Degrade gracefully when the Studio is offline or the session drops. Losing your network connection no longer blanks the Studio: a boot failure now shows an honest, recoverable state (offline / session needs a refresh / server unreachable) with a Retry that reconnects in place, and a non-blocking banner appears if the connection drops mid-session so the app stays usable against its last-known state. A rejected credential surfaces as a recoverable "reconnect" state rather than a hard lockout. These states are wired to real signals (the browser's connectivity and the kind of the failed request).
+- b6b9d16: Recover from an expired or rotated API key instead of getting stuck. When a live-run status request is rejected as unauthorized, the Studio now re-reads your cached credentials and retries once, so signing in again (in the CLI or elsewhere) unblocks the app in place rather than requiring a restart. Studio actions always authenticate with your held API key.
+- b6b9d16: Remove the Studio's cost and pricing surfaces. The wallet card, the per-workflow price note, and per-step cost figures are gone; the run inspector now shows logs, latency, and pass/fail only. `StepView` no longer carries a `costUsd` field.
+- b6b9d16: Remove the run spend and transactions endpoints (`GET /api/runs/:executionId/spend` and `/transactions`) and their supporting fetchers. The runs router now serves only run state (`GET /api/runs/:executionId/state`).
+- b6b9d16: Restore the bundled demo canvas document (`web/public/canvas/sess-boot/`) the
+  Studio's mock/demo mode renders on first paint. The web app already references
+  it (the demo session opens on its seeded board), but the file was missing, so
+  the canvas pane stayed empty in demo mode. This is demo/mock-only content; real
+  local mode still renders the server-generated canvas.
+- b6b9d16: Show real per-step input and output in the run inspector's "Last run" section. When a step's run recorded the value it ran on and the value it produced, each is rendered as a collapsible, inspectable payload; a step that carried no input/output shows no block at all (never a fabricated placeholder). Objects are pretty-printed, plain strings shown as-is, and a real `null`/`false`/`0` is displayed faithfully.
+- b6b9d16: Add `POST /api/runs/local`: run an agent entirely offline against stub capabilities and stream the result back as NDJSON — one per-step trace line, then a terminal summary carrying the run outcome plus which supplied stub keys went unused or had the wrong shape. It runs in a child process, needs no sign-in, and makes no network call, so a local run works signed-out and at zero cost.
+- b6b9d16: Serve the harness web UI from the package build and harden the design-system seam:
+
+  - `pnpm build` emits the web app to `dist/web` and the harness server serves it as the SPA (index.html, hashed assets, and client-side deep-route fallback), so `start` and `npx @sapiom/harness` launch the full UI against the real server. Adds a regression test pinning the build → serve path.
+  - The design system resolves to the real package when it's installed and falls back to a committed neutral, unbranded token set otherwise — so a public build renders legibly out of the box, with no theme source required. The stylesheet only bridges variable names onto tokens; it never redefines a token.
+
+  No behavioral or API changes to the harness server.
+
+- b6b9d16: Surface how an offline run's stubs behaved in the run inspector. A step that ran in an offline (stub) run now shows a read-only "stubbed" chip on its row and in its detail, so it is clear its capability calls were served by stubs rather than real calls. The inspector also shows, when present, a read-only notice for supplied stubs that matched no capability call (a no-op mock — usually a typo or the wrong path) and for stubs whose value had the wrong shape — so a stub that silently did nothing is visible instead of a mystery. Nothing is shown when a run has no such issues, and the affordance names capabilities, never a model. Real (non-offline) runs are unaffected.
+- b6b9d16: Refresh the harness web UI with a rebuilt workspace: a three-zone layout (an on-disk explorer of your agents, a per-agent workbench with a session tab strip, and session-keyed projections — Canvas / Steps / Code / Skills), a command palette, a chat/terminal view toggle, and a click-into-step run inspector. The bundle ships with a neutral, unbranded default theme so a public build renders legibly out of the box; light and dark are both supported. No behavioral or API changes to the harness server.
+- b6b9d16: Point the harness web UI's `@shared/types` alias at the package's own shared contract instead of a vendored copy, so the web and server always build against a single source of truth. The snippet panel now reads the real deployed-agent slug and executions base URL when the server provides them, falling back cleanly when it does not. No behavioral or API changes to the harness server.
+- b6b9d16: Wire prod and offline run logs into the Studio's click-into-step run inspector.
+
+  - **Prod runs** light up per-step in the inspector as they progress — status, latency, pass/fail, and (when the run carries them) the step's real input and output. The inspector polls the run's state after it starts and stops quietly once the run finishes or can't be found, so a click into any step shows what it actually did.
+  - **Offline stub runs** render in the SAME inspector: their streamed per-step trace is mapped into the identical step view (logs, pass/fail, and the input/output each step ran on), so an offline run reads exactly like a real one — just free and untimed, since a stub run records no cost or duration.
+
+  Both paths share one step-render shape, so the inspector can never disagree with itself about how a run looks. The inspector names the capability a step called, never a model.
+
+- b6b9d16: Restore the `resolveCoreBaseUrl` helper that the actions router relies on to derive the core API base URL. It is now co-located with `resolveAgentsBaseUrl` (its only dependency) instead of living in a since-removed module, so the harness server builds and the actions router self-defaults its base URL again.
+- b6b9d16: Wire the Studio's Deploy, Prod-run, and Run-local buttons to their direct routes instead of typing a command into the coding agent:
+
+  - **Deploy** streams build status and refreshes the workflow once it publishes, flipping the Draft/Deployed state.
+  - **Prod-run** starts a real execution and hands the new execution off to the run inspector, so it shows up in the Steps view.
+  - **Run-local** runs the workflow offline with capabilities stubbed and reports the outcome — no network, no spend.
+
+  These three actions now run without a coding-agent session, so they consume no LLM credits. Debug, Explain, and free-form prompts still go through the coding agent, and Visualize is unchanged.
+
+- Updated dependencies [b6b9d16]
+  - @sapiom/agent-core@0.9.9
+
 ## 0.1.5
 
 ### Patch Changes
