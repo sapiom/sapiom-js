@@ -8,7 +8,7 @@ import { Markdown } from "./Markdown";
  * The template's step structure, previewed with the canvas projections'
  * vocabulary (templateGraph → kind dots, elbow transition rows) before
  * anything is cloned. Pure manifest truth: the same nodes and edges the
- * canvas would map once the clone lands and Visualize runs.
+ * canvas renders (deterministically) once the clone lands.
  */
 function TemplateGraphPreview({ template }: { template: GalleryTemplate }): JSX.Element {
   const graph = templateGraph(template);

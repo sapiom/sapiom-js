@@ -6,18 +6,19 @@ import * as path from "node:path";
 import express from "express";
 import type { Server } from "node:http";
 import { renderFileFor } from "../core/canvas-render.js";
-import { assembleCanvasBody, buildErrorPanelHtml } from "../core/canvas-body.js";
+import { buildErrorPanelHtml } from "../core/canvas-body.js";
 import { renderCanvasDocument, TEMPLATE_HTML } from "../core/canvas-template.js";
 import { createCanvasRouter, type CanvasSession } from "./canvas.js";
 
 /** A stale legacy overview of the exact shape a pre-split server wrote to
  *  index.html: stacked "render failed" panels + the deterministic footer note. */
 const LEGACY_OVERVIEW_HTML = renderCanvasDocument(
-  assembleCanvasBody({
-    panels: [buildErrorPanelHtml("text-to-image", "No agent was exported")],
-    legend: "",
-    note: "Static preview — regenerate after a workflow changes (1 workflow failed to build).",
-  }),
+  [
+    buildErrorPanelHtml("text-to-image", "No agent was exported"),
+    `<footer class="canvas-footer">
+  <p class="canvas-note">Static preview — regenerate after a workflow changes (1 workflow failed to build).</p>
+</footer>`,
+  ].join("\n\n"),
 );
 
 async function writeIndex(dir: string, html: string): Promise<void> {

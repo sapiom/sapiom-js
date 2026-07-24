@@ -90,7 +90,7 @@ export function WelcomePanel({
           <div className="welcome-hints" data-testid="welcome-hints">
             <div className="welcome-hint-chips">
               <span className="welcome-hint-chip">
-                <Icon name="Sparkles" size={11} /> Visualize
+                <Icon name="Workflow" size={11} /> Visualize
               </span>
               <span className="welcome-hint-chip">
                 <Icon name="Play" size={11} /> Run local

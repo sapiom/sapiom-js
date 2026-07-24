@@ -5,6 +5,14 @@ import { CANVAS_DIR } from "../shared/types.js";
 const DEBOUNCE_MS = 150;
 const POLL_INTERVAL_MS = 500;
 
+/** Directories a workflow-source walk never descends into (heavy or generated)
+ *  — mirrors core/canvas-interconnections.ts's `listSourceFiles`. */
+const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "dist", "build", ".sapiom"]);
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
+/** Bounds the polling snapshot walk — the extraction itself already caps at
+ *  200 files; this is just a defensive ceiling on the fingerprint cost. */
+const MAX_SOURCE_FILES = 400;
+
 /**
  * Cheap change fingerprint for a directory tree: sorted `path:mtime:size`
  * entries. Used by the polling fallback (and directly testable on its own)
@@ -30,59 +38,132 @@ export function snapshotCanvasDir(canvasDir: string): string {
 }
 
 /**
- * One session's watcher. Watches the whole project root (not the canvas dir
- * directly) recursively and filters to CANVAS_DIR-prefixed changes — so
- * there's no separate "wait for the dir to appear" phase, and it naturally
- * survives the canvas dir itself being deleted/recreated. Falls back to
- * polling a directory-tree fingerprint when recursive `fs.watch` isn't
- * available (notably Linux) or the watcher errors out at runtime.
+ * Cheap change fingerprint over a project's own `.ts`/`.tsx` sources (skipping
+ * node_modules/dist/.git/.sapiom), the polling fallback's equivalent of
+ * `snapshotCanvasDir` for the workflow SOURCE — so an editor save on a step
+ * file is noticed on platforms without recursive `fs.watch` too. Bounded and
+ * total: an unreadable dir simply contributes nothing.
+ */
+export function snapshotWorkflowSources(root: string): string {
+  const parts: string[] = [];
+  const walk = (dir: string): void => {
+    if (parts.length >= MAX_SOURCE_FILES) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (parts.length >= MAX_SOURCE_FILES) return;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIR_NAMES.has(entry.name)) continue;
+        walk(full);
+      } else if (SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
+        try {
+          const stat = fs.statSync(full);
+          parts.push(`${full}:${stat.mtimeMs}:${stat.size}`);
+        } catch {
+          parts.push(`${full}:gone`);
+        }
+      }
+    }
+  };
+  walk(root);
+  return parts.sort().join("|");
+}
+
+/** The two things a session watcher reports, kept separate so the integrator
+ *  can react differently: a rendered-output change reloads the iframe, a
+ *  source change re-renders the bound workflow (which then flows back as an
+ *  output change → reload). */
+export interface SessionWatcherCallbacks {
+  onCanvasChange: (harnessSessionId: string) => void;
+  onSourceChange: (harnessSessionId: string) => void;
+}
+
+/**
+ * One session's watcher. Watches the whole project root recursively and routes
+ * each change: a change under CANVAS_DIR is a rendered-output change (reload
+ * the iframe); a `.ts`/`.tsx` change anywhere else is a workflow-source change
+ * (re-render). No separate "wait for the dir to appear" phase, and it survives
+ * the canvas dir itself being deleted/recreated. Falls back to polling two
+ * directory-tree fingerprints (canvas output + sources) when recursive
+ * `fs.watch` isn't available (notably Linux) or the watcher errors out.
  */
 class SessionCanvasWatcher {
   private watcher: fs.FSWatcher | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private canvasDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private sourceDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private lastSnapshot = "";
+  private lastSourceSnapshot = "";
   private readonly canvasDir: string;
   private readonly canvasPrefix: string;
 
   constructor(
     private readonly cwd: string,
     private readonly harnessSessionId: string,
-    private readonly onChange: (harnessSessionId: string) => void,
+    private readonly callbacks: SessionWatcherCallbacks,
   ) {
     this.canvasDir = path.join(cwd, CANVAS_DIR);
     this.canvasPrefix = CANVAS_DIR + path.sep;
     this.arm();
   }
 
-  private scheduleChange(): void {
+  private scheduleCanvasChange(): void {
     if (this.closed) return;
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.debounceTimer = setTimeout(() => this.onChange(this.harnessSessionId), DEBOUNCE_MS);
+    if (this.canvasDebounceTimer) clearTimeout(this.canvasDebounceTimer);
+    this.canvasDebounceTimer = setTimeout(
+      () => this.callbacks.onCanvasChange(this.harnessSessionId),
+      DEBOUNCE_MS,
+    );
   }
 
-  private isCanvasPath(filename: string | null): boolean {
-    // A `null` filename means the platform couldn't report which path
-    // changed — reload to be safe rather than miss an update.
-    if (!filename) return true;
+  private scheduleSourceChange(): void {
+    if (this.closed) return;
+    if (this.sourceDebounceTimer) clearTimeout(this.sourceDebounceTimer);
+    this.sourceDebounceTimer = setTimeout(
+      () => this.callbacks.onSourceChange(this.harnessSessionId),
+      DEBOUNCE_MS,
+    );
+  }
+
+  private isCanvasPath(filename: string): boolean {
     return filename === CANVAS_DIR || filename.startsWith(this.canvasPrefix);
+  }
+
+  private isWorkflowSourcePath(filename: string): boolean {
+    if (!SOURCE_EXTENSIONS.has(path.extname(filename))) return false;
+    return !filename.split(path.sep).some((seg) => SKIP_DIR_NAMES.has(seg));
   }
 
   private arm(): void {
     if (this.closed) return;
     try {
       this.watcher = fs.watch(this.cwd, { recursive: true }, (event, filename) => {
-        if (!this.isCanvasPath(filename)) return;
-        this.scheduleChange();
-        // A rename at (or above) the canvas dir — e.g. an editor's atomic
-        // write-then-rename, or the agent `mkdir -p`'ing it for the first
-        // time — can leave a recursive watcher no longer covering the new
-        // inode on some platforms. Re-arm defensively rather than risk
-        // silently going deaf.
-        if (event === "rename" && (filename === CANVAS_DIR || filename === path.dirname(CANVAS_DIR))) {
-          this.rearm();
+        // A `null` filename means the platform couldn't report which path
+        // changed — do both (reload AND re-render) rather than miss an update.
+        if (filename === null) {
+          this.scheduleCanvasChange();
+          this.scheduleSourceChange();
+          return;
         }
+        if (this.isCanvasPath(filename)) {
+          this.scheduleCanvasChange();
+          // A rename at (or above) the canvas dir — e.g. an editor's atomic
+          // write-then-rename, or the agent `mkdir -p`'ing it for the first
+          // time — can leave a recursive watcher no longer covering the new
+          // inode on some platforms. Re-arm defensively rather than risk
+          // silently going deaf.
+          if (event === "rename" && (filename === CANVAS_DIR || filename === path.dirname(CANVAS_DIR))) {
+            this.rearm();
+          }
+          return;
+        }
+        if (this.isWorkflowSourcePath(filename)) this.scheduleSourceChange();
       });
       this.watcher.on("error", () => this.fallBackToPolling());
     } catch {
@@ -102,18 +183,25 @@ class SessionCanvasWatcher {
     this.watcher?.close();
     this.watcher = null;
     this.lastSnapshot = snapshotCanvasDir(this.canvasDir);
+    this.lastSourceSnapshot = snapshotWorkflowSources(this.cwd);
     this.pollTimer = setInterval(() => {
       const snapshot = snapshotCanvasDir(this.canvasDir);
       if (snapshot !== this.lastSnapshot) {
         this.lastSnapshot = snapshot;
-        this.scheduleChange();
+        this.scheduleCanvasChange();
+      }
+      const sourceSnapshot = snapshotWorkflowSources(this.cwd);
+      if (sourceSnapshot !== this.lastSourceSnapshot) {
+        this.lastSourceSnapshot = sourceSnapshot;
+        this.scheduleSourceChange();
       }
     }, POLL_INTERVAL_MS);
   }
 
   close(): void {
     this.closed = true;
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    if (this.canvasDebounceTimer) clearTimeout(this.canvasDebounceTimer);
+    if (this.sourceDebounceTimer) clearTimeout(this.sourceDebounceTimer);
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.watcher?.close();
     this.watcher = null;
@@ -121,9 +209,14 @@ class SessionCanvasWatcher {
 }
 
 export interface CanvasWatcherManagerDeps {
-  /** Debounced per-session change notification — the integrator broadcasts
+  /** Debounced per-session notification that the RENDERED canvas output under
+   *  `.sapiom/canvas/` changed — the integrator broadcasts
    *  `{type: "canvas.reload", harnessSessionId}` on /ws/events from this. */
   onChange(harnessSessionId: string): void;
+  /** Debounced per-session notification that a workflow SOURCE file changed —
+   *  the integrator re-renders the session's bound workflow from this (the
+   *  render write then flows back through onChange as an iframe reload). */
+  onSourceChange(harnessSessionId: string): void;
 }
 
 /** Registry of one SessionCanvasWatcher per active harness session. */
@@ -138,7 +231,10 @@ export class CanvasWatcherManager {
     this.stop(harnessSessionId);
     this.watchers.set(
       harnessSessionId,
-      new SessionCanvasWatcher(cwd, harnessSessionId, (id) => this.deps.onChange(id)),
+      new SessionCanvasWatcher(cwd, harnessSessionId, {
+        onCanvasChange: (id) => this.deps.onChange(id),
+        onSourceChange: (id) => this.deps.onSourceChange(id),
+      }),
     );
   }
 

@@ -754,7 +754,7 @@ test("canvas pane shows its empty state for a session with nothing generated yet
   // the scratch session — no bundled doc — to see the honest empty state.
   await page.getByTestId("workspace-focus-scratch").click();
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
-  await expect(page.locator(".canvas-empty")).toContainText("Visualize the bound workflow");
+  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound workflow");
 });
 
 test("settings popover: identity, telemetry toggle, and it persists across close/reopen", async ({ page }) => {
@@ -859,104 +859,25 @@ test.describe("workflow actions", () => {
     await page.waitForTimeout(50);
 
     const header = page.getByTestId("workflow-actions-header");
-    const reVisualizeBtn = header.getByTestId("canvas-revisualize");
-    await expect(reVisualizeBtn).toBeVisible();
+    await expect(header).toBeVisible();
 
-    const btnBox = await reVisualizeBtn.boundingBox();
-    expect(btnBox).not.toBeNull();
-    expect((btnBox?.x ?? 0) + (btnBox?.width ?? 0)).toBeLessThanOrEqual(900);
+    const headerBox = await header.boundingBox();
+    expect(headerBox).not.toBeNull();
+    expect((headerBox?.x ?? 0) + (headerBox?.width ?? 0)).toBeLessThanOrEqual(900);
 
     await page.screenshot({ path: "web/e2e/screenshots/narrow-viewport-header.png", fullPage: true });
   });
 
-  test("the header's deployed dot is pinned to a fixed slot regardless of name length", async ({ page }) => {
-    // "leasing" (short) and "onboarding-flow" (long) are both deployed in the
-    // fixtures specifically to exercise this — the dot used to trail right
-    // after the name, so it visibly jumped between the two. It now rides the
-    // deployed tag, a fixed unit right before the header's refresh action.
-    //
-    // The two agents legitimately differ in board state: leasing ships a
-    // bundled doc so it renders a board (and gains an Expand control), while
-    // onboarding-flow does not — so their dots have different ABSOLUTE x. What
-    // stays constant regardless of name length is the dot's offset from the
-    // always-present refresh action (Expand comes after refresh), so compare
-    // that stable relationship, not the absolute x.
-    const dot = page.locator(".workflow-actions-header .workflow-dot");
-    const refresh = page.getByTestId("canvas-revisualize");
-    const dotToRefresh = async (): Promise<number> => {
-      const d = await dot.boundingBox();
-      const r = await refresh.boundingBox();
-      if (!d || !r) throw new Error("header dot/refresh box missing");
-      return r.x - d.x;
-    };
-
-    // Boot's doc-bearing agent renders on first paint: board + deployed dot +
-    // an Expand control.
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-    await expect(page.getByTestId("canvas-expand")).toBeVisible();
-    const leasingGap = await dotToRefresh();
-
-    // Open onboarding-flow (long name) and start its session — its workspace
-    // has no live session. It is deployed (dot present) but ships no doc, so
-    // it never mounts a board and never gains the Expand control.
-    await page.getByTestId("workflow-onboarding-flow").locator(".workflow-item-trigger").click();
-    await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("workflow-actions-header")).toContainText("onboarding-flow");
-    await expect(page.locator(".canvas-iframe")).toHaveCount(0);
-    await expect(page.getByTestId("canvas-expand")).toHaveCount(0);
-    const onboardingGap = await dotToRefresh();
-
-    // The name length changed drastically; the dot's slot did not.
-    expect(onboardingGap).toBeCloseTo(leasingGap, 0);
-
-    await dot.hover();
-    // The dot rides inside the flat deployed tag; the tag owns the tooltip.
-    await expect(page.getByTestId("workflow-deployed-tag")).toHaveAttribute(
-      "data-tooltip",
-      "Deployed to production",
-    );
-    await page.screenshot({ path: "web/e2e/screenshots/header-dot-pinned.png", fullPage: true });
-  });
-
-  test("the header's action is re-visualize, not a no-op iframe reload", async ({ page }) => {
-    const reVisualizeBtn = page.getByTestId("workflow-actions-header").getByTestId("canvas-revisualize");
-    await expect(reVisualizeBtn).toBeEnabled();
-    await expect(reVisualizeBtn).toHaveAttribute("data-tooltip", "Re-visualize");
-
-    await reVisualizeBtn.click();
-
-    // Clicking it fires the same one-click Visualize macro the strip and the
-    // empty-state CTA use — not a bare reload with no new content.
-    await page.waitForFunction(
-      () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
-    );
-    const lastRun = await page.evaluate(
-      () =>
-        (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string; req: { subject?: string } } } })
-          .__HARNESS_TEST__.lastMacroRun,
-    );
-    expect(lastRun?.id).toBe("visualize");
-
-    // The pane itself swaps in the new render once canvas.reload arrives —
-    // that part is unchanged, and still the only thing that flips the iframe in.
-    await page.evaluate(() => {
-      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
-        type: "canvas.reload",
-        harnessSessionId: "sess-boot",
-      });
-    });
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-  });
 });
 
-test("canvas empty state explains itself and offers a one-click Visualize CTA", async ({ page }) => {
+test("canvas empty state explains itself and offers a one-click render CTA", async ({ page }) => {
   // The scratch session has no bundled doc, so its Canvas is the empty state
   // (the boot session opens on its board).
   await page.getByTestId("workspace-focus-scratch").click();
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
   // Short supporting line, no file-editing instructions (there is no editor
   // in this harness), CTA after.
-  await expect(page.locator(".canvas-empty")).toContainText("Visualize the bound workflow");
+  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound workflow");
   await expect(page.locator(".canvas-empty")).not.toContainText(".sapiom/canvas/index.html");
 
   await page.screenshot({ path: "web/e2e/screenshots/canvas-empty-state.png" });
@@ -979,16 +900,16 @@ test("canvas empty state explains itself and offers a one-click Visualize CTA", 
   expect(lastRun?.req.subject).toBeUndefined();
 });
 
-test("steps tab shows its own empty state (not canvas copy) before anything is visualized", async ({ page }) => {
+test("steps tab shows its own empty state (not canvas copy) before anything is rendered", async ({ page }) => {
   // The scratch session has no generated canvas content, so the Steps tab hits
   // the same early-return state as the board — but must talk about steps, with
-  // the SAME one-click Visualize CTA (it works from here). (The boot session
+  // the SAME one-click render CTA (it works from here). (The boot session
   // opens on its board, which does post a step graph.)
   await page.getByTestId("workspace-focus-scratch").click();
   await page.getByTestId("right-tab-steps").click();
   const empty = page.locator(".canvas-empty");
   await expect(empty).toContainText("No steps yet");
-  await expect(empty).toContainText("Steps are read from the visualized workflow");
+  await expect(empty).toContainText("Steps are read from the bound workflow");
   await expect(empty).not.toContainText("Nothing generated yet");
   await expect(page.getByTestId("canvas-visualize-cta")).toBeVisible();
 
@@ -1090,17 +1011,15 @@ test("a pending canvas load shows a skeleton over the iframe — never a blank p
   });
 
   // While the iframe document is in flight: shimmer skeleton visible (with
-  // its a11y label), and the header's refresh icon spins.
+  // its a11y label).
   await expect(page.getByTestId("canvas-loading")).toBeVisible();
   await expect(page.getByTestId("canvas-loading")).toHaveAttribute("aria-label", "Rendering diagram");
-  await expect(page.locator(".canvas-refresh-btn")).toHaveClass(/is-refreshing/);
 
   // Once loaded the skeleton fades out (kept mounted briefly with .is-fading)
-  // and then unmounts; the spin stops with it.
+  // and then unmounts.
   releaseCanvas();
   await expect(page.getByTestId("canvas-loading")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".canvas-iframe")).toBeVisible();
-  await expect(page.locator(".canvas-refresh-btn")).not.toHaveClass(/is-refreshing/);
 });
 
 test("a mock session without a bundled canvas doc shows the empty state and never mounts an iframe", async ({
@@ -1879,8 +1798,8 @@ test("an observed run renders its real steps even before anything is visualized"
   // Studio is cost-free, so no money renders anywhere on the run surface.
   await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("local run");
   await expect(fallback).not.toContainText("$");
-  // Structure (transitions, contracts) still needs Visualize; the hint says so.
-  await expect(fallback).toContainText("Visualize on the Canvas tab");
+  // Structure (transitions, contracts) lives on the Canvas tab; the hint says so.
+  await expect(fallback).toContainText("Open the Canvas tab");
 });
 
 test("a second run never erases the first: the run picker recalls past runs", async ({

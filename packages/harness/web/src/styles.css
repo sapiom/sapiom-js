@@ -2902,10 +2902,6 @@ input {
   text-overflow: ellipsis;
 }
 
-.canvas-refresh-btn {
-  border-radius: var(--radius);
-}
-
 .canvas-frame-wrap {
   position: relative;
   flex: 1;
@@ -2927,6 +2923,13 @@ input {
   flex: 1;
   display: flex;
   min-height: 0;
+  /* Reserve a strip at the bottom for the floating zoom/fit controls so they
+     sit BELOW the canvas iframe instead of on top of the diagram card
+     ("l'un sur l'autre"). The iframe (flex child) stretches to the content box
+     — i.e. shrinks by this much — and the absolute .canvas-view-controls
+     (bottom-anchored) land in the reserved strip. Keep in sync with
+     .canvas-pan-layer's bottom inset below. */
+  padding-bottom: 56px;
 }
 
 /* Overview / step inspector: a full-bleed bottom split block in the pane
@@ -4157,18 +4160,6 @@ input {
   background: var(--bg-1);
 }
 
-/* Re-visualize while a render is in flight: the icon itself rotates, so
-   "refreshing" is visible without any layout change. */
-@keyframes canvas-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.canvas-refresh-btn.is-refreshing svg {
-  animation: canvas-refresh-spin 900ms linear infinite;
-}
-
 /* Lazy-load skeleton: shimmer placeholder blocks laid out like a diagram
    (title, node rows, a wide footer). It stays mounted briefly after the
    iframe loads (.is-fading) so the handoff is a fade, not a pop. */
@@ -4226,11 +4217,6 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .canvas-refresh-btn.is-refreshing svg {
-    animation: none;
-    opacity: 0.6;
-  }
-
   .canvas-skeleton-block {
     animation: none;
   }
@@ -4241,7 +4227,10 @@ input {
    control cluster (z3+), so buttons stay clickable. */
 .canvas-pan-layer {
   position: absolute;
-  inset: 0;
+  /* Cover the iframe area only, not the reserved controls strip below it (see
+     .canvas-visual's padding-bottom) — so fit-to-view measures the visible
+     canvas and gestures don't extend under the controls. */
+  inset: 0 0 56px 0;
   z-index: 1;
   cursor: grab;
   touch-action: none;

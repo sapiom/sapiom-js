@@ -2,19 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CanvasWatcherManager, snapshotCanvasDir } from "./canvas-watcher.js";
+import { CanvasWatcherManager, snapshotCanvasDir, snapshotWorkflowSources } from "./canvas-watcher.js";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 let cwd: string;
 let manager: CanvasWatcherManager;
 let onChange: ReturnType<typeof vi.fn>;
+let onSourceChange: ReturnType<typeof vi.fn>;
 
 describe("CanvasWatcherManager", () => {
   beforeEach(async () => {
     cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-canvas-watch-"));
     onChange = vi.fn();
-    manager = new CanvasWatcherManager({ onChange });
+    onSourceChange = vi.fn();
+    manager = new CanvasWatcherManager({ onChange, onSourceChange });
   });
 
   afterEach(async () => {
@@ -58,7 +60,7 @@ describe("CanvasWatcherManager", () => {
     expect(onChange.mock.calls.length).toBeLessThan(5);
   });
 
-  it("does not fire for changes outside the canvas dir", async () => {
+  it("does not fire for non-source changes outside the canvas dir", async () => {
     manager.start("sess-1", cwd);
     await sleep(100);
 
@@ -66,6 +68,30 @@ describe("CanvasWatcherManager", () => {
     await sleep(400);
 
     expect(onChange).not.toHaveBeenCalled();
+    expect(onSourceChange).not.toHaveBeenCalled();
+  });
+
+  it("fires onSourceChange (not onChange) when a workflow source file changes", async () => {
+    await fs.mkdir(path.join(cwd, "steps"), { recursive: true });
+    manager.start("sess-1", cwd);
+    await sleep(100);
+
+    await fs.writeFile(path.join(cwd, "steps", "route.ts"), "export const x = 1;");
+    await sleep(500);
+
+    expect(onSourceChange).toHaveBeenCalledWith("sess-1");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("ignores source changes under skipped dirs (node_modules et al.)", async () => {
+    await fs.mkdir(path.join(cwd, "node_modules", "pkg"), { recursive: true });
+    manager.start("sess-1", cwd);
+    await sleep(100);
+
+    await fs.writeFile(path.join(cwd, "node_modules", "pkg", "index.ts"), "export default 1;");
+    await sleep(400);
+
+    expect(onSourceChange).not.toHaveBeenCalled();
   });
 
   it("survives the canvas dir being deleted after it existed", async () => {
@@ -159,5 +185,37 @@ describe("snapshotCanvasDir", () => {
   it("is stable across calls when nothing changed", async () => {
     await fs.writeFile(path.join(dir, "index.html"), "hi");
     expect(snapshotCanvasDir(dir)).toBe(snapshotCanvasDir(dir));
+  });
+});
+
+describe("snapshotWorkflowSources", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-src-snap-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("changes on a .ts source add, ignores non-source files and skipped dirs", async () => {
+    const before = snapshotWorkflowSources(dir);
+
+    await fs.writeFile(path.join(dir, "README.md"), "hi");
+    expect(snapshotWorkflowSources(dir)).toBe(before); // non-source: ignored
+
+    await fs.writeFile(path.join(dir, "step.ts"), "export const x = 1;");
+    const withSource = snapshotWorkflowSources(dir);
+    expect(withSource).not.toBe(before);
+
+    await fs.mkdir(path.join(dir, "node_modules"), { recursive: true });
+    await fs.writeFile(path.join(dir, "node_modules", "dep.ts"), "export default 1;");
+    expect(snapshotWorkflowSources(dir)).toBe(withSource); // skipped dir: ignored
+  });
+
+  it("is stable across calls when nothing changed", async () => {
+    await fs.writeFile(path.join(dir, "step.ts"), "export const x = 1;");
+    expect(snapshotWorkflowSources(dir)).toBe(snapshotWorkflowSources(dir));
   });
 });

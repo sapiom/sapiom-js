@@ -86,10 +86,15 @@ export function computeLayers(
   return layer;
 }
 
-/** Computes (x, y) for every node and the overall canvas size. Nodes in the
- *  same layer are centered as a row; layers stack top to bottom. An
- *  enrichment's `laneOrder` hint reorders nodes WITHIN their computed layer
- *  only — layer assignment itself stays purely structural. */
+/** Computes (x, y) for every node and the overall canvas size. Each node is
+ *  placed at the BARYCENTRE of its already-placed parents (so a single-child
+ *  step sits directly under its parent's lane, and a merge node centres between
+ *  the branches that feed it — the two paths converge symmetrically instead of
+ *  a straight chain being forced dead-centre while a side branch has to detour
+ *  around it). Within a layer, order follows the (laneOrder-applied) sequence
+ *  and nodes are spread to a minimum spacing, then re-balanced onto the parent
+ *  barycentre. Layers stack top to bottom; layer assignment stays purely
+ *  structural (computeLayers). */
 export function layoutGraph(
   graph: CanvasGraph,
   laneOrder?: CanvasLayoutHints["laneOrder"],
@@ -104,25 +109,53 @@ export function layoutGraph(
   }
   applyLaneOrder(byLayer, graph, laneOrder);
   const layers = [...byLayer.keys()].sort((a, b) => a - b);
-  const maxCols = layers.reduce(
-    (m, l) => Math.max(m, byLayer.get(l)!.length),
-    1,
-  );
-  const width = MARGIN * 2 + maxCols * NODE_W + (maxCols - 1) * COL_GAP;
 
+  const idSet = new Set(graph.nodes.map((n) => n.id));
+  const parentsOf = new Map<string, string[]>(graph.nodes.map((n) => [n.id, []]));
+  for (const e of graph.edges) {
+    if (idSet.has(e.from) && idSet.has(e.to)) parentsOf.get(e.to)!.push(e.from);
+  }
+
+  const SLOT = NODE_W + COL_GAP;
+  // Provisional node-CENTRE x, filled top-down so a node's parents are placed
+  // before it. Normalised to the left margin afterwards.
+  const cx = new Map<string, number>();
+  for (const l of layers) {
+    const ids = byLayer.get(l)!;
+    const desired = ids.map((id) => {
+      const placed = parentsOf.get(id)!.filter((p) => cx.has(p));
+      return placed.length ? placed.reduce((s, p) => s + cx.get(p)!, 0) / placed.length : null;
+    });
+    const known = desired.filter((v): v is number => v != null);
+    const fallback = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 0;
+    const centers = desired.map((d) => (d == null ? fallback : d));
+    // Enforce the row's left-to-right order and a minimum gap between boxes.
+    for (let i = 1; i < centers.length; i++) {
+      if (centers[i]! < centers[i - 1]! + SLOT) centers[i] = centers[i - 1]! + SLOT;
+    }
+    // Spreading may have pushed the row off its parents' centre — slide it back
+    // so the group stays balanced under what feeds it.
+    if (known.length) {
+      const assigned = centers.reduce((a, b) => a + b, 0) / centers.length;
+      const shift = known.reduce((a, b) => a + b, 0) / known.length - assigned;
+      for (let i = 0; i < centers.length; i++) centers[i]! += shift;
+    }
+    ids.forEach((id, i) => cx.set(id, centers[i]!));
+  }
+
+  const centersAll = [...cx.values()];
+  const minLeft = Math.min(...centersAll) - NODE_W / 2;
+  const shiftX = MARGIN - minLeft;
   const pos: Record<string, { x: number; y: number }> = {};
   for (const l of layers) {
-    const idsInLayer = byLayer.get(l)!;
-    const rowWidth =
-      idsInLayer.length * NODE_W + (idsInLayer.length - 1) * COL_GAP;
-    const startX = (width - rowWidth) / 2;
-    idsInLayer.forEach((id, i) => {
+    for (const id of byLayer.get(l)!) {
       pos[id] = {
-        x: startX + i * (NODE_W + COL_GAP),
+        x: cx.get(id)! + shiftX - NODE_W / 2,
         y: MARGIN + l * (NODE_H + LAYER_GAP),
       };
-    });
+    }
   }
+  const width = Math.max(...centersAll) + shiftX + NODE_W / 2 + MARGIN;
   const height =
     MARGIN * 2 + (layers.length - 1) * (NODE_H + LAYER_GAP) + NODE_H;
   return { pos, width, height: Math.max(height, MARGIN * 2 + NODE_H) };
@@ -266,7 +299,43 @@ export function renderGraphSvg(
       ]
         .filter(Boolean)
         .join(" ");
-      const d = edgePath(edge.kind, x1, y1, x2, y2);
+      const fromLayer = Math.round((from.y - MARGIN) / (NODE_H + LAYER_GAP));
+      const toLayer = Math.round((to.y - MARGIN) / (NODE_H + LAYER_GAP));
+      // In-between nodes a long edge might cross (empty for adjacent edges).
+      const between =
+        toLayer - fromLayer > 1
+          ? graph.nodes.filter((n) => {
+              const l = Math.round((layout.pos[n.id].y - MARGIN) / (NODE_H + LAYER_GAP));
+              return l > fromLayer && l < toLayer;
+            })
+          : [];
+      // Only re-route when the straight line would actually run UNDER one of
+      // them — with the barycentre layout most long edges pass through clear
+      // space and stay a plain line/curve.
+      const collides = between.some((n) => {
+        const np = layout.pos[n.id];
+        const t = (np.y + NODE_H / 2 - y1) / (y2 - y1);
+        const lineX = x1 + (x2 - x1) * t;
+        return lineX > np.x - COL_GAP / 2 && lineX < np.x + NODE_W + COL_GAP / 2;
+      });
+      let d: string;
+      if (collides) {
+        // Route down a clear SIDE LANE past the blocking node(s) — the lane
+        // clears the widest one on the bow side — then curve into the target,
+        // nudging the entry x so a stacked arrowhead doesn't overlap another.
+        const bowRight = x1 >= x2;
+        const laneX = bowRight
+          ? Math.min(
+              layout.width - MARGIN / 2,
+              Math.max(x1, x2, ...between.map((n) => layout.pos[n.id].x + NODE_W)) + COL_GAP,
+            )
+          : Math.max(MARGIN / 2, Math.min(x1, x2, ...between.map((n) => layout.pos[n.id].x)) - COL_GAP);
+        const enterX = x2 + (bowRight ? NODE_W * 0.18 : -NODE_W * 0.18);
+        const dy = y2 - y1;
+        d = `M${x1},${y1} C ${laneX},${y1 + dy * 0.25} ${laneX},${y2 - dy * 0.25} ${enterX},${y2}`;
+      } else {
+        d = edgePath(edge.kind, x1, y1, x2, y2);
+      }
       const marker = dashedClass
         ? "url(#canvas-arrow)"
         : arrowMarker(colorSuffix);

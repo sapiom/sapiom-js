@@ -5,11 +5,12 @@
  * `GET /canvas/:harnessSessionId/*`. The root request resolves by binding:
  * a session bound to a workflow gets that workflow's deterministic render
  * (`renders/<slug>.html` — resolved at request time, so switching the
- * binding is instant, no file rewrite involved); an unbound session gets its
- * agent-authored `index.html` custom canvas — but ONLY when the file is a
- * genuine custom canvas. A machine-generated `index.html` (the seeded
- * template, or a stale legacy deterministic overview a pre-split server wrote
- * there) is NOT served: the unbound session gets the clean empty state
+ * binding is instant, no file rewrite involved); an unbound session gets a
+ * custom `index.html` if one exists (e.g. the bundled example's prefilled
+ * showcase) — but ONLY when it's a genuine custom canvas. A machine-generated
+ * `index.html` (the seeded empty-state template, or a stale legacy
+ * deterministic overview a pre-split server wrote there) is NOT served: the
+ * unbound session gets the clean empty state
  * instead, so it never opens to a wall of unrelated "render failed" panels
  * (see core/canvas-index-classify.ts). The SPA's CanvasPane embeds this in a sandboxed iframe
  * and probes it with a HEAD request (`fetch('/canvas/<id>/', { method:
@@ -65,8 +66,7 @@ const EMPTY_STATE_HTML = `<!doctype html>
 <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #444; text-align: center; padding: 0 2rem;">
   <div>
     <h1 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Nothing rendered yet</h1>
-    <p style="margin: 0;">Select a workflow in the rail to visualize it, or ask your agent to write HTML to
-    <code>.sapiom/canvas/index.html</code> in this project — this pane hot-reloads whenever it changes.</p>
+    <p style="margin: 0;">Select a workflow in the rail and its step graph renders here automatically.</p>
   </div>
 </body>
 </html>`;

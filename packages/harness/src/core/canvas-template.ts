@@ -20,8 +20,10 @@ import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
 import {
   applyRunStateToCanvas,
+  bootCanvasGraph,
   bootCanvasNodeClicks,
   bootCanvasRunState,
+  bootCanvasView,
   runStateNodeClass,
 } from "./canvas-run-state.js";
 
@@ -84,7 +86,16 @@ html, body {
   margin: 0; min-height: 100%; background: var(--canvas-bg); color: var(--canvas-text);
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
-#canvas-root { max-width: 1100px; margin: 0 auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 18px; }
+/* Center the rendered card in the pane. The harness posts pan/zoom as a
+   transform on #canvas-root (transform-origin: center — see canvas-run-state.ts),
+   so a flex-centered body keeps it centered at rest and while scaling: fit-to-view
+   (pan 0,0) lands it dead center, and zooming grows from the middle. The body is
+   pinned to the viewport (height:100vh, NOT min-height) so a card taller than the
+   pane centers within the VISIBLE area — with min-height the body would grow and
+   push the card off-screen — and overflow is clipped (pan/zoom navigates instead
+   of scrollbars). */
+body { display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+#canvas-root { max-width: 1100px; padding: 24px 20px; display: flex; flex-direction: column; gap: 18px; }
 
 /* --- structural classes: keep these, and their names, untouched --- */
 .canvas-panel { background: var(--canvas-panel); border: 1px solid var(--canvas-border); border-radius: 16px; padding: 20px; }
@@ -95,7 +106,6 @@ html, body {
   font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--canvas-border-strong);
   color: var(--canvas-text-dim);
 }
-.canvas-badge--stale { color: var(--canvas-escalation); border-color: var(--canvas-escalation); }
 .canvas-subtitle { margin: 0; color: var(--canvas-text-dim); font-size: 12.5px; }
 .canvas-stats { display: flex; gap: 22px; margin-top: 2px; }
 .canvas-stat { display: flex; flex-direction: column; }
@@ -141,6 +151,10 @@ html, body {
 
 /* --- legend + interconnections --- */
 .canvas-legend { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 11px; color: var(--canvas-text-dim); }
+/* In a diagram panel the legend is a footer under the SVG — separate it with a
+   hairline so it reads as a key, not part of the graph. Scoped to .canvas-panel
+   so the overview/seed legends keep their own layout. */
+.canvas-panel .canvas-legend { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--canvas-border); }
 .canvas-legend-item { display: flex; align-items: center; gap: 6px; }
 .canvas-legend-marker { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
 .canvas-legend-marker--entry { background: var(--canvas-accent); }
@@ -314,12 +328,34 @@ const SVG_DEFS = `
 </svg>
 `.trim();
 
-/** Stringified run-state listener and node-click channel injected into every
- *  canvas document. The run-state functions must all be in scope together
- *  because `bootCanvasRunState` calls `applyRunStateToCanvas`, which calls
- *  `runStateNodeClass`. `bootCanvasNodeClicks` adds the reverse click channel
- *  (iframe → parent) using the same stringify pattern. */
-const RUN_STATE_SCRIPT = `${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();`;
+/**
+ * A no-op `__name` shim, prepended to the injected script.
+ *
+ * esbuild's `keepNames` — which `tsx` enables in `dev`, and any `--keep-names`
+ * build — rewrites NESTED function declarations inside the boot functions below
+ * to `__name(fn, "fn")` calls, and defines the `__name` helper at MODULE scope:
+ * scope that `Function.prototype.toString()` does NOT capture. Injected raw into
+ * the sandboxed iframe, those calls throw `ReferenceError: __name is not
+ * defined`, which aborts the whole <script> and kills the node-click AND
+ * pan/zoom channels (run-state only survives because it has no nested
+ * functions). A trivial in-scope shim makes the stringified output run verbatim
+ * regardless of how it was compiled — `tsc` emits no such calls, so the shim is
+ * simply unused there. Without this, canvas gestures work in a `tsc`/dist build
+ * but silently break under `tsx`/esbuild.
+ */
+const NAME_SHIM = "function __name(fn){return fn;}";
+
+/** Stringified run-state listener, node-click channel, and pan/zoom view
+ *  channel injected into every canvas document. The run-state functions must
+ *  all be in scope together because `bootCanvasRunState` calls
+ *  `applyRunStateToCanvas`, which calls `runStateNodeClass`.
+ *  `bootCanvasNodeClicks` adds the reverse click channel (iframe → parent), and
+ *  `bootCanvasView` applies the parent's pan/zoom (transforming `#canvas-root`)
+ *  and reports the graph size for fit-to-view; `bootCanvasGraph` posts the
+ *  embedded step graph so the Steps tab can project it — all via the same
+ *  stringify pattern. `NAME_SHIM` MUST come first (see its doc — without it,
+ *  esbuild/tsx output throws in the iframe). */
+const RUN_STATE_SCRIPT = `${NAME_SHIM}\n${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();\n${bootCanvasView.toString()}\nbootCanvasView();\n${bootCanvasGraph.toString()}\nbootCanvasGraph();`;
 
 /**
  * Wraps `bodyHtml` in the shared canvas document shell: doctype, the theme
@@ -408,16 +444,15 @@ async function writeIfMissing(
 }
 
 /**
- * Backfill-only: ensures both `<cwd>/.sapiom/canvas/_template.html` (a
- * pristine copy, so "clone the template" always has a clean source — see
- * the visualize macro's prompt) and `<cwd>/.sapiom/canvas/index.html` (the
- * live canvas, seeded with the same empty-state content) exist. Never
- * clobbers either file if something's already there — an earlier session,
- * or the agent's own edits. Called from SessionManager's create()/resume()
- * (see its `ensureCanvasTemplate` option) so the canvas pane never opens to
- * a completely empty iframe. Best-effort, like the sibling
- * `workspace-context.ts` writer: a session's cwd could be unwritable, and
- * that must never fail session creation itself.
+ * Backfill-only: seeds `<cwd>/.sapiom/canvas/index.html` (and a pristine
+ * `_template.html` beside it) with the empty-state document, and clears any
+ * legacy overview a pre-split server left behind. A bound session always
+ * renders its workflow deterministically to `renders/<slug>.html`, so this
+ * seed is only the unbound placeholder — the canvas pane never opens to a
+ * completely empty iframe. Never clobbers an existing file. Called from
+ * SessionManager's create()/resume() (see its `ensureCanvasTemplate` option).
+ * Best-effort, like the sibling `workspace-context.ts` writer: a session's cwd
+ * could be unwritable, and that must never fail session creation itself.
  */
 export async function ensureCanvasTemplate(cwd: string): Promise<void> {
   await removeLegacyOverviewIndex(path.join(cwd, CANVAS_INDEX));

@@ -53,15 +53,6 @@ export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
 export const CANVAS_RENDERS_DIR = `${CANVAS_DIR}/renders`;
 
 /**
- * Per-workflow enrichment cache lives here (one `<slug>.json` per workflow,
- * same slug scheme as CANVAS_RENDERS_DIR), relative to the session cwd:
- * `{ graph, enrichment, sourceFingerprint, enrichedAt }`. A stale
- * sourceFingerprint keeps the enrichment displayed (with a "stale" chip)
- * until a re-run replaces it — see core/canvas-enrich.ts.
- */
-export const CANVAS_CACHE_DIR = `${CANVAS_DIR}/cache`;
-
-/**
  * Composer image attachments (upload / paste / drag-drop) land here, relative
  * to the session cwd, before their path is relayed into the agent's prompt.
  * Co-located under `.sapiom/` with the canvas + context conventions so a single
@@ -873,11 +864,10 @@ export interface MacroDef {
   action:
     | { kind: "inject"; text: string; submit?: boolean }
     | { kind: "open-url"; url: string }
-    /** Force refresh of the bound workflow's canvas: invalidates the
-     *  extraction + enrichment caches, re-renders the deterministic diagram
-     *  instantly, and re-spawns the bounded AI enrichment task (see
-     *  core/canvas-enrich.ts) — no pty involved. A cheap no-op when the
-     *  session is unbound. */
+    /** Refresh of the bound workflow's canvas: invalidates the extraction
+     *  cache and re-renders the fully deterministic diagram (structure +
+     *  derived annotations, no LLM, no user token) — no pty involved. A cheap
+     *  no-op when the session is unbound. */
     | { kind: "render-canvas" };
   /** Macro requires a selected workflow to be enabled. */
   requiresWorkflow?: boolean;

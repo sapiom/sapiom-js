@@ -5,21 +5,22 @@ import {
   isMachineGeneratedCanvas,
   isSeededCanvasTemplate,
 } from "./canvas-index-classify.js";
-import { assembleCanvasBody, buildErrorPanelHtml } from "./canvas-body.js";
+import { buildErrorPanelHtml } from "./canvas-body.js";
 import { renderCanvasDocument, TEMPLATE_HTML } from "./canvas-template.js";
 
 /** A realistic reproduction of the stale legacy overview a pre-split server
  *  wrote to index.html: the shared shell wrapping stacked "render failed"
- *  panels and the deterministic "Static preview —" footer note. */
+ *  panels and the deterministic "Static preview —" footer note. Built by hand —
+ *  the current renderer no longer emits any footer — so the legacy signature
+ *  the classifier keys on is reproduced exactly. */
 const LEGACY_OVERVIEW_HTML = renderCanvasDocument(
-  assembleCanvasBody({
-    panels: [
-      buildErrorPanelHtml("text-to-image", "No agent was exported"),
-      buildErrorPanelHtml("logo-flow", "No agent was exported"),
-    ],
-    legend: "",
-    note: "Static preview — regenerate after a workflow changes (2 workflows failed to build).",
-  }),
+  [
+    buildErrorPanelHtml("text-to-image", "No agent was exported"),
+    buildErrorPanelHtml("logo-flow", "No agent was exported"),
+    `<footer class="canvas-footer">
+  <p class="canvas-note">Static preview — regenerate after a workflow changes (2 workflows failed to build).</p>
+</footer>`,
+  ].join("\n\n"),
 );
 
 /** What an agent authors after cloning the template and filling it in — the

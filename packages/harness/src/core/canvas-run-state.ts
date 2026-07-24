@@ -200,3 +200,104 @@ export function bootCanvasNodeClicks(): void {
     }
   });
 }
+
+/**
+ * Wires the view (pan/zoom) channel and announces the graph's natural size.
+ *
+ * The sandboxed iframe element itself NEVER transforms — that keeps the gesture
+ * layer's forwarded click/hover points in this frame's coordinate space (see
+ * bootCanvasNodeClicks). Instead the harness gesture layer captures wheel/drag,
+ * tracks a `{ zoom, x, y }` view, and posts `{ type: "sapiom-canvas:view" }`;
+ * this applies it as a CSS transform on `#canvas-root`. Without this handler the
+ * view messages are dropped and the canvas can neither zoom nor pan.
+ *
+ * On load it posts `{ type: "sapiom-canvas:size", width, height, ... }` — the
+ * graph's natural px (canvas-svg.ts pins the `<svg>` to explicit width/height) —
+ * which is the parent's fit-to-view input. `#canvas-root` and the `<svg>` are
+ * looked up lazily because this runs from `<head>`, before `<body>` is parsed.
+ *
+ * Stringified into the iframe template by `canvas-template.ts`.
+ */
+export function bootCanvasView(): void {
+  function applyView(zoom: number, x: number, y: number): void {
+    const root = document.getElementById("canvas-root");
+    if (!root) return;
+    // Scale from the center so a flex-centered card (see canvas-template.ts's
+    // body rule) stays centered at rest and grows from the middle when zoomed;
+    // `translate` is in absolute px regardless of origin, so drag-pan is
+    // unaffected.
+    root.style.transformOrigin = "50% 50%";
+    root.style.transform = "translate(" + x + "px," + y + "px) scale(" + zoom + ")";
+  }
+  function postSize(): void {
+    const root = document.getElementById("canvas-root");
+    if (!root) return;
+    // Report the WHOLE card (header + diagram + legend), not just the SVG: the
+    // view transform scales #canvas-root, so fit-to-view must size to the full
+    // card or the header/legend push the graph past the pane and it clips
+    // vertically. offsetWidth/Height are the layout border-box, unaffected by
+    // any transform, so this is correct even if a view was already applied.
+    const width = root.offsetWidth;
+    const height = root.offsetHeight;
+    if (!width || !height) return;
+    window.parent.postMessage(
+      { type: "sapiom-canvas:size", width: width, height: height, insetTop: 0, insetBottom: 0, insetX: 0 },
+      "*",
+    );
+  }
+  window.addEventListener("message", function (e) {
+    const d = e && e.data;
+    if (!d || d.type !== "sapiom-canvas:view") return;
+    applyView(d.zoom, d.x, d.y);
+  });
+  // Report size once the card has actually laid out, AND on any later
+  // layout/font shift. A ResizeObserver fires reliably POST-layout, so the
+  // parent always receives a real (non-zero) size to fit to — measuring at
+  // DOMContentLoaded alone can run before layout and post nothing, which left
+  // the parent stuck at 100%. (Transforms don't change layout size, so the
+  // parent applying the fitted view never re-triggers this — no loop.)
+  function armSize(): void {
+    postSize();
+    if (typeof ResizeObserver !== "undefined") {
+      const root = document.getElementById("canvas-root");
+      if (root) new ResizeObserver(postSize).observe(root);
+    }
+  }
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", armSize);
+  } else {
+    armSize();
+  }
+}
+
+/**
+ * Posts the workflow's step graph to the parent so the Steps tab / inspector
+ * can project it (`{ type: "sapiom-canvas:graph", graph }`).
+ *
+ * The graph is embedded by `canvas-body.ts` as a `<script type="application/json"
+ * id="sapiom-graph">` data block (NOT executed — it's read as text here). Without
+ * this the board (SVG) still shows, but the Steps tab has no graph and reads
+ * "No steps yet" even though the diagram is visible. Deferred to DOM-ready
+ * because this boots from `<head>`, before `<body>` (and the data block) parses.
+ *
+ * Stringified into the iframe template by `canvas-template.ts`.
+ */
+export function bootCanvasGraph(): void {
+  function post(): void {
+    const el = document.getElementById("sapiom-graph");
+    if (!el) return;
+    try {
+      window.parent.postMessage(
+        { type: "sapiom-canvas:graph", graph: JSON.parse(el.textContent || "{}") },
+        "*",
+      );
+    } catch {
+      /* malformed payload — leave the drill-down empty rather than throw */
+    }
+  }
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", post);
+  } else {
+    post();
+  }
+}

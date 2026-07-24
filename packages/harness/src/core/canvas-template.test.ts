@@ -11,15 +11,18 @@ import {
   ensureCanvasTemplate,
   renderCanvasDocument,
 } from "./canvas-template.js";
-import { assembleCanvasBody, buildErrorPanelHtml } from "./canvas-body.js";
+import { buildErrorPanelHtml } from "./canvas-body.js";
 
-/** The stale legacy overview a pre-split server wrote to index.html. */
+/** The stale legacy overview a pre-split server wrote to index.html — built by
+ *  hand (the renderer no longer emits a footer) to reproduce the legacy
+ *  "Static preview" signature the classifier keys on. */
 const LEGACY_OVERVIEW_HTML = renderCanvasDocument(
-  assembleCanvasBody({
-    panels: [buildErrorPanelHtml("text-to-image", "No agent was exported")],
-    legend: "",
-    note: "Static preview — regenerate after a workflow changes (1 workflow failed to build).",
-  }),
+  [
+    buildErrorPanelHtml("text-to-image", "No agent was exported"),
+    `<footer class="canvas-footer">
+  <p class="canvas-note">Static preview — regenerate after a workflow changes (1 workflow failed to build).</p>
+</footer>`,
+  ].join("\n\n"),
 );
 
 describe("renderCanvasDocument", () => {
@@ -64,6 +67,33 @@ describe("renderCanvasDocument", () => {
     expect(html).toContain("elementFromPoint");
     // Hover answers the hit channel so the gesture layer shows a pointer cursor.
     expect(html).toContain("sapiom-canvas:hit");
+  });
+
+  it("injects the pan/zoom view channel so the canvas can zoom and move", () => {
+    const html = renderCanvasDocument("<p>x</p>");
+    // The parent posts the view; without this receiver zoom/pan are dropped.
+    expect(html).toContain("sapiom-canvas:view");
+    expect(html).toContain("bootCanvasView()");
+    // The iframe element never transforms — the view rides #canvas-root.
+    expect(html).toContain('getElementById("canvas-root")');
+    expect(html).toContain("transform");
+    // The doc reports its natural size so the parent can fit-to-view.
+    expect(html).toContain("sapiom-canvas:size");
+  });
+
+  it("prepends a __name shim so esbuild/tsx keepNames output doesn't throw in the iframe", () => {
+    // Under tsx/esbuild the stringified boot functions contain `__name(fn,"fn")`
+    // calls whose helper lives at module scope (not captured by toString()).
+    // The shim must be defined in the injected script or the whole <script>
+    // throws ReferenceError and node-click + pan/zoom silently die.
+    const html = renderCanvasDocument("<p>x</p>");
+    expect(html).toContain("function __name");
+    // If any __name(...) call is present, the shim definition must precede it.
+    const firstCall = html.indexOf("__name(");
+    if (firstCall !== -1) {
+      expect(html.indexOf("function __name")).toBeGreaterThanOrEqual(0);
+      expect(html.indexOf("function __name")).toBeLessThan(firstCall);
+    }
   });
 
   it("makes canvas nodes read as clickable via cursor: pointer CSS", () => {
@@ -113,10 +143,21 @@ describe("renderCanvasDocument", () => {
     expect(html).toContain('id="canvas-arrow-warn"');
   });
 
-  it("has no JSON data block and no data-parsing renderer script — markup only", () => {
+  it("bakes the diagram as markup — no legacy client-side SVG builder", () => {
     const html = renderCanvasDocument("");
+    // The old AI path shipped a `canvas-data` JSON block that a runtime script
+    // turned INTO the SVG. The deterministic render never does: the diagram is
+    // server-rendered markup.
     expect(html).not.toMatch(/canvas-data/);
-    expect(html).not.toMatch(/JSON\.parse/);
+  });
+
+  it("posts the embedded step graph to the parent (Steps tab source of truth)", () => {
+    const html = renderCanvasDocument("");
+    // The one JSON the doc parses is the embedded `#sapiom-graph` payload it
+    // POSTS to the parent — never to draw the board. Without this the Steps
+    // tab reads "No steps yet" even when the diagram is visible.
+    expect(html).toContain("sapiom-canvas:graph");
+    expect(html).toContain('getElementById("sapiom-graph")');
   });
 });
 

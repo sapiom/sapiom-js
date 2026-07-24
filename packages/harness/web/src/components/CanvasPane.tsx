@@ -132,7 +132,12 @@ export function CanvasPane({
   const [panning, setPanning] = useState(false);
   const panLayerRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
-  const clampZoom = (z: number): number => Math.min(3, Math.max(0.25, Math.round(z * 100) / 100));
+  // The smallest zoom allowed — adaptive, not a fixed value: for a large graph
+  // it's the exact fit-to-frame zoom (so you can zoom out until the whole thing
+  // shows), for a small graph it stays at a sane 0.25. Recomputed on each fit
+  // (see fitView) from the graph + pane size.
+  const [minZoom, setMinZoom] = useState(0.25);
+  const clampZoom = (z: number): number => Math.min(3, Math.max(minZoom, Math.round(z * 100) / 100));
   // Fit-to-view: documents that implement {type:"sapiom-canvas:size"} post
   // their graph's natural size plus reserved chrome insets (the docked zoom
   // controls' strip, side padding) — the fit excludes those insets so the
@@ -161,20 +166,36 @@ export function CanvasPane({
     const availWidth = rect.width - graphSize.insetX * 2;
     const availHeight = rect.height - graphSize.insetTop - graphSize.insetBottom;
     if (availWidth <= 0 || availHeight <= 0) return null;
-    // Fit only ever shrinks (enlarging a small graph past 100% just blurs
-    // it) and never dips below the zoom widget's own floor.
+    // Fit only ever shrinks (enlarging a small graph past 100% just blurs it).
+    // The zoom is ESTIMATED from the graph + pane, floored only at a tiny 0.1
+    // safety bound — so even a very large graph frames whole. The old hard 0.5
+    // floor is exactly what left big graphs cut off.
     const fitted = Math.min(1, availWidth / graphSize.width, availHeight / graphSize.height);
-    return { zoom: Math.max(0.5, Math.round(fitted * 100) / 100), x: 0, y: 0 };
+    return { zoom: Math.max(0.1, Math.round(fitted * 100) / 100), x: 0, y: 0 };
   }, [graphSize]);
 
   const fitView = useCallback((): void => {
-    const fit = computeFit() ?? { zoom: 1, x: 0, y: 0 };
-    // An explicit fit hands the view back to auto-follow: subsequent pane
-    // resizes keep it fitted until the user moves the view again.
-    userAdjustedRef.current = false;
-    setZoom(fit.zoom);
-    setPan({ x: fit.x, y: fit.y });
-    setRestView(fit);
+    // Retry across a few frames instead of snapping to 100% when the pane or
+    // the document's size isn't measurable yet — on a fresh load that snap was
+    // the "sometimes it opens at 100% and doesn't adapt" bug.
+    let tries = 12;
+    const apply = (): void => {
+      const computed = computeFit();
+      if (!computed) {
+        if (tries-- > 0) requestAnimationFrame(apply);
+        return;
+      }
+      // Adapt the zoom-out floor to this graph: a large graph fits below 0.25,
+      // so let the user reach that; a small graph keeps the ordinary 0.25 floor.
+      setMinZoom(Math.min(0.25, computed.zoom));
+      // An explicit fit hands the view back to auto-follow: subsequent pane
+      // resizes keep it fitted until the user moves the view again.
+      userAdjustedRef.current = false;
+      setZoom(computed.zoom);
+      setPan({ x: computed.x, y: computed.y });
+      setRestView(computed);
+    };
+    apply();
   }, [computeFit]);
 
   // Fit on first render (the document announces its size once laid out)…
@@ -616,24 +637,6 @@ export function CanvasPane({
       : null;
   const retryMacro = failedTask ? (macros.find((macro) => macro.id === failedTask.macroId) ?? null) : null;
 
-  // The header's action IS Visualize now — one click re-fires the same macro
-  // that generated what's already on screen. The reload starts eagerly (fresh
-  // iframe fetch + skeleton + spinning icon on THIS click), and the macro's
-  // own canvas.reload event swaps in the re-rendered document when it lands.
-  const handleReVisualize = (): void => {
-    if (!visualizeMacro) return;
-    if (hasGeneratedContent) {
-      // Guarantee the refresh is SEEN: the skeleton (and the spinning icon
-      // that tracks it) holds for at least ~900ms even if the document
-      // round-trips instantly.
-      skeletonHoldUntilRef.current = Date.now() + 900;
-      setFrameLoading(true);
-      setReloadKey((key) => key + 1);
-    }
-    onRunMacro(visualizeMacro);
-    track("visualize.triggered");
-  };
-
   // Content is on screen and loadable — the only state where panel-level
   // view actions (expand) make sense.
   // Mock hard gate, derived (not state): only sessions with a bundled demo
@@ -649,9 +652,6 @@ export function CanvasPane({
       {boundWorkflow && !overviewActive && (
         <WorkflowActionsHeader
           workflow={boundWorkflow}
-          onReVisualize={handleReVisualize}
-          reVisualizeDisabledReason={visualizeDisabledReason}
-          refreshing={Boolean(runningTask) || (showingFrame && frameLoading)}
           expanded={expanded}
           onToggleExpanded={() => setExpanded((v) => !v)}
           canExpand={showingFrame}
@@ -761,33 +761,34 @@ export function CanvasPane({
           <p className="canvas-empty-hint">{surface === "steps" ? "Loading steps…" : "Loading canvas…"}</p>
         </div>
       ) : !showsContent && surface === "steps" && run ? (
-        /* Nothing visualized yet, but a run was observed: the live
-           per-step data renders instead of "No steps yet". */
+        /* No diagram yet, but a run was observed: the live per-step data
+           renders instead of "No steps yet". */
         <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
           <RunStepsList run={run} target={runTarget} />
         </div>
       ) : !showsContent && sessionExited ? (
-        /* nothing was generated and the session is dead — inviting a
-           Visualize here would target a pty that no longer exists. */
+        /* nothing was generated and the session is dead — a render here would
+           target a pty that no longer exists. */
         <EmptyState
           className="canvas-empty"
           testId="canvas-empty-exited"
           icon="History"
           title="Session ended"
-          body={`Resume the session to visualize its ${surface === "steps" ? "workflow steps" : "workflow"} here.`}
+          body={`Resume the session to see its ${surface === "steps" ? "workflow steps" : "workflow diagram"} here.`}
         />
       ) : !showsContent ? (
         /* Header claim, one supporting line, then the action — top to bottom.
-           The Visualize CTA works from either tab: it renders the board AND
-           posts the step graph the Steps tab projects. */
+           The diagram is generated deterministically from the bound workflow
+           (no AI); the render CTA works from either tab — it (re)renders the
+           board AND posts the step graph the Steps tab projects. */
         <EmptyState
           className="canvas-empty"
-          icon="Sparkles"
+          icon="Workflow"
           title={surface === "steps" ? "No steps yet" : "Nothing generated yet"}
           body={
             surface === "steps"
-              ? "Steps are read from the visualized workflow. Visualize on the Canvas tab to map them."
-              : "Visualize the bound workflow; the canvas updates as the agent works."
+              ? "Steps are read from the bound workflow's diagram — generated automatically from its code."
+              : "Generated automatically from the bound workflow; it refreshes when the code changes."
           }
           cta={
             visualizeMacro && (
@@ -801,7 +802,7 @@ export function CanvasPane({
                   track("visualize.triggered");
                 }}
               >
-                <Icon name="Sparkles" size={14} /> Visualize
+                <Icon name="Workflow" size={14} /> Render diagram
               </button>
             )
           }
@@ -825,10 +826,10 @@ export function CanvasPane({
               data-testid="canvas-zoom-out"
               aria-label="Zoom out"
               title="Zoom out"
-              disabled={zoom <= 0.5}
+              disabled={zoom <= minZoom + 0.001}
               onClick={() => {
                 userAdjustedRef.current = true;
-                setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100));
+                setZoom((z) => Math.max(minZoom, Math.round((z - 0.25) * 100) / 100));
               }}
             >
               <Icon name="ZoomOut" size={14} />
@@ -940,7 +941,7 @@ export function CanvasPane({
               </div>
               <details className="canvas-error-details">
                 <summary>Details</summary>
-                <pre>{postedError.reason.trim().length >= 4 ? postedError.reason : "The rendered document reported a failure without details. Re-run Visualize or check the terminal."}</pre>
+                <pre>{postedError.reason.trim().length >= 4 ? postedError.reason : "The rendered document reported a failure without details. Re-render the diagram or check the terminal."}</pre>
               </details>
             </div>
           )}
@@ -1048,9 +1049,9 @@ export function CanvasPane({
                    this cause (a rendered canvas that posted no graph). */
                 <EmptyState
                   className="canvas-empty"
-                  icon="Sparkles"
+                  icon="Workflow"
                   title="No steps yet"
-                  body="This canvas has not posted a step graph. Re-run Visualize on the Canvas tab to map them."
+                  body="This diagram has no step graph. It regenerates automatically from the bound workflow — check the terminal if it never appears."
                 />
               )}
             </div>

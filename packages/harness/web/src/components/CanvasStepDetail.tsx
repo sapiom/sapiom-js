@@ -398,7 +398,7 @@ export function RunStepsList({ run, target }: { run: RunView; target: RunTarget 
       })}
       <StubNoticeSection run={run} />
       <p className="canvas-empty-hint">
-        Run data only. Visualize on the Canvas tab to map transitions and contracts.
+        Run data only. Open the Canvas tab for the diagram — transitions and contracts come from the workflow.
       </p>
     </div>
   );

@@ -1,5 +1,3 @@
-import { CANVAS_STYLE_GUIDELINES } from "./canvas-guidelines.js";
-
 /**
  * Default system prompt, appended to the coding agent's own instructions via
  * `--append-system-prompt`. Orients a fresh session to the Sapiom-specific
@@ -28,19 +26,15 @@ step code against stub capabilities, no cost) → link (associate the project
 with a hosted agent) → deploy (push, build, go live). Read a project's
 AGENTS.md before touching its steps — it documents that project's specifics.
 
-**Canvas convention:** \`.sapiom/canvas/\` already has a prebuilt
-\`_template.html\` (pristine, styles and markup patterns baked in — never
-edit this one) and a live \`index.html\` cloned from it (the harness watches
-this file and renders it live in the app's canvas pane). For "visualize this
-workflow" / "how does everything connect" asks (including the Visualize
-action), clone \`_template.html\` over \`index.html\` and fill in the content
-using the node/edge/stats/legend markup patterns documented in the
-template's own \`<template id="canvas-patterns">\` block — keep the
-\`<style>\` block and structural classes untouched, write no new CSS. Only
-write a full replacement file from scratch, ignoring the template, when
-someone asks for a genuinely custom canvas its patterns can't represent; in
-that case follow this style contract so it still looks Sapiom-native:
-${CANVAS_STYLE_GUIDELINES}
+**Canvas convention:** the canvas pane renders the selected workflow's step
+graph automatically and deterministically — the harness extracts it from the
+workflow's manifest and draws the diagram (nodes, edges, a summary and
+annotations) server-side: no LLM, no tokens, identical every time. You do NOT
+author or edit any canvas HTML, and there is nothing to write under
+\`.sapiom/canvas/\`. When someone asks to "visualize this workflow" or "how
+does everything connect", just make sure the workflow is selected in the rail
+(the Visualize button and the ⌘K action only force a re-render) — it draws
+itself.
 
 **Your current workspace state:** the harness mirrors what it knows about
 this workspace at \`.sapiom/harness-context.json\`, relative to your working

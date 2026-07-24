@@ -351,26 +351,6 @@ test.describe("Contrast: macros use runMacro (NOT the direct route)", () => {
     expect(hook?.lastDirectAction).toBeUndefined();
   });
 
-  test("re-Visualize from the canvas header fires runMacro, NOT the direct route", async ({ page }) => {
-    // The canvas header has a re-Visualize button (canvas-revisualize) for
-    // the boot session's bound board.
-    const reVisualizeBtn = page.getByTestId("workflow-actions-header").getByTestId("canvas-revisualize");
-    await expect(reVisualizeBtn).toBeEnabled();
-
-    const before = await readTestHook(page);
-    expect(before?.lastDirectAction).toBeUndefined();
-
-    await reVisualizeBtn.click();
-
-    await page.waitForFunction(
-      () => (window as unknown as HarnessTestWindow).__HARNESS_TEST__?.lastMacroRun,
-    );
-    const hook = await readTestHook(page);
-    expect(hook?.lastMacroRun?.id).toBe("visualize");
-    // Direct route untouched.
-    expect(hook?.lastDirectAction).toBeUndefined();
-  });
-
   test("direct/inject split is exclusive: running Deploy then Visualize records both hooks in the right slots", async ({
     page,
   }) => {

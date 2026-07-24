@@ -11,10 +11,6 @@ import { Icon } from "./Icon";
 
 interface WorkflowActionsHeaderProps {
   workflow: WorkflowInfo;
-  onReVisualize: () => void;
-  reVisualizeDisabledReason: string | null;
-  /** A render is in flight (macro running or iframe reloading) — spins the refresh icon. */
-  refreshing: boolean;
   /** Panel-level expand lives here (subheader), not in the board's zoom widget. */
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -47,7 +43,8 @@ function runChipLabel(run: RunView, target: RunTarget | null): string {
 
 /**
  * The canvas pane's subheader. Three modes on one bar:
- * - Board: workflow name + deployed dot, refresh (spins in flight), expand.
+ * - Board: workflow name + deployed dot, expand (the canvas re-renders itself
+ *   on any workflow-source edit, so there's no manual refresh action).
  * - Steps list: the workflow name and the real step count, info left, no
  *   competing actions (rows are the interface).
  * - Step detail: 1×1 back left-anchored, the step's name and kind, then the
@@ -56,9 +53,6 @@ function runChipLabel(run: RunView, target: RunTarget | null): string {
  */
 export function WorkflowActionsHeader({
   workflow,
-  onReVisualize,
-  reVisualizeDisabledReason,
-  refreshing,
   expanded,
   onToggleExpanded,
   canExpand,
@@ -270,16 +264,6 @@ export function WorkflowActionsHeader({
           <span className="workflow-dashboard-link-label">Go to dashboard</span>
         </a>
       )}
-      <button
-        className={"macro-icon-btn canvas-refresh-btn" + (refreshing ? " is-refreshing" : "")}
-        aria-label="Re-visualize"
-        data-testid="canvas-revisualize"
-        data-tooltip={reVisualizeDisabledReason ?? (refreshing ? "Rendering…" : "Re-visualize")}
-        disabled={Boolean(reVisualizeDisabledReason)}
-        onClick={onReVisualize}
-      >
-        <Icon name="RefreshCw" size={14} />
-      </button>
       {canExpand && (
         <button
           className="macro-icon-btn"
