@@ -1,0 +1,72 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Give it one blog post or transcript and it hands you a whole content pack: a tweet thread, a LinkedIn post, a newsletter section, quote graphics, and a short teaser clip. An LLM (`models.run`) rewrites the source into every channel at once, keeping your meaning instead of inventing new claims.\n\nFrom there it makes the media. It renders each pull-quote into a graphic, all at once, then animates the first graphic into a short clip — that video job runs in the background and the workflow pauses until a webhook says it's ready, costing nothing while it waits. It gathers everything into one markdown pack, saves a durable copy to file storage, and emails the pack to you.\n\nIt ships with a `schedule` input, so you can point it at your latest post and let it run on a cron cadence instead of by hand. Set `dryRun` and it stops right after writing the copy, returning the text without paying for any images or video.\n\nYou pay for one LLM call, one image per quote, one short clip, and the email — the waiting is free. Start with a small `numQuotes`; the images and the clip are the pricey part.",
+  "useCases": [
+    "Turn one blog post or podcast transcript into a tweet thread, LinkedIn post, newsletter, quote graphics, and a teaser clip in a single run.",
+    "Run it on a schedule against your latest post so repurposing happens without anyone remembering to do it.",
+    "Draft the copy first with dryRun, read it, then run the full pipeline once you like the angles."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\n`source` is the only required input — paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it without paying for any images or video. A full run bills the LLM, one image per quote, one short image-to-video clip, and the email, so keep `numQuotes` small (default 2, max 4). To have it email the pack, set `deliverTo` or store a `RECIPIENT` under the `content-repurposing-pipeline` Vault ref; with neither set it returns the pack without sending. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step for free, or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Draft only (dryRun — no billed media)",
+      "input": {
+        "source": "Long-form blog post about why small teams ship faster...",
+        "title": "Why small teams ship faster",
+        "numQuotes": 2,
+        "dryRun": true
+      },
+      "output": {
+        "dryRun": true,
+        "title": "Why small teams ship faster",
+        "pack": {
+          "tweetThread": [
+            "Small teams don't ship faster because they work harder. They ship faster because there's less to coordinate. 🧵",
+            "Every extra person adds a communication edge. The graph grows faster than the headcount."
+          ],
+          "linkedInPost": "The fastest teams I've worked on were also the smallest...",
+          "newsletter": "## Why small teams ship faster\n\nCoordination cost, not effort, is the hidden tax on delivery...",
+          "quoteGraphics": [
+            {
+              "quote": "Coordination cost, not effort, is the hidden tax on delivery.",
+              "imagePrompt": "A clean, modern quote graphic on a solid deep-blue background, 16:9, no watermark, large legible sans-serif type."
+            }
+          ],
+          "videoScript": "Upbeat teaser: slow push-in on the pull-quote; 5s; bright and clean; social-ready."
+        }
+      }
+    },
+    {
+      "title": "Full run, emailed",
+      "input": {
+        "source": "Long-form blog post about why small teams ship faster...",
+        "title": "Why small teams ship faster",
+        "numQuotes": 2,
+        "deliverTo": "me@example.com",
+        "schedule": "0 9 * * 1"
+      },
+      "output": {
+        "title": "Why small teams ship faster",
+        "schedule": "0 9 * * 1",
+        "channels": {
+          "tweets": 5,
+          "linkedIn": true,
+          "newsletter": true,
+          "graphics": 2,
+          "clip": true
+        },
+        "packFileId": "file_abc123",
+        "packDownloadUrl": "https://files.sapiom.ai/download/file_abc123?sig=...",
+        "clipFileId": "file_def456",
+        "delivered": true,
+        "to": "me@example.com",
+        "messageId": "msg_789"
+      }
+    }
+  ]
+}
