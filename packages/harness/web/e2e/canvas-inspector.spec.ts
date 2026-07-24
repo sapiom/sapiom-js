@@ -141,6 +141,12 @@ test("the panel hugs its content up to half the pane; taller content scrolls ins
 test("dragging the top edge resizes the panel and persists; double-click resets to auto", async ({
   page,
 }) => {
+  // This panel is capped at half the canvas pane. CI's default (short)
+  // viewport can leave the panel's natural height within a few px of that
+  // cap, so an 80px drag can't grow it past the +40 threshold below. Give
+  // this test a tall viewport so the resize has real headroom.
+  await page.setViewportSize({ width: 1280, height: 1024 });
+
   const panel = page.getByTestId("canvas-overview");
   const handle = page.getByTestId("canvas-overview-resize");
   await expect(handle).toHaveAttribute("role", "separator");
