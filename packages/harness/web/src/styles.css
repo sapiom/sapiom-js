@@ -1048,6 +1048,131 @@ input {
   color: var(--text-warning);
 }
 
+/* ── Deployment popover ──────────────────────────────────────────────────────
+   Rides the ONE popover recipe (.deployment-popover): bg-2, border-strong,
+   radius, soft-md shadow, pop-in. Distinct from status-tag so colours come
+   from the shared state tokens, never raw hex. */
+.deployment-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tree-row-gap);
+  padding: var(--sp3);
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 30;
+  min-width: 220px;
+  max-width: 320px;
+  animation: pop-in var(--transition-fast) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deployment-popover {
+    animation: none;
+  }
+}
+
+.deployment-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.deployment-popover-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-label);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Error state heading uses the shared warning token. */
+.deployment-popover-heading--error {
+  color: var(--text-warning);
+}
+
+.deployment-popover-details {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.deployment-popover-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp2);
+}
+
+.deployment-popover-label {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.deployment-popover-value {
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  margin: 0;
+}
+
+/* Build id + relative time — slightly smaller, muted. */
+.deployment-popover-meta {
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Muted hint text (draft/error state). */
+.deployment-popover-hint {
+  margin: 0;
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.deployment-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding-top: var(--sp1);
+}
+
+/* External dashboard link — flat, inline, underline on hover. */
+.deployment-popover-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.deployment-popover-link:hover {
+  text-decoration: underline;
+  color: var(--text);
+}
+
+.deployment-popover-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Primary deploy/redeploy button — inherits the shared btn-primary recipe. */
+.deployment-popover-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+}
+
 .session-actions {
   display: flex;
   align-items: center;
@@ -5847,6 +5972,58 @@ input {
 
 /* ── Templates journey v0: the "Start from a template" dialog ─────────────
    Anatomy mirrors the add/new-session dialog family (full-bleed header /
+/* Run-input dialog: a focused JSON editor for supplying workflow input
+   before a Local Run or Prod Run fires. Inherits the standard .modal
+   anatomy (header/body/footer separated by hairlines). The editor textarea
+   uses the mono font and keeps a fixed height to avoid jumping on content
+   changes — tall enough for a 6-field JSON object comfortably. */
+.modal-run-input {
+  width: 440px;
+}
+
+.modal-run-input .modal-header {
+  display: flex;
+  align-items: center;
+}
+
+.run-input-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  margin-top: var(--sp2);
+}
+
+/* Hint line: dimmed, meta-size, shows the entry step's expected fields. */
+.run-input-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+/* JSON editor: monospaced, fixed height, same border/bg as .modal-input. */
+.run-input-editor {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  padding: var(--sp2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+  transition: border-color var(--transition-fast);
+}
+
+.run-input-editor:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The modal-templates dialog lays out its sections (header /
    body / footer separated by hairlines) at a two-pane browse width: the
    curated list on the left, the picked template's real manifest on the
    right, the destination + confirm in the footer. Selection, hover, and

@@ -904,6 +904,26 @@ export const startServer = async (
       // (see actions.ts), which derives the core host from the agents env.
       resolveWorkflow: (id) =>
         workflowsCache.find((w) => w.path === id) ?? null,
+      // Re-read the registry entry for the deployed workflow and broadcast
+      // `workflows.changed` so every connected client's refreshWorkflows()
+      // returns the updated definitionId immediately — without this, the
+      // workspace watcher only fires on structural changes (new/deleted files),
+      // so a definitionId written INSIDE an existing sapiom.json is invisible
+      // to the watcher and the stale id stays in the cache until the next
+      // periodic refresh tick.
+      onWorkflowConfigChanged: async (workflowPath: string) => {
+        // Re-scan the single project directory: readMarker picks up the
+        // updated sapiom.json and the registry merges the new definitionId
+        // in place (existing entries keep their `source` field).
+        await workflowRegistry.scan(workflowPath);
+        workflowsCache = await workflowRegistry.list();
+        // Rewrite every open session's context file so an agent that reads
+        // harness-context.json right after the broadcast sees the fresh id.
+        await Promise.all(
+          sessionManager.list().map((s) => writeSessionContext(s)),
+        );
+        bus.publish({ type: "workflows.changed" });
+      },
     }),
   );
   app.use(

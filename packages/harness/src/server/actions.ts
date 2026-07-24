@@ -26,16 +26,19 @@
 
 import { spawn as spawnChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Router } from "express";
 import {
   AgentOperationError,
+  check as coreCheck,
   createClient,
   deploy as coreDeploy,
+  link as coreLink,
   run as coreRun,
   readConfig as coreReadConfig,
+  writeConfig as coreWriteConfig,
   type DeployResult,
   type RunResult,
   type SapiomConfig,
@@ -57,6 +60,12 @@ import {
 export interface ActionWorkflow {
   /** Absolute path to the agent project directory (deploy's `projectDir`). */
   path: string;
+  /**
+   * The deployed agent's slug (`defineAgent({ name })`) cached from the
+   * registry — the preferred source for the link name on deploy. Mirrors
+   * {@link WorkflowInfo.definitionSlug}.
+   */
+  definitionSlug?: string | null;
 }
 
 /**
@@ -79,6 +88,9 @@ export interface ActionsCoreDeps {
   deploy: typeof coreDeploy;
   run: typeof coreRun;
   readConfig: typeof coreReadConfig;
+  link: typeof coreLink;
+  check: typeof coreCheck;
+  writeConfig: typeof coreWriteConfig;
 }
 
 const DEFAULT_CORE_DEPS: ActionsCoreDeps = {
@@ -86,6 +98,9 @@ const DEFAULT_CORE_DEPS: ActionsCoreDeps = {
   deploy: coreDeploy,
   run: coreRun,
   readConfig: coreReadConfig,
+  link: coreLink,
+  check: coreCheck,
+  writeConfig: coreWriteConfig,
 };
 
 /**
@@ -194,14 +209,23 @@ export interface ActionsRouterOpts {
    * runs.ts and the `spawnProcess` seam in task-manager.ts.
    */
   runLocalSpawn?: RunLocalSpawnFn;
+  /**
+   * Called after a deploy writes a new `definitionId` to `sapiom.json`, so the
+   * server can refresh its workflow cache and broadcast `workflows.changed` to
+   * connected clients. The path is the project directory whose `sapiom.json`
+   * was updated. Optional — when omitted the cache is refreshed by the
+   * client-side `refreshWorkflows()` call that fires after the deploy stream
+   * ends, but the server-side broadcast is skipped (so other open clients see
+   * the stale id until their next poll).
+   */
+  onWorkflowConfigChanged?: (workflowPath: string) => void | Promise<void>;
 }
 
 /**
- * Extract the linked `definitionId` from a project's `sapiom.json`. The config
- * file — not the registry — is the source of truth for a project's server-side
- * definition id, so both deploy and (a future) resolve path read it here. Never
- * throws: an unlinked/unreadable project returns null and the route maps that to
- * a 409.
+ * Read the cached `definitionId` from a project's `sapiom.json`, or null when
+ * absent/unreadable. Used to detect whether the link-resolved id differs from
+ * what is already on disk so `writeConfig` can be skipped when it is a no-op.
+ * Never throws.
  */
 function readDefinitionId(
   readConfig: typeof coreReadConfig,
@@ -211,7 +235,6 @@ function readDefinitionId(
   try {
     config = readConfig(projectDir);
   } catch {
-    // BAD_CONFIG (unparseable sapiom.json) — treat as "not linked" for the route.
     return null;
   }
   return config?.definitionId ?? null;
@@ -287,6 +310,42 @@ async function withKeyRefreshRetry<T>(
 }
 
 /**
+ * Determine the agent name to use when resolving (or creating) the server-side
+ * definition on deploy. Precedence mirrors the MCP `link` tool's `linkName`:
+ *   1. `definitionSlug` from the workflow registry (cached `defineAgent({name})`).
+ *   2. `check({ sourceDir })` — bundles index.ts locally, reads the name field.
+ *   3. Directory basename — last-resort when bundling fails (no tsc installed,
+ *      index.ts missing, etc.).
+ *
+ * Never throws: the basename fallback is always available. Returns null only
+ * when the project path itself is unreliable (empty string).
+ */
+async function resolveAgentName(
+  workflow: ActionWorkflow,
+  checkFn: typeof coreCheck,
+): Promise<string | null> {
+  // 1. Registry slug (fastest, already resolved).
+  if (typeof workflow.definitionSlug === "string" && workflow.definitionSlug.trim() !== "") {
+    return workflow.definitionSlug.trim();
+  }
+
+  // 2. Bundle and read the manifest name.
+  try {
+    const result = await checkFn({ sourceDir: workflow.path, typecheck: false });
+    if (result.name && result.name.trim() !== "") {
+      return result.name.trim();
+    }
+  } catch {
+    // Bundling failed (missing entry, no node_modules, etc.) — fall through.
+  }
+
+  // 3. Directory basename.
+  const dir = workflow.path.trim();
+  if (!dir) return null;
+  return basename(dir) || null;
+}
+
+/**
  * Create the actions router. Mounts:
  *   - `POST /api/workflows/:id/deploy` — NDJSON build-status stream.
  *   - `POST /api/runs` — `{ executionId }` for a started prod execution.
@@ -300,6 +359,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   const deps: ActionsCoreDeps = { ...DEFAULT_CORE_DEPS, ...opts.coreDeps };
   const baseUrl = opts.coreBaseUrl ?? resolveCoreBaseUrl();
   const runLocalSpawn = opts.runLocalSpawn ?? defaultRunLocalSpawn;
+  const { onWorkflowConfigChanged } = opts;
   // Normalize to a provider so deploy/prod-run always authenticate with the
   // held API key and can refresh + retry when that key is rejected — a plain
   // string|null becomes a no-op static provider (no refresh). Mirrors the runs
@@ -315,16 +375,23 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   /**
    * POST /api/workflows/:id/deploy
    *
-   * Deploys the linked agent for the given workflow id: mints push credentials,
-   * pushes the synthesized tree, triggers a build, and polls to a terminal
-   * status — all inside @sapiom/agent-core's {@link deploy}. Streams NDJSON: a
-   * `building` line up front, then exactly one terminal `ready`/`error` line.
+   * Resolves (or creates) the caller's own server-side agent definition by
+   * name, then deploys it: mints push credentials, pushes the synthesized
+   * tree, triggers a build, and polls to a terminal status — all inside
+   * @sapiom/agent-core's {@link deploy}. Streams NDJSON: a `building` line
+   * once the link step succeeds and the build is triggered, then exactly one
+   * terminal `ready`/`error` line.
+   *
+   * The link step resolves by name (account-scoped), so a stale/foreign
+   * `definitionId` in sapiom.json (e.g. from a cloned template) is ignored:
+   * Deploy always targets the caller's own definition. The resolved
+   * `definitionId` is written back to sapiom.json when it differs, so a
+   * subsequent Prod Run picks up the correct id without another link.
    *
    * 200  NDJSON stream (even a build failure is a 200 with a terminal `error`
    *      line — the request itself succeeded; the build outcome is in-band).
    * 400  id missing/empty
    * 404  workflow id not registered
-   * 409  workflow is not linked to a Sapiom agent (no definitionId)
    * 503  harness is not signed in to Sapiom
    */
   router.post("/api/workflows/:id/deploy", async (req, res) => {
@@ -344,16 +411,8 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       return;
     }
 
-    const definitionId = readDefinitionId(deps.readConfig, workflow.path);
-    if (!definitionId) {
-      res
-        .status(409)
-        .json({ error: "workflow is not linked to a Sapiom agent" });
-      return;
-    }
-
     // From here the outcome is streamed in-band as NDJSON — status is 200 and
-    // headers are committed before the (potentially long) build runs.
+    // headers are committed before the (potentially long) link+build runs.
     res.status(200);
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
@@ -361,12 +420,58 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       res.write(JSON.stringify(event) + "\n");
     };
 
-    write({ phase: "building", definitionId });
-
     try {
-      // Auth against the live key, refreshing + retrying once on a rejected key
-      // (same recovery the runs router gets). The building/terminal streaming
-      // shape is unchanged — the retry is transparent to the NDJSON stream.
+      // ── Step 1: resolve the agent name ─────────────────────────────────
+      // Prefer the registry slug (fastest, no bundling), then a local bundle
+      // check, then the directory basename. Mirrors the MCP link tool's
+      // linkName derivation — keeps link consistent with what check/deploy
+      // would produce.
+      const agentName = await resolveAgentName(workflow, deps.check);
+      if (!agentName) {
+        write({
+          phase: "error",
+          code: "NAME_REQUIRED",
+          message: "Could not determine the agent name.",
+          hint: "Ensure index.ts is present and exports defineAgent({ name: '…' }).",
+        });
+        res.end();
+        return;
+      }
+
+      // ── Step 2: resolve-or-create the caller's own definition ──────────
+      // link() resolves by name (account-scoped), ignoring any stale/foreign
+      // definitionId already in sapiom.json. create: true mints a new
+      // definition when none exists by that name in the caller's account.
+      const linkResult = await withKeyRefreshRetry(
+        provider,
+        clientFor,
+        (client) => deps.link({ name: agentName, create: true }, client),
+      );
+      const definitionId = linkResult.definitionId;
+
+      // ── Step 3: persist the resolved id when it differs ────────────────
+      // Keep sapiom.json current so a subsequent Prod Run reads the right id
+      // without another link. Merge-writes only the fields link owns.
+      const existingId = readDefinitionId(deps.readConfig, workflow.path);
+      const idChanged = existingId !== definitionId;
+      if (idChanged) {
+        try {
+          deps.writeConfig(workflow.path, {
+            definitionId,
+            name: linkResult.name,
+          });
+        } catch {
+          // Non-fatal: the deploy still uses the resolved id; a write failure
+          // just means the next deploy will re-link (which is cheap).
+        }
+      }
+
+      // ── Step 4: build and deploy ────────────────────────────────────────
+      write({ phase: "building", definitionId });
+
+      // Auth against the live key, refreshing + retrying once on a rejected
+      // key (same recovery the runs router gets). The building/terminal
+      // streaming shape is unchanged — the retry is transparent to the stream.
       const result: DeployResult = await withKeyRefreshRetry(
         provider,
         clientFor,
@@ -379,6 +484,24 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
         buildRunId: result.buildRunId,
         status: result.status,
       });
+      // ── Step 5: propagate the new definitionId to connected clients ────
+      // After a successful deploy the sapiom.json on disk has a fresh (or
+      // confirmed) definitionId. Notify the server so it can re-read the
+      // registry entry and broadcast `workflows.changed` — which causes every
+      // connected client's refreshWorkflows() to return the updated id,
+      // keeping the chip, canvas badge, and Prod Run all in sync without a
+      // manual reload. Only fired when the id actually changed (a redeploy of
+      // an already-linked workflow is a no-op for the cache). The call is
+      // fire-and-forget from the handler's perspective: a failure here is
+      // non-fatal (the deploy succeeded; only the broadcast is missed, and
+      // the client-side refreshWorkflows() still runs as a fallback).
+      if (idChanged && onWorkflowConfigChanged) {
+        try {
+          await onWorkflowConfigChanged(workflow.path);
+        } catch {
+          // Non-fatal — the deploy succeeded; the broadcast is best-effort.
+        }
+      }
     } catch (err) {
       write(toDeployErrorEvent(err));
     } finally {

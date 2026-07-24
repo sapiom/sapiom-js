@@ -310,7 +310,7 @@ test.describe("debug macros — offline stub run", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await page.getByTestId("right-tab-steps").click();
 
-    // Trigger the local run.
+    // Trigger the local run — run-first fires directly (no dialog).
     const btn = page.getByTestId("session-step-local");
     await expect(btn).toBeEnabled();
     await btn.click();

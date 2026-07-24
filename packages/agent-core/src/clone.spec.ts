@@ -7,7 +7,7 @@
  * and materializes an empty target dir. The filesystem (a temp dir) is the
  * only real dependency.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -250,6 +250,79 @@ describe('clone', () => {
       await expect(
         clone({ templateId: 'missing', targetDir: path.join(base, 'p'), cloneRepo: () => {} }, client),
       ).rejects.toMatchObject({ code: 'HTTP_404' });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('strips a foreign definitionId committed in the template repo when cloning by templateId', async () => {
+    // Simulate the bug: the gallery template's git repo has a committed
+    // sapiom.json that pre-links to the Sapiom team's own deployed definition.
+    // A template clone must produce an unlinked sapiom.json — the foreign id
+    // must not survive the writeConfig merge.
+    mockFetch([
+      { status: 200, body: FORK_BODY },
+      { status: 200, body: TOKEN_BODY },
+    ]);
+    const base = makeTmp();
+    const target = path.join(base, 'project');
+
+    // A cloneRepo that writes a sapiom.json containing a foreign definitionId
+    // before clone() calls writeConfig — simulating a committed sapiom.json in
+    // the template's git repo.
+    const cloneRepoWithForeignConfig = (o: { targetDir: string }) => {
+      mkdirSync(o.targetDir, { recursive: true });
+      writeFileSync(
+        path.join(o.targetDir, CONFIG_FILE),
+        JSON.stringify({ definitionId: '266', name: 'web-research-digest' }, null, 2) + '\n',
+      );
+    };
+
+    try {
+      const result = await clone(
+        { templateId: 'web-research-digest', targetDir: target, cloneRepo: cloneRepoWithForeignConfig },
+        client,
+      );
+
+      // The result must not expose the foreign id.
+      expect(result.definitionId).toBeUndefined();
+      expect(result.forkId).toBe('fork-uuid-1');
+
+      // The on-disk sapiom.json must have no definitionId.
+      const cfg = JSON.parse(readFileSync(path.join(target, CONFIG_FILE), 'utf8'));
+      expect(cfg.definitionId).toBeUndefined();
+      expect(cfg.forkId).toBe('fork-uuid-1');
+      expect(cfg.templateId).toBe('web-research-digest');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('strips a foreign definitionId when cloning by forkId', async () => {
+    // Same scenario via forkId — re-cloning an existing fork that has a
+    // committed sapiom.json with a foreign definition id.
+    mockFetch([{ status: 200, body: TOKEN_BODY }]);
+    const base = makeTmp();
+    const target = path.join(base, 'project');
+
+    const cloneRepoWithForeignConfig = (o: { targetDir: string }) => {
+      mkdirSync(o.targetDir, { recursive: true });
+      writeFileSync(
+        path.join(o.targetDir, CONFIG_FILE),
+        JSON.stringify({ definitionId: '266' }, null, 2) + '\n',
+      );
+    };
+
+    try {
+      const result = await clone(
+        { forkId: 'fork-uuid-1', targetDir: target, cloneRepo: cloneRepoWithForeignConfig },
+        client,
+      );
+
+      expect(result.definitionId).toBeUndefined();
+      const cfg = JSON.parse(readFileSync(path.join(target, CONFIG_FILE), 'utf8'));
+      expect(cfg.definitionId).toBeUndefined();
+      expect(cfg.forkId).toBe('fork-uuid-1');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

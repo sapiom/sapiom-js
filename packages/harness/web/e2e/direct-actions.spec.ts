@@ -191,6 +191,8 @@ test.describe("Prod-run button — direct route, executionId → inspector, no p
     await expect(runBtn).toBeEnabled();
 
     const injectBefore = await captureInjectInputBefore(page);
+    // Run-first: clicking Prod Run fires directly (no dialog) using the last-used
+    // input or {}.
     await runBtn.click();
 
     // Wait for lastDirectAction to confirm the DIRECT route fired.
@@ -249,6 +251,8 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
     await expect(localBtn).toBeEnabled();
 
     const injectBefore = await captureInjectInputBefore(page);
+    // Run-first: clicking Local Run fires directly (no dialog) using the last-used
+    // input or {}.
     await localBtn.click();
 
     // Run-local streams offline stub traces; the Steps tab should show the run
@@ -296,6 +300,7 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
 
     const injectBefore = await captureInjectInputBefore(page);
 
+    // Run-first: clicking Local Run fires directly (no dialog).
     await page.getByTestId("session-step-local").click();
     await page.getByTestId("right-tab-steps").click();
 

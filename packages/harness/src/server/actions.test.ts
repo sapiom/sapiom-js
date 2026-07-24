@@ -29,6 +29,11 @@ function makeCoreDeps(overrides: Partial<ActionsRouterOpts["coreDeps"]> = {}) {
     deploy: vi.fn(),
     run: vi.fn(),
     readConfig: vi.fn().mockReturnValue({ definitionId: "def_123" }),
+    // link: by default returns the same id already in config (no rewrite needed).
+    link: vi.fn().mockResolvedValue({ definitionId: "def_123", name: "test-agent" }),
+    // check: returns a name so resolveAgentName can avoid a basename fallback.
+    check: vi.fn().mockResolvedValue({ name: "test-agent", stepCount: 1, warnings: [], manifest: {} }),
+    writeConfig: vi.fn(),
     ...overrides,
   } as NonNullable<ActionsRouterOpts["coreDeps"]> & { __client?: unknown };
 }
@@ -278,38 +283,139 @@ describe("createActionsRouter", () => {
       expect(coreDeps.deploy).not.toHaveBeenCalled();
     });
 
-    it("returns 409 when the workflow has no linked definitionId", async () => {
+    it("links-on-deploy when the workflow has no definitionId in sapiom.json", async () => {
+      // An unlinked workflow (no definitionId) must link via link({ create: true }),
+      // write the resolved id to sapiom.json, then deploy — no 409.
       const coreDeps = makeCoreDeps({
-        // sapiom.json present but not linked (no definitionId).
-        readConfig: vi.fn().mockReturnValue({}),
-      });
-      start({
-        apiKey: "sk-test-key",
-        resolveWorkflow: () => ({ path: "/proj/agent" }),
-        coreDeps,
-      });
-
-      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
-        method: "POST",
-      });
-      expect(res.status).toBe(409);
-      const body = (await res.json()) as Record<string, unknown>;
-      expect(body.error).toBe("workflow is not linked to a Sapiom agent");
-      expect(coreDeps.deploy).not.toHaveBeenCalled();
-    });
-
-    it("returns 409 when sapiom.json is unreadable/unparseable", async () => {
-      const { AgentOperationError } = await import("@sapiom/agent-core");
-      const coreDeps = makeCoreDeps({
-        readConfig: vi.fn().mockImplementation(() => {
-          throw new AgentOperationError({
-            code: "BAD_CONFIG",
-            message: "sapiom.json is not valid JSON.",
-          });
+        readConfig: vi.fn().mockReturnValue({}), // no definitionId
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "test-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
         }),
       });
       start({
         apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "test-agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+
+      const events = parseNdjson(await res.text());
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_new" },
+        { phase: "ready", definitionId: "def_new", buildRunId: "build_1", status: "ready" },
+      ]);
+
+      // link was called with create: true and the registry slug.
+      expect(coreDeps.link).toHaveBeenCalledWith(
+        { name: "test-agent", create: true },
+        expect.anything(),
+      );
+      // writeConfig persisted the resolved id.
+      expect(coreDeps.writeConfig).toHaveBeenCalledWith("/proj/agent", {
+        definitionId: "def_new",
+        name: "test-agent",
+      });
+      // deploy targeted the resolved id.
+      expect(coreDeps.deploy).toHaveBeenCalledWith(
+        { projectDir: "/proj/agent", definitionId: "def_new" },
+        expect.anything(),
+      );
+    });
+
+    it("resolves stale/foreign definitionId via link and redeploys to own definition", async () => {
+      // sapiom.json carries a stale/foreign id (e.g. from a cloned template).
+      // link() resolves by name (account-scoped) and returns the user's own id.
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_foreign_267" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_mine_42", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_mine_42",
+          buildRunId: "build_7",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      // The resolved (own) id is the one used everywhere.
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_mine_42" },
+        { phase: "ready", definitionId: "def_mine_42", buildRunId: "build_7", status: "ready" },
+      ]);
+
+      // link was called with the registry slug.
+      expect(coreDeps.link).toHaveBeenCalledWith(
+        { name: "my-agent", create: true },
+        expect.anything(),
+      );
+      // writeConfig rewrote the stale id with the resolved one.
+      expect(coreDeps.writeConfig).toHaveBeenCalledWith("/proj/agent", {
+        definitionId: "def_mine_42",
+        name: "my-agent",
+      });
+      // deploy targeted the user's own definition, not the foreign one.
+      expect(coreDeps.deploy).toHaveBeenCalledWith(
+        { projectDir: "/proj/agent", definitionId: "def_mine_42" },
+        expect.anything(),
+      );
+    });
+
+    it("skips writeConfig when link returns the same id already in sapiom.json", async () => {
+      // id is already correct — no redundant write.
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_123" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_123", name: "test-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "test-agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      expect(coreDeps.writeConfig).not.toHaveBeenCalled();
+    });
+
+    it("falls back to check() for agent name when definitionSlug is absent", async () => {
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({}),
+        check: vi.fn().mockResolvedValue({ name: "bundled-name", stepCount: 2, warnings: [], manifest: {} }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_99", name: "bundled-name" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_99",
+          buildRunId: "build_3",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        // No definitionSlug supplied — forces check() path.
         resolveWorkflow: () => ({ path: "/proj/agent" }),
         coreDeps,
       });
@@ -317,7 +423,80 @@ describe("createActionsRouter", () => {
       const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
         method: "POST",
       });
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      // check was called to read the manifest name.
+      expect(coreDeps.check).toHaveBeenCalledWith({
+        sourceDir: "/proj/agent",
+        typecheck: false,
+      });
+      // link received the bundled name.
+      expect(coreDeps.link).toHaveBeenCalledWith(
+        { name: "bundled-name", create: true },
+        expect.anything(),
+      );
+    });
+
+    it("falls back to directory basename when check() fails", async () => {
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({}),
+        check: vi.fn().mockRejectedValue(new Error("bundle failed")),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_77", name: "my-project" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_77",
+          buildRunId: "build_5",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/my-project" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      // link received the directory basename.
+      expect(coreDeps.link).toHaveBeenCalledWith(
+        { name: "my-project", create: true },
+        expect.anything(),
+      );
+    });
+
+    it("streams a terminal error when link() fails (no name in manifest)", async () => {
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({}),
+        // check returns an empty name and link is never reached.
+        check: vi.fn().mockResolvedValue({ name: "", stepCount: 0, warnings: [], manifest: {} }),
+        link: vi.fn().mockRejectedValue(
+          new AgentOperationError({
+            code: "HTTP_401",
+            message: "Unauthorized.",
+          }),
+        ),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/basename-fallback" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      // Terminal error line — the link failure is surfaced in-band, no building phase.
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ phase: "error", code: "HTTP_401" });
       expect(coreDeps.deploy).not.toHaveBeenCalled();
     });
 
@@ -392,6 +571,8 @@ describe("createActionsRouter", () => {
     it("recovers a 401 by refreshing the key and retrying, streaming ready", async () => {
       // First deploy attempt is rejected (stale key); the router refreshes to a
       // newer key and the retry succeeds — a single building line, then ready.
+      // Note: link runs first (succeeds on first try with sk-stale); deploy then
+      // fails 401 and retries with sk-fresh.
       const provider = refreshingProvider("sk-stale", "sk-fresh");
       const deploy = vi
         .fn()
@@ -405,7 +586,7 @@ describe("createActionsRouter", () => {
       start({
         apiKey: provider,
         coreBaseUrl: "https://api.test",
-        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "test-agent" }),
         coreDeps,
       });
 
@@ -426,12 +607,10 @@ describe("createActionsRouter", () => {
 
       expect(provider.refreshCalls).toBe(1);
       expect(deploy).toHaveBeenCalledTimes(2);
-      // Retry re-minted the client with the refreshed key.
-      expect(coreDeps.createClient).toHaveBeenNthCalledWith(1, {
-        host: "https://api.test",
-        apiKey: "sk-stale",
-      });
-      expect(coreDeps.createClient).toHaveBeenNthCalledWith(2, {
+      // The deploy retry re-minted the client with the refreshed key.
+      // createClient is called once for link (sk-stale), once for the first
+      // deploy (sk-stale), and once for the deploy retry (sk-fresh).
+      expect(coreDeps.createClient).toHaveBeenCalledWith({
         host: "https://api.test",
         apiKey: "sk-fresh",
       });
@@ -462,6 +641,134 @@ describe("createActionsRouter", () => {
       // router did not burn a second attempt.
       expect(deploy).toHaveBeenCalledTimes(1);
       expect(provider.refreshCalls).toBe(1);
+    });
+
+    it("calls onWorkflowConfigChanged after a successful deploy that changes the definitionId", async () => {
+      // The canonical post-deploy state-sync: a deploy that resolves a new id
+      // (link returned def_new, sapiom.json had def_old) must notify the server
+      // so it can refresh its cache and broadcast workflows.changed — keeping
+      // every connected client's chip, canvas badge, and Prod Run in sync
+      // without a harness restart.
+      const onWorkflowConfigChanged = vi.fn().mockResolvedValue(undefined);
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      // The callback must have been invoked with the workflow's project path.
+      expect(onWorkflowConfigChanged).toHaveBeenCalledOnce();
+      expect(onWorkflowConfigChanged).toHaveBeenCalledWith("/proj/agent");
+    });
+
+    it("does not call onWorkflowConfigChanged when link returns the same id already in sapiom.json", async () => {
+      // A redeploy of an already-linked workflow: link returned the same id that
+      // is already on disk, so writeConfig was skipped — no cache invalidation
+      // needed and onWorkflowConfigChanged must not fire.
+      const onWorkflowConfigChanged = vi.fn();
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_123" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_123", name: "test-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "test-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      expect(onWorkflowConfigChanged).not.toHaveBeenCalled();
+    });
+
+    it("does not call onWorkflowConfigChanged when the deploy build fails", async () => {
+      // A build failure means no new definitionId was committed — no cache
+      // refresh needed. The terminal error line is still streamed in-band.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const onWorkflowConfigChanged = vi.fn();
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockRejectedValue(
+          new AgentOperationError({ code: "BUILD_FAILED", message: "Build failed." }),
+        ),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "error" });
+
+      expect(onWorkflowConfigChanged).not.toHaveBeenCalled();
+    });
+
+    it("streams ready even when onWorkflowConfigChanged throws (non-fatal)", async () => {
+      // A cache-refresh failure must not corrupt the stream or throw — the
+      // deploy succeeded; the broadcast is best-effort.
+      const onWorkflowConfigChanged = vi.fn().mockRejectedValue(new Error("cache write failed"));
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_5",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      // The ready line was already written before onWorkflowConfigChanged was
+      // called — both lines must still be present.
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_new" },
+        { phase: "ready", definitionId: "def_new", buildRunId: "build_5", status: "ready" },
+      ]);
     });
   });
 

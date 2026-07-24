@@ -93,8 +93,11 @@ test.describe("Fix 2 — pending ring clears on terminal outcomes", () => {
     const localBtn = page.getByTestId("session-step-local");
     await expect(localBtn).toBeEnabled();
 
+    // Run-first: clicking Local Run fires directly (no dialog) using the
+    // last-used input or {}.
     await localBtn.click();
-    // Ring appears immediately (React boolean → "true").
+
+    // Ring appears once the run fires (React boolean → "true").
     await expect(localBtn).toHaveAttribute("data-pending", "true");
 
     // The mock local run streams 3 step traces (each ~140ms) + a summary.

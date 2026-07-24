@@ -1368,7 +1368,8 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
 
     // Run fires the DIRECT prod-run route (no pty inject / user LLM credits):
     // it records lastDirectAction, never lastMacroRun, and carries leasing's
-    // definitionId as the runs route wants it (a string).
+    // definitionId as the runs route wants it (a string). With run-first, the
+    // click fires immediately using the last-used input (or {}) — no dialog.
     await page.getByTestId("session-step-run").click();
     await page.waitForFunction(
       () =>
