@@ -138,64 +138,67 @@ test("the panel hugs its content up to half the pane; taller content scrolls ins
   await expect(page.getByTestId("canvas-overview-toggle")).toBeVisible();
 });
 
-test("dragging the top edge resizes the panel and persists; double-click resets to auto", async ({
-  page,
-}) => {
-  // This panel is capped at half the canvas pane. CI's default (short)
-  // viewport can leave the panel's natural height within a few px of that
-  // cap, so an 80px drag can't grow it past the +40 threshold below. Give
-  // this test a tall viewport so the resize has real headroom.
-  await page.setViewportSize({ width: 1280, height: 1024 });
+// The panel is capped at half the canvas pane, so the drag-grow assertion
+// needs vertical headroom the default CI viewport (720px) doesn't give — the
+// natural height sits within ~20px of the cap there. Pin a tall viewport via
+// the page fixture so the page is BORN at this size; resizing mid-test would
+// race the layout the drag's handle position depends on.
+test.describe("canvas overview drag-resize", () => {
+  test.use({ viewport: { width: 1280, height: 1024 } });
 
-  const panel = page.getByTestId("canvas-overview");
-  const handle = page.getByTestId("canvas-overview-resize");
-  await expect(handle).toHaveAttribute("role", "separator");
-  await expect(handle).toHaveCSS("cursor", "row-resize");
+  test("dragging the top edge resizes the panel and persists; double-click resets to auto", async ({
+    page,
+  }) => {
+    const panel = page.getByTestId("canvas-overview");
+    const handle = page.getByTestId("canvas-overview-resize");
+    await expect(handle).toHaveAttribute("role", "separator");
+    await expect(handle).toHaveCSS("cursor", "row-resize");
 
-  const before = (await panel.boundingBox())?.height ?? 0;
-  const handleBox = await handle.boundingBox();
-  if (!handleBox) throw new Error("resize handle has no box");
-  const x = handleBox.x + handleBox.width / 2;
-  const y = handleBox.y + handleBox.height / 2;
+    const before = (await panel.boundingBox())?.height ?? 0;
+    const handleBox = await handle.boundingBox();
+    if (!handleBox) throw new Error("resize handle has no box");
+    const x = handleBox.x + handleBox.width / 2;
+    const y = handleBox.y + handleBox.height / 2;
 
-  // Drag up 80px: the panel grows (clamped to half the pane). Move in two
-  // segments with several steps so every pointermove reaches the resize
-  // handler even under CI load.
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.move(x, y - 40, { steps: 8 });
-  await page.mouse.move(x, y - 80, { steps: 8 });
-  await page.mouse.up();
-  // Poll for the grown height rather than reading it once — defensive against a
-  // frame of settle after mouse-up.
-  await expect
-    .poll(async () => (await panel.boundingBox())?.height ?? 0)
-    .toBeGreaterThan(before + 40);
-  const grown = (await panel.boundingBox())?.height ?? 0;
+    // Drag up 80px: the panel grows (clamped to half the pane). Move in two
+    // segments with several steps so every pointermove reaches the resize
+    // handler even under CI load.
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y - 40, { steps: 8 });
+    await page.mouse.move(x, y - 80, { steps: 8 });
+    await page.mouse.up();
+    // Poll for the grown height rather than reading it once — defensive against a
+    // frame of settle after mouse-up.
+    await expect
+      .poll(async () => (await panel.boundingBox())?.height ?? 0)
+      .toBeGreaterThan(before + 40);
+    const grown = (await panel.boundingBox())?.height ?? 0;
 
-  // The manual height persists in ui-prefs alongside the rest of the
-  // arrangement.
-  const stored = await page.evaluate(
-    () =>
-      (JSON.parse(window.localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}") as {
-        canvasInspectorHeight?: number | null;
-      }).canvasInspectorHeight,
-  );
-  expect(typeof stored).toBe("number");
-  expect(Math.abs((stored as number) - grown)).toBeLessThanOrEqual(2);
+    // The manual height persists in ui-prefs alongside the rest of the
+    // arrangement.
+    const stored = await page.evaluate(
+      () =>
+        (JSON.parse(window.localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}") as {
+          canvasInspectorHeight?: number | null;
+        }).canvasInspectorHeight,
+    );
+    expect(typeof stored).toBe("number");
+    expect(Math.abs((stored as number) - grown)).toBeLessThanOrEqual(2);
 
-  // Double-click the handle: back to auto-hug (the pre-drag height).
-  await handle.dblclick();
-  await expect
-    .poll(async () => (await panel.boundingBox())?.height ?? 0)
-    .toBeLessThanOrEqual(before + 2);
-  const cleared = await page.evaluate(
-    () =>
-      (JSON.parse(window.localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}") as {
-        canvasInspectorHeight?: number | null;
-      }).canvasInspectorHeight,
-  );
-  expect(cleared).toBeNull();
+    // Double-click the handle: back to auto-hug (the pre-drag height).
+    await handle.dblclick();
+    await expect
+      .poll(async () => (await panel.boundingBox())?.height ?? 0)
+      .toBeLessThanOrEqual(before + 2);
+    const cleared = await page.evaluate(
+      () =>
+        (JSON.parse(window.localStorage.getItem("sapiom-harness-ui-prefs") ?? "{}") as {
+          canvasInspectorHeight?: number | null;
+        }).canvasInspectorHeight,
+    );
+    expect(cleared).toBeNull();
+  });
 });
 
 test("an observed run's truth reaches the selected step's inspector", async ({ page }) => {
