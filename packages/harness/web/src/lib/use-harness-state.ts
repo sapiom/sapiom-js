@@ -29,6 +29,7 @@ import { subscribeEvents } from "./events";
 import { renderLocalRun } from "@shared/render-local-run";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 import { saveLastDeploy } from "./deploy-meta";
+import { isDefinitionNotFoundError, definitionNotFoundMessage } from "./definition-not-found";
 
 const api = createApi();
 
@@ -844,16 +845,25 @@ export function useHarnessState(): HarnessStateHook {
           // actions update without waiting on a bus refresh.
           await refreshWorkflows();
         } else if (terminal.phase === "error") {
-          const msg = terminal.hint
+          const rawMsg = terminal.hint
             ? `Deploy failed: ${terminal.message} (${terminal.hint})`
             : `Deploy failed: ${terminal.message}`;
+          // Replace a raw "definition not found" error with an actionable prompt
+          // so users who cloned a gallery template know what to do.
+          const msg = isDefinitionNotFoundError(terminal.message)
+            ? definitionNotFoundMessage()
+            : rawMsg;
           setToast(msg);
           // Persist the failure so the action bar can distinguish "last deploy
           // failed" from "never deployed" after the toast is dismissed.
           setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
         }
       } catch (err) {
-        const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
+        const raw = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
+        // Replace a raw "definition not found" error with an actionable prompt.
+        const msg = isDefinitionNotFoundError(raw)
+          ? definitionNotFoundMessage()
+          : raw;
         setToast(msg);
         // An exception from the deploy stream (e.g. network error) also counts
         // as a deploy failure — persist so the action bar reflects it.
@@ -881,7 +891,13 @@ export function useHarnessState(): HarnessStateHook {
         const { executionId } = await api.run({ definitionId, input });
         startRunPolling(sessionId, executionId, "prod");
       } catch (err) {
-        const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
+        const raw = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
+        // Replace a raw "definition not found" message with an actionable prompt
+        // so users who cloned a gallery template know to deploy rather than
+        // hitting a dead-end error about an id that isn't on their account.
+        const msg = isDefinitionNotFoundError(raw)
+          ? definitionNotFoundMessage(definitionId)
+          : raw;
         // Notify the caller before toasting so it can decide whether to open
         // the run-input dialog instead of showing a bare error toast.
         onInputError?.(msg);
