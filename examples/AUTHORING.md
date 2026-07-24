@@ -1,12 +1,139 @@
-# Authoring Sapiom templates — copy & structure guide
+# Authoring Sapiom templates
 
-This is the contract for how a Sapiom workflow template describes itself. It covers the
-**copy** (the words a user reads in the gallery and on the template detail page) and how
-that copy maps onto the two files that feed it. Follow it when you add a template or when
-an agent generates one, so every template reads in one consistent voice.
+A **template** is a working Sapiom agent, published in this repo, that anyone can browse in
+the gallery and turn into their own workflow with one click. This guide takes you from an
+empty directory to a merged, live template. Contributions are welcome — a human or an agent
+can follow it end to end.
+
+The path is five steps:
+
+1. **[Develop](#1-develop)** — write the agent and its manifest in a new directory.
+2. **[Build & test](#2-build--test)** — compile it, trace a run for free, and validate the files.
+3. **[Categorize](#3-categorize)** — set its category, cadence, and step kinds.
+4. **[Write the copy](#4-write-the-copy)** — the words a user reads. This is most of the work.
+5. **[Submit](#5-submit)** — open a PR; once merged, Sapiom picks it up automatically.
 
 If you only remember one thing: **write for the person deciding whether to use this, not
 for the person who built it.** Plain, concrete, second-person. No pitch.
+
+---
+
+## 1. Develop
+
+Every template is one directory under `examples/`, named for its `id` (kebab-case, e.g.
+`examples/scheduled-research-brief`). Look at an existing one — `examples/hello-agent` is the
+smallest — and copy its shape. A template directory holds:
+
+| File | What it is |
+|---|---|
+| `index.ts` | The agent itself — a `defineAgent` / `defineStep` graph. This is the code that runs. |
+| `template.json` | The rich manifest for the detail page (`longDescription`, `useCases`, `notes`, `examples`, `author`). |
+| `package.json` / `tsconfig.json` | Pinned `@sapiom/*` SDK deps and a `typecheck` script. Copy these from an existing template. |
+| `README.md` | Short, optional — how to run it from the code. |
+
+Plus **one entry** in `examples/registry.json` — the gallery index (see
+[Write the copy](#4-write-the-copy) for every field). That entry's `sourcePath` must point at
+your directory (`examples/<id>`), and its `id` must match the directory name.
+
+Write the agent by importing from the SDK packages the same way the existing templates do
+(`import { defineAgent, defineStep, terminate } from "@sapiom/agent";`). Each step declares
+its allowed transitions (`next` / `terminal`); the return type is derived from them, so an
+undeclared transition is a compile error. Reach a real capability through the run context
+(`ctx.sapiom.*`) — a web search, an LLM call, an email, a sandbox.
+
+**Iterating against unreleased SDK changes (advanced, optional).** If you need SDK edits that
+aren't published to npm yet, publish the workspace packages to a local registry and point your
+template at them: `pnpm registry:local` in one shell, `pnpm publish:local` in another. Most
+authors don't need this — the published `@sapiom/*` versions are enough.
+
+## 2. Build & test
+
+1. **Compile.** From your template directory: `npm install`, then `npm run typecheck`. It must
+   pass — the gallery only ships templates that build.
+2. **Trace a run for free.** Drive the agent through the Sapiom MCP: `run_local` executes the
+   whole graph locally and traces every step without spending anything, so you can watch the
+   flow before you deploy. The lifecycle is `check → run_local → link → deploy → run`; each
+   template's `README.md` shows it.
+3. **Validate the registry.** Run `pnpm examples:check` from the repo root. It checks that
+   `registry.json` matches the schema (including a valid `category`, `cadence`, and step
+   `kind`), is sorted by `id`, that every `sourcePath` points at a real directory with a
+   `template.json`, and that any `checkpoint` is a single genuine human gate. Run
+   `pnpm examples:sort` first to put your entry in order.
+4. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
+   must be the exact `ctx.sapiom.*` ids your code actually calls — see
+   [Capability ids](#capability-ids-correctness-not-style). The LLM path is `models.run`
+   (`models.coding` for a coding agent), **not** `llm.generate`.
+5. **Keep the manifest honest.** The `examples` you list must be real `{ input, output }` pairs
+   the code produces — don't invent fields.
+
+## 3. Categorize
+
+Set three things in your `registry.json` entry: one `category`, one `cadence`, and a `kind` on
+every step. They drive how the gallery groups, filters, and describes your template.
+
+### `category` — the outcome, not the mechanism
+
+Pick **exactly one**. The question it answers is *"what is the user trying to produce?"* — the
+business job, not the platform primitive you're demonstrating. A durable pause-and-resume drip
+that books meetings is `revenue-marketing`, not "durable"; the durability is *how*, not *what*.
+
+| `category` | What belongs here |
+|---|---|
+| `starter` | Learning the platform — the smallest thing that runs, or a primitive shown on its own. The one category that is about mechanism, because that is its job. |
+| `product-engineering` | Ship and maintain software: code review, dependency work, tests, quality gates. |
+| `reliability-governance` | Keep systems and processes healthy and accountable: triage, self-healing, approvals, fleet oversight. |
+| `revenue-marketing` | Win and keep customers: outreach, proposals, CRM, content, campaigns, creative. |
+| `customer-experience` | Serve an existing customer: support resolution, onboarding, service channels. |
+| `data-knowledge` | Turn data or sources into an answer: research, reporting, querying, backfills. |
+| `finance-legal-people` | Money, compliance, contracts, and employment work. |
+
+Mechanism words — `durable`, `pause-resume`, `hitl`, `evals`, `media`, `orchestration` — belong
+in freeform `tags`, which drive search and the chips on a card. Put them there and they stay
+findable without competing with the outcome axis.
+
+If nothing fits cleanly, pick the closest and say so in your PR — the enum can grow, and a
+template that fits nowhere is useful signal. (The display label, icon, and section order are
+chosen by the app; you only set the id.)
+
+### `cadence` — what starts a run
+
+| `cadence` | Use when |
+|---|---|
+| `on-demand` | A person or an API call starts it. |
+| `scheduled` | A cron trigger starts it. |
+| `on-webhook` | An inbound webhook event starts it (e.g. a PR opening). |
+| `on-event` | A request to an endpoint the template deploys starts it. |
+
+This describes the **entry only**, not what happens mid-run. `wait-for-webhook` is `on-demand`:
+you start it, and it pauses for a callback partway through. `pr-review-bot` is `on-webhook`:
+the PR event itself is what starts it.
+
+### `kind` and `checkpoint` — what each step is
+
+Set `kind` on every step:
+
+| `kind` | Use when |
+|---|---|
+| `capability` | It calls a priced catalog capability. |
+| `llm` | It calls a model (`models.run`, `models.coding`). |
+| `compute` | In-process logic, a branch, or a terminal. |
+| `pause` | It suspends the run at $0 until something wakes it. |
+
+A step that calls a capability *and then* suspends is `pause` — suspending is what defines it.
+
+Then set `checkpoint: true` on the **one** step, if any, where **a person must approve** before
+the run proceeds. This is much narrower than `pause`: most pauses are machine waits — a render
+job finishing, a webhook arriving, a drip interval elapsing — and marking one would make the
+gallery advertise "waiting for a video to encode" as an approval boundary. Mark it only where a
+human decides. Most templates have no checkpoint, and that is the honest answer.
+`pnpm examples:check` fails if a checkpoint is not a `pause`, or if a template declares more
+than one.
+
+## 4. Write the copy
+
+This is most of the work, and where a template earns its place. The rest of this guide is the
+copy contract: what each field is, and the voice every template shares. Read it for the person
+choosing whether to use your template.
 
 ---
 
@@ -21,10 +148,14 @@ the same way, at two levels of depth.
 |---|---|---|
 | `name` | Card title, detail H1 | Title Case, human. "Human-in-the-Loop Approval", not the slug. |
 | `description` | Card subtitle, detail subtitle | **One sentence.** What it does, in plain words. See "The tagline" below. |
-| `tags` | Chips under the title | 3–4 lowercase, kebab or single words. Concrete, searchable ("approval", "hitl", "fallback"). |
+| `tags` | Chips under the title | 3–4 lowercase, kebab or single words. Concrete, searchable ("approval", "hitl", "fallback"). This is where mechanism words go. |
+| `category` | Which gallery group it files under | One id from the enum. The **outcome**, not the mechanism — see [Categorize](#3-categorize). |
+| `cadence` | The "Trigger" fact | One id from the enum. What **starts** a run, not what it does mid-run — see [Categorize](#3-categorize). |
 | `capabilities` | Capability chips + est. cost | The exact `ctx.sapiom.*` capability ids the source calls. Must match the code (see "Capability ids"). |
 | `whatItDoes` | "What it does" (Overview tab) | **The beats.** 3–6 short sentences, capability-first, no jargon headline. See "What it does". |
 | `steps[].description` | Node labels in the Definition graph | One plain sentence per step: what THIS step does. Preserve `name`/`next`/`terminal`/`capability` exactly. |
+| `steps[].kind` | The step's glyph in the graph | `capability` / `llm` / `compute` / `pause`, one per step — see [Categorize](#3-categorize). |
+| `steps[].checkpoint` | The "Checkpoint" fact | `true` on the single step where a **person** approves, or omit. Never on a machine wait. |
 
 ### `examples/<slug>/template.json` — the rich manifest (detail page)
 
@@ -137,7 +268,33 @@ Never present the MCP path as the only way to build and run — the webapp does 
 
 ---
 
+## 5. Submit
+
+1. **Fork** this repo and branch off `main`.
+2. **Add your directory** under `examples/` and your **one entry** in `examples/registry.json`.
+3. **Sort and validate** locally: `pnpm examples:sort`, then `pnpm examples:check`. Both must be
+   clean — the same check runs in CI and blocks the merge if the registry is invalid, unsorted,
+   or points at a directory with no `template.json`.
+4. **Open a pull request.** CI validates the registry and builds the SDK; an automated review
+   runs too. Keep the PR to one template.
+5. **On merge, it goes live.** The Sapiom backend reads `registry.json` at a pinned commit of
+   this repo; once your change merges and that pin advances, your template shows up in the
+   gallery, ready for anyone to use.
+
+---
+
 ## Checklist (author or generating agent)
+
+**Develop & test**
+
+- [ ] One directory `examples/<id>/` with `index.ts`, `template.json`, `package.json`, `tsconfig.json`.
+- [ ] `npm run typecheck` passes in the template directory.
+- [ ] Traced a `run_local` end to end (free) before deploying.
+- [ ] One `category` (the outcome, not the mechanism) and one `cadence`; `tags` kept freeform.
+- [ ] A `kind` on every step, and `checkpoint: true` only on a real human approval gate.
+- [ ] `pnpm examples:sort` then `pnpm examples:check` both clean.
+
+**Copy**
 
 - [ ] `description`: one plain sentence, no internal jargon.
 - [ ] `whatItDoes`: 3–6 short sentences, capability named in passing, no pitch words.

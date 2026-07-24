@@ -44,6 +44,28 @@ jobs:
       - name: Test
         run: pnpm test
 
+  # Template gallery registry gate. The `examples/` tree lives outside the pnpm
+  # workspace, so the matrix job above never touches it — this is the only check
+  # that validates examples/registry.json (schema + sort + sourcePath) on a PR.
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate examples registry
+        run: pnpm examples:check
+
   # Playwright mock-mode tier — harness web/e2e specs (VITE_MOCK=1, chromium only).
   # The live/real-pty tiers (e2e:live, sim) are opt-in local only; nothing here
   # invokes them — they require real agent binaries and credentials not in CI.

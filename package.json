@@ -25,11 +25,14 @@
     "release": "pnpm build && changeset publish",
     "dev:watch": "pnpm -r --filter='./packages/*' --parallel run dev",
     "registry:local": "npx -y verdaccio@6 --config .verdaccio/config.yaml",
-    "publish:local": "node scripts/publish-local.mjs"
+    "publish:local": "node scripts/publish-local.mjs",
+    "examples:check": "node scripts/examples-check.mjs",
+    "examples:sort": "node scripts/examples-sort.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.1",
     "@types/node": "^20.11.30",
+    "ajv": "^8.12.0",
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",

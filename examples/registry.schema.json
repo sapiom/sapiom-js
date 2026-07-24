@@ -23,6 +23,16 @@
         "name": { "type": "string", "minLength": 1, "description": "Display name shown on the card." },
         "description": { "type": "string", "description": "One-line card description." },
         "tags": { "type": "array", "items": { "type": "string" }, "description": "Freeform browse tags." },
+        "category": {
+          "type": "string",
+          "enum": ["starter", "product-engineering", "reliability-governance", "revenue-marketing", "customer-experience", "data-knowledge", "finance-legal-people"],
+          "description": "Primary gallery category (the source-of-truth taxonomy). Exactly one per template; the frontend owns the display label, icon, and section order keyed off this id. The axis is OUTCOME — \"what am I trying to produce?\" — not mechanism: `starter` aside, a template belongs to the business job it does, never to the primitive it demonstrates. Mechanism words (durable, pause-resume, hitl, evals, media, orchestration) stay in freeform `tags`, which drive secondary browse/search. Optional for now — every template should carry one, and the examples CI check flags any invalid value."
+        },
+        "cadence": {
+          "type": "string",
+          "enum": ["on-demand", "scheduled", "on-event", "on-webhook"],
+          "description": "What STARTS a run — the gallery's \"Trigger\" fact. Describes the entry only, not what the run does mid-flight: `wait-for-webhook` is `on-demand` (you start it; it pauses for a callback partway through), whereas `pr-review-bot` is `on-webhook` (the PR event itself starts it). Use `on-event` for a run invoked by an endpoint the template deploys."
+        },
         "sourcePath": {
           "type": "string",
           "minLength": 1,
@@ -51,6 +61,15 @@
         "capability": {
           "type": ["string", "null"],
           "description": "Catalog capability id this step calls, or null/omitted for an in-process step."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["capability", "llm", "compute", "pause"],
+          "description": "What the step structurally IS, which picks its glyph in the rendered graph. `capability` calls a priced catalog capability; `llm` calls a model (`models.run` / `models.coding`); `compute` is in-process logic, a branch, or a terminal; `pause` suspends the run at $0 until something wakes it. A step that both calls a capability and then suspends is `pause` — suspending is the step's defining behaviour."
+        },
+        "checkpoint": {
+          "type": "boolean",
+          "description": "True when this step is a HUMAN decision gate — a person must approve before the run proceeds. Strictly narrower than `kind: \"pause\"`: most pauses are machine waits (a render job, a webhook callback, a drip interval) and must NOT be marked, or the gallery will advertise \"waiting for a video to encode\" as an approval boundary. Set it only where a person decides; most templates have none. At most one per template — the examples CI check enforces both rules."
         },
         "next": {
           "type": "array",
