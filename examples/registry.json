@@ -3,60 +3,101 @@
   "version": 1,
   "templates": [
     {
-      "id": "slack-notifier",
-      "name": "Slack Notifier",
-      "description": "Post a message to Slack with a token you store in the Vault — the starter for wiring up any external API.",
-      "tags": ["integration", "starter", "slack"],
-      "sourcePath": "examples/slack-notifier",
-      "capabilities": ["vault"],
-      "whatItDoes": "A starting point for calling an outside service with your own credential. You give it a message and, for bot mode, a channel. It checks the message, picks the auth mode (a bot token or an incoming webhook), and works out where the message goes. Then it reads your Slack token from the Vault and posts the message with a direct `fetch` — nothing is ever baked into the code. The token stays in the Vault, scoped to this workflow, and is read only at runtime. Slack is just the example here: change the endpoint and the Vault key and the same shape calls any API you have a token for.",
+      "id": "cold-outreach-engine",
+      "name": "Cold Outreach Personalization Engine",
+      "description": "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip follow-ups that stop the moment someone replies.",
+      "tags": ["outreach", "sales", "drip", "personalization"],
+      "category": "durable",
+      "sourcePath": "examples/cold-outreach-engine",
+      "capabilities": [
+        "email.domain.search",
+        "email.find",
+        "web.scrape",
+        "models.run",
+        "email.verify",
+        "database.get",
+        "database.create",
+        "email.send"
+      ],
+      "whatItDoes": "For turning a raw list of target companies into personalized outreach that follows up on its own. It finds a real contact at each company with Hunter, reads their website, and asks the live model (`models.run`) to write one specific opener per prospect. It verifies every address and drops the ones that would bounce before anything sends. Then it sends the first touch and pauses — idling at $0 between touches, waking on its own to send the next, but dropping anyone who replies so they never get a follow-up. Everything it sends is logged to a Postgres store it owns, and a `dryRun` returns the plan and every opener without sending a thing.",
       "steps": [
         {
-          "name": "validate",
-          "description": "Check the message, pick the auth mode (bot or webhook), and resolve the target channel.",
-          "next": ["post", "rejected"]
+          "name": "enrich",
+          "description": "Resolve a real contact for each lead with Hunter — look up the named person, or surface a decision-maker when you only have the company.",
+          "capability": "email.domain.search",
+          "next": ["scrape"]
         },
         {
-          "name": "post",
-          "description": "Read your Slack token from the Vault and post the message to Slack.",
-          "capability": "vault",
-          "next": ["posted", "failed"]
+          "name": "scrape",
+          "description": "Read each company's website for a few lines of context to personalize with.",
+          "capability": "web.scrape",
+          "next": ["personalize"]
         },
         {
-          "name": "posted",
-          "description": "Return the result — for bot mode, the channel and the message timestamp.",
-          "terminal": true
+          "name": "personalize",
+          "description": "Ask the live model to write one specific opener per prospect, falling back to a safe generic line when it returns nothing usable.",
+          "capability": "models.run",
+          "next": ["verify"]
         },
         {
-          "name": "failed",
-          "description": "The Slack call errored; return the error.",
-          "terminal": true
+          "name": "verify",
+          "description": "Check each address for deliverability and drop the ones that would bounce before anything sends.",
+          "capability": "email.verify",
+          "next": ["launch"]
         },
         {
-          "name": "rejected",
-          "description": "The input didn't pass validation, so nothing was posted.",
+          "name": "launch",
+          "description": "Persist the campaign roster to a Postgres store the engine owns, then start the drip. A dry run stops here and returns the full plan without sending or persisting.",
+          "capability": "database.create",
+          "next": ["send"]
+        },
+        {
+          "name": "send",
+          "description": "Deliver the current touch to everyone still active and log it, then pause at $0 until the drip interval elapses or a prospect replies.",
+          "capability": "email.send",
+          "next": ["advance", "done"]
+        },
+        {
+          "name": "advance",
+          "description": "Wake on the reply-or-timeout, mark anyone who replied as done, then loop back for the next touch or end the run.",
+          "next": ["send", "done"]
+        },
+        {
+          "name": "done",
+          "description": "Return the campaign summary — who was enriched, how many were deliverable, what was sent, and who replied.",
           "terminal": true
         }
       ]
     },
     {
-      "id": "web-research-digest",
-      "name": "Web Research Digest",
-      "description": "Search the web for a topic and get back a short, sourced digest.",
-      "tags": ["research", "search"],
-      "sourcePath": "examples/web-research-digest",
-      "capabilities": ["web.search"],
-      "whatItDoes": "Give it a topic and it searches the web, then hands you a short digest you can read or share. The search step runs one web search through Sapiom's search capability, which comes back with a synthesized answer and a ranked list of results. The summarize step formats that answer and its source links into a markdown digest right in the run — no model call. You get back the topic, the digest, and the list of sources. It's the simplest template that does something real end to end: one metered call, an obvious result.",
+      "id": "eval-gate",
+      "name": "Eval Gate",
+      "description": "Score an output against your own rubric with an LLM judge, then branch to publish or revise on whether it clears a threshold.",
+      "tags": ["evals", "quality-gate", "llm-judge", "composition"],
+      "category": "quality",
+      "sourcePath": "examples/eval-gate",
+      "capabilities": ["models.run"],
+      "whatItDoes": "For when you want an automated quality check before something ships. You give it a case, the output to grade, and your rubric. It builds a judge prompt from your rubric and scores the output from 0 to 1 with one LLM call (`models.run`). A gate step compares the score to your threshold: at or above, it goes to publish; below, it goes to revise. Both endings return the decision, the score, the threshold, and the judge's rationale — you decide what publish and revise actually do next.",
       "steps": [
         {
-          "name": "search",
-          "description": "Take the topic and run one web search, returning a synthesized answer and ranked results.",
-          "capability": "web.search",
-          "next": ["summarize"]
+          "name": "judge",
+          "description": "Build a judge prompt from your rubric, call the LLM (models.run), and parse a 0-to-1 score from the reply.",
+          "capability": "models.run",
+          "next": ["gate"]
         },
         {
-          "name": "summarize",
-          "description": "Format that answer and its source links into a markdown digest, in the run and with no model call.",
+          "name": "gate",
+          "description": "Compare the score to your threshold. At or above goes to publish, below goes to revise. No LLM call here.",
+          "next": ["publish", "revise"]
+        },
+        {
+          "name": "publish",
+          "description": "The output cleared the threshold. Return the decision, score, threshold, and rationale.",
+          "terminal": true
+        },
+        {
+          "name": "revise",
+          "description": "The output fell below the threshold. Return the decision, score, threshold, and rationale.",
           "terminal": true
         }
       ]
@@ -66,6 +107,7 @@
       "name": "Hello Agent",
       "description": "The smallest working Sapiom agent — one step that returns a greeting, so you can confirm build, deploy, and run before adding a real capability.",
       "tags": ["starter", "minimal"],
+      "category": "starter",
       "sourcePath": "examples/hello-agent",
       "capabilities": [],
       "whatItDoes": "The starting point when you want to confirm the plumbing works before building anything real. It has one step, `greet`. That step reads an optional `name` input, trims it, and returns `{ greeting: \"Hello, <name>!\" }`. If you pass no name, it greets `world`. There are no capabilities, so nothing is metered and the run just proves that build, deploy, and run all connect end to end.",
@@ -78,167 +120,11 @@
       ]
     },
     {
-      "id": "wait-for-webhook",
-      "name": "Wait-for-Webhook",
-      "description": "Start a slow external job, pause until a webhook calls back, then summarize the result and decide whether to accept it.",
-      "tags": ["durable", "pause-resume", "webhook", "async"],
-      "sourcePath": "examples/wait-for-webhook",
-      "capabilities": ["models.run"],
-      "whatItDoes": "For work that hinges on a slow external job — a render, a batch export, a third-party callback. It starts the job, tells the job how to reach this run, and then pauses. While it waits it costs nothing, and it can wait minutes, hours, or days. When the webhook fires, the run wakes up exactly where it left off and the callback payload becomes the next step's input. A model summarizes that result, and the run branches to accept or reject.",
-      "steps": [
-        {
-          "name": "kickoff",
-          "description": "Starts the external job, registers how to resume this run, then pauses and waits for the callback — costing nothing while idle.",
-          "next": ["decide"]
-        },
-        {
-          "name": "decide",
-          "description": "Wakes when the callback arrives; its input is the callback payload. A model summarizes the result and picks accept or reject.",
-          "capability": "models.run",
-          "next": ["accept", "reject"]
-        },
-        {
-          "name": "accept",
-          "description": "Ends the run — the callback result looked complete and usable.",
-          "terminal": true
-        },
-        {
-          "name": "reject",
-          "description": "Ends the run — the callback result failed or looked wrong.",
-          "terminal": true
-        }
-      ]
-    },
-    {
-      "id": "scheduled-research-brief",
-      "name": "Scheduled Research Brief",
-      "description": "On a schedule, it researches a topic and emails you a short, sourced brief.",
-      "tags": ["research", "search", "scheduled", "llm"],
-      "sourcePath": "examples/scheduled-research-brief",
-      "capabilities": ["web.search", "models.run"],
-      "whatItDoes": "For a topic you want to keep watching without checking it by hand. It searches the web for the topic, then reads the top results for their full text. It hands those sources to an LLM (models.run) to rank them, drop the weak ones, and write a short brief that cites each source. Then it emails the brief to your recipient. Give it a cron schedule and it runs on its own, as a standing morning brief instead of a one-shot. A dryRun flag computes the brief and returns it without sending, so you can check the output before it mails anyone.",
-      "steps": [
-        {
-          "name": "search",
-          "description": "Search the web for the topic and collect candidate sources.",
-          "capability": "web.search",
-          "next": ["scrape"]
-        },
-        {
-          "name": "scrape",
-          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
-          "capability": "web.search",
-          "next": ["curate"]
-        },
-        {
-          "name": "curate",
-          "description": "Hand the sources to an LLM to rank them, drop the weak ones, and write a short brief that cites each one.",
-          "capability": "models.run",
-          "next": ["deliver"]
-        },
-        {
-          "name": "deliver",
-          "description": "Email the brief to your recipient; a dry run, or a run with no recipient set, returns it without sending.",
-          "terminal": true
-        }
-      ]
-    },
-    {
-      "id": "scene-to-video",
-      "name": "Scene → Images → Video",
-      "description": "Turn one scene description into a short stitched video: an LLM plans the shots, each shot gets a keyframe image, each keyframe is animated into a clip, and the clips are joined into one video.",
-      "tags": ["generative", "video", "pipeline", "media"],
-      "sourcePath": "examples/scene-to-video",
-      "capabilities": [
-        "models.run",
-        "contentGeneration.images",
-        "contentGeneration.video"
-      ],
-      "whatItDoes": "You give it a scene. An LLM breaks that scene into a style guide and an ordered shot list. It makes one keyframe image per shot, all at once. Then it animates each keyframe into a short clip, one at a time — launching a video job and waiting for it to finish before starting the next. When every clip is in, it stitches them into one video and returns the file. Pass `dryRun` and it stops after planning, so you can read the shot list without paying for any images or video.",
-      "steps": [
-        {
-          "name": "decompose",
-          "description": "An LLM turns your scene into a style guide and an ordered shot list. If you set dryRun, it stops here and returns the plan.",
-          "capability": "models.run",
-          "next": ["keyframes"]
-        },
-        {
-          "name": "keyframes",
-          "description": "Make one keyframe image per shot, all at once, and save each one.",
-          "capability": "contentGeneration.images",
-          "next": ["animate"]
-        },
-        {
-          "name": "animate",
-          "description": "Launch a video job that animates one keyframe into a clip, then pause until it finishes.",
-          "capability": "contentGeneration.video",
-          "next": ["collect"]
-        },
-        {
-          "name": "collect",
-          "description": "Save the finished clip, then loop back for the next shot, or move on once every clip is in.",
-          "next": ["animate", "stitch"]
-        },
-        {
-          "name": "stitch",
-          "description": "Join the clips into one video with a merge job, then pause until it's ready.",
-          "capability": "contentGeneration.video",
-          "next": ["finalize"]
-        },
-        {
-          "name": "finalize",
-          "description": "Return the stitched video's file id and download link.",
-          "terminal": true
-        }
-      ]
-    },
-    {
-      "id": "preview-keep-alive",
-      "name": "Preview Keep-Alive",
-      "description": "A cron heartbeat that checks a sandbox preview and, when it has gone down, redeploys it for you — no human needed.",
-      "tags": ["sandbox", "self-healing", "cron"],
-      "sourcePath": "examples/preview-keep-alive",
-      "capabilities": [
-        "sandboxes.deployPreview",
-        "sandboxes.attach",
-        "database.get",
-        "vault.get"
-      ],
-      "whatItDoes": "For keeping a sandbox-hosted preview app reachable when its process gets recycled out from under it. On each scheduled run it fetches the app's health path. If the app answers, it stops right there and does nothing. If the app is down or times out, it re-attaches the sandbox and redeploys the code already uploaded there, bringing it back up at the same URL. Before it redeploys, it builds the startup env — a port and any literal values, plus a DATABASE_URL from a Postgres handle and secrets pulled from the vault at run time. One deployed copy can keep many previews alive, one schedule per app.",
-      "steps": [
-        {
-          "name": "check",
-          "description": "Fetches the preview's health path. Sends it on to heal only when the app is actually down.",
-          "next": ["healthy", "heal"]
-        },
-        {
-          "name": "healthy",
-          "description": "The app is already serving, so there's nothing to do. The run ends here.",
-          "terminal": true
-        },
-        {
-          "name": "heal",
-          "description": "Re-attaches the sandbox and redeploys the code already uploaded there, restarting it at the same URL. First assembles the startup env, adding a DATABASE_URL from a Postgres handle and any vault secrets read at run time.",
-          "capability": "sandboxes.deployPreview",
-          "next": ["healed", "heal_failed"]
-        },
-        {
-          "name": "healed",
-          "description": "The relaunch worked. Reports the URL and status.",
-          "terminal": true
-        },
-        {
-          "name": "heal_failed",
-          "description": "The relaunch didn't work. Reports the deploy logs so you can see why.",
-          "terminal": true
-        }
-      ]
-    },
-    {
       "id": "human-in-the-loop",
       "name": "Human-in-the-Loop Approval",
       "description": "An agent does the prep, then waits for a person to approve before it spends money or does anything it can't undo.",
       "tags": ["approval", "human-in-the-loop", "hitl", "fallback"],
+      "category": "human-in-the-loop",
       "sourcePath": "examples/human-in-the-loop",
       "capabilities": ["models.run", "email.send"],
       "whatItDoes": "For work where an agent can do the legwork but a person makes the final call. It reads the request, ranks your candidates by fit, and emails the approver its recommendation — then pauses and waits, costing nothing while idle. Say no and it backs out cleanly, having committed nothing. Say yes and it makes a provisional offer to the top pick and waits for a reply, falling down the ranked list until someone accepts. The one irreversible step only runs after a human approved and a candidate accepted (models.run, email) — and if the list runs out, it escalates to a person instead of failing quietly.",
@@ -297,71 +183,100 @@
       ]
     },
     {
-      "id": "eval-gate",
-      "name": "Eval Gate",
-      "description": "Score an output against your own rubric with an LLM judge, then branch to publish or revise on whether it clears a threshold.",
-      "tags": ["evals", "quality-gate", "llm-judge", "composition"],
-      "sourcePath": "examples/eval-gate",
-      "capabilities": ["models.run"],
-      "whatItDoes": "For when you want an automated quality check before something ships. You give it a case, the output to grade, and your rubric. It builds a judge prompt from your rubric and scores the output from 0 to 1 with one LLM call (`models.run`). A gate step compares the score to your threshold: at or above, it goes to publish; below, it goes to revise. Both endings return the decision, the score, the threshold, and the judge's rationale — you decide what publish and revise actually do next.",
+      "id": "pr-review-bot",
+      "name": "PR Review Bot",
+      "description": "When a pull request opens, a coding agent reviews the code and flags missing tests, then posts the review to your email or Slack.",
+      "tags": ["coding-agent", "review", "pause-resume", "webhook"],
+      "category": "quality",
+      "sourcePath": "examples/pr-review-bot",
+      "capabilities": [
+        "models.coding",
+        "models.run",
+        "email.send",
+        "vault.get"
+      ],
+      "whatItDoes": "An always-on first-pass reviewer for your pull requests. It registers a PR webhook and then waits, costing nothing while idle — it can sit for days between reviews. When a PR is opened, the run wakes with the PR as its input: a coding agent checks the code out in a sandbox and reads the diff, told to look hardest at test coverage and list any change that shipped without a matching test. It reviews, it doesn't edit — nothing is pushed. A model then turns those raw notes into a short, structured review — a verdict, a summary, and the missing tests — and posts it to your email or, using a bot token you keep in the Vault, a Slack channel.",
       "steps": [
         {
-          "name": "judge",
-          "description": "Build a judge prompt from your rubric, call the LLM (models.run), and parse a 0-to-1 score from the reply.",
+          "name": "watch",
+          "description": "Registers a PR webhook and how to resume this run, then pauses and waits for a pull request — costing nothing while idle.",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Wakes when a PR opens; its input is the PR payload. A coding agent checks the code out and analyzes the diff, flagging changes that lack tests.",
+          "capability": "models.coding",
+          "next": ["assess"]
+        },
+        {
+          "name": "assess",
+          "description": "A model turns the coding agent's raw findings into a structured review — a verdict, a summary, and the list of missing tests.",
           "capability": "models.run",
-          "next": ["gate"]
+          "next": ["reportEmail", "reportSlack"]
         },
         {
-          "name": "gate",
-          "description": "Compare the score to your threshold. At or above goes to publish, below goes to revise. No LLM call here.",
-          "next": ["publish", "revise"]
+          "name": "reportEmail",
+          "description": "Emails the review to the configured recipient.",
+          "capability": "email.send",
+          "next": ["posted", "failed"]
         },
         {
-          "name": "publish",
-          "description": "The output cleared the threshold. Return the decision, score, threshold, and rationale.",
+          "name": "reportSlack",
+          "description": "Reads your Slack bot token from the Vault and posts the review to the configured channel.",
+          "capability": "vault.get",
+          "next": ["posted", "failed"]
+        },
+        {
+          "name": "posted",
+          "description": "Return the result — the channel used and the verdict.",
           "terminal": true
         },
         {
-          "name": "revise",
-          "description": "The output fell below the threshold. Return the decision, score, threshold, and rationale.",
+          "name": "failed",
+          "description": "The send errored; return the error.",
           "terminal": true
         }
       ]
     },
     {
-      "id": "the-brain",
-      "name": "The Brain",
-      "description": "Watches a fleet of workflows, spots which member is off cadence, and launches it — with a model that may only pick from a fixed list of safe moves.",
-      "tags": ["orchestration", "agents-managing-agents", "meta-workflow"],
-      "sourcePath": "examples/the-brain",
+      "id": "preview-keep-alive",
+      "name": "Preview Keep-Alive",
+      "description": "A cron heartbeat that checks a sandbox preview and, when it has gone down, redeploys it for you — no human needed.",
+      "tags": ["sandbox", "self-healing", "cron"],
+      "category": "durable",
+      "sourcePath": "examples/preview-keep-alive",
       "capabilities": [
-        "models.run",
+        "sandboxes.deployPreview",
+        "sandboxes.attach",
         "database.get",
-        "database.create",
         "vault.get"
       ],
-      "whatItDoes": "For running a set of workflows where nothing is watching the whole. It reads its own event log and works out which members are off cadence — a daily one that hasn't run today, a weekly one that's overdue, a launch that never reported back. It hands those situations to a model (`models.run`) that can only pick from a fixed list of moves: launch a member, flag a human, or do nothing. It acts on that plan behind guardrails — it won't launch the same member twice a day, won't stack a launch on one still running, and caps how many it fires per run. Then it posts a short briefing to a Slack channel and records what it did. The model only chooses; deterministic code does everything that touches the outside world.",
+      "whatItDoes": "For keeping a sandbox-hosted preview app reachable when its process gets recycled out from under it. On each scheduled run it fetches the app's health path. If the app answers, it stops right there and does nothing. If the app is down or times out, it re-attaches the sandbox and redeploys the code already uploaded there, bringing it back up at the same URL. Before it redeploys, it builds the startup env — a port and any literal values, plus a DATABASE_URL from a Postgres handle and secrets pulled from the vault at run time. One deployed copy can keep many previews alive, one schedule per app.",
       "steps": [
         {
-          "name": "scan",
-          "description": "Reads the event log and works out which members are off cadence — missed today, overdue, or launched with no result.",
-          "capability": "database.get",
-          "next": ["assess"]
+          "name": "check",
+          "description": "Fetches the preview's health path. Sends it on to heal only when the app is actually down.",
+          "next": ["healthy", "heal"]
         },
         {
-          "name": "assess",
-          "description": "Hands those situations to a model that may only pick a move from a fixed list, then re-checks its answer in code.",
-          "capability": "models.run",
-          "next": ["actuate"]
+          "name": "healthy",
+          "description": "The app is already serving, so there's nothing to do. The run ends here.",
+          "terminal": true
         },
         {
-          "name": "actuate",
-          "description": "Runs the plan behind guardrails, launching each due member as a child workflow and recording each launch.",
-          "next": ["report"]
+          "name": "heal",
+          "description": "Re-attaches the sandbox and redeploys the code already uploaded there, restarting it at the same URL. First assembles the startup env, adding a DATABASE_URL from a Postgres handle and any vault secrets read at run time.",
+          "capability": "sandboxes.deployPreview",
+          "next": ["healed", "heal_failed"]
         },
         {
-          "name": "report",
-          "description": "Posts a short briefing to a Slack channel, records the run, and advances its place in the log.",
+          "name": "healed",
+          "description": "The relaunch worked. Reports the URL and status.",
+          "terminal": true
+        },
+        {
+          "name": "heal_failed",
+          "description": "The relaunch didn't work. Reports the deploy logs so you can see why.",
           "terminal": true
         }
       ]
@@ -371,6 +286,7 @@
       "name": "Proposal / Quote Generator",
       "description": "Draft a client proposal from a request, render it to a PDF, then wait for a person to approve it before it emails the client.",
       "tags": ["sales", "pdf", "approval", "human-in-the-loop"],
+      "category": "human-in-the-loop",
       "sourcePath": "examples/proposal-generator",
       "capabilities": [
         "models.run",
@@ -417,60 +333,11 @@
       ]
     },
     {
-      "id": "pr-review-bot",
-      "name": "PR Review Bot",
-      "description": "When a pull request opens, a coding agent reviews the code and flags missing tests, then posts the review to your email or Slack.",
-      "tags": ["coding-agent", "review", "pause-resume", "webhook"],
-      "sourcePath": "examples/pr-review-bot",
-      "capabilities": ["models.coding", "models.run", "email.send", "vault.get"],
-      "whatItDoes": "An always-on first-pass reviewer for your pull requests. It registers a PR webhook and then waits, costing nothing while idle — it can sit for days between reviews. When a PR is opened, the run wakes with the PR as its input: a coding agent checks the code out in a sandbox and reads the diff, told to look hardest at test coverage and list any change that shipped without a matching test. It reviews, it doesn't edit — nothing is pushed. A model then turns those raw notes into a short, structured review — a verdict, a summary, and the missing tests — and posts it to your email or, using a bot token you keep in the Vault, a Slack channel.",
-      "steps": [
-        {
-          "name": "watch",
-          "description": "Registers a PR webhook and how to resume this run, then pauses and waits for a pull request — costing nothing while idle.",
-          "next": ["review"]
-        },
-        {
-          "name": "review",
-          "description": "Wakes when a PR opens; its input is the PR payload. A coding agent checks the code out and analyzes the diff, flagging changes that lack tests.",
-          "capability": "models.coding",
-          "next": ["assess"]
-        },
-        {
-          "name": "assess",
-          "description": "A model turns the coding agent's raw findings into a structured review — a verdict, a summary, and the list of missing tests.",
-          "capability": "models.run",
-          "next": ["reportEmail", "reportSlack"]
-        },
-        {
-          "name": "reportEmail",
-          "description": "Emails the review to the configured recipient.",
-          "capability": "email.send",
-          "next": ["posted", "failed"]
-        },
-        {
-          "name": "reportSlack",
-          "description": "Reads your Slack bot token from the Vault and posts the review to the configured channel.",
-          "capability": "vault.get",
-          "next": ["posted", "failed"]
-        },
-        {
-          "name": "posted",
-          "description": "Return the result — the channel used and the verdict.",
-          "terminal": true
-        },
-        {
-          "name": "failed",
-          "description": "The send errored; return the error.",
-          "terminal": true
-        }
-      ]
-    },
-    {
       "id": "research-to-microsite",
       "name": "Research → Micro-Site Publisher",
       "description": "Research a topic across the web, then build and deploy a shareable live report site — not just a document.",
       "tags": ["research", "coding-agent", "sandbox", "publish"],
+      "category": "research",
       "sourcePath": "examples/research-to-microsite",
       "capabilities": [
         "web.search",
@@ -536,67 +403,219 @@
       ]
     },
     {
-      "id": "cold-outreach-engine",
-      "name": "Cold Outreach Personalization Engine",
-      "description": "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip follow-ups that stop the moment someone replies.",
-      "tags": ["outreach", "sales", "drip", "personalization"],
-      "sourcePath": "examples/cold-outreach-engine",
+      "id": "scene-to-video",
+      "name": "Scene → Images → Video",
+      "description": "Turn one scene description into a short stitched video: an LLM plans the shots, each shot gets a keyframe image, each keyframe is animated into a clip, and the clips are joined into one video.",
+      "tags": ["generative", "video", "pipeline", "media"],
+      "category": "media",
+      "sourcePath": "examples/scene-to-video",
       "capabilities": [
-        "email.domain.search",
-        "email.find",
-        "web.scrape",
         "models.run",
-        "email.verify",
-        "database.get",
-        "database.create",
-        "email.send"
+        "contentGeneration.images",
+        "contentGeneration.video"
       ],
-      "whatItDoes": "For turning a raw list of target companies into personalized outreach that follows up on its own. It finds a real contact at each company with Hunter, reads their website, and asks the live model (`models.run`) to write one specific opener per prospect. It verifies every address and drops the ones that would bounce before anything sends. Then it sends the first touch and pauses — idling at $0 between touches, waking on its own to send the next, but dropping anyone who replies so they never get a follow-up. Everything it sends is logged to a Postgres store it owns, and a `dryRun` returns the plan and every opener without sending a thing.",
+      "whatItDoes": "You give it a scene. An LLM breaks that scene into a style guide and an ordered shot list. It makes one keyframe image per shot, all at once. Then it animates each keyframe into a short clip, one at a time — launching a video job and waiting for it to finish before starting the next. When every clip is in, it stitches them into one video and returns the file. Pass `dryRun` and it stops after planning, so you can read the shot list without paying for any images or video.",
       "steps": [
         {
-          "name": "enrich",
-          "description": "Resolve a real contact for each lead with Hunter — look up the named person, or surface a decision-maker when you only have the company.",
-          "capability": "email.domain.search",
+          "name": "decompose",
+          "description": "An LLM turns your scene into a style guide and an ordered shot list. If you set dryRun, it stops here and returns the plan.",
+          "capability": "models.run",
+          "next": ["keyframes"]
+        },
+        {
+          "name": "keyframes",
+          "description": "Make one keyframe image per shot, all at once, and save each one.",
+          "capability": "contentGeneration.images",
+          "next": ["animate"]
+        },
+        {
+          "name": "animate",
+          "description": "Launch a video job that animates one keyframe into a clip, then pause until it finishes.",
+          "capability": "contentGeneration.video",
+          "next": ["collect"]
+        },
+        {
+          "name": "collect",
+          "description": "Save the finished clip, then loop back for the next shot, or move on once every clip is in.",
+          "next": ["animate", "stitch"]
+        },
+        {
+          "name": "stitch",
+          "description": "Join the clips into one video with a merge job, then pause until it's ready.",
+          "capability": "contentGeneration.video",
+          "next": ["finalize"]
+        },
+        {
+          "name": "finalize",
+          "description": "Return the stitched video's file id and download link.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "scheduled-research-brief",
+      "name": "Scheduled Research Brief",
+      "description": "On a schedule, it researches a topic and emails you a short, sourced brief.",
+      "tags": ["research", "search", "scheduled", "llm"],
+      "category": "research",
+      "sourcePath": "examples/scheduled-research-brief",
+      "capabilities": ["web.search", "models.run"],
+      "whatItDoes": "For a topic you want to keep watching without checking it by hand. It searches the web for the topic, then reads the top results for their full text. It hands those sources to an LLM (models.run) to rank them, drop the weak ones, and write a short brief that cites each source. Then it emails the brief to your recipient. Give it a cron schedule and it runs on its own, as a standing morning brief instead of a one-shot. A dryRun flag computes the brief and returns it without sending, so you can check the output before it mails anyone.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Search the web for the topic and collect candidate sources.",
+          "capability": "web.search",
           "next": ["scrape"]
         },
         {
           "name": "scrape",
-          "description": "Read each company's website for a few lines of context to personalize with.",
-          "capability": "web.scrape",
-          "next": ["personalize"]
+          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
+          "capability": "web.search",
+          "next": ["curate"]
         },
         {
-          "name": "personalize",
-          "description": "Ask the live model to write one specific opener per prospect, falling back to a safe generic line when it returns nothing usable.",
+          "name": "curate",
+          "description": "Hand the sources to an LLM to rank them, drop the weak ones, and write a short brief that cites each one.",
           "capability": "models.run",
-          "next": ["verify"]
+          "next": ["deliver"]
         },
         {
-          "name": "verify",
-          "description": "Check each address for deliverability and drop the ones that would bounce before anything sends.",
-          "capability": "email.verify",
-          "next": ["launch"]
+          "name": "deliver",
+          "description": "Email the brief to your recipient; a dry run, or a run with no recipient set, returns it without sending.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "slack-notifier",
+      "name": "Slack Notifier",
+      "description": "Post a message to Slack with a token you store in the Vault — the starter for wiring up any external API.",
+      "tags": ["integration", "starter", "slack"],
+      "category": "starter",
+      "sourcePath": "examples/slack-notifier",
+      "capabilities": ["vault"],
+      "whatItDoes": "A starting point for calling an outside service with your own credential. You give it a message and, for bot mode, a channel. It checks the message, picks the auth mode (a bot token or an incoming webhook), and works out where the message goes. Then it reads your Slack token from the Vault and posts the message with a direct `fetch` — nothing is ever baked into the code. The token stays in the Vault, scoped to this workflow, and is read only at runtime. Slack is just the example here: change the endpoint and the Vault key and the same shape calls any API you have a token for.",
+      "steps": [
+        {
+          "name": "validate",
+          "description": "Check the message, pick the auth mode (bot or webhook), and resolve the target channel.",
+          "next": ["post", "rejected"]
         },
         {
-          "name": "launch",
-          "description": "Persist the campaign roster to a Postgres store the engine owns, then start the drip. A dry run stops here and returns the full plan without sending or persisting.",
-          "capability": "database.create",
-          "next": ["send"]
+          "name": "post",
+          "description": "Read your Slack token from the Vault and post the message to Slack.",
+          "capability": "vault",
+          "next": ["posted", "failed"]
         },
         {
-          "name": "send",
-          "description": "Deliver the current touch to everyone still active and log it, then pause at $0 until the drip interval elapses or a prospect replies.",
-          "capability": "email.send",
-          "next": ["advance", "done"]
+          "name": "posted",
+          "description": "Return the result — for bot mode, the channel and the message timestamp.",
+          "terminal": true
         },
         {
-          "name": "advance",
-          "description": "Wake on the reply-or-timeout, mark anyone who replied as done, then loop back for the next touch or end the run.",
-          "next": ["send", "done"]
+          "name": "failed",
+          "description": "The Slack call errored; return the error.",
+          "terminal": true
         },
         {
-          "name": "done",
-          "description": "Return the campaign summary — who was enriched, how many were deliverable, what was sent, and who replied.",
+          "name": "rejected",
+          "description": "The input didn't pass validation, so nothing was posted.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "the-brain",
+      "name": "The Brain",
+      "description": "Watches a fleet of workflows, spots which member is off cadence, and launches it — with a model that may only pick from a fixed list of safe moves.",
+      "tags": ["orchestration", "agents-managing-agents", "meta-workflow"],
+      "category": "orchestration",
+      "sourcePath": "examples/the-brain",
+      "capabilities": [
+        "models.run",
+        "database.get",
+        "database.create",
+        "vault.get"
+      ],
+      "whatItDoes": "For running a set of workflows where nothing is watching the whole. It reads its own event log and works out which members are off cadence — a daily one that hasn't run today, a weekly one that's overdue, a launch that never reported back. It hands those situations to a model (`models.run`) that can only pick from a fixed list of moves: launch a member, flag a human, or do nothing. It acts on that plan behind guardrails — it won't launch the same member twice a day, won't stack a launch on one still running, and caps how many it fires per run. Then it posts a short briefing to a Slack channel and records what it did. The model only chooses; deterministic code does everything that touches the outside world.",
+      "steps": [
+        {
+          "name": "scan",
+          "description": "Reads the event log and works out which members are off cadence — missed today, overdue, or launched with no result.",
+          "capability": "database.get",
+          "next": ["assess"]
+        },
+        {
+          "name": "assess",
+          "description": "Hands those situations to a model that may only pick a move from a fixed list, then re-checks its answer in code.",
+          "capability": "models.run",
+          "next": ["actuate"]
+        },
+        {
+          "name": "actuate",
+          "description": "Runs the plan behind guardrails, launching each due member as a child workflow and recording each launch.",
+          "next": ["report"]
+        },
+        {
+          "name": "report",
+          "description": "Posts a short briefing to a Slack channel, records the run, and advances its place in the log.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "wait-for-webhook",
+      "name": "Wait-for-Webhook",
+      "description": "Start a slow external job, pause until a webhook calls back, then summarize the result and decide whether to accept it.",
+      "tags": ["durable", "pause-resume", "webhook", "async"],
+      "category": "durable",
+      "sourcePath": "examples/wait-for-webhook",
+      "capabilities": ["models.run"],
+      "whatItDoes": "For work that hinges on a slow external job — a render, a batch export, a third-party callback. It starts the job, tells the job how to reach this run, and then pauses. While it waits it costs nothing, and it can wait minutes, hours, or days. When the webhook fires, the run wakes up exactly where it left off and the callback payload becomes the next step's input. A model summarizes that result, and the run branches to accept or reject.",
+      "steps": [
+        {
+          "name": "kickoff",
+          "description": "Starts the external job, registers how to resume this run, then pauses and waits for the callback — costing nothing while idle.",
+          "next": ["decide"]
+        },
+        {
+          "name": "decide",
+          "description": "Wakes when the callback arrives; its input is the callback payload. A model summarizes the result and picks accept or reject.",
+          "capability": "models.run",
+          "next": ["accept", "reject"]
+        },
+        {
+          "name": "accept",
+          "description": "Ends the run — the callback result looked complete and usable.",
+          "terminal": true
+        },
+        {
+          "name": "reject",
+          "description": "Ends the run — the callback result failed or looked wrong.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "web-research-digest",
+      "name": "Web Research Digest",
+      "description": "Search the web for a topic and get back a short, sourced digest.",
+      "tags": ["research", "search"],
+      "category": "research",
+      "sourcePath": "examples/web-research-digest",
+      "capabilities": ["web.search"],
+      "whatItDoes": "Give it a topic and it searches the web, then hands you a short digest you can read or share. The search step runs one web search through Sapiom's search capability, which comes back with a synthesized answer and a ranked list of results. The summarize step formats that answer and its source links into a markdown digest right in the run — no model call. You get back the topic, the digest, and the list of sources. It's the simplest template that does something real end to end: one metered call, an obvious result.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Take the topic and run one web search, returning a synthesized answer and ranked results.",
+          "capability": "web.search",
+          "next": ["summarize"]
+        },
+        {
+          "name": "summarize",
+          "description": "Format that answer and its source links into a markdown digest, in the run and with no model call.",
           "terminal": true
         }
       ]

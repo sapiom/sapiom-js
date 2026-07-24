@@ -23,6 +23,11 @@
         "name": { "type": "string", "minLength": 1, "description": "Display name shown on the card." },
         "description": { "type": "string", "description": "One-line card description." },
         "tags": { "type": "array", "items": { "type": "string" }, "description": "Freeform browse tags." },
+        "category": {
+          "type": "string",
+          "enum": ["starter", "research", "media", "durable", "human-in-the-loop", "quality", "orchestration"],
+          "description": "Primary gallery category (the source-of-truth taxonomy). Exactly one per template; the frontend owns the display label, icon, and section order keyed off this id. Freeform `tags` still drive secondary browse/search. Optional for now — every template should carry one, and the examples CI check flags any invalid value."
+        },
         "sourcePath": {
           "type": "string",
           "minLength": 1,

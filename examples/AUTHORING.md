@@ -1,12 +1,94 @@
-# Authoring Sapiom templates — copy & structure guide
+# Authoring Sapiom templates
 
-This is the contract for how a Sapiom workflow template describes itself. It covers the
-**copy** (the words a user reads in the gallery and on the template detail page) and how
-that copy maps onto the two files that feed it. Follow it when you add a template or when
-an agent generates one, so every template reads in one consistent voice.
+A **template** is a working Sapiom agent, published in this repo, that anyone can browse in
+the gallery and turn into their own workflow with one click. This guide takes you from an
+empty directory to a merged, live template. Contributions are welcome — a human or an agent
+can follow it end to end.
+
+The path is five steps:
+
+1. **[Develop](#1-develop)** — write the agent and its manifest in a new directory.
+2. **[Build & test](#2-build--test)** — compile it, trace a run for free, and validate the files.
+3. **[Categorize](#3-categorize)** — pick the one category it belongs in.
+4. **[Write the copy](#4-write-the-copy)** — the words a user reads. This is most of the work.
+5. **[Submit](#5-submit)** — open a PR; once merged, Sapiom picks it up automatically.
 
 If you only remember one thing: **write for the person deciding whether to use this, not
 for the person who built it.** Plain, concrete, second-person. No pitch.
+
+---
+
+## 1. Develop
+
+Every template is one directory under `examples/`, named for its `id` (kebab-case, e.g.
+`examples/scheduled-research-brief`). Look at an existing one — `examples/hello-agent` is the
+smallest — and copy its shape. A template directory holds:
+
+| File | What it is |
+|---|---|
+| `index.ts` | The agent itself — a `defineAgent` / `defineStep` graph. This is the code that runs. |
+| `template.json` | The rich manifest for the detail page (`longDescription`, `useCases`, `notes`, `examples`, `author`). |
+| `package.json` / `tsconfig.json` | Pinned `@sapiom/*` SDK deps and a `typecheck` script. Copy these from an existing template. |
+| `README.md` | Short, optional — how to run it from the code. |
+
+Plus **one entry** in `examples/registry.json` — the gallery index (see
+[Write the copy](#4-write-the-copy) for every field). That entry's `sourcePath` must point at
+your directory (`examples/<id>`), and its `id` must match the directory name.
+
+Write the agent by importing from the SDK packages the same way the existing templates do
+(`import { defineAgent, defineStep, terminate } from "@sapiom/agent";`). Each step declares
+its allowed transitions (`next` / `terminal`); the return type is derived from them, so an
+undeclared transition is a compile error. Reach a real capability through the run context
+(`ctx.sapiom.*`) — a web search, an LLM call, an email, a sandbox.
+
+**Iterating against unreleased SDK changes (advanced, optional).** If you need SDK edits that
+aren't published to npm yet, publish the workspace packages to a local registry and point your
+template at them: `pnpm registry:local` in one shell, `pnpm publish:local` in another. Most
+authors don't need this — the published `@sapiom/*` versions are enough.
+
+## 2. Build & test
+
+1. **Compile.** From your template directory: `npm install`, then `npm run typecheck`. It must
+   pass — the gallery only ships templates that build.
+2. **Trace a run for free.** Drive the agent through the Sapiom MCP: `run_local` executes the
+   whole graph locally and traces every step without spending anything, so you can watch the
+   flow before you deploy. The lifecycle is `check → run_local → link → deploy → run`; each
+   template's `README.md` shows it.
+3. **Validate the registry.** Run `pnpm examples:check` from the repo root. It checks that
+   `registry.json` matches the schema (including a valid `category`), is sorted by `id`, and
+   that every `sourcePath` points at a real directory with a `template.json`. Run
+   `pnpm examples:sort` first to put your entry in order.
+4. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
+   must be the exact `ctx.sapiom.*` ids your code actually calls — see
+   [Capability ids](#capability-ids-correctness-not-style). The LLM path is `models.run`
+   (`models.coding` for a coding agent), **not** `llm.generate`.
+5. **Keep the manifest honest.** The `examples` you list must be real `{ input, output }` pairs
+   the code produces — don't invent fields.
+
+## 3. Categorize
+
+Pick **exactly one** `category` for your template and set it in its `registry.json` entry. It's
+the primary way the gallery groups templates. Keep `tags` freeform for secondary browse and
+search — the category is the one bucket, the tags are everything else.
+
+| `category` | What belongs here |
+|---|---|
+| `starter` | Minimal, get-started templates — the smallest thing that runs. |
+| `research` | Search / read the web and produce a sourced result. |
+| `media` | Generate images, audio, or video. |
+| `durable` | Long-running or async — pause on a webhook, drip over time, self-heal on a schedule. |
+| `human-in-the-loop` | Pause for a person to approve before an irreversible step. |
+| `quality` | Score, judge, or review an output against a bar. |
+| `orchestration` | Coordinate or manage other workflows. |
+
+If none fits cleanly, pick the closest and mention it in your PR — the list can grow. (The
+display label, icon, and section order are chosen by the app; you only set the `category` id.)
+
+## 4. Write the copy
+
+This is most of the work, and where a template earns its place. The rest of this guide is the
+copy contract: what each field is, and the voice every template shares. Read it for the person
+choosing whether to use your template.
 
 ---
 
@@ -137,7 +219,32 @@ Never present the MCP path as the only way to build and run — the webapp does 
 
 ---
 
+## 5. Submit
+
+1. **Fork** this repo and branch off `main`.
+2. **Add your directory** under `examples/` and your **one entry** in `examples/registry.json`.
+3. **Sort and validate** locally: `pnpm examples:sort`, then `pnpm examples:check`. Both must be
+   clean — the same check runs in CI and blocks the merge if the registry is invalid, unsorted,
+   or points at a directory with no `template.json`.
+4. **Open a pull request.** CI validates the registry and builds the SDK; an automated review
+   runs too. Keep the PR to one template.
+5. **On merge, it goes live.** The Sapiom backend reads `registry.json` at a pinned commit of
+   this repo; once your change merges and that pin advances, your template shows up in the
+   gallery, ready for anyone to use.
+
+---
+
 ## Checklist (author or generating agent)
+
+**Develop & test**
+
+- [ ] One directory `examples/<id>/` with `index.ts`, `template.json`, `package.json`, `tsconfig.json`.
+- [ ] `npm run typecheck` passes in the template directory.
+- [ ] Traced a `run_local` end to end (free) before deploying.
+- [ ] One `category` from the enum set; `tags` kept freeform.
+- [ ] `pnpm examples:sort` then `pnpm examples:check` both clean.
+
+**Copy**
 
 - [ ] `description`: one plain sentence, no internal jargon.
 - [ ] `whatItDoes`: 3–6 short sentences, capability named in passing, no pitch words.
