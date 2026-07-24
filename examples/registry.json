@@ -698,6 +698,453 @@
           "terminal": true
         }
       ]
+    },
+    {
+      "id": "news-roundup",
+      "name": "Company News Roundup",
+      "description": "Search the web for a company's recent news, then publish a dated, illustrated roundup page to a small website for that company.",
+      "tags": ["news", "summarize", "images", "publish"],
+      "sourcePath": "examples/news-roundup",
+      "capabilities": [
+        "web.search",
+        "models.run",
+        "contentGeneration.images",
+        "fileStorage.upload",
+        "sandboxes.create",
+        "sandboxes.deployPreview"
+      ],
+      "whatItDoes": "For keeping a shareable news page for a company you care about, refreshed whenever you run it. You give it a company name and it searches the web (web.search) for that company's news from the last week. An LLM (models.run) picks the three-to-five most relevant articles and writes a plain-language summary and an image prompt for each, and it generates one illustration per article (contentGeneration.images). It saves the page and images to file storage, then rebuilds the company's website from storage in a sandbox and deploys it (sandboxes.deployPreview), handing back the live URL. Each run adds a new dated page without touching the earlier ones. If an image fails it becomes a text-only card, and if there's no news the run stops early instead of publishing an empty page.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Search the web for the company's news from the last week. If nothing comes back, stop early and report no news instead of publishing.",
+          "capability": "web.search",
+          "next": ["select"]
+        },
+        {
+          "name": "select",
+          "description": "Ask an LLM to pick the three-to-five most relevant articles and write a plain-language summary and an image prompt for each.",
+          "capability": "models.run",
+          "next": ["illustrate"]
+        },
+        {
+          "name": "illustrate",
+          "description": "Generate one image per selected article and save each to storage; an article whose image fails degrades to a text-only card.",
+          "capability": "contentGeneration.images",
+          "next": ["publish"]
+        },
+        {
+          "name": "publish",
+          "description": "Save the dated page, rebuild the company's site from storage in a sandbox, and deploy it — returning the live site and page URLs.",
+          "capability": "sandboxes.deployPreview",
+          "next": [],
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "dependency-upgrade",
+      "name": "Dependency Upgrade",
+      "description": "On a schedule, a coding agent bumps a repo's dependencies in a sandbox, runs the tests, and pushes only when the build is green.",
+      "tags": ["dependencies", "coding-agent", "scheduled", "ci"],
+      "sourcePath": "examples/dependency-upgrade",
+      "capabilities": [
+        "models.coding",
+        "sandboxes.exec",
+        "models.run",
+        "fileStorage.upload",
+        "repositories.pushFromSandbox"
+      ],
+      "whatItDoes": "For keeping a project's dependencies current without a human driving each bump. On each scheduled run a coding agent (`models.coding`) clones your repo into a sandbox and upgrades its dependencies, and because that run is long the workflow pauses at $0 until it finishes. It then re-attaches the same sandbox and runs your real test suite there (`sandboxes.exec`) — a red build is dropped, never pushed. A green build gets a model risk rating of the changed dependencies (`models.run`); anything above your risk bar is held for a person instead of pushed. When it does push, it commits the bumped branch straight from the sandbox. Every run — pushed, held, or dropped — archives a triage report to file storage (`fileStorage.upload`) so you can see what changed and why it did or didn't ship.",
+      "steps": [
+        {
+          "name": "plan",
+          "description": "Resolves the repo and the install and test commands and checks the input; with no repo it stops right away.",
+          "next": ["bump", "rejected"]
+        },
+        {
+          "name": "bump",
+          "description": "Launches a coding agent to bump the repo's dependencies in a sandbox, then pauses until the run finishes.",
+          "capability": "models.coding",
+          "next": ["verify"]
+        },
+        {
+          "name": "verify",
+          "description": "Re-attaches that sandbox and runs the install and test suite there; a failed run or a red build is rejected.",
+          "capability": "sandboxes.exec",
+          "next": ["assess", "rejected"]
+        },
+        {
+          "name": "assess",
+          "description": "Asks a model to rate the upgrade's risk from the dependency diff, holding anything above your bar.",
+          "capability": "models.run",
+          "next": ["publish", "held"]
+        },
+        {
+          "name": "publish",
+          "description": "Pushes the bumped branch from the sandbox and archives the triage report.",
+          "capability": "repositories.pushFromSandbox",
+          "terminal": true
+        },
+        {
+          "name": "held",
+          "description": "The build was green but the risk was too high, so it archives the report and waits for a human.",
+          "capability": "fileStorage.upload",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "The coding run failed or the tests were red, so it archives the report and pushes nothing.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "meeting-notes-crm",
+      "name": "Meeting Notes to CRM Updater",
+      "description": "Take a meeting transcript, pull out the contact, the CRM fields to update, and the action items, write them to a database, and email a summary.",
+      "tags": ["crm", "sales", "transcript", "pause-resume"],
+      "sourcePath": "examples/meeting-notes-crm",
+      "capabilities": ["models.run", "database.get", "database.create", "email.send"],
+      "whatItDoes": "For turning what was said on a call into an updated CRM record without hand-copying anything. It takes the transcript either way: a run hands it one directly, or you set `webhook: true` and it pauses at $0 until your note-taker pushes one as the `transcript.ready` signal. An LLM (`models.run`) reads the transcript and returns structured data — the contact the call was with, the fields to change (deal stage, next step), and the action items with owners and due dates. It writes them to a small Postgres store it owns, updating the contact's row without wiping fields the call didn't mention and recording each action item under a stable id so a re-run logs it once. Then it emails a recap that splits action items into new versus already tracked. A dryRun computes the recap and returns it without touching the database or sending mail.",
+      "steps": [
+        {
+          "name": "intake",
+          "description": "Takes the transcript — passed in directly, or, with webhook set, pauses at $0 until a note-taker pushes one via the transcript.ready signal.",
+          "next": ["extract"]
+        },
+        {
+          "name": "extract",
+          "description": "Hands the transcript to an LLM to pull the contact, the CRM fields to update, and the action items as structured JSON.",
+          "capability": "models.run",
+          "next": ["upsert"]
+        },
+        {
+          "name": "upsert",
+          "description": "Writes to a Postgres CRM store: updates the contact's row without wiping unmentioned fields, and records each action item under a stable id. Skipped on a dry run.",
+          "capability": "database.get",
+          "next": ["summary"]
+        },
+        {
+          "name": "summary",
+          "description": "Writes a markdown recap — fields updated, action items new vs. already tracked — and emails it. A dry run, or a run with no recipient, returns it without sending.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "approval-chain",
+      "name": "Multi-Party Approval Chain (Saga)",
+      "description": "A durable sequential sign-off chain — pause-per-gate approvals with reminders, timeout escalation, and compensation on rejection.",
+      "tags": ["approval", "saga", "pause-resume", "durable"],
+      "sourcePath": "examples/approval-chain",
+      "capabilities": ["email.send", "database.create"],
+      "whatItDoes": "Routes a subject — a contract, a budget, a policy change — through an ordered chain of approvers (e.g. legal → finance → the CEO) who must each sign off IN ORDER. Every gate is a durable pauseUntilSignal: the run emails the current approver and suspends at $0 until they fire approval.decision, then advances to the next gate. A reject walks a saga compensation — notifying everyone who already approved that the chain was cancelled — so a half-signed contract is never left behind. Between gates, a resume with no decision (the pause timeoutMs, an auto-resume, or an explicit remind) is a reminder tick that re-notifies and re-pauses, up to maxReminders, after which a silent gate escalates to a human channel. The canonical chain state lives in ctx.shared and survives every pause; when a ledgerHandle is set, each transition is also appended to a durable Postgres table (the database capability) as a best-effort, queryable audit trail. pauseUntilSignal is a runtime primitive, not a metered capability — the billed calls are the notifications and the ledger database.",
+      "steps": [
+        {
+          "name": "start",
+          "description": "Resolve the subject, the ordered approvers, and the escalation / ledger / reminder settings; initialise the chain state. An empty chain escalates.",
+          "capability": "database.create",
+          "next": ["present", "escalate"]
+        },
+        {
+          "name": "present",
+          "description": "Record the gate as pending and email the current approver, then pause until the approval signal (resumes at 'decide').",
+          "capability": "email.send",
+          "next": ["decide"]
+        },
+        {
+          "name": "decide",
+          "description": "Resume target — its input is the approval payload; approve advances to the next gate or finalises, reject compensates, timeout/no-response escalates, and any other resume is a reminder tick.",
+          "next": ["present", "remind", "finalize", "compensate", "escalate"]
+        },
+        {
+          "name": "remind",
+          "description": "Email a reminder to the current approver, then pause again on the same gate (resumes at 'decide').",
+          "capability": "email.send",
+          "next": ["decide"]
+        },
+        {
+          "name": "finalize",
+          "description": "The single irreversible action — reached only after every party approved; a dryRun guard makes it a no-op offline.",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "compensate",
+          "description": "Saga rollback: someone rejected — notify everyone who already approved that the chain was cancelled.",
+          "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "escalate",
+          "description": "Terminal branch: a gate went silent or timed out — escalate to a human channel.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "scheduled-db-insight-report",
+      "name": "Scheduled DB Snapshot to Insight Report",
+      "description": "On a schedule, query a database, write the narrative and render charts, then email the insight report.",
+      "tags": ["scheduled", "database", "analytics", "report"],
+      "sourcePath": "examples/scheduled-db-insight-report",
+      "capabilities": [
+        "database.get",
+        "database.create",
+        "models.run",
+        "sandboxes.create",
+        "fileStorage.upload",
+        "fileStorage.getDownloadUrl",
+        "email.send",
+        "vault.get"
+      ],
+      "whatItDoes": "The standing \"metrics email\" you'd otherwise assemble by hand. On each tick it runs a set of read-only SQL queries and turns every result into a metric — a labeled series or a single number. A model (`models.run`) reads those numbers and writes a short report: a summary, a few insights that cite the figures, and a line on what to watch. Then it spins up a sandbox, renders the series into an SVG bar chart with a tiny dependency-free script, and hosts that chart in file storage so the report can link to it. Finally it emails the whole thing. With no config it introspects the database's own catalog — rows per table, size — so it reports on any database immediately; pass your own `queries` to report on real data. A `dryRun` reports on sample metrics and skips the send.",
+      "steps": [
+        {
+          "name": "snapshot",
+          "description": "Runs the read-only queries against the database and normalizes each result into a metric — a labeled series or a scalar KPI.",
+          "capability": "database.get",
+          "next": ["narrate"]
+        },
+        {
+          "name": "narrate",
+          "description": "Hands the metrics to a model to write a short markdown report — a summary, insights that cite the numbers, and what to watch.",
+          "capability": "models.run",
+          "next": ["chart"]
+        },
+        {
+          "name": "chart",
+          "description": "Renders the series into an SVG bar chart inside a sandbox, hosts it in file storage, and takes a shareable link.",
+          "capability": "sandboxes.create",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Emails the report — narrative, chart link, and a metrics table. A dry run or a missing recipient returns it as a preview instead.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "newsletter-autopilot",
+      "name": "Newsletter Autopilot",
+      "description": "On a weekly schedule, it researches a niche, writes and illustrates the issue, and emails it to your subscriber list.",
+      "tags": ["newsletter", "scheduled", "llm", "email"],
+      "sourcePath": "examples/newsletter-autopilot",
+      "capabilities": ["web.search", "models.run", "contentGeneration.images"],
+      "whatItDoes": "For running a niche newsletter without drafting each issue by hand. It searches the web for your niche, then reads the top results for their full text. It hands those sources to an LLM (models.run) to curate the strongest items and write the issue — a subject line, an intro, a few sections that cite their sources, and a header-image prompt. It generates that header image, then emails each subscriber their own copy. Give it a cron schedule and it publishes on its own, defaulting to Mondays at 08:00. A dryRun flag writes and illustrates the full issue and returns it without emailing anyone, so you can review before it goes out.",
+      "steps": [
+        {
+          "name": "search",
+          "description": "Search the web for the niche and collect candidate sources.",
+          "capability": "web.search",
+          "next": ["scrape"]
+        },
+        {
+          "name": "scrape",
+          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
+          "capability": "web.search",
+          "next": ["write"]
+        },
+        {
+          "name": "write",
+          "description": "Hand the sources to an LLM to curate them and write this week's issue: a subject, a body that cites each source, and a header-image prompt.",
+          "capability": "models.run",
+          "next": ["header"]
+        },
+        {
+          "name": "header",
+          "description": "Generate a header image for the issue; if none comes back, the issue still goes out without it.",
+          "capability": "contentGeneration.images",
+          "next": ["deliver"]
+        },
+        {
+          "name": "deliver",
+          "description": "Email each subscriber their own copy; a dry run, or a run with no subscribers set, returns the issue without sending.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "durable-backfill",
+      "name": "Durable Backfill / Long-Job Runner",
+      "description": "Process a huge dataset in resumable chunks, checkpointing progress so the job survives restarts and picks up where it left off.",
+      "tags": ["durable", "backfill", "batch", "cron"],
+      "sourcePath": "examples/durable-backfill",
+      "capabilities": [
+        "database.get",
+        "sandboxes.create",
+        "sandboxes.exec",
+        "fileStorage.upload",
+        "fileStorage.getDownloadUrl",
+        "fileStorage.list",
+        "fileStorage.delete"
+      ],
+      "whatItDoes": "For long jobs that are too big for one pass — a backfill, a migration, a reprocess. It walks the dataset one chunk at a time. Each chunk's work runs in a sandbox that gets the dataset's connection string and the chunk's range, and after every chunk it writes a checkpoint to file storage and pauses until a heartbeat wakes it for the next one — so nothing runs and nothing is billed while it waits. Progress survives restarts: start a fresh run with the same job id and it reads the checkpoint and resumes mid-dataset. Leave the database handle unset (or pass dryRun) and it counts each chunk in-process, so you can trace the whole loop for free.",
+      "steps": [
+        {
+          "name": "plan",
+          "description": "Works out the job — dataset size, chunk size, and a stable job id — then resumes from a saved checkpoint if one exists for that id.",
+          "next": ["process"]
+        },
+        {
+          "name": "process",
+          "description": "Processes the current chunk in a sandbox, saves a result file and rewrites the checkpoint, then pauses for the next heartbeat — or finishes once the last chunk is done.",
+          "capability": "sandboxes.exec",
+          "next": ["finalize"]
+        },
+        {
+          "name": "finalize",
+          "description": "Writes a manifest of the run and returns a summary.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "nl-db-query-endpoint",
+      "name": "Natural-Language DB Query Endpoint",
+      "description": "Deploy a live endpoint that turns a plain-English question into a read-only SQL query and returns the answer.",
+      "tags": ["database", "sql", "endpoint", "llm"],
+      "sourcePath": "examples/nl-db-query-endpoint",
+      "capabilities": ["database.get", "models.run", "sandboxes.deployPreview", "vault.get"],
+      "whatItDoes": "For giving your team a question box over a read-only database. One run stands up a live endpoint; then anyone can POST a plain-English question to it. It reads the connection string from a Sapiom database handle, previews the translation on a sample question so a bad path fails before anything ships, then writes a small server into a sandbox and exposes it at a stable URL. Each request asks an LLM for a single SELECT, checks it, and runs it inside a READ ONLY transaction Postgres enforces — with a statement timeout and a row cap, so a write can't slip through. The server's own key is read from the vault at deploy time, never baked into source.",
+      "steps": [
+        {
+          "name": "validate",
+          "description": "Checks the input (a database handle or connection string) and resolves config.",
+          "next": ["resolve", "rejected"]
+        },
+        {
+          "name": "resolve",
+          "description": "Reads the target Postgres connection string from a Sapiom database handle to inject into the endpoint.",
+          "capability": "database.get",
+          "next": ["plan"]
+        },
+        {
+          "name": "plan",
+          "description": "Previews the pipeline: translates the sample question into SQL with an LLM.",
+          "capability": "models.run",
+          "next": ["guard"]
+        },
+        {
+          "name": "guard",
+          "description": "Applies the read-only guardrail to the sample SQL; anything that isn't a single read-only statement is rejected.",
+          "next": ["deploy", "rejected"]
+        },
+        {
+          "name": "deploy",
+          "description": "Writes the endpoint server into a sandbox and exposes it at a stable URL, injecting DATABASE_URL and a vault-read API key.",
+          "capability": "sandboxes.deployPreview",
+          "next": ["deployed", "deploy_failed"]
+        },
+        {
+          "name": "deployed",
+          "description": "The endpoint is live — returns its URL and the previewed sample query.",
+          "terminal": true
+        },
+        {
+          "name": "deploy_failed",
+          "description": "The deploy failed — surfaces the deployPreview logs.",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Input or the sample SQL failed the guardrail; nothing was deployed.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "scheduled-compliance-audit",
+      "name": "Scheduled Compliance Audit + Attestation",
+      "description": "On a schedule, it audits your resources against a policy, waits for a person to sign off, then archives the signed attestation.",
+      "tags": ["compliance", "scheduled", "human-in-the-loop", "attestation"],
+      "sourcePath": "examples/scheduled-compliance-audit",
+      "capabilities": [
+        "web.scrape",
+        "models.run",
+        "fileStorage.upload",
+        "fileStorage.getDownloadUrl"
+      ],
+      "whatItDoes": "For a recurring policy audit you need a signed record of. On each tick it reads the current state of the resources you point it at — a config page, a status endpoint, a policy doc — and hands that state and your policy to an LLM (models.run) that returns an overall verdict plus one check per requirement, with evidence and a fix for each failure. Then it pauses and waits for a person to sign off, costing nothing while idle. Only an explicit approval archives the signed attestation to durable file storage (fileStorage) and hands back a download link — because an attestation records that a human reviewed and approved, it is never filed automatically. Decline and the findings come back, but nothing is archived. A dryRun flag returns the whole attestation as a preview without archiving.",
+      "steps": [
+        {
+          "name": "collect",
+          "description": "Read the current state of each resource with a scrape, keeping the error as missing evidence when a page won't load.",
+          "capability": "web.scrape",
+          "next": ["audit"]
+        },
+        {
+          "name": "audit",
+          "description": "Hand the collected state and your policy to an LLM to produce a verdict and one evidence-cited check per requirement.",
+          "capability": "models.run",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Pause and wait for a human sign-off signal, costing nothing while idle (resumes at 'onSignoff').",
+          "next": ["onSignoff"]
+        },
+        {
+          "name": "onSignoff",
+          "description": "Read the sign-off reply: an explicit approve archives the attestation, anything else backs out with nothing filed.",
+          "next": ["archive", "rejected"]
+        },
+        {
+          "name": "archive",
+          "description": "Write the signed attestation to durable file storage and return its file id and download link; a dry run skips the upload.",
+          "capability": "fileStorage.upload",
+          "terminal": true
+        },
+        {
+          "name": "rejected",
+          "description": "Sign-off was declined — return the audit findings, having archived nothing.",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "error-triage-digest",
+      "name": "Error / Log Triage Digest",
+      "description": "Ingest errors by webhook or a scheduled pull, cluster and summarize them with an LLM, dedupe against a database, and email a daily digest.",
+      "tags": ["errors", "triage", "digest", "dedupe", "scheduled"],
+      "sourcePath": "examples/error-triage-digest",
+      "capabilities": [
+        "models.run",
+        "database.get",
+        "database.create",
+        "email.send"
+      ],
+      "whatItDoes": "For turning a noisy error stream into one digest that tells you what's actually new. It takes a batch of errors two ways from the same entry: a cron-triggered run pulls one in (or is handed one), or with `webhook: true` it pauses at $0 until your pipeline pushes one as the `errors.pushed` signal. An LLM (`models.run`) clusters the raw entries into a handful of issues, each with a stable fingerprint that strips out volatile ids and line numbers. It looks each fingerprint up in a Postgres store it owns (`database`): unseen ones are new, the rest are recurring with their running totals updated — so the daily digest surfaces new problems instead of re-alerting on known ones. Then it emails a markdown digest, new issues first. A dryRun computes the digest without touching the database or sending mail.",
+      "steps": [
+        {
+          "name": "collect",
+          "description": "Gather the error batch — take it directly, GET it from a pull URL, or pause at $0 until a webhook pushes one via the errors.pushed signal.",
+          "next": ["triage"]
+        },
+        {
+          "name": "triage",
+          "description": "Hand the raw errors to an LLM to cluster them into distinct issues, each with a stable fingerprint, a severity, and an occurrence count.",
+          "capability": "models.run",
+          "next": ["dedupe"]
+        },
+        {
+          "name": "dedupe",
+          "description": "Look each fingerprint up in a Postgres store: never-seen ones are new, the rest are recurring, and their running totals are updated. Skipped on a dry run.",
+          "capability": "database.get",
+          "next": ["digest"]
+        },
+        {
+          "name": "digest",
+          "description": "Write a markdown digest — new issues first, recurring below — and email it. A dry run, or a run with no recipient, returns it without sending.",
+          "capability": "email.send",
+          "terminal": true
+        }
+      ]
     }
   ]
 }

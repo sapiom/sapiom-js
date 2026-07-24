@@ -1,0 +1,53 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "On a schedule, this queries a database, turns the numbers into a written report and a chart, and emails it — the standing \"metrics email\" you'd otherwise assemble by hand.\n\nThe graph is four steps: `snapshot` (database) runs a set of read-only SQL queries and turns each result into a metric — a labeled series or a single number. `narrate` (`models.run`, the live x402-served model) reads those numbers and writes a short markdown report: a summary, a few insights that cite the figures, and a line on what to watch. `chart` spins up a sandbox, renders the series into an SVG bar chart with a tiny dependency-free script, and hosts it in file storage so the report can link to it. `deliver` emails the whole thing.\n\nOut of the box it introspects the database's own catalog — rows per table, table count, database size — so it produces a real report on any database with no setup. Point it at your own data by passing `queries` (each returns `label` and `value` columns), and set an external database with a `DATABASE_URL` in the vault, read at runtime and never stored in the run. A `dryRun` reports on sample metrics and skips the send, so you can trace the whole flow for free.\n\nYou pay for the database snapshot, the model that writes the narrative, and the sandbox that renders the chart, on each run — the email is cheap, and a dry run reports on sample data without touching a database.",
+  "useCases": [
+    "Wake up to a metrics email — a written summary plus a chart — pulled straight from your production database.",
+    "Turn a recurring \"how are the numbers looking?\" query into a scheduled report you never assemble by hand.",
+    "See how a database snapshot, LLM narration, sandbox chart rendering, and email delivery compose in one agent, with a safe dry-run path."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nWith no config it reports on the database's own catalog (rows per table, size), so you get a real report immediately. To report on your own data, pass `queries` — an array of `{ name, sql }` where each query returns `label` and `value` columns (a single `value` row is read as a KPI). To point at an external database, store its connection string under the `scheduled-db-insight-report` vault ref (key `DATABASE_URL`); it's read at runtime, never saved into the run. Set who gets the email with `deliverTo`, or store a default under the same vault ref (key `RECIPIENT`). Pass `dryRun: true` to report on sample metrics and get the report back without sending. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed workflow.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole snapshot → narrate → chart → deliver flow for free (capabilities stubbed, the DB query and delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "A daily catalog snapshot, previewed",
+      "input": {
+        "schedule": "0 8 * * *",
+        "dryRun": true
+      },
+      "output": {
+        "delivered": false,
+        "dryRun": true,
+        "reason": "dry-run",
+        "to": null,
+        "subject": "Database insight report",
+        "schedule": "0 8 * * *",
+        "generatedAt": "2099-01-01T00:00:00.000Z",
+        "chartUrl": null,
+        "metricCount": 3,
+        "report": "# Database insight report\n\nThe database holds roughly 112k rows across 14 user tables and occupies 48.2 MB. Activity is concentrated in `events`, which alone accounts for the large majority of stored rows.\n\n- `events` is by far the largest table at 81,300 rows [1]\n- `users` (12,840) and `orders` (9,420) are the next largest [1]\n- Total footprint is a modest 48.2 MB across 14 tables\n\n**What to watch:** growth in `events` relative to the rest.\n\n## Metrics\n- **Rows per table (top 10):**\n  - events: 81300\n  - users: 12840\n  - orders: 9420\n  - sessions: 6110\n  - invoices: 2305\n- **User tables:** 14\n- **Database size (MB):** 48.2"
+      }
+    },
+    {
+      "title": "A weekly report on your own data",
+      "input": {
+        "schedule": "0 9 * * 1",
+        "queries": [
+          {
+            "name": "Signups per day (last 7d)",
+            "sql": "select to_char(created_at::date, 'Dy') as label, count(*) as value from users where created_at > now() - interval '7 days' group by 1 order by min(created_at)"
+          },
+          {
+            "name": "Active subscriptions",
+            "sql": "select count(*) as value from subscriptions where status = 'active'"
+          }
+        ],
+        "deliverTo": "founders@example.com"
+      }
+    }
+  ]
+}

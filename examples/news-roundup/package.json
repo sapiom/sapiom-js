@@ -1,0 +1,23 @@
+{
+  "name": "news-roundup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\"",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sapiom/agent": "0.6.5",
+    "@sapiom/tools": "0.20.1",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.2",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Deploy a live endpoint that answers questions about your database in plain English. One run stands up the endpoint; then anyone can `POST /query` a question and get the data back — no SQL required.\n\nEach request introspects your schema, asks an LLM (`models.run`) for a single `SELECT`, and returns the rows. The read-only guardrail is the point: the model is told to write only a `SELECT`, the query is checked (single statement, starts with `SELECT`/`WITH`, no write or DDL keywords), and it runs inside a `READ ONLY` transaction that Postgres enforces at the engine level — with a statement timeout and a row cap. A write can't slip through even if the model misbehaves.\n\nThe workflow itself is the deployer: it reads the connection string from a Sapiom database handle (`database.get`), previews the translation on a sample question so a bad path fails before anything ships, then writes a small server into a sandbox and exposes it at a stable URL (`sandboxes.deployPreview`). The server's own API key is read from the vault at deploy time (`vault.get`), never baked into source.\n\nYou pay for the deploy (one sandbox) plus the model reasoning on each question the endpoint answers — the endpoint sitting idle is free.",
+  "useCases": [
+    "Give your ops or analyst team a question box over a read-only database, without building a UI.",
+    "Stand up a self-serve metrics endpoint another service can POST questions to.",
+    "Let non-technical teammates ask 'how many…' and 'which…' questions without waiting on SQL."
+  ],
+  "notes": "**Use this template.** Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page to stand up the endpoint. Your $5 signup credit covers first runs.\n\nYou need a target database: pass a Sapiom Postgres handle as `dbHandle` (or a full `connectionString`). The deployed server calls the LLM per request, so it needs its own key — store one in the vault and pass `vaultRef` (and `vaultKey`, default `sapiom_api_key`); a dev-only `sapiomApiKey` input is also accepted but the vault is the right way. Once deployed, `POST /query { \"question\": \"…\" }` to the returned URL.\n\n**Advanced (prefer to work from the code?):** Run it locally with `run_local` to trace the whole flow for free. The `models.run` stub returns non-SQL, so on defaults `guard` routes to `rejected` — a legible demo of the guardrail. To trace the deploy branch, pass `{ \"dryRun\": true }` and a stub override returning a real SELECT (see `AGENTS.md`). Then edit and deploy with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Deploy the endpoint (real run)",
+      "input": {
+        "dbHandle": "analytics",
+        "sampleQuestion": "How many rows are in each table?",
+        "vaultRef": "nl-db-query-endpoint",
+        "vaultKey": "sapiom_api_key",
+        "port": 3000,
+        "maxRows": 100
+      },
+      "output": {
+        "deployed": true,
+        "dryRun": false,
+        "url": "https://your-preview-hash.preview.bl.run",
+        "queryEndpoint": "https://your-preview-hash.preview.bl.run/query",
+        "healthEndpoint": "https://your-preview-hash.preview.bl.run/health",
+        "sampleQuestion": "How many rows are in each table?",
+        "sampleSql": "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC",
+        "envKeys": ["PORT", "DATABASE_URL", "SAPIOM_MODEL", "MAX_ROWS", "SAPIOM_API_KEY"],
+        "serverBytes": 3400
+      }
+    },
+    {
+      "title": "The guardrail rejects a write",
+      "input": {
+        "dbHandle": "analytics",
+        "sampleQuestion": "delete every user"
+      },
+      "output": {
+        "deployed": false,
+        "rejected": true,
+        "reason": "only SELECT / WITH queries are allowed",
+        "sql": "DELETE FROM users"
+      }
+    }
+  ]
+}

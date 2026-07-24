@@ -1,0 +1,56 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "Some jobs are too big for one pass — backfill a column across a million rows, reprocess a year of records, migrate a table. Run it as one long worker and a restart halfway through loses everything. This template walks the dataset one chunk at a time instead, and writes down where it is after every chunk.\n\n`plan` works out the job — how big the dataset is, how large each chunk is, and a `jobId` that names the run. `process` handles the current chunk: it hands the dataset's connection string and the chunk's range to a fresh sandbox, runs your command there, saves a small result file, and rewrites a checkpoint. Then it pauses until a heartbeat wakes it for the next chunk. The heartbeat is just a schedule firing a signal on a cadence — so between chunks nothing runs and nothing is billed.\n\nRestarts survive on two levels. Inside one run, the cursor rides along in `ctx.shared` through every pause. If the whole run is torn down, the checkpoint is still in file storage under the `jobId` — start a fresh run with the same `jobId` and `plan` reads it back and picks up mid-dataset.\n\nYou pay for the chunk work — the sandbox while it runs, plus the small checkpoint and result files. The waiting between chunks is free.",
+  "useCases": [
+    "Backfill or reprocess a large table in resumable chunks, checkpointing after each one.",
+    "Run a long batch job on a cron heartbeat so it survives restarts and never holds a worker open.",
+    "Resume an interrupted job from its last checkpoint by starting a fresh run with the same job id."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `total` (dataset size), a `chunkSize`, and a `dbHandle` for the Postgres database holding the data; the chunk's `DATABASE_URL`, `CHUNK_OFFSET`, `CHUNK_LIMIT`, and `JOB_ID` are injected into the `command` you run per chunk (it should print the number of items it processed as its last line). A deployed run processes one chunk, then pauses for the heartbeat. Advance it by firing the signal — on a schedule for a real cadence, or by hand with the MCP `workflow_signal` tool: `{ \"signal\": \"backfill.heartbeat\", \"correlationId\": \"<executionId of the paused run>\" }`. To resume an interrupted job, start a new run with the same `jobId` — it reads the checkpoint and continues.\n\nPrefer to work from the code? Run it locally with `run_local` (leave `dbHandle` unset, or pass `dryRun: true`) to trace the whole plan → process → finalize loop for free — it counts each chunk in-process and auto-resumes every heartbeat. Or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "Trace the full loop offline (run_local)",
+      "input": {
+        "total": 25,
+        "chunkSize": 10,
+        "jobId": "demo",
+        "dryRun": true
+      },
+      "output": {
+        "jobId": "demo",
+        "total": 25,
+        "processed": 25,
+        "chunks": 3,
+        "complete": true,
+        "checkpointFileId": null,
+        "manifestFileId": null,
+        "resultFileIds": []
+      }
+    },
+    {
+      "title": "Backfill a real dataset in chunks (deployed)",
+      "input": {
+        "total": 100000,
+        "chunkSize": 5000,
+        "jobId": "users-email-backfill",
+        "dbHandle": "users-db",
+        "command": "node backfill.js"
+      },
+      "output": {
+        "jobId": "users-email-backfill",
+        "total": 100000,
+        "processed": 100000,
+        "chunks": 20,
+        "complete": true,
+        "checkpointFileId": "file_abc123",
+        "manifestFileId": "file_def456",
+        "resultFileIds": ["file_chunk0", "file_chunk1"]
+      }
+    }
+  ]
+}

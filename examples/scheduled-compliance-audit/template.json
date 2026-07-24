@@ -1,0 +1,46 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "longDescription": "You point it at the resources that prove you're compliant — a config page, a status endpoint, a published policy doc — and give it the policy to hold them to. On each tick it reads the current state of each resource, hands that state and your policy to an LLM (`models.run`), and gets back a structured report: an overall verdict, plus one check per requirement with the evidence it relied on and a fix for anything that failed.\n\nThen it stops and waits for a person. The run pauses on a sign-off signal, costing nothing while idle, and only an explicit approval moves it forward. That gate is the point: an attestation is a record that a human reviewed and signed off, so it is never filed automatically. Approve, and it writes the signed attestation — verdict, checks, sources, signer, and timestamp — to durable file storage and hands back a download link. Decline, and the findings come back but nothing is archived.\n\nCollection fails routinely on auth walls and dead endpoints — when a resource won't load, the auditor sees it as missing evidence and marks that requirement unknown rather than the run aborting. A `dryRun` flag computes the whole attestation and returns it as a preview without archiving anything.\n\nYou pay for the scrapes, the model reasoning, and the one attestation upload on each run — the waiting is free, and a dry run costs only the collect and the check it still performs.",
+  "useCases": [
+    "Run a recurring policy audit — SOC 2, an internal security baseline, a data-retention rule — and keep a signed record each time.",
+    "Require a human sign-off before an attestation is filed, so no compliance record is ever created without a real review.",
+    "Archive every audit's signed attestation to durable storage, building an evidence trail you can hand an auditor later."
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it `resources` (the config/status/policy URLs to audit) and a `policy` (the rules to hold them to). Set the `schedule` cron cadence, and optionally a `framework` label and `signOffBy` address, both recorded in the attestation. This template **pauses for a human sign-off**: a real run stops after the policy check and waits. Resume it by firing the `attestation.signoff` signal with `{ \"decision\": \"approve\" }` (today via the MCP `workflow_signal` tool / the API — there is no one-click sign-off button yet); the `correlationId` is the paused run's `executionId`. Only an explicit approval archives the attestation — anything else returns the findings without filing anything. Pass `dryRun: true` to compute the attestation and get it back without archiving.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole collect → audit → sign-off → archive flow for free (capabilities stubbed, the pause auto-resumed, the archive skipped), or edit and deploy it with the Sapiom MCP.",
+  "examples": [
+    {
+      "title": "A weekly SOC 2 access-control audit (dry-run preview)",
+      "input": {
+        "resources": [
+          {
+            "id": "api-config",
+            "url": "https://example.com/.well-known/security.txt",
+            "label": "API security policy"
+          }
+        ],
+        "policy": "Every service must publish a security contact and enforce TLS 1.2+.",
+        "schedule": "0 6 * * 1",
+        "framework": "SOC 2 CC6",
+        "signOffBy": "compliance@example.com",
+        "dryRun": true
+      },
+      "output": {
+        "archived": false,
+        "dryRun": true,
+        "status": "needs_review",
+        "framework": "SOC 2 CC6",
+        "signer": "compliance@example.com",
+        "signedAt": "2026-01-05T06:00:12.000Z",
+        "fileName": "attestation-2026-01-05.md",
+        "attestation": "# Compliance Attestation — SOC 2 CC6\n\n- **Overall status:** needs_review\n- **Audited at:** 2026-01-05T06:00:00.000Z\n- **Cadence:** 0 6 * * 1\n- **Resources audited:** 1\n\n## Summary\nA security contact is published, but TLS version enforcement could not be confirmed from the collected state.\n\n## Checks\n- [✓] A security contact is published — pass: security.txt lists a Contact field.\n- [?] TLS 1.2+ is enforced — unknown: the collected page does not state the TLS policy.\n\n## Sign-off\n- **Decision:** approved\n- **Signed by:** compliance@example.com\n- **Signed at:** 2026-01-05T06:00:12.000Z\n\n## Sources\n- API security policy (https://example.com/.well-known/security.txt)",
+        "fileId": null,
+        "downloadUrl": null
+      }
+    }
+  ]
+}
