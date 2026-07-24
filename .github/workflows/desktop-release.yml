@@ -47,18 +47,28 @@ jobs:
         include:
           - os: ubuntu-latest
             packflag: "--linux"
-            # Anything under release/ that's a shippable Linux installer.
-            artifact_glob: "packages/harness-desktop/release/*.AppImage,packages/harness-desktop/release/*.deb"
-          - os: macos-14 # Apple Silicon; builds an arm64 .dmg + .zip
+            # The shippable Linux installers.
+            artifact_path: |
+              packages/harness-desktop/release/*.AppImage
+              packages/harness-desktop/release/*.deb
+          - os: macos-14 # Apple Silicon; builds an arm64 .app (+ .dmg/.zip)
             packflag: "--mac"
-            artifact_glob: "packages/harness-desktop/release/*.dmg,packages/harness-desktop/release/*.zip"
+            # Upload the raw .app bundle so the downloaded artifact IS the binary
+            # (one unzip → Sapiom.app), not a zip-of-{dmg, zip-of-app}. `mac-arm64/`
+            # holds only Sapiom.app, so that dir becomes the artifact's root and the
+            # app unzips out directly.
+            # CAVEAT: actions/upload-artifact does NOT preserve the executable bit,
+            # so a downloaded .app may need `chmod -R +x Sapiom.app` (plus the usual
+            # `xattr -dr com.apple.quarantine`) before it launches. The .dmg/.zip are
+            # still built into release/ (just not uploaded here) for signed releases.
+            artifact_path: packages/harness-desktop/release/mac-arm64
           # Pinned to windows-2022 (VS 2022 / v17). windows-latest rolled to an
           # image with Visual Studio 18, whose version node-gyp's VS detection
           # doesn't recognize ("unknown version undefined") → the node-pty
           # rebuild can't find a usable compiler. VS 2022 is fully supported.
           - os: windows-2022
             packflag: "--win"
-            artifact_glob: "packages/harness-desktop/release/*.exe"
+            artifact_path: packages/harness-desktop/release/*.exe
 
     runs-on: ${{ matrix.os }}
     # Windows stays non-blocking while we bring it up (Phase 6). Keep it in the
@@ -123,18 +133,15 @@ jobs:
 
       # Always upload to the run's Artifacts so workflow_dispatch (untagged)
       # builds are downloadable and testable — this is how you grab the unsigned
-      # macOS .dmg to test on a Mac before signing exists.
+      # macOS app to test on a Mac before signing exists. Each OS uploads only
+      # its own binary (see matrix.artifact_path); macOS ships the raw .app so the
+      # download is the binary directly, not a zip of installers.
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: harness-desktop-${{ matrix.os }}
-          path: |
-            packages/harness-desktop/release/*.AppImage
-            packages/harness-desktop/release/*.deb
-            packages/harness-desktop/release/*.dmg
-            packages/harness-desktop/release/*.zip
-            packages/harness-desktop/release/*.exe
+          path: ${{ matrix.artifact_path }}
           if-no-files-found: warn
           retention-days: 14
 
@@ -158,6 +165,11 @@ jobs:
           # Unsigned pre-release until Phases 5–6 add signing/notarization.
           prerelease: true
           fail_on_unmatched_files: false
+          # NOTE (Phase 5): the macOS build artifact is now the raw Sapiom.app
+          # bundle (optimized for test downloads), so `**/*` would attach its
+          # hundreds of inner files as individual release assets. Before cutting
+          # real tagged releases, attach the signed .dmg/.zip instead (e.g. glob
+          # the dmg/zip that pack.mjs still produces, or re-zip the .app here).
           files: dist-artifacts/**/*
           body: |
             Unsigned desktop installers built by CI (Phase 4).
