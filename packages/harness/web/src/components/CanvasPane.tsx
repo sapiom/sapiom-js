@@ -606,6 +606,33 @@ export function CanvasPane({
     userAdjustedRef.current = false;
   }, [boundWorkflowPath]);
 
+  // When the bound workflow's definitionId changes (e.g. a deploy that
+  // links-or-creates the agent for the first time), the served canvas board
+  // bakes the "deployed" / "local only" badge from the id at render time.
+  // Reload the iframe so the server re-serves the board with the fresh value
+  // — the path effect above doesn't fire (path is unchanged), so this is the
+  // only mechanism that keeps the badge in sync post-deploy.
+  const boundWorkflowDefinitionId = boundWorkflow?.definitionId ?? null;
+  const prevDefinitionIdRef = useRef<{
+    path: string | null;
+    definitionId: number | string | null;
+  }>({ path: boundWorkflowPath, definitionId: boundWorkflowDefinitionId });
+  useEffect(() => {
+    const prev = prevDefinitionIdRef.current;
+    prevDefinitionIdRef.current = { path: boundWorkflowPath, definitionId: boundWorkflowDefinitionId };
+    // When the path changed, the path effect above already scheduled a reload —
+    // skip here to avoid a redundant double-reload on the same render cycle.
+    if (prev.path !== boundWorkflowPath) return;
+    // Only reload when the id actually transitions (null → id or id → different
+    // id). An id-to-null transition (unlikely but possible if the registry is
+    // pruned) doesn't warrant a reload — the path effect already handles
+    // full binding changes.
+    if (prev.definitionId === boundWorkflowDefinitionId) return;
+    if (boundWorkflowDefinitionId == null) return;
+    setFrameLoading(true);
+    setReloadKey((key) => key + 1);
+  }, [boundWorkflowPath, boundWorkflowDefinitionId]);
+
   const visualizeMacro = findVisualizeMacro(macros);
   const visualizeDisabledReason = visualizeMacro
     ? macroDisabledReason(visualizeMacro, boundWorkflow, activeSessionId)

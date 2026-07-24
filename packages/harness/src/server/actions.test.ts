@@ -642,6 +642,134 @@ describe("createActionsRouter", () => {
       expect(deploy).toHaveBeenCalledTimes(1);
       expect(provider.refreshCalls).toBe(1);
     });
+
+    it("calls onWorkflowConfigChanged after a successful deploy that changes the definitionId", async () => {
+      // The canonical post-deploy state-sync: a deploy that resolves a new id
+      // (link returned def_new, sapiom.json had def_old) must notify the server
+      // so it can refresh its cache and broadcast workflows.changed — keeping
+      // every connected client's chip, canvas badge, and Prod Run in sync
+      // without a harness restart.
+      const onWorkflowConfigChanged = vi.fn().mockResolvedValue(undefined);
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      // The callback must have been invoked with the workflow's project path.
+      expect(onWorkflowConfigChanged).toHaveBeenCalledOnce();
+      expect(onWorkflowConfigChanged).toHaveBeenCalledWith("/proj/agent");
+    });
+
+    it("does not call onWorkflowConfigChanged when link returns the same id already in sapiom.json", async () => {
+      // A redeploy of an already-linked workflow: link returned the same id that
+      // is already on disk, so writeConfig was skipped — no cache invalidation
+      // needed and onWorkflowConfigChanged must not fire.
+      const onWorkflowConfigChanged = vi.fn();
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_123" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_123", name: "test-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "test-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      expect(onWorkflowConfigChanged).not.toHaveBeenCalled();
+    });
+
+    it("does not call onWorkflowConfigChanged when the deploy build fails", async () => {
+      // A build failure means no new definitionId was committed — no cache
+      // refresh needed. The terminal error line is still streamed in-band.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const onWorkflowConfigChanged = vi.fn();
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockRejectedValue(
+          new AgentOperationError({ code: "BUILD_FAILED", message: "Build failed." }),
+        ),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "error" });
+
+      expect(onWorkflowConfigChanged).not.toHaveBeenCalled();
+    });
+
+    it("streams ready even when onWorkflowConfigChanged throws (non-fatal)", async () => {
+      // A cache-refresh failure must not corrupt the stream or throw — the
+      // deploy succeeded; the broadcast is best-effort.
+      const onWorkflowConfigChanged = vi.fn().mockRejectedValue(new Error("cache write failed"));
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_5",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      // The ready line was already written before onWorkflowConfigChanged was
+      // called — both lines must still be present.
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_new" },
+        { phase: "ready", definitionId: "def_new", buildRunId: "build_5", status: "ready" },
+      ]);
+    });
   });
 
   // ── POST /api/runs ────────────────────────────────────────────────────────
