@@ -798,6 +798,9 @@ export const App = (): JSX.Element => {
                         : undefined,
                   });
                 }}
+                onDeploy={() => {
+                  void harness.deploy(boundWorkflow.path);
+                }}
               />
             )}
             <div className="terminal-slot">

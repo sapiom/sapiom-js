@@ -1048,6 +1048,131 @@ input {
   color: var(--text-warning);
 }
 
+/* ── Deployment popover ──────────────────────────────────────────────────────
+   Rides the ONE popover recipe (.deployment-popover): bg-2, border-strong,
+   radius, soft-md shadow, pop-in. Distinct from status-tag so colours come
+   from the shared state tokens, never raw hex. */
+.deployment-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tree-row-gap);
+  padding: var(--sp3);
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 30;
+  min-width: 220px;
+  max-width: 320px;
+  animation: pop-in var(--transition-fast) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deployment-popover {
+    animation: none;
+  }
+}
+
+.deployment-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.deployment-popover-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-label);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Error state heading uses the shared warning token. */
+.deployment-popover-heading--error {
+  color: var(--text-warning);
+}
+
+.deployment-popover-details {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.deployment-popover-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp2);
+}
+
+.deployment-popover-label {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.deployment-popover-value {
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  margin: 0;
+}
+
+/* Build id + relative time — slightly smaller, muted. */
+.deployment-popover-meta {
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Muted hint text (draft/error state). */
+.deployment-popover-hint {
+  margin: 0;
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.deployment-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding-top: var(--sp1);
+}
+
+/* External dashboard link — flat, inline, underline on hover. */
+.deployment-popover-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.deployment-popover-link:hover {
+  text-decoration: underline;
+  color: var(--text);
+}
+
+.deployment-popover-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Primary deploy/redeploy button — inherits the shared btn-primary recipe. */
+.deployment-popover-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+}
+
 .session-actions {
   display: flex;
   align-items: center;

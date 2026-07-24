@@ -28,6 +28,7 @@ import { type ConnectivityErrorInput } from "./connectivity";
 import { subscribeEvents } from "./events";
 import { renderLocalRun } from "@shared/render-local-run";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
+import { saveLastDeploy } from "./deploy-meta";
 
 const api = createApi();
 
@@ -825,6 +826,12 @@ export function useHarnessState(): HarnessStateHook {
         });
         if (terminal.phase === "ready") {
           setToast("Deployed to Sapiom.");
+          // Persist the deploy result so the deployment popover can surface the
+          // build id and relative timestamp without a network call.
+          saveLastDeploy(workflowPath, {
+            buildRunId: terminal.buildRunId,
+            deployedAt: Date.now(),
+          });
           // Clear any prior deploy error for this workflow — it succeeded.
           setLastDeployErrorByPath((prev) => {
             if (!prev.has(workflowPath)) return prev;

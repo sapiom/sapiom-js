@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
+import { DeploymentPopover } from "./DeploymentPopover";
 import { macroDisabledReason } from "../lib/macro-gating";
 import { track } from "../lib/track";
 
@@ -41,6 +42,11 @@ interface SessionStepsBarProps {
    * "Edit input" affordance. When undefined the affordance is not rendered.
    */
   onEditInput?: () => void;
+  /**
+   * Fires a deploy action — delegated from the deployment popover's Deploy /
+   * Redeploy / Retry buttons so the popover doesn't duplicate deploy logic.
+   */
+  onDeploy: () => void;
 }
 
 /**
@@ -68,9 +74,15 @@ export function SessionStepsBar({
   authenticated,
   directActionSettleSeq,
   onEditInput,
+  onDeploy,
 }: SessionStepsBarProps): JSX.Element {
   const macroFor = (id: string): MacroDef | undefined => macros.find((m) => m.id === id);
   const deployed = workflow.definitionId != null;
+
+  // Deployment popover state
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const closePopover = useCallback(() => setPopoverOpen(false), []);
 
   // Launched-but-not-durable feedback: a clicked action shows a dotted
   // "in flight" ring until a durable signal lands. The ring clears on ANY
@@ -132,19 +144,25 @@ export function SessionStepsBar({
 
   return (
     <div className="session-steps" data-testid="session-steps" aria-label="Agent actions">
-      {/* The one durable truth, left-anchored: has this agent been deployed? */}
-      <span
-        className="status-tag session-lifecycle-chip"
+      {/* The one durable truth, left-anchored: has this agent been deployed?
+          Now a button so the user can click for deployment details. */}
+      <button
+        ref={chipRef}
+        type="button"
+        className="status-tag status-tag-action session-lifecycle-chip"
         data-testid="session-lifecycle-chip"
         data-deployed={deployed}
         data-deploy-error={lastDeployError != null && !deployed ? "" : undefined}
         data-tooltip={
           deployed
-            ? `Deployed to Sapiom (definition ${workflow.definitionId}). Run starts real cloud executions.`
+            ? `Deployed to Sapiom (definition ${workflow.definitionId}). Click for details.`
             : lastDeployError != null
-              ? "Last deploy failed. Retry Deploy to push to Sapiom."
-              : "Draft: exists locally only. Building here uses your Claude Code account; Deploy publishes to Sapiom."
+              ? "Last deploy failed. Click for details."
+              : "Draft: not yet deployed. Click for details."
         }
+        aria-haspopup="dialog"
+        aria-expanded={popoverOpen}
+        onClick={() => setPopoverOpen((prev) => !prev)}
       >
         <Icon name={deployed ? "Cloud" : "CloudOff"} size={13} />
         {/* display: contents at rest, hidden by the bar's container query
@@ -152,7 +170,16 @@ export function SessionStepsBar({
         <span className="session-lifecycle-label">
           {deployed ? "Deployed" : lastDeployError != null ? "Deploy failed" : "Draft"}
         </span>
-      </span>
+      </button>
+
+      <DeploymentPopover
+        open={popoverOpen}
+        anchorRef={chipRef}
+        onDismiss={closePopover}
+        workflow={workflow}
+        lastDeployError={lastDeployError}
+        onDeploy={onDeploy}
+      />
 
       {/* One-click preview loop, v0: the server detected a dev
           server this session's agent started - one click opens the app. */}
