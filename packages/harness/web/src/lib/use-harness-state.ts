@@ -131,9 +131,18 @@ export interface HarnessStateHook {
    * Start a real prod execution via the DIRECT route (Prod-run button) — no
    * Claude Code — then hand the returned `executionId` to the run-inspector
    * poller so the run shows up in the Steps tab exactly as a CLI-launched run
-   * does. Errors go to the toast slot.
+   * does. Non-input errors go to the toast slot.
+   *
+   * `onInputError` — called with the failure message when the API rejects
+   * because of a missing-input validation error. Used by the run-first flow
+   * to decide whether to open the input dialog reactively.
    */
-  startProdRun: (sessionId: string, definitionId: string, input?: unknown) => Promise<void>;
+  startProdRun: (
+    sessionId: string,
+    definitionId: string,
+    input?: unknown,
+    onInputError?: (message: string) => void,
+  ) => Promise<void>;
   /**
    * Runs the workflow at `sourceDir` OFFLINE against stub capabilities and
    * streams the result into the SAME run store the prod poller feeds — so the
@@ -142,8 +151,17 @@ export interface HarnessStateHook {
    * untimed). Resolves when the stream ends; a failed *run* is a normal
    * terminal state (surfaced in the run), not a rejection. Fully offline: no
    * key, no cost, works signed-out.
+   *
+   * `onInputError` — called with the failure message when the run fails because
+   * of a missing-input validation error. Used by the run-first flow to decide
+   * whether to open the input dialog reactively.
    */
-  runLocal: (sessionId: string, sourceDir: string, input?: unknown) => Promise<void>;
+  runLocal: (
+    sessionId: string,
+    sourceDir: string,
+    input?: unknown,
+    onInputError?: (message: string) => void,
+  ) => Promise<void>;
   /**
    * Submits text to a session's pty via POST /api/sessions/:id/input.
    * Throws `ApiError` on HTTP errors — callers handle 409 (session not ready)
@@ -343,7 +361,12 @@ export function useHarnessState(): HarnessStateHook {
    * failed step so the failure is still visible rather than silent.
    */
   const runLocal = useCallback(
-    async (sessionId: string, sourceDir: string, input?: unknown): Promise<void> => {
+    async (
+      sessionId: string,
+      sourceDir: string,
+      input?: unknown,
+      onInputError?: (message: string) => void,
+    ): Promise<void> => {
       localRunSeq.current += 1;
       const executionId = `local-${Date.now()}-${localRunSeq.current}`;
       // Attribution + observation facts captured now, exactly like a prod run
@@ -403,8 +426,15 @@ export function useHarnessState(): HarnessStateHook {
             error: { name: "RunLocalError", message: line.error },
             logs: [],
           });
+          // Notify the caller if this was a missing-input failure so it can open
+          // the run-input dialog reactively.
+          onInputError?.(line.error);
         } else {
-          // A per-step trace line (no `kind`).
+          // A per-step trace line (no `kind`). Check for step-level input
+          // validation failures (a step that threw because its input was invalid).
+          if (line.status === "threw" && line.error?.message) {
+            onInputError?.(line.error.message);
+          }
           traces.push(line);
         }
         publish();
@@ -834,12 +864,21 @@ export function useHarnessState(): HarnessStateHook {
   // the returned executionId into the SAME poller a CLI-launched run uses
   // (startRunPolling) so it lands in the Steps tab / run picker identically.
   const startProdRun = useCallback(
-    async (sessionId: string, definitionId: string, input?: unknown): Promise<void> => {
+    async (
+      sessionId: string,
+      definitionId: string,
+      input?: unknown,
+      onInputError?: (message: string) => void,
+    ): Promise<void> => {
       try {
         const { executionId } = await api.run({ definitionId, input });
         startRunPolling(sessionId, executionId, "prod");
       } catch (err) {
-        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
+        // Notify the caller before toasting so it can decide whether to open
+        // the run-input dialog instead of showing a bare error toast.
+        onInputError?.(msg);
+        setToast(msg);
       } finally {
         // Signal settle so the SessionStepsBar clears its pending ring for
         // the Prod Run button — the run has been handed off to the poller

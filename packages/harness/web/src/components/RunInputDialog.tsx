@@ -1,13 +1,15 @@
 /**
- * Run-input dialog — opened by Local Run and Prod Run buttons before firing
- * the run. Lets users supply the entry-step input as JSON instead of always
- * using the empty default.
+ * Run-input dialog — opened proactively via "Edit input", or reactively when
+ * a run fails because required fields were missing. Lets users supply the
+ * entry-step input as JSON.
  *
  * Prefill priority (highest to lowest):
- *   1. Last-used input for this workflow path (persisted across opens).
- *   2. A skeleton JSON object derived from the entry step's declared input
+ *   1. An explicit prefill skeleton built from detected missing fields (passed
+ *      by the run-first caller when a run failed input validation).
+ *   2. Last-used input for this workflow path (persisted across opens).
+ *   3. A skeleton JSON object derived from the entry step's declared input
  *      fields (when the canvas graph is available).
- *   3. Empty object `{}` as the safe fallback.
+ *   4. Empty object `{}` as the safe fallback.
  *
  * Design tokens: reuses .modal, .modal-backdrop, .modal-header, .modal-input,
  * .modal-actions, .modal-error, .btn-primary, .btn-ghost — no new palette
@@ -94,9 +96,53 @@ export function buildFieldHint(graph: CanvasGraph | null): string {
 
 /**
  * Compute the initial editor value for a fresh dialog open, applying the
- * prefill priority: last-used > skeleton > `{}`.
+ * prefill priority: explicit fields > last-used > skeleton > `{}`.
+ *
+ * When `prefillFields` is provided (non-empty), a skeleton is built from those
+ * field names merged over the last-used value — so known values are preserved
+ * while the missing fields are highlighted with `""` placeholders. When the
+ * array is empty but truthy (a general validation failure with no named
+ * fields), the last-used value is returned as-is so the user can correct it.
+ *
+ * When `prefillFields` is not provided (undefined), the standard priority
+ * applies: last-used > graph skeleton > `{}`.
  */
-export function computeInitialValue(workflowPath: string, graph: CanvasGraph | null): string {
+export function computeInitialValue(
+  workflowPath: string,
+  graph: CanvasGraph | null,
+  prefillFields?: string[],
+): string {
+  if (prefillFields !== undefined) {
+    // Run-first mode: a run failed with missing fields.
+    const lastUsedRaw = loadLastInput(workflowPath);
+    let base: Record<string, unknown> = {};
+    if (lastUsedRaw !== null) {
+      try {
+        const parsed = JSON.parse(lastUsedRaw);
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          base = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Corrupted stored value — start from an empty base.
+      }
+    }
+    if (prefillFields.length > 0) {
+      // Merge: missing fields get an empty placeholder; existing fields keep
+      // their stored value.
+      const merged: Record<string, unknown> = { ...base };
+      for (const field of prefillFields) {
+        if (!(field in merged) || merged[field] === "") {
+          merged[field] = "";
+        }
+      }
+      return JSON.stringify(merged, null, 2);
+    }
+    // General validation failure (no field names): return the last-used value
+    // or the graph skeleton so the user can fix it.
+    if (lastUsedRaw !== null) return lastUsedRaw;
+    return buildSkeleton(graph);
+  }
+  // Standard priority: last-used > skeleton > {}.
   const lastUsed = loadLastInput(workflowPath);
   if (lastUsed !== null) return lastUsed;
   return buildSkeleton(graph);
@@ -117,6 +163,20 @@ export interface RunInputDialogProps {
   /** The canvas graph for the bound workflow, if available. Used for skeleton
    *  derivation and the field hint line. May be null (graph not yet posted). */
   graph: CanvasGraph | null;
+  /**
+   * When present: the dialog was opened because a run failed with missing
+   * fields. The editor is prefilled with a skeleton merged over the last-used
+   * value, with these field names highlighted as empty placeholders. When the
+   * array is empty (general validation failure), the last-used value is
+   * preserved as-is. When undefined, the standard prefill priority applies
+   * (last-used > graph skeleton > {}).
+   */
+  prefillFields?: string[];
+  /**
+   * When present, overrides the field-hint line shown below the dialog title.
+   * Useful for run-first mode to name the fields the failed run detected.
+   */
+  hintOverride?: string | null;
   /** Called when the user confirms the run — receives the parsed input. */
   onRun: (input: unknown) => void;
   onClose: () => void;
@@ -126,10 +186,14 @@ export function RunInputDialog({
   workflowPath,
   kind,
   graph,
+  prefillFields,
+  hintOverride,
   onRun,
   onClose,
 }: RunInputDialogProps): JSX.Element {
-  const [value, setValue] = useState<string>(() => computeInitialValue(workflowPath, graph));
+  const [value, setValue] = useState<string>(() =>
+    computeInitialValue(workflowPath, graph, prefillFields),
+  );
   const [jsonError, setJsonError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -142,7 +206,8 @@ export function RunInputDialog({
 
   useDismissable(true, { onDismiss: onClose, containerRef: panelRef });
 
-  const fieldHint = buildFieldHint(graph);
+  // hintOverride (from run-first detection) takes priority over the graph-derived hint.
+  const fieldHint = hintOverride !== undefined ? (hintOverride ?? "") : buildFieldHint(graph);
   const title = kind === "local" ? "Local Run" : "Prod Run";
 
   const submit = (): void => {
@@ -150,7 +215,7 @@ export function RunInputDialog({
     try {
       parsed = JSON.parse(value.trim() || "{}");
     } catch {
-      setJsonError("Invalid JSON — fix the syntax and try again.");
+      setJsonError('Enter a JSON object, e.g. { "topic": "..." }');
       return;
     }
     // Persist as last-used for this workflow path before firing.

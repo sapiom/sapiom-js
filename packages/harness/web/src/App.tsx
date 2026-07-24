@@ -29,7 +29,7 @@ import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
 import { ImageComposer } from "./components/ImageComposer";
-import { RunInputDialog } from "./components/RunInputDialog";
+import { RunInputDialog, loadLastInput, saveLastInput } from "./components/RunInputDialog";
 import { SessionBar } from "./components/SessionBar";
 import { SessionStepsBar } from "./components/SessionStepsBar";
 import { SessionTabs } from "./components/SessionTabs";
@@ -51,6 +51,7 @@ import { sessionDisplayName } from "./lib/session-name";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState, type ObservedRun } from "./lib/use-harness-state";
+import { parseMissingInputFields, isInputValidationError } from "./lib/run-input-error";
 
 type RightTab = "canvas" | "steps" | "code";
 
@@ -107,15 +108,26 @@ export const App = (): JSX.Element => {
   // Per-workflow canvas graph cache: updated via onGraphChange from CanvasPane
   // so the run-input dialog can derive an entry-step skeleton.
   const [graphByWorkflow, setGraphByWorkflow] = useState<Map<string, CanvasGraph>>(new Map());
-  // Pending run-input dialog: which workflow + run kind the user clicked on.
-  // Set when Local Run or Prod Run is clicked (instead of firing immediately);
-  // cleared on dialog close or after the run fires.
+  // Pending run-input dialog: opened reactively (run failed with a missing-input
+  // error) or proactively (user clicked "Edit input"). Cleared on dialog close.
   const [pendingRunDialog, setPendingRunDialog] = useState<{
     workflowPath: string;
     kind: "local" | "prod";
     sessionId: string;
     /** For prod runs, the definitionId (stringified). */
     definitionId?: string;
+    /**
+     * When the dialog is opened because a run failed input validation: the
+     * field names extracted from the error. Passed to RunInputDialog so it can
+     * build a prefill skeleton. Undefined for a proactive "Edit input" open
+     * (uses the standard last-used > skeleton priority).
+     */
+    prefillFields?: string[];
+    /**
+     * Hint line to display in the dialog when opened reactively (e.g.
+     * "This agent needs: topic"). Overrides the graph-derived hint.
+     */
+    hintOverride?: string;
   } | null>(null);
   // User session renames (no server rename endpoint yet, so names persist
   // client-side with the rest of the UI arrangement). State
@@ -522,13 +534,38 @@ export const App = (): JSX.Element => {
           }
         } else if (direct === "prod-run") {
           if (workflow?.definitionId != null) {
-            // Open the run-input dialog instead of firing immediately.
-            // The dialog submits with the parsed input once the user clicks Run.
-            setPendingRunDialog({
-              workflowPath: workflow.path,
-              kind: "prod",
-              sessionId,
-              definitionId: String(workflow.definitionId),
+            // Run-first: resolve last-used input (or {}) and fire immediately.
+            // Only open the dialog when the run reports a missing-input error.
+            const raw = loadLastInput(workflow.path);
+            let input: unknown = {};
+            if (raw !== null) {
+              try {
+                input = JSON.parse(raw);
+              } catch {
+                input = {};
+              }
+            }
+            const definitionId = String(workflow.definitionId);
+            const capturedSessionId = sessionId;
+            const capturedWorkflowPath = workflow.path;
+            void harness.startProdRun(capturedSessionId, definitionId, input, (msg) => {
+              if (isInputValidationError(msg)) {
+                const fields = parseMissingInputFields(msg);
+                const hint =
+                  fields.length > 0
+                    ? `This agent needs: ${fields.join(", ")}`
+                    : null;
+                setPendingRunDialog({
+                  workflowPath: capturedWorkflowPath,
+                  kind: "prod",
+                  sessionId: capturedSessionId,
+                  definitionId,
+                  prefillFields: fields,
+                  hintOverride: hint ?? undefined,
+                });
+              }
+              // Non-input failures: harness.startProdRun already toasted them,
+              // so no extra action needed here.
             });
           } else {
             // The button is already disabled in SessionStepsBar when there's no
@@ -546,12 +583,41 @@ export const App = (): JSX.Element => {
           if (!workflow) {
             harness.showToast("Select a workflow first.");
           } else {
-            // Open the run-input dialog instead of firing immediately.
-            setPendingRunDialog({
-              workflowPath: workflow.path,
-              kind: "local",
-              sessionId,
-            });
+            // Run-first: resolve last-used input (or {}) and fire immediately.
+            const raw = loadLastInput(workflow.path);
+            let input: unknown = {};
+            if (raw !== null) {
+              try {
+                input = JSON.parse(raw);
+              } catch {
+                input = {};
+              }
+            }
+            const capturedSessionId = sessionId;
+            const capturedWorkflowPath = workflow.path;
+            // runLocal is fully offline and streams per-step traces; detect an
+            // input-validation failure in the stream's error / summary lines.
+            void harness.runLocal(
+              capturedSessionId,
+              capturedWorkflowPath,
+              input,
+              (failureMessage) => {
+                if (isInputValidationError(failureMessage)) {
+                  const fields = parseMissingInputFields(failureMessage);
+                  const hint =
+                    fields.length > 0
+                      ? `This agent needs: ${fields.join(", ")}`
+                      : null;
+                  setPendingRunDialog({
+                    workflowPath: capturedWorkflowPath,
+                    kind: "local",
+                    sessionId: capturedSessionId,
+                    prefillFields: fields,
+                    hintOverride: hint ?? undefined,
+                  });
+                }
+              },
+            );
           }
         }
         return;
@@ -717,6 +783,21 @@ export const App = (): JSX.Element => {
                 lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
                 authenticated={state.authenticated}
                 directActionSettleSeq={harness.directActionSettleSeq}
+                onEditInput={() => {
+                  // Proactive "Edit input" open: no prefillFields — standard
+                  // last-used > skeleton priority applies.
+                  setPendingRunDialog({
+                    workflowPath: boundWorkflow.path,
+                    // Use the run kind most relevant for the workflow's current
+                    // state: prod when deployed, local otherwise.
+                    kind: boundWorkflow.definitionId != null ? "prod" : "local",
+                    sessionId: harness.activeSessionId ?? "",
+                    definitionId:
+                      boundWorkflow.definitionId != null
+                        ? String(boundWorkflow.definitionId)
+                        : undefined,
+                  });
+                }}
               />
             )}
             <div className="terminal-slot">
@@ -954,11 +1035,57 @@ export const App = (): JSX.Element => {
           workflowPath={pendingRunDialog.workflowPath}
           kind={pendingRunDialog.kind}
           graph={graphByWorkflow.get(pendingRunDialog.workflowPath) ?? null}
+          prefillFields={pendingRunDialog.prefillFields}
+          hintOverride={pendingRunDialog.hintOverride}
           onRun={(input) => {
+            // The dialog's submit() saves last-used and closes the dialog.
+            // If the re-run ALSO fails with an input-validation error, the
+            // onInputError callback re-opens the dialog with the new error state.
             if (pendingRunDialog.kind === "local") {
-              void harness.runLocal(pendingRunDialog.sessionId, pendingRunDialog.workflowPath, input);
+              void harness.runLocal(
+                pendingRunDialog.sessionId,
+                pendingRunDialog.workflowPath,
+                input,
+                (msg) => {
+                  if (isInputValidationError(msg)) {
+                    const fields = parseMissingInputFields(msg);
+                    const hint =
+                      fields.length > 0
+                        ? `This agent needs: ${fields.join(", ")}`
+                        : null;
+                    setPendingRunDialog({
+                      workflowPath: pendingRunDialog.workflowPath,
+                      kind: "local",
+                      sessionId: pendingRunDialog.sessionId,
+                      prefillFields: fields,
+                      hintOverride: hint ?? undefined,
+                    });
+                  }
+                },
+              );
             } else if (pendingRunDialog.definitionId) {
-              void harness.startProdRun(pendingRunDialog.sessionId, pendingRunDialog.definitionId, input);
+              void harness.startProdRun(
+                pendingRunDialog.sessionId,
+                pendingRunDialog.definitionId,
+                input,
+                (msg) => {
+                  if (isInputValidationError(msg)) {
+                    const fields = parseMissingInputFields(msg);
+                    const hint =
+                      fields.length > 0
+                        ? `This agent needs: ${fields.join(", ")}`
+                        : null;
+                    setPendingRunDialog({
+                      workflowPath: pendingRunDialog.workflowPath,
+                      kind: "prod",
+                      sessionId: pendingRunDialog.sessionId,
+                      definitionId: pendingRunDialog.definitionId,
+                      prefillFields: fields,
+                      hintOverride: hint ?? undefined,
+                    });
+                  }
+                },
+              );
             }
           }}
           onClose={() => setPendingRunDialog(null)}

@@ -995,8 +995,22 @@ class MockApi implements HarnessApi {
   // so the inspector visibly lights up step-by-step. Lets the mock/demo build
   // and Playwright exercise the run-local inspector with no server, mirroring
   // the real NDJSON stream's ordering (traces first, terminal line last).
+  //
+  // Test-only failure mode: `?mockError=runLocalInput` makes the run emit an
+  // error line with a missing-input validation message so Playwright can verify
+  // the run-first input dialog opens reactively.
   async runLocal(args: RunLocalArgs, onLine: (line: RunLocalLine) => void): Promise<void> {
     this.recordDirectAction("runLocal", { sourceDir: args.sourceDir, input: args.input });
+    if (mockErrorTargets().has("runLocalInput")) {
+      await delay(140);
+      onLine({
+        kind: "error",
+        outcome: "failed",
+        error:
+          "Input for step 'research' failed validation: topic: must have required property 'topic'",
+      });
+      return;
+    }
     const traces: LocalStepTrace[] = [
       {
         step: "intake",
@@ -1080,6 +1094,16 @@ class MockApi implements HarnessApi {
   async run(req: { definitionId: string; input?: unknown }): Promise<RunResponse> {
     this.recordDirectAction("run", req);
     await delay(200);
+    // Test-only failure mode: `?mockError=prodRunInput` makes the API reject
+    // with a missing-input validation error so Playwright can verify the run-first
+    // dialog opens reactively for prod runs.
+    if (mockErrorTargets().has("prodRunInput")) {
+      throw new ApiError(
+        422,
+        "must have required property 'topic'",
+        "must have required property 'topic'",
+      );
+    }
     // A fresh, non-"local" id so the run-state fixture returns the prod
     // steps and the inspector poller has something to follow.
     return { executionId: `exec-mock-prod-${Date.now()}` };

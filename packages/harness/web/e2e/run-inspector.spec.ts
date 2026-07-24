@@ -50,15 +50,14 @@ const loadStepsTab = async (page: Page): Promise<void> => {
   await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
 };
 
-/** Trigger the "Local" action-bar button: opens the run-input dialog, then
- *  confirms with the default input (empty/prefilled {}). */
+/** Trigger the "Local" action-bar button: run-first mode fires the run directly
+ *  using the last-used input (or {}) — no dialog opens for a clean run. */
 const clickLocalButton = async (page: Page): Promise<void> => {
   const btn = page.getByTestId("session-step-local");
   await expect(btn).toBeEnabled();
   await btn.click();
-  // The run-input dialog opens; click Run to confirm with the default input.
-  await expect(page.getByTestId("run-input-dialog")).toBeVisible({ timeout: 3_000 });
-  await page.getByTestId("run-input-submit").click();
+  // Run-first: the button fires immediately with no dialog (the mock run
+  // succeeds with no input-validation error, so the dialog is never opened).
 };
 
 /** Publish a bus message via the test escape hatch (same pattern as
