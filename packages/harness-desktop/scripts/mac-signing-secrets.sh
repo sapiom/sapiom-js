@@ -19,7 +19,10 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cert_dir="$here/../.cert"
+# Overridable so the certificate material can live outside the repo, and so this
+# script's success path can be exercised against a throwaway cert without
+# touching the real .cert/ directory.
+cert_dir="${SAPIOM_CERT_DIR:-$here/../.cert}"
 key="$cert_dir/devid.key"
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -79,7 +82,15 @@ openssl pkcs12 -export -legacy \
   -name "Sapiom Developer ID Application" \
   -passout pass:"$p12_password"
 chmod 600 "$p12"
-echo "wrote       : $p12 (gitignored)"
+
+# Read the archive back BEFORE it becomes a secret. A .p12 that is unreadable or
+# carries no private key still uploads fine and then fails in CI minutes later
+# with a cryptic codesign error — and by then the useless value is already stored.
+verify_subject="$(openssl pkcs12 -in "$p12" -nokeys -legacy -passin pass:"$p12_password" 2>/dev/null | openssl x509 -noout -subject 2>/dev/null || true)"
+[ "$verify_subject" = "$subject" ] || die "the .p12 does not read back as the certificate it was built from"
+openssl pkcs12 -in "$p12" -nocerts -nodes -legacy -passin pass:"$p12_password" >/dev/null 2>&1 ||
+  die "the .p12 contains no private key"
+echo "wrote       : $p12 (gitignored, verified readable with a private key)"
 
 command -v gh >/dev/null || die "gh CLI not found — cannot set secrets"
 
@@ -101,8 +112,13 @@ if [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
 fi
 
 echo
-echo "Remaining, if not listed above:"
-echo "  gh secret set APPLE_ID                       # the Apple ID email on the developer account"
-echo "  gh secret set APPLE_APP_SPECIFIC_PASSWORD    # appleid.apple.com → Sign-In and Security"
-echo
+if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
+  echo "Still needed for NOTARIZATION (signing alone works without them, but the"
+  echo "first launch still shows a Gatekeeper prompt):"
+  [ -n "${APPLE_ID:-}" ] || echo "  gh secret set APPLE_ID                     # Apple ID email on the developer account"
+  [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || echo "  gh secret set APPLE_APP_SPECIFIC_PASSWORD  # appleid.apple.com → Sign-In and Security"
+  echo
+else
+  echo "All signing + notarization secrets are set."
+fi
 echo "Then tag to ship:  git tag harness-desktop-v0.1.0 && git push origin harness-desktop-v0.1.0"
