@@ -1,0 +1,153 @@
+/*
+ * Onboarding/setup window — layout AND its one button.
+ *
+ * Tokens come from the design system, resolved through the SAME seam the SPA
+ * uses: `scripts/copy-renderer.mjs` probes for the private
+ * `@sapiom/design-system` package and falls back to the harness's committed
+ * `web/src/styles/ds-neutral` token set, then copies the resolved files in as
+ * `ds-tokens.css` + `ds-agent-cloud.css`. So this window and the SPA read the
+ * same token VALUES from the same source, and a public clone still renders
+ * legibly. See `packages/harness/web/vite.config.ts` for the seam's rationale.
+ *
+ * The one rule this file inherits: **never redefine a design-system token.**
+ * Everything below reads tokens via `var()` and declares no `--custom-property`
+ * of its own. This window cannot load the SPA's `styles.css` (that file is the
+ * 2000-line app stylesheet, and it carries the app's own bridge from the
+ * upstream `--bg-0/--text/--accent` var names onto these tokens), so it
+ * addresses the system tokens directly: --bg/--s1/--ink/--ink-muted/--line for
+ * surfaces and ink, --brand/--brand-hover/--brand-ink for the accent, --red for
+ * the error state.
+ *
+ * NOTE on `--brand` vs `--accent`: the design system's shadcn alias block
+ * defines `--accent` as a hover WASH, not the product accent — the SPA remaps it
+ * in its bridge. A window without that bridge must say `--brand` for the accent
+ * or the wordmark renders as a near-invisible translucent fill.
+ *
+ * The button lives here rather than in a shared primitives layer: it is the only
+ * control in the only window this package renders, so a shared file would be one
+ * consumer wide. It mirrors the SPA's `.btn-primary` (solid accent fill, no
+ * border, 3px focus ring).
+ */
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  font: var(--type-ui) / 1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  padding: var(--sp5);
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  padding: 36px var(--sp6);
+  text-align: center;
+  background: var(--s1);
+  border: 1px solid var(--line);
+  /* Literal, not a token override: the app pins ONE 0.5rem radius for every
+     surface (its documented deviation from the system's r-sm/r/r-lg/r-xl
+     scale — see styles.css). Matching that literally keeps the first screen a
+     user sees consistent with the app, without redeclaring `--radius` here. */
+  border-radius: 0.5rem;
+  box-shadow: var(--shadow);
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--brand);
+  font-size: var(--type-meta);
+}
+
+h1 {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 14px 0 6px;
+  color: var(--ink);
+}
+h1[data-status="error"] {
+  color: var(--red);
+}
+
+.detail {
+  color: var(--ink-muted);
+  min-height: 1.45em;
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: var(--type-ui);
+}
+
+.consent {
+  margin-top: 26px;
+  text-align: left;
+}
+.consent-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--ink-muted);
+  font-size: var(--type-ui);
+}
+.consent-row input[type="checkbox"] {
+  margin-top: 1px;
+  accent-color: var(--brand);
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.error {
+  margin-top: 22px;
+  text-align: left;
+}
+.error-message {
+  color: var(--red);
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: var(--type-label);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Mirrors the SPA's .btn-primary: solid accent fill, no visible border. */
+.btn-primary {
+  background: var(--brand);
+  border: 1px solid transparent;
+  color: var(--brand-ink);
+  font-weight: 500;
+  border-radius: 0.5rem;
+  transition: background-color var(--fast) var(--ease);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--brand-hover);
+}
+.btn-primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Centers the CTA and matches the SPA welcome panel's CTA sizing. */
+.consent .btn-primary,
+.error .btn-primary {
+  display: block;
+  width: fit-content;
+  margin: 18px auto 0;
+  padding: var(--sp2) 14px;
+  font-size: 12.5px;
+}

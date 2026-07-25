@@ -98,7 +98,7 @@
     "build": "npm run gen:version && npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:esm": "tsc --project tsconfig.esm.json",
-    "build:esm-pkg": "echo '{\"type\": \"module\"}' > dist/esm/package.json",
+    "build:esm-pkg": "node -e \"require('fs').writeFileSync('dist/esm/package.json',JSON.stringify({type:'module'}))\"",
     "clean": "rm -rf dist *.tsbuildinfo",
     "dev": "npm run gen:version && tsc --watch --project tsconfig.cjs.json",
     "gen:version": "node scripts/generate-version.mjs",

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    />
+    <title>Sapiom</title>
+    <script>
+      // Set the theme before first paint (mirrors the SPA's inline script in
+      // web/index.html). The design-system tokens key dark on
+      // [data-theme="dark"], so this window must set the attribute too. This
+      // origin has its own storage, so a fresh window follows the system —
+      // matching the SPA's default for a first-time user.
+      (function () {
+        var stored = null;
+        try {
+          stored = localStorage.getItem("sapiom-harness-theme");
+        } catch (_) {}
+        var theme =
+          stored === "light" || stored === "dark"
+            ? stored
+            : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <!-- Design-system token layer, resolved at build time through the same seam
+         the SPA uses (private @sapiom/design-system if installed, else the
+         harness's committed ds-neutral set) and copied in by
+         scripts/copy-renderer.mjs. Order matters: tokens → accent/brand layer →
+         this window's own layout. -->
+    <link rel="stylesheet" href="./ds-tokens.css" />
+    <link rel="stylesheet" href="./ds-agent-cloud.css" />
+    <link rel="stylesheet" href="./setup.css" />
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">Sapiom</div>
+      <h1 id="status" data-status="active">Starting Sapiom…</h1>
+      <p id="detail" class="detail"></p>
+
+      <section id="consent" class="consent" hidden>
+        <label class="consent-row">
+          <input type="checkbox" id="telemetry" checked />
+          <span>Share anonymous usage data to help improve Sapiom (optional).</span>
+        </label>
+        <button id="consent-continue" class="btn-primary">Continue</button>
+      </section>
+
+      <section id="error" class="error" hidden>
+        <pre id="error-message" class="error-message"></pre>
+        <button id="retry" class="btn-primary" hidden>Retry</button>
+      </section>
+    </main>
+    <script type="module" src="./setup.js"></script>
+  </body>
+</html>

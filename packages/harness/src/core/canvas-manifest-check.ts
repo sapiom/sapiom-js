@@ -38,7 +38,12 @@ const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 // This module lives at either src/core/ (tsx dev, vitest) or dist/core/
 // (built) — both two directories below the package root.
 function packageRoot(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  // When embedded in Electron, an asarUnpack'd module still reports its
+  // app.asar (virtual) path via import.meta.url. Using that as a child
+  // process `cwd` fails with `spawn ENOTDIR` (app.asar is a file). Point at the
+  // unpacked twin — the desktop app must asarUnpack this package.
+  return root.replace(/([\\/])app\.asar([\\/])/, "$1app.asar.unpacked$2");
 }
 
 const RUNNER_SOURCE = `
@@ -84,7 +89,15 @@ export function runManifestCheck(sourceDir: string): Promise<ManifestCheckResult
       ["--input-type=module", "-e", RUNNER_SOURCE],
       {
         cwd: packageRoot(),
-        env: { ...process.env, SAPIOM_CANVAS_CHECK_SOURCE_DIR: sourceDir },
+        env: {
+          ...process.env,
+          SAPIOM_CANVAS_CHECK_SOURCE_DIR: sourceDir,
+          // When embedded in Electron, `process.execPath` is the Electron
+          // binary, which would try to launch `-e <src>` as an app. This flag
+          // makes it behave as plain Node. No-op under the CLI (real node), and
+          // only set when actually running inside Electron.
+          ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        },
         timeout: CHECK_TIMEOUT_MS,
         maxBuffer: MAX_BUFFER_BYTES,
       },

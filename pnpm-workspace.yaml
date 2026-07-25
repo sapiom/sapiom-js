@@ -3,5 +3,20 @@ packages:
 
 # node-pty needs its postinstall (chmods spawn-helper +x); pnpm skips build
 # scripts by default, which leaves it silently non-functional on fresh installs.
+# electron/esbuild need their postinstall too (electron downloads its binary;
+# without this the desktop app's `electron` runtime is missing). @electron/rebuild
+# recompiles node-pty against Electron's ABI during packaging.
 onlyBuiltDependencies:
   - node-pty
+  - electron
+  - esbuild
+  - '@electron/rebuild'
+
+# Upgrade the @electron/rebuild that electron-builder bundles (app-builder-lib
+# pins 3.6.1, which drags node-gyp@9.4.1 — its VS detection can't parse recent
+# VS2022 on the windows-latest runner, so the node-pty rebuild fails). 3.7.x
+# ships a modern, COMPATIBLE node-gyp@10 (detects VS2022) — overriding rebuild
+# itself, rather than forcing node-gyp@10 under the old 3.6.1, avoids the
+# cross-platform rebuild HANG that the bare node-gyp override caused.
+overrides:
+  '@electron/rebuild': ^3.7.0

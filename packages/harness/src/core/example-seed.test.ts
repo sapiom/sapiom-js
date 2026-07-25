@@ -23,7 +23,10 @@ describe("seedExampleProject", () => {
     await fs.rm(targetRoot, { recursive: true, force: true });
   });
 
-  const seed = (force?: boolean) => seedExampleProject({ targetRoot, force, versions: VERSIONS });
+  // installDependencies:false keeps the suite offline/fast — the pinned
+  // VERSIONS don't exist on npm, and the Canvas-bundle behaviour isn't under test here.
+  const seed = (force?: boolean) =>
+    seedExampleProject({ targetRoot, force, versions: VERSIONS, installDependencies: false });
 
   it("seeds a scaffolded project plus the canvas pair into an empty root", async () => {
     const result = await seed();

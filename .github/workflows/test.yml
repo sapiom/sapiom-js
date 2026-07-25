@@ -111,6 +111,13 @@ jobs:
       - name: Run Playwright mock-mode suite
         run: pnpm --filter @sapiom/harness test:ui
 
+      # The canvas suite renders the generated diagram documents in the same
+      # chromium this job already installed. It was previously opt-in only, so
+      # nothing verified in CI that a canvas the renderer produces actually
+      # paints — a rendering regression could only be caught by hand.
+      - name: Run Playwright canvas suite
+        run: pnpm --filter @sapiom/harness test:canvas
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -118,3 +125,47 @@ jobs:
           name: playwright-report
           path: packages/harness/web/e2e/playwright-report/
           retention-days: 7
+
+  # Desktop app: does the PACKAGED bundle still launch?
+  #
+  # Split from desktop-release.yml on purpose. That workflow BUILDS installers
+  # for three OSes and only runs on a `harness-desktop-v*` tag (plus a temporary
+  # feature-branch trigger) — releases, not feedback. But the bugs it catches are
+  # packaging bugs: asar path resolution, a native module against the wrong ABI, a
+  # dependency that wasn't unpacked, a mangled package.json. Waiting for a tag to
+  # discover those is too late, and unit/e2e tests structurally cannot see them.
+  #
+  # So the same `--smoke` checks run here, on every PR, Linux-only: Linux packages
+  # in ~2 minutes (node-pty ships a prebuilt binary, so nothing compiles) and the
+  # asar/serving/preload/PTY layers are platform-independent. macOS and Windows
+  # keep their per-OS runs in the release workflow, where the platform-specific
+  # toolchains matter.
+  desktop-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          # NOT the dev box's Node 26, which breaks Electron's binary extraction.
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build harness + desktop (topological)
+        run: pnpm --filter "@sapiom/harness-desktop..." build
+
+      - name: Package the Linux app
+        run: node packages/harness-desktop/scripts/pack.mjs --linux
+
+      - name: Install xvfb (Electron needs a display)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+
+      - name: Smoke-launch the packaged app
+        run: packages/harness-desktop/scripts/smoke.sh

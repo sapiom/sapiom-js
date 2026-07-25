@@ -39,7 +39,7 @@
     "build": "pnpm run build:cjs && pnpm run build:esm && pnpm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:esm": "tsc --project tsconfig.esm.json",
-    "build:esm-pkg": "echo '{\"type\": \"module\"}' > dist/esm/package.json",
+    "build:esm-pkg": "node -e \"require('fs').writeFileSync('dist/esm/package.json',JSON.stringify({type:'module'}))\"",
     "clean": "rm -rf dist *.tsbuildinfo",
     "dev": "tsc --watch --project tsconfig.cjs.json",
     "test": "jest",
