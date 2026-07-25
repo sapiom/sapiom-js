@@ -24,6 +24,15 @@ on:
       - "harness-desktop-v*"
   workflow_dispatch:
 
+# Minimal token scope, declared at the top so it is the DEFAULT every job
+# inherits — including any job added later. `build` only reads the checked-out
+# code (upload-artifact authenticates with ACTIONS_RUNTIME_TOKEN, not
+# GITHUB_TOKEN, so it needs no `actions:` scope); the `release` job overrides
+# this with `contents: write` at its own level, which is the only place a
+# write-scoped token exists in this workflow.
+permissions:
+  contents: read
+
 # Don't cancel an in-progress release build for the same ref: half-published
 # release assets are worse than a slightly stale queue.
 concurrency:
