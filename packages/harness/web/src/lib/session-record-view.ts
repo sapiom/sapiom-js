@@ -57,14 +57,25 @@ function formatTokens(count: number): string {
 }
 
 /**
- * "14:32" — the clock time of an event, for the per-turn timestamp. Returns
- * null (rather than "Invalid Date") when the timestamp is missing or unparsable.
+ * The per-turn timestamp: "14:32" for today, "1 Jul, 14:32" for any other day.
+ *
+ * The date isn't decoration — a past session can span days, and bare clock times
+ * then repeat with no boundary between them, which reads as one long afternoon.
+ * Returns null (rather than "Invalid Date") when the timestamp is missing or
+ * unparsable. `now` is injectable for tests only.
  */
-export function formatClockTime(iso: string | null): string | null {
+export function formatClockTime(iso: string | null, now: number = Date.now()): string | null {
   if (!iso) return null;
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const time = parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const today = new Date(now);
+  const sameDay =
+    parsed.getFullYear() === today.getFullYear() &&
+    parsed.getMonth() === today.getMonth() &&
+    parsed.getDate() === today.getDate();
+  if (sameDay) return time;
+  return `${parsed.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
 }
 
 /** Compact one-line label for a tool call's collapsed summary row. */

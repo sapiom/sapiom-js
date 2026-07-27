@@ -339,10 +339,13 @@ describe("createSessionRecordReader", () => {
     expect(record?.mergedSessionIds).toEqual(["sess-a", "sess-b"]);
     expect(record?.harnessSessionId).toBe("sess-a");
     expect(record?.turns.map((t) => t.prompt)).toEqual(["first", "second"]);
-    // turnCounts agrees with the merged record for the agent-session key.
+    // Every key reports the whole conversation, so a history row can't
+    // contradict the record it links to whichever id it was keyed by.
     const counts = await reader.turnCounts();
     expect(counts.get("agent-1")).toBe(2);
-    expect(counts.get("sess-a")).toBe(1);
+    expect(counts.get("sess-a")).toBe(2);
+    expect(counts.get("sess-b")).toBe(2);
+    expect(record?.turnCount).toBe(2);
   });
 
   it("returns null for an unknown session and for a missing events file", async () => {
@@ -444,6 +447,92 @@ describe("createSessionRecordReader", () => {
     });
     // The enrichment closed the gap, so the record stops claiming it.
     expect(record?.limitations).not.toContain("missing-assistant-text");
+  });
+
+  it("recomputes limitations after enrichment — filling a turn can OPEN a gap", async () => {
+    // The turn has tool calls and no assistant text: our events report
+    // `missing-assistant-text` and (correctly) not the narration gap. Enrichment
+    // supplies the turn's FINAL message, which closes the first gap and opens
+    // the second — whatever the agent said between those tool calls is still
+    // missing. Patching the one code instead of recomputing under-reported it.
+    const cwd = "/repo/reopens-gap";
+    const homeDir = path.join(tmpDir, "home");
+    const projectDir = path.join(homeDir, ".claude", "projects", cwd.replace(/:/g, "").replace(/[/.]/g, "-"));
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, "agent-gap.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", model: "claude-opus-4-6", content: "the final word" },
+      })}\n`,
+      "utf8",
+    );
+
+    await writeEvents([
+      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd } }),
+      prompt("2026-07-01T10:00:01.000Z", "go", { agentSessionId: "agent-gap" }),
+      tool("2026-07-01T10:00:02.000Z", "Read", { agentSessionId: "agent-gap" }),
+      event({
+        type: "turn.completed",
+        ts: "2026-07-01T10:00:03.000Z",
+        agentSessionId: "agent-gap",
+        payload: { assistantText: null },
+      }),
+    ]);
+
+    const reader = createSessionRecordReader(createEventStore(filePath), {
+      enrichFinalTurn: createClaudeTranscriptEnricher({ homeDir }),
+    });
+
+    const record = await reader.read("sess-a");
+    expect(record?.turns[0].assistantText).toBe("the final word");
+    expect(record?.limitations).not.toContain("missing-assistant-text");
+    expect(record?.limitations).toContain("assistant-narration-gap");
+  });
+
+  it("finds the vendor transcript for a symlinked cwd (Claude stores the realpath)", async () => {
+    // os.tmpdir() on macOS is itself a symlink (/var → /private/var), which is
+    // exactly the case that silently no-ops when a caller skips the realpath.
+    const cwd = path.join(tmpDir, "project");
+    await fs.mkdir(cwd, { recursive: true });
+    // The transcript is placed ONLY at the resolved encoding, so an enricher
+    // that built the path from the raw cwd finds nothing and returns null.
+    const resolvedCwd = await fs.realpath(cwd);
+    const homeDir = path.join(tmpDir, "home");
+    const projectDir = path.join(
+      homeDir,
+      ".claude",
+      "projects",
+      resolvedCwd.replace(/:/g, "").replace(/[/.]/g, "-"),
+    );
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, "agent-symlinked.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", model: "claude-opus-4-6", content: "found via realpath" },
+      })}\n`,
+      "utf8",
+    );
+
+    await writeEvents([
+      // The event carries the UNRESOLVED cwd, as the hook payload does.
+      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd } }),
+      prompt("2026-07-01T10:00:01.000Z", "go", { agentSessionId: "agent-symlinked" }),
+      event({
+        type: "turn.completed",
+        ts: "2026-07-01T10:00:02.000Z",
+        agentSessionId: "agent-symlinked",
+        payload: { assistantText: null },
+      }),
+    ]);
+
+    const record = await createSessionRecordReader(createEventStore(filePath), {
+      enrichFinalTurn: createClaudeTranscriptEnricher({ homeDir }),
+    }).read("sess-a");
+
+    expect(record?.cwd).toBe(cwd);
+    expect(record?.turns[0].assistantText).toBe("found via realpath");
   });
 
   it("never lets enrichment overwrite what our own events recorded", async () => {

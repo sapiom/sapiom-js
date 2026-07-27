@@ -356,10 +356,28 @@ describe("createEventStore", () => {
       await store.append({ ...sampleEvent, eventId: "evt-1", type: "prompt.submitted" });
 
       const [a, b, c] = await Promise.all([store.index(), store.index(), store.index()]);
-      // Same maps, and each session counted exactly once (a double scan would
-      // have doubled turnCount).
-      expect(a.bySession).toBe(b.bySession);
-      expect(c.bySession.get("session-1")?.turnCount).toBe(1);
+      // Each session counted exactly once — a second concurrent scan of the
+      // same bytes would have doubled turnCount.
+      for (const index of [a, b, c]) {
+        expect(index.bySession.get("session-1")?.turnCount).toBe(1);
+        expect(index.bySession.get("session-1")?.eventCount).toBe(1);
+      }
+    });
+
+    it("hands out a snapshot, so a later reconcile can't mutate a held result", async () => {
+      const filePath = path.join(tmpDir, "events.ndjson");
+      const store = createEventStore(filePath);
+      await store.append({ ...sampleEvent, eventId: "evt-1", type: "prompt.submitted" });
+
+      const held = await store.index();
+      const entry = held.bySession.get("session-1");
+      expect(entry?.turnCount).toBe(1);
+
+      await store.append({ ...sampleEvent, eventId: "evt-2", type: "prompt.submitted" });
+      // The fresh index sees two; the one the caller is holding still reads the
+      // state it was handed (entries are mutated in place internally).
+      expect((await store.index()).bySession.get("session-1")?.turnCount).toBe(2);
+      expect(entry?.turnCount).toBe(1);
     });
   });
 });

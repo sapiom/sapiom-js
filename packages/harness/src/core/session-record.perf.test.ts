@@ -38,6 +38,17 @@ const COLD_BUDGET_MS = 15_000;
 /** Padding that makes each event a realistic size (a real tool.call is ~1-16 KB). */
 const FILLER = "x".repeat(400);
 
+/**
+ * The worst realistic case for MEMORY rather than latency: one session owning
+ * the whole log, at the density observed in real event files (~4.3 KB/event,
+ * from a 16 MB / 3737-event sample) rather than this file's sparser default.
+ * That's ~11.6k events resident at once — the ceiling documented on
+ * createSessionRecordReader, measured here so a regression that starts holding
+ * the raw file (or a second copy of the events) is caught rather than argued.
+ */
+const DENSE_FILLER = "x".repeat(4200);
+const HEAP_BUDGET_BYTES = 600 * 1024 * 1024;
+
 function line(index: number, session: string, type: AnalyticsEventType): string {
   const event: AnalyticsEvent = {
     eventId: `evt-${index}`,
@@ -163,6 +174,95 @@ describe("session record perf (50 MB events.ndjson)", () => {
     // magnitude so this stays a regression tripwire, not a fixture-count echo.
     expect(spanBytes).toBeLessThan(fileBytes / 10);
     expect(spanBytes).toBeGreaterThan(0);
+  }, 300_000);
+
+  it("holds one dense single-session record within its documented heap ceiling", async () => {
+    // A DIFFERENT fixture on purpose: the latency file above is sparse
+    // (~26 KB/event), which understates how many events a real 50 MB log holds.
+    // Here one session owns the file at the observed real density, so the
+    // buffered-record ceiling is measured rather than estimated.
+    const densePath = path.join(tmpDir, "dense.ndjson");
+    const handle = await fs.open(densePath, "w");
+    let denseEvents = 0;
+    try {
+      let written = 0;
+      let batch: string[] = [];
+      let batchBytes = 0;
+      while (written < TARGET_BYTES) {
+        const type = CYCLE[denseEvents % CYCLE.length];
+        const event: AnalyticsEvent = {
+          eventId: `dense-${denseEvents}`,
+          seq: denseEvents + 1,
+          ts: new Date(Date.UTC(2026, 0, 1) + denseEvents * 1000).toISOString(),
+          userId: null,
+          tenantId: null,
+          machineId: "machine-perf",
+          harnessSessionId: "sess-dense",
+          agentSessionId: "agent-dense",
+          harness: "claude-code",
+          type,
+          payload:
+            type === "tool.call"
+              ? { toolName: "Read", toolInput: `{"file":"/repo/f${denseEvents}.ts"}`, toolResponseSummary: DENSE_FILLER }
+              : type === "prompt.submitted"
+                ? { prompt: `do the thing #${denseEvents} ${DENSE_FILLER}` }
+                : { assistantText: `did it #${denseEvents} ${DENSE_FILLER}`, model: "claude-opus-4-6", usage: { inputTokens: denseEvents, outputTokens: 10 } },
+        };
+        const text = `${JSON.stringify(event)}\n`;
+        batch.push(text);
+        batchBytes += Buffer.byteLength(text, "utf8");
+        denseEvents += 1;
+        if (batchBytes >= 4 * 1024 * 1024) {
+          await handle.write(batch.join(""));
+          written += batchBytes;
+          batch = [];
+          batchBytes = 0;
+        }
+      }
+      if (batch.length > 0) {
+        await handle.write(batch.join(""));
+        written += batchBytes;
+      }
+    } finally {
+      await handle.close();
+    }
+
+    const store = createEventStore(densePath);
+    const reader = createSessionRecordReader(store);
+    const before = process.memoryUsage().heapUsed;
+    const start = performance.now();
+    const record = await reader.read("sess-dense");
+    const elapsed = performance.now() - start;
+    // Sampled while the record is still referenced, so retained memory counts.
+    // Informational only: without --expose-gc a collection during the read can
+    // move this either way. The assertions below are the deterministic part.
+    const heapDelta = process.memoryUsage().heapUsed - before;
+    expect(record?.eventCount).toBe(denseEvents);
+
+    // Deterministic, GC-independent: how much CONTENT the returned record
+    // holds, against the bytes the session occupies on disk. A read that
+    // duplicated the event data (or buffered the raw file alongside it) would
+    // land at a multiple of this.
+    const contentBytes = JSON.stringify(record).length;
+    const spanBytes = (await store.index()).bySession
+      .get("sess-dense")!
+      .spans.reduce((total, span) => total + (span.end - span.start), 0);
+    const fileBytes = (await fs.stat(densePath)).size;
+
+    console.info(
+      `[perf] dense 50MB single session · ${denseEvents} events · record content ${(contentBytes / 1024 / 1024).toFixed(0)}MB vs ${(spanBytes / 1024 / 1024).toFixed(0)}MB on disk · heap delta ${(heapDelta / 1024 / 1024).toFixed(0)}MB · ${elapsed.toFixed(0)}ms (index build included)`,
+    );
+
+    // One copy of the session's own events, not two: `sortEventsForFold` copies
+    // the array of REFERENCES, and the turns reference the same payload strings
+    // the events do — so the record's content tracks the session's bytes rather
+    // than doubling them.
+    expect(contentBytes).toBeLessThan(spanBytes * 1.5);
+    expect(spanBytes).toBeGreaterThan(fileBytes * 0.9); // this fixture is one session
+    // Generous ceiling on the noisy measure — it exists to catch a regression
+    // that starts holding the raw file, not to police allocator noise.
+    expect(heapDelta).toBeLessThan(HEAP_BUDGET_BYTES);
+    await fs.rm(densePath, { force: true });
   }, 300_000);
 
   it("counts turns for every session without reading the file again", async () => {

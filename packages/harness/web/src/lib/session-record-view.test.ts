@@ -52,8 +52,18 @@ describe("formatClockTime", () => {
     expect(formatClockTime("not a date")).toBeNull();
   });
 
-  it("formats a real timestamp", () => {
-    expect(formatClockTime("2026-07-01T10:00:00.000Z")).toMatch(/\d{1,2}:\d{2}/);
+  it("shows the bare clock time for a turn from today", () => {
+    const iso = "2026-07-01T10:00:00.000Z";
+    const formatted = formatClockTime(iso, new Date(iso).getTime());
+    expect(formatted).toMatch(/^\d{1,2}:\d{2}/);
+    expect(formatted).not.toMatch(/Jul/);
+  });
+
+  it("adds the date for a turn from another day, so a multi-day session has boundaries", () => {
+    // Same clock time, three days earlier — indistinguishable without a date.
+    const formatted = formatClockTime("2026-07-01T10:00:00.000Z", Date.parse("2026-07-04T10:00:00.000Z"));
+    expect(formatted).toMatch(/Jul/);
+    expect(formatted).toMatch(/\d{1,2}:\d{2}/);
   });
 });
 

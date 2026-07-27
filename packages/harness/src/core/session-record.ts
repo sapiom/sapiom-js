@@ -44,7 +44,7 @@ import type {
   SessionRecordToolCall,
   SessionRecordTurn,
 } from "../shared/types.js";
-import { encodeProjectPath } from "./adapters/claude-code.js";
+import { projectDirsFor } from "./adapters/claude-code.js";
 import { readLastAssistantTurn } from "./collector/transcript.js";
 import type { EventIndex, EventReader } from "./collector/store.js";
 
@@ -202,20 +202,6 @@ export function foldSessionRecord(
 
   close(null);
 
-  const limitations: SessionRecordLimitation[] = [];
-  if (turns.some((turn) => turn.toolCalls.some((call) => call.responseTruncated))) {
-    limitations.push("truncated-tool-output");
-  }
-  if (turns.some((turn) => turn.toolCalls.length > 0 && turn.assistantText !== null)) {
-    limitations.push("assistant-narration-gap");
-  }
-  if (turns.some((turn) => turn.completedAt !== null && turn.assistantText === null)) {
-    limitations.push("missing-assistant-text");
-  }
-  if (turns.length > 0 && turns[turns.length - 1].incomplete) {
-    limitations.push("incomplete-final-turn");
-  }
-
   const merged = options.mergedSessionIds ? [...options.mergedSessionIds] : seenSessionIds;
   return {
     harnessSessionId: options.harnessSessionId ?? merged[0] ?? "",
@@ -229,8 +215,36 @@ export function foldSessionRecord(
     turnCount: turns.filter((turn) => turn.prompt !== null).length,
     eventCount: ordered.length,
     reconstructed: true,
-    limitations,
+    limitations: computeLimitations(turns),
   };
+}
+
+/**
+ * Derive the record's honest gaps from the turns themselves.
+ *
+ * A pure function of the turn list, and called again by the reader after any
+ * enrichment — deliberately, because gaps can APPEAR as well as disappear when
+ * a turn is filled in. Giving a turn that has tool calls its assistant text
+ * back closes `missing-assistant-text` and simultaneously opens
+ * `assistant-narration-gap` (only the turn's *final* message was ever
+ * recorded). Patching individual codes after the fact got that wrong and
+ * under-reported a real gap.
+ */
+function computeLimitations(turns: readonly SessionRecordTurn[]): SessionRecordLimitation[] {
+  const limitations: SessionRecordLimitation[] = [];
+  if (turns.some((turn) => turn.toolCalls.some((call) => call.responseTruncated))) {
+    limitations.push("truncated-tool-output");
+  }
+  if (turns.some((turn) => turn.toolCalls.length > 0 && turn.assistantText !== null)) {
+    limitations.push("assistant-narration-gap");
+  }
+  if (turns.some((turn) => turn.completedAt !== null && turn.assistantText === null)) {
+    limitations.push("missing-assistant-text");
+  }
+  if (turns.length > 0 && turns[turns.length - 1].incomplete) {
+    limitations.push("incomplete-final-turn");
+  }
+  return limitations;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +315,21 @@ function resolveSessionIds(index: EventIndex, id: string): string[] {
  * Reader over the local event store. `read` touches only the byte spans the
  * index attributes to the session, so opening a record never rescans the (up
  * to 50 MB) ndjson.
+ *
+ * MEMORY CEILING — stated, because a global `(ts, seq)` order can't be produced
+ * from a stream: `read` holds the whole session's events at once. That is ONE
+ * copy, not two — `sortEventsForFold` copies the array of references, and the
+ * turns reference the same payload strings the events do. Measured against a
+ * 50 MB log owned by a single session at real event density (~4.3 KB/event):
+ * 12k events, ~50 MB of record content against ~52 MB on disk (see
+ * session-record.perf.test.ts, which asserts that ratio so a regression that
+ * duplicates the data or buffers the raw file gets caught).
+ *
+ * So the ceiling is "one session's share of a file capped at 50 MB", which for
+ * the pathological single-session case is ~50 MB of transient heap in a local
+ * server. That is deliberate and bounded rather than unbounded; if a future
+ * caller needs a tighter bound (H3's rehydration reading only recent context,
+ * say), the fix is a `limit`/most-recent-N on the wire, not a change of order.
  */
 export function createSessionRecordReader(
   store: EventReader,
@@ -340,31 +369,34 @@ export function createSessionRecordReader(
         usage: final.usage ?? enrichment.usage,
       };
       const turns = [...record.turns.slice(0, -1), enriched];
-      return {
-        ...record,
-        turns,
-        // The enrichment may have filled the very gap we flagged.
-        limitations: turns.some((turn) => turn.completedAt !== null && turn.assistantText === null)
-          ? record.limitations
-          : record.limitations.filter((limitation) => limitation !== "missing-assistant-text"),
-      };
+      // Recomputed, not patched: filling a turn can open a gap as well as close
+      // one — see computeLimitations.
+      return { ...record, turns, limitations: computeLimitations(turns) };
     },
 
     async turnCounts(): Promise<Map<string, number>> {
       const index = await store.index();
       const counts = new Map<string, number>();
-      for (const entry of index.bySession.values()) {
-        counts.set(entry.harnessSessionId, entry.turnCount);
-      }
-      // Agent-session keys sum every harness session that reported them, so a
-      // conversation resumed under a new harness session still counts once,
-      // whole — matching what `read` folds for the same id.
-      for (const [agentSessionId, harnessSessionIds] of index.byAgentSession) {
+
+      // Every key — harness-session and agent-session alike — counts the whole
+      // CONVERSATION that `read(id)` would fold for it, not the one segment the
+      // index happens to file it under. A conversation resumed under a second
+      // harness session must not report two different turn counts depending on
+      // which id a history row was keyed by; a row's count has to match the
+      // record it links to.
+      const totalFor = (id: string): number => {
         let total = 0;
-        for (const harnessSessionId of harnessSessionIds) {
-          total += index.bySession.get(harnessSessionId)?.turnCount ?? 0;
+        for (const sessionId of resolveSessionIds(index, id)) {
+          total += index.bySession.get(sessionId)?.turnCount ?? 0;
         }
-        counts.set(agentSessionId, total);
+        return total;
+      };
+
+      for (const harnessSessionId of index.bySession.keys()) {
+        counts.set(harnessSessionId, totalFor(harnessSessionId));
+      }
+      for (const agentSessionId of index.byAgentSession.keys()) {
+        counts.set(agentSessionId, totalFor(agentSessionId));
       }
       return counts;
     },
@@ -389,13 +421,16 @@ export function createClaudeTranscriptEnricher(
   return async (record: SessionRecord) => {
     if (record.harness !== "claude-code") return null;
     if (!record.cwd || !record.agentSessionId) return null;
-    const transcriptPath = path.join(
-      homeDir,
-      ".claude",
-      "projects",
-      encodeProjectPath(record.cwd),
-      `${record.agentSessionId}.jsonl`,
-    );
-    return readLastAssistantTurn(transcriptPath);
+    // projectDirsFor (shared with the adapter's canResume / listPastSessions)
+    // handles the trap here: Claude Code stores transcripts under the REALPATH
+    // of the project, so a session opened in /tmp/proj lives under
+    // `-private-tmp-proj` and a hand-built path silently finds nothing. It
+    // returns the resolved candidate first and the raw one as a fallback, so
+    // this tries both rather than betting on either.
+    for (const projectDir of await projectDirsFor(homeDir, record.cwd)) {
+      const turn = await readLastAssistantTurn(path.join(projectDir, `${record.agentSessionId}.jsonl`));
+      if (turn) return turn;
+    }
+    return null;
   };
 }

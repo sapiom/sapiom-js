@@ -461,7 +461,19 @@ export function createEventStore(filePath: string = HARNESS_PATHS.events): Event
 
     async index(): Promise<EventIndex> {
       const current = await withIndex();
-      return { bySession: current.bySession, byAgentSession: current.byAgentSession };
+      // A snapshot, not the live maps. reconcile() mutates entries IN PLACE as
+      // the file grows, so handing out the internals would let a caller's
+      // `turnCount` or `lastTs` change under it between two reads of the same
+      // object — and let a caller corrupt the index by writing to a span. The
+      // copy is one small object per session; the alternative is a data race
+      // dressed up as a `ReadonlyMap`.
+      const bySession = new Map<string, EventIndexEntry>();
+      for (const [id, entry] of current.bySession) {
+        bySession.set(id, { ...entry, spans: entry.spans.map((span) => ({ ...span })), agentSessionIds: [...entry.agentSessionIds] });
+      }
+      const byAgentSession = new Map<string, readonly string[]>();
+      for (const [id, sessionIds] of current.byAgentSession) byAgentSession.set(id, [...sessionIds]);
+      return { bySession, byAgentSession };
     },
   };
 }

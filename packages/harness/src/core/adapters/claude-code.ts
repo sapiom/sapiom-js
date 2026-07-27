@@ -28,9 +28,9 @@ import type {
  * a private duplicate in the test file is exactly the thing that would let
  * encoder drift pass the tests written to catch it.
  *
- * Takes a path as given. Callers that start from a user-supplied cwd want
+ * Encodes the path as given. Callers starting from a user-supplied cwd want
  * {@link projectDirsFor}, which handles the symlink case this encoder can't
- * see — see its docstring.
+ * see on its own — see its docstring.
  */
 export function encodeProjectPath(cwd: string): string {
   const normalized = cwd.replace(/\\/g, "/");
