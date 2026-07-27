@@ -102,7 +102,7 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
     await page.getByTestId("template-row-web-research-digest").click();
     // Destination defaults to a new folder named after the template.
     await expect(page.getByTestId("template-dest-input")).toHaveValue(
-      "/Users/demo/acme-app/web-research-digest",
+      "/Users/demo/acme-app/projects/web-research-digest",
     );
     await page.getByTestId("template-use-btn").click();
 
@@ -117,13 +117,13 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
       .toContain("sapiom_dev_agents_clone");
     const record = await lastInject(page);
     expect(record?.req.text).toContain('templateId "web-research-digest"');
-    expect(record?.req.text).toContain('dir "/Users/demo/acme-app/web-research-digest"');
+    expect(record?.req.text).toContain('dir "/Users/demo/acme-app/projects/web-research-digest"');
     expect(record?.req.text).toContain("free local test run (sapiom_dev_agents_run_local)");
   });
 
   test("use (starter): the real bundled-template init command", async ({ page }) => {
     await page.getByTestId("template-row-coding-pause").click();
-    await expect(page.getByTestId("template-dest-input")).toHaveValue("/Users/demo/acme-app/coding-pause");
+    await expect(page.getByTestId("template-dest-input")).toHaveValue("/Users/demo/acme-app/projects/coding-pause");
     await page.getByTestId("template-use-btn").click();
 
     await expect(page.getByTestId("session-context-title")).toContainText("coding-pause");
@@ -190,14 +190,14 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
   });
 });
 
-test("the add-project dialog hands off to templates (the 'I don't have a project yet' branch)", async ({
+test("the 'start from a template' door hands straight off to the templates browser", async ({
   page,
 }) => {
   await page.goto("/");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await page.getByTestId("add-workspace").click();
-  await page.getByTestId("modal-browse-templates").click();
-  // One dialog at a time: the add dialog yields to the templates browser.
+  await page.getByTestId("aw-door-template").click();
+  // One dialog at a time, and no intermediate step: the door IS the browser.
   await expect(page.getByTestId("templates-dialog")).toBeVisible();
   await expect(page.locator(".modal-add-workspace")).toHaveCount(0);
 });

@@ -53,18 +53,27 @@ test.describe("first run", () => {
     await page.screenshot({ path: "web/e2e/screenshots/welcome-panel.png", fullPage: true });
   });
 
-  test("'New workspace' opens the existing new-session flow and creating a session dismisses the panel", async ({
+  test("'New workspace' opens the three-door add flow, and adding one dismisses the panel", async ({
     page,
   }) => {
+    // This CTA used to open the SESSION modal — the most prominent button on
+    // the first-run screen said "workspace" and delivered "new session". It now
+    // reaches the same three doors the rail's + does.
     await page.getByTestId("welcome-start-project").click();
-    await expect(page.getByText("New session")).toBeVisible();
+    await expect(page.locator(".modal-add-workspace")).toBeVisible();
+    await expect(page.getByTestId("aw-doors")).toBeVisible();
+    await expect(page.locator(".modal-new-session")).toHaveCount(0);
 
-    // Same directory picker as the tab strip's "+" — pick a real fixture dir.
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/acme-app");
-    await page.getByRole("button", { name: "Start session" }).click();
+    // Through door 1: pick a fixture folder that holds an agent project.
+    await page.getByTestId("aw-door-have").click();
+    await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-workflows");
+    await page.getByTestId("aw-have-continue").click();
+    await expect(page.getByTestId("aw-result")).toContainText("This is an agent project");
+    await page.getByTestId("aw-add").click();
 
-    await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
-    await expect(page.getByTestId("session-context-title")).toContainText("acme-app");
+    // The workspace joins the rail; the first-run pitch is done.
+    await expect(page.locator(".modal-add-workspace")).toHaveCount(0);
+    await expect(page.getByTestId("workflow-rfq-workflows")).toBeVisible();
   });
 
   test("the footer links out to the documentation instead of a dismiss", async ({ page }) => {

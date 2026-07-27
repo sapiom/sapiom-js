@@ -267,7 +267,19 @@ export function DirectoryPicker({
               onClick={() => navigate(entry.path)}
             >
               <Icon name="Folder" size={13} />
-              {entry.name}
+              <span className="dir-picker-item-name">{entry.name}</span>
+              {/* The whole point of the detection flag: you are choosing from
+                  labelled options instead of guessing which folder is a project. */}
+              {entry.hasAgentProject && (
+                <span
+                  className="dir-picker-item-badge"
+                  data-testid={`dir-picker-badge-${entry.name}`}
+                  title="Contains sapiom.json"
+                >
+                  <Icon name="Check" size={11} />
+                  Agent
+                </span>
+              )}
             </button>
           ))}
       </div>

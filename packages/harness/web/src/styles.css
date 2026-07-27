@@ -5760,6 +5760,30 @@ input {
   color: var(--text);
 }
 
+/* The name takes the slack so the detection badge stays right-anchored. */
+.dir-picker-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "This folder is an agent project" — the signal that lets the add-workspace
+   flow offer one right action instead of every escape hatch at once. */
+.dir-picker-item-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  flex: 0 0 auto;
+  padding: 1px var(--sp2);
+  border: 1px solid color-mix(in srgb, var(--green) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  color: var(--green-text);
+  font-size: var(--type-micro);
+}
+
 .toast {
   position: fixed;
   left: 50%;
@@ -6104,58 +6128,256 @@ input {
   font-size: var(--type-label);
 }
 
-/* The scaffold action offered when the Project tab's typed folder
-   doesn't exist yet — an action where an instruction used to be. */
-.modal-scaffold-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp2);
-  margin-bottom: var(--sp2);
+/* ---------------------------------------------------------------------------
+   Add workspace — three doors
+   Replaces the old workspace mode of the new-session modal (and its
+   .modal-scaffold-cta / .modal-scan-btn / .mcp-install / .modal-templates-cta
+   rules, removed with it). Same dialog anatomy as everything else here:
+   hairline-separated header / body / full-bleed rows / actions, nothing
+   floating inside.
+   --------------------------------------------------------------------------- */
+
+/* The title takes the slack so Close stays right-anchored whether or not the
+   back button is present. */
+.aw-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Bulk discovery lives left of the dialog's confirm cluster. */
-.modal-scan-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp2);
-  margin-right: auto;
+.aw-back {
+  margin-right: var(--sp2);
+  flex: 0 0 auto;
 }
 
-/* Per-agent Sapiom MCP setup prompts, copyable from the Project tab. */
-.mcp-install {
+/* Doors are full-bleed rows: the GROUP owns its separators, so no row draws a
+   perimeter line and the dividers reach the dialog edge. */
+.aw-doors {
   display: flex;
   flex-direction: column;
-  gap: var(--sp2);
-  margin: var(--sp2) 0 var(--sp3);
-  padding: var(--sp3);
+}
+
+.aw-door {
+  display: flex;
+  align-items: center;
+  gap: var(--sp3);
+  width: 100%;
+  padding: var(--sp3) var(--modal-pad-x);
+  border: none;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  border-radius: 0;
+  text-align: left;
+  color: var(--text);
+  transition: background-color var(--transition-fast);
+}
+
+.aw-door:hover,
+.aw-door:focus-visible {
+  background: var(--surface-hover);
+}
+
+.aw-door-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-2);
+  color: var(--text-dim);
 }
 
-.mcp-install-title {
-  font-size: var(--type-label);
-  font-weight: 600;
-  color: var(--text);
+.aw-door-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.mcp-install-hint {
-  margin: 0;
+.aw-door-title {
+  font-size: var(--type-ui);
+  font-weight: 500;
+}
+
+.aw-door-sub {
   font-size: var(--type-meta);
   color: var(--text-faint);
+}
+
+.aw-door-arrow {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: transform var(--transition-fast);
+}
+
+.aw-door:hover .aw-door-arrow {
+  transform: translateX(2px);
+}
+
+/* Detection outcome. Scaffold / template / bulk-scan / MCP-setup all live
+   BEHIND this block — they are consequences of what we found, which is the
+   whole reason the dialog no longer shows them all at once. */
+.aw-result {
+  border-top: 1px solid var(--border);
+  padding: var(--sp3) var(--modal-pad-x);
+}
+
+.aw-result[data-tone="good"] {
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.aw-result[data-tone="todo"] {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.aw-result-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp2);
+}
+
+.aw-result-glyph {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.aw-result[data-tone="good"] .aw-result-glyph {
+  color: var(--green);
+}
+
+.aw-result[data-tone="todo"] .aw-result-glyph {
+  color: var(--amber);
+}
+
+.aw-result-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.aw-result-title {
+  font-size: var(--type-ui);
+}
+
+.aw-result-path {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-result-change {
+  flex: 0 0 auto;
+}
+
+/* The MCP setup offer, shown ONLY in the "no agent project" outcome. One row
+   plus a disclosure, where the old dialog had a permanent 5-wide button grid. */
+.aw-mcp {
+  margin-top: var(--sp3);
+  padding-top: var(--sp3);
+  border-top: 1px solid var(--border);
+}
+
+.aw-mcp-row,
+.aw-mcp-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+
+.aw-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  margin-top: var(--sp2);
+}
+
+.aw-mcp-list-row {
+  justify-content: space-between;
+}
+
+.aw-mcp-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--type-meta);
+  color: var(--text-dim);
   line-height: 1.5;
 }
 
-.mcp-install-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp2);
+.aw-mcp-dim {
+  color: var(--text-faint);
 }
 
-.mcp-install-copy {
-  display: inline-flex;
+.aw-mcp-more {
+  flex: 0 0 auto;
+  padding-left: var(--sp2);
+  padding-right: var(--sp2);
+}
+
+/* Idea door: two fields, then the resolved path as a STATEMENT (not a field —
+   the way to change it is to edit the name or the root). */
+.aw-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding: 0 var(--modal-pad-x) var(--sp3);
+}
+
+.aw-field-label {
+  font-size: var(--type-label);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.aw-textarea {
+  resize: vertical;
+  min-height: 68px;
+  line-height: 1.5;
+}
+
+.aw-target {
+  display: flex;
   align-items: center;
   gap: var(--sp2);
+  padding: 0 var(--modal-pad-x) var(--sp2);
+}
+
+.aw-target-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-root-change {
+  flex: 0 0 auto;
+}
+
+.aw-root-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp2);
+  padding-top: var(--sp2);
+}
+
+/* An invalid name or a collision is stated where the hint already is, rather
+   than in a new element that would shift the layout on every keystroke. */
+.modal-field-hint[data-invalid="true"] {
+  color: var(--amber-text, var(--amber));
 }
 
 /* an overflowing chip row fades at its clipped edge(s) instead of
@@ -6731,15 +6953,6 @@ input {
 
 .templates-dest-error {
   margin-top: 0;
-}
-
-/* Add dialog handoff: sits with the scaffold CTA's geometry. */
-.modal-templates-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp2);
-  margin-bottom: var(--sp2);
-  align-self: start;
 }
 
 /* Mobile shell: one column — the list becomes a short scroll band above the

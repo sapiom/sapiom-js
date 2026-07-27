@@ -177,17 +177,21 @@ test("Overview heads the account menu, shows the intro panel, and any session le
 test("creation IA: the rail + adds projects; the tab strip + adds a session to the focused agent", async ({
   page,
 }) => {
-  // The rail's + is the PROJECT entry: the dialog opens in Project mode with
-  // no mode tabs at all — the entry point fixed the intent (docs/IA.md).
+  // The rail's + is the PROJECT entry: it opens the three-door add-workspace
+  // dialog. No mode tabs (the entry point fixed the intent, docs/IA.md) and no
+  // agent picker — each door asks exactly one question.
   await page.getByTestId("add-workspace").click();
   const modal = page.locator(".modal-add-workspace");
   await expect(modal).toBeVisible();
-  await expect(modal.locator(".modal-header")).toContainText("Add workspace");
+  await expect(modal.locator(".modal-header")).toContainText("Add to Sapiom");
+  await expect(modal.getByTestId("aw-doors")).toBeVisible();
   await expect(modal.getByTestId("add-mode-session")).toHaveCount(0);
   await expect(modal.getByTestId("add-mode-project")).toHaveCount(0);
-  await expect(modal.getByRole("button", { name: "Add workspace" })).toBeVisible();
   await expect(modal.getByTestId("harness-select")).toHaveCount(0);
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // "Add workspace" is now the OUTCOME of picking a folder that holds a
+  // project, not a button offered before anything is known.
+  await expect(modal.getByRole("button", { name: "Add workspace" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
 
   // Session creation lives in the tab strip: the trailing + opens a NEW
@@ -430,19 +434,22 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 });
 
-test("add project: the rail's + opens the same directory-picker dialog and registers the path", async ({ page }) => {
+test("add project: the rail's + registers a bare folder through the 'I have a project' door", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
 
-  // Same dialog anatomy as new-session, its own identity: no harness picker,
-  // workspace title and CTA.
   const modal = page.locator(".modal-add-workspace");
   await expect(modal).toBeVisible();
-  await expect(modal).toContainText("Add workspace");
   await expect(modal.getByTestId("harness-select")).toHaveCount(0);
 
+  await modal.getByTestId("aw-door-have").click();
   const input = modal.getByTestId("dir-picker-input");
   await input.fill("/Users/demo/scratch");
-  await modal.getByRole("button", { name: "Add workspace" }).click();
+  await modal.getByTestId("aw-have-continue").click();
+
+  // scratch holds no sapiom.json, so detection says so — and registering it as
+  // a bare workspace stays available (the rail supports agent-less folders).
+  await expect(modal.getByTestId("aw-result")).toContainText("No agent project");
+  await modal.getByTestId("aw-add-anyway").click();
 
   await expect(modal).toBeHidden();
   // The connected path joins the rail as a workspace-owned workflow row.

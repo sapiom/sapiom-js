@@ -38,6 +38,24 @@ async function normalizeRecentDir(candidate: string): Promise<string | null> {
 }
 
 /**
+ * Normalize a `projectRoot`: expand `~`, require absolute, resolve.
+ *
+ * Deliberately does NOT require the directory to exist, unlike
+ * normalizeRecentDir. A recent dir is a place something already happened; a
+ * project root is a place things WILL happen, and it is created when the first
+ * project lands there. Requiring existence would silently reset the user's
+ * chosen default the moment they picked a folder they hadn't made yet.
+ *
+ * Returns undefined for junk so the field simply falls back to the host default.
+ */
+function normalizeProjectRoot(candidate: unknown): string | undefined {
+  if (typeof candidate !== "string" || !candidate.trim()) return undefined;
+  const expanded = expandHome(candidate.trim());
+  if (!path.isAbsolute(expanded)) return undefined;
+  return path.resolve(expanded);
+}
+
+/**
  * Validates, normalizes, case-sensitively dedupes (first occurrence wins —
  * callers order newest-first), and caps a candidate recent-dirs list.
  * Applied on every write (via saveSettings) and on every read (via
@@ -71,7 +89,14 @@ export async function loadSettings(settingsPath: string = defaultSettingsFilePat
   try {
     const raw = await fs.readFile(settingsPath, "utf-8");
     const parsed = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<HarnessSettings>) };
-    return { ...parsed, recentDirs: await sanitizeRecentDirs(parsed.recentDirs) };
+    const projectRoot = normalizeProjectRoot(parsed.projectRoot);
+    return {
+      ...parsed,
+      recentDirs: await sanitizeRecentDirs(parsed.recentDirs),
+      // Omit rather than store undefined, so JSON.stringify on the way back out
+      // doesn't leave a dangling `"projectRoot": null`-shaped hole.
+      ...(projectRoot ? { projectRoot } : { projectRoot: undefined }),
+    };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -81,9 +106,11 @@ export async function saveSettings(
   settings: HarnessSettings,
   settingsPath: string = defaultSettingsFilePath(),
 ): Promise<void> {
+  const normalizedRoot = normalizeProjectRoot(settings.projectRoot);
   const sanitized: HarnessSettings = {
     ...settings,
     recentDirs: await sanitizeRecentDirs(settings.recentDirs),
+    ...(normalizedRoot ? { projectRoot: normalizedRoot } : { projectRoot: undefined }),
   };
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify(sanitized, null, 2) + "\n");

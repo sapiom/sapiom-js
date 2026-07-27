@@ -5,85 +5,14 @@
  * isolation — the same pattern used by bin.test.ts for signal handlers.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import * as path from "node:path";
-import { DEFAULT_PORT } from "../shared/types.js";
+import { parseArgs } from "./args.js";
 
 // ---------------------------------------------------------------------------
-// Extracted helpers (mirror of bin.ts parseArgs / printBanner)
+// parseArgs is the REAL implementation (src/cli/args.ts). It used to be a
+// hand-copied mirror here, which meant a flag could ship with green tests that
+// never touched it. printBanner is still mirrored below — bin.ts self-executes,
+// so it cannot be imported directly.
 // ---------------------------------------------------------------------------
-
-interface CliOptions {
-  dir: string;
-  port: number;
-  login: boolean;
-  noAuth: boolean;
-  noTelemetry: boolean;
-  noOpen: boolean;
-  noSession: boolean;
-  dev: boolean;
-}
-
-function parseArgs(argv: string[]): CliOptions {
-  let dir: string | undefined;
-  let port = DEFAULT_PORT;
-  let login = false;
-  let noAuth = false;
-  let noTelemetry = false;
-  let noOpen = false;
-  let noSession = false;
-  let dev = false;
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--port": {
-        const value = argv[++i];
-        if (!value || Number.isNaN(Number(value))) {
-          throw new Error("--port requires a numeric value");
-        }
-        port = Number(value);
-        break;
-      }
-      case "--login":
-        login = true;
-        break;
-      case "--no-auth":
-        noAuth = true;
-        break;
-      case "--no-telemetry":
-        noTelemetry = true;
-        break;
-      case "--no-open":
-        noOpen = true;
-        break;
-      case "--no-session":
-        noSession = true;
-        break;
-      case "--dev":
-        dev = true;
-        break;
-      default:
-        if (arg.startsWith("--")) {
-          throw new Error(`Unknown flag: ${arg}`);
-        }
-        if (dir !== undefined) {
-          throw new Error(`Unexpected extra argument: ${arg}`);
-        }
-        dir = arg;
-    }
-  }
-
-  return {
-    dir: path.resolve(dir ?? process.cwd()),
-    port,
-    login,
-    noAuth,
-    noTelemetry,
-    noOpen,
-    noSession,
-    dev,
-  };
-}
 
 interface PrintBannerOpts {
   dir: string;
@@ -120,6 +49,26 @@ function printBanner(opts: PrintBannerOpts): void {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe("parseArgs — --state-root flag", () => {
+  it("is absent by default, so the real state root is used", () => {
+    expect(parseArgs([]).stateRoot).toBeUndefined();
+  });
+
+  it("captures the directory it is given", () => {
+    expect(parseArgs(["--state-root", "/tmp/throwaway"]).stateRoot).toBe("/tmp/throwaway");
+  });
+
+  it("rejects a missing value rather than silently ignoring the flag", () => {
+    expect(() => parseArgs(["--state-root"])).toThrow(/requires a directory path/);
+  });
+
+  it("composes with a working directory argument", () => {
+    const options = parseArgs(["/Users/demo/scratch", "--state-root", "/tmp/throwaway"]);
+    expect(options.dir).toBe("/Users/demo/scratch");
+    expect(options.stateRoot).toBe("/tmp/throwaway");
+  });
+});
 
 describe("parseArgs — --login flag", () => {
   it("login defaults to false (non-blocking boot)", () => {

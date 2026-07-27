@@ -188,6 +188,14 @@ export interface HarnessServerOptions {
    *  boot so the rail isn't empty until a manual "+ Connect", and (unless
    *  autoCreateSession is false) where the boot session is created. */
   launchDir?: string;
+  /** The host's default parent directory for NEW agent projects (the
+   *  add-workspace template and idea doors), before the user's `projectRoot`
+   *  setting overrides it. Defaults to `launchDir` — correct for the CLI, where
+   *  the developer chose that directory deliberately. The Electron host passes
+   *  `<launchDir>/projects` so user code doesn't land in the state directory's
+   *  own listing. Only the host knows which it is, which is why this is an
+   *  option rather than something the SPA infers. */
+  projectRoot?: string;
   /** Auto-create a session in launchDir once the server is listening, so the
    *  app doesn't open empty. Defaults to true; the CLI's --no-session flag
    *  sets this to false. Uses `defaultHarnessKind` for which agent to launch. */
@@ -859,6 +867,7 @@ export const startServer = async (
           });
       },
       launchDir,
+      defaultProjectRoot: options.projectRoot ?? launchDir,
       agentsBaseUrl: resolveAgentsBaseUrl(),
       availableHarnesses: options.availableHarnesses,
       listTasks: () => taskManager.list(),

@@ -7,7 +7,7 @@ import type { FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
 import { loadUiPrefs } from "../lib/ui-prefs";
 import { Icon } from "./Icon";
-import { NewSessionModal } from "./NewSessionModal";
+import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
 import { TemplatesDialog } from "./TemplatesDialog";
 
 /* Real screenshots of THIS app (the current Studio shell in mock mode),
@@ -19,10 +19,20 @@ const welcomeHeroLight = `${import.meta.env.BASE_URL}welcome-hero-light.png`;
 interface WelcomePanelProps {
   recentDirs: string[];
   launchDir: string | null;
+  /** Where NEW projects are created — the templates dialog's destination.
+   *  Distinct from launchDir, which is where a SESSION opens. */
+  projectRoot: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
-  /** The existing new-session flow — "New workspace" opens the same
-   *  NewSessionModal the tab strip's "+" does, with the same handler. */
+  /** Session creation — still used by the recents rows (opening a recent
+   *  workspace starts a session in it). NOT what "New workspace" does. */
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
+  /** "New workspace" opens the SAME three-door dialog the rail's + does.
+   *  It used to open NewSessionModal, which meant the panel's most prominent
+   *  CTA said "workspace" and delivered the one-question session dialog. */
+  onConnect: (cwd: string) => Promise<void>;
+  onScan: (root: string) => Promise<number>;
+  onScaffold: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
+  onSaveProjectRoot: (root: string) => Promise<void>;
   /** Adapter registry fetch — keeps this modal's picker registry-driven too. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /** Templates journey (App.handleUseTemplate): starts a session in the
@@ -60,8 +70,13 @@ function folderName(dir: string): string {
 export function WelcomePanel({
   recentDirs,
   launchDir,
+  projectRoot,
   listDir,
   onCreateSession,
+  onConnect,
+  onScan,
+  onScaffold,
+  onSaveProjectRoot,
   listHarnesses,
   onUseTemplate,
   listTemplates,
@@ -231,13 +246,20 @@ export function WelcomePanel({
       </div>
 
       {modalOpen && (
-        <NewSessionModal
+        <AddWorkspaceDialog
           recentDirs={recentDirs}
-          launchDir={launchDir}
+          projectRoot={projectRoot}
           listDir={listDir}
           onClose={() => setModalOpen(false)}
-          onCreate={onCreateSession}
+          onConnect={onConnect}
+          onScan={onScan}
+          onScaffold={onScaffold}
+          onSaveProjectRoot={onSaveProjectRoot}
           listHarnesses={listHarnesses}
+          onBrowseTemplates={() => {
+            setModalOpen(false);
+            setTemplatesOpen(true);
+          }}
           triggerRef={startProjectRef}
         />
       )}
@@ -246,7 +268,7 @@ export function WelcomePanel({
           whole panel — the session pane is the destination. */}
       {templatesOpen && (
         <TemplatesDialog
-          launchDir={launchDir}
+          projectRoot={projectRoot}
           onClose={() => setTemplatesOpen(false)}
           onUse={onUseTemplate}
           listTemplates={listTemplates}

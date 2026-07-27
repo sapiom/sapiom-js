@@ -31,15 +31,16 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { AGENT_PROJECT_MARKER } from "../shared/types.js";
 
 const DEBOUNCE_MS = 250;
 /** Longer than the watch debounce — the watcher path is the fast signal;
  *  the poll is just a backstop for platforms without recursive fs.watch. */
 const POLL_INTERVAL_MS = 2_000;
 
-/** Kept in sync with core/workflow-registry.ts's scan: the marker file that
- *  makes a directory a workflow, and how deep the scan looks for it. */
-const WORKFLOW_MARKER = "sapiom.json";
+/** Shared with core/workflow-registry.ts and server/fs.ts via
+ *  AGENT_PROJECT_MARKER; this is only how deep the scan looks for it. */
+const WORKFLOW_MARKER = AGENT_PROJECT_MARKER;
 const MAX_SCAN_DEPTH = 3;
 
 /** Directories a workflow marker never lives in — skipped both when

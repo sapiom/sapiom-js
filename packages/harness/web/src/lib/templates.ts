@@ -24,6 +24,7 @@
 import type { TemplateComplexity, TemplateDetailView, TemplateSummary } from "@shared/types";
 
 import type { CanvasGraph } from "./canvas-graph";
+import { FALLBACK_PROJECT_NAME, projectDirSuggestion } from "./project-dir";
 
 /** A live catalog entry. `kind` discriminates it from a bundled starter. */
 export type GalleryTemplate = TemplateSummary & { kind: "gallery" };
@@ -282,10 +283,17 @@ export function templateGraph(detail: TemplateDetailView): CanvasGraph {
   };
 }
 
-/** Default destination: a new folder named after the template, under the launch
- *  dir. "default" would make a meaningless folder name, so it gets a
- *  descriptive one instead. */
-export function templateDirSuggestion(template: StudioTemplate, launchDir: string | null): string {
-  const folder = template.kind === "starter" && template.id === "default" ? "sapiom-agent" : template.id;
-  return launchDir ? `${launchDir}/${folder}` : "";
+/** Default destination: a new folder named after the template, under the project
+ *  root. "default" would make a meaningless folder name, so it gets a
+ *  descriptive one instead.
+ *
+ *  Delegates the join to `projectDirSuggestion` so this door and the
+ *  "start from an idea" door can never disagree about where new projects land
+ *  or how a root is combined with a name. `root` is what
+ *  `resolveProjectRoot()` returned — historically the launch dir, which is
+ *  still what that resolves to on the CLI host. */
+export function templateDirSuggestion(template: StudioTemplate, root: string | null): string {
+  const folder =
+    template.kind === "starter" && template.id === "default" ? FALLBACK_PROJECT_NAME : template.id;
+  return projectDirSuggestion(folder, root);
 }

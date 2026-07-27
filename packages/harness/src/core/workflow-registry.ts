@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 
-import { HARNESS_PATHS, type WorkflowInfo } from "../shared/types.js";
+import { AGENT_PROJECT_MARKER, HARNESS_PATHS, type WorkflowInfo } from "../shared/types.js";
 import { hasTraversalSegment, resolveWithinRoot } from "./path-safety.js";
 
 const MAX_SCAN_DEPTH = 3;
@@ -41,7 +41,7 @@ interface SapiomMarker {
 async function readMarker(dir: string): Promise<SapiomMarker | null> {
   if (hasTraversalSegment(dir)) return null;
   try {
-    const raw = await fs.readFile(path.join(dir, "sapiom.json"), "utf8");
+    const raw = await fs.readFile(path.join(dir, AGENT_PROJECT_MARKER), "utf8");
     return JSON.parse(raw) as SapiomMarker;
   } catch {
     return null;

@@ -11,12 +11,10 @@
  * browser OAuth before the server starts.
  *
  * Flags: [dir] (default cwd), --port, --login, --no-auth, --no-telemetry,
- * --no-open, --no-session, --dev.
+ * --no-open, --no-session, --dev, --state-root <dir>.
  */
-import * as path from "node:path";
 import * as crypto from "node:crypto";
 import open from "open";
-import { DEFAULT_PORT } from "../shared/types.js";
 import {
   runDoctor,
   printDoctorReport,
@@ -28,80 +26,9 @@ import { ensureAuthenticated, type HarnessIdentity } from "./auth.js";
 import { ensureConsent } from "./consent.js";
 import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
+import { resolveStatePaths } from "../core/paths.js";
+import { parseArgs } from "./args.js";
 import { startServer, type HarnessServer } from "../server/index.js";
-
-interface CliOptions {
-  dir: string;
-  port: number;
-  login: boolean;
-  noAuth: boolean;
-  noTelemetry: boolean;
-  noOpen: boolean;
-  noSession: boolean;
-  dev: boolean;
-}
-
-function parseArgs(argv: string[]): CliOptions {
-  let dir: string | undefined;
-  let port = DEFAULT_PORT;
-  let login = false;
-  let noAuth = false;
-  let noTelemetry = false;
-  let noOpen = false;
-  let noSession = false;
-  let dev = false;
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--port": {
-        const value = argv[++i];
-        if (!value || Number.isNaN(Number(value))) {
-          throw new Error("--port requires a numeric value");
-        }
-        port = Number(value);
-        break;
-      }
-      case "--login":
-        login = true;
-        break;
-      case "--no-auth":
-        noAuth = true;
-        break;
-      case "--no-telemetry":
-        noTelemetry = true;
-        break;
-      case "--no-open":
-        noOpen = true;
-        break;
-      case "--no-session":
-        noSession = true;
-        break;
-      case "--dev":
-        dev = true;
-        break;
-      default:
-        if (arg.startsWith("--")) {
-          throw new Error(`Unknown flag: ${arg}`);
-        }
-        if (dir !== undefined) {
-          throw new Error(`Unexpected extra argument: ${arg}`);
-        }
-        dir = arg;
-    }
-  }
-
-  return {
-    dir: path.resolve(dir ?? process.cwd()),
-    port,
-    login,
-    noAuth,
-    noTelemetry,
-    noOpen,
-    noSession,
-    dev,
-  };
-}
 
 function printBanner(opts: {
   dir: string;
@@ -156,7 +83,12 @@ const main = async (): Promise<void> => {
     );
   }
 
-  const machineId = await getOrCreateMachineId();
+  // Every piece of harness state resolves through ONE root, so --state-root
+  // relocates all of it together. Without this, firstRun and recentDirs would
+  // still read and WRITE the real settings file while everything else used the
+  // throwaway root — a half-isolated run that silently mutates real state.
+  const statePaths = resolveStatePaths(options.stateRoot);
+  const machineId = await getOrCreateMachineId(statePaths.machineId);
 
   // Auth is non-blocking at boot: use a cached credential if one exists, but
   // never open a browser at startup. The Studio launches unauthenticated and
@@ -180,8 +112,8 @@ const main = async (): Promise<void> => {
   // and suppresses the auto-created boot session, so a brand-new user lands on
   // the welcome panel rather than a bare terminal in whatever directory they
   // happened to launch from.
-  const firstRun = (await loadSettings()).recentDirs.length === 0;
-  await recordRecentDir(options.dir);
+  const firstRun = (await loadSettings(statePaths.settings)).recentDirs.length === 0;
+  await recordRecentDir(options.dir, statePaths.settings);
 
   const bootToken = crypto.randomBytes(32).toString("hex");
 
@@ -196,6 +128,7 @@ const main = async (): Promise<void> => {
       identity,
       machineId,
       launchDir: options.dir,
+      ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
       autoCreateSession: !options.noSession && !firstRun,
       defaultHarnessKind,
       availableHarnesses: doctorReport.availableHarnesses,

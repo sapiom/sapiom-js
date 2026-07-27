@@ -19,6 +19,7 @@ import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
+import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
 import { TemplatesDialog } from "./TemplatesDialog";
@@ -64,8 +65,13 @@ interface WorkflowsRailProps {
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
   /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
   listHarnesses: () => Promise<HarnessEntry[]>;
-  /** Session-plus-scaffold-prompt at a folder that doesn't exist yet. */
-  onScaffoldSession: (cwd: string, harness: HarnessKind) => Promise<void>;
+  /** Session-plus-scaffold-prompt at a folder that doesn't exist yet. `idea`
+   *  is the "start from an idea" door's text, passed verbatim to the agent. */
+  onScaffoldSession: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
+  /** Where NEW projects are created (resolveProjectRoot in App). */
+  projectRoot: string | null;
+  /** Persist a changed project root as the user's default. */
+  onSaveProjectRoot: (root: string) => Promise<void>;
   /** Bare-scaffold folder affordance: ask the folder's live session to
    *  scaffold its first agent (sapiom.json) in place. */
   onScaffoldInSession: (sessionId: string) => void;
@@ -309,6 +315,8 @@ export function WorkflowsRail({
   listHarnesses,
   onScaffoldSession,
   onScaffoldInSession,
+  projectRoot,
+  onSaveProjectRoot,
   onUseTemplate,
   listTemplates,
   getTemplate,
@@ -633,31 +641,46 @@ export function WorkflowsRail({
         />
       </div>
 
-      {addDialogMode && (
+      {/* Two intents, two dialogs — deliberately not one component with a
+          `mode`. The workspace intent is three doors (AddWorkspaceDialog); a
+          session is one question (which folder) plus which agent. They shared
+          375 lines and almost no UI, which is how the workspace side ended up
+          showing five jobs at once. */}
+      {addDialogMode === "workspace" && (
+        <AddWorkspaceDialog
+          recentDirs={recentDirs}
+          projectRoot={projectRoot}
+          listDir={listDir}
+          onClose={() => setAddDialogMode(null)}
+          onConnect={async (cwd) => {
+            await onConnect(cwd);
+          }}
+          onScan={onScanWorkflows}
+          onScaffold={onScaffoldSession}
+          onSaveProjectRoot={onSaveProjectRoot}
+          listHarnesses={listHarnesses}
+          onBrowseTemplates={() => {
+            setAddDialogMode(null);
+            setTemplatesOpen(true);
+          }}
+          triggerRef={connectTriggerRef}
+        />
+      )}
+      {addDialogMode === "session" && (
         <NewSessionModal
-          mode={addDialogMode}
           recentDirs={recentDirs}
           launchDir={launchDir}
           listDir={listDir}
           onClose={() => setAddDialogMode(null)}
           onCreate={onCreateSession}
           listHarnesses={listHarnesses}
-          onScaffold={onScaffoldSession}
-          onScan={onScanWorkflows}
-          onConnect={async (cwd) => {
-            await onConnect(cwd);
-          }}
-          onBrowseTemplates={() => {
-            setAddDialogMode(null);
-            setTemplatesOpen(true);
-          }}
-          triggerRef={addDialogMode === "workspace" ? connectTriggerRef : historyTriggerRef}
+          triggerRef={historyTriggerRef}
         />
       )}
 
       {templatesOpen && (
         <TemplatesDialog
-          launchDir={launchDir}
+          projectRoot={projectRoot}
           onClose={() => setTemplatesOpen(false)}
           onUse={onUseTemplate}
           listTemplates={listTemplates}
