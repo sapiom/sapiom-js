@@ -51,6 +51,93 @@
           "output": { "type": "object", "description": "Optional output the run returns." }
         }
       }
+    },
+    "requiredSecrets": {
+      "type": "array",
+      "description": "Third-party credentials the template needs. ONLY for credentials Sapiom cannot broker — never a Sapiom API key, never a non-secret value (use `settings`). Declares what the credential IS, never where it is stored: there is no `vaultRef`, no `connectorId`, no `store`, and there never will be. Binding `key` to a concrete value belongs to the resolver (`process.env[key]` today), which is what lets resolution move to connectors later without touching a manifest or the deploy panel.",
+      "items": {
+        "type": "object",
+        "required": ["key", "label", "provider"],
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,255}$",
+            "description": "Logical identifier the run reads. Must satisfy the engine's process-env rules: cannot be PATH, SAPIOM_*, or WORKFLOWS_* — namespace rules this pattern cannot express, enforced by the `manifest-secret-key` check in examples-check."
+          },
+          "label": { "type": "string", "minLength": 1, "description": "Human label for the input field." },
+          "provider": { "type": "string", "description": "Provider hint (e.g. \"slack\", \"notion\"). NOT a storage location." },
+          "credentialKind": {
+            "enum": ["bearer_token", "api_key", "basic", "dsn"],
+            "description": "Shape of the credential, so the panel can label and validate the field."
+          },
+          "description": { "type": "string", "description": "Helper text: what it is, where to get it." },
+          "docsUrl": { "type": "string", "description": "Link to the third party's token-creation page." },
+          "optional": {
+            "type": "boolean",
+            "default": false,
+            "description": "True when the template degrades honestly without it — the run still reaches a terminal state and names what it skipped in `unmet[]`. False means the run cannot do its job at all."
+          }
+        }
+      }
+    },
+    "settings": {
+      "type": "array",
+      "description": "Non-secret configuration with a declared default, rendered as ordinary form fields and merged into the run input. Where a RECIPIENT or a lookback window belongs — NOT the vault, which cannot be listed, validated, or prompted for.",
+      "items": {
+        "type": "object",
+        "required": ["path", "label", "type", "default"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*$",
+            "description": "Dotted path into the entry-step input object this setting fills (e.g. `deliverTo`, `client.email`)."
+          },
+          "label": { "type": "string", "minLength": 1, "description": "Human label for the form field." },
+          "description": { "type": "string", "description": "Helper text shown under the field." },
+          "type": { "enum": ["string", "number", "boolean", "email", "cron", "string[]", "email[]"] },
+          "default": { "description": "The value used when the user supplies nothing. REQUIRED — a setting without a default cannot support a zero-interaction run, which is the entire point." },
+          "example": { "description": "A realistic value shown as placeholder text." }
+        }
+      }
+    },
+    "defaultInput": {
+      "type": "object",
+      "description": "The input a zero-interaction run starts with. Merged UNDER the user's input and UNDER `settings` defaults, so an explicit value always wins. Distinct from `examples[0].input`, which is documentation and may legitimately contain values that cannot work on a fresh tenant (a repo slug, a live sandbox URL). The runtime guarantee lives in code (`z.string().min(1).default(\"Sapiom\")`); this is its declared, renderable projection — the UI cannot introspect a zod schema across a GitHub fetch — and it NEVER overrides code."
+    },
+    "zeroSetup": {
+      "type": "object",
+      "description": "The machine-checkable expectation for an unconfigured run. An expectation asserts that the pattern demonstrably ran and the output is honest about it — not that the result is production-grade.",
+      "additionalProperties": false,
+      "required": ["terminalState"],
+      "properties": {
+        "terminalState": {
+          "enum": ["completed", "completed_partial", "paused_for_approval"],
+          "description": "The terminal state a zero-input, zero-credential run is expected to reach."
+        },
+        "expect": {
+          "type": "array",
+          "description": "Assertions over the terminal artifact that prove the pattern ran.",
+          "items": {
+            "type": "object",
+            "required": ["path", "assert"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "description": "Dotted path into the terminal artifact." },
+              "assert": {
+                "enum": ["nonEmptyArray", "nonEmptyString", "minLength", "matches", "equals", "absent"],
+                "description": "Closed assertion vocabulary — anything outside it is a check failure, not a new operator."
+              },
+              "value": { "description": "Operand for minLength / matches / equals." }
+            }
+          }
+        },
+        "narrative": {
+          "type": "string",
+          "description": "One honest sentence for what an unconfigured run actually produces. Rendered VERBATIM on the shelf as `setup.degradedWithoutSetup` — must never imply a send that will not happen."
+        }
+      }
     }
   }
 }

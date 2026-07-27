@@ -27,6 +27,7 @@
     "registry:local": "npx -y verdaccio@6 --config .verdaccio/config.yaml",
     "publish:local": "node scripts/publish-local.mjs",
     "examples:check": "node scripts/examples-check.mjs",
+    "examples:check:test": "node --test scripts/*.test.mjs",
     "examples:sort": "node scripts/examples-sort.mjs"
   },
   "devDependencies": {

@@ -44,9 +44,10 @@ jobs:
       - name: Test
         run: pnpm test
 
-  # Template gallery registry gate. The `examples/` tree lives outside the pnpm
-  # workspace, so the matrix job above never touches it — this is the only check
-  # that validates examples/registry.json (schema + sort + sourcePath) on a PR.
+  # Template gallery gate. The `examples/` tree lives outside the pnpm workspace,
+  # so the matrix job above never touches it — this is the only check that
+  # validates examples/registry.json (schema + sort + sourcePath + checkpoints)
+  # and every co-located template.json manifest on a PR.
   examples:
     runs-on: ubuntu-latest
     steps:
@@ -63,8 +64,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate examples registry
+      - name: Validate examples registry and manifests
         run: pnpm examples:check
+
+      # Fixture tests for the gate itself: a typo'd declaration field must fail
+      # rather than be silently stripped downstream.
+      - name: Test the examples checks
+        run: pnpm examples:check:test
 
   # Playwright mock-mode tier — harness web/e2e specs (VITE_MOCK=1, chromium only).
   # The live/real-pty tiers (e2e:live, sim) are opt-in local only; nothing here

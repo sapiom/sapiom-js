@@ -11,6 +11,10 @@
 //      (draft-07, includes the `category` enum).
 //   2. `templates` is sorted by `id` ascending  (run `pnpm examples:sort` to fix).
 //   3. every `sourcePath` dir exists and contains a `template.json`.
+//   4. checkpoint discipline (human gates only, at most one per template).
+//   5. every template.json validates against examples/template.schema.json,
+//      including the declaration surface (requiredSecrets, settings,
+//      defaultInput, zeroSetup) — see scripts/examples-manifest-check.mjs.
 //
 // Exits non-zero with a readable report on the first category of failure it
 // finds, so a bad registry fails CI before it reaches the backend.
@@ -22,16 +26,19 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
+import { createManifestChecker } from "./examples-manifest-check.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXAMPLES_DIR = path.join(ROOT, "examples");
 const REGISTRY_PATH = path.join(EXAMPLES_DIR, "registry.json");
 const SCHEMA_PATH = path.join(EXAMPLES_DIR, "registry.schema.json");
+const MANIFEST_SCHEMA_PATH = path.join(EXAMPLES_DIR, "template.schema.json");
 
 const errors = [];
 
 const registry = JSON.parse(readFileSync(REGISTRY_PATH, "utf8"));
 const schema = JSON.parse(readFileSync(SCHEMA_PATH, "utf8"));
+const manifestSchema = JSON.parse(readFileSync(MANIFEST_SCHEMA_PATH, "utf8"));
 
 // 1. Schema validation. The schema carries its own `$schema`/`$id`; strip the
 // data's own `$schema` pointer so ajv validates the payload, not the reference.
@@ -58,7 +65,12 @@ for (let i = 0; i < ids.length; i++) {
   }
 }
 
-// 3. Every sourcePath dir exists and has a template.json.
+// 3. Every sourcePath dir exists and has a template.json, and 5. that manifest
+// validates against template.schema.json. Folded into one pass because the
+// manifest check needs the same resolved path — and because a manifest that only
+// had to *exist* is how `repoSlug: "my-app"` shipped.
+const checkManifest = createManifestChecker(ajv, manifestSchema);
+let manifestsChecked = 0;
 for (const t of templates) {
   if (!t.sourcePath) continue; // required-ness is a schema concern (check 1).
   const dir = path.join(ROOT, t.sourcePath);
@@ -68,9 +80,23 @@ for (const t of templates) {
     );
     continue;
   }
-  if (!existsSync(path.join(dir, "template.json"))) {
+  const manifestPath = path.join(dir, "template.json");
+  if (!existsSync(manifestPath)) {
     errors.push(`sourcePath: "${t.sourcePath}" is missing a template.json.`);
+    continue;
   }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch (e) {
+    errors.push(
+      `manifest-parse: "${t.id}" template.json is not valid JSON: ${e.message}`,
+    );
+    continue;
+  }
+  errors.push(...checkManifest(t.id, manifest));
+  manifestsChecked++;
 }
 
 // 4. Checkpoint discipline. `checkpoint` marks a HUMAN approval gate and the
@@ -95,9 +121,7 @@ for (const t of templates) {
 }
 
 if (errors.length > 0) {
-  console.error(
-    `examples/registry.json failed validation (${errors.length} problem(s)):\n`,
-  );
+  console.error(`examples/ failed validation (${errors.length} problem(s)):\n`);
   for (const e of errors) console.error(`  - ${e}`);
   process.exit(1);
 }
@@ -118,5 +142,5 @@ for (const [label, ids] of [
 }
 
 console.log(
-  `examples/registry.json OK — ${templates.length} templates, sorted, schema-valid, all sourcePaths present.`,
+  `examples/registry.json OK — ${templates.length} templates, sorted, schema-valid, all sourcePaths present; ${manifestsChecked} template.json manifest(s) schema-valid.`,
 );

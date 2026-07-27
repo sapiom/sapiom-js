@@ -54,11 +54,14 @@ authors don't need this — the published `@sapiom/*` versions are enough.
    whole graph locally and traces every step without spending anything, so you can watch the
    flow before you deploy. The lifecycle is `check → run_local → link → deploy → run`; each
    template's `README.md` shows it.
-3. **Validate the registry.** Run `pnpm examples:check` from the repo root. It checks that
-   `registry.json` matches the schema (including a valid `category`, `cadence`, and step
-   `kind`), is sorted by `id`, that every `sourcePath` points at a real directory with a
-   `template.json`, and that any `checkpoint` is a single genuine human gate. Run
-   `pnpm examples:sort` first to put your entry in order.
+3. **Validate the registry and your manifest.** Run `pnpm examples:check` from the repo root.
+   It checks that `registry.json` matches the schema (including a valid `category`, `cadence`,
+   and step `kind`), is sorted by `id`, that every `sourcePath` points at a real directory with
+   a `template.json`, that any `checkpoint` is a single genuine human gate, and that **each
+   `template.json` matches `template.schema.json`**. The manifest schema is
+   `additionalProperties: false`, so a mistyped field name fails here rather than being
+   silently dropped by the backend parser. Run `pnpm examples:sort` first to put your entry in
+   order.
 4. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
    must be the exact `ctx.sapiom.*` ids your code actually calls — see
    [Capability ids](#capability-ids-correctness-not-style). The LLM path is `models.run`
@@ -167,6 +170,20 @@ the same way, at two levels of depth.
 | `examples` | "Examples" | Real `{ input, output }` pairs. Keep these accurate to the code; don't invent fields. |
 | `author` | "By …" | `{ "name": "Sapiom", "url": "https://sapiom.ai/" }` for first-party. |
 
+#### What the template needs to run (all optional, all machine-read)
+
+These four say what a run requires **before** anyone clicks Run, so the UI can be honest about it.
+A declaration says what a thing **is**, never where it is stored — there is no `vaultRef`, no
+`connectorId`, no `store`, and there never will be. Storage belongs to the resolver, which is what
+lets it change without touching your template.
+
+| Field | Shows up as | Write it as |
+|---|---|---|
+| `requiredSecrets` | The credential dialog on "Use this template" | Only credentials **Sapiom cannot broker** — a Slack token, the customer's own DB. Never a Sapiom API key, never a non-secret value. Each needs `key`, `label`, `provider`; `key` follows process-env rules — not `PATH`, not `SAPIOM_*`, not `WORKFLOWS_*`. Mark `optional: true` only when the run still reaches a terminal state without it and says what it skipped. |
+| `settings` | Ordinary form fields, merged into the run input | Non-secret config — a recipient, a lookback window, a row cap. **This is where a `RECIPIENT` belongs, not the vault**, which can't be listed, validated, or prompted for. `default` is required: a setting without one can't support a zero-interaction run, which is the point. |
+| `defaultInput` | The one-click Run path | The input a run starts with when the user supplies nothing. Merged **under** the user's input and under `settings` defaults, so an explicit value always wins. **Not the same as `examples[0].input`**, which is documentation and may legitimately hold a repo slug or a live URL that won't work on a fresh tenant. It never overrides your code's own defaults. |
+| `zeroSetup` | The shelf's "runs with no setup" claim | What an unconfigured run actually reaches: a `terminalState`, optional `expect[]` assertions over the terminal artifact (`nonEmptyArray`, `nonEmptyString`, `minLength`, `matches`, `equals`, `absent`), and a one-sentence `narrative`. Assert that the pattern **demonstrably ran and the output is honest about it** — not that the result is production-grade. The narrative renders verbatim, so it must never imply a send that won't happen. |
+
 ---
 
 ## Voice
@@ -274,7 +291,8 @@ Never present the MCP path as the only way to build and run — the webapp does 
 2. **Add your directory** under `examples/` and your **one entry** in `examples/registry.json`.
 3. **Sort and validate** locally: `pnpm examples:sort`, then `pnpm examples:check`. Both must be
    clean — the same check runs in CI and blocks the merge if the registry is invalid, unsorted,
-   or points at a directory with no `template.json`.
+   points at a directory with no `template.json`, or your `template.json` doesn't match the
+   manifest schema.
 4. **Open a pull request.** CI validates the registry and builds the SDK; an automated review
    runs too. Keep the PR to one template.
 5. **On merge, it goes live.** The Sapiom backend reads `registry.json` at a pinned commit of
