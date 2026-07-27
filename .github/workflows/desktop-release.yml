@@ -82,7 +82,12 @@ jobs:
     # matrix to observe its status, but never let it fail the release. Remove
     # this once Windows is first-class.
     continue-on-error: ${{ startsWith(matrix.os, 'windows') }}
-    timeout-minutes: 40
+    # 75, not 40: macOS notarization is the long pole and Apple's turnaround has
+    # been measured at 30+ minutes on this account (see the Package installers
+    # step). The job cap MUST exceed that step's own cap or the step timeout can
+    # never fire and the diagnostic never runs — which is exactly how three
+    # successful notarizations got thrown away.
+    timeout-minutes: 75
 
     steps:
       - uses: actions/checkout@v4
@@ -121,13 +126,19 @@ jobs:
         run: pnpm --filter "@sapiom/harness-desktop..." build
 
       - name: Package installers
-        # Bounded so a stuck notarization fails fast. Packaging alone takes ~1
-        # minute (unsigned macOS runs: 31s–64s); signing adds seconds; the rest
-        # is Apple's notary service, which `notarytool submit --wait` blocks on
-        # with no timeout of its own. A first attempt sat pending for 33 minutes
-        # and had to be killed — without this it would have consumed the whole
-        # 40-minute job budget and produced no artifact and no diagnosis.
-        timeout-minutes: 25
+        # Packaging alone takes ~1 minute (unsigned macOS runs: 31s–64s) and
+        # signing adds seconds; everything beyond that is Apple's notary service,
+        # which `notarytool submit --wait` blocks on with no timeout of its own.
+        #
+        # 45 minutes because Apple's measured turnaround on this account is 30+
+        # minutes, not the 5–15 the docs suggest. Three earlier runs were killed
+        # at 25–33 minutes while submissions were still "In Progress" — and
+        # `notarytool history` later showed every one of them had come back
+        # Accepted. The app was never the problem; the timeout was. Keep this
+        # comfortably above observed latency, and below the job cap so a genuine
+        # hang still fails here (leaving budget for the diagnostic) rather than
+        # killing the whole job.
+        timeout-minutes: 45
         # Invoke pack.mjs directly (not the `dist` script) so we control the
         # platform flag and skip the script's redundant single-package build.
         # electron-builder's npmRebuild recompiles node-pty against the Electron
