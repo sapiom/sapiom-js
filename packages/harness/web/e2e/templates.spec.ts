@@ -1,10 +1,10 @@
 /**
  * Templates journey v0 (browse → preview → use), all in mock mode.
  *
- * Ground truth this exercises: the curated index in lib/templates.ts is a
- * pin of the harness gallery registry (browse has no listing API yet), the
- * preview renders only real manifest fields, and "Use template" performs the
- * REAL handoff shape — a session at the destination folder plus the agent
+ * Ground truth this exercises: the gallery is FETCHED (GET /api/templates, which
+ * the server relays from core) rather than pinned in lib/templates.ts, only the
+ * bundled starters are local, the preview renders only real manifest fields, and
+ * "Use template" performs the REAL handoff shape — a session at the destination folder plus the agent
  * prompt naming sapiom_dev_agents_clone (gallery) or `sapiom agents init -t`
  * (bundled starter). MockApi records the injection on
  * window.__HARNESS_TEST__.lastInjectInput for the clone assertions.
@@ -31,10 +31,10 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
     await expect(page.getByTestId("templates-dialog")).toBeVisible();
   });
 
-  test("browse: the two clonable gallery ids and the two bundled starters", async ({
+  test("browse: catalog templates plus the two bundled starters", async ({
     page,
   }) => {
-    // Exactly the real clonable slugs — nothing invented.
+    // Real clonable slugs from the catalog, not a hardcoded pair.
     await expect(page.getByTestId("template-row-web-research-digest")).toBeVisible();
     await expect(page.getByTestId("template-row-hello-agent")).toBeVisible();
     await expect(page.getByTestId("template-row-default")).toBeVisible();
@@ -50,20 +50,29 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
     await expect(detail).toContainText("By");
     await expect(detail).toContainText("Sapiom");
 
-    // Steps render in registry order: array order is execution order, the
-    // first step is the entry, terminal steps carry the exit marker.
+    // Steps render in declared order, each labelled with the role the SHARED
+    // classifier assigned (classifyStepKind) rather than a terminal-or-not guess:
+    // the entry says "entry", a terminate-only sink says "terminal · success".
     const stepNames = detail.locator(".template-step-name");
     await expect(stepNames.nth(0)).toContainText("search");
+    await expect(stepNames.nth(0)).toContainText("entry");
     await expect(stepNames.nth(1)).toContainText("summarize");
-    await expect(stepNames.nth(1)).toContainText("exit");
+    await expect(stepNames.nth(1)).toContainText("terminal · success");
     await expect(detail.locator(".template-cap").first()).toContainText("web.search");
   });
 
-  test("preview: cost is honestly absent — a stated basis, never a fabricated figure", async ({ page }) => {
+  test("preview: cost is the estimate core computed, or an honest absence — never fabricated", async ({ page }) => {
+    // Core now serves estCostPerRunUsd, so a known estimate is SHOWN (it used to
+    // say "not surfaced here yet", which was true of the pinned index).
     await page.getByTestId("template-row-web-research-digest").click();
-    const note = page.getByTestId("template-cost-note");
-    await expect(note).toContainText("not surfaced here yet");
-    expect(await note.textContent()).not.toMatch(/\$\s*\d/);
+    await expect(page.getByTestId("template-cost-note")).toContainText("per run");
+    await expect(page.getByTestId("template-cost-note")).toContainText("$0.0060");
+
+    // Capabilities but NO estimate: say so, never print $0.00.
+    await page.getByTestId("template-row-approval-chain").click();
+    const absent = page.getByTestId("template-cost-note");
+    await expect(absent).toContainText("no per-call price");
+    expect(await absent.textContent()).not.toMatch(/\$\s*\d/);
 
     // Zero capabilities is its own honest state, not an empty slot.
     await page.getByTestId("template-row-hello-agent").click();
@@ -132,11 +141,28 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
     await expect(summarize.locator(".canvas-step-dot.dot--terminal-success")).toBeVisible();
     await expect(summarize).toContainText("exit");
 
-    // A single-step template still previews honestly: one terminal node,
-    // no edges.
+    // A single-step template still previews honestly: one node, no edges. Its
+    // step is the ENTRY — entry outranks terminal in classifyStepKind, same as
+    // the canvas does for a one-step definition.
     await page.getByTestId("template-row-hello-agent").click();
-    await expect(page.getByTestId("template-graph-node-greet")).toBeVisible();
+    const greet = page.getByTestId("template-graph-node-greet");
+    await expect(greet).toBeVisible();
+    await expect(greet.locator(".canvas-step-dot.dot--entry")).toBeVisible();
     await expect(page.getByTestId("template-graph").locator(".canvas-step-transition")).toHaveCount(0);
+  });
+
+  test("preview: a fail-only exit is amber, and a pause step names its signal", async ({ page }) => {
+    // The vocabulary the previous projection collapsed: every exit was a green
+    // terminal-success and no step could be a pause.
+    await page.getByTestId("template-row-dependency-upgrade").click();
+    const giveUp = page.getByTestId("template-graph-node-give_up");
+    await expect(giveUp.locator(".canvas-step-dot.dot--terminal-warn")).toBeVisible();
+    await expect(giveUp).toContainText("fails out");
+
+    await page.getByTestId("template-row-approval-chain").click();
+    const decide = page.getByTestId("template-graph-node-decide");
+    await expect(decide.locator(".canvas-step-dot.dot--pause")).toBeVisible();
+    await expect(page.getByTestId("template-detail")).toContainText("pause · approval.decided");
   });
 
   test("a hand-edited destination survives switching templates", async ({ page }) => {

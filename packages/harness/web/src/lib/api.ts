@@ -19,15 +19,16 @@ import type {
   InjectInputRequest,
   MacroDef,
   RunMacroRequest,
-  SampleProjectSeedResponse,
   SessionSummary,
+  TemplateDetailView,
+  TemplateListResponse,
   RunView,
   WorkflowInfo,
 } from "@shared/types";
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
-import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SAMPLE_PROJECT_ROOT, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_WORKFLOWS } from "./mock-data";
+import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATE_GRAPHS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
 
 /**
  * Body for `POST /api/runs/local` — run the agent project at `sourceDir`
@@ -231,9 +232,11 @@ export interface HarnessApi {
   updateSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings>;
   listDir(path?: string): Promise<FsListResponse>;
   bindWorkflow(sessionId: string, workflowPath: string | null): Promise<HarnessSession>;
-  /** Seeds (or reuses) the bundled example project; the caller follows up
-   *  with a normal createSession against the returned root. */
-  seedSampleProject(): Promise<SampleProjectSeedResponse>;
+  /** The live template gallery, relayed by the server from core (key stays
+   *  server-side). Never rejects on a degraded catalog — inspect `source`. */
+  listTemplates(): Promise<TemplateListResponse>;
+  /** One template's manifest + declared graph. Rejects 404 on an unknown id. */
+  getTemplate(id: string): Promise<TemplateDetailView>;
   /** Live run render state (upstream feat/harness-runtime-analytics):
    *  GET /api/runs/:id/state = inspect -> decode -> renderRunState. Poll
    *  after an execution.started bus message until the run is terminal. */
@@ -394,8 +397,12 @@ class RealApi implements HarnessApi {
     });
   }
 
-  seedSampleProject(): Promise<SampleProjectSeedResponse> {
-    return this.request<SampleProjectSeedResponse>("/api/sample-project", { method: "POST" });
+  listTemplates(): Promise<TemplateListResponse> {
+    return this.request<TemplateListResponse>("/api/templates");
+  }
+
+  getTemplate(id: string): Promise<TemplateDetailView> {
+    return this.request<TemplateDetailView>(`/api/templates/${encodeURIComponent(id)}`);
   }
 
   getRunState(executionId: string): Promise<RunView> {
@@ -804,7 +811,7 @@ class MockApi implements HarnessApi {
         throw new ApiError(409, `POST /api/sessions/${id}/input → 409: Session is still initialising`, "Session is still initialising");
       }
       // Record the submission for Playwright to assert on — same pattern as
-      // runMacro's lastMacroRun and seedSampleProject's lastSampleSeed.
+      // runMacro's lastMacroRun.
       win.__HARNESS_TEST__ = {
         ...(win.__HARNESS_TEST__ ?? {}),
         lastInjectInput: { id, req },
@@ -938,21 +945,43 @@ class MockApi implements HarnessApi {
     return bound;
   }
 
-  async seedSampleProject(): Promise<SampleProjectSeedResponse> {
-    await delay(300);
-    const response: SampleProjectSeedResponse = {
-      root: MOCK_SAMPLE_PROJECT_ROOT,
-      projectDir: `${MOCK_SAMPLE_PROJECT_ROOT}/order-triage`,
-      created: true,
+  async listTemplates(): Promise<TemplateListResponse> {
+    await delay(200);
+    return { templates: MOCK_TEMPLATES, source: "live" };
+  }
+
+  async getTemplate(id: string): Promise<TemplateDetailView> {
+    await delay(150);
+    const summary = MOCK_TEMPLATES.find((template) => template.id === id);
+    if (!summary) throw new ApiError(404, `mock: no template ${id}`, `Template not found: ${id}`);
+    // Real per-template graphs (MOCK_TEMPLATE_GRAPHS) with the registry's actual
+    // step names, so mock mode previews what live mode previews. A template with
+    // no graph fixture falls back to a single entry node rather than inventing a
+    // shape we would then assert against.
+    const graph = MOCK_TEMPLATE_GRAPHS[summary.id] ?? {
+      steps: [
+        {
+          name: "start",
+          description: null,
+          capabilities: summary.capabilities,
+          kind: "entry",
+          sublabel: "entry",
+        },
+      ],
+      transitions: [],
     };
-    // Test-only escape hatch, mock mode only — same pattern as runMacro's
-    // lastMacroRun: seeding has no other observable effect in mock mode, so
-    // Playwright reads this back to assert the click actually seeded.
-    if (typeof window !== "undefined") {
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
-      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastSampleSeed: response };
-    }
-    return response;
+    return {
+      ...summary,
+      whatItDoes: summary.description,
+      sourcePath: `examples/${summary.id}`,
+      steps: graph.steps,
+      transitions: graph.transitions,
+      author: { name: "Sapiom", url: "https://sapiom.ai/" },
+      useCases: [`Use ${summary.name} as a starting point.`],
+      notes: "Mock notes — the real manifest ships with the template.",
+      examples: [],
+      requiredSecrets: [],
+    };
   }
 
   // Scripted completed run for the demo leasing workflow. Per-step latency

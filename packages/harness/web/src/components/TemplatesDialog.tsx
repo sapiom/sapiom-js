@@ -1,10 +1,15 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { JSX, RefObject } from "react";
 
+import type { TemplateDetailView, TemplateListResponse } from "@shared/types";
+
 import {
-  GALLERY_TEMPLATES,
   STARTER_TEMPLATES,
+  formatEstCost,
+  groupByCategory,
+  matchesQuery,
   templateDirSuggestion,
+  type GalleryTemplate,
   type StudioTemplate,
 } from "../lib/templates";
 import { useDismissable } from "../lib/use-dismissable";
@@ -18,6 +23,9 @@ interface TemplatesDialogProps {
   /** The real handoff (App.handleUseTemplate): starts a session in the
    *  destination folder and hands the agent the clone or scaffold prompt. */
   onUse: (dir: string, template: StudioTemplate) => Promise<void>;
+  /** The live catalog fetchers (server relays core; the key stays server-side). */
+  listTemplates: () => Promise<TemplateListResponse>;
+  getTemplate: (id: string) => Promise<TemplateDetailView>;
   /** The button that opened the dialog — Escape returns focus to it. */
   triggerRef?: RefObject<HTMLElement | null>;
 }
@@ -42,35 +50,109 @@ function TemplateRow({
     >
       <span className="template-row-name">{template.name}</span>
       <span className="template-row-desc">{template.description}</span>
+      {/* Cost is the one number that changes the decision, so it rides on the
+          card. An em dash means "no per-call-priced capability declared" —
+          never rendered as $0.00 (see formatEstCost). */}
+      {template.kind === "gallery" && (
+        <span className="template-row-meta">
+          <span className="template-row-steps">
+            {template.stepCount} {template.stepCount === 1 ? "step" : "steps"}
+          </span>
+          <span className="template-row-cost" title="Estimated capability cost per run">
+            {formatEstCost(template.estCostPerRunUsd)}
+          </span>
+        </span>
+      )}
     </button>
   );
 }
 
 /**
- * Start from a template (templates journey v0): browse the curated index,
- * preview a template's real manifest, and use it — which starts a session in
- * a new destination folder and hands the agent the real operation (the
- * clone MCP tool for gallery templates, `sapiom agents init -t` for bundled
- * starters). The cloned folder then joins the rail as a workspace and
- * editing/running is the normal loop — no special path. See lib/templates.ts
- * for the provenance of every word in the index.
+ * Start from a template: browse the LIVE catalog (the same one the dashboard's
+ * Template library renders, relayed by the harness server from core so the API
+ * key never reaches the browser), preview a template's real manifest, and use it
+ * — which starts a session in a new destination folder and hands the agent the
+ * real operation (the clone MCP tool for catalog templates, `sapiom agents init
+ * -t` for bundled starters). The cloned folder then joins the rail as a
+ * workspace and editing/running is the normal loop — no special path.
+ *
+ * The catalog is fetched, not pinned: this dialog previously rendered a
+ * hardcoded two-entry copy while the dashboard showed 26. If the fetch degrades
+ * (signed out, core unreachable) the bundled starters still work offline and the
+ * dialog SAYS the gallery is unavailable rather than presenting a short list as
+ * if it were complete.
  */
-export function TemplatesDialog({ launchDir, onClose, onUse, triggerRef }: TemplatesDialogProps): JSX.Element {
-  const [selected, setSelected] = useState<StudioTemplate>(GALLERY_TEMPLATES[0]);
-  const [dest, setDest] = useState(() => templateDirSuggestion(GALLERY_TEMPLATES[0], launchDir));
+export function TemplatesDialog({
+  launchDir,
+  onClose,
+  onUse,
+  listTemplates,
+  getTemplate,
+  triggerRef,
+}: TemplatesDialogProps): JSX.Element {
+  const [catalog, setCatalog] = useState<TemplateListResponse | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<StudioTemplate>(STARTER_TEMPLATES[0]);
+  const [dest, setDest] = useState(() => templateDirSuggestion(STARTER_TEMPLATES[0], launchDir));
   // A hand-edited destination survives template switches; an untouched one
   // follows the selection so the default always names the picked template.
-  const [destEdited, setDestEdited] = useState(false);
+  // A REF, not state: the catalog effect below runs once (`[]` deps), so a
+  // state closure would capture `false` permanently and overwrite a destination
+  // the user typed while the fetch was in flight.
+  const destEdited = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   useDismissable(true, { onDismiss: onClose, containerRef: panelRef, triggerRef });
 
+  // Selection follows the loaded catalog: default to the first gallery template
+  // once it arrives, but never clobber a choice the user already made.
+  const selectionTouched = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    listTemplates()
+      .then((response) => {
+        if (cancelled) return;
+        setCatalog(response);
+        const first = response.templates[0];
+        if (first && !selectionTouched.current) {
+          const template: GalleryTemplate = { ...first, kind: "gallery" };
+          setSelected(template);
+          if (!destEdited.current) setDest(templateDirSuggestion(template, launchDir));
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally once-per-open: the dialog is short-lived and the server
+    // caches the upstream call, so re-fetching on a keystroke would be waste.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const select = (template: StudioTemplate): void => {
+    selectionTouched.current = true;
     setSelected(template);
     setError(null);
-    if (!destEdited) setDest(templateDirSuggestion(template, launchDir));
+    if (!destEdited.current) setDest(templateDirSuggestion(template, launchDir));
   };
+
+  const gallery = useMemo<GalleryTemplate[]>(
+    () => (catalog?.templates ?? []).map((template) => ({ ...template, kind: "gallery" as const })),
+    [catalog],
+  );
+  const groups = useMemo(
+    () => groupByCategory(gallery.filter((template) => matchesQuery(template, query))),
+    [gallery, query],
+  );
+  const starters = useMemo(
+    () => STARTER_TEMPLATES.filter((template) => matchesQuery(template, query)),
+    [query],
+  );
+  const resultCount = groups.reduce((sum, group) => sum + group.templates.length, 0) + starters.length;
 
   const submit = async (): Promise<void> => {
     const trimmed = dest.trim();
@@ -85,6 +167,18 @@ export function TemplatesDialog({ launchDir, onClose, onUse, triggerRef }: Templ
       setBusy(false);
     }
   };
+
+  /** Why the gallery is short, in the user's terms — silence here is what made
+   *  the pinned two-entry list look like the whole catalog. */
+  const degraded = (): string | null => {
+    if (loadError) return `Could not load the template gallery: ${loadError}`;
+    if (!catalog) return null;
+    if (catalog.source === "live") return null;
+    return catalog.reason === "signed-out"
+      ? "Sign in to Sapiom to browse the template gallery. The bundled starters below work offline."
+      : "The template gallery is unreachable right now. The bundled starters below work offline.";
+  };
+  const degradedNote = degraded();
 
   return (
     <div className="modal-backdrop">
@@ -109,28 +203,67 @@ export function TemplatesDialog({ launchDir, onClose, onUse, triggerRef }: Templ
         </div>
 
         <div className="templates-layout">
-          <div className="templates-list" role="listbox" aria-label="Templates">
-            <div className="templates-list-section">Gallery</div>
-            {GALLERY_TEMPLATES.map((template) => (
-              <TemplateRow
-                key={template.id}
-                template={template}
-                isSelected={template.id === selected.id}
-                onSelect={select}
-              />
-            ))}
-            <div className="templates-list-section">Starters</div>
-            {STARTER_TEMPLATES.map((template) => (
-              <TemplateRow
-                key={template.id}
-                template={template}
-                isSelected={template.id === selected.id}
-                onSelect={select}
-              />
-            ))}
+          <div className="templates-sidebar">
+            <input
+              className="modal-input templates-search"
+              value={query}
+              placeholder="Search templates…"
+              aria-label="Search templates"
+              data-testid="template-search"
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <div className="templates-list" role="listbox" aria-label="Templates">
+              {catalog === null && !loadError && (
+                <div className="templates-list-empty" data-testid="templates-loading">
+                  Loading templates…
+                </div>
+              )}
+              {degradedNote && (
+                <div className="templates-list-note" data-testid="templates-degraded">
+                  {degradedNote}
+                </div>
+              )}
+              {groups.map((group) => (
+                <div key={group.label}>
+                  <div className="templates-list-section">
+                    {group.label}
+                    <span className="templates-list-count">{group.templates.length}</span>
+                  </div>
+                  {group.templates.map((template) => (
+                    <TemplateRow
+                      key={template.id}
+                      template={template}
+                      isSelected={template.id === selected.id}
+                      onSelect={select}
+                    />
+                  ))}
+                </div>
+              ))}
+              {starters.length > 0 && (
+                <>
+                  <div className="templates-list-section">
+                    Bundled starters
+                    <span className="templates-list-count">{starters.length}</span>
+                  </div>
+                  {starters.map((template) => (
+                    <TemplateRow
+                      key={template.id}
+                      template={template}
+                      isSelected={template.id === selected.id}
+                      onSelect={select}
+                    />
+                  ))}
+                </>
+              )}
+              {catalog !== null && resultCount === 0 && (
+                <div className="templates-list-empty" data-testid="templates-no-results">
+                  No templates match “{query}”.
+                </div>
+              )}
+            </div>
           </div>
 
-          <TemplateDetail template={selected} />
+          <TemplateDetail template={selected} getTemplate={getTemplate} />
         </div>
 
         <div className="modal-actions templates-actions">
@@ -144,7 +277,7 @@ export function TemplatesDialog({ launchDir, onClose, onUse, triggerRef }: Templ
               disabled={busy}
               onChange={(e) => {
                 setDest(e.target.value);
-                setDestEdited(true);
+                destEdited.current = true;
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void submit();

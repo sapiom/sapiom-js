@@ -182,10 +182,10 @@ test("creation IA: the rail + adds projects; the tab strip + adds a session to t
   await page.getByTestId("add-workspace").click();
   const modal = page.locator(".modal-add-workspace");
   await expect(modal).toBeVisible();
-  await expect(modal.locator(".modal-header")).toContainText("Add project");
+  await expect(modal.locator(".modal-header")).toContainText("Add workspace");
   await expect(modal.getByTestId("add-mode-session")).toHaveCount(0);
   await expect(modal.getByTestId("add-mode-project")).toHaveCount(0);
-  await expect(modal.getByRole("button", { name: "Add project" })).toBeVisible();
+  await expect(modal.getByRole("button", { name: "Add workspace" })).toBeVisible();
   await expect(modal.getByTestId("harness-select")).toHaveCount(0);
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(modal).toHaveCount(0);
@@ -439,12 +439,12 @@ test("add project: the rail's + opens the same directory-picker dialog and regis
   // workspace title and CTA.
   const modal = page.locator(".modal-add-workspace");
   await expect(modal).toBeVisible();
-  await expect(modal).toContainText("Add project");
+  await expect(modal).toContainText("Add workspace");
   await expect(modal.getByTestId("harness-select")).toHaveCount(0);
 
   const input = modal.getByTestId("dir-picker-input");
   await input.fill("/Users/demo/scratch");
-  await modal.getByRole("button", { name: "Add project" }).click();
+  await modal.getByRole("button", { name: "Add workspace" }).click();
 
   await expect(modal).toBeHidden();
   // The connected path joins the rail as a workspace-owned workflow row.

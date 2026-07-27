@@ -223,14 +223,14 @@ export function NewSessionModal({
       <div
         className={"modal " + (isWorkspace ? "modal-add-workspace" : "modal-new-session")}
         role="dialog"
-        aria-label={isWorkspace ? "Add project" : "New session"}
+        aria-label={isWorkspace ? "Add workspace" : "New session"}
         ref={panelRef}
       >
         {/* Full-bleed dialog anatomy: hairline-separated header / body /
             footer blocks, no floating inner boxes — mirrors the design
             system's DialogSurface (.sapiom-dialog). */}
         <div className="modal-header">
-          {isWorkspace ? "Add project" : "New session"}
+          {isWorkspace ? "Add workspace" : "New session"}
           <button
             className="theme-toggle modal-close"
             aria-label="Close"
@@ -258,9 +258,9 @@ export function NewSessionModal({
           <p className="modal-field-hint">
             {isWorkspace
               ? newDirTyped
-                ? "This folder doesn't exist yet. Add an existing agent project instead, or scaffold a new one here:"
+                ? "This folder doesn't exist yet. Add a folder that already holds an agent project, or scaffold a new one here:"
                 : "Pick a folder that already contains an agent project (sapiom.json); its workflow joins the rail."
-              : "Pick the project directory the agent runs in; the session is named after the folder."}
+              : "Pick the workspace folder the agent runs in; the session is named after the folder."}
           </p>
           {/* The hint's "ask the agent to scaffold one" is an ACTION —
               one click starts the session and hands the agent the scaffold
@@ -366,7 +366,7 @@ export function NewSessionModal({
             onClick={() => void submit()}
             disabled={busy || !cwd.trim() || (isWorkspace && newDirTyped)}
           >
-            {isWorkspace ? (busy ? "Adding…" : "Add project") : busy ? "Starting…" : "Start session"}
+            {isWorkspace ? (busy ? "Adding…" : "Add workspace") : busy ? "Starting…" : "Start session"}
           </button>
         </div>
       </div>

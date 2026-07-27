@@ -2,7 +2,7 @@
  * Fixture data for `VITE_MOCK=1` — lets the SPA render fully without a
  * running harness server (see MockApi in ./api).
  */
-import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
+import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionSummary, TemplateDetailView, TemplateSummary, WorkflowInfo } from "@shared/types";
 
 const now = Date.now();
 const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
@@ -41,9 +41,151 @@ export function hasMockCanvasDoc(sessionId: string): boolean {
   return MOCK_CANVAS_SESSIONS.includes(sessionId);
 }
 
-/** Where MockApi.seedSampleProject pretends the example project landed —
- *  mirrors the real HARNESS_PATHS.sampleProject location. */
-export const MOCK_SAMPLE_PROJECT_ROOT = "/Users/demo/.sapiom/harness/sample-project";
+/**
+ * A slice of the real template catalog for mock mode. Spans several categories
+ * on purpose — the dialog groups by category and shows a per-run cost estimate,
+ * and both need a mixed list (including a null `estCostPerRunUsd`, the majority
+ * case upstream) to be exercised without a backend.
+ */
+export const MOCK_TEMPLATES: TemplateSummary[] = [
+  {
+    id: "hello-agent",
+    name: "Hello Agent",
+    description: "The minimal single-step agent: a smoke test for the build, deploy, run path.",
+    tags: ["starter", "minimal"],
+    category: "starter",
+    cadence: "on-demand",
+    stepCount: 1,
+    capabilities: [],
+    estCostPerRunUsd: null,
+  },
+  {
+    id: "web-research-digest",
+    name: "Web Research Digest",
+    description: "Search the web for a topic and return a concise, sourced digest.",
+    tags: ["research", "search"],
+    category: "data-knowledge",
+    cadence: "on-demand",
+    stepCount: 2,
+    capabilities: ["web.search"],
+    estCostPerRunUsd: 0.006,
+  },
+  {
+    id: "dependency-upgrade",
+    name: "Dependency Upgrade",
+    description:
+      "On a schedule, a coding agent bumps a repo's dependencies in a sandbox, runs the tests, and opens a PR.",
+    tags: ["coding-agent", "scheduled"],
+    category: "product-engineering",
+    cadence: "scheduled",
+    stepCount: 5,
+    capabilities: ["sandbox.run"],
+    estCostPerRunUsd: 0.42,
+  },
+  {
+    id: "approval-chain",
+    name: "Multi-Party Approval Chain (Saga)",
+    description:
+      "A durable sequential sign-off chain — pause-per-gate approvals with reminders, timeout escalation, and compensation on rejection.",
+    tags: ["approval", "saga", "pause-resume", "durable"],
+    category: "reliability-governance",
+    cadence: "on-demand",
+    stepCount: 7,
+    capabilities: ["email.send", "database.create"],
+    estCostPerRunUsd: null,
+  },
+  {
+    id: "cold-outreach-engine",
+    name: "Cold Outreach Personalization Engine",
+    description:
+      "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip the sends.",
+    tags: ["outreach", "email", "fan-out"],
+    category: "revenue-marketing",
+    cadence: "scheduled",
+    stepCount: 6,
+    capabilities: ["web.search", "email.send"],
+    estCostPerRunUsd: 0.13,
+  },
+];
+
+/**
+ * Real per-template graphs for mock mode, keyed by template id. Step NAMES are
+ * the registry's actual ones (`search`/`summarize`, `greet`) because the e2e
+ * suite addresses nodes by name — and because a synthesized `step-2` teaches a
+ * reader nothing about what the preview looks like.
+ *
+ * `kind`/`sublabel` are what the server's `classifyStepKind` produces for each
+ * shape, so mock mode renders the same branches live mode does. Note a
+ * single-step template's one step is the ENTRY (entry outranks terminal in the
+ * precedence), which is why `greet` is not an exit node.
+ */
+export const MOCK_TEMPLATE_GRAPHS: Record<
+  string,
+  Pick<TemplateDetailView, "steps" | "transitions">
+> = {
+  "hello-agent": {
+    steps: [
+      { name: "greet", description: "Validate the input and return a greeting.", capabilities: [], kind: "entry", sublabel: "entry" },
+    ],
+    transitions: [],
+  },
+  "web-research-digest": {
+    steps: [
+      { name: "search", description: "Query the web for the topic.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
+      {
+        name: "summarize",
+        description: "Condense the results into a sourced digest.",
+        capabilities: [],
+        kind: "terminal-success",
+        sublabel: "terminal · success",
+      },
+    ],
+    transitions: [{ from: "search", to: "summarize", label: null, kind: "continue" }],
+  },
+  "dependency-upgrade": {
+    steps: [
+      { name: "scan", description: "List outdated dependencies.", capabilities: ["sandbox.run"], kind: "entry", sublabel: "entry" },
+      { name: "bump", description: "Apply the upgrades in a sandbox.", capabilities: [], kind: "step", sublabel: "step" },
+      { name: "test", description: "Run the suite against the bumped tree.", capabilities: [], kind: "step", sublabel: "step · can also terminate" },
+      { name: "open_pr", description: "Open a PR with the passing upgrade.", capabilities: [], kind: "terminal-success", sublabel: "terminal · success" },
+      // A fail-only sink: amber "needs attention", NOT a green success exit.
+      { name: "give_up", description: "Tests still failing after retries.", capabilities: [], kind: "terminal-warn", sublabel: "terminal · needs attention" },
+    ],
+    transitions: [
+      { from: "scan", to: "bump", label: null, kind: "continue" },
+      { from: "bump", to: "test", label: null, kind: "continue" },
+      { from: "test", to: "open_pr", label: null, kind: "continue" },
+      { from: "test", to: "give_up", label: null, kind: "continue" },
+    ],
+  },
+  "approval-chain": {
+    steps: [
+      { name: "start", description: "Record the request.", capabilities: ["database.create"], kind: "entry", sublabel: "entry" },
+      { name: "present", description: "Email the current gate's approver.", capabilities: ["email.send"], kind: "step", sublabel: "step" },
+      // A pause step shows the signal it waits for.
+      { name: "decide", description: "Wait for the approver's answer.", capabilities: [], kind: "pause", sublabel: "pause · approval.decided" },
+      { name: "finalize", description: "All gates passed.", capabilities: ["email.send"], kind: "terminal-success", sublabel: "terminal · success" },
+      { name: "compensate", description: "Roll back on rejection.", capabilities: ["email.send"], kind: "terminal-warn", sublabel: "terminal · needs attention" },
+    ],
+    transitions: [
+      { from: "start", to: "present", label: null, kind: "continue" },
+      { from: "present", to: "decide", label: null, kind: "continue" },
+      { from: "decide", to: "finalize", label: "approval.decided", kind: "pause" },
+      { from: "decide", to: "compensate", label: null, kind: "continue" },
+    ],
+  },
+  "cold-outreach-engine": {
+    steps: [
+      { name: "enrich", description: "Enrich the lead list.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
+      { name: "personalize", description: "Write a first line per prospect.", capabilities: [], kind: "step", sublabel: "step" },
+      { name: "send", description: "Drip the sends.", capabilities: ["email.send"], kind: "terminal-success", sublabel: "terminal · success" },
+    ],
+    transitions: [
+      { from: "enrich", to: "personalize", label: null, kind: "continue" },
+      { from: "personalize", to: "send", label: null, kind: "continue" },
+    ],
+  },
+};
 
 export const MOCK_SESSIONS: HarnessSession[] = [
   {

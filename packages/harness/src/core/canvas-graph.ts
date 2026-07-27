@@ -78,10 +78,33 @@ function classifyNode(
   entry: string,
   step: AgentStepManifest,
 ): { kind: CanvasNodeKind; sublabel: string } {
-  const continueTargets = step.transitions.filter((t) => t.kind === "continue");
-  const pause = step.transitions.find((t) => t.kind === "pause");
-  const hasTerminate = step.transitions.some((t) => t.kind === "terminate");
-  const hasFail = step.transitions.some((t) => t.kind === "fail");
+  return classifyStepKind({ name, entry, transitions: step.transitions });
+}
+
+/**
+ * The precedence table above, over nothing but a step's declared transition
+ * kinds — so a caller that has transitions from somewhere OTHER than a local
+ * `AgentManifest` classifies identically.
+ *
+ * Exported because the Studio's template preview projects the SAME graph from
+ * core's relayed `DefinitionTransitionDto[]` (see `core/template-catalog.ts`).
+ * That preview claims parity with the canvas, so it must not re-derive this:
+ * a second copy of the rule is a second answer to "what kind of node is this",
+ * and the two surfaces disagreeing is the exact class of bug the template work
+ * set out to remove. Collapsing the four kinds into a single `terminal` boolean
+ * (as the first cut of that preview did) renders a fail-only sink as a green
+ * success exit and a `continue`-plus-`terminate` gate as a terminal.
+ */
+export function classifyStepKind(input: {
+  name: string;
+  entry: string;
+  transitions: ReadonlyArray<{ kind: string; signal?: string | null }>;
+}): { kind: CanvasNodeKind; sublabel: string } {
+  const { name, entry, transitions } = input;
+  const continueTargets = transitions.filter((t) => t.kind === "continue");
+  const pause = transitions.find((t) => t.kind === "pause");
+  const hasTerminate = transitions.some((t) => t.kind === "terminate");
+  const hasFail = transitions.some((t) => t.kind === "fail");
 
   if (name === entry) return { kind: "entry", sublabel: "entry" };
   if (pause) return { kind: "pause", sublabel: `pause · ${pause.signal}` };

@@ -642,7 +642,8 @@ export interface CollectorBatch {
 // POST   /api/macros/:id/run            RunMacroRequest → { ok: true }
 // GET    /api/settings                  → HarnessSettings
 // PATCH  /api/settings                  Partial<HarnessSettings> → HarnessSettings
-// POST   /api/sample-project            → SampleProjectSeedResponse (seed/reuse the bundled example)
+// GET    /api/templates                 → TemplateListResponse (relays core's gallery)
+// GET    /api/templates/:id             → TemplateDetailView
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
 // POST   /api/track                     UiTrackRequest → { ok: true }  (UI-interaction analytics)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
@@ -781,14 +782,102 @@ export interface AppState {
   agentsBaseUrl?: string;
 }
 
-/** `POST /api/sample-project` response — the seeded (or reused) example. */
-export interface SampleProjectSeedResponse {
-  /** Directory to open a session in — contains the project + its canvas. */
-  root: string;
-  /** Absolute path of the scaffolded example project inside `root`. */
-  projectDir: string;
-  /** False when an already-seeded copy was reused as-is. */
-  created: boolean;
+// ---------------------------------------------------------------------------
+// Template gallery (relayed from the Sapiom core surface)
+// ---------------------------------------------------------------------------
+
+/**
+ * A gallery card, relayed verbatim from core's `GET /v1/workflows/templates`
+ * (`TemplateSummaryDto`). The Studio does NOT own this taxonomy — the registry
+ * in the public sapiom-js repo does, and the backend computes `estCostPerRunUsd`
+ * from the declared capabilities against live gateway pricing. Fields are
+ * carried through untouched so the Studio's list and the dashboard's Template
+ * library can never disagree.
+ */
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  /** Registry outcome-axis id (`starter`, `revenue-marketing`, …), or null for a
+   *  template predating the field. A loose string on purpose: the taxonomy is
+   *  owned upstream, so an unrecognised id buckets as uncategorised rather than
+   *  dropping the card. */
+  category: string | null;
+  /** What starts a run (`on-demand` | `scheduled` | `on-webhook` | `on-event`),
+   *  or null when undeclared. */
+  cadence: string | null;
+  stepCount: number;
+  /** Dotted catalog capability ids (e.g. `web.search`). */
+  capabilities: string[];
+  /** Null when the template declares no per-call-priced capability — render an
+   *  em dash, NEVER a fabricated `$0.00` (21 of 26 templates are null today). */
+  estCostPerRunUsd: number | null;
+}
+
+/**
+ * One step of a template's declared graph (core's `DefinitionStepDto` subset the
+ * detail pane renders).
+ *
+ * `kind`/`sublabel` come from `classifyStepKind` — the SAME precedence the canvas
+ * applies to a real definition — so the preview and the post-clone canvas agree.
+ * There is deliberately no `terminal` boolean: the four transition kinds
+ * (`continue`/`pause`/`terminate`/`fail`) do not collapse into one, and pretending
+ * they do renders a fail-only sink as a green success exit.
+ */
+export interface TemplateStepView {
+  name: string;
+  description: string | null;
+  capabilities: string[];
+  /** Canvas node kind: `entry` | `step` | `pause` | `terminal-success` | `terminal-warn`. */
+  kind: string;
+  /** One-line role, e.g. `entry`, `step · can also fail`, `terminal · success`. */
+  sublabel: string;
+}
+
+/** One edge of a template's declared graph (core's `DefinitionTransitionDto`). */
+export interface TemplateTransitionView {
+  from: string;
+  to: string;
+  /** The signal a `pause` edge waits for; null for a plain `continue`. */
+  label: string | null;
+  /** `cross` for a pause edge (as the canvas draws it), else continue flow. */
+  kind: "continue" | "pause";
+}
+
+/**
+ * `GET /api/templates/:id` — the summary plus the rich manifest the detail pane
+ * renders. Core expands the registry's hand-authored step list into the same
+ * graph shapes a real definition uses, so the preview and the post-clone canvas
+ * are the same vocabulary.
+ */
+export interface TemplateDetailView extends TemplateSummary {
+  /** Prose from the co-located `template.json`; null when the manifest omits it. */
+  whatItDoes: string | null;
+  /** Path inside the sapiom-js repo the fork is seeded from. */
+  sourcePath: string | null;
+  steps: TemplateStepView[];
+  transitions: TemplateTransitionView[];
+  author: { name: string; url: string | null } | null;
+  useCases: string[];
+  /** Markdown. */
+  notes: string | null;
+  examples: Array<{ title: string | null; input: unknown; output: unknown }>;
+  /** Credentials the template needs supplied before a deployed run works. */
+  requiredSecrets: Array<{ key: string; label: string; description: string | null }>;
+}
+
+/**
+ * `GET /api/templates` response. `source` tells the SPA whether it is looking at
+ * the live catalog or the offline fallback, so the dialog can say so instead of
+ * silently presenting two entries as the whole gallery — the failure mode this
+ * endpoint exists to fix.
+ */
+export interface TemplateListResponse {
+  templates: TemplateSummary[];
+  source: "live" | "fallback";
+  /** Why the live fetch was not used, when `source` is `fallback`. */
+  reason?: "signed-out" | "unreachable";
 }
 
 export interface HarnessSettings {

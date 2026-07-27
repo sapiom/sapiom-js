@@ -26,7 +26,6 @@ import type {
   ImageMediaType,
   InjectInputRequest,
   MacroDef,
-  SampleProjectSeedResponse,
   SessionSummary,
   UiEventName,
   UiTrackRequest,
@@ -191,11 +190,6 @@ export interface RestRouterOptions {
   /** Which env var forced telemetry off — surfaced in AppState for the
    * tracking indicator's "off (env)" label. Null/absent otherwise. */
   consentEnvReason?: string | null;
-  /** Seeds (or reuses) the bundled example project and returns where it
-   * landed — backs POST /api/sample-project (the welcome panel's "Run the
-   * sample project"). Optional so callers without the real seeder (tests)
-   * get a 501 from the route instead of having to stub one. */
-  seedSampleProject?: () => Promise<SampleProjectSeedResponse>;
   /** Where GET/PATCH /settings (and /state's settings read) persist to.
    * Omitted, the real `~/.sapiom/harness/settings.json` — the integrator
    * (server/index.ts) passes the path under its resolved state root so an
@@ -294,26 +288,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
         options.onTelemetryOptInChange?.(parsed.data.telemetryOptIn);
       }
       res.json(updated);
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // Deliberately does NOT create a session itself — the SPA follows up with
-  // its normal POST /sessions against the returned root, so recent-dirs
-  // bookkeeping, workflow scanning, and tab state all flow through the one
-  // existing session-creation path.
-  router.post("/sample-project", async (_req, res, next) => {
-    if (!options.seedSampleProject) {
-      res
-        .status(501)
-        .json({
-          error: "sample project seeding is not available on this server",
-        });
-      return;
-    }
-    try {
-      res.json(await options.seedSampleProject());
     } catch (err) {
       next(err);
     }

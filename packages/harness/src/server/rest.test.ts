@@ -274,46 +274,6 @@ describe("createRestRouter", () => {
     expect(await res.json()).toEqual([]);
   });
 
-  describe("POST /sample-project", () => {
-    it("501s when no seeder is wired up", async () => {
-      start();
-      const res = await fetch(`${baseUrl}/sample-project`, {
-        method: "POST",
-        headers: TOKEN_HEADER,
-      });
-      expect(res.status).toBe(501);
-    });
-
-    it("returns the seeder's result", async () => {
-      const seeded = {
-        root: "/tmp/sample",
-        projectDir: "/tmp/sample/order-triage",
-        created: true,
-      };
-      const seedSampleProject = vi.fn().mockResolvedValue(seeded);
-      start({ seedSampleProject });
-
-      const res = await fetch(`${baseUrl}/sample-project`, {
-        method: "POST",
-        headers: TOKEN_HEADER,
-      });
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual(seeded);
-      expect(seedSampleProject).toHaveBeenCalledOnce();
-    });
-
-    it("propagates a seeding failure as a server error, not a hang", async () => {
-      start({
-        seedSampleProject: vi.fn().mockRejectedValue(new Error("disk full")),
-      });
-      const res = await fetch(`${baseUrl}/sample-project`, {
-        method: "POST",
-        headers: TOKEN_HEADER,
-      });
-      expect(res.status).toBe(500);
-    });
-  });
-
   describe("POST /sessions", () => {
     it("calls onSessionCreated with the new session's cwd and id", async () => {
       const onSessionCreated = vi.fn();
