@@ -121,6 +121,13 @@ jobs:
         run: pnpm --filter "@sapiom/harness-desktop..." build
 
       - name: Package installers
+        # Bounded so a stuck notarization fails fast. Packaging alone takes ~1
+        # minute (unsigned macOS runs: 31s–64s); signing adds seconds; the rest
+        # is Apple's notary service, which `notarytool submit --wait` blocks on
+        # with no timeout of its own. A first attempt sat pending for 33 minutes
+        # and had to be killed — without this it would have consumed the whole
+        # 40-minute job budget and produced no artifact and no diagnosis.
+        timeout-minutes: 25
         # Invoke pack.mjs directly (not the `dist` script) so we control the
         # platform flag and skip the script's redundant single-package build.
         # electron-builder's npmRebuild recompiles node-pty against the Electron
@@ -187,6 +194,38 @@ jobs:
           fi
           # shellcheck disable=SC2086 # intentional: empty must vanish
           node packages/harness-desktop/scripts/pack.mjs ${{ matrix.packflag }} $notarize_flag
+
+      # Ask Apple what actually happened, on the runner that has notarytool.
+      # Runs even when packaging failed — that is precisely when it's needed:
+      # a submission that timed out here may still have completed on Apple's
+      # side, and an `Invalid` verdict carries a log explaining exactly which
+      # binary or entitlement Apple rejected. Without this the only signal is
+      # "the step hung", which is not a diagnosis.
+      - name: Notarization history (diagnostic)
+        if: always() && runner.os == 'macOS'
+        continue-on-error: true
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -uo pipefail
+          if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
+            echo "no notarization credentials — nothing to query"; exit 0
+          fi
+          echo "--- recent submissions ---"
+          xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1 | head -40
+          # Apple's verdict on the newest submission, with the rejection reasons
+          # when it is Invalid.
+          id="$(xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" 2>/dev/null \
+                | awk '/id:/ {print $2; exit}')"
+          if [ -n "${id:-}" ]; then
+            echo "--- log for submission $id ---"
+            xcrun notarytool log "$id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1 | head -60
+          fi
 
       - name: List built artifacts
         # `shell: bash` runs under git-bash on the Windows runner too, so one ls works.
