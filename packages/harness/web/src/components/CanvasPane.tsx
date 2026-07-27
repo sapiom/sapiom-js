@@ -4,13 +4,11 @@ import type { BackgroundTask, BusMessage, MacroDef, RunView, WorkflowInfo } from
 
 import { isMockMode } from "../lib/api";
 import { MOCK_CANVAS_OVERVIEWS, hasMockCanvasDoc } from "../lib/mock-data";
-import { findVisualizeMacro, macroDisabledReason } from "../lib/macro-gating";
 import { getTheme, subscribeTheme } from "../lib/theme";
-import { track } from "../lib/track";
 import { type CanvasGraph, formatGraphCounts, parseCanvasGraph } from "../lib/canvas-graph";
 import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { CanvasOverviewPanel } from "./CanvasOverviewPanel";
-import { CanvasStepDetail, CanvasStepsList, RunStepsList } from "./CanvasStepDetail";
+import { CanvasChatPanel, CanvasStepDetail, CanvasStepsList, RunStepsList } from "./CanvasStepDetail";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
@@ -27,7 +25,6 @@ interface CanvasPaneProps {
    *  agent's board (the canvas is served per session, so an
    *  unsessioned agent has no board to render). */
   noSessionAgent?: string | null;
-  activeSessionId: string | null;
   /** the overview/welcome panel owns the center pane — no session is
    *  displayed, so the canvas shows the fresh-install "start a session"
    *  state instead of the previous session's empty state and CTA. */
@@ -35,6 +32,10 @@ interface CanvasPaneProps {
   /** the displayed session has exited — Visualize can't do anything,
    *  so the empty state swaps to a resume invitation. */
   sessionExited: boolean;
+  /** Canvas full-screen state + toggle — owned by App so the control sits in
+   *  the right-pane tab bar; CanvasPane renders the frame + exit affordance. */
+  expanded: boolean;
+  onToggleExpanded: () => void;
   macros: MacroDef[];
   /** All background tasks (any session) — filtered to `sessionId` here. */
   tasks: BackgroundTask[];
@@ -69,9 +70,10 @@ export function CanvasPane({
   lastMessage,
   boundWorkflow,
   noSessionAgent = null,
-  activeSessionId,
   overviewActive,
   sessionExited,
+  expanded,
+  onToggleExpanded,
   macros,
   tasks,
   onRunMacro,
@@ -355,7 +357,6 @@ export function CanvasPane({
     layer.addEventListener("pointercancel", onUp);
   };
 
-  const [expanded, setExpanded] = useState(false);
   // The board-picked step whose detail the bottom inspector shows. Separate
   // from detailStepId (the Steps tab's full-pane drill): a pick stays on the
   // Canvas tab now, populating the panel below the board in real time.
@@ -368,12 +369,16 @@ export function CanvasPane({
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
       if (selectedNodeId != null) setSelectedNodeId(null);
-      else setExpanded(false);
+      else onToggleExpanded();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [expanded, selectedNodeId]);
+  }, [expanded, selectedNodeId, onToggleExpanded]);
   const [overviewOpen, setOverviewOpen] = useState(true);
+  // The chat (macros + ask) is a standalone panel, CLOSED by default and
+  // toggled by the 💬 control — independent of the info panel (both can be
+  // open at once; the chat also opens with no step selected, as a general ask).
+  const [chatOpen, setChatOpen] = useState(false);
   // Overview contract: a rendered document may post its chrome content
   // ({type:"sapiom-canvas:overview", description, stats, notes[]}) so the APP
   // renders the overview panel and the document stays a pure board. Live
@@ -609,11 +614,6 @@ export function CanvasPane({
     userAdjustedRef.current = false;
   }, [boundWorkflowPath]);
 
-  const visualizeMacro = findVisualizeMacro(macros);
-  const visualizeDisabledReason = visualizeMacro
-    ? macroDisabledReason(visualizeMacro, boundWorkflow, activeSessionId)
-    : null;
-
   // Background-task state for THIS session's pane, scoped to the CURRENT
   // binding: a task that carries a workflowPath only surfaces while the pane
   // is showing that workflow — switching the binding mid-run must not bleed
@@ -645,16 +645,12 @@ export function CanvasPane({
   // GitHub's 404 page rendered inside the pane.
   const sessionHasServableDoc = sessionId != null && (!isMockMode() || hasMockCanvasDoc(sessionId));
   const showsContent = hasGeneratedContent && sessionHasServableDoc;
-  const showingFrame = Boolean(sessionId) && !failedTask && showsContent && !probing;
 
   return (
     <aside className="canvas-pane">
       {boundWorkflow && !overviewActive && (
         <WorkflowActionsHeader
           workflow={boundWorkflow}
-          expanded={expanded}
-          onToggleExpanded={() => setExpanded((v) => !v)}
-          canExpand={showingFrame}
           detailStep={detailNode}
           onBack={() => setDetailStepId(null)}
           onAskAgent={onInjectPrompt}
@@ -777,10 +773,11 @@ export function CanvasPane({
           body={`Resume the session to see its ${surface === "steps" ? "workflow steps" : "workflow diagram"} here.`}
         />
       ) : !showsContent ? (
-        /* Header claim, one supporting line, then the action — top to bottom.
-           The diagram is generated deterministically from the bound workflow
-           (no AI); the render CTA works from either tab — it (re)renders the
-           board AND posts the step graph the Steps tab projects. */
+        /* Header claim + one supporting line — no action. The diagram is
+           generated deterministically from the bound workflow (no AI),
+           automatically on bind/start and on every code change, so there's
+           nothing to trigger by hand; an unbound session simply has nothing
+           to show yet. */
         <EmptyState
           className="canvas-empty"
           icon="Workflow"
@@ -789,22 +786,6 @@ export function CanvasPane({
             surface === "steps"
               ? "Steps are read from the bound workflow's diagram — generated automatically from its code."
               : "Generated automatically from the bound workflow; it refreshes when the code changes."
-          }
-          cta={
-            visualizeMacro && (
-              <button
-                className="btn-primary canvas-visualize-cta"
-                data-testid="canvas-visualize-cta"
-                data-tooltip={visualizeDisabledReason ?? visualizeMacro.label}
-                disabled={Boolean(visualizeDisabledReason)}
-                onClick={() => {
-                  onRunMacro(visualizeMacro);
-                  track("visualize.triggered");
-                }}
-              >
-                <Icon name="Workflow" size={14} /> Render diagram
-              </button>
-            )
           }
         />
       ) : (
@@ -877,7 +858,7 @@ export function CanvasPane({
               data-testid="canvas-expand-exit"
               aria-label="Exit expanded canvas"
               title="Exit expanded canvas (Esc)"
-              onClick={() => setExpanded(false)}
+              onClick={onToggleExpanded}
             >
               <Icon name="Minimize2" size={14} />
             </button>
@@ -987,6 +968,19 @@ export function CanvasPane({
               i
             </button>
           )}
+          {/* Chat toggle — the ask/macros panel is standalone and closed by
+              default; independent of the info panel (both can be open). */}
+          {surface === "board" && (
+            <button
+              className={"theme-toggle canvas-chat-toggle" + (chatOpen ? " is-active" : "")}
+              data-testid="canvas-chat-toggle"
+              aria-label={chatOpen ? "Close chat" : "Open chat"}
+              data-tooltip="Chat — ask about this workflow or the selected step"
+              onClick={() => setChatOpen((c) => !c)}
+            >
+              <Icon name="MessageSquare" size={14} />
+            </button>
+          )}
           <iframe
             ref={frameRef}
             key={`${sessionId}:${reloadKey}`}
@@ -1068,14 +1062,23 @@ export function CanvasPane({
               run={run}
               workflows={workflows}
               onOpenWorkflow={onOpenWorkflow}
-              onSelectStep={setSelectedNodeId}
               onOpenSteps={() => {
                 if (selectedNodeId) setDetailStepId(selectedNodeId);
                 onOpenSteps();
               }}
               onDeselect={() => setSelectedNodeId(null)}
               onCollapse={() => setOverviewOpen(false)}
+            />
+          )}
+          {/* Standalone chat panel — independent of the info panel above; shows
+              whenever the 💬 toggle is on and a session can receive the inject.
+              Targets the selected step, or a general ask when none is selected. */}
+          {surface === "board" && chatOpen && (
+            <CanvasChatPanel
+              node={selectedNode}
+              run={run}
               onInjectPrompt={onInjectPrompt}
+              onClose={() => setChatOpen(false)}
             />
           )}
           </div>
@@ -1085,7 +1088,6 @@ export function CanvasPane({
                 graph={graph}
                 node={renderedDetail}
                 run={run}
-                onSelectStep={setDetailStepId}
                 workflows={workflows}
                 onOpenWorkflow={onOpenWorkflow}
               />

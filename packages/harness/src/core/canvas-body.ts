@@ -91,7 +91,12 @@ function buildGraphPayload(graph: CanvasGraph, enrichment?: CanvasEnrichment | n
         kind: n.kind,
         label: n.label,
         role: details?.sublabel ?? n.sublabel ?? "",
-        description: details?.description ?? "",
+        // Manifest-authored description (Option A) wins; enrichment is the
+        // legacy fallback (currently always undefined).
+        description: details?.description ?? n.description ?? "",
+        inputSchema: n.inputSchema ?? null,
+        capabilities: n.capabilities ?? [],
+        timeoutMs: n.timeoutMs ?? null,
       };
     }),
     edges: graph.edges.map((e) => ({
@@ -103,6 +108,31 @@ function buildGraphPayload(graph: CanvasGraph, enrichment?: CanvasEnrichment | n
     warnings: graph.warnings,
   };
   return JSON.stringify(payload).replace(/</g, "\\u003c");
+}
+
+/** The workflow-level overview the Canvas tab's bottom panel shows: a
+ *  deterministic stats line ("N steps · M exits · <entry> entry"), the shape
+ *  summary as the description, and the graph's validation notes. Embedded as a
+ *  JSON data block (read by bootCanvasOverview), the same pattern as the step
+ *  graph — everything here is derived from the graph, no LLM. */
+function buildOverviewPayload(graph: CanvasGraph, enrichment?: CanvasEnrichment | null): string {
+  const exits = graph.nodes.filter(
+    (n) => n.kind === "terminal-success" || n.kind === "terminal-warn",
+  ).length;
+  const steps = graph.nodes.length - exits;
+  const entryLabel = graph.nodes.find((n) => n.id === graph.entry)?.label ?? graph.entry;
+  const parts = [`${steps} ${steps === 1 ? "step" : "steps"}`];
+  if (exits > 0) parts.push(`${exits} ${exits === 1 ? "exit" : "exits"}`);
+  if (entryLabel) parts.push(`${entryLabel} entry`);
+  const overview = {
+    // Human-authored workflow description from the manifest (Option A); "" when
+    // the workflow declares none (the shape summary still renders on the board).
+    description: graph.description ?? "",
+    stats: parts.join(" · "),
+    notes: enrichment?.notes ?? [],
+  };
+  // JSON in a <script> block: neutralize any "</script>"/"<" in derived text.
+  return JSON.stringify(overview).replace(/</g, "\\u003c");
 }
 
 /** One workflow's full panel: title/badges + summary header and the SVG
@@ -126,6 +156,7 @@ export function buildWorkflowPanelHtml(
   const legend = buildLegendHtml(used.nodeKinds, used.edgeKinds);
   const legendHtml = legend ? `\n  ${legend}` : "";
   const graphData = buildGraphPayload(graph, enrichment);
+  const overviewData = buildOverviewPayload(graph, enrichment);
   return `<section class="canvas-panel">
   <header class="canvas-header">
     <div class="canvas-title-row">
@@ -137,6 +168,7 @@ export function buildWorkflowPanelHtml(
 ${renderGraphSvg(graph, enrichment)}
   </div>${legendHtml}
   <script type="application/json" id="sapiom-graph">${graphData}</script>
+  <script type="application/json" id="sapiom-overview">${overviewData}</script>
 </section>`;
 }
 

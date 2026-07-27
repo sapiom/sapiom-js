@@ -301,3 +301,38 @@ export function bootCanvasGraph(): void {
     post();
   }
 }
+
+/**
+ * Posts the workflow-level overview (`{ description, stats, notes }`) so the
+ * Canvas tab's bottom panel can show it — the deterministic equivalent of the
+ * demo doc's overview. Embedded by `canvas-body.ts` as a `<script
+ * type="application/json" id="sapiom-overview">` data block (read as text, same
+ * pattern as the graph). A missing block posts nothing and the parent keeps its
+ * empty state; a malformed one is swallowed rather than thrown. Stringified into
+ * the template by `canvas-template.ts`.
+ */
+export function bootCanvasOverview(): void {
+  function post(): void {
+    const el = document.getElementById("sapiom-overview");
+    if (!el) return;
+    try {
+      const data = JSON.parse(el.textContent || "{}");
+      window.parent.postMessage(
+        {
+          type: "sapiom-canvas:overview",
+          description: typeof data.description === "string" ? data.description : "",
+          stats: typeof data.stats === "string" ? data.stats : "",
+          notes: Array.isArray(data.notes) ? data.notes : [],
+        },
+        "*",
+      );
+    } catch {
+      /* malformed payload — leave the overview empty rather than throw */
+    }
+  }
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", post);
+  } else {
+    post();
+  }
+}

@@ -11,10 +11,6 @@ import { Icon } from "./Icon";
 
 interface WorkflowActionsHeaderProps {
   workflow: WorkflowInfo;
-  /** Panel-level expand lives here (subheader), not in the board's zoom widget. */
-  expanded: boolean;
-  onToggleExpanded: () => void;
-  canExpand: boolean;
   /** Drilled step, when the pane shows a step detail instead of the board. */
   detailStep: CanvasGraphNode | null;
   onBack: () => void;
@@ -42,9 +38,10 @@ function runChipLabel(run: RunView, target: RunTarget | null): string {
 }
 
 /**
- * The canvas pane's subheader. Three modes on one bar:
- * - Board: workflow name + deployed dot, expand (the canvas re-renders itself
- *   on any workflow-source edit, so there's no manual refresh action).
+ * The canvas pane's subheader. Renders only for the Steps list and a drilled
+ * step — the board shows no subheader at all (its deployed pill and
+ * expand/collapse live in the tab bar, its name in the rail), so this returns
+ * null in that case.
  * - Steps list: the workflow name and the real step count, info left, no
  *   competing actions (rows are the interface).
  * - Step detail: 1×1 back left-anchored, the step's name and kind, then the
@@ -53,9 +50,6 @@ function runChipLabel(run: RunView, target: RunTarget | null): string {
  */
 export function WorkflowActionsHeader({
   workflow,
-  expanded,
-  onToggleExpanded,
-  canExpand,
   detailStep,
   onBack,
   onAskAgent,
@@ -65,7 +59,7 @@ export function WorkflowActionsHeader({
   runTarget,
   runs,
   onSelectRun,
-}: WorkflowActionsHeaderProps): JSX.Element {
+}: WorkflowActionsHeaderProps): JSX.Element | null {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -235,46 +229,8 @@ export function WorkflowActionsHeader({
     );
   }
 
-  return (
-    <div className="workflow-actions-header" data-testid="workflow-actions-header">
-      <span className="workflow-actions-name">{workflow.name}</span>
-      {workflow.definitionId != null && (
-        /* Flat status tag: the dot carries the hue, the word carries the
-           meaning — never a bare colored mark alone. */
-        <span
-          className="status-tag workflow-deployed-tag"
-          data-testid="workflow-deployed-tag"
-          data-tooltip="Deployed to production"
-        >
-          <span className="workflow-dot workflow-dot-pinned" aria-hidden="true" />
-          Deployed
-        </span>
-      )}
-      {workflow.definitionId != null && (
-        <a
-          className="status-tag status-tag-action workflow-dashboard-link"
-          data-testid="workflow-dashboard-link"
-          href={`https://app.sapiom.ai/workflows/${workflow.definitionId}`}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Go to dashboard"
-          data-tooltip="Open this workflow in the Sapiom dashboard"
-        >
-          <Icon name="ExternalLink" size={12} />
-          <span className="workflow-dashboard-link-label">Go to dashboard</span>
-        </a>
-      )}
-      {canExpand && (
-        <button
-          className="macro-icon-btn"
-          data-testid="canvas-expand"
-          aria-label={expanded ? "Exit expanded canvas" : "Expand canvas"}
-          data-tooltip={expanded ? "Exit expanded canvas" : "Expand canvas"}
-          onClick={onToggleExpanded}
-        >
-          <Icon name={expanded ? "Minimize2" : "Maximize2"} size={14} />
-        </button>
-      )}
-    </div>
-  );
+  // The board renders no subheader at all: its deployed pill (→ dashboard) and
+  // expand/collapse live in the tab bar, its name in the rail. Tidjane's board
+  // design has nothing between the tabs and the canvas, so return null here.
+  return null;
 }

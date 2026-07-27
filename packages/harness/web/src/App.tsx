@@ -126,6 +126,10 @@ export const App = (): JSX.Element => {
   const [rightCollapsed, setRightCollapsed] = useState(
     () => isMobileShell() || (loadUiPrefs().rightCollapsed ?? false),
   );
+  // Canvas full-screen expand — lifted here so its control sits next to the
+  // collapse-panel toggle in the right-pane tab bar (the frame itself lives in
+  // CanvasPane, which reads these props).
+  const [canvasExpanded, setCanvasExpanded] = useState(false);
   const isMobile = useMobileShell();
 
   const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
@@ -833,15 +837,46 @@ export const App = (): JSX.Element => {
               >
                 Code
               </button>
-              <button
-                className="theme-toggle right-pane-collapse"
-                data-testid="right-collapse"
-                aria-label="Collapse canvas panel"
-                title="Collapse canvas panel"
-                onClick={() => setRightCollapsed(true)}
-              >
-                <Icon name="PanelRightClose" size={15} />
-              </button>
+              <div className="right-pane-corner">
+                {/* Deployed pill → dashboard. The board has no subheader now, so
+                    its deploy status lives here in the tab bar (Tidjane's design:
+                    nothing sits between the tabs and the canvas). */}
+                {rightTab === "canvas" && rightPaneWorkflow?.definitionId != null && (
+                  <a
+                    className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
+                    data-testid="workflow-dashboard-link"
+                    href={`https://app.sapiom.ai/workflows/${rightPaneWorkflow.definitionId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Deployed — open in the Sapiom dashboard"
+                    data-tooltip="Open this workflow in the Sapiom dashboard"
+                  >
+                    <Icon name="Cloud" size={12} />
+                    deployed
+                  </a>
+                )}
+                {/* Canvas expand sits right beside the collapse-panel toggle. */}
+                {rightTab === "canvas" && (
+                  <button
+                    className="theme-toggle"
+                    data-testid="canvas-expand"
+                    aria-label={canvasExpanded ? "Exit expanded canvas" : "Expand canvas"}
+                    title={canvasExpanded ? "Exit expanded canvas" : "Expand canvas"}
+                    onClick={() => setCanvasExpanded((v) => !v)}
+                  >
+                    <Icon name={canvasExpanded ? "Minimize2" : "Maximize2"} size={15} />
+                  </button>
+                )}
+                <button
+                  className="theme-toggle right-pane-collapse"
+                  data-testid="right-collapse"
+                  aria-label="Collapse canvas panel"
+                  title="Collapse canvas panel"
+                  onClick={() => setRightCollapsed(true)}
+                >
+                  <Icon name="PanelRightClose" size={15} />
+                </button>
+              </div>
             </div>
 
             <div
@@ -853,9 +888,10 @@ export const App = (): JSX.Element => {
                 lastMessage={harness.lastMessage}
                 boundWorkflow={rightPaneWorkflow}
                 noSessionAgent={noSessionAgentName}
-                activeSessionId={harness.activeSessionId}
                 overviewActive={showWelcome}
                 sessionExited={showDead}
+                expanded={canvasExpanded}
+                onToggleExpanded={() => setCanvasExpanded((v) => !v)}
                 macros={state.macros}
                 tasks={harness.tasks}
                 surface={rightTab === "steps" ? "steps" : "board"}

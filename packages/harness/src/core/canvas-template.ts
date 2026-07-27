@@ -21,6 +21,7 @@ import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
 import {
   applyRunStateToCanvas,
   bootCanvasGraph,
+  bootCanvasOverview,
   bootCanvasNodeClicks,
   bootCanvasRunState,
   bootCanvasView,
@@ -94,11 +95,16 @@ html, body {
    pane centers within the VISIBLE area — with min-height the body would grow and
    push the card off-screen — and overflow is clipped (pan/zoom navigates instead
    of scrollbars). */
-body { display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+body {
+  display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden;
+  /* Dotted grid behind the board — matches the studio's demo canvas. */
+  background-image: radial-gradient(var(--canvas-border-strong) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
 #canvas-root { max-width: 1100px; padding: 24px 20px; display: flex; flex-direction: column; gap: 18px; }
 
 /* --- structural classes: keep these, and their names, untouched --- */
-.canvas-panel { background: var(--canvas-panel); border: 1px solid var(--canvas-border); border-radius: 16px; padding: 20px; }
+.canvas-panel { background: transparent; border: 0; padding: 20px; }
 .canvas-header { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
 .canvas-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .canvas-title { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
@@ -355,7 +361,7 @@ const NAME_SHIM = "function __name(fn){return fn;}";
  *  embedded step graph so the Steps tab can project it — all via the same
  *  stringify pattern. `NAME_SHIM` MUST come first (see its doc — without it,
  *  esbuild/tsx output throws in the iframe). */
-const RUN_STATE_SCRIPT = `${NAME_SHIM}\n${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();\n${bootCanvasView.toString()}\nbootCanvasView();\n${bootCanvasGraph.toString()}\nbootCanvasGraph();`;
+const RUN_STATE_SCRIPT = `${NAME_SHIM}\n${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();\n${bootCanvasView.toString()}\nbootCanvasView();\n${bootCanvasGraph.toString()}\nbootCanvasGraph();\n${bootCanvasOverview.toString()}\nbootCanvasOverview();`;
 
 /**
  * Wraps `bodyHtml` in the shared canvas document shell: doctype, the theme

@@ -3275,8 +3275,7 @@ input {
 }
 
 .canvas-step-row:focus-visible,
-.canvas-step-open:focus-visible,
-.canvas-detail-edge:focus-visible {
+.canvas-step-open:focus-visible {
   outline: 1.5px solid var(--brand);
   outline-offset: 1px;
 }
@@ -3789,6 +3788,9 @@ input {
   border-top: 1px solid var(--ui-line);
 }
 
+/* Read-only lineage rows: "Leads to" / "Reached from" show a step's real
+   edges and branch conditions as reference. Navigation is the chart's job, so
+   no hover/press/link affordances here. */
 .canvas-detail-edge {
   display: flex;
   align-items: center;
@@ -3796,24 +3798,8 @@ input {
   width: 100%;
   min-height: 40px;
   padding: var(--sp1) var(--sp3);
-  border: 0;
-  background: transparent;
   color: var(--text-dim);
   text-align: left;
-  transition: background-color var(--transition-fast);
-}
-
-.canvas-detail-edge:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.canvas-detail-edge:active {
-  background: var(--surface-selected);
-}
-
-.canvas-detail-edge:focus-visible {
-  outline-offset: -2px;
 }
 
 .canvas-detail-edge > svg {
@@ -3834,10 +3820,6 @@ input {
   background: var(--surface-inset);
   font-size: var(--type-micro);
   color: var(--text-faint);
-}
-
-.canvas-detail-edge:hover .canvas-detail-edge-target {
-  text-decoration: underline;
 }
 
 .canvas-detail-edge-cond {
@@ -3954,38 +3936,6 @@ input {
   margin: 0;
 }
 
-/* Transition rows double as links in the inspector: same elbow anatomy,
-   plus real interaction states on the target's name. */
-.canvas-step-transition.is-link {
-  border: 0;
-  background: none;
-  /* A little inset padding gives the soft-shade hover something to fill. */
-  padding: 2px var(--sp1);
-  text-align: left;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: background-color var(--transition-fast);
-}
-
-/* Selectable inspector rows get the same soft-shade language as the board's
-   selected node when they are the interaction target. */
-.canvas-step-transition.is-link:hover,
-.canvas-step-transition.is-link:active {
-  background: var(--active-shade);
-}
-
-.canvas-step-transition.is-link:hover .canvas-step-transition-target,
-.canvas-step-transition.is-link:active .canvas-step-transition-target {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.canvas-step-transition.is-link:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
 /* The selected step's observed run facts: one meta-size row — status ink
    from the shared run-text scale, then duration. */
 .canvas-inspector-run {
@@ -4007,19 +3957,25 @@ input {
    reads as native to the panel above it. */
 .canvas-inspector-macros {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: var(--sp1);
   margin-top: var(--sp1);
   padding-top: var(--sp2);
   border-top: 1px solid var(--ui-line);
 }
 
+/* The three macros ride as a single wrapping row of pills (they inherit
+   .btn-ghost / .btn-primary); each grows to share the row, wrapping when the
+   drawer is too narrow. */
 .canvas-inspector-macro-btn {
-  width: 100%;
-  text-align: left;
+  flex: 1 1 auto;
+  text-align: center;
 }
 
+/* The free-form ask always drops to its own full-width row below the pills. */
 .canvas-inspector-freeform {
+  flex: 1 0 100%;
   display: flex;
   flex-direction: column;
   gap: var(--sp1);
@@ -4086,13 +4042,59 @@ input {
 
 .canvas-overview-open {
   position: absolute;
-  right: var(--sp3);
+  /* Left of the chat toggle so both corner controls sit side by side. */
+  right: calc(var(--sp3) + 40px);
   bottom: var(--sp3);
   z-index: 3;
   background: var(--surface-raised);
   border: 1px solid var(--ui-line);
   box-shadow: var(--shadow-soft);
   font-weight: 590;
+}
+
+/* Chat toggle — the corner control that opens/closes the standalone chat
+   panel (closed by default), beside the info (ⓘ) reopen affordance. */
+.canvas-chat-toggle {
+  position: absolute;
+  right: var(--sp3);
+  bottom: var(--sp3);
+  z-index: 3;
+  background: var(--surface-raised);
+  border: 1px solid var(--ui-line);
+  box-shadow: var(--shadow-soft);
+}
+.canvas-chat-toggle.is-active {
+  background: var(--active-shade);
+  border-color: var(--ui-line-strong);
+  color: var(--text);
+}
+
+/* Standalone chat panel — its own bottom-drawer section, below the info panel;
+   both can be open at once. Content (macros + ask) is short, so it hugs, capped
+   so it never eats the whole pane. */
+.canvas-chat-panel {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow-y: auto;
+  border-top: 1px solid var(--ui-line);
+  background: var(--surface-raised);
+  padding: var(--sp3);
+}
+.canvas-chat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  margin-bottom: var(--sp2);
+}
+.canvas-chat-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--type-label);
+  font-weight: 590;
+  color: var(--text);
+}
+.canvas-chat-close {
+  flex: 0 0 auto;
 }
 
 /* Expanded: the same node lifts to a fixed overlay (never remounted, so the
@@ -4634,14 +4636,6 @@ input {
   max-width: 320px;
   color: var(--text-faint);
   font-size: var(--type-meta);
-}
-
-.canvas-visualize-cta {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 4px 0;
 }
 
 /* Background-task states (see CanvasPane) ------------------------------- */
@@ -5522,8 +5516,20 @@ input {
   display: none;
 }
 
-.right-pane-collapse {
+/* The canvas expand + collapse-panel toggles sit together, right-anchored at
+   the end of the tab bar. */
+.right-pane-corner {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+}
+
+/* Deploy pill in the canvas tab bar — the board dropped its subheader, so the
+   deploy status + dashboard link sit up here beside expand/collapse. */
+.right-pane-deployed {
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 /* The canvas-pane child panel must fill the slot fully. */

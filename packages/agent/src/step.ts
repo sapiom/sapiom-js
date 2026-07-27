@@ -81,6 +81,12 @@ export interface StepDefinition<TShared extends Record<string, unknown> = Record
   readonly pause?: { readonly signal: string; readonly resumeStep: string };
   readonly inputSchema?: ZodType<unknown>;
   readonly timeoutMs?: number;
+  /** Human-authored one-liner for the canvas step inspector (Option A —
+   *  deterministic, no LLM; read by buildManifest exactly like inputSchema). */
+  readonly description?: string;
+  /** Sapiom capabilities this step declares it calls, shown in the inspector;
+   *  a run's actual call trace supersedes this when observed. */
+  readonly capabilities?: readonly string[];
   run(input: unknown, ctx: AgentExecutionContext<TShared>): Promise<NextStepDirective>;
 }
 
@@ -113,6 +119,8 @@ export function defineStep<
   pause?: PauseDecl;
   inputSchema?: ZodType<TIn>;
   timeoutMs?: number;
+  description?: string;
+  capabilities?: readonly string[];
   // Arrow-property (not method) type so `def.run` can be read as a value below
   // without tripping @typescript-eslint/unbound-method.
   run: (
@@ -128,6 +136,8 @@ export function defineStep<
     ...(def.pause ? { pause: def.pause } : {}),
     ...(def.inputSchema ? { inputSchema: def.inputSchema as ZodType<unknown> } : {}),
     ...(def.timeoutMs !== undefined ? { timeoutMs: def.timeoutMs } : {}),
+    ...(def.description !== undefined ? { description: def.description } : {}),
+    ...(def.capabilities !== undefined ? { capabilities: def.capabilities } : {}),
     run: def.run as unknown as (input: unknown, ctx: AgentExecutionContext<TShared>) => Promise<NextStepDirective>,
   };
 }

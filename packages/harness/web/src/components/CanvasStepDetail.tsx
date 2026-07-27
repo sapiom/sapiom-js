@@ -263,44 +263,27 @@ function StepCapabilities({ node }: { node: CanvasGraphNode }): JSX.Element | nu
 /**
  * A step's real transitions as compact elbow rows — what it leads to
  * (CornerDownRight, with branch condition / pause signal) and what reaches
- * it (CornerLeftUp). Shared by the steps accordion and the board's bottom
- * inspector; with `onSelectStep` the rows become links that retarget the
- * selection, without it they stay plain information.
+ * it (CornerLeftUp). Read-only information for the steps accordion; the
+ * board's bottom inspector relies on the chart itself for navigation.
  */
 export function StepTransitions({
   graph,
   node,
-  onSelectStep,
 }: {
   graph: CanvasGraph;
   node: CanvasGraphNode;
-  onSelectStep?: (id: string) => void;
 }): JSX.Element | null {
   const outgoing = graph.edges.filter((e) => e.from === node.id);
   const incoming = graph.edges.filter((e) => e.to === node.id);
   if (outgoing.length === 0 && incoming.length === 0) return null;
   const labelFor = (id: string): string => graph.nodes.find((n) => n.id === id)?.label ?? id;
   const row = (edge: CanvasGraphEdge, target: string, icon: "CornerDownRight" | "CornerLeftUp"): JSX.Element => {
-    const body = (
-      <>
+    const key = `${icon}${edge.from}->${edge.to}`;
+    return (
+      <div key={key} className="canvas-step-transition">
         <Icon name={icon} size={12} />
         <span className="canvas-step-transition-target">{labelFor(target)}</span>
         {edge.label && <span className="canvas-step-transition-cond">{edge.label}</span>}
-      </>
-    );
-    const key = `${icon}${edge.from}->${edge.to}`;
-    return onSelectStep ? (
-      <button
-        key={key}
-        className="canvas-step-transition is-link"
-        data-tooltip={`Inspect ${labelFor(target)}`}
-        onClick={() => onSelectStep(target)}
-      >
-        {body}
-      </button>
-    ) : (
-      <div key={key} className="canvas-step-transition">
-        {body}
       </div>
     );
   };
@@ -543,14 +526,9 @@ interface CanvasStepDetailProps {
   node: CanvasGraphNode;
   /** The session's shown run, if any (see CanvasStepsList). */
   run: RunView | null;
-  /** Jump to another step's detail (from a transition row). */
-  onSelectStep: (id: string) => void;
   /** Registry workflows — launched-workflow nodes link through to theirs. */
   workflows: WorkflowInfo[];
   onOpenWorkflow: (path: string) => void;
-  /** Inject a prompt into the active terminal session (used by the debug macros).
-   *  Absent when no session is live; the macro buttons are hidden in that case. */
-  onInjectPrompt?: (text: string) => void;
 }
 
 /**
@@ -558,13 +536,12 @@ interface CanvasStepDetailProps {
  * in the canvas subheader; see WorkflowActionsHeader). Driven entirely by
  * the posted graph: the step's role and description, then its real
  * transitions — what it leads to (with branch condition / pause signal) and
- * what reaches it. Each transition links deeper into the graph.
+ * what reaches it, shown as read-only lineage.
  */
 export function CanvasStepDetail({
   graph,
   node,
   run,
-  onSelectStep,
   workflows,
   onOpenWorkflow,
 }: CanvasStepDetailProps): JSX.Element {
@@ -702,16 +679,12 @@ export function CanvasStepDetail({
             <ul className="canvas-detail-edges">
               {outgoing.map((e) => (
                 <li key={`${e.from}->${e.to}`}>
-                  <button
-                    className="canvas-detail-edge"
-                    data-tooltip={`Open ${labelFor(e.to)}`}
-                    onClick={() => onSelectStep(e.to)}
-                  >
+                  <div className="canvas-detail-edge">
                     <Icon name="CornerDownRight" size={13} />
                     <span className="canvas-detail-edge-target">{labelFor(e.to)}</span>
                     {edgeKindLabel(e) && <span className="canvas-detail-edge-kind">{edgeKindLabel(e)}</span>}
                     {e.label && <span className="canvas-detail-edge-cond">{e.label}</span>}
-                  </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -730,16 +703,12 @@ export function CanvasStepDetail({
             <ul className="canvas-detail-edges">
               {incoming.map((e) => (
                 <li key={`${e.from}->${e.to}`}>
-                  <button
-                    className="canvas-detail-edge"
-                    data-tooltip={`Open ${labelFor(e.from)}`}
-                    onClick={() => onSelectStep(e.from)}
-                  >
+                  <div className="canvas-detail-edge">
                     <Icon name="CornerLeftUp" size={13} />
                     <span className="canvas-detail-edge-target">{labelFor(e.from)}</span>
                     {edgeKindLabel(e) && <span className="canvas-detail-edge-kind">{edgeKindLabel(e)}</span>}
                     {e.label && <span className="canvas-detail-edge-cond">{e.label}</span>}
-                  </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -780,45 +749,12 @@ export function CanvasStepDetail({
  * cost data is injected — `extractStepContext` is cost-free by contract.
  */
 export function CanvasStepInspector({
-  graph,
   node,
   run,
-  onSelectStep,
   workflows,
   onOpenWorkflow,
-  onInjectPrompt,
 }: CanvasStepDetailProps): JSX.Element {
   const runStep = runStepFor(run, node.id);
-  const [freeformText, setFreeformText] = useState("");
-
-  /** Build the step context + question and inject into the terminal. */
-  function injectMacro(question: string): void {
-    if (!onInjectPrompt) return;
-    // Compose the trace from what the StepView already carries: input, output,
-    // and calls (the per-step capability call trace — present for local runs).
-    // Also forward run-level stub bookkeeping when the run carries it.
-    const trace = runStep
-      ? {
-          input: runStep.input,
-          output: runStep.output,
-          calls: runStep.calls,
-          unusedStubs: run?.unusedStubs?.map((u) => u.key),
-          stubWarnings: run?.stubWarnings,
-        }
-      : undefined;
-    // Declared capabilities as graph-facts fallback (no call trace available).
-    const facts =
-      node.capabilities.length > 0 ? { capabilities: node.capabilities } : undefined;
-    const ctx = extractStepContext(runStep ?? { id: node.id, name: node.id, status: "pending" }, trace, facts);
-    onInjectPrompt(`${ctx}\n\n${question}`);
-  }
-
-  function handleFreeformAsk(): void {
-    const trimmed = freeformText.trim();
-    if (!trimmed) return;
-    injectMacro(trimmed);
-    setFreeformText("");
-  }
 
   return (
     <div className="canvas-inspector" data-testid="canvas-step-inspector">
@@ -832,7 +768,6 @@ export function CanvasStepInspector({
           <span className="canvas-detail-timeout">{formatTimeout(node.timeoutMs)}</span>
         </div>
       )}
-      <StepTransitions graph={graph} node={node} onSelectStep={onSelectStep} />
       <OpenLaunchedWorkflow node={node} workflows={workflows} onOpenWorkflow={onOpenWorkflow} />
       {runStep && (
         <div className="canvas-inspector-run" data-testid="canvas-inspector-run">
@@ -874,62 +809,125 @@ export function CanvasStepInspector({
       {/* Links: scan output, logs, and call results for URLs. */}
       {runStep && <StepLinksBlock step={runStep} />}
       <StubNoticeSection run={run} />
+    </div>
+  );
+}
 
-      {/* Debug macros — only when an active session can receive the inject.
-          Shown whenever onInjectPrompt is wired (a live session exists).
-          "Debug this step" is primary-styled on a failed step, ghost otherwise. */}
-      {onInjectPrompt && (
-        <div className="canvas-inspector-macros" data-testid="canvas-inspector-macros">
-          <button
-            className="canvas-inspector-macro-btn btn-ghost"
-            data-testid="canvas-macro-slow"
-            onClick={() => injectMacro("Why is this step slow / stuck?")}
-          >
-            Why is this step slow / stuck?
-          </button>
-          <button
-            className={
-              "canvas-inspector-macro-btn " +
-              (runStep?.status === "failed" ? "btn-primary" : "btn-ghost")
-            }
-            data-testid="canvas-macro-debug"
-            onClick={() => injectMacro("Debug this step")}
-          >
-            Debug this step
-          </button>
-          <button
-            className="canvas-inspector-macro-btn btn-ghost"
-            data-testid="canvas-macro-explain"
-            onClick={() => injectMacro("Explain this step")}
-          >
-            Explain this step
-          </button>
-          <div className="canvas-inspector-freeform">
-            <textarea
-              className="canvas-inspector-freeform-input"
-              data-testid="canvas-freeform-input"
-              placeholder="Ask about this step…"
-              rows={2}
-              value={freeformText}
-              onChange={(e) => setFreeformText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  handleFreeformAsk();
-                }
-              }}
-            />
+/**
+ * The step chat: debug macros + a free-form ask, injected into the active
+ * terminal session. A STANDALONE panel — toggled by the canvas 💬 button,
+ * closed by default, and independent of the step-detail info panel (both can be
+ * open at once). With a step selected it targets that step (context-aware
+ * macros); with none it is a general ask about the workflow.
+ */
+export function CanvasChatPanel({
+  node,
+  run,
+  onInjectPrompt,
+  onClose,
+}: {
+  node: CanvasGraphNode | null;
+  run: RunView | null;
+  onInjectPrompt: (text: string) => void;
+  onClose: () => void;
+}): JSX.Element {
+  const runStep = node ? runStepFor(run, node.id) : null;
+  const [freeformText, setFreeformText] = useState("");
+
+  /** Prepend the selected step's context (when there is one) and inject. */
+  function inject(question: string): void {
+    if (!node) {
+      onInjectPrompt(question);
+      return;
+    }
+    const trace = runStep
+      ? {
+          input: runStep.input,
+          output: runStep.output,
+          calls: runStep.calls,
+          unusedStubs: run?.unusedStubs?.map((u) => u.key),
+          stubWarnings: run?.stubWarnings,
+        }
+      : undefined;
+    const facts = node.capabilities.length > 0 ? { capabilities: node.capabilities } : undefined;
+    const ctx = extractStepContext(runStep ?? { id: node.id, name: node.id, status: "pending" }, trace, facts);
+    onInjectPrompt(`${ctx}\n\n${question}`);
+  }
+
+  function handleFreeformAsk(): void {
+    const trimmed = freeformText.trim();
+    if (!trimmed) return;
+    inject(trimmed);
+    setFreeformText("");
+  }
+
+  return (
+    <div className="canvas-chat-panel" data-testid="canvas-chat-panel">
+      <div className="canvas-chat-head">
+        <span className="canvas-chat-title" data-testid="canvas-chat-title">
+          {node ? `Chat · ${node.label}` : "Chat"}
+        </span>
+        <button
+          className="theme-toggle canvas-chat-close"
+          data-testid="canvas-chat-close"
+          aria-label="Close chat"
+          data-tooltip="Close chat"
+          onClick={onClose}
+        >
+          <Icon name="X" size={13} />
+        </button>
+      </div>
+      <div className="canvas-inspector-macros" data-testid="canvas-inspector-macros">
+        {node && (
+          <>
             <button
-              className="btn-primary canvas-inspector-freeform-ask"
-              data-testid="canvas-freeform-ask"
-              disabled={!freeformText.trim()}
-              onClick={handleFreeformAsk}
+              className="canvas-inspector-macro-btn btn-ghost"
+              data-testid="canvas-macro-slow"
+              onClick={() => inject("Why is this step slow / stuck?")}
             >
-              Ask
+              Why slow / stuck?
             </button>
-          </div>
+            <button
+              className={"canvas-inspector-macro-btn " + (runStep?.status === "failed" ? "btn-primary" : "btn-ghost")}
+              data-testid="canvas-macro-debug"
+              onClick={() => inject("Debug this step")}
+            >
+              Debug this step
+            </button>
+            <button
+              className="canvas-inspector-macro-btn btn-ghost"
+              data-testid="canvas-macro-explain"
+              onClick={() => inject("Explain this step")}
+            >
+              Explain this step
+            </button>
+          </>
+        )}
+        <div className="canvas-inspector-freeform">
+          <textarea
+            className="canvas-inspector-freeform-input"
+            data-testid="canvas-freeform-input"
+            placeholder={node ? "Ask about this step…" : "Ask about this workflow…"}
+            rows={2}
+            value={freeformText}
+            onChange={(e) => setFreeformText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                handleFreeformAsk();
+              }
+            }}
+          />
+          <button
+            className="btn-primary canvas-inspector-freeform-ask"
+            data-testid="canvas-freeform-ask"
+            disabled={!freeformText.trim()}
+            onClick={handleFreeformAsk}
+          >
+            Ask
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

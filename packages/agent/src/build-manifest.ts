@@ -35,6 +35,8 @@ export function buildManifest(
       timeoutMs: number | null;
       inputSchema: Record<string, unknown> | null;
       transitions: ManifestTransition[];
+      description: string | null;
+      capabilities: readonly string[];
     }
   > = {};
 
@@ -50,12 +52,15 @@ export function buildManifest(
       timeoutMs: step.timeoutMs ?? null,
       inputSchema,
       transitions: transitionsFor(step),
+      description: step.description ?? null,
+      capabilities: step.capabilities ?? [],
     };
   }
 
   return {
     protocol: MANIFEST_PROTOCOL,
     name: def.name,
+    description: def.description ?? null,
     entry: def.entry,
     sdkVersion: opts.sdkVersion,
     artifact: opts.artifact,

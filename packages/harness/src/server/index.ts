@@ -641,6 +641,15 @@ export const startServer = async (
         void rescanWorkspaceForSession(session.id).catch((err: unknown) => {
           console.error("[harness] initial workspace rescan failed:", err);
         });
+        // A resumed/already-bound session skips the rescan's auto-bind render
+        // (guarded by !boundWorkflowPath), so render it here — a reopened
+        // workflow shows its diagram on start without any manual trigger, now
+        // that the empty-state render button is gone.
+        if (session.boundWorkflowPath) {
+          void autoRenderCanvas(session).catch((err: unknown) => {
+            console.error("[harness] on-start canvas render failed:", err);
+          });
+        }
       }
     } else if (session.status === "exited") {
       canvasWatcher.stop(session.id);

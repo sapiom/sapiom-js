@@ -213,7 +213,7 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
   await expect(prodRun).toBeEnabled();
 
   // The open_prod button has been removed from the action bar (SAP-1899);
-  // the "Go to dashboard" link now lives in the canvas header for deployed workflows.
+  // the deployed pill (→ dashboard) now lives in the canvas tab bar for deployed workflows.
   await expect(page.getByTestId("macro-open_prod")).toHaveCount(0);
 
   // Focusing "rfq" (no live session) does NOT rebind the boot session or start
@@ -378,7 +378,6 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // the right pane renders leasing's board.
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
     await expect(page.getByTestId("session-workflow-chip")).toContainText("leasing");
-    await expect(page.getByTestId("workflow-actions-header")).toContainText("leasing");
     await expect(page.locator(".canvas-iframe")).toBeVisible();
 
     // Focus rfq and start its session: all four move together to rfq.
@@ -387,7 +386,6 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
     await expect(page.getByTestId("workflow-leasing")).not.toHaveClass(/is-focused/);
     await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
-    await expect(page.getByTestId("workflow-actions-header")).toContainText("rfq");
     // Still exactly one filled row.
     await expect(
       page.locator(".rail-list .workflow-item.is-focused, .rail-list .workspace-row.is-selected"),
@@ -781,34 +779,6 @@ test("settings popover: identity, telemetry toggle, and it persists across close
   await expect(page.getByTestId("telemetry-toggle")).toHaveAttribute("aria-checked", "true");
 });
 
-test("visualize macro is one click — no subject dialog", async ({ page }) => {
-  // Visualize lives on the canvas (empty-state CTA + header re-visualize),
-  // not on the lifecycle wizard — it's a view action, not a funnel step. The
-  // scratch session has no bundled board, so its empty-state CTA is present.
-  await page.getByTestId("workspace-focus-scratch").click();
-  await expect(page.getByTestId("canvas-visualize-cta")).toBeEnabled();
-
-  await page.getByTestId("canvas-visualize-cta").click();
-
-  // No modal, no free-text field — the click alone fires the macro.
-  await expect(page.locator(".modal-backdrop")).toHaveCount(0);
-  await expect(page.getByPlaceholder("What should the agent visualize?")).toHaveCount(0);
-
-  // MockApi.runMacro has no other observable effect (it's a no-op against real
-  // infra), so the test hook is what confirms the click actually fired — and
-  // fired with no subject, since that plumbing is gone.
-  await page.waitForFunction(
-    () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
-  );
-  const lastRun = await page.evaluate(
-    () =>
-      (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string; req: { subject?: string } } } })
-        .__HARNESS_TEST__.lastMacroRun,
-  );
-  expect(lastRun?.id).toBe("visualize");
-  expect(lastRun?.req.subject).toBeUndefined();
-});
-
 test.describe("workflow actions", () => {
   test("agent rows carry no macro strip and show their full untruncated name", async ({ page }) => {
     // The explorer row is [zap][name][cloud] only — no macro strip, no hover
@@ -840,15 +810,15 @@ test.describe("workflow actions", () => {
     // Rail workflow rows still carry no macro strips — the wizard owns them.
     await expect(page.getByTestId("workflow-macros")).toHaveCount(0);
 
-    // The "Go to dashboard" link appears in the canvas header for deployed workflows.
-    // leasing is deployed (definitionId set) on load.
+    // The deployed pill doubles as the dashboard link and sits in the canvas
+    // tab bar for deployed workflows. leasing is deployed (definitionId set) on load.
     const dashLink = page.getByTestId("workflow-dashboard-link");
     await expect(dashLink).toBeVisible();
     await expect(dashLink).toHaveAttribute("href", /app\.sapiom\.ai\/workflows\//);
     await expect(dashLink).toHaveAttribute("target", "_blank");
   });
 
-  test("the canvas header stays fully on-screen even when the app is narrower than the default pane widths", async ({
+  test("the canvas tab bar stays fully on-screen even when the app is narrower than the default pane widths", async ({
     page,
   }) => {
     // Rail (320 default, shrinkable to 180) + terminal/canvas floors (20rem
@@ -858,60 +828,47 @@ test.describe("workflow actions", () => {
     await page.setViewportSize({ width: 900, height: 640 });
     await page.waitForTimeout(50);
 
-    const header = page.getByTestId("workflow-actions-header");
-    await expect(header).toBeVisible();
+    // The canvas pane's top chrome is the tab bar now (Canvas/Steps/Code + the
+    // deployed pill + expand/collapse) — the board dropped its subheader. The
+    // bar spans the pane, so its right edge is the sentinel for h-overflow.
+    const tabBar = page.locator(".right-pane-tabs");
+    await expect(tabBar).toBeVisible();
 
-    const headerBox = await header.boundingBox();
-    expect(headerBox).not.toBeNull();
-    expect((headerBox?.x ?? 0) + (headerBox?.width ?? 0)).toBeLessThanOrEqual(900);
+    const tabBarBox = await tabBar.boundingBox();
+    expect(tabBarBox).not.toBeNull();
+    expect((tabBarBox?.x ?? 0) + (tabBarBox?.width ?? 0)).toBeLessThanOrEqual(900);
 
     await page.screenshot({ path: "web/e2e/screenshots/narrow-viewport-header.png", fullPage: true });
   });
 
 });
 
-test("canvas empty state explains itself and offers a one-click render CTA", async ({ page }) => {
+test("canvas empty state explains itself — no manual render action", async ({ page }) => {
   // The scratch session has no bundled doc, so its Canvas is the empty state
   // (the boot session opens on its board).
   await page.getByTestId("workspace-focus-scratch").click();
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
-  // Short supporting line, no file-editing instructions (there is no editor
-  // in this harness), CTA after.
+  // Short supporting line, no file-editing instructions (there is no editor in
+  // this harness). The diagram generates automatically from the bound workflow
+  // — there is no manual render button anymore.
   await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound workflow");
   await expect(page.locator(".canvas-empty")).not.toContainText(".sapiom/canvas/index.html");
+  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 
   await page.screenshot({ path: "web/e2e/screenshots/canvas-empty-state.png" });
-
-  const cta = page.getByTestId("canvas-visualize-cta");
-  await expect(cta).toBeVisible();
-  await cta.click();
-
-  // One click and done — no dialog, no free-text field.
-  await expect(page.locator(".modal-backdrop")).toHaveCount(0);
-  await page.waitForFunction(
-    () => (window as unknown as { __HARNESS_TEST__?: { lastMacroRun?: unknown } }).__HARNESS_TEST__?.lastMacroRun,
-  );
-  const lastRun = await page.evaluate(
-    () =>
-      (window as unknown as { __HARNESS_TEST__: { lastMacroRun?: { id: string; req: { subject?: string } } } })
-        .__HARNESS_TEST__.lastMacroRun,
-  );
-  expect(lastRun?.id).toBe("visualize");
-  expect(lastRun?.req.subject).toBeUndefined();
 });
 
 test("steps tab shows its own empty state (not canvas copy) before anything is rendered", async ({ page }) => {
   // The scratch session has no generated canvas content, so the Steps tab hits
-  // the same early-return state as the board — but must talk about steps, with
-  // the SAME one-click render CTA (it works from here). (The boot session
-  // opens on its board, which does post a step graph.)
+  // the same early-return state as the board — but must talk about steps. (The
+  // boot session opens on its board, which does post a step graph.)
   await page.getByTestId("workspace-focus-scratch").click();
   await page.getByTestId("right-tab-steps").click();
   const empty = page.locator(".canvas-empty");
   await expect(empty).toContainText("No steps yet");
   await expect(empty).toContainText("Steps are read from the bound workflow");
   await expect(empty).not.toContainText("Nothing generated yet");
-  await expect(page.getByTestId("canvas-visualize-cta")).toBeVisible();
+  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 
   // The board keeps its own copy on the Canvas tab.
   await page.getByTestId("right-tab-canvas").click();
@@ -1613,10 +1570,10 @@ test("canvas controls: the board widget zooms; the subheader's expand lifts the 
   // The gesture surface for drag-pan/wheel-zoom covers the board.
   await expect(page.getByTestId("canvas-pan-layer")).toBeVisible();
 
-  // The board widget carries zoom only — panel-level expand lives on the
-  // subheader row, right-anchored next to refresh.
+  // The board widget carries zoom only — the panel-level expand lives in the
+  // right-pane tab bar, right beside the collapse-panel toggle.
   await expect(controls.getByTestId("canvas-expand")).toHaveCount(0);
-  const expand = page.getByTestId("workflow-actions-header").getByTestId("canvas-expand");
+  const expand = page.getByTestId("canvas-expand");
 
   // Expand: same node, fixed overlay — the iframe is not remounted. The
   // overlay covers the subheader, so it carries its own exit control.
@@ -1705,10 +1662,6 @@ test("steps tab drills into a step's real transitions and slides back", async ({
   await expect(contract).toContainText("score");
   await expect(contract).toContainText("number");
   await expect(detail.getByTestId("canvas-detail-capabilities")).toContainText("rules.evaluate");
-
-  // An edge row links deeper: jump to the terminal it points at.
-  await detail.getByText("draft-lease").click();
-  await expect(header.getByTestId("canvas-detail-title")).toHaveText("draft-lease");
 
   await page.screenshot({ path: "web/e2e/screenshots/canvas-step-detail.png" });
 
@@ -1872,7 +1825,7 @@ test("board nodes get hover and selected states through the message contract", a
   await expect(page.getByTestId("canvas-pan-layer")).toHaveAttribute("data-over-node", "true");
 
   // A non-drag click on a node is a PICK: the bottom inspector populates in
-  // place (no tab switch — the Steps tab is its explicit "Open in Steps"
+  // place (no tab switch — the Steps tab is its explicit "Open step"
   // drill), and the board rings the selected node. Collapse the overview
   // sheet first so it can't overlay the lower nodes — the taller board
   // refits (larger zoom), so wait for that view to settle too.

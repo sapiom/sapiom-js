@@ -5,7 +5,7 @@
  * - A board node pick (the document's {type:"sapiom-canvas:node"} answer)
  *   populates the bottom panel with that step's detail IN PLACE — the right
  *   pane stays on the Canvas tab; the Steps tab is only the inspector's
- *   explicit "Open in Steps" drill.
+ *   explicit "Open step" drill.
  * - Deselect (Esc / empty board space / the panel's close) restores the
  *   general workflow overview unchanged.
  * - Height hugs the content up to half the canvas pane; taller content
@@ -59,20 +59,16 @@ test("a board pick populates the inspector in place, with no tab switch", async 
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
   const inspector = page.getByTestId("canvas-step-inspector");
   await expect(inspector).toContainText("Logs the incoming order");
-  // Contract chips and transitions render from the posted graph.
+  // Contract chips render from the posted graph.
   await expect(inspector).toContainText("records.read");
-  await expect(inspector).toContainText("screen");
 
-  // A transition row retargets the selection without leaving the board.
-  await inspector.locator(".canvas-step-transition.is-link").filter({ hasText: "screen" }).click();
-  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("screen");
-  await expect(page.getByTestId("right-tab-canvas")).toHaveClass(/is-active/);
-
-  // "Open in Steps" is the explicit full-pane drill.
+  // The drawer no longer carries step-navigation links — the chart is right
+  // there for that. "Open step" is the explicit full-pane drill, and it opens
+  // the picked step (still intake, since nothing retargeted the selection).
   await page.getByTestId("canvas-inspector-open-steps").click();
   await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "detail");
-  await expect(page.getByTestId("canvas-detail-title")).toHaveText("screen");
+  await expect(page.getByTestId("canvas-detail-title")).toHaveText("intake");
 });
 
 test("deselect restores the overview: Esc, the panel's close, and empty board space", async ({ page }) => {
@@ -109,9 +105,11 @@ test("deselect restores the overview: Esc, the panel's close, and empty board sp
 
 test("the panel hugs its content up to half the pane; taller content scrolls inside", async ({ page }) => {
   // A short pane makes the 50% cap bite: the inspector's content for a
-  // contract-heavy step is taller than half the pane at this height.
+  // contract-heavy step is taller than half the pane at this height. (The chat
+  // moved to its own toggled panel, so the inspector itself is shorter now —
+  // hence the shorter viewport to keep the cap biting.)
   // Collapse the overview first so the whole cascade stays clickable.
-  await page.setViewportSize({ width: 1280, height: 560 });
+  await page.setViewportSize({ width: 1280, height: 400 });
   await loadBoard(page);
   await page.getByTestId("canvas-overview-toggle").click();
   await pickNode(page, "credit-check");

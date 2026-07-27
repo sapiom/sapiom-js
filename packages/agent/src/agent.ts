@@ -45,6 +45,9 @@ export interface AgentDefinition<
   TShared extends Record<string, unknown> = Record<string, unknown>,
 > {
   readonly name: string;
+  /** Human-authored workflow summary for the canvas Overview panel (Option A —
+   *  deterministic, no LLM). */
+  readonly description?: string;
   readonly entry: string;
   readonly steps: Readonly<Record<string, StepDefinition<TShared>>>;
   /**

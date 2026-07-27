@@ -323,65 +323,8 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
 // 4. Contrast — macros (Visualize) STILL go through runMacro (NOT direct route)
 // ---------------------------------------------------------------------------
 
-test.describe("Contrast: macros use runMacro (NOT the direct route)", () => {
-  test("Visualize CTA fires runMacro, sets lastMacroRun, never sets lastDirectAction", async ({ page }) => {
-    // Switch to a session with no bundled canvas doc so the empty-state CTA
-    // is available (the boot session opens on its board, which hides it).
-    await page.getByTestId("workspace-focus-scratch").click();
-    await expect(page.locator(".canvas-empty")).toBeVisible();
-
-    const ctaBefore = await readTestHook(page);
-    // No prior direct action from this fresh page load.
-    expect(ctaBefore?.lastDirectAction).toBeUndefined();
-
-    // Click the one-click Visualize CTA (render-canvas macro path — NOT inject).
-    const cta = page.getByTestId("canvas-visualize-cta");
-    await expect(cta).toBeEnabled();
-    await cta.click();
-
-    // runMacro records lastMacroRun — wait for it.
-    await page.waitForFunction(
-      () => (window as unknown as HarnessTestWindow).__HARNESS_TEST__?.lastMacroRun,
-    );
-    const hook = await readTestHook(page);
-    expect(hook?.lastMacroRun?.id).toBe("visualize");
-
-    // The direct-action hatch must NEVER be set — Visualize is a
-    // render-canvas macro, NOT a direct server action.
-    expect(hook?.lastDirectAction).toBeUndefined();
-  });
-
-  test("direct/inject split is exclusive: running Deploy then Visualize records both hooks in the right slots", async ({
-    page,
-  }) => {
-    // Step 1: fire the direct Deploy button.
-    const deployBtn = page.getByTestId("session-step-deploy");
-    await expect(deployBtn).toBeEnabled();
-    await deployBtn.click();
-
-    // Wait for the direct action to land.
-    const directAfterDeploy = await waitForDirectAction(page);
-    expect(directAfterDeploy.action).toBe("deploy");
-    // At this point, no macro run should have happened.
-    const hookAfterDeploy = await readTestHook(page);
-    expect(hookAfterDeploy?.lastMacroRun).toBeUndefined();
-
-    // Step 2: fire the Visualize CTA on the scratch session (render-canvas macro path).
-    await page.getByTestId("workspace-focus-scratch").click();
-    const cta = page.getByTestId("canvas-visualize-cta");
-    await expect(cta).toBeEnabled();
-    await cta.click();
-
-    await page.waitForFunction(
-      () => (window as unknown as HarnessTestWindow).__HARNESS_TEST__?.lastMacroRun,
-    );
-    const hookAfterVisualize = await readTestHook(page);
-
-    // The macro slot now has the visualize entry.
-    expect(hookAfterVisualize?.lastMacroRun?.id).toBe("visualize");
-
-    // The direct-action slot still carries the deploy (lastDirectAction is the
-    // LAST direct action; the visualize click must NOT overwrite it).
-    expect(hookAfterVisualize?.lastDirectAction?.action).toBe("deploy");
-  });
-});
+// NOTE: the "Contrast: macros use runMacro" describe lived here. It exercised
+// the canvas Visualize CTA (empty-state render button), which has been removed
+// — the diagram now renders automatically on bind/start and on code changes,
+// so there is no manual render macro surface left to contrast against the
+// direct-action route.

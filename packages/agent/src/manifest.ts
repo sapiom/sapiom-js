@@ -47,6 +47,11 @@ export interface AgentStepManifest {
    * per-kind); the renderer draws one edge per entry. `reachable ⊆ declared`.
    */
   readonly transitions: readonly ManifestTransition[];
+  /** Human-authored step description (Option A). Optional for back-compat with
+   *  manifests emitted before this field existed. */
+  readonly description?: string | null;
+  /** Author-declared Sapiom capabilities this step calls. */
+  readonly capabilities?: readonly string[];
 }
 
 /**
@@ -59,6 +64,8 @@ export interface AgentManifest {
   readonly protocol: typeof MANIFEST_PROTOCOL;
   /** Agent name (matches AgentDefinition.name). */
   readonly name: string;
+  /** Human-authored workflow description (Option A); optional for back-compat. */
+  readonly description?: string | null;
   /** Entry step name (matches AgentDefinition.entry). */
   readonly entry: string;
   /** Version of @sapiom/workflow-sdk used to build the definition. */

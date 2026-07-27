@@ -105,3 +105,59 @@ export async function detectWorkflowLaunches(
   }
   return launches;
 }
+
+// Matches `sapiom.<ns>.<method>(` chains — e.g. `ctx.sapiom.web.search(`,
+// `sapiom.email.messages.send(`. Captures the dotted chain AFTER `sapiom.`
+// (the capability id: "web.search", "email.messages.send"), tolerating
+// whitespace around the dots. The negative lookbehind avoids matching an
+// identifier that merely ends in "sapiom".
+const CAPABILITY_CALL_PATTERN =
+  /(?<![\w$])sapiom\s*\.\s*([a-z][\w$]*(?:\s*\.\s*[a-z][\w$]*)+)\s*\(/gi;
+
+// Launch calls are surfaced as dashed launched-workflow nodes, not capabilities.
+const NON_CAPABILITY_CALLS = new Set(["agents.launch", "orchestrations.launch"]);
+
+export interface DetectedCapability {
+  /** The dotted capability id (e.g. "web.search", "email.messages.send"). */
+  capability: string;
+  /** The step the call was attributed to, or null (a shared helper). */
+  fromStepId: string | null;
+}
+
+/**
+ * Every `ctx.sapiom.<ns>.<method>(...)` call in `root`'s sources — the Sapiom
+ * capabilities each step calls — best-effort attributed to the step whose
+ * `defineStep` block it sits in (same attribution as detectWorkflowLaunches).
+ * A deterministic grep (no LLM): a step computing its call dynamically simply
+ * isn't detected; false negatives are fine. Launch calls are excluded (they
+ * render as launched-workflow nodes instead).
+ */
+export async function detectStepCapabilities(
+  root: string,
+  knownStepIds: ReadonlySet<string>,
+): Promise<DetectedCapability[]> {
+  const found: DetectedCapability[] = [];
+  for (const file of await listSourceFiles(root)) {
+    let content: string;
+    try {
+      const stat = await fs.stat(file);
+      if (stat.size > MAX_FILE_BYTES) continue;
+      content = await fs.readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+
+    const stepDeclarations: Array<{ index: number; stepId: string }> = [];
+    for (const match of content.matchAll(STEP_NAME_PATTERN)) {
+      if (knownStepIds.has(match[2]!)) stepDeclarations.push({ index: match.index, stepId: match[2]! });
+    }
+
+    for (const match of content.matchAll(CAPABILITY_CALL_PATTERN)) {
+      const capability = match[1]!.replace(/\s+/g, "");
+      if (NON_CAPABILITY_CALLS.has(capability)) continue;
+      const preceding = stepDeclarations.filter((d) => d.index < match.index).at(-1);
+      found.push({ capability, fromStepId: preceding?.stepId ?? null });
+    }
+  }
+  return found;
+}

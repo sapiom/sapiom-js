@@ -55,6 +55,13 @@ const pickNode = async (page: Page, nodeId: string): Promise<void> => {
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 };
 
+/** Open the standalone chat panel (macros + ask) via the 💬 toggle — closed by
+ *  default now, independent of the step inspector. */
+const openChat = async (page: Page): Promise<void> => {
+  await page.getByTestId("canvas-chat-toggle").click();
+  await expect(page.getByTestId("canvas-chat-panel")).toBeVisible();
+};
+
 /** Poll for the last inject recorded by MockApi.injectInput (mock delay is ~180ms). */
 const lastInject = async (page: Page): Promise<{ id: string; req: { text: string; submit: boolean } }> => {
   let result: { id: string; req: { text: string; submit: boolean } } | null = null;
@@ -97,41 +104,46 @@ const seedRunState = (page: Page, executionId: string, view: RunView): Promise<v
 // Macro bar visibility
 // ---------------------------------------------------------------------------
 
-test.describe("macro bar visibility", () => {
+test.describe("chat panel visibility", () => {
   test.beforeEach(async ({ page }) => {
     await loadBoard(page);
   });
 
-  test("picking a board node shows the macro bar in the inspector", async ({ page }) => {
-    // No inspector yet — macro bar absent.
+  test("the chat is closed by default and opens via the 💬 toggle", async ({ page }) => {
+    // Closed by default — no chat/macros on load.
+    await expect(page.getByTestId("canvas-chat-panel")).toHaveCount(0);
     await expect(page.getByTestId("canvas-inspector-macros")).toHaveCount(0);
 
+    await openChat(page);
+    // With no step selected the chat is a general ask — freeform only, no
+    // step-specific macros.
+    await expect(page.getByTestId("canvas-freeform-input")).toBeVisible();
+    await expect(page.getByTestId("canvas-macro-debug")).toHaveCount(0);
+  });
+
+  test("picking a step surfaces the step macros in the chat", async ({ page }) => {
+    await openChat(page);
     await pickNode(page, "intake");
     await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
 
-    // The macro bar should be visible inside the inspector.
     const macros = page.getByTestId("canvas-inspector-macros");
-    await expect(macros).toBeVisible();
     await expect(macros.getByTestId("canvas-macro-debug")).toBeVisible();
     await expect(macros.getByTestId("canvas-macro-slow")).toBeVisible();
     await expect(macros.getByTestId("canvas-macro-explain")).toBeVisible();
     await expect(macros.getByTestId("canvas-freeform-input")).toBeVisible();
   });
 
-  test("closing the inspector hides the macro bar", async ({ page }) => {
+  test("the chat closes on its own X — independent of the step inspector", async ({ page }) => {
     await pickNode(page, "intake");
-    await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
+    await openChat(page);
+    // Both open at once: the step inspector (info) AND the chat.
+    await expect(page.getByTestId("canvas-step-inspector")).toBeVisible();
+    await expect(page.getByTestId("canvas-chat-panel")).toBeVisible();
 
-    await page.getByTestId("canvas-inspector-close").click();
-    await expect(page.getByTestId("canvas-inspector-macros")).toHaveCount(0);
-  });
-
-  test("Esc also dismisses the inspector and the macro bar", async ({ page }) => {
-    await pickNode(page, "intake");
-    await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
-
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("canvas-inspector-macros")).toHaveCount(0);
+    // Closing the chat leaves the inspector untouched.
+    await page.getByTestId("canvas-chat-close").click();
+    await expect(page.getByTestId("canvas-chat-panel")).toHaveCount(0);
+    await expect(page.getByTestId("canvas-step-inspector")).toBeVisible();
   });
 });
 
@@ -143,6 +155,7 @@ test.describe("debug macros — pre-run (no run data)", () => {
   test.beforeEach(async ({ page }) => {
     await loadBoard(page);
     await pickNode(page, "intake");
+    await openChat(page);
     await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
     await clearLastInject(page);
   });
@@ -246,6 +259,7 @@ test.describe("debug macros — prod run data enriches the context", () => {
     // races with the node pick and clears the run from the inspector.
     await page.getByTestId("right-tab-canvas").click();
     await pickNode(page, "intake");
+    await openChat(page);
     await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
     // Run data is in state (chip confirmed above); inspector must show it.
     await expect(page.getByTestId("canvas-inspector-run")).toBeVisible({ timeout: 5000 });
@@ -288,6 +302,7 @@ test.describe("debug macros — prod run data enriches the context", () => {
     // races with the node pick and clears the run from the inspector.
     await page.getByTestId("right-tab-canvas").click();
     await pickNode(page, "intake");
+    await openChat(page);
     await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
     // Run data is in state (chip confirmed above); inspector must show it.
     await expect(page.getByTestId("canvas-inspector-run")).toBeVisible({ timeout: 5000 });
@@ -325,6 +340,7 @@ test.describe("debug macros — offline stub run", () => {
     // race with the node pick and clear the run from the inspector.
     await page.getByTestId("right-tab-canvas").click();
     await pickNode(page, "intake");
+    await openChat(page);
     await expect(page.getByTestId("canvas-inspector-macros")).toBeVisible();
     // Run data is in state (chip confirmed above); inspector must show it.
     await expect(page.getByTestId("canvas-inspector-run")).toBeVisible({ timeout: 5000 });

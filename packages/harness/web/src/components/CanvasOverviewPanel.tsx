@@ -29,17 +29,12 @@ interface CanvasOverviewPanelProps {
   run: RunView | null;
   workflows: WorkflowInfo[];
   onOpenWorkflow: (path: string) => void;
-  /** Retargets the selection (a transition row picks a neighbor step). */
-  onSelectStep: (id: string) => void;
   /** The full-pane drill: opens the selected step in the Steps tab. */
   onOpenSteps: () => void;
   /** Clears the selection — back to the overview. */
   onDeselect: () => void;
   /** Collapses the overview to its ⓘ reopen affordance (overview mode only). */
   onCollapse: () => void;
-  /** Inject a prompt into the active terminal session (forwarded to the step
-   *  inspector's debug macros). Absent when no session is live. */
-  onInjectPrompt?: (text: string) => void;
 }
 
 /**
@@ -60,11 +55,9 @@ export function CanvasOverviewPanel({
   run,
   workflows,
   onOpenWorkflow,
-  onSelectStep,
   onOpenSteps,
   onDeselect,
   onCollapse,
-  onInjectPrompt,
 }: CanvasOverviewPanelProps): JSX.Element {
   const panelRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
@@ -215,7 +208,7 @@ export function CanvasOverviewPanel({
               data-tooltip="Full details in the Steps tab"
               onClick={onOpenSteps}
             >
-              Open in Steps <Icon name="ArrowRight" size={12} />
+              Open step <Icon name="ArrowRight" size={12} />
             </button>
             <button
               className="theme-toggle canvas-overview-close"
@@ -264,15 +257,15 @@ export function CanvasOverviewPanel({
               graph={graph}
               node={selectedNode}
               run={run}
-              onSelectStep={onSelectStep}
               workflows={workflows}
               onOpenWorkflow={onOpenWorkflow}
-              onInjectPrompt={onInjectPrompt}
             />
           ) : (
             overview && (
               <>
-                <p className="canvas-overview-desc">{overview.description}</p>
+                {overview.description && (
+                  <p className="canvas-overview-desc">{overview.description}</p>
+                )}
                 {overview.notes.length > 0 && (
                   <ul className="canvas-overview-notes">
                     {overview.notes.map((note) => (
