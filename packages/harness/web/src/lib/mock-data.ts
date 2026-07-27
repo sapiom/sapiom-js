@@ -231,6 +231,24 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     ready: false,
   },
   {
+    // A PHANTOM: the SessionStart hook gave us an agentSessionId, but the user
+    // never submitted a prompt, so Claude Code wrote no transcript and
+    // `--resume` would exit 1. The registry can't tell this apart from a real
+    // session on its own — only the server's canResume probe can, which is why
+    // MOCK_HISTORY reports this row as `rehydrate`.
+    id: "sess-phantom",
+    agentSessionId: "7e5f4d3c-2b1a-4098-8765-4321fedcba98",
+    boundWorkflowPath: null,
+    harness: "claude-code",
+    cwd: "/Users/demo/acme-app",
+    title: "acme-app",
+    status: "exited",
+    createdAt: daysAgo(1),
+    lastActiveAt: daysAgo(1),
+    exitCode: 1,
+    ready: false,
+  },
+  {
     id: "sess-leasing-2",
     agentSessionId: "1a2b3c4d-5e6f-4a71-8b2c-3d4e5f6a7b8c",
     // A SECOND live session bound to leasing, so the focused agent's main-panel
@@ -290,6 +308,13 @@ export const MOCK_FS_TREE: Record<string, string[]> = {
   "/Users/demo/scratch": [],
 };
 
+/**
+ * `resumeMode` on every row is what the real server resolves by probing the
+ * agent's own store (`HarnessAdapter.canResume`), never something the client
+ * derives — so the fixtures carry all three interesting shapes: a registry row
+ * the agent still holds, a registry row it doesn't (the phantom), and a
+ * transcript-only row that is genuinely resumable via adopt.
+ */
 export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
   "/Users/demo/acme-app": [
     {
@@ -300,6 +325,20 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       title: "Build the leasing pipeline",
       lastActiveAt: minutesAgo(1),
       source: "registry",
+      resumeMode: "agent-resume",
+    },
+    {
+      // The phantom's history row: we hold its agentSessionId, the agent holds
+      // no conversation for it. This is the row that used to render
+      // "resumable" and hand the user a guaranteed exit-1.
+      harnessSessionId: "sess-phantom",
+      agentSessionId: "7e5f4d3c-2b1a-4098-8765-4321fedcba98",
+      harness: "claude-code",
+      cwd: "/Users/demo/acme-app",
+      title: "acme-app",
+      lastActiveAt: daysAgo(1),
+      source: "registry",
+      resumeMode: "rehydrate",
     },
     {
       agentSessionId: "2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33",
@@ -308,6 +347,10 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       title: "Wire the screening webhook",
       lastActiveAt: daysAgo(1),
       source: "transcript",
+      // Transcript-only, but the transcript really is there — so it adopts
+      // into the registry and resumes for real rather than opening a fresh
+      // session, which is what the hardcoded `resumable={false}` forced.
+      resumeMode: "agent-resume",
       // Rich-meta fields: present on this entry (exercises the rich meta
       // line), absent on the others (exercises the graceful degradation).
       gitBranch: "feat/screening-webhook",
@@ -323,6 +366,7 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       title: "rfq-workflows",
       lastActiveAt: daysAgo(1),
       source: "registry",
+      resumeMode: "agent-resume",
     },
   ],
 };

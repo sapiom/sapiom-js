@@ -1,13 +1,30 @@
 import type { JSX } from "react";
-import type { HarnessSession, SessionSummary } from "@shared/types";
+import type { HarnessSession, SessionResumeMode, SessionSummary } from "@shared/types";
 
 import { HARNESS_LABELS, formatDuration, formatRelativeTime, historyRowMeta } from "../lib/history-meta";
 import { Icon } from "./Icon";
 
 interface DeadSessionPaneProps {
   session: HarnessSession;
+  /**
+   * Server-verified resumability for this session, from its history row.
+   * Undefined while that lookup is still in flight — Resume stays available in
+   * that window (the server's own pre-flight is the backstop and answers 409
+   * with the reason), but a resolved `rehydrate` disables the button outright
+   * rather than letting the user click a guaranteed failure.
+   */
+  resumeMode: SessionResumeMode | undefined;
   onResume: () => void;
   onClose: () => void;
+}
+
+/** Why a session can't be handed back, in the user's terms. Two distinct
+ *  causes — never started vs. started but left no transcript — and conflating
+ *  them is what made the old single message misleading for most rows. */
+function resumeBlockedReason(session: HarnessSession): string {
+  return session.agentSessionId == null
+    ? "This session can't be resumed. It exited before establishing a session id."
+    : `${HARNESS_LABELS[session.harness]} has no saved conversation for this session, so there's nothing to hand back. That happens when a session ends before its first prompt — the agent never writes a transcript for those. Start a new session in this directory instead.`;
 }
 
 /**
@@ -21,15 +38,15 @@ interface DeadSessionPaneProps {
  * an exited pty, so there is no last-output tail to show — metadata is
  * everything the record truly has (honest absence, never a fabricated tail).
  *
- * Resume is only offered when the session has an agentSessionId — without
- * one the agent never established its own session, so there is nothing to
- * hand off to. The button is disabled with an explanation in that case so
- * the user isn't left clicking a button that silently does nothing.
+ * Resume is offered only when the AGENT still holds the conversation, which is
+ * a question about the agent's own store, not about whether we captured an
+ * `agentSessionId` (we capture that from the SessionStart hook, long before
+ * there's anything worth resuming). The button is disabled with the real
+ * reason otherwise, so the user isn't left clicking a button whose only
+ * possible outcome is `exit code 1` and this same pane again.
  */
-export function DeadSessionPane({ session, onResume, onClose }: DeadSessionPaneProps): JSX.Element {
-  // A session that exited before the agent established its own session id has
-  // nothing to resume against — the server will return SessionNotResumeableError.
-  const canResume = session.agentSessionId != null;
+export function DeadSessionPane({ session, resumeMode, onResume, onClose }: DeadSessionPaneProps): JSX.Element {
+  const canResume = session.agentSessionId != null && resumeMode !== "rehydrate";
   const duration = formatDuration(session.createdAt, session.lastActiveAt);
 
   return (
@@ -70,7 +87,7 @@ export function DeadSessionPane({ session, onResume, onClose }: DeadSessionPaneP
           data-testid="dead-session-resume"
           onClick={onResume}
           disabled={!canResume}
-          title={canResume ? undefined : "This session can't be resumed. It exited before establishing a session id."}
+          title={canResume ? undefined : resumeBlockedReason(session)}
         >
           Resume
         </button>
@@ -80,7 +97,7 @@ export function DeadSessionPane({ session, onResume, onClose }: DeadSessionPaneP
       </div>
       {!canResume && (
         <div className="dead-session-resume-reason" data-testid="dead-session-resume-reason">
-          This session can't be resumed. It exited before establishing a session id.
+          {resumeBlockedReason(session)}
         </div>
       )}
     </div>
@@ -92,22 +109,27 @@ export function DeadSessionPane({ session, onResume, onClose }: DeadSessionPaneP
  * past-session row never silently spawns a live session anymore — it lands
  * here first, and resuming (or starting fresh) is the explicit action.
  *
- * `resumable` mirrors what resumeFromHistory will actually do: entries the
- * registry still tracks reattach to their session; transcript-only entries
- * the harness never tracked can only start a fresh session in the same
- * directory — the button says which, honestly, before the click.
+ * The button says what will actually happen, before the click, from the
+ * server-verified `summary.resumeMode`: `agent-resume` reattaches to the
+ * agent's own conversation (whether the registry tracked the row or it gets
+ * adopted out of transcript history), `rehydrate` can only open a fresh
+ * session in the same directory — which it says, with the real reason.
+ *
+ * Note this is no longer "did the registry track it": a tracked row whose
+ * transcript the agent never wrote is `rehydrate`, and an untracked row whose
+ * transcript is really there is `agent-resume`. The old registry-membership
+ * test got both of those backwards.
  */
 export function PastSessionPane({
   summary,
-  resumable,
   onStart,
   onClose,
 }: {
   summary: SessionSummary;
-  resumable: boolean;
   onStart: () => void;
   onClose: () => void;
 }): JSX.Element {
+  const resumable = summary.resumeMode === "agent-resume";
   return (
     <div className="dead-session-pane" data-testid="past-session-pane">
       <div className="dead-session-title">{summary.title}</div>
@@ -124,8 +146,9 @@ export function PastSessionPane({
       </div>
       {!resumable && (
         <div className="dead-session-resume-reason" data-testid="past-session-reason">
-          This entry comes from the agent's own transcript history; the Studio can't reattach to
-          its process. Starting opens a fresh session in the same directory.
+          {HARNESS_LABELS[summary.harness]} has no saved conversation for this session, so it can't
+          be reattached — sessions that end before their first prompt are never written to the
+          agent's history. Starting opens a fresh session in the same directory.
         </div>
       )}
     </div>

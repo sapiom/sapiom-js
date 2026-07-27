@@ -13,7 +13,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpHome };
 });
 
-import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SpawnSpec, WorkflowInfo } from "../shared/types.js";
+import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SessionSummary, SpawnSpec, WorkflowInfo } from "../shared/types.js";
 import { MAX_IMAGE_UPLOAD_BYTES } from "../shared/types.js";
 import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
 import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
@@ -35,7 +35,64 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
       const session = sessions.get(id);
       if (session) session.boundWorkflowPath = workflowPath;
     }),
+    registerHistorical: vi.fn((input: { agentSessionId: string; harness: HarnessKind; cwd: string; title: string; lastActiveAt: string }) => {
+      const session: HarnessSession = {
+        id: `adopted-${input.agentSessionId}`,
+        agentSessionId: input.agentSessionId,
+        harness: input.harness,
+        cwd: input.cwd,
+        title: input.title,
+        status: "exited",
+        createdAt: input.lastActiveAt,
+        lastActiveAt: input.lastActiveAt,
+        exitCode: null,
+        boundWorkflowPath: null,
+        ready: false,
+      };
+      sessions.set(session.id, session);
+      return session;
+    }),
   } as unknown as RestRouterOptions["sessionManager"];
+}
+
+/** An exited registry session — the shape a past-sessions row is built from. */
+function exitedSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
+  return {
+    id: "sess-1",
+    agentSessionId: "agent-1",
+    harness: "claude-code",
+    cwd: "/tmp/proj",
+    title: "proj",
+    status: "exited",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastActiveAt: "2026-01-01T01:00:00.000Z",
+    exitCode: 0,
+    boundWorkflowPath: null,
+    ready: false,
+    ...overrides,
+  };
+}
+
+/** A history adapter whose resumability answer and transcript listing are both
+ *  controllable — the two independent inputs the history endpoint merges. */
+function historyAdapter(opts: {
+  canResume?: HarnessAdapter["canResume"];
+  listPastSessions?: HarnessAdapter["listPastSessions"];
+} = {}): HarnessAdapter {
+  return {
+    id: "claude-code",
+    eventSource: "hooks" as const,
+    doctor: async () => [],
+    launch: (o): SpawnSpec => ({ command: "fake-claude", args: [], env: {}, cwd: o.cwd }),
+    resume: (agentSessionId, o): SpawnSpec => ({
+      command: "fake-claude",
+      args: ["--resume", agentSessionId],
+      env: {},
+      cwd: o.cwd,
+    }),
+    listPastSessions: opts.listPastSessions ?? (async () => []),
+    canResume: opts.canResume ?? (async () => true),
+  };
 }
 
 describe("createRestRouter", () => {
@@ -783,6 +840,224 @@ describe("createRestRouter", () => {
     });
   });
 
+  describe("GET /sessions/history — server-verified resumeMode", () => {
+    async function history(cwd: string): Promise<SessionSummary[]> {
+      const res = await fetch(`${baseUrl}/sessions/history?cwd=${encodeURIComponent(cwd)}`, {
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(200);
+      return (await res.json()) as SessionSummary[];
+    }
+
+    it("marks a registry row the agent still holds as agent-resume", async () => {
+      start({
+        sessionManager: fakeSessionManager([exitedSession()]),
+        adapters: { "claude-code": historyAdapter({ canResume: async () => true }) },
+      });
+
+      const rows = await history("/tmp/proj");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ agentSessionId: "agent-1", source: "registry", resumeMode: "agent-resume" });
+    });
+
+    it("marks a PHANTOM registry row as rehydrate — an agentSessionId is not evidence of a conversation", async () => {
+      // The bug this endpoint change exists for: the client used to render
+      // `agentSessionId != null` as "resumable", so this row offered a Resume
+      // button whose only possible outcome was exit 1.
+      start({
+        sessionManager: fakeSessionManager([exitedSession()]),
+        adapters: { "claude-code": historyAdapter({ canResume: async () => false }) },
+      });
+
+      const rows = await history("/tmp/proj");
+      expect(rows[0]).toMatchObject({ source: "registry", resumeMode: "rehydrate" });
+    });
+
+    it("probes with the row's own agentSessionId and cwd", async () => {
+      const canResume = vi.fn(async () => true);
+      start({
+        sessionManager: fakeSessionManager([exitedSession()]),
+        adapters: { "claude-code": historyAdapter({ canResume }) },
+      });
+
+      await history("/tmp/proj");
+      expect(canResume).toHaveBeenCalledWith("agent-1", "/tmp/proj");
+    });
+
+    it("marks a transcript-only row as agent-resume — the adapter reading it out of the agent's store IS the proof", async () => {
+      // Previously hardcoded un-resumable on the client, which hid genuinely
+      // recoverable conversations behind a "New session here" button.
+      start({
+        adapters: {
+          "claude-code": historyAdapter({
+            listPastSessions: async () => [
+              {
+                agentSessionId: "agent-transcript",
+                harness: "claude-code",
+                cwd: "/tmp/proj",
+                title: "Wire the webhook",
+                lastActiveAt: "2026-01-01T00:00:00.000Z",
+                source: "transcript",
+              },
+            ],
+          }),
+        },
+      });
+
+      const rows = await history("/tmp/proj");
+      expect(rows[0]).toMatchObject({ source: "transcript", resumeMode: "agent-resume" });
+    });
+
+    it("resolves each row independently — a phantom and a live transcript in one directory", async () => {
+      start({
+        sessionManager: fakeSessionManager([exitedSession({ id: "sess-phantom", agentSessionId: "agent-phantom" })]),
+        adapters: {
+          "claude-code": historyAdapter({
+            canResume: async (id) => id !== "agent-phantom",
+            listPastSessions: async () => [
+              {
+                agentSessionId: "agent-real",
+                harness: "claude-code",
+                cwd: "/tmp/proj",
+                title: "real conversation",
+                lastActiveAt: "2026-01-02T00:00:00.000Z",
+                source: "transcript",
+              },
+            ],
+          }),
+        },
+      });
+
+      const byId = new Map((await history("/tmp/proj")).map((row) => [row.agentSessionId, row.resumeMode]));
+      expect(byId.get("agent-phantom")).toBe("rehydrate");
+      expect(byId.get("agent-real")).toBe("agent-resume");
+    });
+
+    it("reports rehydrate rather than failing when the harness has no registered adapter to ask", async () => {
+      // e.g. an external-mode harness, or a kind persisted by another build:
+      // unverifiable is not the same as resumable.
+      start({
+        sessionManager: fakeSessionManager([exitedSession({ harness: "conductor" as HarnessKind })]),
+        adapters: {},
+      });
+
+      const rows = await history("/tmp/proj");
+      expect(rows[0]).toMatchObject({ resumeMode: "rehydrate" });
+    });
+
+    it("survives an adapter whose canResume throws, despite the never-throws contract", async () => {
+      start({
+        sessionManager: fakeSessionManager([exitedSession()]),
+        adapters: {
+          "claude-code": historyAdapter({
+            canResume: async () => {
+              throw new Error("EACCES");
+            },
+          }),
+        },
+      });
+
+      const rows = await history("/tmp/proj");
+      expect(rows[0]).toMatchObject({ resumeMode: "rehydrate" });
+    });
+  });
+
+  describe("POST /sessions/adopt", () => {
+    const body = {
+      agentSessionId: "agent-transcript",
+      harness: "claude-code" as HarnessKind,
+      cwd: "/tmp/proj",
+      title: "Wire the webhook",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    async function adopt(payload: unknown) {
+      return fetch(`${baseUrl}/sessions/adopt`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    it("registers a transcript-only row and resumes it for real", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => ({
+        ...exitedSession({ id, agentSessionId: body.agentSessionId }),
+        status: "running",
+      }));
+      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => true }) } });
+
+      const res = await adopt(body);
+      expect(res.status).toBe(200);
+      expect((await res.json()) as HarnessSession).toMatchObject({ status: "running" });
+      expect(sessionManager.registerHistorical).toHaveBeenCalledWith(body);
+      // The whole point: a real resume, not a fresh session.
+      expect(sessionManager.resume).toHaveBeenCalledWith("adopted-agent-transcript");
+    });
+
+    it("409s SESSION_NOT_RESUMEABLE without registering anything when the agent no longer holds it", async () => {
+      const sessionManager = fakeSessionManager();
+      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => false }) } });
+
+      const res = await adopt(body);
+      expect(res.status).toBe(409);
+      expect((await res.json()) as { code: string }).toMatchObject({ code: "SESSION_NOT_RESUMEABLE" });
+      // No phantom record left behind by a stale history row.
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+    });
+
+    it("re-verifies server-side — a client claiming resumability cannot force a registration", async () => {
+      const sessionManager = fakeSessionManager();
+      const canResume = vi.fn(async () => false);
+      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume }) } });
+
+      expect((await adopt({ ...body, resumeMode: "agent-resume" })).status).toBe(409);
+      expect(canResume).toHaveBeenCalledWith(body.agentSessionId, body.cwd);
+    });
+
+    it("is idempotent: an already-tracked row resumes its existing record instead of duplicating it", async () => {
+      const existing = exitedSession({ id: "sess-existing", agentSessionId: body.agentSessionId });
+      const sessionManager = fakeSessionManager([existing]);
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({ ...existing, status: "running" });
+      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => true }) } });
+
+      expect((await adopt(body)).status).toBe(200);
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).toHaveBeenCalledWith("sess-existing");
+    });
+
+    it("400s on a malformed body and an unspawnable harness", async () => {
+      start({ adapters: { "claude-code": historyAdapter() } });
+      expect((await adopt({ ...body, agentSessionId: "" })).status).toBe(400);
+      expect((await adopt({ ...body, harness: "conductor" })).status).toBe(400);
+      expect((await adopt({ cwd: "/tmp/proj" })).status).toBe(400);
+    });
+
+    it("is matched ahead of /sessions/:id/resume — ':id' never swallows 'adopt'", async () => {
+      const sessionManager = fakeSessionManager();
+      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => false }) } });
+
+      // If the :id route won, resume("adopt") would run and this would not be
+      // the adopt route's own 409.
+      const res = await adopt(body);
+      expect(res.status).toBe(409);
+      expect(sessionManager.resume).not.toHaveBeenCalled();
+    });
+
+    it("maps a resume failure after registration onto the same status the :id route uses", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new SessionAlreadyLiveError("adopted-agent-transcript"),
+      );
+      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => true }) } });
+
+      const res = await adopt(body);
+      expect(res.status).toBe(409);
+      expect((await res.json()) as { code: string }).toMatchObject({ code: "SESSION_ALREADY_LIVE" });
+    });
+  });
+
   describe("GET /harnesses", () => {
     it("returns a list of adapter descriptors with id, label, mode, experimental, installed, and installMcpPrompt", async () => {
       start();
@@ -914,6 +1189,7 @@ describe("createRestRouter", () => {
           cwd: opts.cwd,
         }),
         listPastSessions: async () => [],
+        canResume: async () => true,
       };
     }
 

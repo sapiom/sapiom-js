@@ -302,4 +302,77 @@ describe("ClaudeCodeAdapter", () => {
       expect(summary!.title).not.toContain("11111111");
     });
   });
+
+  describe("canResume", () => {
+    const cwd = "/Users/test/my-project";
+    const sessionId = "8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f";
+    let homeDir: string;
+
+    beforeEach(async () => {
+      homeDir = await mkdtemp(join(tmpdir(), "harness-claude-canresume-"));
+    });
+
+    afterEach(async () => {
+      await rm(homeDir, { recursive: true, force: true });
+    });
+
+    function encodedProjectDir(home: string, projectCwd: string): string {
+      return join(home, ".claude", "projects", projectCwd.replace(/[/.]/g, "-"));
+    }
+
+    async function writeTranscript(projectCwd: string, id: string, body: string): Promise<void> {
+      const dir = encodedProjectDir(homeDir, projectCwd);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${id}.jsonl`), body, "utf8");
+    }
+
+    it("is true when the transcript for that id exists under the encoded project dir", async () => {
+      await writeTranscript(cwd, sessionId, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(true);
+    });
+
+    it("is false for a phantom: an id we hold with no transcript written for it", async () => {
+      // The real-world shape — the SessionStart hook gave us an id, but the
+      // user never submitted a prompt, so Claude Code wrote nothing at all.
+      // The project dir itself exists because OTHER sessions in it did run.
+      await writeTranscript(cwd, "some-other-session", JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+    });
+
+    it("is false when no project directory exists for the cwd at all", async () => {
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, "/nonexistent/project")).toBe(false);
+    });
+
+    it("is false for a zero-byte transcript — the file exists but holds no conversation", async () => {
+      await writeTranscript(cwd, sessionId, "");
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+    });
+
+    it("is scoped to the cwd: the same id under another project does not count", async () => {
+      await writeTranscript("/Users/test/other-project", sessionId, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+      expect(await adapter.canResume(sessionId, "/Users/test/other-project")).toBe(true);
+    });
+
+    it("is false for a directory that happens to be named <id>.jsonl", async () => {
+      await mkdir(join(encodedProjectDir(homeDir, cwd), `${sessionId}.jsonl`), { recursive: true });
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+    });
+
+    it("never throws and refuses ids that would escape the project dir", async () => {
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      // Ids reach this from HTTP via POST /api/sessions/adopt, so a traversal
+      // attempt must be rejected outright rather than statted.
+      expect(await adapter.canResume("../../../../etc/passwd", cwd)).toBe(false);
+      expect(await adapter.canResume("..", cwd)).toBe(false);
+      expect(await adapter.canResume("a/b", cwd)).toBe(false);
+      expect(await adapter.canResume("", cwd)).toBe(false);
+    });
+  });
 });

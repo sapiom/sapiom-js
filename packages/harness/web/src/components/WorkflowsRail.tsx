@@ -5,6 +5,7 @@ import type {
   HarnessEntry,
   HarnessKind,
   HarnessSession,
+  SessionResumeMode,
   SessionSummary,
   TemplateDetailView,
   TemplateListResponse,
@@ -221,15 +222,23 @@ function BareFolderRow({
   );
 }
 
-/** Merged past-sessions row: exited registry sessions and history
- *  entries share this anatomy — title, one meta line, path, TEXT status tag. */
+/**
+ * Merged past-sessions row: exited registry sessions and history entries share
+ * this anatomy — title, one meta line, path, TEXT status tag.
+ *
+ * The tag reports the server-verified `resumeMode`, never a local guess. It is
+ * undefined until history has loaded for the row's directory, and that reads as
+ * "checking…" rather than resolving optimistically either way — claiming
+ * "resumable" before we know is how one in three rows came to be a Resume
+ * button that failed.
+ */
 function PastSessionRow({
   testid,
   harness,
   title,
   meta,
   cwd,
-  resumable,
+  resumeMode,
   isSelected,
   onOpen,
 }: {
@@ -238,10 +247,12 @@ function PastSessionRow({
   title: string;
   meta: string;
   cwd: string;
-  resumable: boolean;
+  resumeMode: SessionResumeMode | undefined;
   isSelected: boolean;
   onOpen: () => void;
 }): JSX.Element {
+  const tag =
+    resumeMode === "agent-resume" ? "resumable" : resumeMode === "rehydrate" ? "archived" : "checking…";
   return (
     <button
       data-testid={testid}
@@ -256,8 +267,11 @@ function PastSessionRow({
         <span className="session-item-meta">{meta}</span>
         <span className="session-item-cwd">{cwd}</span>
       </span>
-      <span className="past-session-tag" data-resumable={resumable}>
-        {resumable ? "resumable" : "archived"}
+      <span
+        className="past-session-tag"
+        data-resumable={resumeMode == null ? "unknown" : resumeMode === "agent-resume"}
+      >
+        {tag}
       </span>
     </button>
   );
@@ -368,6 +382,15 @@ export function WorkflowsRail({
     ...pastSummaries.map((summary) => ({ kind: "summary" as const, at: summary.lastActiveAt, summary })),
   ].sort((a, b) => b.at.localeCompare(a.at));
 
+  // Exited registry rows render from the session record (it carries live status
+  // history can't), but only the server knows whether the agent still holds
+  // their conversation — so their tag comes from the matching history row's
+  // verified resumeMode. Absent until history loads for that directory, which
+  // the row renders as "checking…" rather than guessing.
+  const resumeModeByAgentId = new Map(
+    history.map((summary) => [summary.agentSessionId, summary.resumeMode] as const),
+  );
+
   const { workspaces, orphanAgents } = buildWorkspaceTree(workflows, sessions);
 
   const copyPath = (path: string): void => {
@@ -475,7 +498,14 @@ export function WorkflowsRail({
                   title={row.session.title}
                   meta={historyRowMeta(row.session)}
                   cwd={row.session.cwd}
-                  resumable={row.session.agentSessionId != null}
+                  resumeMode={
+                    // No agentSessionId at all: the agent never established a
+                    // session, so there is provably nothing to resume — no
+                    // need to wait on history to say so.
+                    row.session.agentSessionId == null
+                      ? "rehydrate"
+                      : resumeModeByAgentId.get(row.session.agentSessionId)
+                  }
                   isSelected={row.session.id === activeSessionId}
                   onOpen={() => {
                     onSelectSession(row.session.id);
@@ -490,7 +520,7 @@ export function WorkflowsRail({
                   title={row.summary.title}
                   meta={historyRowMeta(row.summary)}
                   cwd={row.summary.cwd}
-                  resumable={false}
+                  resumeMode={row.summary.resumeMode}
                   isSelected={false}
                   onOpen={() => {
                     onReviewSummary(row.summary);

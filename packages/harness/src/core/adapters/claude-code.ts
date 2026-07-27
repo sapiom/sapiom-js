@@ -16,7 +16,7 @@ import type {
   DoctorCheck,
   HarnessAdapter,
   LaunchOpts,
-  SessionSummary,
+  PastSessionRecord,
   SpawnSpec,
 } from "../../shared/types.js";
 /**
@@ -27,6 +27,16 @@ import type {
 function encodeProjectPath(cwd: string): string {
   const normalized = cwd.replace(/\\/g, "/");
   return normalized.replace(/:/g, "").replace(/[/.]/g, "-");
+}
+
+/**
+ * A session id we're willing to interpolate into a transcript path. Claude
+ * Code's ids are UUIDs; anything carrying a separator or a `..` segment is
+ * either corrupt registry data or an attempt to walk out of the project dir
+ * via `POST /api/sessions/adopt`, and is never a real transcript either way.
+ */
+function isSafeSessionId(agentSessionId: string): boolean {
+  return agentSessionId.length > 0 && /^[A-Za-z0-9._-]+$/.test(agentSessionId) && !agentSessionId.includes("..");
 }
 
 const execFileAsync = promisify(execFile);
@@ -343,7 +353,24 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     };
   }
 
-  async listPastSessions(cwd: string): Promise<SessionSummary[]> {
+  /**
+   * See `HarnessAdapter.canResume`. One `stat` on the transcript `claude
+   * --resume <id>` would read: `~/.claude/projects/<encoded cwd>/<id>.jsonl`.
+   * Reuses `encodeProjectPath` so the vendor's directory layout stays defined
+   * in exactly one place (`listPastSessions` is the other reader).
+   *
+   * A zero-byte file counts as absent: the transcript is created before the
+   * first turn is written, so an empty one is precisely the never-prompted
+   * session that `--resume` rejects with "No conversation found".
+   */
+  async canResume(agentSessionId: string, cwd: string): Promise<boolean> {
+    if (!isSafeSessionId(agentSessionId)) return false;
+    const filePath = join(this.homeDir, ".claude", "projects", encodeProjectPath(cwd), `${agentSessionId}.jsonl`);
+    const fileStat = await stat(filePath).catch(() => undefined);
+    return fileStat != null && fileStat.isFile() && fileStat.size > 0;
+  }
+
+  async listPastSessions(cwd: string): Promise<PastSessionRecord[]> {
     const projectDir = join(this.homeDir, ".claude", "projects", encodeProjectPath(cwd));
     let entries: string[];
     try {
@@ -352,7 +379,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       return [];
     }
 
-    const summaries: SessionSummary[] = [];
+    const summaries: PastSessionRecord[] = [];
     for (const file of entries) {
       if (!file.endsWith(".jsonl")) continue;
       const filePath = join(projectDir, file);

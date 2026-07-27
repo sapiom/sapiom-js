@@ -166,7 +166,24 @@ export interface HarnessSession {
   ready: boolean;
 }
 
-/** A resumable past session discovered from agent transcripts or our registry. */
+/**
+ * What resuming a past session would ACTUALLY do — resolved server-side
+ * against the agent's own conversation store, never guessed from whether we
+ * happen to hold an `agentSessionId`.
+ *
+ * - `agent-resume`: the agent still holds this conversation, so
+ *   `HarnessAdapter.resume()` reattaches to it for real.
+ * - `rehydrate`: the agent does NOT hold it. Most commonly a session that
+ *   ended before its first prompt — Claude Code writes no transcript at all
+ *   for those, and Codex writes no rollout file (see CodexAdapter's
+ *   `detectBlockingPrompt` for the same rule from the other direction). The
+ *   conversation is unrecoverable from the agent; the only honest options are
+ *   a fresh session in the same directory, or (once H3 lands) replaying our
+ *   own recorded context into one.
+ */
+export type SessionResumeMode = "agent-resume" | "rehydrate";
+
+/** A past session discovered from agent transcripts or our registry. */
 export interface SessionSummary {
   /** Back-reference to our session when the registry tracked it (source "registry"). */
   harnessSessionId?: string;
@@ -176,6 +193,14 @@ export interface SessionSummary {
   title: string;
   lastActiveAt: string;
   source: "registry" | "transcript";
+  /**
+   * Whether this row can genuinely be handed back to the agent — verified
+   * against the agent's own store by `GET /api/sessions/history`, for BOTH
+   * row sources. Holding an `agentSessionId` is not evidence of anything:
+   * we capture it from the SessionStart hook, which fires long before the
+   * agent has a conversation worth resuming.
+   */
+  resumeMode: SessionResumeMode;
   /**
    * Git branch the session was last active on, when the transcript records it.
    * The strongest within-directory differentiator between otherwise-similar
@@ -190,6 +215,16 @@ export interface SessionSummary {
    */
   messageCount?: number;
 }
+
+/**
+ * What an adapter reports having FOUND — everything in a `SessionSummary`
+ * except `resumeMode`. Deciding what resuming a row would do is the server's
+ * job (`GET /api/sessions/history`), so the adapter contract deliberately
+ * can't express it: that's what kept transcript rows hardcoded to
+ * un-resumable while registry rows were hardcoded to resumable, each wrong in
+ * the opposite direction.
+ */
+export type PastSessionRecord = Omit<SessionSummary, "resumeMode">;
 
 // ---------------------------------------------------------------------------
 // Harness adapters (the interface contract with each coding agent)
@@ -248,8 +283,26 @@ export interface HarnessAdapter {
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec;
   /** How analytics events are sourced for this harness. */
   eventSource: "hooks" | "transcript-tail";
-  /** Resumable sessions for a directory (agent-side history). */
-  listPastSessions(cwd: string): Promise<SessionSummary[]>;
+  /** Past sessions this agent recorded for a directory (agent-side history).
+   *  Reports what it found; `resumeMode` is the server's call — see
+   *  {@link PastSessionRecord}. */
+  listPastSessions(cwd: string): Promise<PastSessionRecord[]>;
+  /**
+   * Does this agent's OWN conversation store still hold `agentSessionId` for
+   * `cwd` — i.e. would `resume()` reattach to a real conversation rather than
+   * dying on startup?
+   *
+   * This exists because holding an `agentSessionId` proves nothing: we capture
+   * it from the SessionStart hook, which fires before the user has submitted
+   * anything, and an agent that never received a prompt writes no transcript
+   * at all. Without this check, one in three history rows was a Resume button
+   * guaranteed to fail with `No conversation found with session ID: …`.
+   *
+   * Contract: **never throws**. A missing, unreadable, or empty store is
+   * `false` — a resumability probe must not be able to break the history
+   * endpoint or `resume()`'s pre-flight.
+   */
+  canResume(agentSessionId: string, cwd: string): Promise<boolean>;
   /**
    * Best-effort scrollback check for this harness's own known blocking
    * prompts (e.g. "trust this directory?"), for harnesses whose real
@@ -630,6 +683,7 @@ export interface CollectorBatch {
 // POST   /api/sessions                  CreateSessionRequest → HarnessSession
 // GET    /api/sessions                  → HarnessSession[]
 // GET    /api/sessions/history?cwd=     → SessionSummary[]
+// POST   /api/sessions/adopt            AdoptSessionRequest → HarnessSession (register + resume a transcript-only row)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
@@ -653,6 +707,29 @@ export interface CreateSessionRequest {
   harness: HarnessKind;
   /** Profile id; omit for default. */
   profile?: string;
+}
+
+/**
+ * `POST /api/sessions/adopt` body — takes a transcript-only history row (one
+ * the registry never tracked, `SessionSummary.harnessSessionId` absent) into
+ * the registry and immediately resumes it, so a row whose transcript really is
+ * there reattaches to the agent instead of quietly starting a fresh session.
+ *
+ * The server re-verifies `resumeMode` itself via `HarnessAdapter.canResume`
+ * before registering anything — a client claim is never taken on trust, and a
+ * `rehydrate` row 409s with `SESSION_NOT_RESUMEABLE` rather than leaving a
+ * phantom record behind.
+ */
+export interface AdoptSessionRequest {
+  /** The agent's own conversation id, as reported by `GET /sessions/history`. */
+  agentSessionId: string;
+  harness: HarnessKind;
+  cwd: string;
+  /** Display title carried over from the history row. */
+  title: string;
+  /** When the transcript was last touched — becomes the adopted record's
+   *  `createdAt`/`lastActiveAt` so history keeps sorting it where it was. */
+  lastActiveAt: string;
 }
 
 /** Inject text into the session pty (used by macros and the Visualize button). */

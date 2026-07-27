@@ -30,10 +30,15 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
  * "under a minute" / "42m" / "1h 12m" / "2d 3h" — how long a session ran,
  * from its createdAt/lastActiveAt pair. Null on bad timestamps so callers
  * drop the row instead of showing a fabricated duration.
+ *
+ * A zero (or inverted) span is also null, not "under a minute": a session
+ * adopted out of transcript history has `createdAt === lastActiveAt` because
+ * nothing has run under our management yet, and "Ran for under a minute" would
+ * be a number we invented. No measurable span → no duration row.
  */
 export function formatDuration(startIso: string, endIso: string): string | null {
   const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return null;
+  if (!Number.isFinite(ms) || ms <= 0) return null;
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 1) return "under a minute";
   if (minutes < 60) return `${minutes}m`;
@@ -49,17 +54,23 @@ export function formatDuration(startIso: string, endIso: string): string | null 
  * fields, absent on older servers), then relative time. Parts that are
  * absent simply drop out; nothing is fabricated.
  */
-export function historyRowMeta(summary: {
-  harness: HarnessKind;
-  gitBranch?: string;
-  messageCount?: number;
-  lastActiveAt: string;
-}): string {
+export function historyRowMeta(
+  summary: {
+    harness: HarnessKind;
+    gitBranch?: string;
+    messageCount?: number;
+    lastActiveAt: string;
+  },
+  now: number = Date.now(),
+): string {
   const parts: string[] = [HARNESS_LABELS[summary.harness]];
   if (summary.gitBranch) parts.push(summary.gitBranch);
   if (summary.messageCount != null && summary.messageCount > 0) {
     parts.push(`${summary.messageCount} ${summary.messageCount === 1 ? "turn" : "turns"}`);
   }
-  parts.push(formatRelativeTime(summary.lastActiveAt));
+  // Relative time keys off lastActiveAt, never createdAt — a row's age is when
+  // it was last actually active, and resume() no longer stamps that field for
+  // an attempt that never produced a pty.
+  parts.push(formatRelativeTime(summary.lastActiveAt, now));
   return parts.join(" · ");
 }

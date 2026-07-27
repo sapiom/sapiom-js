@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type {
+  AdoptSessionRequest,
   AnalyticsEvent,
   AppState,
   AttachImageRequest,
@@ -126,6 +127,37 @@ const uiTrackSchema = z.object({
   data: uiTrackDataSchema.optional(),
   harnessSessionId: z.string().optional(),
 }) satisfies z.ZodType<UiTrackRequest>;
+
+const adoptSessionSchema = z.object({
+  agentSessionId: z.string().min(1),
+  harness: z.enum(SPAWNABLE_HARNESS_KINDS),
+  cwd: z.string().min(1),
+  title: z.string().min(1),
+  lastActiveAt: z.string().min(1),
+}) satisfies z.ZodType<AdoptSessionRequest>;
+
+/**
+ * Whether `harness` can genuinely hand this conversation back, per its own
+ * adapter. An unregistered harness (an external-mode one like Conductor, or a
+ * kind persisted by another build) is `false`: we have no way to check, and
+ * offering Resume on an unverifiable row is the exact bug this replaces.
+ * Never throws — adapters promise the same, and a probe failure must not take
+ * the history endpoint down with it.
+ */
+async function agentHoldsConversation(
+  adapters: Partial<Record<HarnessKind, HarnessAdapter>>,
+  harness: HarnessKind,
+  agentSessionId: string,
+  cwd: string,
+): Promise<boolean> {
+  const adapter = adapters[harness];
+  if (!adapter) return false;
+  try {
+    return await adapter.canResume(agentSessionId, cwd);
+  } catch {
+    return false;
+  }
+}
 
 export interface RestRouterOptions {
   sessionManager: SessionManager;
@@ -394,6 +426,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
     try {
       // Registry entries win over transcript-scanned history for the same
       // agent session — they carry live status the transcript can't know.
+      //
+      // `resumeMode` is resolved here, for BOTH sources, against the agent's
+      // own store. Previously the client guessed it (`agentSessionId != null`
+      // → resumable, which made every never-prompted session a Resume button
+      // guaranteed to fail) and transcript rows were hardcoded un-resumable
+      // (which hid genuinely resumable conversations). One check, one place.
       const byAgentSessionId = new Map<string, SessionSummary>();
       for (const session of sessionManager.list()) {
         if (session.cwd !== cwd || !session.agentSessionId) continue;
@@ -405,14 +443,21 @@ export function createRestRouter(options: RestRouterOptions): Router {
           title: session.title,
           lastActiveAt: session.lastActiveAt,
           source: "registry",
+          resumeMode: (await agentHoldsConversation(adapters, session.harness, session.agentSessionId, session.cwd))
+            ? "agent-resume"
+            : "rehydrate",
         });
       }
       for (const adapter of Object.values(adapters)) {
         if (!adapter) continue;
-        for (const summary of await adapter.listPastSessions(cwd)) {
-          if (!byAgentSessionId.has(summary.agentSessionId)) {
-            byAgentSessionId.set(summary.agentSessionId, summary);
-          }
+        for (const record of await adapter.listPastSessions(cwd)) {
+          if (byAgentSessionId.has(record.agentSessionId)) continue;
+          // A transcript row needs no second probe: the adapter just read this
+          // conversation out of the agent's own store, and it skips files with
+          // no parseable entries — finding it IS the verification `canResume`
+          // performs. Re-probing every row would also turn codex's single
+          // rollout-tree walk into one walk per row.
+          byAgentSessionId.set(record.agentSessionId, { ...record, resumeMode: "agent-resume" });
         }
       }
       const merged = Array.from(byAgentSessionId.values()).sort((a, b) =>
@@ -424,31 +469,83 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
+  /**
+   * Maps a resume failure onto its status code. Shared by both routes that
+   * resume — `/sessions/:id/resume` and `/sessions/adopt` — so a
+   * transcript-only row that turns out not to be resumable answers with the
+   * same 409 + `code` the UI already knows how to surface. Returns false when
+   * the error isn't a resume-shaped one, so the caller falls through to
+   * `next(err)`.
+   */
+  const sendResumeError = (res: express.Response, err: unknown): boolean => {
+    if (err instanceof UnknownSessionError) {
+      res.status(404).json({ error: err.message });
+      return true;
+    }
+    if (err instanceof AdapterNotFoundError) {
+      // A persisted session with an unknown harness kind (e.g. from a future
+      // or removed harness type) cannot be resumed.
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+    }
+    if (
+      err instanceof ExternalHarnessError ||
+      err instanceof SessionAlreadyLiveError ||
+      err instanceof SessionNotResumeableError
+    ) {
+      res.status(409).json({ error: err.message, code: (err as { code: string }).code });
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * Adopts a transcript-only history row into the registry and resumes it, so
+   * a row whose conversation the agent really still holds reattaches for real
+   * instead of quietly opening a fresh session (`registerHistorical` existed
+   * for exactly this and had no caller until now).
+   *
+   * Registered ahead of `/sessions/:id/resume` because both are three-segment
+   * paths — reversed, `:id` would swallow "adopt".
+   */
+  router.post("/sessions/adopt", async (req, res, next) => {
+    const parsed = adoptSessionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
+      return;
+    }
+    const { agentSessionId, harness, cwd, title, lastActiveAt } = parsed.data;
+    try {
+      // Never take the client's word for resumability — it's re-derived from
+      // the agent's own store here, so a stale history row (transcript deleted
+      // between the list and the click) can't leave a phantom record behind.
+      if (!(await agentHoldsConversation(adapters, harness, agentSessionId, cwd))) {
+        const label = getHarnessAdapter(harness).label;
+        res.status(409).json({
+          error: `${label} no longer has the conversation for session ${agentSessionId} in ${cwd} — there is nothing to resume. Start a new session in this directory instead.`,
+          code: "SESSION_NOT_RESUMEABLE",
+        });
+        return;
+      }
+      // Idempotent: a row already tracked by the registry resumes its existing
+      // record rather than minting a duplicate on every click.
+      const existing = sessionManager
+        .list()
+        .find((session) => session.agentSessionId === agentSessionId && session.cwd === cwd);
+      const target = existing ?? sessionManager.registerHistorical({ agentSessionId, harness, cwd, title, lastActiveAt });
+      res.json(await sessionManager.resume(target.id));
+    } catch (err) {
+      if (sendResumeError(res, err)) return;
+      next(err);
+    }
+  });
+
   router.post("/sessions/:id/resume", async (req, res, next) => {
     try {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
     } catch (err) {
-      if (err instanceof UnknownSessionError) {
-        res.status(404).json({ error: err.message });
-        return;
-      }
-      if (err instanceof AdapterNotFoundError) {
-        // A persisted session with an unknown harness kind (e.g. from a future
-        // or removed harness type) cannot be resumed.
-        res.status(400).json({ error: err.message, code: err.code });
-        return;
-      }
-      if (
-        err instanceof ExternalHarnessError ||
-        err instanceof SessionAlreadyLiveError ||
-        err instanceof SessionNotResumeableError
-      ) {
-        res
-          .status(409)
-          .json({ error: err.message, code: (err as { code: string }).code });
-        return;
-      }
+      if (sendResumeError(res, err)) return;
       next(err);
     }
   });

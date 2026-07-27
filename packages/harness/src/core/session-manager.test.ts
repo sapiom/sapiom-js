@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HarnessAdapter, HarnessKind, HarnessSession, SpawnSpec } from "../shared/types.js";
 import { SessionManager, type PtySpawnFn, type SessionManagerOptions } from "./session-manager.js";
-import { ExternalHarnessError } from "./errors.js";
+import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -58,6 +58,9 @@ function createFakeAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdap
       }),
     ),
     listPastSessions: vi.fn(async () => []),
+    // Resumable by default so the existing resume tests exercise resume()
+    // itself; the pre-flight's own behaviour is covered by overriding this.
+    canResume: vi.fn(async () => true),
     ...overrides,
   };
 }
@@ -598,6 +601,97 @@ describe("SessionManager", () => {
 
     const resumed = await manager.resume(session.id);
     expect(resumed.status).toBe("running");
+  });
+
+  describe("resume() resumability pre-flight", () => {
+    /** A session record that looks perfectly resumable — status exited, an
+     *  agentSessionId captured from the SessionStart hook — which is exactly
+     *  the phantom shape: 15 of 46 real registry entries looked like this and
+     *  every one of them was a Resume button guaranteed to fail. */
+    function registerPhantom(manager: SessionManager) {
+      return manager.registerHistorical({
+        agentSessionId: "agent-uuid-phantom",
+        harness: "claude-code",
+        cwd: "/tmp/proj",
+        title: "never prompted",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
+    }
+
+    it("throws SessionNotResumeableError instead of spawning when the agent no longer holds the conversation", async () => {
+      const adapter = createFakeAdapter({ canResume: vi.fn(async () => false) });
+      const { manager, spawns } = makeManager({ adapter });
+      const session = registerPhantom(manager);
+
+      await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
+      // The point of the pre-flight: no doomed pty. Previously this spawned
+      // `claude --resume <id>`, which exited 1 with "No conversation found".
+      expect(spawns).toHaveLength(0);
+      expect(adapter.resume).not.toHaveBeenCalled();
+    });
+
+    it("names the agent and the reason so the 409 tells the user WHY", async () => {
+      const adapter = createFakeAdapter({ canResume: vi.fn(async () => false) });
+      const { manager } = makeManager({ adapter });
+      const session = registerPhantom(manager);
+
+      await expect(manager.resume(session.id)).rejects.toMatchObject({
+        code: "SESSION_NOT_RESUMEABLE",
+        message: expect.stringContaining("Claude Code"),
+      });
+      await expect(manager.resume(session.id)).rejects.toThrow(/before their first prompt/);
+    });
+
+    it("probes the agent's store with the session's own agentSessionId and cwd", async () => {
+      const canResume = vi.fn(async () => true);
+      const { manager } = makeManager({ adapter: createFakeAdapter({ canResume }) });
+      const session = registerPhantom(manager);
+
+      await manager.resume(session.id);
+
+      expect(canResume).toHaveBeenCalledWith("agent-uuid-phantom", "/tmp/proj");
+    });
+
+    it("leaves a rejected session's record untouched — still exited, same lastActiveAt", async () => {
+      const { manager } = makeManager({ adapter: createFakeAdapter({ canResume: vi.fn(async () => false) }) });
+      const session = registerPhantom(manager);
+
+      await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
+
+      const after = manager.get(session.id);
+      expect(after?.status).toBe("exited");
+      // The duration bug: stamping lastActiveAt here made a session idle since
+      // last night report "Ran for 6h 25m" purely because someone clicked Resume.
+      expect(after?.lastActiveAt).toBe("2026-01-01T00:00:00.000Z");
+    });
+
+    it("rolls lastActiveAt back when the resume passes pre-flight but dies before a live pty", async () => {
+      const { manager } = makeManager({
+        adapter: createFakeAdapter({ canResume: vi.fn(async () => true) }),
+        spawnPty: () => {
+          throw new Error("node-pty exploded");
+        },
+      });
+      const session = registerPhantom(manager);
+
+      await expect(manager.resume(session.id)).rejects.toThrow("node-pty exploded");
+
+      const after = manager.get(session.id);
+      expect(after?.status).toBe("exited");
+      // No pty ever ran, so the session's last real activity is unchanged —
+      // "we noticed it's dead" is not activity.
+      expect(after?.lastActiveAt).toBe("2026-01-01T00:00:00.000Z");
+    });
+
+    it("still short-circuits on a missing agentSessionId without probing the adapter", async () => {
+      const canResume = vi.fn(async () => true);
+      const { manager } = makeManager({ adapter: createFakeAdapter({ canResume }) });
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      await manager.kill(session.id);
+
+      await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
+      expect(canResume).not.toHaveBeenCalled();
+    });
   });
 
   it("new sessions start with boundWorkflowPath: null", async () => {

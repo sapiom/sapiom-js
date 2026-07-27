@@ -29,6 +29,7 @@ function fakeCodexAdapter(): HarnessAdapter {
       cwd: opts.cwd,
     }),
     listPastSessions: async () => [],
+    canResume: async () => true,
   };
 }
 

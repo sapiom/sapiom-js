@@ -199,6 +199,29 @@ export const App = (): JSX.Element => {
     saveUiPrefs({ rightTab });
   }, [rightTab]);
 
+  // The dead pane's Resume button has to be as honest as a history row's tag,
+  // and only the server can say whether the agent still holds the
+  // conversation. Its verdict rides on the history row for this session, so
+  // fetch this directory's history when we don't already have it. Skipping the
+  // fetch once the row is present also keeps this from clobbering a broader
+  // load (the rail's popover reads the very same store) with a single dir.
+  //
+  // Declared here, above this component's early returns, so the hook list
+  // stays stable regardless of boot state.
+  const activeExitedSession =
+    harness.state?.sessions.find(
+      (session) => session.id === harness.activeSessionId && session.status === "exited",
+    ) ?? null;
+  const deadResumeMode = activeExitedSession?.agentSessionId
+    ? harness.history.find((summary) => summary.agentSessionId === activeExitedSession.agentSessionId)?.resumeMode
+    : "rehydrate";
+  const deadCwdNeedingHistory =
+    activeExitedSession?.agentSessionId != null && deadResumeMode === undefined ? activeExitedSession.cwd : null;
+  const loadHistory = harness.loadHistory;
+  useEffect(() => {
+    if (deadCwdNeedingHistory) void loadHistory([deadCwdNeedingHistory]);
+  }, [deadCwdNeedingHistory, loadHistory]);
+
   if (harness.loading) {
     return <div className="app-status">Loading Sapiom Studio…</div>;
   }
@@ -712,13 +735,6 @@ export const App = (): JSX.Element => {
               ) : showReview && reviewSummary ? (
                 <PastSessionPane
                   summary={reviewSummary}
-                  resumable={
-                    (reviewSummary.harnessSessionId != null &&
-                      state.sessions.some((s) => s.id === reviewSummary.harnessSessionId)) ||
-                    state.sessions.some(
-                      (s) => s.agentSessionId != null && s.agentSessionId === reviewSummary.agentSessionId,
-                    )
-                  }
                   onStart={() => {
                     const summary = reviewSummary;
                     setReviewSummary(null);
@@ -729,6 +745,7 @@ export const App = (): JSX.Element => {
               ) : showDead && activeSession ? (
                 <DeadSessionPane
                   session={activeSession}
+                  resumeMode={deadResumeMode}
                   onResume={() => void harness.resumeSession(activeSession.id)}
                   onClose={() => void harness.closeSession(activeSession.id)}
                 />

@@ -53,13 +53,19 @@ export class SessionNotReadyError extends HarnessError {
 }
 
 /**
- * Thrown by `resume()` when the session record has no `agentSessionId` to
- * resume from (it was never fully started, or is history-only with no
- * recorded session). Maps to HTTP 409.
+ * Thrown by `resume()` when the session cannot be handed back to its agent.
+ * Two causes, both 409:
+ *
+ *  1. No `agentSessionId` at all — never fully started (the default message).
+ *  2. An `agentSessionId` the agent's own store no longer holds, caught by
+ *     `resume()`'s `canResume` pre-flight. Pass `reason` for these: the
+ *     message reaches the user as a toast, and "why" is the whole point —
+ *     the old behaviour spawned a doomed pty and left them with a bare
+ *     "exit code 1" and a Resume button that would fail again.
  */
 export class SessionNotResumeableError extends HarnessError {
-  constructor(id: string) {
-    super("SESSION_NOT_RESUMEABLE", `Session "${id}" has no agentSessionId to resume from`);
+  constructor(id: string, reason?: string) {
+    super("SESSION_NOT_RESUMEABLE", reason ?? `Session "${id}" has no agentSessionId to resume from`);
   }
 }
 

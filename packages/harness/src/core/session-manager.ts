@@ -424,8 +424,16 @@ export class SessionManager {
 
   /**
    * Registers a purely historical (never-launched-by-this-harness) session so
-   * it can subsequently be resumed via `resume()`. Used by the server layer
-   * when a user picks a past session out of transcript-scanned history.
+   * it can subsequently be resumed via `resume()`. Called by
+   * `POST /api/sessions/adopt` when a user opens a transcript-only history row
+   * whose transcript the agent genuinely still holds — that row then resumes
+   * for real instead of silently starting a fresh session in the directory,
+   * which is what happened for as long as nothing called this.
+   *
+   * The record is born `exited` with `createdAt === lastActiveAt` (nothing has
+   * run under our management yet). `resume()` is what gives it a pty, and the
+   * adopt route pre-verifies resumability before registering, so this never
+   * mints a record that can't be resumed.
    */
   registerHistorical(input: {
     agentSessionId: string;
@@ -463,12 +471,35 @@ export class SessionManager {
       throw new SessionAlreadyLiveError(id);
     }
     const adapter = this.getAdapter(session.harness);
+    // Pre-flight against the agent's OWN store before touching the record.
+    // Holding an agentSessionId only means our SessionStart hook fired once;
+    // an agent that never received a prompt writes no transcript, so
+    // `--resume` would exit 1 with "No conversation found with session ID"
+    // and leave the user on a dead pane offering Resume all over again.
+    // Failing here instead keeps the record exactly as it was — unspawned,
+    // and (see below) with its real lastActiveAt intact.
+    if (!(await adapter.canResume(session.agentSessionId, session.cwd))) {
+      const label = listHarnessAdapters().find((a) => a.id === session.harness)?.label ?? session.harness;
+      throw new SessionNotResumeableError(
+        id,
+        `${label} no longer has the conversation for this session (${session.agentSessionId}) in ${session.cwd}. ` +
+          `Sessions that ended before their first prompt are never written to the agent's history, so there is nothing to resume — start a new session in this directory instead.`,
+      );
+    }
     const opts: LaunchOpts = {
       harnessSessionId: id,
       cwd: session.cwd,
       ...(await this.buildLaunchOpts(id, session)),
     };
     const spec = adapter.resume(session.agentSessionId, opts);
+    // Kept so the failure path below can put it back: `lastActiveAt` is
+    // stamped here only to keep sweepDeadSessions() from reaping this record
+    // during the pre-pty window (it reaps non-exited records with no pty once
+    // they're older than the grace period). If the resume never produces a
+    // pty, that stamp is not activity and must not survive — otherwise a
+    // session idle since last night reports "Ran for 6h 25m" purely because
+    // someone clicked Resume.
+    const lastActiveBeforeResume = session.lastActiveAt;
     session.status = "starting";
     session.exitCode = null;
     session.lastActiveAt = this.now();
@@ -490,8 +521,12 @@ export class SessionManager {
     } catch (err) {
       // Same reconciliation as create(): the record just went back to
       // "starting" and was persisted — a failure before the new pty is live
-      // must not leave it stranded there with nothing behind it.
-      await this.transitionExited(session, null);
+      // must not leave it stranded there with nothing behind it. Roll the
+      // pre-pty `lastActiveAt` stamp back at the same time: no pty ever ran,
+      // so the session's last real activity is still where it was, and the
+      // dead pane's "Ran for" stays truthful.
+      session.lastActiveAt = lastActiveBeforeResume;
+      await this.transitionExited(session, null, { stampLastActive: false });
       throw err;
     }
     return session;
@@ -918,10 +953,17 @@ export class SessionManager {
    * the registry durably updated before rethrowing (create/resume) can
    * await it; event-driven callers fire-and-forget it like any other write.
    */
-  private transitionExited(session: HarnessSession, exitCode: number | null): Promise<void> {
+  private transitionExited(
+    session: HarnessSession,
+    exitCode: number | null,
+    { stampLastActive = true }: { stampLastActive?: boolean } = {},
+  ): Promise<void> {
     session.status = "exited";
     session.exitCode = exitCode;
-    session.lastActiveAt = this.now();
+    // `stampLastActive: false` is for reconciling a resume that never got a
+    // pty: "we noticed it's dead" is not activity, and stamping it there is
+    // what made an untouched session's duration grow on every failed Resume.
+    if (stampLastActive) session.lastActiveAt = this.now();
     const persisted = this.persist();
     this.emitStatus(session);
     return persisted;

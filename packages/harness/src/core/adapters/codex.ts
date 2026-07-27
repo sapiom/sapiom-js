@@ -29,7 +29,7 @@ import type {
   DoctorCheck,
   HarnessAdapter,
   LaunchOpts,
-  SessionSummary,
+  PastSessionRecord,
   SpawnSpec,
 } from "../../shared/types.js";
 
@@ -247,11 +247,34 @@ export class CodexAdapter implements HarnessAdapter {
     return TRUST_PROMPT_PATTERN.test(stripAnsi(scrollback));
   }
 
-  async listPastSessions(cwd: string): Promise<SessionSummary[]> {
+  /**
+   * See `HarnessAdapter.canResume`. Reuses the same rollout walk +
+   * `session_meta` read `listPastSessions` is built on, so "codex has this
+   * conversation" means exactly one thing in both places: a rollout file
+   * under `~/.codex/sessions` whose `session_meta` carries this id AND this
+   * cwd. The cwd match matters — `codex resume <id>` run from another
+   * directory is a different session's context, not this row.
+   *
+   * The never-prompted case documented on `detectBlockingPrompt` is why this
+   * can be false for an id we hold: codex writes no rollout file at all until
+   * the first turn is submitted, so a session the user opened and abandoned
+   * leaves us a `SessionStart` id with nothing behind it.
+   */
+  async canResume(agentSessionId: string, cwd: string): Promise<boolean> {
+    if (!agentSessionId) return false;
+    const root = join(this.homeDir, ".codex", "sessions");
+    for (const filePath of await collectRolloutFiles(root)) {
+      const meta = await readSessionMeta(filePath);
+      if (meta?.id === agentSessionId && meta.cwd === cwd) return true;
+    }
+    return false;
+  }
+
+  async listPastSessions(cwd: string): Promise<PastSessionRecord[]> {
     const root = join(this.homeDir, ".codex", "sessions");
     const files = await collectRolloutFiles(root);
 
-    const summaries: SessionSummary[] = [];
+    const summaries: PastSessionRecord[] = [];
     for (const filePath of files) {
       const meta = await readSessionMeta(filePath);
       if (!meta || meta.cwd !== cwd) continue;

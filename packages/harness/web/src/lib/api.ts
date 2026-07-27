@@ -6,6 +6,7 @@
  * server.
  */
 import type {
+  AdoptSessionRequest,
   AppState,
   AttachImageRequest,
   AttachImageResponse,
@@ -212,6 +213,12 @@ export interface HarnessApi {
   listSessions(): Promise<HarnessSession[]>;
   sessionHistory(cwd: string): Promise<SessionSummary[]>;
   resumeSession(id: string): Promise<HarnessSession>;
+  /** Take a transcript-only history row (`resumeMode: "agent-resume"`, no
+   *  `harnessSessionId`) into the registry and resume it — the honest
+   *  alternative to silently opening a fresh session in its directory.
+   *  Rejects 409 `SESSION_NOT_RESUMEABLE` if the server's own re-check finds
+   *  the agent no longer holds the conversation. */
+  adoptSession(req: AdoptSessionRequest): Promise<HarnessSession>;
   killSession(id: string): Promise<void>;
   injectInput(id: string, req: InjectInputRequest): Promise<void>;
   /** Attach an image (composer picker/paste/drop) to a session: the server
@@ -329,6 +336,10 @@ class RealApi implements HarnessApi {
 
   resumeSession(id: string): Promise<HarnessSession> {
     return this.request<HarnessSession>(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: "POST" });
+  }
+
+  adoptSession(req: AdoptSessionRequest): Promise<HarnessSession> {
+    return this.request<HarnessSession>("/api/sessions/adopt", { method: "POST", body: JSON.stringify(req) });
   }
 
   async killSession(id: string): Promise<void> {
@@ -787,6 +798,35 @@ class MockApi implements HarnessApi {
     const resumed = { ...existing, status: "running" as const, lastActiveAt: new Date().toISOString() };
     this.sessions = this.sessions.map((session) => (session.id === resumed.id ? resumed : session));
     return resumed;
+  }
+
+  /** Mirrors the real route: registers the transcript-only row as a session
+   *  record and hands it straight back as running, so mock mode exercises the
+   *  adopt path rather than the create-a-fresh-session fallback. */
+  async adoptSession(req: AdoptSessionRequest): Promise<HarnessSession> {
+    await delay(300);
+    const existing = this.sessions.find(
+      (session) => session.agentSessionId === req.agentSessionId && session.cwd === req.cwd,
+    );
+    const adopted: HarnessSession = {
+      ...(existing ?? {
+        id: `sess-adopted-${req.agentSessionId.slice(0, 8)}`,
+        agentSessionId: req.agentSessionId,
+        boundWorkflowPath: null,
+        harness: req.harness,
+        cwd: req.cwd,
+        title: req.title,
+        createdAt: req.lastActiveAt,
+        exitCode: null,
+      }),
+      status: "running" as const,
+      ready: true,
+      lastActiveAt: new Date().toISOString(),
+    };
+    this.sessions = existing
+      ? this.sessions.map((session) => (session.id === adopted.id ? adopted : session))
+      : [...this.sessions, adopted];
+    return adopted;
   }
 
   async killSession(id: string): Promise<void> {

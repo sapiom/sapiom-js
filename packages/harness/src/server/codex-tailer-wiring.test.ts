@@ -53,6 +53,7 @@ function fakeCodexAdapter(): HarnessAdapter {
       cwd: opts.cwd,
     }),
     listPastSessions: async () => [],
+    canResume: async () => true,
   };
 }
 
@@ -194,6 +195,7 @@ describe("codex tailer lifecycle wiring", () => {
             cwd: opts.cwd,
           }),
           listPastSessions: async () => [],
+          canResume: async () => true,
         },
       },
       stateRoot: dir,

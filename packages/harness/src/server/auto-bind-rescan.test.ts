@@ -42,6 +42,7 @@ function fakeClaudeAdapter(): HarnessAdapter {
     resume: (_agentSessionId: string, opts: LaunchOpts): SpawnSpec =>
       spec(opts),
     listPastSessions: async () => [],
+    canResume: async () => true,
   };
 }
 

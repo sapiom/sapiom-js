@@ -692,11 +692,19 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   /**
-   * Resumes a history entry. Prefers the registry's own harnessSessionId back-reference;
-   * falls back to matching agentSessionId against live sessions for older/partial data,
-   * and — for transcript-sourced entries the harness never tracked at all — starts a
-   * fresh session in the same directory rather than blocking on a resume path that
-   * doesn't exist for them.
+   * Resumes a history entry, in the order that preserves the most context:
+   *
+   *  1. A row the registry already tracks → resume that record.
+   *  2. A transcript-only row the agent still holds (`resumeMode:
+   *     "agent-resume"`, verified server-side) → adopt it into the registry
+   *     and resume for real. This is the case that used to silently start a
+   *     fresh session and throw the conversation away.
+   *  3. Anything else (`rehydrate`) → a fresh session in the same directory,
+   *     which is all that's possible until H3 lands portable continue.
+   *
+   * A failed adopt does NOT fall through to a fresh session: it surfaces the
+   * server's reason as a toast, because quietly starting something different
+   * from what the button promised is the behaviour this replaces.
    */
   const resumeFromHistory = useCallback(
     async (summary: SessionSummary): Promise<HarnessSession> => {
@@ -704,9 +712,35 @@ export function useHarnessState(): HarnessStateHook {
         summary.harnessSessionId ??
         state?.sessions.find((session) => session.agentSessionId === summary.agentSessionId)?.id;
       if (harnessSessionId) return resumeSession(harnessSessionId);
+      if (summary.resumeMode === "agent-resume") {
+        try {
+          const adopted = await api.adoptSession({
+            agentSessionId: summary.agentSessionId,
+            harness: summary.harness,
+            cwd: summary.cwd,
+            title: summary.title,
+            lastActiveAt: summary.lastActiveAt,
+          });
+          // Upsert: the adopted record is new to the registry in the normal
+          // case, but the server resumes an existing one when the row was
+          // already tracked, and then this response is the fresher copy.
+          setState((prev) => {
+            if (!prev) return prev;
+            const sessions = prev.sessions.some((s) => s.id === adopted.id)
+              ? prev.sessions.map((s) => (s.id === adopted.id ? adopted : s))
+              : [...prev.sessions, adopted];
+            return { ...prev, sessions };
+          });
+          selectSession(adopted.id);
+          return adopted;
+        } catch (err) {
+          setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+          throw err;
+        }
+      }
       return createSession({ cwd: summary.cwd, harness: summary.harness });
     },
-    [state, resumeSession, createSession],
+    [state, resumeSession, createSession, selectSession],
   );
 
   const closeSession = useCallback(
