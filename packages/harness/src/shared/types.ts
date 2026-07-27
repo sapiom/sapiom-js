@@ -35,6 +35,14 @@ export const HARNESS_PATHS = {
 } as const;
 
 /**
+ * The file that makes a directory an agent project. Canonical home: three
+ * copies of this literal used to live in core/workspace-watcher.ts,
+ * core/workflow-registry.ts and (now) server/fs.ts, the first of which carried
+ * a "kept in sync with" comment admitting the duplication. Import it.
+ */
+export const AGENT_PROJECT_MARKER = "sapiom.json";
+
+/**
  * Canvas convention: agents write static HTML here, relative to the session
  * cwd. The server watches this directory and serves it at
  * `/canvas/<harnessSessionId>/`.
@@ -954,6 +962,18 @@ export interface AppState {
   /** The directory the CLI was launched against — the SPA prefills the
    *  new-session modal with this instead of recentDirs[0]. */
   launchDir: string;
+  /**
+   * The HOST's default parent directory for NEW agent projects, before the
+   * user's `projectRoot` setting overrides it. The server supplies it because
+   * only the server knows which host it is running under: the Electron app
+   * passes `<launchDir>/projects` (keeping user code out of the state
+   * directory's own listing), while the CLI leaves it as `launchDir` — the
+   * developer `cd`'d somewhere on purpose.
+   *
+   * Optional so existing AppState constructors (tests, mocks) stay valid; the
+   * SPA falls back to `launchDir`, which is the CLI behaviour anyway.
+   */
+  defaultProjectRoot?: string;
   /** Harness kinds with a working binary on PATH at CLI boot (from doctor()),
    *  in default-preference order — `[0]` is what the auto-created boot
    *  session used. Optional: omitted by callers that construct AppState
@@ -1140,6 +1160,16 @@ export interface HarnessSettings {
    * Persisted so the notice never appears again after the first dismiss.
    */
   telemetryNoticeDismissed?: boolean;
+  /**
+   * Where NEW agent projects are created (the add-workspace template and idea
+   * doors). Absent until the user changes it, in which case the host default
+   * (`AppState.defaultProjectRoot`) applies.
+   *
+   * Deliberately the same value the door itself edits: changing the root while
+   * creating a project saves it as the default, so there is one place to set it
+   * rather than a door value that silently diverges from a settings value.
+   */
+  projectRoot?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1149,6 +1179,21 @@ export interface HarnessSettings {
 export interface FsDirEntry {
   name: string;
   path: string;
+  /**
+   * Whether this directory directly contains AGENT_PROJECT_MARKER.
+   *
+   * Load-bearing, not decorative: without it a picker cannot tell an agent
+   * project from any other folder, so it has to offer every escape hatch
+   * (register / scaffold / template / bulk-scan / install-MCP) at all times —
+   * which is exactly what made the old add-workspace dialog unusable. With it,
+   * those become outcomes of what we found rather than permanent options.
+   *
+   * Only ONE level deep, matching this endpoint's contract. A `false` here does
+   * not mean the subtree is empty of projects — a container folder whose
+   * children are projects reports `false` (the rail's recursive scan is the
+   * thing that answers "anything under here?").
+   */
+  hasAgentProject: boolean;
 }
 
 /**

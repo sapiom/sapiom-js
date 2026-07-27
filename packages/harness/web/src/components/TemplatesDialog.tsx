@@ -18,8 +18,12 @@ import { Icon } from "./Icon";
 import { TemplateDetail } from "./TemplateDetail";
 
 interface TemplatesDialogProps {
-  /** Seeds the destination suggestion (a new folder under the launch dir). */
-  launchDir: string | null;
+  /** Seeds the destination suggestion: a new folder under the PROJECT ROOT
+   *  (resolveProjectRoot — the user's `projectRoot` setting, else the host
+   *  default, else the launch dir). Was `launchDir`; renamed when the
+   *  add-workspace doors made root resolution shared, so this dialog and the
+   *  "start from an idea" door can never disagree about where projects land. */
+  projectRoot: string | null;
   onClose: () => void;
   /** The real handoff (App.handleUseTemplate): starts a session in the
    *  destination folder and hands the agent the clone or scaffold prompt. */
@@ -92,7 +96,7 @@ function TemplateRow({
  * if it were complete.
  */
 export function TemplatesDialog({
-  launchDir,
+  projectRoot,
   onClose,
   onUse,
   listTemplates,
@@ -103,7 +107,7 @@ export function TemplatesDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<StudioTemplate>(STARTER_TEMPLATES[0]);
-  const [dest, setDest] = useState(() => templateDirSuggestion(STARTER_TEMPLATES[0], launchDir));
+  const [dest, setDest] = useState(() => templateDirSuggestion(STARTER_TEMPLATES[0], projectRoot));
   // A hand-edited destination survives template switches; an untouched one
   // follows the selection so the default always names the picked template.
   // A REF, not state: the catalog effect below runs once (`[]` deps), so a
@@ -128,7 +132,7 @@ export function TemplatesDialog({
         if (first && !selectionTouched.current) {
           const template: GalleryTemplate = { ...first, kind: "gallery" };
           setSelected(template);
-          if (!destEdited.current) setDest(templateDirSuggestion(template, launchDir));
+          if (!destEdited.current) setDest(templateDirSuggestion(template, projectRoot));
         }
       })
       .catch((err: unknown) => {
@@ -146,7 +150,7 @@ export function TemplatesDialog({
     selectionTouched.current = true;
     setSelected(template);
     setError(null);
-    if (!destEdited.current) setDest(templateDirSuggestion(template, launchDir));
+    if (!destEdited.current) setDest(templateDirSuggestion(template, projectRoot));
   };
 
   const gallery = useMemo<GalleryTemplate[]>(

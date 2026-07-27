@@ -95,6 +95,7 @@ const bindWorkflowSchema = z.object({
 const settingsPatchSchema = z.object({
   telemetryOptIn: z.boolean().optional(),
   recentDirs: z.array(z.string()).optional(),
+  projectRoot: z.string().optional(),
 }) satisfies z.ZodType<Partial<HarnessSettings>>;
 
 const UI_EVENT_NAMES: readonly UiEventName[] = [
@@ -198,6 +199,10 @@ export interface RestRouterOptions {
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
+  /** The host's default parent directory for NEW agent projects. Omitted (the
+   * CLI case), AppState.defaultProjectRoot is absent and the SPA falls back to
+   * `launchDir` — see the field's doc on AppState. */
+  defaultProjectRoot?: string;
   /** The Agents API base URL (env-configurable) — surfaced in AppState so the
    * snippet panel's executions host matches where the server resolves slugs.
    * Omitted by tests, leaving AppState.agentsBaseUrl absent (the SPA then uses
@@ -286,6 +291,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
         workflows: await listWorkflows(),
         macros: listMacros(),
         launchDir: options.launchDir,
+        ...(options.defaultProjectRoot
+          ? { defaultProjectRoot: options.defaultProjectRoot }
+          : {}),
         ...(options.availableHarnesses
           ? { availableHarnesses: options.availableHarnesses }
           : {}),

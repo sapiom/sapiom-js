@@ -63,7 +63,7 @@ test.describe("command palette sections and highlighting", () => {
 // Add dialog: scaffold, scan, registry picker, MCP prompts
 // ---------------------------------------------------------------------------
 
-test.describe("add dialog (Project mode)", () => {
+test.describe("add workspace (three doors)", () => {
   test("a non-existent folder offers the scaffold action, which starts a session and prompts the agent", async ({
     page,
   }) => {
@@ -71,12 +71,16 @@ test.describe("add dialog (Project mode)", () => {
     const modal = page.locator(".modal-add-workspace");
     await expect(modal).toBeVisible();
 
+    await modal.getByTestId("aw-door-have").click();
     await modal.getByTestId("dir-picker-input").fill("/Users/demo/brand-new-agent");
-    const cta = modal.getByTestId("modal-scaffold-cta");
-    await expect(cta).toBeVisible();
-    await expect(modal.getByRole("button", { name: "Add workspace" })).toBeDisabled();
+    await modal.getByTestId("aw-have-continue").click();
 
-    await cta.click();
+    // A folder that doesn't exist can't be registered — only created.
+    await expect(modal.getByTestId("aw-result")).toContainText("doesn't exist yet");
+    await expect(modal.getByTestId("aw-add")).toHaveCount(0);
+    await expect(modal.getByTestId("aw-add-anyway")).toHaveCount(0);
+
+    await modal.getByTestId("aw-scaffold-here").click();
     await expect(modal).toBeHidden();
 
     // The new session is live and the scaffold prompt reached its pty.
@@ -88,20 +92,35 @@ test.describe("add dialog (Project mode)", () => {
     });
   });
 
-  test("scan folder for agents registers everything under the root and toasts the count", async ({ page }) => {
+  test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {
     await page.getByTestId("add-workspace").click();
     const modal = page.locator(".modal-add-workspace");
+    await modal.getByTestId("aw-door-have").click();
     await modal.getByTestId("dir-picker-input").fill("/Users/demo");
+    await modal.getByTestId("aw-have-continue").click();
 
-    await modal.getByTestId("modal-scan-btn").click();
+    // Bulk discovery is no longer a permanent button: it is what the dialog
+    // OFFERS once the picked folder turns out to contain projects. Two of the
+    // three fixture workflows sit directly under /Users/demo (the third is
+    // nested in acme-app), so that is what detection reports here.
+    await expect(modal.getByTestId("aw-add-all")).toContainText("Add all 2");
+    await modal.getByTestId("aw-add-all").click();
     await expect(modal).toBeHidden();
-    // All three fixture workflows live under /Users/demo.
+    // The scan itself is recursive, so it finds all three.
     await expect(page.locator(".toast")).toContainText("Found 3 agent projects.");
   });
 
-  test("the MCP setup prompts are copyable and fire mcp.install", async ({ page, context }) => {
+  test("the MCP setup prompt is copyable and fires mcp.install", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.getByTestId("add-workspace").click();
+    const modal = page.locator(".modal-add-workspace");
+
+    // Contextual now, not permanent: the offer exists only where it applies —
+    // a folder that exists and has no Sapiom wiring.
+    await modal.getByTestId("aw-door-have").click();
+    await modal.getByTestId("dir-picker-input").fill("/Users/demo/scratch");
+    await modal.getByTestId("aw-have-continue").click();
+
     const block = page.getByTestId("mcp-install");
     await expect(block).toBeVisible();
 

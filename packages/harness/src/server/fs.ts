@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
-import type { FsDirEntry, FsListResponse } from "../shared/types.js";
+import { AGENT_PROJECT_MARKER, type FsDirEntry, type FsListResponse } from "../shared/types.js";
 import { hasTraversalSegment } from "../core/path-safety.js";
 
 export type { FsDirEntry, FsListResponse } from "../shared/types.js";
@@ -79,12 +79,30 @@ export function createFsRouter(): ExpressRouter {
       return;
     }
 
-    const dirs: FsDirEntry[] = entries
+    const candidates = entries
       .filter((entry) => entry.isDirectory())
       .filter((entry) => includeHidden || !entry.name.startsWith("."))
       .map((entry) => ({ name: entry.name, path: path.join(resolved, entry.name) }))
       .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, MAX_RESULTS);
+
+    // One marker probe per listed directory, capped at MAX_RESULTS (200) by the
+    // slice above and issued concurrently — so this is a fixed, bounded amount
+    // of local stat work, not an unbounded walk. An unreadable child reports
+    // `false` rather than failing the whole listing: the picker must still be
+    // able to show a folder it can't inspect.
+    const dirs: FsDirEntry[] = await Promise.all(
+      candidates.map(async (dir) => ({
+        ...dir,
+        // stat().isFile(), not access(): a DIRECTORY named `sapiom.json` would
+        // pass an existence check but is not a project (the registry's
+        // readMarker would fail to parse it), so it must report false.
+        hasAgentProject: await fs
+          .stat(path.join(dir.path, AGENT_PROJECT_MARKER))
+          .then((stats) => stats.isFile())
+          .catch(() => false),
+      })),
+    );
 
     const response: FsListResponse = {
       path: resolved,

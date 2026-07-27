@@ -330,6 +330,18 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
     machineId,
     webDir: resolveWebDir(),
     launchDir,
+    // NEW projects go one level down, in `projects/`, not directly into
+    // launchDir. On this host launchDir is `~/.sapiom/harness` — the harness's
+    // own state store (sessions.json, settings.json, workflows.json,
+    // machine-id, generated/) — so creating user projects as its direct
+    // children would interleave code with state and make "clear my state" and
+    // "delete my agents" the same gesture. The seeded sample already uses a
+    // containing subfolder (`sample-project/`), and the rail discovers projects
+    // by scanning recursively for the marker, so nesting costs nothing.
+    //
+    // launchDir itself must stay put: it is the scan root, and moving it would
+    // orphan the seeded sample from the rail.
+    projectRoot: path.join(launchDir, "projects"),
     autoCreateSession: !firstRun,
     defaultHarnessKind: pickDefaultHarness(report),
     availableHarnesses: report.availableHarnesses,

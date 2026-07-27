@@ -41,6 +41,7 @@ import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { ApiError, boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
+import { resolveProjectRoot } from "./lib/project-dir";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
 import { resolveMacroUrl } from "./lib/macro-gating";
@@ -156,6 +157,22 @@ export const App = (): JSX.Element => {
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harness.state?.sessions, focusedAgentPath]);
+
+  // Where NEW agent projects are created — ONE value, shared by every surface
+  // that creates one (the template door and the idea door). They used to
+  // disagree: this dialog seeded its destination from the active session's cwd
+  // while the scaffold path used whatever the user typed, so "where did my
+  // project go?" had two answers. Precedence is
+  // setting → host default → launch dir (see resolveProjectRoot).
+  const projectRoot = resolveProjectRoot({
+    settingsRoot: harness.settings?.projectRoot,
+    defaultProjectRoot: harness.state?.defaultProjectRoot,
+    launchDir: harness.state?.launchDir,
+  });
+
+  const saveProjectRoot = async (root: string): Promise<void> => {
+    await harness.updateSettings({ projectRoot: root });
+  };
 
   // Opening the palette fans out the history load (the palette half).
   useEffect(() => {
@@ -329,11 +346,29 @@ export const App = (): JSX.Element => {
 
   // The idea-to-agent path. Starts a session at the (new) folder, then
   // hands the agent the scaffold prompt.
-  const handleScaffoldSession = async (cwd: string, agentHarness: HarnessKind): Promise<void> => {
+  /**
+   * Start a session at `cwd` and hand the agent the scaffold prompt.
+   *
+   * `idea` is what the "start from an idea" door collects. It rides along
+   * verbatim — the agent needs the intent, not our paraphrase of it. Omitted
+   * (door 1's plain/new outcomes, the bare-folder affordance), the prompt is
+   * byte-identical to what it has always been, so the blank-starter path is
+   * unchanged.
+   */
+  const handleScaffoldSession = async (
+    cwd: string,
+    agentHarness: HarnessKind,
+    idea?: string,
+  ): Promise<void> => {
     const session = await createSessionAt(cwd, agentHarness);
+    const base =
+      "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to";
+    const trimmedIdea = idea?.trim();
     injectPromptWithRetry(
       session.id,
-      "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to define the first workflow.",
+      trimmedIdea
+        ? `${base} build this:\n\n${trimmedIdea}`
+        : `${base} define the first workflow.`,
       "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
     );
   };
@@ -575,6 +610,8 @@ export const App = (): JSX.Element => {
       )}
       {!railCollapsed && (
         <WorkflowsRail
+          projectRoot={projectRoot || null}
+          onSaveProjectRoot={saveProjectRoot}
           width={widths.rail}
           minWidth={RAIL_MIN}
           workflows={state.workflows}
@@ -724,6 +761,13 @@ export const App = (): JSX.Element => {
                 <WelcomePanel
                   recentDirs={harness.settings?.recentDirs ?? []}
                   launchDir={state.launchDir ?? null}
+                  projectRoot={projectRoot || null}
+                  onConnect={async (cwd) => {
+                    await harness.connectWorkflow(cwd);
+                  }}
+                  onScan={handleScanWorkflows}
+                  onScaffold={handleScaffoldSession}
+                  onSaveProjectRoot={saveProjectRoot}
                   listDir={harness.listDir}
                   onCreateSession={handleCreateSession}
                   listHarnesses={harness.listHarnesses}
@@ -927,7 +971,7 @@ export const App = (): JSX.Element => {
 
       {templatesOpen && (
         <TemplatesDialog
-          launchDir={activeSession?.cwd ?? state.launchDir ?? null}
+          projectRoot={projectRoot || null}
           onClose={() => setTemplatesOpen(false)}
           onUse={handleUseTemplate}
           listTemplates={harness.listTemplates}

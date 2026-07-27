@@ -63,6 +63,56 @@ describe("createFsRouter", () => {
     expect(body.dirs.find((d) => d.name === "alpha")).toEqual({
       name: "alpha",
       path: path.join(root, "alpha"),
+      hasAgentProject: false,
+    });
+  });
+
+  describe("hasAgentProject", () => {
+    it("flags only the directories that directly contain the marker", async () => {
+      await fs.writeFile(path.join(root, "alpha", "sapiom.json"), '{"name":"alpha"}');
+
+      const res = await list(`?path=${encodeURIComponent(root)}`);
+      const body = (await res.json()) as FsListResponse;
+
+      expect(body.dirs.find((d) => d.name === "alpha")?.hasAgentProject).toBe(true);
+      expect(body.dirs.find((d) => d.name === "zebra")?.hasAgentProject).toBe(false);
+    });
+
+    it("is one level deep — a container of projects is not itself a project", async () => {
+      await fs.mkdir(path.join(root, "zebra", "inner"));
+      await fs.writeFile(path.join(root, "zebra", "inner", "sapiom.json"), "{}");
+
+      const res = await list(`?path=${encodeURIComponent(root)}`);
+      const body = (await res.json()) as FsListResponse;
+
+      // `zebra` holds a project but is not one. Callers that need "anything
+      // under here?" use the rail's recursive scan, not this endpoint.
+      expect(body.dirs.find((d) => d.name === "zebra")?.hasAgentProject).toBe(false);
+    });
+
+    it("does not mistake a DIRECTORY named sapiom.json for a project", async () => {
+      await fs.mkdir(path.join(root, "alpha", "sapiom.json"));
+
+      const res = await list(`?path=${encodeURIComponent(root)}`);
+      const body = (await res.json()) as FsListResponse;
+
+      expect(body.dirs.find((d) => d.name === "alpha")?.hasAgentProject).toBe(false);
+    });
+
+    it("reports false for an unreadable child rather than failing the listing", async () => {
+      const walled = path.join(root, "walled");
+      await fs.mkdir(walled);
+      await fs.chmod(walled, 0o000);
+      try {
+        const res = await list(`?path=${encodeURIComponent(root)}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as FsListResponse;
+        expect(body.dirs.map((d) => d.name)).toContain("walled");
+        expect(body.dirs.find((d) => d.name === "walled")?.hasAgentProject).toBe(false);
+      } finally {
+        // Restore so afterEach's rm can clean up.
+        await fs.chmod(walled, 0o700);
+      }
     });
   });
 

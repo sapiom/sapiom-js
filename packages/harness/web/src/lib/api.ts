@@ -760,6 +760,10 @@ class MockApi implements HarnessApi {
       workflows: this.workflows,
       macros: MOCK_MACROS,
       launchDir: MOCK_LAUNCH_DIR,
+      // Mirrors the Electron host (`<launchDir>/projects`) rather than the CLI
+      // host (bare launchDir), so mock mode exercises the more interesting of
+      // the two: a project root that differs from the launch dir.
+      defaultProjectRoot: `${MOCK_LAUNCH_DIR}/projects`,
       consentSource: mockConsentSource,
       ...(mockEnvReason ? { consentEnvReason: mockEnvReason } : {}),
       ...(this.fresh ? { firstRun: true } : {}),
@@ -1001,7 +1005,20 @@ class MockApi implements HarnessApi {
     return {
       path: normalized,
       parent,
-      dirs: names.map((name) => ({ name, path: normalized === "/" ? `/${name}` : `${normalized}/${name}` })),
+      dirs: names.map((name) => {
+        const dirPath = normalized === "/" ? `/${name}` : `${normalized}/${name}`;
+        return {
+          name,
+          path: dirPath,
+          // Derived from MOCK_WORKFLOWS (what exists on the mock DISK), not from
+          // `this.workflows` (what the rail currently knows about). They are not
+          // the same thing: a project can sit on disk unregistered — that is
+          // precisely the case "I have a project" exists to handle — and keying
+          // off registry state would leave every folder unbadged under
+          // `?mockState=fresh`, making that flow untestable.
+          hasAgentProject: MOCK_WORKFLOWS.some((workflow) => workflow.path === dirPath),
+        };
+      }),
     };
   }
 
