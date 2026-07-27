@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -349,6 +349,24 @@ describe("CodexAdapter", () => {
       await writeRollout(sessionId, cwd, "15");
       const adapter = new CodexAdapter({ homeDir });
       expect(await adapter.canResume(sessionId, cwd)).toBe(true);
+    });
+
+    it("matches a rollout recorded against the realpath of a symlinked cwd", async () => {
+      // Not vendor-confirmed for codex (it is for claude-code), so the adapter
+      // accepts either form rather than betting on one — a probe that answers
+      // "no" for a conversation that exists is the failure worth avoiding.
+      const root = await mkdtemp(join(tmpdir(), "harness-codex-symlink-"));
+      const realProject = join(root, "real-project");
+      const linkedProject = join(root, "linked-project");
+      await mkdir(realProject, { recursive: true });
+      await symlink(realProject, linkedProject);
+      await writeRollout(sessionId, await realpath(realProject));
+
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, linkedProject)).toBe(true);
+      expect(await adapter.listPastSessions(linkedProject)).toHaveLength(1);
+
+      await rm(root, { recursive: true, force: true });
     });
 
     it("never throws on an empty or malformed id", async () => {

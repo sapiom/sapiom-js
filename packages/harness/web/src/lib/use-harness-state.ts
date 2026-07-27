@@ -25,6 +25,7 @@ import {
   type RunLocalLine,
 } from "./api";
 import { type ConnectivityErrorInput } from "./connectivity";
+import { mergeHistory } from "./history-meta";
 import { subscribeEvents } from "./events";
 import { renderLocalRun } from "@shared/render-local-run";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
@@ -612,23 +613,28 @@ export function useHarnessState(): HarnessStateHook {
     });
   }, [refreshWorkflows, startRunPolling]);
 
+  /**
+   * Loads history for `cwds` and folds it into the store via `mergeHistory`,
+   * which replaces only the rows of the directories that answered — see there
+   * for why a whole-store replace is wrong when callers request different
+   * scopes (the popover asks for up to twelve directories, the dead pane for
+   * one).
+   */
   const loadHistory = useCallback(async (cwds: string[]) => {
     setHistoryLoading(true);
     try {
       // Fan out per directory; one failing dir never hides the others'
-      // history. Dedupe by agentSessionId (a dir can repeat across sources)
-      // and sort newest first — the menu renders one flat, global list.
+      // history — and, since only fulfilled cwds count as refreshed, never
+      // evicts what we already had for it either.
       const results = await Promise.allSettled(cwds.map((cwd) => api.sessionHistory(cwd)));
-      const byAgentId = new Map<string, SessionSummary>();
-      for (const result of results) {
-        if (result.status !== "fulfilled") continue;
-        for (const summary of result.value) {
-          if (!byAgentId.has(summary.agentSessionId)) byAgentId.set(summary.agentSessionId, summary);
-        }
-      }
-      setHistory(
-        Array.from(byAgentId.values()).sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt)),
-      );
+      const refreshed: SessionSummary[] = [];
+      const refreshedCwds = new Set<string>();
+      results.forEach((result, index) => {
+        if (result.status !== "fulfilled") return;
+        refreshedCwds.add(cwds[index]!);
+        refreshed.push(...result.value);
+      });
+      setHistory((prev) => mergeHistory(prev, refreshed, refreshedCwds));
     } finally {
       setHistoryLoading(false);
     }

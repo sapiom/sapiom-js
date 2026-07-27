@@ -606,7 +606,8 @@ describe("SessionManager", () => {
   describe("resume() resumability pre-flight", () => {
     /** A session record that looks perfectly resumable — status exited, an
      *  agentSessionId captured from the SessionStart hook — which is exactly
-     *  the phantom shape: 15 of 46 real registry entries looked like this and
+     *  the phantom shape: 16 of 49 real registry entries on the dev machine
+     *  measured this way (SAP-2057 first reported 15 of 46), and
      *  every one of them was a Resume button guaranteed to fail. */
     function registerPhantom(manager: SessionManager) {
       return manager.registerHistorical({

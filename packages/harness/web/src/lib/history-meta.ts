@@ -1,4 +1,39 @@
-import type { HarnessKind } from "@shared/types";
+import type { HarnessKind, SessionSummary } from "@shared/types";
+
+/**
+ * Folds a fresh history load into the existing store: rows for the directories
+ * that answered are REPLACED, every other directory's rows are retained.
+ *
+ * Callers request different scopes — the sessions popover asks for up to twelve
+ * directories, the dead pane for the single one it needs a verified
+ * `resumeMode` for. Replacing the whole store (what a plain `setHistory` does)
+ * therefore lets the narrow caller evict the broad caller's rows, and the rail
+ * rows that read `resumeMode` out of this store fall back to "checking…" until
+ * something happens to reload them.
+ *
+ * Scoping by cwd rather than merging unconditionally keeps the other direction
+ * honest too: re-loading a directory must be able to DROP a row whose
+ * transcript is gone, which a blind merge could never do.
+ *
+ * Deduped by `agentSessionId` (a directory can appear under more than one
+ * source) with fresh rows winning, and sorted newest first — the menu renders
+ * one flat, global list.
+ */
+export function mergeHistory(
+  previous: readonly SessionSummary[],
+  refreshed: readonly SessionSummary[],
+  refreshedCwds: ReadonlySet<string>,
+): SessionSummary[] {
+  const byAgentSessionId = new Map<string, SessionSummary>();
+  for (const summary of refreshed) {
+    if (!byAgentSessionId.has(summary.agentSessionId)) byAgentSessionId.set(summary.agentSessionId, summary);
+  }
+  for (const summary of previous) {
+    if (refreshedCwds.has(summary.cwd)) continue; // superseded by this load
+    if (!byAgentSessionId.has(summary.agentSessionId)) byAgentSessionId.set(summary.agentSessionId, summary);
+  }
+  return Array.from(byAgentSessionId.values()).sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt));
+}
 
 /** Product names for the agent running a session — shared by the rail's
  *  session rows and the past-sessions list so the same agent never reads

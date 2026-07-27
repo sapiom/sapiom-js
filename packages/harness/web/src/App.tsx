@@ -202,9 +202,9 @@ export const App = (): JSX.Element => {
   // The dead pane's Resume button has to be as honest as a history row's tag,
   // and only the server can say whether the agent still holds the
   // conversation. Its verdict rides on the history row for this session, so
-  // fetch this directory's history when we don't already have it. Skipping the
-  // fetch once the row is present also keeps this from clobbering a broader
-  // load (the rail's popover reads the very same store) with a single dir.
+  // fetch this directory's history when we don't already have it. Safe to ask
+  // for one directory: `loadHistory` replaces only the rows of the directories
+  // it loaded and retains the rest, so this can't evict the rail's rows.
   //
   // Declared here, above this component's early returns, so the hook list
   // stays stable regardless of boot state.

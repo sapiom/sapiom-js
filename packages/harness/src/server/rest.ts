@@ -27,6 +27,7 @@ import type {
   ImageMediaType,
   InjectInputRequest,
   MacroDef,
+  PastSessionRecord,
   SessionSummary,
   UiEventName,
   UiTrackRequest,
@@ -424,42 +425,65 @@ export function createRestRouter(options: RestRouterOptions): Router {
       return;
     }
     try {
+      // `resumeMode` is resolved here, for BOTH row sources, against the
+      // agent's own store. Previously the client guessed it (`agentSessionId
+      // != null` → resumable, which made every never-prompted session a Resume
+      // button guaranteed to fail) and transcript rows were hardcoded
+      // un-resumable (which hid genuinely resumable conversations). One check,
+      // one place.
+      //
+      // Scan each adapter's history FIRST, once. Finding a conversation in the
+      // agent's own store is the verification `canResume` performs, so every
+      // row it covers — registry rows included — is settled without a probe.
+      // That matters most for codex, whose probe walks the entire
+      // `~/.codex/sessions` tree and reads every rollout head: probing per row
+      // would turn one walk into one walk per row, on a user-blocking
+      // history-dropdown open.
+      const transcripts: PastSessionRecord[] = [];
+      const foundInStore = new Set<string>();
+      for (const adapter of Object.values(adapters)) {
+        if (!adapter) continue;
+        for (const record of await adapter.listPastSessions(cwd)) {
+          transcripts.push(record);
+          foundInStore.add(`${record.harness} ${record.agentSessionId}`);
+        }
+      }
+
       // Registry entries win over transcript-scanned history for the same
       // agent session — they carry live status the transcript can't know.
-      //
-      // `resumeMode` is resolved here, for BOTH sources, against the agent's
-      // own store. Previously the client guessed it (`agentSessionId != null`
-      // → resumable, which made every never-prompted session a Resume button
-      // guaranteed to fail) and transcript rows were hardcoded un-resumable
-      // (which hid genuinely resumable conversations). One check, one place.
+      const registryRows = sessionManager
+        .list()
+        .filter((session) => session.cwd === cwd && session.agentSessionId != null);
+      // Only rows the scan did NOT account for need a direct probe — the
+      // phantoms, plus the narrow case of a transcript that exists but holds
+      // no line our parser understands (see ClaudeCodeAdapter.canResume, which
+      // deliberately accepts those). Concurrent, since each is independent.
+      const probed = await Promise.all(
+        registryRows.map(async (session) =>
+          foundInStore.has(`${session.harness} ${session.agentSessionId!}`)
+            ? true
+            : agentHoldsConversation(adapters, session.harness, session.agentSessionId!, session.cwd),
+        ),
+      );
+
       const byAgentSessionId = new Map<string, SessionSummary>();
-      for (const session of sessionManager.list()) {
-        if (session.cwd !== cwd || !session.agentSessionId) continue;
-        byAgentSessionId.set(session.agentSessionId, {
+      registryRows.forEach((session, index) => {
+        byAgentSessionId.set(session.agentSessionId!, {
           harnessSessionId: session.id,
-          agentSessionId: session.agentSessionId,
+          agentSessionId: session.agentSessionId!,
           harness: session.harness,
           cwd: session.cwd,
           title: session.title,
           lastActiveAt: session.lastActiveAt,
           source: "registry",
-          resumeMode: (await agentHoldsConversation(adapters, session.harness, session.agentSessionId, session.cwd))
-            ? "agent-resume"
-            : "rehydrate",
+          resumeMode: probed[index] ? "agent-resume" : "rehydrate",
         });
+      });
+      for (const record of transcripts) {
+        if (byAgentSessionId.has(record.agentSessionId)) continue;
+        byAgentSessionId.set(record.agentSessionId, { ...record, resumeMode: "agent-resume" });
       }
-      for (const adapter of Object.values(adapters)) {
-        if (!adapter) continue;
-        for (const record of await adapter.listPastSessions(cwd)) {
-          if (byAgentSessionId.has(record.agentSessionId)) continue;
-          // A transcript row needs no second probe: the adapter just read this
-          // conversation out of the agent's own store, and it skips files with
-          // no parseable entries — finding it IS the verification `canResume`
-          // performs. Re-probing every row would also turn codex's single
-          // rollout-tree walk into one walk per row.
-          byAgentSessionId.set(record.agentSessionId, { ...record, resumeMode: "agent-resume" });
-        }
-      }
+
       const merged = Array.from(byAgentSessionId.values()).sort((a, b) =>
         a.lastActiveAt < b.lastActiveAt ? 1 : -1,
       );
@@ -504,9 +528,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
    * a row whose conversation the agent really still holds reattaches for real
    * instead of quietly opening a fresh session (`registerHistorical` existed
    * for exactly this and had no caller until now).
-   *
-   * Registered ahead of `/sessions/:id/resume` because both are three-segment
-   * paths — reversed, `:id` would swallow "adopt".
    */
   router.post("/sessions/adopt", async (req, res, next) => {
     const parsed = adoptSessionSchema.safeParse(req.body);

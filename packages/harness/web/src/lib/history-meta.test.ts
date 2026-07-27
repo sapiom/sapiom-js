@@ -1,6 +1,57 @@
 import { describe, expect, it } from "vitest";
+import type { SessionSummary } from "@shared/types";
 
-import { formatDuration, historyRowMeta } from "./history-meta";
+import { formatDuration, historyRowMeta, mergeHistory } from "./history-meta";
+
+function row(overrides: Partial<SessionSummary> & { agentSessionId: string; cwd: string }): SessionSummary {
+  return {
+    harness: "claude-code",
+    title: overrides.agentSessionId,
+    lastActiveAt: "2026-01-01T00:00:00.000Z",
+    source: "registry",
+    resumeMode: "agent-resume",
+    ...overrides,
+  };
+}
+
+describe("mergeHistory", () => {
+  const acme = row({ agentSessionId: "acme-1", cwd: "/demo/acme" });
+  const rfq = row({ agentSessionId: "rfq-1", cwd: "/demo/rfq", lastActiveAt: "2026-01-02T00:00:00.000Z" });
+
+  it("keeps other directories' rows when only one directory is reloaded", () => {
+    // The regression: the dead pane loads a SINGLE cwd to learn its verified
+    // resumeMode. A whole-store replace evicted every other directory's rows,
+    // so the rail's tags fell back to "checking…" with nothing to reload them.
+    const merged = mergeHistory([acme, rfq], [acme], new Set(["/demo/acme"]));
+    expect(merged.map((r) => r.agentSessionId).sort()).toEqual(["acme-1", "rfq-1"]);
+  });
+
+  it("replaces the reloaded directory's rows, so a vanished transcript drops out", () => {
+    const gone = row({ agentSessionId: "acme-gone", cwd: "/demo/acme" });
+    const merged = mergeHistory([acme, gone, rfq], [acme], new Set(["/demo/acme"]));
+    expect(merged.map((r) => r.agentSessionId).sort()).toEqual(["acme-1", "rfq-1"]);
+  });
+
+  it("takes the fresh row's resumeMode over the retained copy", () => {
+    const stale = row({ agentSessionId: "acme-1", cwd: "/demo/acme", resumeMode: "agent-resume" });
+    const fresh = row({ agentSessionId: "acme-1", cwd: "/demo/acme", resumeMode: "rehydrate" });
+    const merged = mergeHistory([stale], [fresh], new Set(["/demo/acme"]));
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.resumeMode).toBe("rehydrate");
+  });
+
+  it("retains a directory's rows when its fetch failed (absent from refreshedCwds)", () => {
+    // Promise.allSettled rejection: the dir is requested but never answers, so
+    // it must not be treated as "refreshed to empty".
+    const merged = mergeHistory([acme, rfq], [], new Set());
+    expect(merged.map((r) => r.agentSessionId).sort()).toEqual(["acme-1", "rfq-1"]);
+  });
+
+  it("sorts newest first across retained and refreshed rows alike", () => {
+    const merged = mergeHistory([acme], [rfq], new Set(["/demo/rfq"]));
+    expect(merged.map((r) => r.agentSessionId)).toEqual(["rfq-1", "acme-1"]);
+  });
+});
 
 describe("formatDuration", () => {
   const start = "2026-01-01T00:00:00.000Z";

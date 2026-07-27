@@ -933,6 +933,65 @@ describe("createRestRouter", () => {
       expect(byId.get("agent-real")).toBe("agent-resume");
     });
 
+    it("settles a registry row from the single history scan, without a second probe", async () => {
+      // Cost guard: codex's canResume walks the whole ~/.codex/sessions tree
+      // and reads every rollout head. Probing per registry row would turn one
+      // walk into one walk per row, on a user-blocking dropdown open. A row the
+      // scan already found needs no probe — finding it IS the verification.
+      const canResume = vi.fn(async () => true);
+      const listPastSessions = vi.fn(async () => [
+        {
+          agentSessionId: "agent-1",
+          harness: "claude-code" as HarnessKind,
+          cwd: "/tmp/proj",
+          title: "found by the scan",
+          lastActiveAt: "2026-01-01T00:00:00.000Z",
+          source: "transcript" as const,
+        },
+      ]);
+      start({
+        sessionManager: fakeSessionManager([exitedSession()]),
+        adapters: { "claude-code": historyAdapter({ canResume, listPastSessions }) },
+      });
+
+      const rows = await history("/tmp/proj");
+      expect(rows).toHaveLength(1);
+      // Registry row wins the merge (it carries live status) and is resumable.
+      expect(rows[0]).toMatchObject({ source: "registry", resumeMode: "agent-resume" });
+      expect(listPastSessions).toHaveBeenCalledTimes(1);
+      expect(canResume).not.toHaveBeenCalled();
+    });
+
+    it("probes only the rows the scan missed", async () => {
+      const canResume = vi.fn(async () => false);
+      start({
+        sessionManager: fakeSessionManager([
+          exitedSession({ id: "sess-found", agentSessionId: "agent-found" }),
+          exitedSession({ id: "sess-missed", agentSessionId: "agent-missed" }),
+        ]),
+        adapters: {
+          "claude-code": historyAdapter({
+            canResume,
+            listPastSessions: async () => [
+              {
+                agentSessionId: "agent-found",
+                harness: "claude-code",
+                cwd: "/tmp/proj",
+                title: "found",
+                lastActiveAt: "2026-01-01T00:00:00.000Z",
+                source: "transcript",
+              },
+            ],
+          }),
+        },
+      });
+
+      const byId = new Map((await history("/tmp/proj")).map((r) => [r.agentSessionId, r.resumeMode]));
+      expect(byId.get("agent-found")).toBe("agent-resume");
+      expect(byId.get("agent-missed")).toBe("rehydrate");
+      expect(canResume.mock.calls).toEqual([["agent-missed", "/tmp/proj"]]);
+    });
+
     it("reports rehydrate rather than failing when the harness has no registered adapter to ask", async () => {
       // e.g. an external-mode harness, or a kind persisted by another build:
       // unverifiable is not the same as resumable.
@@ -1034,12 +1093,14 @@ describe("createRestRouter", () => {
       expect((await adopt({ cwd: "/tmp/proj" })).status).toBe(400);
     });
 
-    it("is matched ahead of /sessions/:id/resume — ':id' never swallows 'adopt'", async () => {
+    it("is handled as its own route — 'adopt' is never read as a session id", async () => {
+      // Today this is structural: `/sessions/adopt` is two path segments and
+      // `/sessions/:id/resume` is three, so they cannot collide and no
+      // `POST /sessions/:id` exists to catch it. This pins that, so adding
+      // such a route later can't silently reroute adopt through resume().
       const sessionManager = fakeSessionManager();
       start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => false }) } });
 
-      // If the :id route won, resume("adopt") would run and this would not be
-      // the adopt route's own 409.
       const res = await adopt(body);
       expect(res.status).toBe(409);
       expect(sessionManager.resume).not.toHaveBeenCalled();

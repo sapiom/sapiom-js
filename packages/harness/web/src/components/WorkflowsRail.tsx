@@ -253,6 +253,10 @@ function PastSessionRow({
 }): JSX.Element {
   const tag =
     resumeMode === "agent-resume" ? "resumable" : resumeMode === "rehydrate" ? "archived" : "checking…";
+  // Always one of three strings, never a boolean rendered as one: this is a
+  // documented test hook (`.past-session-tag[data-resumable]`), and a mixed
+  // type invites `=== "true"` checks that silently miss the unknown state.
+  const resumableAttr = resumeMode === "agent-resume" ? "true" : resumeMode === "rehydrate" ? "false" : "unknown";
   return (
     <button
       data-testid={testid}
@@ -267,10 +271,7 @@ function PastSessionRow({
         <span className="session-item-meta">{meta}</span>
         <span className="session-item-cwd">{cwd}</span>
       </span>
-      <span
-        className="past-session-tag"
-        data-resumable={resumeMode == null ? "unknown" : resumeMode === "agent-resume"}
-      >
+      <span className="past-session-tag" data-resumable={resumableAttr}>
         {tag}
       </span>
     </button>

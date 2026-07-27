@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ClaudeCodeAdapter } from "./claude-code.js";
+import { ClaudeCodeAdapter, encodeProjectPath } from "./claude-code.js";
 
 describe("ClaudeCodeAdapter", () => {
   describe("launch/resume — pluginDir flag", () => {
@@ -156,11 +156,11 @@ describe("ClaudeCodeAdapter", () => {
       await rm(homeDir, { recursive: true, force: true });
     });
 
-    // Claude Code encodes the project cwd into a directory name by stripping
-    // the leading "/" and replacing "/" and "." with "-".
+    // Uses the adapter's OWN encoder, not a copy: a private re-implementation
+    // here would keep passing if the real encoding drifted, which is exactly
+    // the regression these tests exist to catch.
     function encodedProjectDir(home: string, projectCwd: string): string {
-      const encoded = projectCwd.replace(/[/.]/g, "-");
-      return join(home, ".claude", "projects", encoded);
+      return join(home, ".claude", "projects", encodeProjectPath(projectCwd));
     }
 
     it("returns [] when no transcript directory exists for the cwd", async () => {
@@ -316,8 +316,11 @@ describe("ClaudeCodeAdapter", () => {
       await rm(homeDir, { recursive: true, force: true });
     });
 
+    // Uses the adapter's OWN encoder, not a copy: a private re-implementation
+    // here would keep passing if the real encoding drifted, which is exactly
+    // the regression these tests exist to catch.
     function encodedProjectDir(home: string, projectCwd: string): string {
-      return join(home, ".claude", "projects", projectCwd.replace(/[/.]/g, "-"));
+      return join(home, ".claude", "projects", encodeProjectPath(projectCwd));
     }
 
     async function writeTranscript(projectCwd: string, id: string, body: string): Promise<void> {
@@ -363,6 +366,50 @@ describe("ClaudeCodeAdapter", () => {
       await mkdir(join(encodedProjectDir(homeDir, cwd), `${sessionId}.jsonl`), { recursive: true });
       const adapter = new ClaudeCodeAdapter({ homeDir });
       expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+    });
+
+    it("resolves a symlinked cwd — Claude Code encodes the realpath, not the path opened through", async () => {
+      // The regression this guards: on macOS `/tmp` is a symlink to
+      // `/private/tmp`, so a session whose registry cwd is `/tmp/foo` has its
+      // transcript under the encoding of `/private/tmp/foo`. Encoding the raw
+      // string stats a path that doesn't exist and reports "no conversation"
+      // for a conversation that IS there — refusing a resume that works.
+      const root = await mkdtemp(join(tmpdir(), "harness-claude-symlink-"));
+      const realProject = join(root, "real-project");
+      const linkedProject = join(root, "linked-project");
+      await mkdir(realProject, { recursive: true });
+      await symlink(realProject, linkedProject);
+
+      // Write where Claude actually would: under the FULLY resolved path
+      // (mkdtemp itself sits under a symlinked /var/folders on macOS).
+      const dir = encodedProjectDir(homeDir, await realpath(realProject));
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, `${sessionId}.jsonl`),
+        JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n",
+        "utf8",
+      );
+
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, linkedProject)).toBe(true);
+      expect(await adapter.canResume(sessionId, realProject)).toBe(true);
+      // History discovery shares the fix, and must not double-count the
+      // session when the raw and resolved dirs both resolve.
+      const summaries = await adapter.listPastSessions(linkedProject);
+      expect(summaries).toHaveLength(1);
+      // The row reports the cwd the caller asked about, so resuming it stays
+      // in the directory the user is actually working in.
+      expect(summaries[0]).toMatchObject({ agentSessionId: sessionId, cwd: linkedProject });
+
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it("still answers for a cwd that no longer exists on disk (realpath fails, raw encoding stands)", async () => {
+      await writeTranscript(cwd, sessionId, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+      const adapter = new ClaudeCodeAdapter({ homeDir });
+      // `cwd` here is a path that was never created — realpath rejects, and the
+      // raw encoding is the only candidate left. It must still resolve.
+      expect(await adapter.canResume(sessionId, cwd)).toBe(true);
     });
 
     it("never throws and refuses ids that would escape the project dir", async () => {

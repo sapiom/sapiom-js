@@ -595,7 +595,7 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
 test("a phantom past session is tagged archived and never offers Resume", async ({ page }) => {
   // sess-phantom holds an agentSessionId (our SessionStart hook fired) but the
   // agent wrote no transcript, because the session ended before its first
-  // prompt. On one real machine 15 of 46 registry rows were this shape, and
+  // prompt. On one real machine 16 of 49 registry rows measured this shape, and
   // every one rendered "resumable" and failed with exit 1 on click.
   await page.getByTestId("history-trigger").click();
   await expect(page.getByTestId("history-menu")).toBeVisible();
