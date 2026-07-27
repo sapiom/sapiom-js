@@ -815,21 +815,34 @@ export interface TemplateSummary {
   estCostPerRunUsd: number | null;
 }
 
-/** One step of a template's declared graph (core's `DefinitionStepDto` subset the
- *  detail pane renders). */
+/**
+ * One step of a template's declared graph (core's `DefinitionStepDto` subset the
+ * detail pane renders).
+ *
+ * `kind`/`sublabel` come from `classifyStepKind` — the SAME precedence the canvas
+ * applies to a real definition — so the preview and the post-clone canvas agree.
+ * There is deliberately no `terminal` boolean: the four transition kinds
+ * (`continue`/`pause`/`terminate`/`fail`) do not collapse into one, and pretending
+ * they do renders a fail-only sink as a green success exit.
+ */
 export interface TemplateStepView {
   name: string;
   description: string | null;
   capabilities: string[];
-  terminal: boolean;
+  /** Canvas node kind: `entry` | `step` | `pause` | `terminal-success` | `terminal-warn`. */
+  kind: string;
+  /** One-line role, e.g. `entry`, `step · can also fail`, `terminal · success`. */
+  sublabel: string;
 }
 
 /** One edge of a template's declared graph (core's `DefinitionTransitionDto`). */
 export interface TemplateTransitionView {
   from: string;
   to: string;
-  /** Condition label, when the transition is guarded. */
+  /** The signal a `pause` edge waits for; null for a plain `continue`. */
   label: string | null;
+  /** `cross` for a pause edge (as the canvas draws it), else continue flow. */
+  kind: "continue" | "pause";
 }
 
 /**

@@ -25,6 +25,10 @@ function TemplateGraphPreview({ detail }: { detail: TemplateDetailView }): JSX.E
               <span className={"canvas-step-dot dot--" + node.kind} aria-hidden="true" />
               <span className="template-graph-name">{node.label}</span>
               {node.kind === "terminal-success" && <span className="template-step-exit">exit</span>}
+              {node.kind === "terminal-warn" && (
+                <span className="template-step-exit template-step-exit--warn">fails out</span>
+              )}
+              {node.kind === "pause" && <span className="template-step-pause">pause</span>}
               {node.capabilities.map((capability) => (
                 <code key={capability} className="template-cap">
                   {capability}
@@ -98,7 +102,10 @@ function GalleryDetail({ detail }: { detail: TemplateDetailView }): JSX.Element 
                 <span className="template-step-copy">
                   <span className="template-step-name">
                     {step.name}
-                    {step.terminal && <span className="template-step-exit">exit</span>}
+                    {/* The classifier's own one-line role — "step · can also fail"
+                        for a gate, "terminal · needs attention" for a fail sink.
+                        Anything narrower re-invents the precedence. */}
+                    <span className="template-step-role">{step.sublabel}</span>
                   </span>
                   {step.description && <span className="template-step-desc">{step.description}</span>}
                 </span>

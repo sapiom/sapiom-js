@@ -97,7 +97,10 @@ export function TemplatesDialog({
   const [dest, setDest] = useState(() => templateDirSuggestion(STARTER_TEMPLATES[0], launchDir));
   // A hand-edited destination survives template switches; an untouched one
   // follows the selection so the default always names the picked template.
-  const [destEdited, setDestEdited] = useState(false);
+  // A REF, not state: the catalog effect below runs once (`[]` deps), so a
+  // state closure would capture `false` permanently and overwrite a destination
+  // the user typed while the fetch was in flight.
+  const destEdited = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -116,7 +119,7 @@ export function TemplatesDialog({
         if (first && !selectionTouched.current) {
           const template: GalleryTemplate = { ...first, kind: "gallery" };
           setSelected(template);
-          if (!destEdited) setDest(templateDirSuggestion(template, launchDir));
+          if (!destEdited.current) setDest(templateDirSuggestion(template, launchDir));
         }
       })
       .catch((err: unknown) => {
@@ -134,7 +137,7 @@ export function TemplatesDialog({
     selectionTouched.current = true;
     setSelected(template);
     setError(null);
-    if (!destEdited) setDest(templateDirSuggestion(template, launchDir));
+    if (!destEdited.current) setDest(templateDirSuggestion(template, launchDir));
   };
 
   const gallery = useMemo<GalleryTemplate[]>(
@@ -274,7 +277,7 @@ export function TemplatesDialog({
               disabled={busy}
               onChange={(e) => {
                 setDest(e.target.value);
-                setDestEdited(true);
+                destEdited.current = true;
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void submit();

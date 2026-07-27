@@ -28,7 +28,7 @@ import type {
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
-import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
+import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATE_GRAPHS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
 
 /**
  * Body for `POST /api/runs/local` — run the agent project at `sourceDir`
@@ -954,25 +954,28 @@ class MockApi implements HarnessApi {
     await delay(150);
     const summary = MOCK_TEMPLATES.find((template) => template.id === id);
     if (!summary) throw new ApiError(404, `mock: no template ${id}`, `Template not found: ${id}`);
-    // Synthesize a linear graph of `stepCount` steps: mock mode only needs the
-    // detail pane to have SOMETHING structurally valid to project, and the real
-    // per-template graphs live upstream in the registry, not here.
-    const steps = Array.from({ length: Math.max(summary.stepCount, 1) }, (_, index) => ({
-      name: index === 0 ? "start" : index === summary.stepCount - 1 ? "finish" : `step-${index + 1}`,
-      description: `Mock step ${index + 1} of ${summary.stepCount}.`,
-      capabilities: index === 0 ? summary.capabilities : [],
-      terminal: index === Math.max(summary.stepCount, 1) - 1,
-    }));
+    // Real per-template graphs (MOCK_TEMPLATE_GRAPHS) with the registry's actual
+    // step names, so mock mode previews what live mode previews. A template with
+    // no graph fixture falls back to a single entry node rather than inventing a
+    // shape we would then assert against.
+    const graph = MOCK_TEMPLATE_GRAPHS[summary.id] ?? {
+      steps: [
+        {
+          name: "start",
+          description: null,
+          capabilities: summary.capabilities,
+          kind: "entry",
+          sublabel: "entry",
+        },
+      ],
+      transitions: [],
+    };
     return {
       ...summary,
       whatItDoes: summary.description,
       sourcePath: `examples/${summary.id}`,
-      steps,
-      transitions: steps.slice(0, -1).map((step, index) => ({
-        from: step.name,
-        to: steps[index + 1].name,
-        label: null,
-      })),
+      steps: graph.steps,
+      transitions: graph.transitions,
       author: { name: "Sapiom", url: "https://sapiom.ai/" },
       useCases: [`Use ${summary.name} as a starting point.`],
       notes: "Mock notes — the real manifest ships with the template.",

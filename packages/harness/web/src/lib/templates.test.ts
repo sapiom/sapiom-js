@@ -161,10 +161,16 @@ describe("templateGraph", () => {
       whatItDoes: "Searches and summarizes.",
       sourcePath: "examples/web-research-digest",
       steps: [
-        { name: "search", description: "Query the web.", capabilities: ["web.search"], terminal: false },
-        { name: "summarize", description: "Condense the results.", capabilities: [], terminal: true },
+        { name: "search", description: "Query the web.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
+        {
+          name: "summarize",
+          description: "Condense the results.",
+          capabilities: [],
+          kind: "terminal-success",
+          sublabel: "terminal · success",
+        },
       ],
-      transitions: [{ from: "search", to: "summarize", label: null }],
+      transitions: [{ from: "search", to: "summarize", label: null, kind: "continue" as const }],
       author: { name: "Sapiom", url: "https://sapiom.ai/" },
       useCases: [],
       notes: null,
@@ -185,7 +191,15 @@ describe("templateGraph", () => {
   it("a single terminal step yields one node and no edges", () => {
     const graph = templateGraph(
       detail({
-        steps: [{ name: "greet", description: "Say hi.", capabilities: [], terminal: true }],
+        steps: [
+          {
+            name: "greet",
+            description: "Say hi.",
+            capabilities: [],
+            kind: "terminal-success",
+            sublabel: "terminal · success",
+          },
+        ],
         transitions: [],
       }),
     );
@@ -194,26 +208,29 @@ describe("templateGraph", () => {
     expect(graph.edges).toEqual([]);
   });
 
-  it("marks a fan-out as branching and carries a guarded transition's label", () => {
+  it("marks a fan-out as branching and preserves each exit's own kind", () => {
     // The pinned copy could not express this: it inferred edges from array
-    // order. Core serves real transitions, conditions included.
+    // order, and had one terminal kind for every exit.
     const graph = templateGraph(
       detail({
         steps: [
-          { name: "check", description: null, capabilities: [], terminal: false },
-          { name: "approve", description: null, capabilities: [], terminal: true },
-          { name: "reject", description: null, capabilities: [], terminal: true },
+          { name: "check", description: null, capabilities: [], kind: "entry", sublabel: "entry" },
+          { name: "approve", description: null, capabilities: [], kind: "terminal-success", sublabel: "terminal · success" },
+          { name: "reject", description: null, capabilities: [], kind: "terminal-warn", sublabel: "terminal · needs attention" },
         ],
         transitions: [
-          { from: "check", to: "approve", label: "score > 0.8" },
-          { from: "check", to: "reject", label: null },
+          { from: "check", to: "approve", label: null, kind: "continue" as const },
+          { from: "check", to: "reject", label: null, kind: "continue" as const },
         ],
       }),
     );
     expect(graph.edges).toEqual([
-      { from: "check", to: "approve", kind: "branching", label: "score > 0.8" },
+      { from: "check", to: "approve", kind: "branching", label: "" },
       { from: "check", to: "reject", kind: "branching", label: "" },
     ]);
+    // Kinds come straight from the server-side classifier — a fail-only exit
+    // stays amber rather than being flattened into the success dot.
+    expect(graph.nodes.map((n) => n.kind)).toEqual(["entry", "terminal-success", "terminal-warn"]);
   });
 });
 

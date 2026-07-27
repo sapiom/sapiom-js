@@ -98,6 +98,40 @@ test.describe("returning user", () => {
     await expect(page.getByTestId("welcome-start-project")).toBeVisible();
     await expect(page.getByTestId("welcome-browse-templates")).toBeVisible();
   });
+
+  test("clicking a recent workspace opens a session in it", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openOverview(page);
+
+    // Exercises the preferred-harness resolution chain too — it runs before the
+    // session is created, so a throw there would surface as welcome-error.
+    await page.getByTestId("welcome-recent-acme-app").click();
+
+    await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+    await expect(page.getByTestId("session-context-title")).toContainText("acme-app");
+  });
+
+  test("rows disable while one is opening, so a second click cannot double-fire", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openOverview(page);
+
+    const row = page.getByTestId("welcome-recent-acme-app");
+    const sibling = page.getByTestId("welcome-recent-rfq-workflows");
+    // Don't wait for the navigation the click triggers — the guard's whole point
+    // is what the DOM looks like DURING the two awaits (harness registry, then
+    // session create), before the panel unmounts.
+    await row.click({ noWaitAfter: true });
+
+    // Both the clicked row and its siblings go disabled; a second click is then
+    // impossible rather than merely ignored. Without the guard these stay
+    // enabled and two clicks spawn two agent PTYs in the same folder.
+    await expect(row).toBeDisabled();
+    await expect(sibling).toBeDisabled();
+
+    await expect(page.getByTestId("session-context-title")).toContainText("acme-app");
+  });
 });
 
 test.describe("templates dialog", () => {

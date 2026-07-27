@@ -224,9 +224,14 @@ describe("createTemplateCatalog", () => {
       expect(detail?.steps.map((s) => s.name)).toEqual(["search", "summarize"]);
       // capabilityId → the view's list; terminate edge → the step's flag.
       expect(detail?.steps[0].capabilities).toEqual(["web.search"]);
-      expect(detail?.steps.map((s) => s.terminal)).toEqual([false, true]);
+      // Classified by the shared rule: lowest ordinal is the entry, the step
+      // whose only outgoing edge is `terminate` is a success exit.
+      expect(detail?.steps.map((s) => s.kind)).toEqual(["entry", "terminal-success"]);
+      expect(detail?.steps.map((s) => s.sublabel)).toEqual(["entry", "terminal · success"]);
       // Ids resolve to names, and the terminate SINK is not a drawn edge.
-      expect(detail?.transitions).toEqual([{ from: "search", to: "summarize", label: null }]);
+      expect(detail?.transitions).toEqual([
+        { from: "search", to: "summarize", label: null, kind: "continue" },
+      ]);
       expect(detail?.author).toEqual({ name: "Sapiom", url: "https://sapiom.ai/" });
       expect(detail?.useCases).toEqual(["Brief yourself before a meeting."]);
       expect(detail?.requiredSecrets).toEqual([
@@ -250,14 +255,26 @@ describe("createTemplateCatalog", () => {
       const fetchImpl = vi.fn().mockResolvedValue(
         jsonResponse({
           ...upstreamSummary(),
+          // `gate` is deliberately NOT the entry: entry outranks pause in the
+          // precedence, so a pause on the ordinal-0 step would classify as
+          // `entry` and this assertion would prove nothing.
           steps: [
             { id: "t::request", stepName: "request", ordinal: 0, kind: "compute", capabilityId: null },
-            { id: "t::approved", stepName: "approved", ordinal: 1, kind: "compute", capabilityId: null },
+            { id: "t::gate", stepName: "gate", ordinal: 1, kind: "compute", capabilityId: null },
+            { id: "t::approved", stepName: "approved", ordinal: 2, kind: "compute", capabilityId: null },
           ],
           transitions: [
             {
-              id: "t::request->t::approved",
+              id: "t::request->t::gate",
               fromStepDefinitionId: "t::request",
+              toStepDefinitionId: "t::gate",
+              kind: "continue",
+              signal: null,
+              ordinal: 0,
+            },
+            {
+              id: "t::gate->t::approved",
+              fromStepDefinitionId: "t::gate",
               toStepDefinitionId: "t::approved",
               kind: "pause",
               signal: "approval.granted",
@@ -271,16 +288,32 @@ describe("createTemplateCatalog", () => {
       const detail = await catalog.detail("t");
 
       expect(detail?.transitions).toEqual([
-        { from: "request", to: "approved", label: "approval.granted" },
+        { from: "request", to: "gate", label: null, kind: "continue" },
+        { from: "gate", to: "approved", label: "approval.granted", kind: "pause" },
       ]);
+      // The step that HOLDS the pause is the pause node — the canvas draws it
+      // dashed and labels it with the signal.
+      expect(detail?.steps[1].kind).toBe("pause");
+      expect(detail?.steps[1].sublabel).toBe("pause · approval.granted");
     });
 
-    it("a fail sink marks its step terminal without becoming a drawn edge", async () => {
+    it("a fail-only sink is terminal-WARN, not a green success exit", async () => {
       const fetchImpl = vi.fn().mockResolvedValue(
         jsonResponse({
           ...upstreamSummary(),
-          steps: [{ id: "t::check", stepName: "check", ordinal: 0, kind: "compute", capabilityId: null }],
+          steps: [
+            { id: "t::run", stepName: "run", ordinal: 0, kind: "compute", capabilityId: null },
+            { id: "t::check", stepName: "check", ordinal: 1, kind: "compute", capabilityId: null },
+          ],
           transitions: [
+            {
+              id: "t::run->t::check",
+              fromStepDefinitionId: "t::run",
+              toStepDefinitionId: "t::check",
+              kind: "continue",
+              signal: null,
+              ordinal: 0,
+            },
             {
               id: "t::check::fail",
               fromStepDefinitionId: "t::check",
@@ -296,8 +329,81 @@ describe("createTemplateCatalog", () => {
 
       const detail = await catalog.detail("t");
 
-      expect(detail?.steps[0].terminal).toBe(true);
-      expect(detail?.transitions).toEqual([]);
+      // The collapse this replaced rendered `check` as terminal-success (green),
+      // asserting a clean finish for a step that only ever fails out.
+      expect(detail?.steps[1].kind).toBe("terminal-warn");
+      expect(detail?.steps[1].sublabel).toBe("terminal · needs attention");
+      // The sink itself has no target, so it is not a drawn edge.
+      expect(detail?.transitions.map((t) => t.to)).toEqual(["check"]);
+    });
+
+    it("a step that can continue AND terminate stays a mid-flow step, not an exit", async () => {
+      // The gate shape: continues on approval, terminates on rejection. Marking
+      // it terminal drew an exit chip on a node that still has successors.
+      const fetchImpl = vi.fn().mockResolvedValue(
+        jsonResponse({
+          ...upstreamSummary(),
+          steps: [
+            { id: "t::decide", stepName: "decide", ordinal: 0, kind: "compute", capabilityId: null },
+            { id: "t::proceed", stepName: "proceed", ordinal: 1, kind: "compute", capabilityId: null },
+          ],
+          transitions: [
+            {
+              id: "t::decide->t::proceed",
+              fromStepDefinitionId: "t::decide",
+              toStepDefinitionId: "t::proceed",
+              kind: "continue",
+              signal: null,
+              ordinal: 0,
+            },
+            {
+              id: "t::decide::terminate",
+              fromStepDefinitionId: "t::decide",
+              toStepDefinitionId: null,
+              kind: "terminate",
+              signal: null,
+              ordinal: 1,
+            },
+          ],
+        }),
+      );
+      const catalog = createTemplateCatalog({ apiKey: "sk_test", baseUrl: BASE, fetchImpl });
+
+      const detail = await catalog.detail("t");
+
+      // `decide` is the entry here (lowest ordinal), which outranks everything.
+      expect(detail?.steps[0].kind).toBe("entry");
+      // `proceed` has no outgoing edges at all — a plain step, not an exit.
+      expect(detail?.steps[1].kind).toBe("step");
+    });
+
+    it("classifies a non-entry continue+terminate gate as a step", async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(
+        jsonResponse({
+          ...upstreamSummary(),
+          steps: [
+            { id: "t::start", stepName: "start", ordinal: 0, kind: "compute", capabilityId: null },
+            { id: "t::gate", stepName: "gate", ordinal: 1, kind: "compute", capabilityId: null },
+            { id: "t::done", stepName: "done", ordinal: 2, kind: "compute", capabilityId: null },
+          ],
+          transitions: [
+            { id: "e1", fromStepDefinitionId: "t::start", toStepDefinitionId: "t::gate", kind: "continue", signal: null, ordinal: 0 },
+            { id: "e2", fromStepDefinitionId: "t::gate", toStepDefinitionId: "t::done", kind: "continue", signal: null, ordinal: 0 },
+            { id: "e3", fromStepDefinitionId: "t::gate", toStepDefinitionId: null, kind: "terminate", signal: null, ordinal: 1 },
+            { id: "e4", fromStepDefinitionId: "t::done", toStepDefinitionId: null, kind: "terminate", signal: null, ordinal: 0 },
+          ],
+        }),
+      );
+      const catalog = createTemplateCatalog({ apiKey: "sk_test", baseUrl: BASE, fetchImpl });
+
+      const detail = await catalog.detail("t");
+
+      expect(detail?.steps.map((s) => `${s.name}:${s.kind}`)).toEqual([
+        "start:entry",
+        "gate:step",
+        "done:terminal-success",
+      ]);
+      expect(detail?.steps[1].sublabel).toBe("step · can also terminate");
     });
 
     it("url-encodes the id", async () => {

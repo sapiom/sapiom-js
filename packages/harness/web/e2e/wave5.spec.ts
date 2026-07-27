@@ -74,7 +74,7 @@ test.describe("add dialog (Project mode)", () => {
     await modal.getByTestId("dir-picker-input").fill("/Users/demo/brand-new-agent");
     const cta = modal.getByTestId("modal-scaffold-cta");
     await expect(cta).toBeVisible();
-    await expect(modal.getByRole("button", { name: "Add project" })).toBeDisabled();
+    await expect(modal.getByRole("button", { name: "Add workspace" })).toBeDisabled();
 
     await cta.click();
     await expect(modal).toBeHidden();

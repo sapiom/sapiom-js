@@ -194,33 +194,41 @@ export function useTemplatePrompt(template: StudioTemplate, dir: string): string
  * carries its condition label.
  */
 export function templateGraph(detail: TemplateDetailView): CanvasGraph {
-  const terminalOf = (name: string): boolean =>
-    detail.steps.find((s) => s.name === name)?.terminal === true;
-  const nodes: CanvasGraph["nodes"] = detail.steps.map((step, index) => ({
+  const nodes: CanvasGraph["nodes"] = detail.steps.map((step) => ({
     id: step.name,
-    kind: step.terminal ? "terminal-success" : index === 0 ? "entry" : "step",
+    // The kind is CLASSIFIED SERVER-SIDE by the same `classifyStepKind` the
+    // canvas uses (see core/template-catalog.ts). Re-deriving it here — or
+    // reducing it to terminal-vs-not — is what made a fail-only sink render as
+    // a green success exit.
+    kind: step.kind as CanvasGraph["nodes"][number]["kind"],
     label: step.name,
-    role: step.terminal ? "terminal" : index === 0 ? "entry" : "step",
+    role: step.kind.startsWith("terminal") ? "terminal" : step.kind === "entry" ? "entry" : "step",
     description: step.description ?? "",
     timeoutMs: null,
     inputSchema: null,
     capabilities: step.capabilities,
   }));
-  // A step with more than one outgoing edge is a branch — mark every edge out of
-  // it so the preview reads the same as the canvas does for a real definition.
-  const outDegree = new Map<string, number>();
+  // Branch styling counts only CONTINUE fan-out, matching the canvas: a pause
+  // edge is a `cross`, and it never turns its siblings into a branch.
+  const continueOutDegree = new Map<string, number>();
   for (const edge of detail.transitions) {
-    outDegree.set(edge.from, (outDegree.get(edge.from) ?? 0) + 1);
+    if (edge.kind !== "continue") continue;
+    continueOutDegree.set(edge.from, (continueOutDegree.get(edge.from) ?? 0) + 1);
   }
   const edges: CanvasGraph["edges"] = detail.transitions.map((edge) => ({
     from: edge.from,
     to: edge.to,
-    kind: (outDegree.get(edge.from) ?? 0) > 1 ? "branching" : "sequential",
+    kind:
+      edge.kind === "pause"
+        ? "cross"
+        : (continueOutDegree.get(edge.from) ?? 0) > 1
+          ? "branching"
+          : "sequential",
     label: edge.label ?? "",
   }));
   return {
     name: detail.name,
-    entry: detail.steps.find((s) => !terminalOf(s.name))?.name ?? detail.steps[0]?.name ?? "",
+    entry: detail.steps.find((s) => s.kind === "entry")?.name ?? detail.steps[0]?.name ?? "",
     nodes,
     edges,
     groups: [],

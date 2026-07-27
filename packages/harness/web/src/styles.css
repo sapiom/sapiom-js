@@ -6202,6 +6202,29 @@ input {
   color: var(--text-faint);
 }
 
+/* A fail-only sink is NOT a success exit — it carries the canvas's amber, the
+   same signal `dot--terminal-warn` gives the node. */
+.template-step-exit--warn {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+/* A step that waits for a signal, matching the canvas's dashed pause border. */
+.template-step-pause {
+  padding: 0 var(--sp1);
+  border: 1px dashed var(--text-faint);
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+}
+
+/* The classifier's one-line role, beside the step name in the ordered list. */
+.template-step-role {
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+}
+
 .template-step-desc {
   font-size: var(--type-meta);
   color: var(--text-faint);

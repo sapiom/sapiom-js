@@ -39,6 +39,7 @@ import {
   type ApiKeyProvider,
   staticApiKeyProvider,
 } from "./api-key-provider.js";
+import { classifyStepKind } from "./canvas-graph.js";
 import { resolveCoreBaseUrl } from "./definition-slug-resolver.js";
 
 /** Upstream statuses meaning "the key was rejected" — worth one refresh + retry
@@ -140,34 +141,58 @@ function toGraph(rawSteps: unknown, rawTransitions: unknown): {
     return nameOf.get(key) ?? key;
   };
 
-  // A step is terminal when it has an outgoing terminate/fail edge — those are
-  // sinks with a null target, so they never become drawn edges.
-  const SINK_KINDS = new Set(["terminate", "fail"]);
-  const terminalSteps = new Set(
-    edges.filter((edge) => SINK_KINDS.has(str(edge.kind))).map((edge) => resolve(edge.fromStepDefinitionId)),
-  );
+  // Group each step's outgoing transitions so the shared classifier sees exactly
+  // what it sees for a local manifest. All FOUR kinds matter — `terminate` and
+  // `fail` are sinks with a null target (never drawn edges, but they decide the
+  // node's kind), and a step that can `continue` AND terminate is a mid-flow
+  // step, not an exit.
+  const outgoing = new Map<string, Array<{ kind: string; signal: string | null }>>();
+  for (const edge of edges) {
+    const from = resolve(edge.fromStepDefinitionId ?? edge.from);
+    const list = outgoing.get(from) ?? [];
+    list.push({ kind: str(edge.kind), signal: nullableStr(edge.signal) });
+    outgoing.set(from, list);
+  }
+
+  // Entry is the lowest `ordinal` — core documents that on DefinitionStepDto.
+  const entry = steps
+    .map((step) => ({
+      name: str(step.stepName) || str(step.name),
+      ordinal: typeof step.ordinal === "number" ? step.ordinal : Number.MAX_SAFE_INTEGER,
+    }))
+    .sort((a, b) => a.ordinal - b.ordinal)[0]?.name ?? "";
+
+  const DRAWN_KINDS = new Set(["continue", "pause"]);
 
   return {
     steps: steps.map((step) => {
       const name = str(step.stepName) || str(step.name);
       const capability = nullableStr(step.capabilityId);
+      const { kind, sublabel } = classifyStepKind({
+        name,
+        entry,
+        transitions: outgoing.get(name) ?? [],
+      });
       return {
         name,
         description: nullableStr(step.description),
         // Singular `capabilityId` upstream; the view carries a list because a
         // future step could bind more than one, and the older registry shape did.
         capabilities: capability ? [capability] : strArray(step.capabilities),
-        terminal: terminalSteps.has(name),
+        kind,
+        sublabel,
       };
     }),
+    // Only `continue` and `pause` have a target, so only they become edges.
     transitions: edges
-      .filter((edge) => !SINK_KINDS.has(str(edge.kind)))
+      .filter((edge) => DRAWN_KINDS.has(str(edge.kind)))
       .map((edge) => ({
         from: resolve(edge.fromStepDefinitionId ?? edge.from),
         to: resolve(edge.toStepDefinitionId ?? edge.to),
-        // A pause edge names the signal it waits for; that IS its condition.
-        // Nothing else in the DTO is a label, so nothing else is invented.
+        // A pause edge names the signal it waits for; that IS its label. Nothing
+        // else in the DTO is a label, so nothing else is invented.
         label: nullableStr(edge.signal),
+        kind: str(edge.kind) === "pause" ? ("pause" as const) : ("continue" as const),
       }))
       .filter((edge) => edge.from !== "" && edge.to !== ""),
   };

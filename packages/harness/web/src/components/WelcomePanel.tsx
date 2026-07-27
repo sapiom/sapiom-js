@@ -71,10 +71,19 @@ export function WelcomePanel({
   const [modalOpen, setModalOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The workspace currently being opened, so a second click is a no-op and the
+   *  row can show it is working. Null when idle. */
+  const [opening, setOpening] = useState<string | null>(null);
   const startProjectRef = useRef<HTMLButtonElement>(null);
   const templatesTriggerRef = useRef<HTMLButtonElement>(null);
 
   const openWorkspace = async (dir: string): Promise<void> => {
+    // Guarded because opening spans two awaits (registry, then session create)
+    // and `handleCreateSession` does not dedupe by cwd — an impatient second
+    // click would spawn a second agent PTY in the same folder. The Sample
+    // project button this replaces had the same guard.
+    if (opening) return;
+    setOpening(dir);
     setError(null);
     try {
       // Opening a workspace you already used shouldn't re-ask which agent to
@@ -91,9 +100,11 @@ export function WelcomePanel({
         (spawnable[0]?.id as HarnessKind | undefined) ??
         "claude-code";
       await onCreateSession(dir, chosen);
-      // Success unmounts this panel (a live session now exists).
+      // Success unmounts this panel (a live session now exists), so `opening`
+      // is only cleared on the failure path below.
     } catch (err) {
       setError((err as Error).message);
+      setOpening(null);
     }
   };
 
@@ -187,11 +198,14 @@ export function WelcomePanel({
                         className="welcome-recent"
                         data-testid={`welcome-recent-${folderName(dir)}`}
                         title={dir}
+                        disabled={opening !== null}
                         onClick={() => void openWorkspace(dir)}
                       >
                         <Icon name="Folder" size={13} />
                         <span className="welcome-recent-name">{folderName(dir)}</span>
-                        <span className="welcome-recent-path">{dir}</span>
+                        <span className="welcome-recent-path">
+                          {opening === dir ? "Opening…" : dir}
+                        </span>
                       </button>
                     </li>
                   ))}
