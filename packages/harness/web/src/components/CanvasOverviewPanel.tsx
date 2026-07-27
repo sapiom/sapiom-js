@@ -35,6 +35,11 @@ interface CanvasOverviewPanelProps {
   onDeselect: () => void;
   /** Collapses the overview to its ⓘ reopen affordance (overview mode only). */
   onCollapse: () => void;
+  /** "Describe with AI": injects a prompt asking the bound agent to author the
+   *  `description` fields in the workflow source (the canvas re-renders from
+   *  them). Undefined when no session can receive the inject — the button is
+   *  hidden then. */
+  onDescribeWithAI?: () => void;
 }
 
 /**
@@ -58,6 +63,7 @@ export function CanvasOverviewPanel({
   onOpenSteps,
   onDeselect,
   onCollapse,
+  onDescribeWithAI,
 }: CanvasOverviewPanelProps): JSX.Element {
   const panelRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
@@ -265,6 +271,21 @@ export function CanvasOverviewPanel({
               <>
                 {overview.description && (
                   <p className="canvas-overview-desc">{overview.description}</p>
+                )}
+                {/* AI authors the deterministic `description` fields in the
+                    source; the canvas re-renders from them on save. Hidden when
+                    no session can take the inject (onDescribeWithAI undefined). */}
+                {onDescribeWithAI && (
+                  <button
+                    type="button"
+                    className="canvas-describe-ai"
+                    data-testid="canvas-describe-ai"
+                    onClick={onDescribeWithAI}
+                    data-tooltip="Ask the agent to write descriptions into the workflow source — the canvas updates when it saves"
+                  >
+                    <Icon name="Sparkles" size={13} />
+                    {overview.description ? "Rewrite descriptions with AI" : "Describe with AI"}
+                  </button>
                 )}
                 {overview.notes.length > 0 && (
                   <ul className="canvas-overview-notes">

@@ -3,6 +3,7 @@ import type { JSX } from "react";
 import type { BackgroundTask, BusMessage, MacroDef, RunView, WorkflowInfo } from "@shared/types";
 
 import { isMockMode } from "../lib/api";
+import { describeWorkflowPrompt } from "../lib/describe-prompt";
 import { MOCK_CANVAS_OVERVIEWS, hasMockCanvasDoc } from "../lib/mock-data";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { type CanvasGraph, formatGraphCounts, parseCanvasGraph } from "../lib/canvas-graph";
@@ -1068,6 +1069,11 @@ export function CanvasPane({
               }}
               onDeselect={() => setSelectedNodeId(null)}
               onCollapse={() => setOverviewOpen(false)}
+              onDescribeWithAI={
+                boundWorkflow && sessionId
+                  ? () => onInjectPrompt(describeWorkflowPrompt(boundWorkflow))
+                  : undefined
+              }
             />
           )}
           {/* Standalone chat panel — independent of the info panel above; shows

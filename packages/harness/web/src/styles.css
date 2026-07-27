@@ -4462,6 +4462,39 @@ input {
   color: var(--text);
 }
 
+/* "Describe with AI": authors the deterministic `description` fields via the
+   bound agent. Accent-tinted, self-sized — sits in the overview content flow. */
+.canvas-describe-ai {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-meta);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.canvas-describe-ai svg {
+  color: var(--accent);
+}
+.canvas-describe-ai:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground);
+}
+.canvas-describe-ai:hover svg {
+  color: var(--accent-foreground);
+}
+.canvas-describe-ai:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .canvas-overview-notes {
   margin: 0;
   padding-left: var(--sp4);
