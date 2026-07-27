@@ -88,20 +88,26 @@ export function formatDuration(startIso: string, endIso: string): string | null 
  * turn count when the server parsed them (optional
  * fields, absent on older servers), then relative time. Parts that are
  * absent simply drop out; nothing is fabricated.
+ *
+ * `turnCount` (our own event index: exact at any size) wins over
+ * `messageCount` (the vendor-transcript scan, which gives up above its size
+ * cap) whenever both are present.
  */
 export function historyRowMeta(
   summary: {
     harness: HarnessKind;
     gitBranch?: string;
     messageCount?: number;
+    turnCount?: number;
     lastActiveAt: string;
   },
   now: number = Date.now(),
 ): string {
   const parts: string[] = [HARNESS_LABELS[summary.harness]];
   if (summary.gitBranch) parts.push(summary.gitBranch);
-  if (summary.messageCount != null && summary.messageCount > 0) {
-    parts.push(`${summary.messageCount} ${summary.messageCount === 1 ? "turn" : "turns"}`);
+  const turns = summary.turnCount ?? summary.messageCount;
+  if (turns != null && turns > 0) {
+    parts.push(`${turns} ${turns === 1 ? "turn" : "turns"}`);
   }
   // Relative time keys off lastActiveAt, never createdAt — a row's age is when
   // it was last actually active, and resume() no longer stamps that field for

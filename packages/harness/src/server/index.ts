@@ -42,6 +42,10 @@ import {
 } from "../core/workflow-registry.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
+import {
+  createClaudeTranscriptEnricher,
+  createSessionRecordReader,
+} from "../core/session-record.js";
 import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
 import { migrateHarnessIdentity } from "../core/collector/identity-migration.js";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
@@ -730,6 +734,15 @@ export const startServer = async (
   const eventStorePath = options.eventStorePath ?? statePaths.events;
   const eventStore = createEventStore(eventStorePath);
 
+  // Past-session transcripts, rebuilt from the events above rather than from
+  // any vendor's history file — the same code path for claude-code and codex.
+  // The claude enricher is a pure bonus on top: when that transcript happens
+  // to still exist, the final turn gains its model/usage; when it doesn't, the
+  // record renders unchanged.
+  const sessionRecordReader = createSessionRecordReader(eventStore, {
+    enrichFinalTurn: createClaudeTranscriptEnricher(),
+  });
+
   // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
   // caps even on long-lived installs. Runs through the store's exclusive queue
   // so the sweep's read→filter→rename window never races a concurrent append.
@@ -843,6 +856,7 @@ export const startServer = async (
       firstRun: options.firstRun,
       consentSource: options.consentSource,
       consentEnvReason: options.consentEnvReason,
+      sessionRecords: sessionRecordReader,
       uiTrack: {
         store: eventStore,
         batcher,

@@ -214,6 +214,15 @@ export interface SessionSummary {
    * full read (see the claude-code adapter's full-scan size cap).
    */
   messageCount?: number;
+  /**
+   * Number of human prompts (turns) recorded in OUR event log for this
+   * session, from the event store's byte-offset index. Exact and cheap at any
+   * file size — unlike {@link messageCount}, which the claude-code adapter
+   * leaves undefined above its full-scan cap. Undefined when the harness has
+   * no recorded events for the session (a transcript the Studio never ran).
+   * Prefer this over messageCount when both are present.
+   */
+  turnCount?: number;
 }
 
 /**
@@ -635,9 +644,17 @@ export type AnalyticsEventType =
  */
 export interface AnalyticsEvent {
   eventId: string;
-  /** Per-harnessSessionId monotonic counter from 1 — ordering + loss detection. */
+  /**
+   * Per-harnessSessionId counter from 1, for loss detection *within one
+   * process epoch* — NOT a session-lifetime ordering key. The counter lives
+   * in the server's memory (core/collector/seq.ts), so it restarts at 1 on
+   * every harness boot and on every fresh pty for the same session: a real
+   * resumed session reads 1, 2 then 1, 1, 1. A reset means "new epoch", never
+   * "events lost". Anything that orders events must sort by `(ts, seq)` —
+   * see core/session-record.ts.
+   */
   seq: number;
-  /** ISO-8601, client clock. Use seq (not ts) for intra-session ordering. */
+  /** ISO-8601, client clock. Primary ordering key; `seq` only breaks ties. */
   ts: string;
   /** Sapiom user id from auth; null when not logged in. */
   userId: string | null;
@@ -676,6 +693,112 @@ export interface CollectorBatch {
 }
 
 // ---------------------------------------------------------------------------
+// Session records (a past session's transcript, rebuilt from OUR events)
+// ---------------------------------------------------------------------------
+//
+// Reconstructed, never verbatim: the source is our own normalized analytics
+// events (see core/session-record.ts for the fold), so it works identically
+// for claude-code and codex — no vendor transcript file is involved, and
+// deleting one changes nothing here. The gaps that follow from that source
+// are enumerated in `limitations` so the UI can say so out loud rather than
+// implying the record is a full replay.
+
+/** One tool invocation inside a turn, from a `tool.call` event. */
+export interface SessionRecordToolCall {
+  /** Tool name as the agent reported it; null when the event omitted one. */
+  name: string | null;
+  /** Stringified tool input (JSON for structured inputs), possibly truncated. */
+  input: string | null;
+  /** Truncated stringified tool result — see {@link responseTruncated}. */
+  responseSummary: string | null;
+  /** True when the stored response hit the collector's size cap and the real
+   *  output was longer. The missing bytes are not recoverable from our log. */
+  responseTruncated: boolean;
+  /** ISO-8601 timestamp of the `tool.call` event. */
+  at: string;
+}
+
+/** One prompt→response turn. A turn opens on `prompt.submitted` and closes on
+ *  `turn.completed`; tool calls in between attach to it. */
+export interface SessionRecordTurn {
+  /** 1-based ordinal in the record — stable for deep links and test asserts. */
+  index: number;
+  /**
+   * The human prompt that opened the turn. Null for a turn our events imply
+   * but never saw a prompt for: tool calls or a completion that arrived with
+   * no open turn (a session whose recording started mid-turn, or an agent-
+   * initiated turn). Rendered as an explicit "no recorded prompt", never faked.
+   */
+  prompt: string | null;
+  /** ISO-8601 timestamp of the opening `prompt.submitted`; null when absent. */
+  promptAt: string | null;
+  toolCalls: SessionRecordToolCall[];
+  /**
+   * The assistant's final message for the turn. This is the Stop hook's LAST
+   * assistant message only — narration *between* tool calls is not in our
+   * event stream (see core/collector/transcript.ts). Null when the harness
+   * never captured one (Codex's rollout has no equivalent field).
+   */
+  assistantText: string | null;
+  /** Model that produced the turn, when the transcript backfill supplied it. */
+  model: string | null;
+  usage: { inputTokens: number | null; outputTokens: number | null } | null;
+  /** ISO-8601 timestamp of the closing `turn.completed`; null when open. */
+  completedAt: string | null;
+  /** True when no `turn.completed` ever closed this turn — the session was
+   *  killed mid-turn, or a new prompt superseded it. */
+  incomplete: boolean;
+}
+
+/**
+ * A known, structural gap in a reconstructed record. Codes (not prose) so the
+ * UI owns the wording and the set can grow without breaking older clients.
+ *
+ * - `truncated-tool-output`: at least one tool result hit the collector's size
+ *   cap; the full output is not in our log.
+ * - `assistant-narration-gap`: a turn has tool calls plus a final assistant
+ *   message, so whatever the agent said *between* those calls is missing.
+ * - `missing-assistant-text`: a turn completed with no assistant text at all
+ *   (Codex, whose rollout carries no equivalent of the Stop hook's field).
+ * - `incomplete-final-turn`: the last turn never completed — the session
+ *   ended mid-turn.
+ */
+export type SessionRecordLimitation =
+  | "truncated-tool-output"
+  | "assistant-narration-gap"
+  | "missing-assistant-text"
+  | "incomplete-final-turn";
+
+/** `GET /api/sessions/:id/record` response. */
+export interface SessionRecord {
+  /** The harness session this record was folded from. When several harness
+   *  sessions share one agent session (a resumed conversation), this is the
+   *  first of them and `mergedSessionIds` lists them all. */
+  harnessSessionId: string;
+  /** Every harnessSessionId folded into this record, in first-seen order. */
+  mergedSessionIds: string[];
+  /** The agent's own session id, when our events carried one. */
+  agentSessionId: string | null;
+  harness: HarnessKind;
+  /** cwd from the `session.start` event; null when it never recorded one. */
+  cwd: string | null;
+  /** ISO-8601 of the earliest event in the record. */
+  startedAt: string | null;
+  /** ISO-8601 of the `session.end` event; null for a session that never
+   *  reported ending (killed, or crashed). */
+  endedAt: string | null;
+  turns: SessionRecordTurn[];
+  /** Human prompts in the record — `turns.filter(t => t.prompt != null).length`. */
+  turnCount: number;
+  /** Events folded into this record (including ones no turn field shows). */
+  eventCount: number;
+  /** Always true. Present on the wire so no client can mistake a record for a
+   *  verbatim replay of what the user saw in their terminal. */
+  reconstructed: true;
+  limitations: SessionRecordLimitation[];
+}
+
+// ---------------------------------------------------------------------------
 // REST API surface  (all under /api, JSON, boot-token via X-Harness-Token)
 // ---------------------------------------------------------------------------
 //
@@ -684,6 +807,7 @@ export interface CollectorBatch {
 // GET    /api/sessions                  → HarnessSession[]
 // GET    /api/sessions/history?cwd=     → SessionSummary[]
 // POST   /api/sessions/adopt            AdoptSessionRequest → HarnessSession (register + resume a transcript-only row)
+// GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }

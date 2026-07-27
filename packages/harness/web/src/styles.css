@@ -2914,6 +2914,35 @@ input {
   text-align: center;
 }
 
+.dead-session-summary {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* With a transcript below it, the metadata card stops being the whole pane:
+   the column starts at the top and the transcript takes the rest, scrolling
+   on its own (the app shell itself never scrolls). Without one, the pane is
+   unchanged — vertically centred, metadata only. */
+.dead-session-pane[data-has-record="true"] {
+  justify-content: flex-start;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dead-session-record {
+  flex: 1;
+  align-self: stretch;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: var(--sp3);
+  padding-top: var(--sp3);
+  border-top: 1px solid var(--ui-line);
+  text-align: left;
+}
+
 .dead-session-title {
   color: var(--text);
   font-size: var(--type-ui);
@@ -2938,6 +2967,288 @@ input {
   max-width: 300px;
   line-height: 1.4;
   margin-top: 4px;
+}
+
+/* Past session: the reconstructed transcript ---------------------------
+   Unlike .dead-session-pane (a centred metadata card), this one is a
+   document: a fixed header with the actions, and a scrolling body. The
+   shell is viewport-locked, so the body — never the page — is what
+   scrolls (min-height: 0 on the column is what allows that). */
+.past-session-pane {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+}
+
+.past-session-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp4);
+  padding: var(--sp3) var(--pane-pad-x);
+  border-bottom: 1px solid var(--ui-line);
+  background: var(--surface-raised);
+}
+
+.past-session-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  text-align: left;
+}
+
+.past-session-pane .dead-session-meta {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.past-session-pane .dead-session-actions {
+  flex: 0 0 auto;
+}
+
+.past-session-pane .dead-session-resume-reason {
+  flex: 0 0 auto;
+  max-width: none;
+  margin: 0;
+  padding: var(--sp2) var(--pane-pad-x);
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.past-session-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp4) var(--pane-pad-x);
+}
+
+.past-session-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp2);
+  max-width: 44ch;
+  margin: var(--sp6) auto;
+  color: var(--text-faint);
+  font-size: var(--type-label);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ── The transcript itself ── */
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp4);
+  max-width: var(--assistant-measure);
+  margin: 0 auto;
+}
+
+/* The honesty label. Deliberately at the top of the document and not
+   dismissible: this view is rebuilt from our event log, and a reader must
+   never take it for a verbatim replay of their terminal. */
+.transcript-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp3);
+  padding: var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+}
+
+.transcript-badge {
+  flex: 0 0 auto;
+  padding: 2px var(--sp2);
+  border-radius: var(--r-sm);
+  background: var(--surface-inset);
+  border: 1px solid var(--ui-line-strong);
+  color: var(--text-dim);
+  font-size: var(--type-micro);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.transcript-notice-body {
+  min-width: 0;
+}
+
+.transcript-notice-lead {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  line-height: 1.5;
+}
+
+.transcript-notice-list {
+  margin: var(--sp1) 0 0;
+  padding-left: var(--sp4);
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+}
+
+.transcript-turns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.transcript-role {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  font-size: var(--type-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.transcript-role-label {
+  font-weight: 600;
+}
+
+.transcript-model,
+.transcript-usage,
+.transcript-time {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.transcript-prompt {
+  padding: var(--sp2) var(--sp3);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  color: var(--text);
+  font-size: var(--type-ui);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.transcript-assistant {
+  color: var(--text-dim);
+  font-size: var(--type-ui);
+  line-height: 1.6;
+}
+
+.transcript-assistant p,
+.transcript-assistant ul,
+.transcript-assistant pre {
+  margin: 0 0 var(--sp2);
+}
+
+.transcript-assistant > :last-child {
+  margin-bottom: 0;
+}
+
+.transcript-assistant pre,
+.transcript-tool-pre {
+  padding: var(--sp2);
+  border-radius: var(--r-sm);
+  background: var(--surface-inset);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* "We don't have this" — the one thing this view must never fake. */
+.transcript-absent {
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.transcript-incomplete {
+  align-self: flex-start;
+  padding: 1px var(--sp2);
+  border: 1px solid var(--amber);
+  border-radius: var(--r-sm);
+  color: var(--amber-text);
+  font-size: var(--type-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Tool calls: collapsed by default — a long session is mostly tool
+   traffic, and the conversation is what this pane is for. */
+.transcript-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-tool details {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+}
+
+.transcript-tool-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding: var(--sp1) var(--sp2);
+  cursor: pointer;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+}
+
+.transcript-tool-summary:hover {
+  background: var(--surface-hover);
+}
+
+.transcript-tool-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-tool-truncated {
+  flex: 0 0 auto;
+  color: var(--amber-text);
+  font-size: var(--type-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.transcript-tool-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  padding: 0 var(--sp2) var(--sp2);
+}
+
+.transcript-tool-heading {
+  color: var(--text-faint);
+  font-size: var(--type-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* Canvas pane ---------------------------------------------------------- */

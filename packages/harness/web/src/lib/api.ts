@@ -20,6 +20,7 @@ import type {
   InjectInputRequest,
   MacroDef,
   RunMacroRequest,
+  SessionRecord,
   SessionSummary,
   TemplateDetailView,
   TemplateListResponse,
@@ -29,7 +30,7 @@ import type {
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
-import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATE_GRAPHS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
+import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSION_RECORDS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATE_GRAPHS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
 
 /**
  * Body for `POST /api/runs/local` — run the agent project at `sourceDir`
@@ -212,6 +213,15 @@ export interface HarnessApi {
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
   listSessions(): Promise<HarnessSession[]>;
   sessionHistory(cwd: string): Promise<SessionSummary[]>;
+  /**
+   * A past session's transcript, RECONSTRUCTED from the harness's own recorded
+   * events (`GET /api/sessions/:id/record`) — not a verbatim replay, and not
+   * the agent's own transcript file. `id` is a harnessSessionId, or the agent's
+   * session id for history rows the registry never tracked. Resolves null when
+   * the server has no recorded events for it (404) or predates the route (501)
+   * — both are "nothing to show", not an error worth a toast.
+   */
+  sessionRecord(id: string): Promise<SessionRecord | null>;
   resumeSession(id: string): Promise<HarnessSession>;
   /** Take a transcript-only history row (`resumeMode: "agent-resume"`, no
    *  `harnessSessionId`) into the registry and resume it — the honest
@@ -332,6 +342,18 @@ class RealApi implements HarnessApi {
 
   sessionHistory(cwd: string): Promise<SessionSummary[]> {
     return this.request<SessionSummary[]>(`/api/sessions/history?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  async sessionRecord(id: string): Promise<SessionRecord | null> {
+    try {
+      return await this.request<SessionRecord>(`/api/sessions/${encodeURIComponent(id)}/record`);
+    } catch (err) {
+      // 404 = no events recorded for this session; 501 = an older server with
+      // no record route at all. Both mean "there is no transcript to show",
+      // which the pane renders as an empty state — not a failure.
+      if (err instanceof ApiError && (err.status === 404 || err.status === 501)) return null;
+      throw err;
+    }
   }
 
   resumeSession(id: string): Promise<HarnessSession> {
@@ -789,6 +811,13 @@ class MockApi implements HarnessApi {
   async sessionHistory(cwd: string): Promise<SessionSummary[]> {
     await delay();
     return MOCK_HISTORY[cwd] ?? [];
+  }
+
+  async sessionRecord(id: string): Promise<SessionRecord | null> {
+    await delay();
+    // Null for an id with no fixture — the same "nothing recorded" answer the
+    // real client returns for a 404, so the empty state is exercised too.
+    return MOCK_SESSION_RECORDS[id] ?? null;
   }
 
   async resumeSession(id: string): Promise<HarnessSession> {

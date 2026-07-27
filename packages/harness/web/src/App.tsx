@@ -735,6 +735,7 @@ export const App = (): JSX.Element => {
               ) : showReview && reviewSummary ? (
                 <PastSessionPane
                   summary={reviewSummary}
+                  loadRecord={harness.sessionRecord}
                   onStart={() => {
                     const summary = reviewSummary;
                     setReviewSummary(null);
@@ -746,6 +747,7 @@ export const App = (): JSX.Element => {
                 <DeadSessionPane
                   session={activeSession}
                   resumeMode={deadResumeMode}
+                  loadRecord={harness.sessionRecord}
                   onResume={() => void harness.resumeSession(activeSession.id)}
                   onClose={() => void harness.closeSession(activeSession.id)}
                 />

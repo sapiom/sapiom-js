@@ -27,6 +27,10 @@ import type {
  * Exported so tests assert against the real encoder rather than a copy of it:
  * a private duplicate in the test file is exactly the thing that would let
  * encoder drift pass the tests written to catch it.
+ *
+ * Takes a path as given. Callers that start from a user-supplied cwd want
+ * {@link projectDirsFor}, which handles the symlink case this encoder can't
+ * see — see its docstring.
  */
 export function encodeProjectPath(cwd: string): string {
   const normalized = cwd.replace(/\\/g, "/");
@@ -49,8 +53,12 @@ export function encodeProjectPath(cwd: string): string {
  * The raw form is kept as a second candidate (when it differs) so nothing that
  * resolved before can stop resolving, and a cwd that no longer exists on disk
  * — realpath fails — still falls back to it.
+ *
+ * Exported for the session-record reader's optional vendor enrichment
+ * (core/session-record.ts), which reads the same transcript files. Claude's
+ * directory layout — symlink handling included — is defined here once.
  */
-async function projectDirsFor(homeDir: string, cwd: string): Promise<string[]> {
+export async function projectDirsFor(homeDir: string, cwd: string): Promise<string[]> {
   const names = new Set<string>();
   const resolved = await realpath(cwd).catch(() => undefined);
   if (resolved) names.add(encodeProjectPath(resolved));

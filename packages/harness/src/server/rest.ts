@@ -42,6 +42,7 @@ import {
 } from "../shared/types.js";
 import { AdapterNotFoundError, ExternalHarnessError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
+import type { SessionRecordReader } from "../core/session-record.js";
 import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registry.js";
 import { resolveWithinRoot } from "../core/path-safety.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
@@ -228,6 +229,18 @@ export interface RestRouterOptions {
    * (server/index.ts) passes the path under its resolved state root so an
    * isolated boot never reads or writes the developer's real settings. */
   settingsPath?: string;
+  /**
+   * Reader for session records rebuilt from our own analytics events (see
+   * core/session-record.ts). Backs GET /sessions/:id/record and the
+   * `turnCount` on history rows.
+   *
+   * Optional: when omitted, the record route returns 501 and history rows
+   * carry no turnCount (tests that don't care about records don't need to stub
+   * an event store). Never a hard dependency of the history list itself — a
+   * failing reader degrades those rows to what the adapters knew, it never
+   * fails the request.
+   */
+  sessionRecords?: SessionRecordReader;
   /**
    * Dependencies for POST /api/track (UI-interaction analytics).
    * Optional: when omitted, /api/track returns 501 (tests that don't care
@@ -487,6 +500,25 @@ export function createRestRouter(options: RestRouterOptions): Router {
       const merged = Array.from(byAgentSessionId.values()).sort((a, b) =>
         a.lastActiveAt < b.lastActiveAt ? 1 : -1,
       );
+      // Exact turn counts from the event-store index — cheap at any file size,
+      // unlike the claude adapter's messageCount (undefined above its
+      // full-scan cap). Prefer the agent-session key: it sums a conversation
+      // that spans several harness sessions, matching what the record shows.
+      // A reader failure degrades the rows, never the request.
+      const turnCounts = options.sessionRecords
+        ? await options.sessionRecords.turnCounts().catch((err: unknown) => {
+            console.error("[harness] session-record turn counts failed:", err);
+            return null;
+          })
+        : null;
+      if (turnCounts) {
+        for (const summary of merged) {
+          const turnCount =
+            turnCounts.get(summary.agentSessionId) ??
+            (summary.harnessSessionId ? turnCounts.get(summary.harnessSessionId) : undefined);
+          if (turnCount !== undefined) summary.turnCount = turnCount;
+        }
+      }
       res.json(merged);
     } catch (err) {
       next(err);
@@ -557,6 +589,33 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.json(await sessionManager.resume(target.id));
     } catch (err) {
       if (sendResumeError(res, err)) return;
+      next(err);
+    }
+  });
+
+  /**
+   * The past session's transcript, rebuilt from our own recorded events —
+   * works for every harness and needs no vendor transcript file. `:id` may be
+   * a harnessSessionId or the agent's own session id (transcript-sourced
+   * history rows only have the latter).
+   *
+   * Ordering against the `/sessions/adopt` and `/sessions/:id/*` siblings is
+   * cosmetic: express matches on the full path, so `:id` never swallows a
+   * literal segment.
+   */
+  router.get("/sessions/:id/record", async (req, res, next) => {
+    if (!options.sessionRecords) {
+      res.status(501).json({ error: "session records are not available on this server" });
+      return;
+    }
+    try {
+      const record = await options.sessionRecords.read(req.params.id);
+      if (!record) {
+        res.status(404).json({ error: "no recorded events for this session" });
+        return;
+      }
+      res.json(record);
+    } catch (err) {
       next(err);
     }
   });

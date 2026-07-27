@@ -8,6 +8,7 @@ import type {
   HarnessSession,
   HarnessSettings,
   RunMacroRequest,
+  SessionRecord,
   SessionSummary,
   WorkflowInfo,
 } from "@shared/types";
@@ -91,6 +92,9 @@ export interface HarnessStateHook {
    *  prop-driven rather than reaching for a module-level api singleton. */
   listTemplates: () => Promise<TemplateListResponse>;
   getTemplate: (id: string) => Promise<TemplateDetailView>;
+  /** A past session's reconstructed transcript (null when nothing was
+   *  recorded for it). Stable identity — safe as an effect dependency. */
+  sessionRecord: (id: string) => Promise<SessionRecord | null>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
   /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
@@ -674,6 +678,9 @@ export function useHarnessState(): HarnessStateHook {
 
   const listTemplates = useCallback((): Promise<TemplateListResponse> => api.listTemplates(), []);
   const getTemplate = useCallback((id: string): Promise<TemplateDetailView> => api.getTemplate(id), []);
+  // Stable identity matters here: the past-session pane fetches from an effect
+  // keyed on this callback, so a fresh closure per render would refetch forever.
+  const sessionRecord = useCallback((id: string): Promise<SessionRecord | null> => api.sessionRecord(id), []);
 
   const resumeSession = useCallback(
     async (harnessSessionId: string): Promise<HarnessSession> => {
@@ -938,6 +945,7 @@ export function useHarnessState(): HarnessStateHook {
     createSession,
     listTemplates,
     getTemplate,
+    sessionRecord,
     resumeSession,
     resumeFromHistory,
     closeSession,

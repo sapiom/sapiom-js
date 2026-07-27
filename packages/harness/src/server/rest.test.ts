@@ -13,9 +13,10 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpHome };
 });
 
-import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SessionSummary, SpawnSpec, WorkflowInfo } from "../shared/types.js";
+import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SessionRecord, SessionSummary, SpawnSpec, WorkflowInfo } from "../shared/types.js";
 import { MAX_IMAGE_UPLOAD_BYTES } from "../shared/types.js";
 import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
+import type { SessionRecordReader } from "../core/session-record.js";
 import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
@@ -1321,6 +1322,123 @@ describe("createRestRouter", () => {
       const body = (await res.json()) as { error: string; code: string };
       expect(body.code).toBe("HARNESS_EXTERNAL");
       expect(body.error).toMatch(/Conductor/);
+    });
+  });
+
+  describe("session records", () => {
+    const record: SessionRecord = {
+      harnessSessionId: "sess-1",
+      mergedSessionIds: ["sess-1"],
+      agentSessionId: "agent-1",
+      harness: "claude-code",
+      cwd: "/repo",
+      startedAt: "2026-07-01T10:00:00.000Z",
+      endedAt: null,
+      turns: [
+        {
+          index: 1,
+          prompt: "go",
+          promptAt: "2026-07-01T10:00:00.000Z",
+          toolCalls: [],
+          assistantText: "done",
+          model: "claude-opus-4-6",
+          usage: { inputTokens: 10, outputTokens: 2 },
+          completedAt: "2026-07-01T10:00:01.000Z",
+          incomplete: false,
+        },
+      ],
+      turnCount: 1,
+      eventCount: 3,
+      reconstructed: true,
+      limitations: [],
+    };
+
+    function stubRecords(overrides: Partial<SessionRecordReader> = {}): SessionRecordReader {
+      return {
+        read: async (id: string) => (id === "sess-1" || id === "agent-1" ? record : null),
+        turnCounts: async () => new Map([["agent-1", 7]]),
+        ...overrides,
+      };
+    }
+
+    it("GET /sessions/:id/record returns the reconstructed record", async () => {
+      start({ sessionRecords: stubRecords() });
+      const res = await fetch(`${baseUrl}/sessions/sess-1/record`, { headers: TOKEN_HEADER });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(record);
+    });
+
+    it("GET /sessions/:id/record resolves an agent session id too", async () => {
+      start({ sessionRecords: stubRecords() });
+      const res = await fetch(`${baseUrl}/sessions/agent-1/record`, { headers: TOKEN_HEADER });
+      expect(res.status).toBe(200);
+    });
+
+    it("GET /sessions/:id/record is 404 when nothing was recorded for the session", async () => {
+      start({ sessionRecords: stubRecords() });
+      const res = await fetch(`${baseUrl}/sessions/unknown/record`, { headers: TOKEN_HEADER });
+      expect(res.status).toBe(404);
+    });
+
+    it("GET /sessions/:id/record is 501 when the server has no record reader", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/sessions/sess-1/record`, { headers: TOKEN_HEADER });
+      expect(res.status).toBe(501);
+    });
+
+    it("GET /sessions/history stamps turnCount from the index", async () => {
+      const session: HarnessSession = {
+        id: "sess-1",
+        agentSessionId: "agent-1",
+        boundWorkflowPath: null,
+        harness: "claude-code",
+        cwd: "/repo",
+        title: "repo",
+        status: "exited",
+        createdAt: "2026-07-01T10:00:00.000Z",
+        lastActiveAt: "2026-07-01T10:00:05.000Z",
+        ready: false,
+      };
+      start({ sessionManager: fakeSessionManager([session]), sessionRecords: stubRecords() });
+
+      const res = await fetch(`${baseUrl}/sessions/history?cwd=${encodeURIComponent("/repo")}`, {
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as SessionSummary[];
+      expect(body).toHaveLength(1);
+      expect(body[0].turnCount).toBe(7);
+    });
+
+    it("GET /sessions/history still answers when the record reader fails", async () => {
+      const session: HarnessSession = {
+        id: "sess-1",
+        agentSessionId: "agent-1",
+        boundWorkflowPath: null,
+        harness: "claude-code",
+        cwd: "/repo",
+        title: "repo",
+        status: "exited",
+        createdAt: "2026-07-01T10:00:00.000Z",
+        lastActiveAt: "2026-07-01T10:00:05.000Z",
+        ready: false,
+      };
+      start({
+        sessionManager: fakeSessionManager([session]),
+        sessionRecords: stubRecords({
+          turnCounts: async () => {
+            throw new Error("events.ndjson unreadable");
+          },
+        }),
+      });
+
+      const res = await fetch(`${baseUrl}/sessions/history?cwd=${encodeURIComponent("/repo")}`, {
+        headers: TOKEN_HEADER,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as SessionSummary[];
+      expect(body).toHaveLength(1);
+      expect(body[0].turnCount).toBeUndefined();
     });
   });
 });

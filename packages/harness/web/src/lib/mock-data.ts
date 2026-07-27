@@ -2,7 +2,7 @@
  * Fixture data for `VITE_MOCK=1` — lets the SPA render fully without a
  * running harness server (see MockApi in ./api).
  */
-import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionSummary, TemplateDetailView, TemplateSummary, WorkflowInfo } from "@shared/types";
+import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionRecord, SessionSummary, TemplateDetailView, TemplateSummary, WorkflowInfo } from "@shared/types";
 
 const now = Date.now();
 const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
@@ -355,6 +355,26 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       // line), absent on the others (exercises the graceful degradation).
       gitBranch: "feat/screening-webhook",
       messageCount: 12,
+      // turnCount comes from OUR event index and wins over messageCount when
+      // both are present — the two disagreeing here is deliberate.
+      turnCount: 3,
+    },
+    {
+      // A session the Studio never ran: the agent's own transcript knows it,
+      // our event log doesn't. No turnCount, and no record — the review pane's
+      // honest "nothing recorded" state (see MOCK_SESSION_RECORDS).
+      //
+      // `agent-resume` alongside no record is the combination worth having a
+      // fixture for: the agent can continue this conversation, and we still
+      // can't show it, because resumability and readability come from two
+      // different stores.
+      agentSessionId: "5e7a0c94-3f22-4d18-b6e1-77c0a9b12d40",
+      harness: "claude-code",
+      cwd: "/Users/demo/acme-app",
+      title: "Poke at the credit model",
+      lastActiveAt: daysAgo(6),
+      source: "transcript",
+      resumeMode: "agent-resume",
     },
   ],
   "/Users/demo/rfq-workflows": [
@@ -367,8 +387,175 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       lastActiveAt: daysAgo(1),
       source: "registry",
       resumeMode: "agent-resume",
+      turnCount: 1,
     },
   ],
+};
+
+/**
+ * Reconstructed transcripts for the past-session review pane, keyed by the id
+ * the pane asks with (harnessSessionId when the registry tracked the session,
+ * else the agent's own session id).
+ *
+ * Deliberately covers the honest-gap cases the real fold produces, so the mock
+ * UI shows what a user will actually see: a truncated tool result, a turn with
+ * tool calls plus only a final assistant message, a Codex session with no
+ * assistant text at all, and a trailing turn that never completed.
+ */
+export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
+  "sess-leasing": {
+    harnessSessionId: "sess-leasing",
+    mergedSessionIds: ["sess-leasing"],
+    agentSessionId: "8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f",
+    harness: "claude-code",
+    cwd: "/Users/demo/acme-app",
+    startedAt: minutesAgo(48),
+    endedAt: minutesAgo(1),
+    turnCount: 2,
+    eventCount: 9,
+    reconstructed: true,
+    limitations: ["truncated-tool-output", "assistant-narration-gap", "incomplete-final-turn"],
+    turns: [
+      {
+        index: 1,
+        prompt: "Add the screening step to the leasing workflow and wire it to the credit check.",
+        promptAt: minutesAgo(48),
+        toolCalls: [
+          {
+            name: "Read",
+            input: '{"file_path":"/Users/demo/acme-app/leasing/index.ts"}',
+            responseSummary: "export const leasing = defineWorkflow({ … })",
+            responseTruncated: false,
+            at: minutesAgo(47),
+          },
+          {
+            name: "Edit",
+            input: '{"file_path":"/Users/demo/acme-app/leasing/index.ts","old_string":"steps: [apply]","new_string":"steps: [apply, screening]"}',
+            responseSummary: "Applied 1 edit to /Users/demo/acme-app/leasing/index.ts\n…[truncated 2048 chars]",
+            responseTruncated: true,
+            at: minutesAgo(46),
+          },
+        ],
+        assistantText:
+          "Added a `screening` step between `apply` and `creditCheck`, and wired its output into the credit check's input. Run it locally to confirm the new edge.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 18420, outputTokens: 612 },
+        completedAt: minutesAgo(45),
+        incomplete: false,
+      },
+      {
+        index: 2,
+        prompt: "Now deploy it.",
+        promptAt: minutesAgo(3),
+        toolCalls: [
+          {
+            name: "Bash",
+            input: '{"command":"sapiom agents deploy"}',
+            responseSummary: "building…",
+            responseTruncated: false,
+            at: minutesAgo(2),
+          },
+        ],
+        assistantText: null,
+        model: null,
+        usage: null,
+        completedAt: null,
+        incomplete: true,
+      },
+    ],
+  },
+  "2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33": {
+    harnessSessionId: "sess-webhook",
+    mergedSessionIds: ["sess-webhook"],
+    agentSessionId: "2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33",
+    harness: "claude-code",
+    cwd: "/Users/demo/acme-app",
+    startedAt: daysAgo(1),
+    endedAt: daysAgo(1),
+    turnCount: 3,
+    eventCount: 11,
+    reconstructed: true,
+    limitations: ["assistant-narration-gap"],
+    turns: [
+      {
+        index: 1,
+        prompt: "Wire the screening webhook to the applicant queue.",
+        promptAt: daysAgo(1),
+        toolCalls: [
+          {
+            name: "Grep",
+            input: '{"pattern":"applicantQueue"}',
+            responseSummary: "leasing/queue.ts:12\nleasing/screening.ts:44",
+            responseTruncated: false,
+            at: daysAgo(1),
+          },
+        ],
+        assistantText: "Wired it through `applicantQueue.publish()` and added the retry policy.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 9120, outputTokens: 340 },
+        completedAt: daysAgo(1),
+        incomplete: false,
+      },
+      {
+        index: 2,
+        prompt: "Add a test for the retry path.",
+        promptAt: daysAgo(1),
+        toolCalls: [],
+        assistantText: "Added `screening.retry.test.ts` covering the 5xx-then-success path.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 10240, outputTokens: 210 },
+        completedAt: daysAgo(1),
+        incomplete: false,
+      },
+      {
+        index: 3,
+        prompt: "Ship it.",
+        promptAt: daysAgo(1),
+        toolCalls: [],
+        assistantText: "Pushed to `feat/screening-webhook`.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 11010, outputTokens: 96 },
+        completedAt: daysAgo(1),
+        incomplete: false,
+      },
+    ],
+  },
+  "sess-rfq": {
+    harnessSessionId: "sess-rfq",
+    mergedSessionIds: ["sess-rfq"],
+    agentSessionId: "9c1a2b3d-4e5f-4061-8a7b-6c5d4e3f2a10",
+    harness: "codex",
+    cwd: "/Users/demo/rfq-workflows",
+    startedAt: daysAgo(1),
+    endedAt: null,
+    turnCount: 1,
+    eventCount: 4,
+    reconstructed: true,
+    // Codex's rollout carries no equivalent of the Stop hook's final assistant
+    // message, so a Codex record has the chronology but none of the prose.
+    limitations: ["missing-assistant-text"],
+    turns: [
+      {
+        index: 1,
+        prompt: "Summarize what the rfq workflow does.",
+        promptAt: daysAgo(1),
+        toolCalls: [
+          {
+            name: "shell",
+            input: '{"command":["cat","README.md"]}',
+            responseSummary: "# rfq-workflows\nRequest-for-quote intake and routing.",
+            responseTruncated: false,
+            at: daysAgo(1),
+          },
+        ],
+        assistantText: null,
+        model: null,
+        usage: null,
+        completedAt: daysAgo(1),
+        incomplete: false,
+      },
+    ],
+  },
 };
 
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [

@@ -567,10 +567,15 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   // A transcript entry carries branch, turn count, and relative time. Its
   // transcript really is on disk, so the server reports agent-resume and the
   // row is tagged resumable — it used to be hardcoded "archived" regardless.
+  //
+  // The turn count is OUR event index's exact count (turnCount: 3), which
+  // outranks the vendor transcript scan's messageCount (12) that the same
+  // fixture also carries.
   const transcript = page.getByTestId("history-2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33");
   await expect(transcript.locator(".past-session-tag")).toHaveText("resumable");
   await expect(transcript).toContainText("feat/screening-webhook");
-  await expect(transcript).toContainText("12 turns");
+  await expect(transcript).toContainText("3 turns");
+  await expect(transcript).not.toContainText("12 turns");
   await expect(transcript).toContainText("ago");
 
   await page.screenshot({ path: "web/e2e/screenshots/past-sessions-menu.png" });

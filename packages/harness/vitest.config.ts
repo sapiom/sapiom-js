@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // web/e2e/*.spec.ts are Playwright tests (see web/e2e/playwright.config.ts,
 // run via `pnpm test:ui`) — a different runner and API, and opt-in rather
@@ -21,6 +21,13 @@ export default defineConfig({
   },
   test: {
     include: ["src/**/*.test.ts", "web/src/**/*.test.ts"],
+    // *.perf.test.ts are wall-clock benchmarks and are excluded HERE, not
+    // skipped: this run executes ~90 test files in parallel workers, and a
+    // timing assertion measured against that much CPU contention says nothing
+    // about the thing it claims to measure. They run in their own sequential
+    // pass instead — see vitest.perf.config.ts, which `pnpm test` chains after
+    // this one, so they are still enforced on every test run and in CI.
+    exclude: [...configDefaults.exclude, "src/**/*.perf.test.ts"],
     // Guard: analytics-core is live-by-default — an unconfigured emitter
     // delivers to the real production collector. The setup file sets
     // SAPIOM_TELEMETRY_DISABLED=1 globally; tests that assert delivery opt

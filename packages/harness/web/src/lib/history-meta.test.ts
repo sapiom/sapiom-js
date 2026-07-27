@@ -106,4 +106,20 @@ describe("historyRowMeta", () => {
     expect(historyRowMeta({ harness: "codex", messageCount: 1, lastActiveAt: at }, now)).toContain("1 turn ·");
     expect(historyRowMeta({ harness: "codex", messageCount: 0, lastActiveAt: at }, now)).toBe("Codex · 1h ago");
   });
+
+  it("prefers our own exact turnCount over the vendor scan's messageCount", () => {
+    // messageCount comes from the adapter's transcript scan, which gives up
+    // above its size cap; turnCount is the event index's exact count. When the
+    // two disagree, the exact one is the one a user should read.
+    const at = "2026-01-01T01:00:00.000Z";
+    const meta = historyRowMeta({ harness: "claude-code", messageCount: 12, turnCount: 3, lastActiveAt: at }, now);
+    expect(meta).toBe("Claude Code · 3 turns · 1h ago");
+  });
+
+  it("renders a turnCount on its own, for a row the vendor scan couldn't count", () => {
+    const at = "2026-01-01T01:00:00.000Z";
+    expect(
+      historyRowMeta({ harness: "codex", gitBranch: "feat/x", turnCount: 2, lastActiveAt: at }, now),
+    ).toBe("Codex · feat/x · 2 turns · 1h ago");
+  });
 });
