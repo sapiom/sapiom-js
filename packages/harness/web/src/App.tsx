@@ -583,6 +583,8 @@ export const App = (): JSX.Element => {
           onScaffoldSession={handleScaffoldSession}
           onScaffoldInSession={handleScaffoldInSession}
           onUseTemplate={handleUseTemplate}
+          listTemplates={harness.listTemplates}
+          getTemplate={harness.getTemplate}
           onScanWorkflows={handleScanWorkflows}
           onOpenInEditor={openInEditor}
           onToast={harness.showToast}
@@ -703,12 +705,9 @@ export const App = (): JSX.Element => {
                   onCreateSession={handleCreateSession}
                   listHarnesses={harness.listHarnesses}
                   onUseTemplate={handleUseTemplate}
-                  onRunSample={async () => {
-                    const session = await harness.createSampleSession();
-                    setOverviewSelected(false);
-                    setReviewSummary(null);
-                    setFocusedAgentPath(session.cwd);
-                  }}
+                  listTemplates={harness.listTemplates}
+                  getTemplate={harness.getTemplate}
+                  firstRun={state.firstRun === true}
                 />
               ) : showReview && reviewSummary ? (
                 <PastSessionPane
@@ -912,6 +911,8 @@ export const App = (): JSX.Element => {
           launchDir={activeSession?.cwd ?? state.launchDir ?? null}
           onClose={() => setTemplatesOpen(false)}
           onUse={handleUseTemplate}
+          listTemplates={harness.listTemplates}
+          getTemplate={harness.getTemplate}
         />
       )}
 

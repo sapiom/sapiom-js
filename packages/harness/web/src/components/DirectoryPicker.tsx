@@ -174,11 +174,11 @@ export function DirectoryPicker({
         <input
           id="new-session-cwd"
           autoFocus
-          aria-label="Project directory"
+          aria-label="Workspace folder"
           className="modal-input dir-picker-input"
           data-testid="dir-picker-input"
           value={value}
-          placeholder="/path/to/project"
+          placeholder="/path/to/workspace"
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
         />

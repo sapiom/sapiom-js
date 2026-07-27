@@ -2,7 +2,7 @@
  * Fixture data for `VITE_MOCK=1` — lets the SPA render fully without a
  * running harness server (see MockApi in ./api).
  */
-import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
+import type { HarnessEntry, HarnessSession, HarnessSettings, MacroDef, SessionSummary, TemplateSummary, WorkflowInfo } from "@shared/types";
 
 const now = Date.now();
 const minutesAgo = (n: number): string => new Date(now - n * 60_000).toISOString();
@@ -41,9 +41,72 @@ export function hasMockCanvasDoc(sessionId: string): boolean {
   return MOCK_CANVAS_SESSIONS.includes(sessionId);
 }
 
-/** Where MockApi.seedSampleProject pretends the example project landed —
- *  mirrors the real HARNESS_PATHS.sampleProject location. */
-export const MOCK_SAMPLE_PROJECT_ROOT = "/Users/demo/.sapiom/harness/sample-project";
+/**
+ * A slice of the real template catalog for mock mode. Spans several categories
+ * on purpose — the dialog groups by category and shows a per-run cost estimate,
+ * and both need a mixed list (including a null `estCostPerRunUsd`, the majority
+ * case upstream) to be exercised without a backend.
+ */
+export const MOCK_TEMPLATES: TemplateSummary[] = [
+  {
+    id: "hello-agent",
+    name: "Hello Agent",
+    description: "The minimal single-step agent: a smoke test for the build, deploy, run path.",
+    tags: ["starter", "minimal"],
+    category: "starter",
+    cadence: "on-demand",
+    stepCount: 1,
+    capabilities: [],
+    estCostPerRunUsd: null,
+  },
+  {
+    id: "web-research-digest",
+    name: "Web Research Digest",
+    description: "Search the web for a topic and return a concise, sourced digest.",
+    tags: ["research", "search"],
+    category: "data-knowledge",
+    cadence: "on-demand",
+    stepCount: 2,
+    capabilities: ["web.search"],
+    estCostPerRunUsd: 0.006,
+  },
+  {
+    id: "dependency-upgrade",
+    name: "Dependency Upgrade",
+    description:
+      "On a schedule, a coding agent bumps a repo's dependencies in a sandbox, runs the tests, and opens a PR.",
+    tags: ["coding-agent", "scheduled"],
+    category: "product-engineering",
+    cadence: "scheduled",
+    stepCount: 5,
+    capabilities: ["sandbox.run"],
+    estCostPerRunUsd: 0.42,
+  },
+  {
+    id: "approval-chain",
+    name: "Multi-Party Approval Chain (Saga)",
+    description:
+      "A durable sequential sign-off chain — pause-per-gate approvals with reminders, timeout escalation, and compensation on rejection.",
+    tags: ["approval", "saga", "pause-resume", "durable"],
+    category: "reliability-governance",
+    cadence: "on-demand",
+    stepCount: 7,
+    capabilities: ["email.send", "database.create"],
+    estCostPerRunUsd: null,
+  },
+  {
+    id: "cold-outreach-engine",
+    name: "Cold Outreach Personalization Engine",
+    description:
+      "Enrich a lead list, write a personalized first line for each prospect, verify deliverability, then drip the sends.",
+    tags: ["outreach", "email", "fan-out"],
+    category: "revenue-marketing",
+    cadence: "scheduled",
+    stepCount: 6,
+    capabilities: ["web.search", "email.send"],
+    estCostPerRunUsd: 0.13,
+  },
+];
 
 export const MOCK_SESSIONS: HarnessSession[] = [
   {

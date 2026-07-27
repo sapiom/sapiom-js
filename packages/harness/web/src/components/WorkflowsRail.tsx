@@ -6,6 +6,8 @@ import type {
   HarnessKind,
   HarnessSession,
   SessionSummary,
+  TemplateDetailView,
+  TemplateListResponse,
   WorkflowInfo,
 } from "@shared/types";
 
@@ -67,6 +69,9 @@ interface WorkflowsRailProps {
    *  scaffold its first agent (sapiom.json) in place. */
   onScaffoldInSession: (sessionId: string) => void;
   onUseTemplate: (dir: string, template: StudioTemplate) => Promise<void>;
+  /** Forwarded to TemplatesDialog — the live catalog fetchers. */
+  listTemplates: () => Promise<TemplateListResponse>;
+  getTemplate: (id: string) => Promise<TemplateDetailView>;
   onScanWorkflows: (root: string) => Promise<number>;
   /** Opens a project in the user's editor — URL scheme, cwd-scoped. */
   onOpenInEditor: (path: string) => void;
@@ -290,6 +295,8 @@ export function WorkflowsRail({
   onScaffoldSession,
   onScaffoldInSession,
   onUseTemplate,
+  listTemplates,
+  getTemplate,
   onScanWorkflows,
   onOpenInEditor,
   onToast,
@@ -388,7 +395,7 @@ export function WorkflowsRail({
       </div>
 
       <div className="rail-header">
-        Workspace
+        Workspaces
         <div className="rail-header-actions">
           <button
             ref={historyTriggerRef}
@@ -410,8 +417,8 @@ export function WorkflowsRail({
             ref={connectTriggerRef}
             className="theme-toggle rail-header-btn"
             data-testid="add-workspace"
-            aria-label="Add project"
-            title="Register an existing agent project folder (sapiom.json). Its agent appears in the rail."
+            aria-label="Add workspace"
+            title="Add a workspace: a folder containing an agent project (sapiom.json). Its agent appears in the rail."
             onClick={() => {
               setHistoryOpen(false);
               setAddDialogMode("workspace");
@@ -505,7 +512,7 @@ export function WorkflowsRail({
               className="rail-empty"
               icon="Folder"
               title="No agents yet"
-              body="Start a session in a project directory, or add a workspace. Agents (sapiom.json) appear here automatically."
+              body="Open a workspace folder to start a session, or add one. Agents (sapiom.json) appear here automatically."
             />
           )}
 
@@ -622,6 +629,8 @@ export function WorkflowsRail({
           launchDir={launchDir}
           onClose={() => setTemplatesOpen(false)}
           onUse={onUseTemplate}
+          listTemplates={listTemplates}
+          getTemplate={getTemplate}
           triggerRef={connectTriggerRef}
         />
       )}

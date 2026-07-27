@@ -1,67 +1,32 @@
 /**
- * The Studio's curated template index (templates journey v0).
+ * The Studio's template index — two sources, deliberately different in kind.
  *
- * Provenance: the gallery entries are pinned copies of the harness source's
- * in-repo registry at origin/main f0e3406 (harness 0.1.4) — every field below
- * comes verbatim from `examples/registry.json` plus each example's
- * `template.json` detail manifest, with punctuation normalized to house style
- * (em-dashes become colons or commas; one upstream typo fixed). The starters
- * are the two templates bundled with `@sapiom/agent-core` (`templates/
- * {default,coding-pause}`), described with the wording the scaffold MCP tool
- * itself ships.
+ * **Gallery** templates come from the LIVE catalog: `GET /api/templates`, which
+ * the harness server relays from core's `GET /v1/workflows/templates` (the same
+ * endpoint the dashboard's Template library renders). This module used to ship a
+ * hardcoded pin of two entries because no listing API existed; it does now, and
+ * the pin was the reason the Studio showed 2 templates while the app showed 26.
+ * There is no local copy of the gallery any more — a stale copy IS the bug.
  *
- * WHY a pin and not a fetch: no listing API, MCP tool, or CLI command exposes
- * the gallery to any client today — the registry is read server-side by the
- * Sapiom backend for the dashboard only. This
- * module is the swap point: when a listing endpoint ships, a fetch of the
- * same shape replaces these constants without touching the dialog.
+ * **Starters** stay local, and should: they are the templates bundled with
+ * `@sapiom/agent-core` (`templates/{default,coding-pause}`), scaffolded by
+ * `sapiom agents init -t <name>` with no account and no network. They are the
+ * offline floor — what the dialog can still offer when the catalog is
+ * unreachable — so describing them from the package is correct, not a shortcut.
  *
- * Both "use" paths are real operations, driven through the session's agent:
- * - Gallery: the `sapiom_dev_agents_clone` MCP tool (`{dir, templateId}`)
- *   forks the template into a repo the user owns, clones it, and writes
- *   `sapiom.json` provenance. Needs a signed-in Sapiom account.
- * - Starters: `sapiom agents init <dir> -t <name>` scaffolds offline from
- *   the bundled template. No account, no network.
+ * Both "use" paths are real operations driven through the session's agent:
+ * - Gallery: `sapiom_dev_agents_clone` (`{dir, templateId}`) forks the template
+ *   into a repo the user owns, clones it, and writes `sapiom.json` provenance.
+ *   Its `templateId` is a free-form string relayed to core's fork endpoint — no
+ *   allowlist — so every catalog id works, not just the two once pinned here.
+ * - Starters: `sapiom agents init <dir> -t <name>`, offline.
  */
+import type { TemplateDetailView, TemplateSummary } from "@shared/types";
+
 import type { CanvasGraph } from "./canvas-graph";
 
-export interface TemplateStep {
-  name: string;
-  description: string;
-  /** Dotted capability catalog id (e.g. "web.search"); absent = unmetered. */
-  capability?: string;
-  /** Successor step names; array order in `steps` is execution order. */
-  next?: string[];
-  terminal?: boolean;
-}
-
-export interface TemplateExample {
-  title: string;
-  input: unknown;
-  output: unknown;
-}
-
-/** A registry entry + its template.json detail, pinned (see module header). */
-export interface GalleryTemplate {
-  kind: "gallery";
-  /** Stable gallery id — the `templateId` the clone tool takes. */
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  /** Path inside the harness repo; consumed by the fork handoff server-side. */
-  sourcePath: string;
-  /** Dotted capability ids. Drives the backend's per-run cost estimate,
-   *  which no client surface exposes yet. */
-  capabilities: string[];
-  whatItDoes: string;
-  steps: TemplateStep[];
-  author: { name: string; url: string };
-  useCases: string[];
-  /** Markdown. */
-  notes: string;
-  examples: TemplateExample[];
-}
+/** A live catalog entry. `kind` discriminates it from a bundled starter. */
+export type GalleryTemplate = TemplateSummary & { kind: "gallery" };
 
 /** A template bundled with @sapiom/agent-core — scaffolds offline. */
 export interface StarterTemplate {
@@ -74,88 +39,10 @@ export interface StarterTemplate {
 
 export type StudioTemplate = GalleryTemplate | StarterTemplate;
 
-/** What the curated gallery is pinned to — named in the dialog's note. */
-export const TEMPLATES_PIN = { harnessVersion: "0.1.4", ref: "f0e3406" };
-
-export const GALLERY_TEMPLATES: GalleryTemplate[] = [
-  {
-    kind: "gallery",
-    id: "web-research-digest",
-    name: "Web Research Digest",
-    description: "Search the web for a topic and return a concise, sourced digest.",
-    tags: ["research", "search"],
-    sourcePath: "examples/web-research-digest",
-    capabilities: ["web.search"],
-    whatItDoes:
-      "Takes a topic, runs a web search through the Sapiom search capability, then condenses the top results into a short digest with source links. A legible \"it did a thing\" flagship: one metered capability, an obvious output.",
-    steps: [
-      {
-        name: "search",
-        description: "Query the web for the topic.",
-        capability: "web.search",
-        next: ["summarize"],
-      },
-      {
-        name: "summarize",
-        description: "Condense the results into a sourced digest.",
-        terminal: true,
-      },
-    ],
-    author: { name: "Sapiom", url: "https://sapiom.ai/" },
-    useCases: [
-      "Get a quick, sourced briefing on an unfamiliar topic before a meeting.",
-      "Turn a research question into a shareable markdown digest with citations.",
-      "Learn how to wire a single capability into an agent you can extend.",
-    ],
-    notes:
-      "`run_local` stubs the `web.search` capability, so you can trace the full graph offline before deploying. A real `deploy` + `run` performs a live web search.\n\nTo extend it, add a step after `summarize`, e.g. store the digest with `ctx.sapiom.memory.*`, or fan out one search per subtopic. `AGENTS.md` in this directory has the authoring loop.",
-    examples: [
-      {
-        title: "Research an unfamiliar term",
-        input: { topic: "what is an LLM agent?" },
-        output: {
-          topic: "what is an LLM agent?",
-          digest:
-            "# Research digest: what is an LLM agent?\n\nAn LLM agent is a system that uses a large language model to decide and take actions...\n\n## Sources\n1. [What are LLM agents?](https://example.com/llm-agents)\n2. [Agents overview](https://example.com/agents-overview)",
-          sources: [
-            { title: "What are LLM agents?", url: "https://example.com/llm-agents" },
-            { title: "Agents overview", url: "https://example.com/agents-overview" },
-          ],
-        },
-      },
-    ],
-  },
-  {
-    kind: "gallery",
-    id: "hello-agent",
-    name: "Hello Agent",
-    description: "The minimal single-step agent: a smoke test for the build, deploy, run path.",
-    tags: ["starter", "minimal"],
-    sourcePath: "examples/hello-agent",
-    capabilities: [],
-    whatItDoes:
-      "Validates an input name and returns a greeting. The smallest valid definition: use it to confirm your MCP install and deploy path work end to end before reaching for a capability.",
-    steps: [
-      {
-        name: "greet",
-        description: "Validate the input and return a greeting.",
-        terminal: true,
-      },
-    ],
-    author: { name: "Sapiom", url: "https://sapiom.ai/" },
-    useCases: [
-      "Confirm your MCP install and deploy path work before building something real.",
-      "Start from the smallest valid definition and grow it one step at a time.",
-    ],
-    notes:
-      "No capabilities, so `run_local` and a real `run` behave identically and cost nothing. Once this deploys and runs cleanly, fork a capability-backed template (e.g. Web Research Digest) for the real thing. See `AGENTS.md` for the authoring loop.",
-    examples: [
-      { title: "Greet a name", input: { name: "Ada" }, output: { greeting: "Hello, Ada!" } },
-      { title: "Default greeting", input: {}, output: { greeting: "Hello, world!" } },
-    ],
-  },
-];
-
+/**
+ * The bundled starters. Wording is the scaffold tool's own, so the dialog never
+ * claims more about them than the CLI does.
+ */
 export const STARTER_TEMPLATES: StarterTemplate[] = [
   {
     kind: "starter",
@@ -171,16 +58,111 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   },
 ];
 
-export const STUDIO_TEMPLATES: StudioTemplate[] = [...GALLERY_TEMPLATES, ...STARTER_TEMPLATES];
+/**
+ * Display labels for the registry's outcome-axis category ids. The taxonomy is
+ * owned by the sapiom-js registry, so an id we don't recognise falls back to a
+ * humanized form of the id itself rather than being dropped — same contract the
+ * dashboard follows. Labels match the dashboard's Template library sidebar.
+ */
+const CATEGORY_LABELS: Record<string, string> = {
+  starter: "Starter",
+  "product-engineering": "Product and engineering",
+  "reliability-governance": "Reliability and governance",
+  "revenue-marketing": "Revenue and marketing",
+  "customer-experience": "Customer experience",
+  "data-knowledge": "Data and knowledge",
+  "finance-legal-people": "Finance, legal and people",
+};
+
+export function categoryLabel(category: string | null): string {
+  if (!category) return "Uncategorised";
+  return (
+    CATEGORY_LABELS[category] ??
+    category.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase())
+  );
+}
 
 /**
- * The prompt handed to the session's agent after "Use template" starts a
- * session in the destination folder. Both branches name the REAL operation:
- * the clone MCP tool for gallery templates (with its auth failure path), the
- * bundled-template init command for starters — mirroring the scaffold prompt
- * App.tsx already ships for the blank-project path. Both end with the same
- * single next move (a free local test run), so use → edit → run is one
- * continuous path instead of a journey that stops at the clone.
+ * Group the catalog by category for the dialog's list, ordered to match the
+ * dashboard's sidebar (`starter` first — it is the on-ramp), with unknown
+ * categories after the known ones and `Uncategorised` last.
+ */
+const CATEGORY_ORDER = [
+  "starter",
+  "product-engineering",
+  "reliability-governance",
+  "revenue-marketing",
+  "customer-experience",
+  "data-knowledge",
+  "finance-legal-people",
+];
+
+export function groupByCategory(
+  templates: GalleryTemplate[],
+): Array<{ category: string | null; label: string; templates: GalleryTemplate[] }> {
+  const buckets = new Map<string, GalleryTemplate[]>();
+  for (const template of templates) {
+    const key = template.category ?? "";
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(template);
+    else buckets.set(key, [template]);
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => {
+      // "" (uncategorised) sorts last; known ids keep the dashboard's order;
+      // unknown-but-present ids sort alphabetically between the two.
+      if (a === "") return 1;
+      if (b === "") return -1;
+      const ia = CATEGORY_ORDER.indexOf(a);
+      const ib = CATEGORY_ORDER.indexOf(b);
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      if (ia !== -1) return -1;
+      if (ib !== -1) return 1;
+      return a.localeCompare(b);
+    })
+    .map(([key, group]) => ({
+      category: key === "" ? null : key,
+      label: categoryLabel(key === "" ? null : key),
+      templates: group,
+    }));
+}
+
+/**
+ * Format a per-run cost estimate. Core returns null for any template that
+ * declares no per-call-priced capability (21 of 26 today) — that MUST render as
+ * an em dash, never `$0.00`, which would assert a real free run. Sub-cent
+ * estimates keep enough precision to not read as zero.
+ */
+export function formatEstCost(usd: number | null): string {
+  if (usd === null) return "—";
+  if (usd === 0) return "$0";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+/** Case-insensitive match over the fields a user would search by. */
+export function matchesQuery(template: StudioTemplate, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    template.name,
+    template.description,
+    template.id,
+    ...(template.kind === "gallery" ? template.tags : []),
+    ...(template.kind === "gallery" ? template.capabilities : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+/**
+ * The prompt handed to the session's agent after "Use template" starts a session
+ * in the destination folder. Both branches name the REAL operation: the clone
+ * MCP tool for gallery templates (with its auth failure path), the bundled
+ * template init command for starters. Both end with the same next move (a free
+ * local test run), so use → edit → run is one continuous path rather than a
+ * journey that stops at the clone.
  */
 export function useTemplatePrompt(template: StudioTemplate, dir: string): string {
   const runContinuation =
@@ -203,35 +185,42 @@ export function useTemplatePrompt(template: StudioTemplate, dir: string): string
 }
 
 /**
- * A gallery template's steps as a CanvasGraph, so the dialog can preview the
- * step structure with the same vocabulary the canvas projections use (kind
- * dots, elbow transitions). Pure projection of the pinned manifest: array
- * order is execution order, the first step is the entry, `next` names the
- * successors (falling back to the next listed step), `terminal` marks exits.
- * Nothing is invented — steps without a capability stay unmetered, and
- * conditions do not exist in the manifest so no edge carries a label.
+ * A template's declared graph as a CanvasGraph, so the dialog previews step
+ * structure in the same vocabulary the canvas projections use (kind dots, elbow
+ * transitions). Pure projection of what core served — core expands the registry's
+ * step list into definition graph shapes server-side, so `transitions` are
+ * authoritative here rather than inferred from array order as the old pinned
+ * copy had to do. Steps with no capability stay unmetered; a guarded transition
+ * carries its condition label.
  */
-export function templateGraph(template: GalleryTemplate): CanvasGraph {
-  const nodes: CanvasGraph["nodes"] = template.steps.map((step, index) => ({
+export function templateGraph(detail: TemplateDetailView): CanvasGraph {
+  const terminalOf = (name: string): boolean =>
+    detail.steps.find((s) => s.name === name)?.terminal === true;
+  const nodes: CanvasGraph["nodes"] = detail.steps.map((step, index) => ({
     id: step.name,
     kind: step.terminal ? "terminal-success" : index === 0 ? "entry" : "step",
     label: step.name,
     role: step.terminal ? "terminal" : index === 0 ? "entry" : "step",
-    description: step.description,
+    description: step.description ?? "",
     timeoutMs: null,
     inputSchema: null,
-    capabilities: step.capability ? [step.capability] : [],
+    capabilities: step.capabilities,
   }));
-  const edges: CanvasGraph["edges"] = [];
-  template.steps.forEach((step, index) => {
-    const successors = step.next ?? (template.steps[index + 1] && !step.terminal ? [template.steps[index + 1].name] : []);
-    for (const next of successors) {
-      edges.push({ from: step.name, to: next, kind: successors.length > 1 ? "branching" : "sequential", label: "" });
-    }
-  });
+  // A step with more than one outgoing edge is a branch — mark every edge out of
+  // it so the preview reads the same as the canvas does for a real definition.
+  const outDegree = new Map<string, number>();
+  for (const edge of detail.transitions) {
+    outDegree.set(edge.from, (outDegree.get(edge.from) ?? 0) + 1);
+  }
+  const edges: CanvasGraph["edges"] = detail.transitions.map((edge) => ({
+    from: edge.from,
+    to: edge.to,
+    kind: (outDegree.get(edge.from) ?? 0) > 1 ? "branching" : "sequential",
+    label: edge.label ?? "",
+  }));
   return {
-    name: template.name,
-    entry: template.steps[0]?.name ?? "",
+    name: detail.name,
+    entry: detail.steps.find((s) => !terminalOf(s.name))?.name ?? detail.steps[0]?.name ?? "",
     nodes,
     edges,
     groups: [],
@@ -239,8 +228,8 @@ export function templateGraph(template: GalleryTemplate): CanvasGraph {
   };
 }
 
-/** Default destination: a new folder named after the template, under the
- *  launch dir. "default" would make a meaningless folder name, so it gets a
+/** Default destination: a new folder named after the template, under the launch
+ *  dir. "default" would make a meaningless folder name, so it gets a
  *  descriptive one instead. */
 export function templateDirSuggestion(template: StudioTemplate, launchDir: string | null): string {
   const folder = template.kind === "starter" && template.id === "default" ? "sapiom-agent" : template.id;

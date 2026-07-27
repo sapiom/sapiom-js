@@ -12,7 +12,7 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import type { HarnessEntry } from "@shared/types";
+import type { HarnessEntry, TemplateDetailView, TemplateListResponse } from "@shared/types";
 
 import {
   ApiError,
@@ -85,9 +85,11 @@ export interface HarnessStateHook {
    *  resume view, not one directory at a time). */
   loadHistory: (cwds: string[]) => Promise<void>;
   createSession: (req: CreateSessionRequest) => Promise<HarnessSession>;
-  /** Welcome panel's "Run the sample project": seeds (or reuses) the bundled
-   *  example, then opens a normal session in it with the default harness. */
-  createSampleSession: () => Promise<HarnessSession>;
+  /** The live template gallery + one template's detail (server relays core;
+   *  the API key never reaches the browser). Surfaced here so components stay
+   *  prop-driven rather than reaching for a module-level api singleton. */
+  listTemplates: () => Promise<TemplateListResponse>;
+  getTemplate: (id: string) => Promise<TemplateDetailView>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
   /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
@@ -664,14 +666,8 @@ export function useHarnessState(): HarnessStateHook {
     return session;
   }, [selectSession]);
 
-  const createSampleSession = useCallback(async (): Promise<HarnessSession> => {
-    const seeded = await api.seedSampleProject();
-    // Same default-harness choice the auto-created boot session uses:
-    // doctor()'s preference order, falling back to claude-code when the
-    // server didn't report availability (see AppState.availableHarnesses).
-    const harness = state?.availableHarnesses?.[0] ?? "claude-code";
-    return createSession({ cwd: seeded.root, harness });
-  }, [state?.availableHarnesses, createSession]);
+  const listTemplates = useCallback((): Promise<TemplateListResponse> => api.listTemplates(), []);
+  const getTemplate = useCallback((id: string): Promise<TemplateDetailView> => api.getTemplate(id), []);
 
   const resumeSession = useCallback(
     async (harnessSessionId: string): Promise<HarnessSession> => {
@@ -900,7 +896,8 @@ export function useHarnessState(): HarnessStateHook {
     historyLoading,
     loadHistory,
     createSession,
-    createSampleSession,
+    listTemplates,
+    getTemplate,
     resumeSession,
     resumeFromHistory,
     closeSession,

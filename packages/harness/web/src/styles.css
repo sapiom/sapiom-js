@@ -2696,6 +2696,85 @@ input {
   color: var(--text-dim);
 }
 
+/* ── Returning user: Overview, not a pitch ──
+   The first-run card is a centered hero. This one is a working surface — a list
+   you scan and click — so it left-aligns and grows with the recents rather than
+   holding hero proportions with no hero in it. */
+.welcome-card--returning {
+  width: 560px;
+}
+
+.welcome-copy--returning {
+  align-items: stretch;
+  text-align: left;
+  gap: var(--sp2);
+}
+
+.welcome-title--returning {
+  font-size: var(--type-title);
+}
+
+.welcome-recents-title {
+  margin: var(--sp2) 0 0;
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text-faint);
+}
+
+.welcome-recents {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome-recent {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp2);
+  width: 100%;
+  padding: var(--sp2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+  transition: background-color var(--transition-fast);
+}
+
+.welcome-recent:hover {
+  background: var(--surface-hover);
+}
+
+.welcome-recent:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.welcome-recent-name {
+  font-size: var(--type-ui);
+  font-weight: 550;
+  flex: 0 0 auto;
+}
+
+/* The full path is the disambiguator when two workspaces share a folder name,
+   so it stays visible — truncated from the LEFT, since the tail is what
+   identifies it. */
+.welcome-recent-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+  direction: rtl;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Bottom-anchored action BAND: full-bleed against the card's own edges
    (negative inline/bottom margins swallow the card padding), hairline on
    top — the same dialog-footer anatomy as .modal-actions. Docs link far
@@ -5867,21 +5946,61 @@ input {
   min-height: 0;
 }
 
+/* The sidebar owns the grid column now that a search field sits above the
+   scrolling list — the list alone can't both scroll and pin the input. */
+.templates-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--ui-line);
+}
+
+.templates-search {
+  margin: var(--sp2) var(--sp2) 0;
+  flex: 0 0 auto;
+}
+
 .templates-list {
   display: flex;
   flex-direction: column;
   gap: var(--sp1);
   padding: var(--sp2);
-  border-right: 1px solid var(--ui-line);
   overflow-y: auto;
 }
 
 .templates-list-section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp1);
   padding: var(--sp2) var(--sp2) 0;
   font-size: var(--type-micro);
   font-weight: 700;
   letter-spacing: 0.01em;
   color: var(--text-faint);
+}
+
+/* Per-category count, mirroring the dashboard's Template library sidebar. */
+.templates-list-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+/* Loading / no-results / degraded-catalog copy. The degraded note is deliberately
+   not styled as an error: a signed-out gallery is a state, not a fault. */
+.templates-list-empty,
+.templates-list-note {
+  padding: var(--sp2);
+  font-size: var(--type-micro);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.templates-list-note {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
 }
 
 .template-row {
@@ -5931,9 +6050,35 @@ input {
   overflow: hidden;
 }
 
+/* Step count + per-run cost estimate on the card: the two facts that change
+   which template you pick. Cost may be an em dash (no estimate) — see
+   formatEstCost; it must never read as $0.00. */
+.template-row-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp1);
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+}
+
+.template-row-cost {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .template-row.is-selected .template-row-name,
-.template-row.is-selected .template-row-desc {
+.template-row.is-selected .template-row-desc,
+.template-row.is-selected .template-row-meta {
   color: var(--accent-foreground);
+}
+
+/* A guarded transition's condition, shown beside the elbow target so a branch
+   reads the same here as it does on the canvas. */
+.canvas-step-transition-label {
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+  color: var(--text-faint);
 }
 
 /* ── Preview pane: real manifest fields only ── */

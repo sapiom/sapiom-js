@@ -28,7 +28,6 @@ import type {
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import { resolveStatePaths } from "../core/paths.js";
-import { seedExampleProject } from "../core/example-seed.js";
 import {
   SessionManager,
   type LaunchOptsBuilder,
@@ -100,6 +99,7 @@ import { createCanvasRenderRouter } from "./canvas-render.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
+import { createTemplatesRouter } from "./templates.js";
 import { createActionsRouter } from "./actions.js";
 import {
   createAuthRouter,
@@ -212,9 +212,6 @@ export interface HarnessServerOptions {
    * Passed through into AppState.consentEnvReason.
    */
   consentEnvReason?: string | null;
-  /** Where POST /api/sample-project seeds the bundled example. Defaults to
-   *  `<stateRoot>/sample-project`. */
-  sampleProjectRoot?: string;
 }
 
 export interface HarnessServer {
@@ -854,12 +851,6 @@ export const startServer = async (
         userId: identity?.userId ?? null,
         tenantId: identity?.tenantId ?? null,
       },
-      seedSampleProject: async () => {
-        const { root, projectDir, created } = await seedExampleProject({
-          targetRoot: options.sampleProjectRoot ?? statePaths.sampleProject,
-        });
-        return { root, projectDir, created };
-      },
       settingsPath: statePaths.settings,
     }),
   );
@@ -885,6 +876,14 @@ export const startServer = async (
       // the API key on a 401 and retry, recovering instead of locking.
       apiKey: apiKeyProvider,
       baseUrl: resolveAgentsBaseUrl(),
+    }),
+  );
+  // The template gallery, relayed from CORE (not the agents surface) so the
+  // Studio's picker and the dashboard's Template library read one catalog.
+  // baseUrl omitted: the router self-defaults via resolveCoreBaseUrl().
+  app.use(
+    createTemplatesRouter({
+      apiKey: apiKeyProvider,
     }),
   );
   // Direct action macros (Deploy / Prod-run) — server-side, key never reaches
