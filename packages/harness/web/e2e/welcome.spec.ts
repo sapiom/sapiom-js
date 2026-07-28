@@ -124,27 +124,44 @@ test.describe("returning user", () => {
     await expect(page.getByTestId("welcome-browse-templates")).toBeVisible();
   });
 
-  test("carries no screenshot of itself, and fits its pane without scrolling", async ({ page }) => {
-    // The card briefly opened with a cropped capture of the app above the copy.
-    // It cost ~120px of a panel whose whole job is to be read at a glance, and
-    // read as a fragment of a UI rather than a picture of the product — so the
-    // image is gone and the row cap came down with it.
+  test("carries no screenshot of itself, and never puts content out of reach", async ({ page }) => {
+    // The card briefly opened with a cropped capture of the app above the copy —
+    // ~120px on a surface whose job is to be read at a glance, reading as a
+    // fragment of a UI rather than a picture of the product.
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openOverview(page);
-
     await expect(page.getByTestId("welcome-hero")).toHaveCount(0);
     await expect(page.locator(".welcome-panel img")).toHaveCount(0);
 
-    // The real regression risk is height: this list grows with use, so the card
-    // has to stay inside the pane that holds it rather than making an
-    // orientation surface something you scroll.
-    const card = page.locator(".welcome-card");
-    const panel = page.getByTestId("welcome-panel");
-    const cardBox = await card.boundingBox();
-    const panelBox = await panel.boundingBox();
-    expect(cardBox?.height).toBeLessThanOrEqual((panelBox?.height ?? 0) + 1);
+    // Height is the regression that recurs here, and the first attempt at
+    // guarding it measured the card against its container — which passed on
+    // these fonts and failed on CI's, where the same copy wraps ~34px taller.
+    // So the invariant is REACHABILITY, which no font metric can break: at any
+    // window height the card stays inside the scrim, the two actions are on
+    // screen, and the last workspace row can be scrolled to. Getting that wrong
+    // is silent — a card that honours a max-height by clipping its own bottom
+    // looks fine and hides rows below the fold.
+    for (const height of [1000, 640, 460]) {
+      await page.setViewportSize({ width: 1280, height });
 
+      const card = await page.locator(".welcome-card").boundingBox();
+      const scrim = await page.getByTestId("welcome-panel").boundingBox();
+      expect(card!.height, `card must fit the scrim at ${height}px`).toBeLessThanOrEqual(
+        scrim!.height,
+      );
+
+      // The fixed part stays put: these are the reason the card exists.
+      await expect(page.getByTestId("welcome-start-project")).toBeInViewport();
+      await expect(page.getByTestId("welcome-browse-templates")).toBeInViewport();
+
+      // And the part that yields is scrollable rather than clipped.
+      const lastRow = page.locator(".welcome-recent").last();
+      await lastRow.scrollIntoViewIfNeeded();
+      await expect(lastRow, `last row must be reachable at ${height}px`).toBeInViewport();
+    }
+
+    await page.setViewportSize({ width: 1280, height: 720 });
     await page.screenshot({ path: "web/e2e/screenshots/welcome-overview.png", fullPage: true });
   });
 
