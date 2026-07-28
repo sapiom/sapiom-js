@@ -1,12 +1,18 @@
 import { useRef, useState } from "react";
 import type { JSX } from "react";
 import { SPAWNABLE_HARNESS_KINDS } from "@shared/types";
-import type { HarnessEntry, HarnessKind, HarnessSession, WorkflowInfo } from "@shared/types";
+import type {
+  HarnessEntry,
+  HarnessKind,
+  HarnessSession,
+  WorkflowInfo,
+} from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
 import { recentWorkspaces, unlistedAgentCount } from "../lib/recent-workspaces";
 import { relativeTimeLabel } from "../lib/relative-time";
 import { loadUiPrefs } from "../lib/ui-prefs";
+import { useDismissable } from "../lib/use-dismissable";
 import { Icon } from "./Icon";
 import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
 
@@ -36,13 +42,19 @@ interface WelcomePanelProps {
    *  CTA said "workspace" and delivered the one-question session dialog. */
   onConnect: (cwd: string) => Promise<void>;
   onScan: (root: string) => Promise<number>;
-  onScaffold: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
+  onScaffold: (
+    cwd: string,
+    harness: HarnessKind,
+    idea?: string,
+  ) => Promise<void>;
   onSaveProjectRoot: (root: string) => Promise<void>;
   /** Adapter registry fetch — keeps this modal's picker registry-driven too. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /** Navigate to the templates destination. Browsing is a place you go now,
    *  not a dialog this panel owns — see TemplatesPanel. */
   onBrowseTemplates: () => void;
+  /** Close button, scrim click, Escape. This is an overlay, never a trap. */
+  onDismiss: () => void;
   /**
    * True only on a genuine first run of this install (AppState.firstRun).
    * Changes the greeting and nothing else — "Welcome to" is a thing you say
@@ -60,17 +72,23 @@ interface WelcomePanelProps {
 const MAX_OVERVIEW_ROWS = 5;
 
 /**
- * Overview / first-run panel — rendered in the terminal slot when no session is
- * live, and whenever the Overview tab is selected.
+ * Overview — a card ON TOP of the shell, shown unprompted on an install that has
+ * never been used and summonable any time from the account menu.
+ *
+ * An overlay, not a view, and that is the whole point: the shell behind it keeps
+ * whatever was on screen, so re-reading what Studio is never costs you your
+ * place. It also stops the card inheriting one pane's width — as a panel inside
+ * the centre pane it had ~500px of usable measure, which wrapped every option
+ * row's description onto a second line and made a card that fit its slot read as
+ * oversized. Centred over the whole window it simply has the room.
  *
  * ONE anatomy for both audiences: what Studio is, the two ways in, the docs, and
- * where you have already been. It carried a cropped screenshot of the app above
- * all that; the image cost ~120px of a panel whose whole job is to be read at a
- * glance, and read as a fragment of a UI rather than a picture of the product.
- * Removed, along with the two 390KB captures. The `e2e/capture-welcome-hero.mjs`
- * that comment named as their source does not exist and did not when this was
- * written — a reference outliving the thing it pointed at, same as the
- * sample-project route's.
+ * where you have already been. Only the greeting differs.
+ *
+ * It briefly carried a cropped screenshot of the app above all that. The image
+ * cost ~120px of a surface whose job is to be read at a glance and read as a
+ * fragment of a UI rather than a picture of the product; it is gone, with its two
+ * 390KB captures.
  */
 export function WelcomePanel({
   recentDirs,
@@ -85,6 +103,7 @@ export function WelcomePanel({
   onSaveProjectRoot,
   listHarnesses,
   onBrowseTemplates,
+  onDismiss,
   firstRun,
 }: WelcomePanelProps): JSX.Element {
   const [modalOpen, setModalOpen] = useState(false);
@@ -94,6 +113,10 @@ export function WelcomePanel({
   const [opening, setOpening] = useState<string | null>(null);
   const startProjectRef = useRef<HTMLButtonElement>(null);
   const templatesTriggerRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Suspended while the add-workspace dialog is up, so one Escape closes that
+  // dialog (its own handler) rather than both layers at once.
+  useDismissable(!modalOpen, { onDismiss, containerRef: cardRef });
 
   // Cheap enough to derive every render (a few dozen entries, string compares)
   // and always consistent with the props that drove it — memoizing would only
@@ -117,11 +140,15 @@ export function WelcomePanel({
       // registry-driven correction NewSessionModal applies to its default.
       const entries = await listHarnesses();
       const spawnable = entries.filter(
-        (entry) => entry.installed && (SPAWNABLE_HARNESS_KINDS as readonly string[]).includes(entry.id),
+        (entry) =>
+          entry.installed &&
+          (SPAWNABLE_HARNESS_KINDS as readonly string[]).includes(entry.id),
       );
       const preferred = loadUiPrefs().preferredHarness;
       const chosen =
-        (preferred && spawnable.some((entry) => entry.id === preferred) ? preferred : undefined) ??
+        (preferred && spawnable.some((entry) => entry.id === preferred)
+          ? preferred
+          : undefined) ??
         (spawnable[0]?.id as HarnessKind | undefined) ??
         "claude-code";
       await onCreateSession(dir, chosen);
@@ -134,140 +161,179 @@ export function WelcomePanel({
   };
 
   return (
-    <div className="welcome-panel" data-testid="welcome-panel">
-      <div className="welcome-card">
-        <div className="welcome-body">
-          {/* One greeting, two readings: "Welcome to" is a thing you say once.
-              This card used to fork into two whole layouts — a product pitch for
-              a first run, an Overview list for a return — which meant the
-              returning surface had no explanation of what Studio is and the
-              first-run surface had no way into anything. One anatomy serves
-              both: the recents block below simply has nothing to show on a
-              brand-new install, so it renders nothing. */}
-          <h1 className="welcome-title">
-            {firstRun ? "Welcome to Sapiom Agent Studio" : "Sapiom Agent Studio"}
-          </h1>
-          {/* Three beats, in the order the product earns trust: what it makes of
-              your code, what a run costs and shows, who decides to ship. The
-              mechanics belong to the rows below — repeating them here would
-              spend the one paragraph anybody reads on instructions they are
-              about to be given. */}
-          <p className="welcome-intro">
-            Studio turns the agent workflows in your codebase into a diagram you can run. Local runs
-            are free and offline, with every step&rsquo;s input, output and capability call on
-            screen. Nothing ships until you say so.
-          </p>
-          {error && <div className="welcome-error">{error}</div>}
-
-          {/* Primary path: point Studio at a folder. Opens the three-door add
-              dialog, whose first door is exactly this question — and which is
-              the only surface that can tell an agent project from any folder
-              (GET /api/fs/list carries the marker flag). */}
-          <div className="welcome-open" data-testid="welcome-open-card">
-            <span className="welcome-open-icon" aria-hidden="true">
-              <Icon name="FolderOpen" size={20} />
-            </span>
-            <span className="welcome-open-copy">
-              <span className="welcome-open-title">Open a folder</span>
-              <span className="welcome-open-desc">
-                Workflows in the folder appear in the rail. Nothing is uploaded.
-              </span>
-            </span>
-            <button
-              ref={startProjectRef}
-              type="button"
-              className="btn-primary welcome-open-cta"
-              data-testid="welcome-start-project"
-              onClick={() => setModalOpen(true)}
-            >
-              Open folder
-            </button>
-          </div>
-
-          {/* Secondary path: the catalog, same row anatomy. */}
-          <div className="welcome-open" data-testid="welcome-templates-card">
-            <span className="welcome-open-icon" aria-hidden="true">
-              <Icon name="LayoutTemplate" size={20} />
-            </span>
-            <span className="welcome-open-copy">
-              <span className="welcome-open-title">Start from a template</span>
-              <span className="welcome-open-desc">
-                Runnable starters, cloned locally and free to test.
-              </span>
-            </span>
-            <button
-              ref={templatesTriggerRef}
-              type="button"
-              className="btn-line welcome-open-cta"
-              data-testid="welcome-browse-templates"
-              onClick={onBrowseTemplates}
-            >
-              Browse templates
-            </button>
-          </div>
-
-          <a
-            className="welcome-docs-btn"
-            data-testid="welcome-docs"
-            href="https://docs.sapiom.ai/agents/quick-start"
-            target="_blank"
-            rel="noopener noreferrer"
+    <>
+      <div
+        className="modal-backdrop welcome-panel"
+        data-testid="welcome-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={
+          firstRun ? "Welcome to Sapiom Agent Studio" : "Sapiom Agent Studio"
+        }
+      >
+        <div className="welcome-card" ref={cardRef}>
+          <button
+            type="button"
+            className="theme-toggle modal-close welcome-close"
+            data-testid="welcome-close"
+            aria-label="Close"
+            title="Close"
+            onClick={onDismiss}
           >
-            Read documentation <Icon name="ArrowUpRight" size={12} />
-          </a>
+            <Icon name="X" size={14} />
+          </button>
 
-          {/* Where you have already been. Absent on a first run because there is
-              genuinely nothing to list — see lib/recent-workspaces.ts for why
-              this is the session registry and not settings.recentDirs. */}
-          {workspaces.length > 0 && (
-            <div className="welcome-recents-block">
-              <h2 className="welcome-recents-title">Recent workspaces</h2>
-              <ul className="welcome-recents" data-testid="welcome-recents">
-                {shownWorkspaces.map((workspace) => (
-                  <li key={workspace.cwd}>
-                    <button
-                      type="button"
-                      className="welcome-recent"
-                      data-testid={`welcome-recent-${workspace.label}`}
-                      title={workspace.cwd}
-                      disabled={opening !== null}
-                      onClick={() => void openWorkspace(workspace.cwd)}
-                    >
-                      <Icon name="Folder" size={13} />
-                      <span className="welcome-recent-name">{workspace.label}</span>
-                      <span className="welcome-recent-path">
-                        {opening === workspace.cwd ? "Opening…" : workspace.cwd}
-                      </span>
-                      {/* How many agents are in it, and when it was last worked
-                          in. A launch dir that never hosted a session has no
-                          honest timestamp, so it shows none. */}
-                      <span className="welcome-recent-meta">
-                        {workspace.agentCount > 0 &&
-                          `${workspace.agentCount} agent${workspace.agentCount === 1 ? "" : "s"}`}
-                        {workspace.agentCount > 0 && workspace.lastActiveAt && " · "}
-                        {workspace.lastActiveAt &&
-                          relativeTimeLabel(Date.parse(workspace.lastActiveAt))}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {/* The gap this panel used to hide: the rail scans recursively for
-                  sapiom.json and routinely knows dozens of projects, while this
-                  list is scoped to where work happened and capped. Say so,
-                  rather than letting a short list imply a small installation. */}
-              {unlisted > 0 && (
-                <p className="welcome-recents-note" data-testid="welcome-recents-note">
-                  {workflows.length} agent {workflows.length === 1 ? "project" : "projects"} known in
-                  total — the rail lists them all.
-                </p>
-              )}
+          <div className="welcome-body">
+            {/* One greeting, two readings: "Welcome to" is a thing you say once.
+                This card used to fork into two whole layouts — a product pitch for
+                a first run, an Overview list for a return — which meant the
+                returning surface had no explanation of what Studio is and the
+                first-run surface had no way into anything. One anatomy serves
+                both: the recents block below simply has nothing to show on a
+                brand-new install, so it renders nothing. */}
+            <h1 className="welcome-title">
+              {firstRun
+                ? "Welcome to Sapiom Agent Studio"
+                : "Sapiom Agent Studio"}
+            </h1>
+            {/* Three beats, in the order the product earns trust: what it makes of
+                your code, what a run costs and shows, who decides to ship. The
+                mechanics belong to the rows below — repeating them here would
+                spend the one paragraph anybody reads on instructions they are
+                about to be given. */}
+            <p className="welcome-intro">
+              Studio turns the agent workflows in your codebase into a diagram
+              you can run. Local runs are free and offline, with every
+              step&rsquo;s input, output and capability call on screen. Nothing
+              ships until you say so.
+            </p>
+            {error && <div className="welcome-error">{error}</div>}
+
+            {/* Primary path: point Studio at a folder. Opens the three-door add
+                dialog, whose first door is exactly this question — and which is
+                the only surface that can tell an agent project from any folder
+                (GET /api/fs/list carries the marker flag). */}
+            <div className="welcome-open" data-testid="welcome-open-card">
+              <span className="welcome-open-icon" aria-hidden="true">
+                <Icon name="Folder" size={20} />
+              </span>
+              <span className="welcome-open-copy">
+                <span className="welcome-open-title">Open a folder</span>
+                <span className="welcome-open-desc">
+                  Workflows in the folder appear in the rail. Nothing is
+                  uploaded.
+                </span>
+              </span>
+              <button
+                ref={startProjectRef}
+                type="button"
+                className="btn-primary welcome-open-cta"
+                data-testid="welcome-start-project"
+                onClick={() => setModalOpen(true)}
+              >
+                Open folder
+              </button>
             </div>
-          )}
 
-          <span className="welcome-hints-kbd">
-            or press <kbd>⌘K</kbd>
-          </span>
+            {/* Secondary path: the catalog, same row anatomy. */}
+            <div className="welcome-open" data-testid="welcome-templates-card">
+              <span className="welcome-open-icon" aria-hidden="true">
+                <Icon name="LayoutTemplate" size={20} />
+              </span>
+              <span className="welcome-open-copy">
+                <span className="welcome-open-title">
+                  Start from a template
+                </span>
+                <span className="welcome-open-desc">
+                  Runnable starters, cloned locally and free to test.
+                </span>
+              </span>
+              <button
+                ref={templatesTriggerRef}
+                type="button"
+                className="btn-line welcome-open-cta"
+                data-testid="welcome-browse-templates"
+                onClick={onBrowseTemplates}
+              >
+                Browse templates
+              </button>
+            </div>
+
+            <a
+              className="welcome-docs-btn"
+              data-testid="welcome-docs"
+              href="https://docs.sapiom.ai/agents/quick-start"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Read documentation <Icon name="ArrowUpRight" size={12} />
+            </a>
+
+            {/* Where you have already been. Absent on a first run because there is
+                genuinely nothing to list — see lib/recent-workspaces.ts for why
+                this is the session registry and not settings.recentDirs. */}
+            {workspaces.length > 0 && (
+              <div className="welcome-recents-block">
+                <h2 className="welcome-recents-title">Recent workspaces</h2>
+                <ul className="welcome-recents" data-testid="welcome-recents">
+                  {shownWorkspaces.map((workspace) => (
+                    <li key={workspace.cwd}>
+                      <button
+                        type="button"
+                        className="welcome-recent"
+                        data-testid={`welcome-recent-${workspace.label}`}
+                        title={workspace.cwd}
+                        disabled={opening !== null}
+                        onClick={() => void openWorkspace(workspace.cwd)}
+                      >
+                        <Icon name="Folder" size={13} />
+                        <span className="welcome-recent-name">
+                          {workspace.label}
+                        </span>
+                        <span className="welcome-recent-path">
+                          {opening === workspace.cwd
+                            ? "Opening…"
+                            : workspace.cwd}
+                        </span>
+                        {/* How many agents are in it, and when it was last worked
+                            in. A launch dir that never hosted a session has no
+                            honest timestamp, so it shows none. */}
+                        <span className="welcome-recent-meta">
+                          {workspace.agentCount > 0 &&
+                            `${workspace.agentCount} agent${workspace.agentCount === 1 ? "" : "s"}`}
+                          {workspace.agentCount > 0 &&
+                            workspace.lastActiveAt &&
+                            " · "}
+                          {workspace.lastActiveAt &&
+                            relativeTimeLabel(
+                              Date.parse(workspace.lastActiveAt),
+                            )}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {/* The gap this panel used to hide: the rail scans recursively for
+                    sapiom.json and routinely knows dozens of projects, while this
+                    list is scoped to where work happened and capped. Say so,
+                    rather than letting a short list imply a small installation. */}
+                {unlisted > 0 && (
+                  <p
+                    className="welcome-recents-note"
+                    data-testid="welcome-recents-note"
+                  >
+                    {workflows.length} agent{" "}
+                    {workflows.length === 1 ? "project" : "projects"} known in
+                    total — the rail lists them all.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <span className="welcome-hints-kbd">
+              or press <kbd>⌘K</kbd>
+            </span>
+          </div>
         </div>
       </div>
 
@@ -289,6 +355,6 @@ export function WelcomePanel({
           triggerRef={startProjectRef}
         />
       )}
-    </div>
+    </>
   );
 }

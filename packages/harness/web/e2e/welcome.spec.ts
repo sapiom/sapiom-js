@@ -43,7 +43,10 @@ test.describe("first run", () => {
   test("greets, says what Studio is, and offers the two ways in", async ({ page }) => {
     const panel = page.getByTestId("welcome-panel");
     await expect(panel).toBeVisible();
-    await expect(page.locator(".terminal-empty")).toHaveCount(0);
+    // The card floats OVER the shell rather than replacing a pane, so the
+    // terminal's own empty state stays behind it. That used to be asserted
+    // absent, back when Overview was a view that took the slot.
+    await expect(page.locator(".terminal-empty")).toBeVisible();
 
     // "Welcome to" is the one thing that marks a first run.
     await expect(panel).toContainText("Welcome to Sapiom Agent Studio");
