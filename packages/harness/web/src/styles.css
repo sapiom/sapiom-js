@@ -2672,6 +2672,15 @@ input {
   display: block;
 }
 
+/* Overview keeps the hero, but as a BAND: roughly half height and faded out
+   sooner, so it reads as the product's letterhead above a working list rather
+   than a pitch the returning user has to scroll past. */
+.welcome-hero--returning {
+  height: 104px;
+  mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
+}
+
 .welcome-copy {
   display: flex;
   flex-direction: column;
@@ -2773,6 +2782,24 @@ input {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Row-trailing detail: agent count and last-active time. Right-aligned and
+   nowrap so the column reads as a column; the path above it is the flexible
+   element, so this simply follows it. */
+.welcome-recent-meta {
+  flex: 0 0 auto;
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* Why a short list is not a small installation — see WelcomePanel. Quiet: it
+   explains, it does not compete with the rows. */
+.welcome-recents-note {
+  margin: var(--sp1) 0 0;
+  font-size: var(--type-micro);
+  color: var(--text-faint);
 }
 
 /* Bottom-anchored action BAND: full-bleed against the card's own edges
