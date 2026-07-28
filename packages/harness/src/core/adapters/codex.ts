@@ -208,6 +208,11 @@ async function collectRolloutFiles(dir: string, depth = 0): Promise<string[]> {
 export class CodexAdapter implements HarnessAdapter {
   readonly id = "codex" as const;
   readonly eventSource = "transcript-tail" as const;
+  /** `buildConfigArgs` inlines `systemPromptFile`'s contents as
+   *  `developer_instructions`, on both launch and resume — same delivery as
+   *  claude-code's flag, so a rehydration brief rides the generated file here
+   *  too and neither adapter needs a rehydration-specific code path. */
+  readonly systemPromptDelivery = "launch-flag" as const;
   private readonly binary: string;
   private readonly homeDir: string;
 

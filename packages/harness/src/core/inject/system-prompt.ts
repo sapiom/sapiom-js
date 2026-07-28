@@ -17,6 +17,14 @@ export interface GenerateSystemPromptFileOptions {
   generatedRoot?: string;
   /** Defaults to the harness's default profile (DEFAULT_SYSTEM_PROMPT). */
   prompt?: string;
+  /**
+   * Extra text appended after the prompt, separated by a blank line — today
+   * the portable-continue brief (core/rehydration.ts). Kept distinct from
+   * `prompt` so a caller that only wants to *add* context doesn't have to
+   * re-import and re-compose the default profile (and can't accidentally
+   * replace it). Empty/whitespace appendices are ignored.
+   */
+  appendix?: string;
 }
 
 /** Writes `<generated>/<harnessSessionId>/system-prompt.txt`. Returns its
@@ -29,7 +37,9 @@ export async function generateSystemPromptFile(
   const dir = path.join(root, harnessSessionId);
   await fs.mkdir(dir, { recursive: true });
 
+  const base = options.prompt ?? DEFAULT_SYSTEM_PROMPT;
+  const appendix = options.appendix?.trim();
   const filePath = path.join(dir, "system-prompt.txt");
-  await fs.writeFile(filePath, options.prompt ?? DEFAULT_SYSTEM_PROMPT, "utf8");
+  await fs.writeFile(filePath, appendix ? `${base}\n\n${appendix}\n` : base, "utf8");
   return filePath;
 }

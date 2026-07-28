@@ -76,6 +76,7 @@ const createSessionSchema = z.object({
   cwd: z.string().min(1),
   harness: z.enum(SPAWNABLE_HARNESS_KINDS),
   profile: z.string().optional(),
+  rehydrateFrom: z.string().min(1).optional(),
 }) satisfies z.ZodType<CreateSessionRequest>;
 
 const injectInputSchema = z.object({
@@ -96,6 +97,7 @@ const settingsPatchSchema = z.object({
   telemetryOptIn: z.boolean().optional(),
   recentDirs: z.array(z.string()).optional(),
   projectRoot: z.string().optional(),
+  rollingSummary: z.boolean().optional(),
 }) satisfies z.ZodType<Partial<HarnessSettings>>;
 
 const UI_EVENT_NAMES: readonly UiEventName[] = [

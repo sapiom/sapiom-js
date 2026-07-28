@@ -187,7 +187,7 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
  */
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
-  req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile">,
+  req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom">,
 ) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
@@ -398,6 +398,11 @@ export class SessionManager {
       lastActiveAt: this.now(),
       exitCode: null,
       boundWorkflowPath: null,
+      // What the builder actually managed to assemble, not what the caller
+      // asked for: `req.rehydrateFrom` naming a session our event log holds
+      // nothing for yields no brief, and this stays null so nothing downstream
+      // presents an empty-handed fresh session as a continuation.
+      rehydratedFrom: opts.rehydratedFrom ?? null,
       ready: false,
     };
     this.sessions.set(id, session);
