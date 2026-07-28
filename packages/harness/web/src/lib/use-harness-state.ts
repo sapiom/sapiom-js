@@ -41,6 +41,11 @@ const api = createApi();
  */
 const BUSY_WINDOW_MS = 3_000;
 
+/** Optimistic cap on the recent-dirs list this client sends. Cosmetic only —
+ *  the server sanitizes and caps the real list (MAX_RECENT_DIRS in
+ *  cli/settings.ts) and its response replaces this guess. */
+const RECENT_DIRS_UI_CAP = 8;
+
 /** Where a run executed — the server announces it on execution.started.
  *  "local" runs are stubbed (capabilities run against fixtures); "prod" runs
  *  are real cloud executions. */
@@ -211,6 +216,15 @@ export interface HarnessStateHook {
 export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
+  /**
+   * Mirror of `settings` for the one reader that cannot wait for a re-render:
+   * createSession needs the CURRENT recent dirs synchronously, because they are
+   * also the body of the PATCH it sends. Assigned during render, which is safe
+   * precisely because it is a mirror — idempotent, so StrictMode's double render
+   * changes nothing, and never read during render itself.
+   */
+  const settingsRef = useRef<HarnessSettings | null>(null);
+  settingsRef.current = settings;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
@@ -658,17 +672,31 @@ export function useHarnessState(): HarnessStateHook {
     );
     selectSession(session.id);
 
-    let optimisticRecentDirs: string[] = [];
-    setSettings((prev) => {
-      optimisticRecentDirs = [req.cwd, ...(prev?.recentDirs ?? []).filter((dir) => dir !== req.cwd)].slice(0, 8);
-      return prev ? { ...prev, recentDirs: optimisticRecentDirs } : prev;
-    });
+    // Built from the ref BEFORE touching state, because this value is also the
+    // PATCH body below and must exist synchronously.
+    //
+    // It used to be assigned INSIDE the setSettings updater on the line below.
+    // That worked only by accident: React invokes a useState updater eagerly —
+    // synchronously, inside the dispatch — when that hook has no pending update,
+    // as a bail-out optimization. It is NOT a guarantee. With an update already
+    // queued on this hook (a session create landing near the boot settings
+    // fetch, say) the updater runs later instead, and the PATCH ships the
+    // initializer: `[]`. The server MERGES a settings patch, so that is a real
+    // erasure of the persisted list, not a no-op.
+    //
+    // Verified: reintroducing the old form still passes the e2e below, because
+    // the eager path covers the common case. The bug is the dependence on it.
+    const nextRecentDirs = [
+      req.cwd,
+      ...(settingsRef.current?.recentDirs ?? []).filter((dir) => dir !== req.cwd),
+    ].slice(0, RECENT_DIRS_UI_CAP);
+    setSettings((prev) => (prev ? { ...prev, recentDirs: nextRecentDirs } : prev));
     // The server is the source of truth for what actually qualifies as a
     // recent dir (must resolve to a real, existing directory) — replace the
     // optimistic guess with its sanitized response so invalid input (e.g.
     // stray free text typed into the directory field) never lingers in the UI.
     try {
-      const updated = await api.updateSettings({ recentDirs: optimisticRecentDirs });
+      const updated = await api.updateSettings({ recentDirs: nextRecentDirs });
       setSettings((prev) => (prev ? { ...prev, recentDirs: updated.recentDirs } : prev));
     } catch {
       // Non-fatal — session creation itself already succeeded.
