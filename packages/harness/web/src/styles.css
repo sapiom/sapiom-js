@@ -671,6 +671,44 @@ input {
 
 /* Section header bars inside panels (Workspace, Skills) — same shared
    height + inset as every other header bar. */
+/* A rail row that navigates somewhere rather than selecting a tree node.
+   Templates is the only one today; it sits above the tree because the catalog
+   is how an empty rail gets its first workflow. */
+.rail-nav-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: calc(100% - var(--sp3));
+  margin: 0 var(--sp2) var(--sp1);
+  padding: var(--sp2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  font-size: var(--type-ui);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.rail-nav-row:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.rail-nav-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.rail-nav-row.is-selected {
+  background: var(--surface-selected);
+  color: var(--text);
+  font-weight: 550;
+}
+
 .rail-header {
   position: relative;
   flex: 0 0 auto;
@@ -2621,7 +2659,7 @@ input {
   flex-direction: column;
   align-items: stretch;
   gap: 12px;
-  width: 520px;
+  width: 560px;
   max-width: 100%;
   padding: 28px;
   overflow: hidden;
@@ -2681,14 +2719,13 @@ input {
   -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
 }
 
-.welcome-copy {
+/* The card's content column. Padding stays on .welcome-card so the hero's
+   negative margins keep bleeding to its edges. */
+.welcome-body {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  text-align: center;
+  gap: var(--sp3);
 }
-
 
 .welcome-title {
   margin: 0;
@@ -2709,20 +2746,6 @@ input {
    The first-run card is a centered hero. This one is a working surface — a list
    you scan and click — so it left-aligns and grows with the recents rather than
    holding hero proportions with no hero in it. */
-.welcome-card--returning {
-  width: 560px;
-}
-
-.welcome-copy--returning {
-  align-items: stretch;
-  text-align: left;
-  gap: var(--sp2);
-}
-
-.welcome-title--returning {
-  font-size: var(--type-title);
-}
-
 .welcome-recents-title {
   margin: var(--sp2) 0 0;
   font-size: var(--type-micro);
@@ -2806,84 +2829,101 @@ input {
    (negative inline/bottom margins swallow the card padding), hairline on
    top — the same dialog-footer anatomy as .modal-actions. Docs link far
    left, CTAs build rightward, primary at the right edge. */
-.welcome-footer {
+/* An option row: icon, copy, action. Two of them carry the whole first-run
+   decision — point Studio at a folder, or start from the catalog — and they are
+   bordered boxes rather than bare buttons so each can afford the sentence that
+   says what picking it does. */
+.welcome-open {
   display: flex;
   align-items: center;
-  gap: var(--sp2);
-  align-self: stretch;
-  margin: var(--sp2) -28px -28px;
-  padding: var(--sp3) 28px;
-  border-top: 1px solid var(--border);
+  gap: var(--sp3);
+  padding: var(--sp3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 
-.welcome-docs {
+.welcome-open-icon {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp1);
-  margin-right: auto;
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-  text-decoration: none;
-  border-radius: var(--radius-sm);
-  transition: color var(--transition-fast);
-}
-
-.welcome-docs:hover {
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
   color: var(--text-dim);
-  text-decoration: underline;
+  background: var(--surface-inset);
+  border-radius: var(--radius-sm);
 }
 
-.welcome-docs:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+.welcome-open-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 
-/* The shared button recipes at their small default scale read as toolbar
-   controls — these are the panel's two primary calls to action, so give
-   them CTA-scale padding without changing the recipe itself. */
-.welcome-action {
-  padding: 0 var(--sp4);
+.welcome-open-title {
   font-size: var(--type-ui);
-  /* Four footer items now share the band — a squeezed label must trigger
-     the container query's stack, never wrap inside its own button. */
-  white-space: nowrap;
+  font-weight: 550;
+  color: var(--text);
 }
 
+.welcome-open-desc {
+  font-size: var(--type-meta);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
 
+.welcome-open-cta {
+  flex: 0 0 auto;
+}
+
+/* Documentation as a full-width quiet row: the third thing you might do, and
+   the only one that leaves the app. */
+.welcome-docs-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp1);
+  padding: var(--sp2);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  text-decoration: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.welcome-docs-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.welcome-docs-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Where you have already been. Renders only when there is something to list,
+   so a first run simply doesn't have it. */
+.welcome-recents-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  padding-top: var(--sp2);
+  border-top: 1px solid var(--border);
+}
 
 .welcome-error {
   font-size: var(--type-label);
   color: var(--red);
 }
 
-.welcome-hints {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--sp2);
-  margin-top: 2px;
-}
-
-.welcome-hint-chips {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: var(--sp1) var(--sp3);
-}
-
-/* Flat status-tag treatment (no border, no wash): accent icon + word. */
-.welcome-hint-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--accent);
-  font-size: var(--type-meta);
-  font-weight: 510;
-  white-space: nowrap;
-}
-
-/* Its own centered line under the pill row. */
+/* Its own line under the content, centered. */
 .welcome-hints-kbd {
   display: block;
   text-align: center;
@@ -6473,174 +6513,463 @@ input {
   overflow-wrap: anywhere;
 }
 
-/* ── Templates journey v0: the "Start from a template" dialog ─────────────
-   Anatomy mirrors the add/new-session dialog family (full-bleed header /
-   body / footer separated by hairlines) at a two-pane browse width: the
-   curated list on the left, the picked template's real manifest on the
-   right, the destination + confirm in the footer. Selection, hover, and
-   focus recipes are the app's standard ones (accent fill, surface-hover,
-   --focus outline). */
-.modal-templates {
-  --modal-pad-x: var(--pane-pad-x);
-  width: 720px;
-  max-width: calc(100vw - var(--sp6));
-  max-height: min(600px, calc(100vh - var(--sp7)));
+/* ── Shared primitives the template browser introduced ───────────────────── */
+
+/* Accessible label for a control whose visible content is elsewhere (the card
+   hitbox). Clip-path over the legacy 1px-square trick: it leaves no scrollable
+   overflow for a focused element to scroll a pane to. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
-.modal-templates .modal-header {
+/* Outlined button: the same metrics as .btn-primary with a hairline instead of
+   a fill, for the secondary of two adjacent actions. */
+.btn-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp1);
+  padding: var(--sp2) var(--sp3);
+  font-size: var(--type-ui);
+  font-weight: 500;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.btn-line:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.btn-line:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.btn-line:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A tag. Freeform registry `tags` on a card, and the offline marker on a
+   bundled starter. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--sp2);
+  font-size: var(--type-micro);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  background: var(--surface-inset);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+/* The count variant: tabular so a facet column's numbers line up. */
+.pill--count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+/* ── Templates: a DESTINATION, not a dialog ───────────────────────────────
+   Browsing is a place you go, spend time in, and come back from — see
+   TemplatesPanel for why this stopped being a modal. It stands in for the
+   workbench (`.app.is-browsing` hides the panes), brings its own header with
+   the way back, and centres on a reading measure so a wide window does not
+   stretch cards to the full monitor. */
+.app.is-browsing > .center-pane,
+.app.is-browsing > .right-pane,
+.app.is-browsing > .pane-resize-handle {
+  display: none;
+}
+
+.templates-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Same height as the session bar it stands in for, so the shell's top edge
+   does not shift when you enter and leave. */
+.templates-bar {
   display: flex;
   align-items: center;
+  gap: var(--sp2);
   flex: 0 0 auto;
   min-height: var(--pane-header-h);
-  padding: 0 var(--modal-pad-x);
-  margin-bottom: 0;
+  padding: 0 var(--pane-pad-x);
+  border-bottom: 1px solid var(--border);
+}
+
+.templates-bar-title {
+  font-size: var(--type-ui);
+  font-weight: 550;
+  color: var(--text);
+}
+
+.templates-bar-use {
+  margin-left: auto;
+}
+
+.templates-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The reading measure. Wide enough for the filter column plus two cards. */
+.templates-measure {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--sp6) var(--sp5) var(--sp7);
+}
+
+.templates-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  margin-bottom: var(--sp5);
+}
+
+.templates-hero-title {
+  margin: 0;
+  font-size: var(--type-h2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.templates-hero-copy {
+  margin: 0;
+  max-width: 60ch;
+  font-size: var(--type-ui);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+/* Why the shelf is short, in the user's terms. Silence here is what made a
+   pinned two-entry list read as the whole catalog. */
+.templates-degraded {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp2);
+  margin-bottom: var(--sp4);
+  padding: var(--sp3);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+  color: var(--text-dim);
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .templates-layout {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: 216px minmax(0, 1fr);
+  gap: var(--sp5);
+  align-items: start;
+}
+
+.template-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp4);
+  position: sticky;
+  top: 0;
+}
+
+.template-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding: var(--sp2) var(--sp3);
+  color: var(--text-faint);
+  background: var(--surface-base);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.template-search:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+.template-search-input {
   flex: 1;
-  min-height: 0;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--type-ui);
+  color: var(--text);
 }
 
-/* The sidebar owns the grid column now that a search field sits above the
-   scrolling list — the list alone can't both scroll and pin the input. */
-.templates-sidebar {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid var(--ui-line);
+.template-search-input:focus {
+  outline: none;
 }
 
-.templates-search {
-  margin: var(--sp2) var(--sp2) 0;
-  flex: 0 0 auto;
-}
-
-.templates-list {
+.facet {
   display: flex;
   flex-direction: column;
   gap: var(--sp1);
-  padding: var(--sp2);
-  overflow-y: auto;
 }
 
-.templates-list-section {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp1);
-  padding: var(--sp2) var(--sp2) 0;
+.facet-title {
+  padding: 0 var(--sp2);
   font-size: var(--type-micro);
   font-weight: 700;
   letter-spacing: 0.01em;
   color: var(--text-faint);
 }
 
-/* Per-category count, mirroring the dashboard's Template library sidebar. */
-.templates-list-count {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--text-faint);
-}
-
-/* Loading / no-results / degraded-catalog copy. The degraded note is deliberately
-   not styled as an error: a signed-out gallery is a state, not a fault. */
-.templates-list-empty,
-.templates-list-note {
-  padding: var(--sp2);
-  font-size: var(--type-micro);
-  line-height: 1.5;
-  color: var(--text-dim);
-}
-
-.templates-list-note {
-  border: 1px solid var(--ui-line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-hover);
-}
-
-.template-row {
+.facet-rows {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: var(--sp1);
+  gap: 1px;
+}
+
+.facet-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
   padding: var(--sp2);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   text-align: left;
+  color: var(--text-dim);
+  cursor: pointer;
   transition: background-color var(--transition-fast);
 }
 
-.template-row:hover {
+.facet-row:hover {
   background: var(--surface-hover);
 }
 
-.template-row:active {
-  background: var(--active-shade);
-}
-
-.template-row:focus-visible {
+.facet-row:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
 }
 
-/* The list's one selection mark — same accent fill as every picker row. */
-.template-row.is-selected {
-  background: var(--accent);
+.facet-row.is-active {
+  background: var(--surface-selected);
+  color: var(--text);
+  font-weight: 550;
 }
 
-.template-row-name {
+.facet-row-label {
+  flex: 1;
+  min-width: 0;
   font-size: var(--type-ui);
-  font-weight: 550;
+}
+
+.templates-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp5);
+  min-width: 0;
+}
+
+.templates-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp3);
+}
+
+/* The card is one hitbox plus the (i) — see TemplateGallery for why the hitbox
+   is an overlay under the content rather than a wrapping button. */
+.template-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding: var(--sp4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.template-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
+}
+
+.template-card:focus-within {
+  border-color: var(--border-strong);
+}
+
+.template-card-hitbox {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  padding: 0;
+  border: none;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.template-card-hitbox:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* Content sits above the hitbox so the (i) stays clickable; everything else is
+   pointer-transparent so the whole face still opens the template. */
+.template-card-header,
+.template-card-desc,
+.template-card-tags {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.template-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp2);
+}
+
+.template-card-name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--type-ui);
+  font-weight: 600;
   color: var(--text);
 }
 
-.template-row-desc {
-  font-size: var(--type-meta);
+.template-card-info {
+  pointer-events: auto;
+  flex: 0 0 auto;
   color: var(--text-faint);
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
-/* Step count + complexity band on the card: the two facts that change which
-   template you pick. The band may be an em dash when the catalog response
-   carried none — see formatComplexity. */
-.template-row-meta {
+.template-card-desc {
+  margin: 0;
+  font-size: var(--type-meta);
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.template-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp1);
+  margin-top: auto;
+  padding-top: var(--sp1);
+}
+
+/* The card's spec sheet, behind the (i). */
+.template-facts {
+  width: 240px;
+  padding: var(--sp3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp3);
+}
+
+.template-fact-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.template-fact {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--sp1);
-  font-size: var(--type-micro);
+  gap: var(--sp2);
+  font-size: var(--type-meta);
+}
+
+.template-fact dt {
   color: var(--text-faint);
 }
 
-/* The band reads as a WORD plus a score, so it drops the mono face the dollar
-   figure used — mono on "Moderate" reads as a code token. Tabular figures stay:
-   the `n/5` sits in a column down the right edge of the list and should not
-   shimmy between rows. Right-aligned so a one-word band and a two-word one end
-   at the same place. */
-.template-row-complexity {
+.template-fact dd {
+  margin: 0;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
 
-.template-row.is-selected .template-row-name,
-.template-row.is-selected .template-row-desc,
-.template-row.is-selected .template-row-meta {
-  color: var(--accent-foreground);
+.template-fact-actions {
+  display: flex;
+  gap: var(--sp2);
 }
 
-/* A guarded transition's condition, shown beside the elbow target so a branch
-   reads the same here as it does on the canvas. */
+.template-fact-actions > * {
+  flex: 1;
+}
+
+/* Bundled starters keep their own block: a different kind of thing (offline,
+   no account) and the floor when the gallery is unreachable. */
+.templates-starters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding-top: var(--sp4);
+  border-top: 1px solid var(--border);
+}
+
+.templates-starters-copy {
+  margin: 0 0 var(--sp2);
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.templates-empty {
+  padding: var(--sp7) var(--sp5);
+}
+
+/* Narrow: the filter column lies on its side above the grid, facet lists
+   becoming horizontal scroll strips. */
+@media (max-width: 860px) {
+  .templates-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp4);
+  }
+
+  .template-filters {
+    position: static;
+  }
+
+  .facet-rows {
+    flex-direction: row;
+    gap: var(--sp1);
+    overflow-x: auto;
+  }
+
+  .facet-row {
+    width: auto;
+    flex: 0 0 auto;
+  }
+}
+
 .canvas-step-transition-label {
   font-family: var(--font-mono);
   font-size: var(--type-micro);
@@ -6941,70 +7270,7 @@ input {
   line-height: 1.5;
 }
 
-/* ── Footer: destination + confirm ── */
-.templates-actions {
-  flex: 0 0 auto;
-  align-items: center;
-  margin-top: 0;
-  padding: var(--sp3) var(--modal-pad-x);
-}
-
-.templates-dest {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp1);
-}
-
-.templates-dest .modal-input {
-  font-family: var(--font-mono);
-  font-size: var(--type-label);
-}
-
-.templates-dest-hint,
-.templates-dest-error {
-  font-size: var(--type-micro);
-  line-height: 1.4;
-}
-
-.templates-dest-hint {
-  color: var(--text-faint);
-}
-
-.templates-dest-error {
-  margin-top: 0;
-}
-
-/* Mobile shell: one column — the list becomes a short scroll band above the
-   preview, and the footer wraps so the destination keeps a full line. */
-@media (max-width: 768px) {
-  .modal-templates {
-    max-height: calc(100dvh - var(--sp6));
-  }
-
-  .templates-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .templates-list {
-    max-height: 176px;
-    border-right: none;
-    border-bottom: 1px solid var(--ui-line);
-  }
-
-  .templates-actions {
-    flex-wrap: wrap;
-  }
-
-  .templates-dest {
-    flex: 1 1 100%;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .template-row,
   .template-example-summary {
     transition: none;
   }

@@ -27,7 +27,7 @@ import type { HarnessEntry, HarnessKind } from "@shared/types";
  * The fix is to branch on INTENT before asking for a path:
  *
  *   I have a project      → which folder? → detection → the ONE right action
- *   Start from a template → hands off to TemplatesDialog (which already asks
+ *   Start from a template → hands off to the templates destination (which asks
  *                           "which template?" and owns the live catalog)
  *   Start from an idea    → what should it do? → derived name → scaffold
  *
@@ -64,7 +64,7 @@ interface AddWorkspaceDialogProps {
   /** Start a session at `cwd` and hand the agent a scaffold prompt carrying
    *  `idea` (door 1's `plain`/`new` outcomes and door 3). */
   onScaffold: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
-  /** Door 2 — hands off to TemplatesDialog rather than duplicating the catalog. */
+  /** Door 2 — hands off to the templates destination rather than duplicating the catalog. */
   onBrowseTemplates: () => void;
   /** Adapter registry — supplies the per-agent MCP setup prompts offered when
    *  detection says the folder has no Sapiom wiring. */

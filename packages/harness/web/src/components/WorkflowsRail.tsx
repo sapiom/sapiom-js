@@ -7,13 +7,10 @@ import type {
   HarnessSession,
   SessionResumeMode,
   SessionSummary,
-  TemplateDetailView,
-  TemplateListResponse,
   WorkflowInfo,
 } from "@shared/types";
 
 import type { AuthStartResponse, FsListResponse } from "../lib/api";
-import type { StudioTemplate } from "../lib/templates";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
@@ -22,7 +19,6 @@ import { Icon } from "./Icon";
 import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
-import { TemplatesDialog } from "./TemplatesDialog";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
 import { HARNESS_LABELS, historyRowMeta } from "../lib/history-meta";
@@ -75,10 +71,10 @@ interface WorkflowsRailProps {
   /** Bare-scaffold folder affordance: ask the folder's live session to
    *  scaffold its first agent (sapiom.json) in place. */
   onScaffoldInSession: (sessionId: string) => void;
-  onUseTemplate: (dir: string, template: StudioTemplate) => Promise<void>;
-  /** Forwarded to TemplatesDialog — the live catalog fetchers. */
-  listTemplates: () => Promise<TemplateListResponse>;
-  getTemplate: (id: string) => Promise<TemplateDetailView>;
+  /** Navigate to the templates destination (App owns the center view). */
+  onBrowseTemplates: () => void;
+  /** True while that destination is the visible view, so the nav row can say so. */
+  templatesActive: boolean;
   onScanWorkflows: (root: string) => Promise<number>;
   /** Opens a project in the user's editor — URL scheme, cwd-scoped. */
   onOpenInEditor: (path: string) => void;
@@ -317,9 +313,8 @@ export function WorkflowsRail({
   onScaffoldInSession,
   projectRoot,
   onSaveProjectRoot,
-  onUseTemplate,
-  listTemplates,
-  getTemplate,
+  onBrowseTemplates,
+  templatesActive,
   onScanWorkflows,
   onOpenInEditor,
   onToast,
@@ -335,7 +330,6 @@ export function WorkflowsRail({
   onSetSettingsOpen,
 }: WorkflowsRailProps): JSX.Element {
   const [addDialogMode, setAddDialogMode] = useState<"session" | "workspace" | null>(null);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -425,6 +419,22 @@ export function WorkflowsRail({
           <span className="palette-trigger-hint">{SHORTCUT_HINT}</span>
         </button>
       </div>
+
+      {/* Templates is a destination the rail navigates to, so it gets a nav row
+          of its own above the tree rather than hiding behind the "+" — the
+          catalog is how someone with an empty rail gets their first workflow,
+          and a surface reachable only from inside a dialog was the reason it
+          went unfound. */}
+      <button
+        type="button"
+        className={"rail-nav-row" + (templatesActive ? " is-selected" : "")}
+        data-testid="rail-templates"
+        aria-current={templatesActive ? "page" : undefined}
+        onClick={onBrowseTemplates}
+      >
+        <Icon name="LayoutTemplate" size={14} />
+        <span>Templates</span>
+      </button>
 
       <div className="rail-header">
         Workspaces
@@ -661,7 +671,7 @@ export function WorkflowsRail({
           listHarnesses={listHarnesses}
           onBrowseTemplates={() => {
             setAddDialogMode(null);
-            setTemplatesOpen(true);
+            onBrowseTemplates();
           }}
           triggerRef={connectTriggerRef}
         />
@@ -678,16 +688,6 @@ export function WorkflowsRail({
         />
       )}
 
-      {templatesOpen && (
-        <TemplatesDialog
-          projectRoot={projectRoot}
-          onClose={() => setTemplatesOpen(false)}
-          onUse={onUseTemplate}
-          listTemplates={listTemplates}
-          getTemplate={getTemplate}
-          triggerRef={connectTriggerRef}
-        />
-      )}
     </aside>
   );
 }

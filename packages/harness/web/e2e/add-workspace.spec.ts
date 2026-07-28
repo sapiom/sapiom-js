@@ -43,26 +43,29 @@ test.describe("the resting state", () => {
     await expect(page.getByTestId("aw-doors")).toBeVisible();
   });
 
-  test("the template door hands straight off to the templates dialog", async ({ page }) => {
+  test("the template door hands straight off to the templates browser", async ({ page }) => {
     await page.getByTestId("aw-door-template").click();
-    // No intermediate step — the door IS the gallery.
-    await expect(page.getByTestId("template-dest-input")).toBeVisible();
+    // No intermediate step — the door IS the browser, which is a destination
+    // now rather than a second dialog stacked on this one.
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
   });
 });
 
 test.describe("entry points", () => {
   // Both "add a workspace" entries must reach the SAME dialog. The welcome
-  // panel's CTA says "New workspace" and used to open the one-question SESSION
-  // modal instead — the most prominent button on a first-run screen delivering
-  // the wrong thing.
-  test("the welcome panel's New workspace opens the three doors, not the session modal", async ({
+  // panel's primary CTA — "Open folder" since the panel adopted the option-row
+  // anatomy, "New workspace" before it — once opened the one-question SESSION
+  // modal instead, which is the most prominent button on a first-run screen
+  // delivering the wrong thing. The label is allowed to change; what it opens
+  // is not.
+  test("the welcome panel's primary CTA opens the three doors, not the session modal", async ({
     page,
   }) => {
     await page.goto("/?mockState=fresh");
     const welcome = page.getByTestId("welcome-panel");
     await expect(welcome).toBeVisible();
 
-    await welcome.getByRole("button", { name: "New workspace" }).click();
+    await welcome.getByTestId("welcome-start-project").click();
 
     await expect(page.locator(".modal-add-workspace")).toBeVisible();
     await expect(page.getByTestId("aw-doors")).toBeVisible();
