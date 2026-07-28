@@ -9,6 +9,7 @@
       "tags": ["approval", "saga", "pause-resume", "durable"],
       "category": "reliability-governance",
       "cadence": "on-demand",
+      "complexity": "simple",
       "sourcePath": "examples/approval-chain",
       "capabilities": ["email.send", "database.create"],
       "steps": [
@@ -70,6 +71,7 @@
       "tags": ["outreach", "sales", "drip", "personalization"],
       "category": "revenue-marketing",
       "cadence": "on-demand",
+      "complexity": "involved",
       "sourcePath": "examples/cold-outreach-engine",
       "capabilities": [
         "email.domain.search",
@@ -145,6 +147,7 @@
       "tags": ["content", "marketing", "media", "scheduled", "pipeline"],
       "category": "revenue-marketing",
       "cadence": "scheduled",
+      "complexity": "advanced",
       "sourcePath": "examples/content-repurposing-pipeline",
       "capabilities": [
         "models.run",
@@ -204,6 +207,7 @@
       "tags": ["dependencies", "coding-agent", "scheduled", "ci"],
       "category": "product-engineering",
       "cadence": "scheduled",
+      "complexity": "advanced",
       "sourcePath": "examples/dependency-upgrade",
       "capabilities": [
         "models.coding",
@@ -270,6 +274,7 @@
       "tags": ["durable", "backfill", "batch", "cron"],
       "category": "data-knowledge",
       "cadence": "scheduled",
+      "complexity": "simple",
       "sourcePath": "examples/durable-backfill",
       "capabilities": [
         "database.get",
@@ -309,6 +314,7 @@
       "tags": ["errors", "triage", "digest", "dedupe", "scheduled", "logs"],
       "category": "reliability-governance",
       "cadence": "scheduled",
+      "complexity": "moderate",
       "sourcePath": "examples/error-triage-digest",
       "capabilities": [
         "models.run",
@@ -353,6 +359,7 @@
       "tags": ["evals", "quality-gate", "llm-judge", "composition"],
       "category": "product-engineering",
       "cadence": "on-demand",
+      "complexity": "moderate",
       "sourcePath": "examples/eval-gate",
       "capabilities": ["models.run"],
       "steps": [
@@ -390,6 +397,7 @@
       "tags": ["starter", "minimal"],
       "category": "starter",
       "cadence": "on-demand",
+      "complexity": "minimal",
       "sourcePath": "examples/hello-agent",
       "capabilities": [],
       "steps": [
@@ -408,6 +416,7 @@
       "tags": ["approval", "human-in-the-loop", "hitl", "fallback"],
       "category": "reliability-governance",
       "cadence": "on-demand",
+      "complexity": "advanced",
       "sourcePath": "examples/human-in-the-loop",
       "capabilities": ["models.run", "email.send"],
       "steps": [
@@ -481,6 +490,7 @@
       "tags": ["crm", "sales", "transcript", "pause-resume"],
       "category": "revenue-marketing",
       "cadence": "on-demand",
+      "complexity": "moderate",
       "sourcePath": "examples/meeting-notes-crm",
       "capabilities": [
         "models.run",
@@ -525,6 +535,7 @@
       "tags": ["news", "summarize", "images", "publish"],
       "category": "revenue-marketing",
       "cadence": "on-demand",
+      "complexity": "involved",
       "sourcePath": "examples/news-roundup",
       "capabilities": [
         "web.search",
@@ -573,6 +584,7 @@
       "tags": ["newsletter", "scheduled", "llm", "email"],
       "category": "revenue-marketing",
       "cadence": "scheduled",
+      "complexity": "involved",
       "sourcePath": "examples/newsletter-autopilot",
       "capabilities": ["web.search", "models.run", "contentGeneration.images"],
       "steps": [
@@ -619,6 +631,7 @@
       "tags": ["database", "sql", "endpoint", "llm", "natural-language"],
       "category": "data-knowledge",
       "cadence": "on-event",
+      "complexity": "involved",
       "sourcePath": "examples/nl-db-query-endpoint",
       "capabilities": [
         "database.get",
@@ -687,6 +700,7 @@
       "tags": ["marketing", "generative", "media", "scheduled"],
       "category": "revenue-marketing",
       "cadence": "scheduled",
+      "complexity": "involved",
       "sourcePath": "examples/personalized-media-at-scale",
       "capabilities": [
         "database.get",
@@ -739,6 +753,7 @@
       "tags": ["coding-agent", "review", "pause-resume", "webhook"],
       "category": "product-engineering",
       "cadence": "on-webhook",
+      "complexity": "advanced",
       "sourcePath": "examples/pr-review-bot",
       "capabilities": [
         "models.coding",
@@ -802,6 +817,7 @@
       "tags": ["sandbox", "self-healing", "cron", "keep-alive"],
       "category": "reliability-governance",
       "cadence": "scheduled",
+      "complexity": "simple",
       "sourcePath": "examples/preview-keep-alive",
       "capabilities": [
         "sandboxes.deployPreview",
@@ -850,6 +866,7 @@
       "tags": ["sales", "pdf", "approval", "human-in-the-loop", "quote"],
       "category": "revenue-marketing",
       "cadence": "on-demand",
+      "complexity": "involved",
       "sourcePath": "examples/proposal-generator",
       "capabilities": [
         "models.run",
@@ -908,6 +925,7 @@
       "tags": ["research", "coding-agent", "sandbox", "publish"],
       "category": "data-knowledge",
       "cadence": "on-demand",
+      "complexity": "advanced",
       "sourcePath": "examples/research-to-microsite",
       "capabilities": [
         "web.search",
@@ -987,6 +1005,7 @@
       "tags": ["generative", "video", "pipeline", "media"],
       "category": "revenue-marketing",
       "cadence": "on-demand",
+      "complexity": "advanced",
       "sourcePath": "examples/scene-to-video",
       "capabilities": [
         "models.run",
@@ -1043,6 +1062,7 @@
       "tags": ["compliance", "scheduled", "human-in-the-loop", "attestation"],
       "category": "finance-legal-people",
       "cadence": "scheduled",
+      "complexity": "involved",
       "sourcePath": "examples/scheduled-compliance-audit",
       "capabilities": [
         "web.scrape",
@@ -1100,6 +1120,7 @@
       "tags": ["scheduled", "database", "analytics", "report"],
       "category": "data-knowledge",
       "cadence": "scheduled",
+      "complexity": "involved",
       "sourcePath": "examples/scheduled-db-insight-report",
       "capabilities": [
         "database.get",
@@ -1149,6 +1170,7 @@
       "tags": ["research", "search", "scheduled", "llm"],
       "category": "data-knowledge",
       "cadence": "scheduled",
+      "complexity": "moderate",
       "sourcePath": "examples/scheduled-research-brief",
       "capabilities": ["web.search", "models.run"],
       "steps": [
@@ -1188,6 +1210,7 @@
       "tags": ["integration", "starter", "slack"],
       "category": "starter",
       "cadence": "on-demand",
+      "complexity": "minimal",
       "sourcePath": "examples/slack-notifier",
       "capabilities": ["vault"],
       "steps": [
@@ -1231,6 +1254,7 @@
       "tags": ["orchestration", "agents-managing-agents", "meta-workflow"],
       "category": "reliability-governance",
       "cadence": "scheduled",
+      "complexity": "involved",
       "sourcePath": "examples/the-brain",
       "capabilities": [
         "models.run",
@@ -1274,6 +1298,7 @@
       "tags": ["durable", "pause-resume", "webhook", "async"],
       "category": "product-engineering",
       "cadence": "on-demand",
+      "complexity": "simple",
       "sourcePath": "examples/wait-for-webhook",
       "capabilities": ["models.run"],
       "steps": [
@@ -1311,6 +1336,7 @@
       "tags": ["research", "search"],
       "category": "data-knowledge",
       "cadence": "on-demand",
+      "complexity": "simple",
       "sourcePath": "examples/web-research-digest",
       "capabilities": ["web.search"],
       "steps": [

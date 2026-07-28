@@ -28,6 +28,11 @@
           "enum": ["starter", "product-engineering", "reliability-governance", "revenue-marketing", "customer-experience", "data-knowledge", "finance-legal-people"],
           "description": "Primary gallery category (the source-of-truth taxonomy). Exactly one per template; the frontend owns the display label, icon, and section order keyed off this id. The axis is OUTCOME — \"what am I trying to produce?\" — not mechanism: `starter` aside, a template belongs to the business job it does, never to the primitive it demonstrates. Mechanism words (durable, pause-resume, hitl, evals, media, orchestration) stay in freeform `tags`, which drive secondary browse/search. Optional for now — every template should carry one, and the examples CI check flags any invalid value."
         },
+        "complexity": {
+          "type": "string",
+          "enum": ["minimal", "simple", "moderate", "involved", "advanced"],
+          "description": "How much VARIATION AND JUDGMENT is in this template's output — authored, not derived from the graph. The axis is not graph size: a deterministic saga with a wide fan-out is `simple` (its answer is always approve/reject), while two chained model steps are not (each one's output is the next one's input, so drift compounds). Count the points where something non-deterministic is produced — a model call, a generated image or video, a capability that synthesizes prose for you — then nudge up one band, never more, when the scaffolding around them is heavy or their output drives something irreversible. See AUTHORING.md §3 for the rubric. Optional for now — every template should carry one, and the examples CI check nudges any that don't. The check also validates the enum and warns when the authored band sits 2+ bands from the score derived from `steps[].kind` / `capabilities`, which means either the label or the declared shape is wrong."
+        },
         "cadence": {
           "type": "string",
           "enum": ["on-demand", "scheduled", "on-event", "on-webhook"],

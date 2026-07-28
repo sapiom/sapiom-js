@@ -9,7 +9,7 @@ The path is five steps:
 
 1. **[Develop](#1-develop)** — write the agent and its manifest in a new directory.
 2. **[Build & test](#2-build--test)** — compile it, trace a run for free, and validate the files.
-3. **[Categorize](#3-categorize)** — set its category, cadence, and step kinds.
+3. **[Categorize](#3-categorize)** — set its category, cadence, complexity, and step kinds.
 4. **[Write the copy](#4-write-the-copy)** — the words a user reads. This is most of the work.
 5. **[Submit](#5-submit)** — open a PR; once merged, Sapiom picks it up automatically.
 
@@ -56,9 +56,10 @@ authors don't need this — the published `@sapiom/*` versions are enough.
    template's `README.md` shows it.
 3. **Validate the registry and your manifest.** Run `pnpm examples:check` from the repo root.
    It checks that `registry.json` matches the schema (including a valid `category`, `cadence`,
-   and step `kind`), is sorted by `id`, that every `sourcePath` points at a real directory with
-   a `template.json`, that any `checkpoint` is a single genuine human gate, and that **each
-   `template.json` matches `template.schema.json`**. The manifest schema is
+   `complexity`, and step `kind`), is sorted by `id`, that every `sourcePath` points at a real
+   directory with a `template.json`, that any `checkpoint` is a single genuine human gate, that
+   your `complexity` doesn't sit 2+ bands from the one derived from your declared shape, and
+   that **each `template.json` matches `template.schema.json`**. The manifest schema is
    `additionalProperties: false`, so a mistyped field name fails here rather than being
    silently dropped by the backend parser. Run `pnpm examples:sort` first to put your entry in
    order.
@@ -71,8 +72,9 @@ authors don't need this — the published `@sapiom/*` versions are enough.
 
 ## 3. Categorize
 
-Set three things in your `registry.json` entry: one `category`, one `cadence`, and a `kind` on
-every step. They drive how the gallery groups, filters, and describes your template.
+Set four things in your `registry.json` entry: one `category`, one `cadence`, one `complexity`,
+and a `kind` on every step. They drive how the gallery groups, filters, and describes your
+template.
 
 ### `category` — the outcome, not the mechanism
 
@@ -110,6 +112,47 @@ chosen by the app; you only set the id.)
 This describes the **entry only**, not what happens mid-run. `wait-for-webhook` is `on-demand`:
 you start it, and it pauses for a callback partway through. `pr-review-bot` is `on-webhook`:
 the PR event itself is what starts it.
+
+### `complexity` — how much judgment is in the output
+
+**The axis is variance and judgment, not graph size.** A deterministic saga with a wide
+fan-out is `simple` — `approval-chain` declares seven steps, two durable pauses, a reminder
+loop and a compensation branch, but every branch is a state check and the answer is always
+approve or reject. Two chained model steps are not simple, however short the graph: each one's
+output is the next one's input, so drift compounds and there is no single place to inspect the
+result. Steps, capabilities and fan-out are a **tiebreak**, never the reason for a band.
+
+To pick a band, count the template's **judgment points** — the places where something
+non-deterministic is produced:
+
+- a step with `kind: "llm"` (a model call — `models.run`, `models.coding`),
+- a generated image or video (`content.generation.*`),
+- a capability that synthesizes prose for you, e.g. `web.search`'s `answer` field. It counts
+  even with no `llm` step in the graph, because the user still reads model-written output.
+
+| `complexity` | Use when |
+|---|---|
+| `minimal` | **No judgment points.** Re-run it with the same input and you get the same output. A greeting, a Slack post, a health check. |
+| `simple` | **One judgment point**, and you can read the output and tell at a glance whether it's right. Also: any fully deterministic template whose scaffolding is substantial — durable checkpoints, a compensation branch, several capabilities. |
+| `moderate` | **Two judgment points**, or one whose output then drives structured work — a branch, a database write, a rendered artifact — so a bad generation has a consequence past the text itself. |
+| `involved` | **Three judgment points**, or one to two whose output drives something **irreversible or outward-facing**: mail to a real prospect, SQL against your database, a deployed endpoint, a filed attestation. Checking it means checking each stage. |
+| `advanced` | **Chained judgment** — a model consuming another model's output, or a coding agent whose artifact is then built and deployed. Error compounds across stages. Three or more chained generative stages land here regardless of graph size. |
+
+Then apply the nudge, **at most one band, and only upward**: raise it if the deterministic
+scaffolding around those judgment points is heavy (many distinct capabilities, a resumable
+loop, a saga rollback), or if a judgment point's output drives something you can't take back.
+Don't nudge for step count alone. If two bands still feel equally right, pick the lower one —
+the gallery over-promising difficulty costs a user a template they could have used.
+
+`pnpm examples:check` validates the enum, and warns when your band sits **2+ bands** from the
+score derived from `steps[].kind` and `capabilities`. That gap means one of two things, and
+both want a human: your label is wrong, or your **declared shape** is wrong — a step that
+calls a model but says `kind: "compute"` also draws the wrong glyph in the gallery graph. Fix
+whichever is actually untrue; don't inflate the label to silence the warning.
+
+One band apart is expected and prints as a `note:`, not a warning. That is where the rubric
+and the scorer legitimately disagree — the scorer can't see a synthesizing capability, so
+`web-research-digest` derives `minimal` while its authored band is `simple`. Leave those alone.
 
 ### `kind` and `checkpoint` — what each step is
 
@@ -174,6 +217,7 @@ offending word.
 | `tags` | Chips under the title | 3–4 lowercase, kebab or single words. Concrete, searchable ("approval", "hitl", "fallback"). This is where mechanism words go. |
 | `category` | Which gallery group it files under | One id from the enum. The **outcome**, not the mechanism — see [Categorize](#3-categorize). |
 | `cadence` | The "Trigger" fact | One id from the enum. What **starts** a run, not what it does mid-run — see [Categorize](#3-categorize). |
+| `complexity` | The "Complexity" band | One id from the enum. Variance and judgment in the output, **not** graph size — see [Categorize](#3-categorize). |
 | `capabilities` | Capability chips + est. cost | The exact `ctx.sapiom.*` capability ids the source calls. Must match the code (see "Capability ids"). |
 | `steps[].description` | Node labels in the Definition graph | One plain sentence per step: what THIS step does. Preserve `name`/`next`/`terminal`/`capability` exactly. |
 | `steps[].kind` | The step's glyph in the graph | `capability` / `llm` / `compute` / `pause`, one per step — see [Categorize](#3-categorize). |
@@ -340,6 +384,7 @@ Never present the MCP path as the only way to build and run — the webapp does 
 - [ ] `npm run typecheck` passes in the template directory.
 - [ ] Traced a `run_local` end to end (free) before deploying.
 - [ ] One `category` (the outcome, not the mechanism) and one `cadence`; `tags` kept freeform.
+- [ ] One `complexity`, picked by counting judgment points — not by counting steps.
 - [ ] A `kind` on every step, and `checkpoint: true` only on a real human approval gate.
 - [ ] `pnpm examples:sort` then `pnpm examples:check` both clean.
 
