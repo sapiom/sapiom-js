@@ -468,7 +468,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
         if (!adapter) continue;
         for (const record of await adapter.listPastSessions(cwd)) {
           transcripts.push(record);
-          foundInStore.add(`${record.harness} ${record.agentSessionId}`);
+          foundInStore.add(`${record.harness}\u0000${record.agentSessionId}`);
         }
       }
 
@@ -483,7 +483,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // deliberately accepts those). Concurrent, since each is independent.
       const probed = await Promise.all(
         registryRows.map(async (session) =>
-          foundInStore.has(`${session.harness} ${session.agentSessionId!}`)
+          foundInStore.has(`${session.harness}\u0000${session.agentSessionId!}`)
             ? true
             : agentHoldsConversation(adapters, session.harness, session.agentSessionId!, session.cwd),
         ),
