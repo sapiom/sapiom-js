@@ -250,6 +250,10 @@ export function useHarnessState(): HarnessStateHook {
   const [history, setHistory] = useState<SessionSummary[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // History fan-out bookkeeping — see loadHistory. Refs, not state: neither
+  // affects the render, and both are read/written within a single call.
+  const inFlightHistory = useRef<Map<string, Promise<SessionSummary[]>>>(new Map());
+  const historyLoads = useRef(0);
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
@@ -651,22 +655,48 @@ export function useHarnessState(): HarnessStateHook {
    * one).
    */
   const loadHistory = useCallback(async (cwds: string[]) => {
+    // Fan out per directory; one failing dir never hides the others'
+    // history — and, since only fulfilled cwds count as refreshed, never
+    // evicts what we already had for it either.
+    //
+    // Coalesced per directory, because three surfaces load history
+    // independently and their requests overlap: the palette and the rail
+    // popover both ask for `historyDirs(...)`, and the dead pane asks for one
+    // directory that is almost always already in that list. A caller that
+    // arrives while a directory is in flight awaits that request instead of
+    // issuing a second one. The entry is dropped the moment it settles — this
+    // deduplicates concurrent callers, it is NOT a cache, so a later open
+    // still re-reads the directory.
+    const unique = Array.from(new Set(cwds));
+    const requests = unique.map((cwd) => {
+      const pending = inFlightHistory.current.get(cwd);
+      if (pending) return pending;
+      const request = api.sessionHistory(cwd).finally(() => {
+        inFlightHistory.current.delete(cwd);
+      });
+      inFlightHistory.current.set(cwd, request);
+      return request;
+    });
+
+    // Counted, not a boolean: with concurrent loads, a flag that every caller
+    // sets and the FIRST to settle clears reports "loaded" while the rest are
+    // still in flight — which renders the popover's empty state over a list
+    // that is about to arrive.
+    historyLoads.current += 1;
     setHistoryLoading(true);
     try {
-      // Fan out per directory; one failing dir never hides the others'
-      // history — and, since only fulfilled cwds count as refreshed, never
-      // evicts what we already had for it either.
-      const results = await Promise.allSettled(cwds.map((cwd) => api.sessionHistory(cwd)));
+      const results = await Promise.allSettled(requests);
       const refreshed: SessionSummary[] = [];
       const refreshedCwds = new Set<string>();
       results.forEach((result, index) => {
         if (result.status !== "fulfilled") return;
-        refreshedCwds.add(cwds[index]!);
+        refreshedCwds.add(unique[index]!);
         refreshed.push(...result.value);
       });
       setHistory((prev) => mergeHistory(prev, refreshed, refreshedCwds));
     } finally {
-      setHistoryLoading(false);
+      historyLoads.current -= 1;
+      if (historyLoads.current === 0) setHistoryLoading(false);
     }
   }, []);
 

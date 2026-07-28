@@ -41,6 +41,7 @@ import { WelcomePanel } from "./components/WelcomePanel";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { ApiError, boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
+import { historyDirs } from "./lib/history-meta";
 import { resolveProjectRoot } from "./lib/project-dir";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
@@ -187,16 +188,17 @@ export const App = (): JSX.Element => {
     await harness.updateSettings({ projectRoot: root });
   };
 
-  // Opening the palette fans out the history load (the palette half).
+  // Opening the palette loads history for the same directories the rail's
+  // popover asks for — one shared builder, so whichever opens second
+  // coalesces against the first instead of re-fetching every directory.
   useEffect(() => {
     if (!paletteOpen || !harness.state) return;
-    const dirs: string[] = [];
-    const push = (dir?: string | null): void => {
-      if (dir && !dirs.includes(dir)) dirs.push(dir);
-    };
-    harness.state.sessions.forEach((session) => push(session.cwd));
-    (harness.settings?.recentDirs ?? []).forEach((dir) => push(dir));
-    if (dirs.length > 0) void harness.loadHistory(dirs.slice(0, 12));
+    const dirs = historyDirs(
+      harness.state.sessions,
+      harness.settings?.recentDirs ?? [],
+      harness.activeSessionId,
+    );
+    if (dirs.length > 0) void harness.loadHistory(dirs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paletteOpen]);
 

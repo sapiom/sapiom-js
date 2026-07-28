@@ -1,4 +1,4 @@
-import type { HarnessKind, SessionSummary } from "@shared/types";
+import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types";
 
 /**
  * Folds a fresh history load into the existing store: rows for the directories
@@ -33,6 +33,37 @@ export function mergeHistory(
     if (!byAgentSessionId.has(summary.agentSessionId)) byAgentSessionId.set(summary.agentSessionId, summary);
   }
   return Array.from(byAgentSessionId.values()).sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt));
+}
+
+/** How many directories one history fan-out will ask for. Each is its own
+ *  request, so this is the cap on a single open's cost. */
+export const HISTORY_DIR_LIMIT = 12;
+
+/**
+ * The directories a history load should cover: the active session's first,
+ * then every open session's, then recently-used ones — deduped, capped.
+ *
+ * Shared because the two surfaces that open history (the command palette and
+ * the rail's past-sessions popover) want the same list. They each built it
+ * privately, from the same two sources, and the lists differed only in
+ * whether the active session's directory was hoisted — so opening both fanned
+ * out twice per directory (the observed 24 requests for 12 directories).
+ * One builder makes the second open a dedupe hit in `loadHistory` rather than
+ * a second round-trip.
+ */
+export function historyDirs(
+  sessions: readonly HarnessSession[],
+  recentDirs: readonly string[],
+  activeSessionId?: string | null,
+): string[] {
+  const dirs: string[] = [];
+  const push = (dir?: string | null): void => {
+    if (dir && !dirs.includes(dir)) dirs.push(dir);
+  };
+  push(sessions.find((session) => session.id === activeSessionId)?.cwd);
+  sessions.forEach((session) => push(session.cwd));
+  recentDirs.forEach((dir) => push(dir));
+  return dirs.slice(0, HISTORY_DIR_LIMIT);
 }
 
 /** Product names for the agent running a session — shared by the rail's

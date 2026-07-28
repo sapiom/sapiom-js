@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { SessionSummary } from "@shared/types";
+import type { HarnessSession, SessionSummary } from "@shared/types";
 
-import { formatDuration, historyRowMeta, mergeHistory } from "./history-meta";
+import { HISTORY_DIR_LIMIT, formatDuration, historyDirs, historyRowMeta, mergeHistory } from "./history-meta";
 
 function row(overrides: Partial<SessionSummary> & { agentSessionId: string; cwd: string }): SessionSummary {
   return {
@@ -50,6 +50,64 @@ describe("mergeHistory", () => {
   it("sorts newest first across retained and refreshed rows alike", () => {
     const merged = mergeHistory([acme], [rfq], new Set(["/demo/rfq"]));
     expect(merged.map((r) => r.agentSessionId)).toEqual(["rfq-1", "acme-1"]);
+  });
+});
+
+describe("historyDirs", () => {
+  function session(id: string, cwd: string): HarnessSession {
+    return {
+      id,
+      agentSessionId: `agent-${id}`,
+      harness: "claude-code",
+      cwd,
+      title: id,
+      status: "running",
+      ready: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      boundWorkflowPath: null,
+    };
+  }
+
+  it("gives both surfaces the same list, so the second open coalesces instead of refetching", () => {
+    // The regression: the palette and the rail popover each built this list
+    // privately from the same two sources. Opening both fanned out one
+    // request per directory TWICE — 24 requests for 12 directories.
+    const sessions = [session("a", "/demo/acme"), session("b", "/demo/rfq")];
+    const recents = ["/demo/rfq", "/demo/old"];
+    expect(historyDirs(sessions, recents, "b")).toEqual(historyDirs(sessions, recents, "b"));
+  });
+
+  it("hoists the active session's directory, then open sessions, then recents", () => {
+    const dirs = historyDirs(
+      [session("a", "/demo/acme"), session("b", "/demo/rfq")],
+      ["/demo/old"],
+      "b",
+    );
+    expect(dirs).toEqual(["/demo/rfq", "/demo/acme", "/demo/old"]);
+  });
+
+  it("deduplicates a directory reachable from several sources", () => {
+    // Two sessions in one directory, which is also a recent — one request.
+    const dirs = historyDirs(
+      [session("a", "/demo/acme"), session("b", "/demo/acme")],
+      ["/demo/acme"],
+      "a",
+    );
+    expect(dirs).toEqual(["/demo/acme"]);
+  });
+
+  it("caps the fan-out, since every directory past the cap is another request", () => {
+    const many = Array.from({ length: 30 }, (_, i) => session(`s${i}`, `/demo/p${i}`));
+    expect(historyDirs(many, [], null)).toHaveLength(HISTORY_DIR_LIMIT);
+  });
+
+  it("returns nothing to load when there are no sessions and no recents", () => {
+    expect(historyDirs([], [], null)).toEqual([]);
+  });
+
+  it("tolerates an activeSessionId that matches nothing", () => {
+    expect(historyDirs([session("a", "/demo/acme")], [], "gone")).toEqual(["/demo/acme"]);
   });
 });
 

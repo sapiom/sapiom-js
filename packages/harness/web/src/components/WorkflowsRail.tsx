@@ -21,7 +21,7 @@ import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
-import { HARNESS_LABELS, historyRowMeta } from "../lib/history-meta";
+import { HARNESS_LABELS, historyDirs, historyRowMeta } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 
@@ -362,14 +362,8 @@ export function WorkflowsRail({
     const next = !historyOpen;
     setHistoryOpen(next);
     if (next) {
-      const dirs: string[] = [];
-      const push = (dir?: string | null): void => {
-        if (dir && !dirs.includes(dir)) dirs.push(dir);
-      };
-      push(sessions.find((session) => session.id === activeSessionId)?.cwd);
-      sessions.forEach((session) => push(session.cwd));
-      recentDirs.forEach((dir) => push(dir));
-      if (dirs.length > 0) onOpenHistory(dirs.slice(0, 12));
+      const dirs = historyDirs(sessions, recentDirs, activeSessionId);
+      if (dirs.length > 0) onOpenHistory(dirs);
     }
   };
 
