@@ -280,7 +280,21 @@ export function CanvasOverviewPanel({
                     type="button"
                     className="canvas-describe-ai"
                     data-testid="canvas-describe-ai"
-                    onClick={onDescribeWithAI}
+                    onClick={() => {
+                      // The Rewrite variant edits source that already has
+                      // hand-written descriptions — confirm before the agent can
+                      // replace them. The empty (Describe) variant has nothing to
+                      // destroy, so it fires straight away.
+                      if (
+                        overview.description &&
+                        !window.confirm(
+                          "Rewrite this workflow's descriptions? The agent will edit the source and may replace text you wrote by hand.",
+                        )
+                      ) {
+                        return;
+                      }
+                      onDescribeWithAI();
+                    }}
                     data-tooltip="Ask the agent to write descriptions into the workflow source — the canvas updates when it saves"
                   >
                     <Icon name="Sparkles" size={13} />

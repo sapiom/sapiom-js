@@ -44,6 +44,13 @@ const lastInject = async (page: Page): Promise<{ id: string; req: { text: string
   return result!;
 };
 
+/** Clear the recorded inject so a "nothing was injected" assertion is unambiguous. */
+const clearLastInject = (page: Page): Promise<void> =>
+  page.evaluate(() => {
+    const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+    if (win.__HARNESS_TEST__) delete win.__HARNESS_TEST__["lastInjectInput"];
+  });
+
 test.describe("Describe with AI", () => {
   test.beforeEach(async ({ page }) => {
     await loadBoard(page);
@@ -59,6 +66,9 @@ test.describe("Describe with AI", () => {
   });
 
   test("clicking it injects a source-editing prompt that names the workflow + path", async ({ page }) => {
+    // leasing already has a description → the Rewrite variant, which confirms
+    // first (it can overwrite hand-written text). Accept it, then assert the inject.
+    page.on("dialog", (d) => void d.accept());
     await page.getByTestId("canvas-describe-ai").click();
     const inject = await lastInject(page);
 
@@ -70,5 +80,20 @@ test.describe("Describe with AI", () => {
     expect(inject.req.text).toContain("defineStep");
     // It targets a real (boot) session.
     expect(inject.id).toBeTruthy();
+  });
+
+  test("the Rewrite variant confirms first — dismissing it injects nothing", async ({ page }) => {
+    // leasing has an existing description, so the button is the destructive
+    // Rewrite. Dismissing the confirm must send no prompt to the agent.
+    await clearLastInject(page);
+    page.on("dialog", (d) => void d.dismiss());
+    await page.getByTestId("canvas-describe-ai").click();
+    // Well past the mock inject delay (~180ms) — if it were going to fire, it has.
+    await page.waitForTimeout(500);
+    const injected = await page.evaluate(() => {
+      const win = window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: unknown } };
+      return win.__HARNESS_TEST__?.lastInjectInput ?? null;
+    });
+    expect(injected).toBeNull();
   });
 });

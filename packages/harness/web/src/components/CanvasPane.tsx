@@ -1070,7 +1070,7 @@ export function CanvasPane({
               onDeselect={() => setSelectedNodeId(null)}
               onCollapse={() => setOverviewOpen(false)}
               onDescribeWithAI={
-                boundWorkflow && sessionId
+                boundWorkflow && sessionId && !sessionExited
                   ? () => onInjectPrompt(describeWorkflowPrompt(boundWorkflow))
                   : undefined
               }
