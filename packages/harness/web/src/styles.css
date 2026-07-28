@@ -2639,41 +2639,55 @@ input {
 
 /* Welcome panel (first run) ------------------------------------------- */
 
+/* Overview is an OVERLAY: the house scrim (.modal-backdrop) plus the overrides
+   below. It floats over the whole shell rather than replacing a pane, so the
+   work behind it is never lost and the card is centred on the window instead of
+   inheriting one pane's measure. */
 .welcome-panel {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--sp4);
+  /* modal-backdrop centres with align/justify-content, which clips the top of an
+     overflowing child instead of scrolling it — and this card's list grows with
+     use. Hand centring to the card's own auto margins. */
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: var(--sp5);
   overflow-y: auto;
-  /* The card responds to ITS slot, not the viewport — the pane is resizable
-     and the mobile shell hands it odd widths. */
-  container: welcome / inline-size;
 }
 
-/* Card recipe: like the modal surface (bg-2 + strong border) but with the
-   card-scale radius (xl) — it's page content, not a floating dialog, so no
-   entrance animation and a quieter shadow. */
+/* Card recipe: the modal surface (bg-2 + strong border) at the card-scale radius
+   (xl) — it is page content in a dialog's clothing, so no entrance animation of
+   its own beyond the scrim's fade. */
 .welcome-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 12px;
-  width: 560px;
-  max-width: 100%;
-  /* Structural, not incidental: capping the recents made the card fit at the
-     content it happens to hold today, on the fonts it happens to render with.
-     It doesn't fit on CI's — the same copy wraps ~34px taller on Linux and the
-     card spilled its pane. A panel whose whole job is to be read at a glance
-     can't depend on font metrics for that, so the ceiling is declared here and
-     the recents list (see .welcome-recents-block) gives up the space. */
+  gap: var(--sp3);
+  margin: auto;
+  width: 100%;
+  max-width: 640px;
+  padding: var(--sp5);
+  /* Structural, not incidental: capping the recents at five made the card fit
+     the content it happens to hold, on the fonts it happens to render with — the
+     same copy wraps ~34px taller on CI's Linux fonts and spilled. A surface
+     whose whole job is to be read at a glance cannot depend on font metrics to
+     stay inside its bounds, so the ceiling is declared here and the recents list
+     (see .welcome-recents-block) gives up the space. Still right as an overlay:
+     the bound is now the window rather than a pane, and a card taller than the
+     viewport would put its own actions off-screen. */
   max-height: 100%;
-  padding: 28px;
   overflow: hidden;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow);
+}
+
+/* Sits over the copy's top-right corner rather than in a header row: this card
+   has no header, and giving it one to hold a single X would cost a whole band. */
+.welcome-close {
+  position: absolute;
+  top: var(--sp3);
+  right: var(--sp3);
 }
 
 .welcome-body {
@@ -2803,8 +2817,8 @@ input {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   color: var(--text-dim);
   background: var(--surface-inset);
   border-radius: var(--radius-sm);

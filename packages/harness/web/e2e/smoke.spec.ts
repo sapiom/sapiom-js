@@ -153,24 +153,59 @@ test("Overview heads the account menu, shows the intro panel, and any session le
   await expect(item).toBeVisible();
   await item.click();
 
-  // Selection closes the menu and swaps the main slot to the intro.
+  // Selection closes the menu and raises the intro OVER the shell.
   await expect(page.getByTestId("profile-menu")).toHaveCount(0);
   await expect(page.getByTestId("welcome-panel")).toBeVisible();
-  await expect(page.getByTestId("session-context-title")).toHaveText("Overview");
-  // No session options while the intro is up — destructive actions beside
-  // "Overview" would read as closing the view.
-  await expect(page.getByTestId("session-menu")).toHaveCount(0);
+  // The session bar keeps describing the session behind the card. It used to
+  // read "Overview" and drop its menu, because Overview replaced the slot; as an
+  // overlay it takes nothing away, so the work behind it stays addressable and
+  // re-reading what Studio is never costs you your place.
+  await expect(page.getByTestId("session-context-title")).not.toHaveText("Overview");
 
-  // Reopening the menu shows the current selection, then Escape closes it.
-  await page.getByTestId("brand-identity").click();
-  await expect(page.getByTestId("rail-overview")).toHaveClass(/is-selected/);
+  // It is a real modal: the scrim owns the pointer, so nothing behind it can be
+  // clicked through. This replaced a step that reopened the account menu while
+  // the intro was up to inspect its selected state — reachable back when
+  // Overview was a view occupying the slot, impossible for a card on top of it.
+  const blocked = await page
+    .getByTestId("brand-identity")
+    .click({ timeout: 700 })
+    .then(() => false)
+    .catch(() => true);
+  expect(blocked).toBe(true);
+
+  // Escape puts it away and hands the shell straight back.
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("profile-menu")).toHaveCount(0);
+  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
 
   // Opening the leasing agent returns to the terminal — acme-app's one live
   // session is bound to it, so opening the agent attaches to that session.
   await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
   await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
+});
+
+test("Overview is dismissable — scrim, close button, and Escape all put it away", async ({ page }) => {
+  // An overlay must never be a trap. Three exits, and none of them may disturb
+  // what is behind: the whole reason it is a card on top.
+  const open = async (): Promise<void> => {
+    await page.getByTestId("brand-identity").click();
+    await page.getByTestId("rail-overview").click();
+    await expect(page.getByTestId("welcome-panel")).toBeVisible();
+  };
+
+  await open();
+  await page.getByTestId("welcome-close").click();
+  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+
+  await open();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+
+  await open();
+  // The scrim, well clear of the card.
+  await page.getByTestId("welcome-panel").click({ position: { x: 8, y: 8 } });
+  await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+  // The session it was covering is untouched.
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 

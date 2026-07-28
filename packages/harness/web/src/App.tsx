@@ -80,6 +80,10 @@ export const App = (): JSX.Element => {
   // Overview (in the rail's account menu): shows the intro panel in the main
   // slot. Opening any session leaves it (openSession below is the one path).
   const [overviewSelected, setOverviewSelected] = useState(false);
+  // First-run Overview is shown unprompted; once dismissed it must not spring
+  // back on the next render. Boot-scoped on purpose — settings.recentDirs being
+  // empty is what makes it a first run, and that is the server's to change.
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false);
   // The focused agent (or bare-scaffold folder) path — the rail's single
   // selection and the main panel's tab-strip subject. The active tab's
   // session is harness.activeSessionId.
@@ -109,6 +113,11 @@ export const App = (): JSX.Element => {
   const [sessionNames, setSessionNames] = useState<Record<string, string>>(
     () => loadUiPrefs().sessionNames ?? {},
   );
+  const dismissWelcome = (): void => {
+    setOverviewSelected(false);
+    setWelcomeDismissed(true);
+  };
+
   const renameSession = (id: string, name: string): void => {
     setSessionNames((prev) => {
       const next = { ...prev };
@@ -272,17 +281,21 @@ export const App = (): JSX.Element => {
   // The focused subject's tabs, and which surface the main panel shows.
   const focusTabs = liveSessionsForFocus(state.sessions, focusedAgentPath);
   const hasLiveSession = state.sessions.some((session) => session.status !== "exited");
-  const showWelcome = overviewSelected || (state.firstRun === true && !hasLiveSession);
-  const showReview = !showWelcome && reviewSummary != null;
-  const showDead = !showWelcome && !showReview && activeSession?.status === "exited";
+  // Overview floats OVER the shell, so it deliberately does not gate the states
+  // below it — the workbench, a review pane, a dead session all stay exactly as
+  // they were behind the card. Dismissed once, the first-run copy stays down for
+  // the rest of the boot; the account menu is how it comes back.
+  const showWelcome =
+    overviewSelected || (state.firstRun === true && !hasLiveSession && !welcomeDismissed);
+  const showReview = reviewSummary != null;
+  const showDead = !showReview && activeSession?.status === "exited";
   // An agent focused with no live session: honest absence, the reason opening
   // one lands on the "start a session" state rather than a board (the canvas
   // is served per session).
   const showAgentEmpty =
-    !showWelcome && !showReview && !showDead && focusedWorkflow != null && focusTabs.length === 0;
+    !showReview && !showDead && focusedWorkflow != null && focusTabs.length === 0;
   // The workbench: an active live session in the focused subject's tabs.
   const showWorkbench =
-    !showWelcome &&
     !showReview &&
     !showDead &&
     !showAgentEmpty &&
@@ -725,9 +738,8 @@ export const App = (): JSX.Element => {
 
           <div className="center-pane">
             <SessionBar
-              overviewMode={showWelcome}
               openedAgentName={noSessionAgentName}
-              reviewTitle={!showWelcome && reviewSummary ? reviewSummary.title : null}
+              reviewTitle={reviewSummary ? reviewSummary.title : null}
               activeSession={showWorkbench ? activeSession : showDead ? activeSession : null}
               sessionName={
                 activeSession ? sessionDisplayName(activeSession, state.sessions, sessionNames) : null
@@ -776,25 +788,7 @@ export const App = (): JSX.Element => {
               />
             )}
             <div className="terminal-slot">
-              {showWelcome ? (
-                <WelcomePanel
-                  recentDirs={harness.settings?.recentDirs ?? []}
-                  sessions={state.sessions}
-                  workflows={state.workflows}
-                  projectRoot={projectRoot || null}
-                  onConnect={async (cwd) => {
-                    await harness.connectWorkflow(cwd);
-                  }}
-                  onScan={handleScanWorkflows}
-                  onScaffold={handleScaffoldSession}
-                  onSaveProjectRoot={saveProjectRoot}
-                  listDir={harness.listDir}
-                  onCreateSession={handleCreateSession}
-                  listHarnesses={harness.listHarnesses}
-                  onBrowseTemplates={() => setTemplatesOpen(true)}
-                  firstRun={state.firstRun === true}
-                />
-              ) : showReview && reviewSummary ? (
+              {showReview && reviewSummary ? (
                 <PastSessionPane
                   summary={reviewSummary}
                   loadRecord={harness.sessionRecord}
@@ -984,6 +978,30 @@ export const App = (): JSX.Element => {
           onOpenPath={(cwd) => void handleCreateSession(cwd, "claude-code")}
           onBrowseTemplates={() => setTemplatesOpen(true)}
           onClose={() => setPaletteOpen(false)}
+        />
+      )}
+
+      {showWelcome && (
+        <WelcomePanel
+          recentDirs={harness.settings?.recentDirs ?? []}
+          sessions={state.sessions}
+          workflows={state.workflows}
+          projectRoot={projectRoot || null}
+          onConnect={async (cwd) => {
+            await harness.connectWorkflow(cwd);
+          }}
+          onScan={handleScanWorkflows}
+          onScaffold={handleScaffoldSession}
+          onSaveProjectRoot={saveProjectRoot}
+          listDir={harness.listDir}
+          onCreateSession={handleCreateSession}
+          listHarnesses={harness.listHarnesses}
+          onBrowseTemplates={() => {
+            dismissWelcome();
+            setTemplatesOpen(true);
+          }}
+          onDismiss={dismissWelcome}
+          firstRun={state.firstRun === true}
         />
       )}
 

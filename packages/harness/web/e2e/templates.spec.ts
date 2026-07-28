@@ -282,7 +282,10 @@ test.describe("templates journey (from the welcome panel)", () => {
 
     await page.getByTestId("templates-exit").click();
     await expect(page.getByTestId("templates-panel")).toHaveCount(0);
-    await expect(page.getByTestId("welcome-panel")).toBeVisible();
+    // Back to the shell, NOT to the Overview card that launched this: choosing
+    // "Browse templates" dismissed it, because that click was a navigation away.
+    await expect(page.locator(".center-pane")).toBeVisible();
+    await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
     expect(await lastInject(page)).toBeUndefined();
   });
 
