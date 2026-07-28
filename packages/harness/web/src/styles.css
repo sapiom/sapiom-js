@@ -2661,6 +2661,13 @@ input {
   gap: 12px;
   width: 560px;
   max-width: 100%;
+  /* Structural, not incidental: capping the recents made the card fit at the
+     content it happens to hold today, on the fonts it happens to render with.
+     It doesn't fit on CI's — the same copy wraps ~34px taller on Linux and the
+     card spilled its pane. A panel whose whole job is to be read at a glance
+     can't depend on font metrics for that, so the ceiling is declared here and
+     the recents list (see .welcome-recents-block) gives up the space. */
+  max-height: 100%;
   padding: 28px;
   overflow: hidden;
   background: var(--bg-2);
@@ -2864,6 +2871,14 @@ input {
   gap: var(--sp1);
   padding-top: var(--sp2);
   border-top: 1px solid var(--border);
+  /* The one part of the card that grows with use, so it is the part that
+     yields when the card hits its max-height. `min-height: 0` is what lets a
+     flex child shrink below its content at all — without it the list keeps its
+     full height and pushes the card past the cap anyway. The heading and the
+     two actions above stay put; only the list scrolls, and only when it has
+     to. */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .welcome-error {
