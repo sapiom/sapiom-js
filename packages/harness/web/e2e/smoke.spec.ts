@@ -593,12 +593,15 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   await expect(menu.getByText("History", { exact: true })).toHaveCount(0);
 
   // The registry's exited session renders ONCE (deduped against its own
-  // history mirror) and is tagged resumable in text, not a color-only dot.
+  // history mirror) and resolves to a real resume.
   const exited = page.getByTestId("exited-session-sess-leasing");
   await expect(exited).toBeVisible();
   await expect(page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f")).toHaveCount(0);
   await expect(menu.getByText("Build the leasing pipeline")).toHaveCount(1);
-  await expect(exited.locator(".past-session-tag")).toHaveText("resumable");
+  await expect(exited).toHaveAttribute("data-resumable", "true");
+  // An ordinary resume carries no state word — only the exceptions speak.
+  await expect(exited).not.toContainText("from summary");
+  await expect(exited).not.toContainText("nothing recorded");
 
   // The list is global — rfq-workflows' past session shows without
   // switching directories.
@@ -612,7 +615,7 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   // outranks the vendor transcript scan's messageCount (12) that the same
   // fixture also carries.
   const transcript = page.getByTestId("history-2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33");
-  await expect(transcript.locator(".past-session-tag")).toHaveText("resumable");
+  await expect(transcript).toHaveAttribute("data-resumable", "true");
   await expect(transcript).toContainText("feat/screening-webhook");
   await expect(transcript).toContainText("3 turns");
   await expect(transcript).not.toContainText("12 turns");
@@ -637,7 +640,7 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", /sess-adopted/);
 });
 
-test("a phantom past session is tagged archived and never offers Resume", async ({ page }) => {
+test("a phantom past session reads 'nothing recorded' and never offers Resume", async ({ page }) => {
   // sess-phantom holds an agentSessionId (our SessionStart hook fired) but the
   // agent wrote no transcript, because the session ended before its first
   // prompt. On one real machine 16 of 49 registry rows measured this shape, and
@@ -647,15 +650,18 @@ test("a phantom past session is tagged archived and never offers Resume", async 
 
   const phantom = page.getByTestId("exited-session-sess-phantom");
   await expect(phantom).toBeVisible();
-  const tag = phantom.locator(".past-session-tag");
-  await expect(tag).toHaveText("archived");
-  await expect(tag).toHaveAttribute("data-resumable", "false");
+  await expect(phantom).toHaveAttribute("data-resumable", "false");
+  // "nothing recorded", not "archived": nothing was archived, and the word used
+  // to be shared with rows that DO have a recorded conversation to rebuild from.
+  await expect(phantom).toContainText("nothing recorded");
+  await expect(phantom).not.toContainText("from summary");
 
   // A genuinely resumable row in the same directory still reads resumable —
   // the tag reflects a per-row probe, not a blanket downgrade.
-  await expect(
-    page.getByTestId("exited-session-sess-leasing").locator(".past-session-tag"),
-  ).toHaveText("resumable");
+  await expect(page.getByTestId("exited-session-sess-leasing")).toHaveAttribute(
+    "data-resumable",
+    "true",
+  );
 
   // Opening it lands on the dead pane with Resume disabled and the real reason
   // stated, rather than a live Resume button and a bare "exit code 1".

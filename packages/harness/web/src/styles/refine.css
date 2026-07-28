@@ -21,7 +21,6 @@ body {
 
 /* Tabular, mono metadata everywhere it reads as a machine value. */
 .session-item-meta,
-.session-item-cwd,
 .palette-trigger-hint,
 .session-history-badge {
   font-family: var(--font-mono);

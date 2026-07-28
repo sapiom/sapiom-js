@@ -1,4 +1,4 @@
-import type { HarnessKind, HarnessSession, SessionSummary } from "@shared/types";
+import type { HarnessKind, HarnessSession, SessionResumeMode, SessionSummary } from "@shared/types";
 
 /**
  * Folds a fresh history load into the existing store: rows for the directories
@@ -115,14 +115,81 @@ export function formatDuration(startIso: string, endIso: string): string | null 
 }
 
 /**
- * The one meta line under a past-session row: harness, then git branch and
- * turn count when the server parsed them (optional
- * fields, absent on older servers), then relative time. Parts that are
- * absent simply drop out; nothing is fabricated.
+ * What opening a past-session row will actually do — the row's whole status,
+ * resolved once from the two facts that decide it.
+ *
+ * These were previously collapsed into two words ("resumable" / "archived"),
+ * which merged the two `rehydrate` cases that behave nothing alike: a real
+ * conversation the agent forgot but WE recorded (continuable, from our brief)
+ * and a session that ended before its first prompt (nothing exists anywhere).
+ * The second is the common one — 29 of 62 rows on one real machine — and it
+ * wore the same badge as the first.
+ *
+ * - `resume` — the agent still holds it; reattaches for real.
+ * - `from-summary` — the agent doesn't, but our record does: a fresh session
+ *   seeded with a reconstruction. Thinner than a resume, and says so.
+ * - `empty` — neither. Opening it can only explain why (the dead-session pane).
+ * - `checking` — history hasn't answered for this directory yet. Never guessed:
+ *   guessing is what made a third of rows a button guaranteed to fail.
+ */
+export type SessionRowState = "resume" | "from-summary" | "empty" | "checking";
+
+export function sessionRowState(row: {
+  resumeMode?: SessionResumeMode;
+  turnCount?: number;
+  messageCount?: number;
+}): SessionRowState {
+  if (row.resumeMode === undefined) return "checking";
+  if (row.resumeMode === "agent-resume") return "resume";
+  // `rehydrate` splits on whether we recorded anything to rebuild from.
+  // `turnCount` covers both live events and the archived record; `messageCount`
+  // is the vendor scan, which only exists when a transcript does (and a row
+  // with a transcript resolves to agent-resume anyway) — read for completeness,
+  // not because it is expected to decide anything here.
+  const turns = row.turnCount ?? row.messageCount ?? 0;
+  return turns > 0 ? "from-summary" : "empty";
+}
+
+/** The state's meta-line word, or null when the state needs no word of its own. */
+function stateLabel(state: SessionRowState): string | null {
+  switch (state) {
+    // The default outcome carries no label: annotating every ordinary row is
+    // what crowded the list in the first place. Only the exceptions speak.
+    case "resume":
+      return null;
+    case "from-summary":
+      return "from summary";
+    case "empty":
+      return "nothing recorded";
+    case "checking":
+      return "checking…";
+  }
+}
+
+export interface HistoryRowMetaOptions {
+  /**
+   * Drop the product name. The rail's rows render {@link HarnessBrandIcon}
+   * immediately to the left, so spending a segment on "Claude Code" says the
+   * same thing twice — and it repeats on every row. Surfaces without the glyph
+   * (the dead-session pane) keep it.
+   */
+  includeHarness?: boolean;
+  /** Appends the row's state word — see {@link stateLabel}. */
+  state?: SessionRowState;
+}
+
+/**
+ * The one meta line under a past-session row: git branch and turn count when
+ * the server parsed them (optional fields, absent on older servers), what
+ * opening the row will do, then relative time. Parts that are absent simply
+ * drop out; nothing is fabricated.
  *
  * `turnCount` (our own event index: exact at any size) wins over
  * `messageCount` (the vendor-transcript scan, which gives up above its size
  * cap) whenever both are present.
+ *
+ * Defaults reproduce the pre-2026-07 line exactly, so the callers that want the
+ * full form get it without opting in.
  */
 export function historyRowMeta(
   summary: {
@@ -133,13 +200,17 @@ export function historyRowMeta(
     lastActiveAt: string;
   },
   now: number = Date.now(),
+  options: HistoryRowMetaOptions = {},
 ): string {
-  const parts: string[] = [HARNESS_LABELS[summary.harness]];
+  const parts: string[] = [];
+  if (options.includeHarness !== false) parts.push(HARNESS_LABELS[summary.harness]);
   if (summary.gitBranch) parts.push(summary.gitBranch);
   const turns = summary.turnCount ?? summary.messageCount;
   if (turns != null && turns > 0) {
     parts.push(`${turns} ${turns === 1 ? "turn" : "turns"}`);
   }
+  const state = options.state ? stateLabel(options.state) : null;
+  if (state) parts.push(state);
   // Relative time keys off lastActiveAt, never createdAt — a row's age is when
   // it was last actually active, and resume() no longer stamps that field for
   // an attempt that never produced a pty.

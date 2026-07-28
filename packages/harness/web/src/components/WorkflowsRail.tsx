@@ -21,7 +21,7 @@ import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
-import { HARNESS_LABELS, historyDirs, historyRowMeta } from "../lib/history-meta";
+import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 
@@ -228,13 +228,26 @@ function BareFolderRow({
 
 /**
  * Merged past-sessions row: exited registry sessions and history entries share
- * this anatomy — title, one meta line, path, TEXT status tag.
+ * this anatomy — title, then one meta line carrying everything else.
  *
- * The tag reports the server-verified `resumeMode`, never a local guess. It is
- * undefined until history has loaded for the row's directory, and that reads as
- * "checking…" rather than resolving optimistically either way — claiming
- * "resumable" before we know is how one in three rows came to be a Resume
- * button that failed.
+ * TWO LINES, NOT THREE (2026-07). The row used to print the path on its own
+ * line under the title, and a status pill beside them. But `title` IS the cwd's
+ * basename — identical in 62 of 62 rows on a real machine — so the path line
+ * repeated the title and then truncated exactly where it would have started to
+ * disambiguate (`/Users/me/sapiom/ha…` for both `harness-e2e` and
+ * `harness-e2e-hn-comic`). It cost a line and a pill's width to say nothing.
+ * The full path moves to the row's tooltip, and the space buys the two fields
+ * that DO tell sessions apart — git branch and turn count, which the server
+ * already computes and nothing rendered.
+ *
+ * The state word lives in the meta line rather than a pill for the same reason:
+ * a pill wide enough for "from summary" is a column the list can't spare, and
+ * `resume` — the ordinary case — needs no word at all.
+ *
+ * `data-resumable` stays on the row (it moved off the retired pill) because it
+ * is the documented hook the e2e suite addresses these rows by. Always one of
+ * three strings, never a boolean rendered as one: a mixed type invites
+ * `=== "true"` checks that silently miss the unknown state.
  */
 function PastSessionRow({
   testid,
@@ -255,16 +268,13 @@ function PastSessionRow({
   isSelected: boolean;
   onOpen: () => void;
 }): JSX.Element {
-  const tag =
-    resumeMode === "agent-resume" ? "resumable" : resumeMode === "rehydrate" ? "archived" : "checking…";
-  // Always one of three strings, never a boolean rendered as one: this is a
-  // documented test hook (`.past-session-tag[data-resumable]`), and a mixed
-  // type invites `=== "true"` checks that silently miss the unknown state.
   const resumableAttr = resumeMode === "agent-resume" ? "true" : resumeMode === "rehydrate" ? "false" : "unknown";
   return (
     <button
       data-testid={testid}
       className={"session-dropdown-item" + (isSelected ? " is-selected" : "")}
+      data-resumable={resumableAttr}
+      title={cwd}
       onClick={onOpen}
     >
       <span className="session-item-icon">
@@ -273,10 +283,6 @@ function PastSessionRow({
       <span className="session-item-copy">
         <span className="session-item-title">{title}</span>
         <span className="session-item-meta">{meta}</span>
-        <span className="session-item-cwd">{cwd}</span>
-      </span>
-      <span className="past-session-tag" data-resumable={resumableAttr}>
-        {tag}
       </span>
     </button>
   );
@@ -385,12 +391,13 @@ export function WorkflowsRail({
 
   // Exited registry rows render from the session record (it carries live status
   // history can't), but only the server knows whether the agent still holds
-  // their conversation — so their tag comes from the matching history row's
-  // verified resumeMode. Absent until history loads for that directory, which
-  // the row renders as "checking…" rather than guessing.
-  const resumeModeByAgentId = new Map(
-    history.map((summary) => [summary.agentSessionId, summary.resumeMode] as const),
-  );
+  // their conversation, what branch it was on, and how many turns it ran — so
+  // those come from the matching history row. Absent until history loads for
+  // that directory, which the row renders as "checking…" rather than guessing.
+  // The whole summary is kept, not just `resumeMode`: the same lookup now feeds
+  // the meta line's branch and turn count, which exited rows could never show
+  // because a registry session carries neither field.
+  const historyByAgentId = new Map(history.map((summary) => [summary.agentSessionId, summary] as const));
 
   const { workspaces, orphanAgents } = buildWorkspaceTree(workflows, sessions);
 
@@ -506,36 +513,56 @@ export function WorkflowsRail({
             </button>
 
             <div className="session-dropdown-section">Past sessions</div>
-            {pastRows.map((row) =>
-              row.kind === "exited" ? (
-                <PastSessionRow
-                  key={row.session.id}
-                  testid={`exited-session-${row.session.id}`}
-                  harness={row.session.harness}
-                  title={row.session.title}
-                  meta={historyRowMeta(row.session)}
-                  cwd={row.session.cwd}
-                  resumeMode={
-                    // No agentSessionId at all: the agent never established a
-                    // session, so there is provably nothing to resume — no
-                    // need to wait on history to say so.
-                    row.session.agentSessionId == null
-                      ? "rehydrate"
-                      : resumeModeByAgentId.get(row.session.agentSessionId)
-                  }
-                  isSelected={row.session.id === activeSessionId}
-                  onOpen={() => {
-                    onSelectSession(row.session.id);
-                    setHistoryOpen(false);
-                  }}
-                />
-              ) : (
+            {pastRows.map((row) => {
+              if (row.kind === "exited") {
+                // No agentSessionId at all: the agent never established a
+                // session, so there is provably nothing to resume — no need to
+                // wait on history to say so.
+                const summary =
+                  row.session.agentSessionId == null
+                    ? undefined
+                    : historyByAgentId.get(row.session.agentSessionId);
+                const resumeMode =
+                  row.session.agentSessionId == null ? ("rehydrate" as const) : summary?.resumeMode;
+                return (
+                  <PastSessionRow
+                    key={row.session.id}
+                    testid={`exited-session-${row.session.id}`}
+                    harness={row.session.harness}
+                    title={row.session.title}
+                    meta={historyRowMeta(
+                      {
+                        ...row.session,
+                        gitBranch: summary?.gitBranch,
+                        turnCount: summary?.turnCount,
+                        messageCount: summary?.messageCount,
+                      },
+                      undefined,
+                      {
+                        includeHarness: false,
+                        state: sessionRowState({ resumeMode, turnCount: summary?.turnCount }),
+                      },
+                    )}
+                    cwd={row.session.cwd}
+                    resumeMode={resumeMode}
+                    isSelected={row.session.id === activeSessionId}
+                    onOpen={() => {
+                      onSelectSession(row.session.id);
+                      setHistoryOpen(false);
+                    }}
+                  />
+                );
+              }
+              return (
                 <PastSessionRow
                   key={row.summary.agentSessionId}
                   testid={`history-${row.summary.agentSessionId}`}
                   harness={row.summary.harness}
                   title={row.summary.title}
-                  meta={historyRowMeta(row.summary)}
+                  meta={historyRowMeta(row.summary, undefined, {
+                    includeHarness: false,
+                    state: sessionRowState(row.summary),
+                  })}
                   cwd={row.summary.cwd}
                   resumeMode={row.summary.resumeMode}
                   isSelected={false}
@@ -544,8 +571,8 @@ export function WorkflowsRail({
                     setHistoryOpen(false);
                   }}
                 />
-              ),
-            )}
+              );
+            })}
             {historyLoading && <div className="session-dropdown-empty">Loading…</div>}
             {!historyLoading && pastRows.length === 0 && (
               <div className="session-dropdown-empty">No past sessions yet</div>

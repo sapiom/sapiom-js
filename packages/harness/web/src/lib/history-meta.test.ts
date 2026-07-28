@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessSession, SessionSummary } from "@shared/types";
 
-import { HISTORY_DIR_LIMIT, formatDuration, historyDirs, historyRowMeta, mergeHistory } from "./history-meta";
+import {
+  HISTORY_DIR_LIMIT,
+  type SessionRowState,
+  formatDuration,
+  historyDirs,
+  historyRowMeta,
+  mergeHistory,
+  sessionRowState,
+} from "./history-meta";
 
 function row(overrides: Partial<SessionSummary> & { agentSessionId: string; cwd: string }): SessionSummary {
   return {
@@ -179,5 +187,56 @@ describe("historyRowMeta", () => {
     expect(
       historyRowMeta({ harness: "codex", gitBranch: "feat/x", turnCount: 2, lastActiveAt: at }, now),
     ).toBe("Codex · feat/x · 2 turns · 1h ago");
+  });
+
+  it("drops the harness name for surfaces that already render the brand glyph", () => {
+    // The rail prints HarnessBrandIcon immediately left of this line, so the
+    // product name is the same claim twice — on every row.
+    const at = "2026-01-01T01:00:00.000Z";
+    expect(
+      historyRowMeta({ harness: "codex", gitBranch: "main", turnCount: 2, lastActiveAt: at }, now, {
+        includeHarness: false,
+      }),
+    ).toBe("main · 2 turns · 1h ago");
+  });
+
+  it("names only the states that differ from an ordinary resume", () => {
+    const at = "2026-01-01T01:00:00.000Z";
+    const line = (state: SessionRowState): string =>
+      historyRowMeta({ harness: "codex", turnCount: 2, lastActiveAt: at }, now, {
+        includeHarness: false,
+        state,
+      });
+    // The common outcome earns no word — labelling every row is what crowded
+    // the list before.
+    expect(line("resume")).toBe("2 turns · 1h ago");
+    expect(line("from-summary")).toBe("2 turns · from summary · 1h ago");
+    expect(line("empty")).toBe("2 turns · nothing recorded · 1h ago");
+    expect(line("checking")).toBe("2 turns · checking… · 1h ago");
+  });
+});
+
+describe("sessionRowState", () => {
+  it("never guesses before history has answered", () => {
+    // Guessing here is the original sin this whole area was fixing: assuming
+    // resumable made one in three rows a button guaranteed to fail.
+    expect(sessionRowState({})).toBe("checking");
+    expect(sessionRowState({ turnCount: 9 })).toBe("checking");
+  });
+
+  it("is a real resume when the agent still holds the conversation", () => {
+    expect(sessionRowState({ resumeMode: "agent-resume" })).toBe("resume");
+    // …even with nothing recorded on our side: the agent's copy is the one
+    // being reattached to.
+    expect(sessionRowState({ resumeMode: "agent-resume", turnCount: 0 })).toBe("resume");
+  });
+
+  it("splits rehydrate on whether we recorded anything to rebuild from", () => {
+    expect(sessionRowState({ resumeMode: "rehydrate", turnCount: 4 })).toBe("from-summary");
+    expect(sessionRowState({ resumeMode: "rehydrate", turnCount: 0 })).toBe("empty");
+    // The phantom shape: SessionStart fired (so there is an agentSessionId) but
+    // the session ended before its first prompt, so neither the agent nor we
+    // hold anything. 29 of 62 registry rows on one real machine.
+    expect(sessionRowState({ resumeMode: "rehydrate" })).toBe("empty");
   });
 });

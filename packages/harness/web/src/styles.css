@@ -2227,7 +2227,6 @@ input {
 }
 
 .session-item-copy > .session-item-title,
-.session-item-copy > .session-item-cwd,
 .session-item-copy > .session-item-meta {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2248,31 +2247,9 @@ input {
   color: var(--text);
 }
 
-.session-item-cwd,
 .session-item-meta {
   font-size: var(--type-meta);
   color: var(--text-faint);
-}
-
-/* Past-session status as a TEXT tag — "resumable" reattaches to a
-   registry session, "archived" reviews a transcript entry (starting there
-   opens a fresh session). A word, not a color-only dot. */
-.past-session-tag {
-  flex: 0 0 auto;
-  align-self: flex-start;
-  padding: 1px 6px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--ui-line);
-  background: var(--surface-inset);
-  color: var(--text-faint);
-  font-size: var(--type-micro);
-  font-weight: 600;
-}
-
-.past-session-tag[data-resumable="true"] {
-  color: var(--green-text);
-  border-color: color-mix(in srgb, var(--green) 32%, transparent);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 
 /* Matches Button variant="outline" size="icon": a persistent border,
