@@ -166,7 +166,24 @@ export interface HarnessSession {
   ready: boolean;
 }
 
-/** A resumable past session discovered from agent transcripts or our registry. */
+/**
+ * What resuming a past session would ACTUALLY do — resolved server-side
+ * against the agent's own conversation store, never guessed from whether we
+ * happen to hold an `agentSessionId`.
+ *
+ * - `agent-resume`: the agent still holds this conversation, so
+ *   `HarnessAdapter.resume()` reattaches to it for real.
+ * - `rehydrate`: the agent does NOT hold it. Most commonly a session that
+ *   ended before its first prompt — Claude Code writes no transcript at all
+ *   for those, and Codex writes no rollout file (see CodexAdapter's
+ *   `detectBlockingPrompt` for the same rule from the other direction). The
+ *   conversation is unrecoverable from the agent; the only honest options are
+ *   a fresh session in the same directory, or (once H3 lands) replaying our
+ *   own recorded context into one.
+ */
+export type SessionResumeMode = "agent-resume" | "rehydrate";
+
+/** A past session discovered from agent transcripts or our registry. */
 export interface SessionSummary {
   /** Back-reference to our session when the registry tracked it (source "registry"). */
   harnessSessionId?: string;
@@ -176,6 +193,14 @@ export interface SessionSummary {
   title: string;
   lastActiveAt: string;
   source: "registry" | "transcript";
+  /**
+   * Whether this row can genuinely be handed back to the agent — verified
+   * against the agent's own store by `GET /api/sessions/history`, for BOTH
+   * row sources. Holding an `agentSessionId` is not evidence of anything:
+   * we capture it from the SessionStart hook, which fires long before the
+   * agent has a conversation worth resuming.
+   */
+  resumeMode: SessionResumeMode;
   /**
    * Git branch the session was last active on, when the transcript records it.
    * The strongest within-directory differentiator between otherwise-similar
@@ -189,7 +214,26 @@ export interface SessionSummary {
    * full read (see the claude-code adapter's full-scan size cap).
    */
   messageCount?: number;
+  /**
+   * Number of human prompts (turns) recorded in OUR event log for this
+   * session, from the event store's byte-offset index. Exact and cheap at any
+   * file size — unlike {@link messageCount}, which the claude-code adapter
+   * leaves undefined above its full-scan cap. Undefined when the harness has
+   * no recorded events for the session (a transcript the Studio never ran).
+   * Prefer this over messageCount when both are present.
+   */
+  turnCount?: number;
 }
+
+/**
+ * What an adapter reports having FOUND — everything in a `SessionSummary`
+ * except `resumeMode`. Deciding what resuming a row would do is the server's
+ * job (`GET /api/sessions/history`), so the adapter contract deliberately
+ * can't express it: that's what kept transcript rows hardcoded to
+ * un-resumable while registry rows were hardcoded to resumable, each wrong in
+ * the opposite direction.
+ */
+export type PastSessionRecord = Omit<SessionSummary, "resumeMode">;
 
 // ---------------------------------------------------------------------------
 // Harness adapters (the interface contract with each coding agent)
@@ -248,8 +292,26 @@ export interface HarnessAdapter {
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec;
   /** How analytics events are sourced for this harness. */
   eventSource: "hooks" | "transcript-tail";
-  /** Resumable sessions for a directory (agent-side history). */
-  listPastSessions(cwd: string): Promise<SessionSummary[]>;
+  /** Past sessions this agent recorded for a directory (agent-side history).
+   *  Reports what it found; `resumeMode` is the server's call — see
+   *  {@link PastSessionRecord}. */
+  listPastSessions(cwd: string): Promise<PastSessionRecord[]>;
+  /**
+   * Does this agent's OWN conversation store still hold `agentSessionId` for
+   * `cwd` — i.e. would `resume()` reattach to a real conversation rather than
+   * dying on startup?
+   *
+   * This exists because holding an `agentSessionId` proves nothing: we capture
+   * it from the SessionStart hook, which fires before the user has submitted
+   * anything, and an agent that never received a prompt writes no transcript
+   * at all. Without this check, one in three history rows was a Resume button
+   * guaranteed to fail with `No conversation found with session ID: …`.
+   *
+   * Contract: **never throws**. A missing, unreadable, or empty store is
+   * `false` — a resumability probe must not be able to break the history
+   * endpoint or `resume()`'s pre-flight.
+   */
+  canResume(agentSessionId: string, cwd: string): Promise<boolean>;
   /**
    * Best-effort scrollback check for this harness's own known blocking
    * prompts (e.g. "trust this directory?"), for harnesses whose real
@@ -582,9 +644,17 @@ export type AnalyticsEventType =
  */
 export interface AnalyticsEvent {
   eventId: string;
-  /** Per-harnessSessionId monotonic counter from 1 — ordering + loss detection. */
+  /**
+   * Per-harnessSessionId counter from 1, for loss detection *within one
+   * process epoch* — NOT a session-lifetime ordering key. The counter lives
+   * in the server's memory (core/collector/seq.ts), so it restarts at 1 on
+   * every harness boot and on every fresh pty for the same session: a real
+   * resumed session reads 1, 2 then 1, 1, 1. A reset means "new epoch", never
+   * "events lost". Anything that orders events must sort by `(ts, seq)` —
+   * see core/session-record.ts.
+   */
   seq: number;
-  /** ISO-8601, client clock. Use seq (not ts) for intra-session ordering. */
+  /** ISO-8601, client clock. Primary ordering key; `seq` only breaks ties. */
   ts: string;
   /** Sapiom user id from auth; null when not logged in. */
   userId: string | null;
@@ -623,6 +693,112 @@ export interface CollectorBatch {
 }
 
 // ---------------------------------------------------------------------------
+// Session records (a past session's transcript, rebuilt from OUR events)
+// ---------------------------------------------------------------------------
+//
+// Reconstructed, never verbatim: the source is our own normalized analytics
+// events (see core/session-record.ts for the fold), so it works identically
+// for claude-code and codex — no vendor transcript file is involved, and
+// deleting one changes nothing here. The gaps that follow from that source
+// are enumerated in `limitations` so the UI can say so out loud rather than
+// implying the record is a full replay.
+
+/** One tool invocation inside a turn, from a `tool.call` event. */
+export interface SessionRecordToolCall {
+  /** Tool name as the agent reported it; null when the event omitted one. */
+  name: string | null;
+  /** Stringified tool input (JSON for structured inputs), possibly truncated. */
+  input: string | null;
+  /** Truncated stringified tool result — see {@link responseTruncated}. */
+  responseSummary: string | null;
+  /** True when the stored response hit the collector's size cap and the real
+   *  output was longer. The missing bytes are not recoverable from our log. */
+  responseTruncated: boolean;
+  /** ISO-8601 timestamp of the `tool.call` event. */
+  at: string;
+}
+
+/** One prompt→response turn. A turn opens on `prompt.submitted` and closes on
+ *  `turn.completed`; tool calls in between attach to it. */
+export interface SessionRecordTurn {
+  /** 1-based ordinal in the record — stable for deep links and test asserts. */
+  index: number;
+  /**
+   * The human prompt that opened the turn. Null for a turn our events imply
+   * but never saw a prompt for: tool calls or a completion that arrived with
+   * no open turn (a session whose recording started mid-turn, or an agent-
+   * initiated turn). Rendered as an explicit "no recorded prompt", never faked.
+   */
+  prompt: string | null;
+  /** ISO-8601 timestamp of the opening `prompt.submitted`; null when absent. */
+  promptAt: string | null;
+  toolCalls: SessionRecordToolCall[];
+  /**
+   * The assistant's final message for the turn. This is the Stop hook's LAST
+   * assistant message only — narration *between* tool calls is not in our
+   * event stream (see core/collector/transcript.ts). Null when the harness
+   * never captured one (Codex's rollout has no equivalent field).
+   */
+  assistantText: string | null;
+  /** Model that produced the turn, when the transcript backfill supplied it. */
+  model: string | null;
+  usage: { inputTokens: number | null; outputTokens: number | null } | null;
+  /** ISO-8601 timestamp of the closing `turn.completed`; null when open. */
+  completedAt: string | null;
+  /** True when no `turn.completed` ever closed this turn — the session was
+   *  killed mid-turn, or a new prompt superseded it. */
+  incomplete: boolean;
+}
+
+/**
+ * A known, structural gap in a reconstructed record. Codes (not prose) so the
+ * UI owns the wording and the set can grow without breaking older clients.
+ *
+ * - `truncated-tool-output`: at least one tool result hit the collector's size
+ *   cap; the full output is not in our log.
+ * - `assistant-narration-gap`: a turn has tool calls plus a final assistant
+ *   message, so whatever the agent said *between* those calls is missing.
+ * - `missing-assistant-text`: a turn completed with no assistant text at all
+ *   (Codex, whose rollout carries no equivalent of the Stop hook's field).
+ * - `incomplete-final-turn`: the last turn never completed — the session
+ *   ended mid-turn.
+ */
+export type SessionRecordLimitation =
+  | "truncated-tool-output"
+  | "assistant-narration-gap"
+  | "missing-assistant-text"
+  | "incomplete-final-turn";
+
+/** `GET /api/sessions/:id/record` response. */
+export interface SessionRecord {
+  /** The harness session this record was folded from. When several harness
+   *  sessions share one agent session (a resumed conversation), this is the
+   *  first of them and `mergedSessionIds` lists them all. */
+  harnessSessionId: string;
+  /** Every harnessSessionId folded into this record, in first-seen order. */
+  mergedSessionIds: string[];
+  /** The agent's own session id, when our events carried one. */
+  agentSessionId: string | null;
+  harness: HarnessKind;
+  /** cwd from the `session.start` event; null when it never recorded one. */
+  cwd: string | null;
+  /** ISO-8601 of the earliest event in the record. */
+  startedAt: string | null;
+  /** ISO-8601 of the `session.end` event; null for a session that never
+   *  reported ending (killed, or crashed). */
+  endedAt: string | null;
+  turns: SessionRecordTurn[];
+  /** Human prompts in the record — `turns.filter(t => t.prompt != null).length`. */
+  turnCount: number;
+  /** Events folded into this record (including ones no turn field shows). */
+  eventCount: number;
+  /** Always true. Present on the wire so no client can mistake a record for a
+   *  verbatim replay of what the user saw in their terminal. */
+  reconstructed: true;
+  limitations: SessionRecordLimitation[];
+}
+
+// ---------------------------------------------------------------------------
 // REST API surface  (all under /api, JSON, boot-token via X-Harness-Token)
 // ---------------------------------------------------------------------------
 //
@@ -630,6 +806,8 @@ export interface CollectorBatch {
 // POST   /api/sessions                  CreateSessionRequest → HarnessSession
 // GET    /api/sessions                  → HarnessSession[]
 // GET    /api/sessions/history?cwd=     → SessionSummary[]
+// POST   /api/sessions/adopt            AdoptSessionRequest → HarnessSession (register + resume a transcript-only row)
+// GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
@@ -653,6 +831,29 @@ export interface CreateSessionRequest {
   harness: HarnessKind;
   /** Profile id; omit for default. */
   profile?: string;
+}
+
+/**
+ * `POST /api/sessions/adopt` body — takes a transcript-only history row (one
+ * the registry never tracked, `SessionSummary.harnessSessionId` absent) into
+ * the registry and immediately resumes it, so a row whose transcript really is
+ * there reattaches to the agent instead of quietly starting a fresh session.
+ *
+ * The server re-verifies `resumeMode` itself via `HarnessAdapter.canResume`
+ * before registering anything — a client claim is never taken on trust, and a
+ * `rehydrate` row 409s with `SESSION_NOT_RESUMEABLE` rather than leaving a
+ * phantom record behind.
+ */
+export interface AdoptSessionRequest {
+  /** The agent's own conversation id, as reported by `GET /sessions/history`. */
+  agentSessionId: string;
+  harness: HarnessKind;
+  cwd: string;
+  /** Display title carried over from the history row. */
+  title: string;
+  /** When the transcript was last touched — becomes the adopted record's
+   *  `createdAt`/`lastActiveAt` so history keeps sorting it where it was. */
+  lastActiveAt: string;
 }
 
 /** Inject text into the session pty (used by macros and the Visualize button). */

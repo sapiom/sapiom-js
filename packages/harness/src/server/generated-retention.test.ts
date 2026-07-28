@@ -29,6 +29,7 @@ function fakeClaudeAdapter(): HarnessAdapter {
       cwd: opts.cwd,
     }),
     listPastSessions: async () => [],
+    canResume: async () => true,
   };
 }
 

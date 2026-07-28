@@ -286,6 +286,7 @@ describe.skipIf(!nodePty)("transcript-fixture replay via SessionManager (real pt
         cwd: path.dirname(FAKE_AGENT),
       }),
       listPastSessions: async () => [],
+      canResume: async () => true,
     };
   }
 

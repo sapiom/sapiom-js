@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -290,6 +290,90 @@ describe("CodexAdapter", () => {
       const summaries = await adapter.listPastSessions(cwd);
       const ids = summaries.map((s) => s.agentSessionId).sort();
       expect(ids).toEqual([idA, idB].sort());
+    });
+  });
+
+  describe("canResume", () => {
+    const cwd = "/Users/test/my-project";
+    const sessionId = "019e62d5-a020-75f1-b5e8-253383076f83";
+    let homeDir: string;
+
+    beforeEach(async () => {
+      homeDir = await mkdtemp(join(tmpdir(), "harness-codex-canresume-"));
+    });
+
+    afterEach(async () => {
+      await rm(homeDir, { recursive: true, force: true });
+    });
+
+    async function writeRollout(id: string, rolloutCwd: string, day = "01"): Promise<void> {
+      const dir = join(homeDir, ".codex", "sessions", "2026", "01", day);
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, `rollout-2026-01-${day}T00-00-00-${id}.jsonl`),
+        [sessionMetaLine(id, rolloutCwd, `2026-01-${day}T00:00:00.000Z`), userMessageLine("hello")].join("\n") + "\n",
+        "utf8",
+      );
+    }
+
+    it("is true when a rollout file's session_meta carries that id and cwd", async () => {
+      await writeRollout(sessionId, cwd);
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(true);
+    });
+
+    it("is false for a phantom: an id we hold with no rollout file written for it", async () => {
+      // Codex writes no rollout until the FIRST turn is submitted (the same
+      // rule detectBlockingPrompt exists for), so an abandoned session leaves
+      // us a SessionStart id and nothing behind it. Another session in the
+      // same directory did run, so the sessions tree itself is populated.
+      await writeRollout("019e62d5-a020-75f1-b5e8-253383076f99", cwd);
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+    });
+
+    it("is false when no sessions directory exists at all", async () => {
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+    });
+
+    it("is scoped to the cwd: the right id recorded against another directory does not count", async () => {
+      await writeRollout(sessionId, "/Users/test/other-project");
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(false);
+      expect(await adapter.canResume(sessionId, "/Users/test/other-project")).toBe(true);
+    });
+
+    it("finds a match across the YYYY/MM/DD shards, not just the first day", async () => {
+      await writeRollout("019e62d5-a020-75f1-b5e8-253383076f01", cwd, "01");
+      await writeRollout(sessionId, cwd, "15");
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, cwd)).toBe(true);
+    });
+
+    it("matches a rollout recorded against the realpath of a symlinked cwd", async () => {
+      // Not vendor-confirmed for codex (it is for claude-code), so the adapter
+      // accepts either form rather than betting on one — a probe that answers
+      // "no" for a conversation that exists is the failure worth avoiding.
+      const root = await mkdtemp(join(tmpdir(), "harness-codex-symlink-"));
+      const realProject = join(root, "real-project");
+      const linkedProject = join(root, "linked-project");
+      await mkdir(realProject, { recursive: true });
+      await symlink(realProject, linkedProject);
+      await writeRollout(sessionId, await realpath(realProject));
+
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume(sessionId, linkedProject)).toBe(true);
+      expect(await adapter.listPastSessions(linkedProject)).toHaveLength(1);
+
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it("never throws on an empty or malformed id", async () => {
+      await writeRollout(sessionId, cwd);
+      const adapter = new CodexAdapter({ homeDir });
+      expect(await adapter.canResume("", cwd)).toBe(false);
+      expect(await adapter.canResume("../../etc/passwd", cwd)).toBe(false);
     });
   });
 });

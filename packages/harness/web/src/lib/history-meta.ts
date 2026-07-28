@@ -1,4 +1,39 @@
-import type { HarnessKind } from "@shared/types";
+import type { HarnessKind, SessionSummary } from "@shared/types";
+
+/**
+ * Folds a fresh history load into the existing store: rows for the directories
+ * that answered are REPLACED, every other directory's rows are retained.
+ *
+ * Callers request different scopes — the sessions popover asks for up to twelve
+ * directories, the dead pane for the single one it needs a verified
+ * `resumeMode` for. Replacing the whole store (what a plain `setHistory` does)
+ * therefore lets the narrow caller evict the broad caller's rows, and the rail
+ * rows that read `resumeMode` out of this store fall back to "checking…" until
+ * something happens to reload them.
+ *
+ * Scoping by cwd rather than merging unconditionally keeps the other direction
+ * honest too: re-loading a directory must be able to DROP a row whose
+ * transcript is gone, which a blind merge could never do.
+ *
+ * Deduped by `agentSessionId` (a directory can appear under more than one
+ * source) with fresh rows winning, and sorted newest first — the menu renders
+ * one flat, global list.
+ */
+export function mergeHistory(
+  previous: readonly SessionSummary[],
+  refreshed: readonly SessionSummary[],
+  refreshedCwds: ReadonlySet<string>,
+): SessionSummary[] {
+  const byAgentSessionId = new Map<string, SessionSummary>();
+  for (const summary of refreshed) {
+    if (!byAgentSessionId.has(summary.agentSessionId)) byAgentSessionId.set(summary.agentSessionId, summary);
+  }
+  for (const summary of previous) {
+    if (refreshedCwds.has(summary.cwd)) continue; // superseded by this load
+    if (!byAgentSessionId.has(summary.agentSessionId)) byAgentSessionId.set(summary.agentSessionId, summary);
+  }
+  return Array.from(byAgentSessionId.values()).sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt));
+}
 
 /** Product names for the agent running a session — shared by the rail's
  *  session rows and the past-sessions list so the same agent never reads
@@ -30,10 +65,15 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
  * "under a minute" / "42m" / "1h 12m" / "2d 3h" — how long a session ran,
  * from its createdAt/lastActiveAt pair. Null on bad timestamps so callers
  * drop the row instead of showing a fabricated duration.
+ *
+ * A zero (or inverted) span is also null, not "under a minute": a session
+ * adopted out of transcript history has `createdAt === lastActiveAt` because
+ * nothing has run under our management yet, and "Ran for under a minute" would
+ * be a number we invented. No measurable span → no duration row.
  */
 export function formatDuration(startIso: string, endIso: string): string | null {
   const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return null;
+  if (!Number.isFinite(ms) || ms <= 0) return null;
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 1) return "under a minute";
   if (minutes < 60) return `${minutes}m`;
@@ -48,18 +88,30 @@ export function formatDuration(startIso: string, endIso: string): string | null 
  * turn count when the server parsed them (optional
  * fields, absent on older servers), then relative time. Parts that are
  * absent simply drop out; nothing is fabricated.
+ *
+ * `turnCount` (our own event index: exact at any size) wins over
+ * `messageCount` (the vendor-transcript scan, which gives up above its size
+ * cap) whenever both are present.
  */
-export function historyRowMeta(summary: {
-  harness: HarnessKind;
-  gitBranch?: string;
-  messageCount?: number;
-  lastActiveAt: string;
-}): string {
+export function historyRowMeta(
+  summary: {
+    harness: HarnessKind;
+    gitBranch?: string;
+    messageCount?: number;
+    turnCount?: number;
+    lastActiveAt: string;
+  },
+  now: number = Date.now(),
+): string {
   const parts: string[] = [HARNESS_LABELS[summary.harness]];
   if (summary.gitBranch) parts.push(summary.gitBranch);
-  if (summary.messageCount != null && summary.messageCount > 0) {
-    parts.push(`${summary.messageCount} ${summary.messageCount === 1 ? "turn" : "turns"}`);
+  const turns = summary.turnCount ?? summary.messageCount;
+  if (turns != null && turns > 0) {
+    parts.push(`${turns} ${turns === 1 ? "turn" : "turns"}`);
   }
-  parts.push(formatRelativeTime(summary.lastActiveAt));
+  // Relative time keys off lastActiveAt, never createdAt — a row's age is when
+  // it was last actually active, and resume() no longer stamps that field for
+  // an attempt that never produced a pty.
+  parts.push(formatRelativeTime(summary.lastActiveAt, now));
   return parts.join(" · ");
 }

@@ -37,6 +37,7 @@ function makeAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
     launch: (opts: LaunchOpts): SpawnSpec => ({ command: "claude", args: [], env: {}, cwd: opts.cwd }),
     resume: (_id: string, opts: LaunchOpts): SpawnSpec => ({ command: "claude", args: [], env: {}, cwd: opts.cwd }),
     listPastSessions: async () => [],
+    canResume: async () => true,
     launchTask: (opts: LaunchOpts): SpawnSpec => ({
       command: "claude",
       args: ["-p", opts.prompt ?? ""],

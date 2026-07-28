@@ -7,7 +7,7 @@
 
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { readFile, readdir, stat, open } from "node:fs/promises";
+import { readFile, readdir, realpath, stat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -16,17 +16,64 @@ import type {
   DoctorCheck,
   HarnessAdapter,
   LaunchOpts,
-  SessionSummary,
+  PastSessionRecord,
   SpawnSpec,
 } from "../../shared/types.js";
 /**
  * Maps a project cwd to the directory name Claude Code uses for its transcript
  * store under `~/.claude/projects/`. Claude Code applies this encoding before
  * creating the directory — see its own source for the canonical definition.
+ *
+ * Exported so tests assert against the real encoder rather than a copy of it:
+ * a private duplicate in the test file is exactly the thing that would let
+ * encoder drift pass the tests written to catch it.
+ *
+ * Encodes the path as given. Callers starting from a user-supplied cwd want
+ * {@link projectDirsFor}, which handles the symlink case this encoder can't
+ * see on its own — see its docstring.
  */
-function encodeProjectPath(cwd: string): string {
+export function encodeProjectPath(cwd: string): string {
   const normalized = cwd.replace(/\\/g, "/");
   return normalized.replace(/:/g, "").replace(/[/.]/g, "-");
+}
+
+/**
+ * Every directory under `~/.claude/projects` that could hold `cwd`'s
+ * transcripts, realpath-resolved form first.
+ *
+ * Claude Code encodes the cwd's **realpath**, not the path the session was
+ * opened through — so a session in `/tmp/foo` on macOS stores its transcripts
+ * under the encoding of `/private/tmp/foo` (`/tmp` is a symlink), and one in
+ * `os.tmpdir()` under `/private/var/folders/…`. Both shapes are present in a
+ * real `~/.claude` on this machine. Encoding the registry's raw `cwd` string
+ * therefore stats a path that does not exist, which for a resumability probe
+ * is worse than a miss: it reports "the agent has no conversation" for a
+ * conversation the agent has, and refuses a resume that would have worked.
+ *
+ * The raw form is kept as a second candidate (when it differs) so nothing that
+ * resolved before can stop resolving, and a cwd that no longer exists on disk
+ * — realpath fails — still falls back to it.
+ *
+ * Exported for the session-record reader's optional vendor enrichment
+ * (core/session-record.ts), which reads the same transcript files. Claude's
+ * directory layout — symlink handling included — is defined here once.
+ */
+export async function projectDirsFor(homeDir: string, cwd: string): Promise<string[]> {
+  const names = new Set<string>();
+  const resolved = await realpath(cwd).catch(() => undefined);
+  if (resolved) names.add(encodeProjectPath(resolved));
+  names.add(encodeProjectPath(cwd));
+  return [...names].map((name) => join(homeDir, ".claude", "projects", name));
+}
+
+/**
+ * A session id we're willing to interpolate into a transcript path. Claude
+ * Code's ids are UUIDs; anything carrying a separator or a `..` segment is
+ * either corrupt registry data or an attempt to walk out of the project dir
+ * via `POST /api/sessions/adopt`, and is never a real transcript either way.
+ */
+function isSafeSessionId(agentSessionId: string): boolean {
+  return agentSessionId.length > 0 && /^[A-Za-z0-9._-]+$/.test(agentSessionId) && !agentSessionId.includes("..");
 }
 
 const execFileAsync = promisify(execFile);
@@ -343,40 +390,75 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     };
   }
 
-  async listPastSessions(cwd: string): Promise<SessionSummary[]> {
-    const projectDir = join(this.homeDir, ".claude", "projects", encodeProjectPath(cwd));
-    let entries: string[];
-    try {
-      entries = await readdir(projectDir);
-    } catch {
-      return [];
+  /**
+   * See `HarnessAdapter.canResume`. One `stat` per candidate project dir on the
+   * transcript `claude --resume <id>` would read — `<project dir>/<id>.jsonl`
+   * — sharing `projectDirsFor` with `listPastSessions` so the vendor's
+   * directory layout, symlink handling included, stays defined in one place.
+   *
+   * A zero-byte file counts as absent: the transcript is created before the
+   * first turn is written, so an empty one is precisely the never-prompted
+   * session that `--resume` rejects with "No conversation found".
+   *
+   * Deliberately a weaker test than `listPastSessions`', which additionally
+   * requires a line OUR parser understands. A non-empty transcript we can't
+   * parse is still Claude's to interpret, and refusing the resume on the
+   * strength of our own parser's limits would be the same fail-closed mistake
+   * as the symlink bug above. So this can say `agent-resume` for a transcript
+   * that never shows up as a history row of its own.
+   */
+  async canResume(agentSessionId: string, cwd: string): Promise<boolean> {
+    if (!isSafeSessionId(agentSessionId)) return false;
+    for (const projectDir of await projectDirsFor(this.homeDir, cwd)) {
+      const fileStat = await stat(join(projectDir, `${agentSessionId}.jsonl`)).catch(() => undefined);
+      if (fileStat != null && fileStat.isFile() && fileStat.size > 0) return true;
     }
+    return false;
+  }
 
-    const summaries: SessionSummary[] = [];
-    for (const file of entries) {
-      if (!file.endsWith(".jsonl")) continue;
-      const filePath = join(projectDir, file);
-      const agentSessionId = basename(file, ".jsonl");
-      const fileStat = await stat(filePath).catch(() => undefined);
-      if (!fileStat) continue;
-      const { head, tail, messageCount } = await scanTranscript(
-        filePath,
-        fileStat.size,
-        this.fullScanMaxBytes,
-      );
-      if (head.length === 0 && tail.length === 0) continue;
-      summaries.push({
-        agentSessionId,
-        harness: "claude-code",
-        cwd,
-        // Never a bare UUID: falls back to the directory basename, not the
-        // session id, when a session has no title/summary/prompt at all.
-        title: extractTitle(head, tail, basename(cwd) || agentSessionId),
-        lastActiveAt: fileStat.mtime.toISOString(),
-        source: "transcript",
-        gitBranch: extractGitBranch(head, tail),
-        messageCount,
-      });
+  async listPastSessions(cwd: string): Promise<PastSessionRecord[]> {
+    const summaries: PastSessionRecord[] = [];
+    // Deduped across candidate dirs: a cwd whose realpath differs contributes
+    // two directories, and the same session must not surface twice.
+    const seen = new Set<string>();
+    for (const projectDir of await projectDirsFor(this.homeDir, cwd)) {
+      let entries: string[];
+      try {
+        entries = await readdir(projectDir);
+      } catch {
+        continue;
+      }
+
+      for (const file of entries) {
+        if (!file.endsWith(".jsonl")) continue;
+        const filePath = join(projectDir, file);
+        const agentSessionId = basename(file, ".jsonl");
+        if (seen.has(agentSessionId)) continue;
+        const fileStat = await stat(filePath).catch(() => undefined);
+        if (!fileStat) continue;
+        const { head, tail, messageCount } = await scanTranscript(
+          filePath,
+          fileStat.size,
+          this.fullScanMaxBytes,
+        );
+        if (head.length === 0 && tail.length === 0) continue;
+        seen.add(agentSessionId);
+        summaries.push({
+          agentSessionId,
+          harness: "claude-code",
+          // The cwd the CALLER asked about, not the resolved one — this row is
+          // how that directory's history is presented, and a session started
+          // in it must resume in it.
+          cwd,
+          // Never a bare UUID: falls back to the directory basename, not the
+          // session id, when a session has no title/summary/prompt at all.
+          title: extractTitle(head, tail, basename(cwd) || agentSessionId),
+          lastActiveAt: fileStat.mtime.toISOString(),
+          source: "transcript",
+          gitBranch: extractGitBranch(head, tail),
+          messageCount,
+        });
+      }
     }
 
     return summaries.sort((a, b) => (a.lastActiveAt < b.lastActiveAt ? 1 : -1));

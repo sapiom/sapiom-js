@@ -20,7 +20,7 @@
 
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -29,7 +29,7 @@ import type {
   DoctorCheck,
   HarnessAdapter,
   LaunchOpts,
-  SessionSummary,
+  PastSessionRecord,
   SpawnSpec,
 } from "../../shared/types.js";
 
@@ -162,6 +162,26 @@ function extractTitleFromHead(content: string, fallback: string): string {
   return fallback;
 }
 
+/**
+ * The cwd strings a rollout's `session_meta.cwd` could carry for this
+ * directory: the path as given, plus its realpath when they differ.
+ *
+ * Claude Code is confirmed to record the realpath rather than the path a
+ * session was opened through (see `projectDirsFor` in the claude-code adapter
+ * — on macOS `/tmp` is a symlink to `/private/tmp`, and both encodings exist
+ * in a real `~/.claude`). Codex's own behaviour here is NOT vendor-confirmed,
+ * so this accepts either form rather than betting on one: matching a superset
+ * can only find rollouts that a raw string comparison would have missed, and
+ * a resumability probe answering "no" for a conversation that exists is the
+ * failure mode worth engineering against.
+ */
+async function cwdVariants(cwd: string): Promise<Set<string>> {
+  const variants = new Set([cwd]);
+  const resolved = await realpath(cwd).catch(() => undefined);
+  if (resolved) variants.add(resolved);
+  return variants;
+}
+
 /** Recursively collect `.jsonl` files under Codex's date-sharded sessions
  * root (`YYYY/MM/DD/rollout-*.jsonl`). Bounded depth as a safety guard
  * against unexpectedly deep/cyclical directory structures. */
@@ -247,14 +267,39 @@ export class CodexAdapter implements HarnessAdapter {
     return TRUST_PROMPT_PATTERN.test(stripAnsi(scrollback));
   }
 
-  async listPastSessions(cwd: string): Promise<SessionSummary[]> {
+  /**
+   * See `HarnessAdapter.canResume`. Reuses the same rollout walk +
+   * `session_meta` read `listPastSessions` is built on, so "codex has this
+   * conversation" means exactly one thing in both places: a rollout file
+   * under `~/.codex/sessions` whose `session_meta` carries this id AND this
+   * cwd. The cwd match matters — `codex resume <id>` run from another
+   * directory is a different session's context, not this row.
+   *
+   * The never-prompted case documented on `detectBlockingPrompt` is why this
+   * can be false for an id we hold: codex writes no rollout file at all until
+   * the first turn is submitted, so a session the user opened and abandoned
+   * leaves us a `SessionStart` id with nothing behind it.
+   */
+  async canResume(agentSessionId: string, cwd: string): Promise<boolean> {
+    if (!agentSessionId) return false;
+    const root = join(this.homeDir, ".codex", "sessions");
+    const cwds = await cwdVariants(cwd);
+    for (const filePath of await collectRolloutFiles(root)) {
+      const meta = await readSessionMeta(filePath);
+      if (meta?.id === agentSessionId && cwds.has(meta.cwd)) return true;
+    }
+    return false;
+  }
+
+  async listPastSessions(cwd: string): Promise<PastSessionRecord[]> {
     const root = join(this.homeDir, ".codex", "sessions");
     const files = await collectRolloutFiles(root);
+    const cwds = await cwdVariants(cwd);
 
-    const summaries: SessionSummary[] = [];
+    const summaries: PastSessionRecord[] = [];
     for (const filePath of files) {
       const meta = await readSessionMeta(filePath);
-      if (!meta || meta.cwd !== cwd) continue;
+      if (!meta || !cwds.has(meta.cwd)) continue;
 
       const fileStat = await stat(filePath).catch(() => undefined);
       const lastActiveAt = fileStat ? fileStat.mtime.toISOString() : new Date(0).toISOString();

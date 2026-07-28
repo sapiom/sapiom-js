@@ -564,28 +564,70 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   // switching directories.
   await expect(page.getByTestId("exited-session-sess-rfq")).toBeVisible();
 
-  // A transcript entry carries branch, turn count, and relative time;
-  // and it is tagged archived.
+  // A transcript entry carries branch, turn count, and relative time. Its
+  // transcript really is on disk, so the server reports agent-resume and the
+  // row is tagged resumable — it used to be hardcoded "archived" regardless.
+  //
+  // The turn count is OUR event index's exact count (turnCount: 3), which
+  // outranks the vendor transcript scan's messageCount (12) that the same
+  // fixture also carries.
   const transcript = page.getByTestId("history-2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33");
-  await expect(transcript.locator(".past-session-tag")).toHaveText("archived");
+  await expect(transcript.locator(".past-session-tag")).toHaveText("resumable");
   await expect(transcript).toContainText("feat/screening-webhook");
-  await expect(transcript).toContainText("12 turns");
+  await expect(transcript).toContainText("3 turns");
+  await expect(transcript).not.toContainText("12 turns");
   await expect(transcript).toContainText("ago");
 
   await page.screenshot({ path: "web/e2e/screenshots/past-sessions-menu.png" });
 
   // Clicking the transcript entry opens the review pane — nothing starts
-  // silently; starting fresh is the pane's explicit, honestly-labeled action.
+  // silently; resuming is the pane's explicit, honestly-labeled action.
   await transcript.click();
   const pane = page.getByTestId("past-session-pane");
   await expect(pane).toBeVisible();
   await expect(page.getByTestId("session-context-title")).toHaveText("Wire the screening webhook");
-  await expect(page.getByTestId("past-session-start")).toHaveText("New session here");
-  await expect(page.getByTestId("past-session-reason")).toContainText("fresh session");
+  await expect(page.getByTestId("past-session-start")).toHaveText("Resume");
+  // Resumable → no "we can't reattach" disclaimer to show.
+  await expect(page.getByTestId("past-session-reason")).toHaveCount(0);
 
+  // Adopted into the registry and resumed for real — NOT a fresh sess-mock
+  // session, which is what the hardcoded resumable={false} used to force.
   await page.getByTestId("past-session-start").click();
   await expect(page.getByTestId("past-session-pane")).toHaveCount(0);
-  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", /sess-mock/);
+  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", /sess-adopted/);
+});
+
+test("a phantom past session is tagged archived and never offers Resume", async ({ page }) => {
+  // sess-phantom holds an agentSessionId (our SessionStart hook fired) but the
+  // agent wrote no transcript, because the session ended before its first
+  // prompt. On one real machine 16 of 49 registry rows measured this shape, and
+  // every one rendered "resumable" and failed with exit 1 on click.
+  await page.getByTestId("history-trigger").click();
+  await expect(page.getByTestId("history-menu")).toBeVisible();
+
+  const phantom = page.getByTestId("exited-session-sess-phantom");
+  await expect(phantom).toBeVisible();
+  const tag = phantom.locator(".past-session-tag");
+  await expect(tag).toHaveText("archived");
+  await expect(tag).toHaveAttribute("data-resumable", "false");
+
+  // A genuinely resumable row in the same directory still reads resumable —
+  // the tag reflects a per-row probe, not a blanket downgrade.
+  await expect(
+    page.getByTestId("exited-session-sess-leasing").locator(".past-session-tag"),
+  ).toHaveText("resumable");
+
+  // Opening it lands on the dead pane with Resume disabled and the real reason
+  // stated, rather than a live Resume button and a bare "exit code 1".
+  await phantom.click();
+  const pane = page.getByTestId("dead-session-pane");
+  await expect(pane).toBeVisible();
+  await expect(page.getByTestId("dead-session-resume")).toBeDisabled();
+  const reason = page.getByTestId("dead-session-resume-reason");
+  await expect(reason).toContainText("no saved conversation");
+  await expect(reason).toContainText("before its first prompt");
+
+  await page.screenshot({ path: "web/e2e/screenshots/phantom-session-pane.png" });
 });
 
 test.describe("dead sessions never trap the user", () => {
