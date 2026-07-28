@@ -118,7 +118,6 @@ const RouteInput = z.object({ order: OrderSchema, receivedAt: z.string(), catego
 const intake = defineStep({
   name: 'intake',
   next: ['classify'],
-  description: 'Logs the incoming order and stamps the time it arrived.',
   async run(input, ctx) {
     ctx.logger.info('order received', { input });
     return goto('classify', { order: input, receivedAt: new Date().toISOString() });
@@ -129,8 +128,6 @@ const classify = defineStep({
   name: 'classify',
   next: ['route'],
   inputSchema: ClassifyInput,
-  description: 'Tags the order with a category for routing.',
-  capabilities: ['rules.classify'],
   async run(input, ctx) {
     const category = input.order.category ?? 'general';
     ctx.logger.info('classified order', { category });
@@ -142,8 +139,6 @@ const route = defineStep({
   name: 'route',
   next: ['auto_resolve', 'escalate'],
   inputSchema: RouteInput,
-  description: 'Branches on the category: billing disputes escalate to a human; everything else auto-resolves.',
-  capabilities: ['rules.evaluate'],
   async run(input) {
     const needsHuman = input.category === 'billing_dispute';
     return goto(needsHuman ? 'escalate' : 'auto_resolve', input);
@@ -155,7 +150,6 @@ const auto_resolve = defineStep({
   next: [],
   terminal: true,
   inputSchema: RouteInput,
-  description: 'Auto-resolves the order and completes.',
   async run(input) {
     return terminate({ resolved: true, category: input.category });
   },
@@ -166,7 +160,6 @@ const escalate = defineStep({
   next: [],
   terminal: true,
   inputSchema: RouteInput,
-  description: 'Escalates the order to a human for manual handling.',
   async run(input, ctx) {
     ctx.logger.info('escalating to human', { category: input.category });
     return terminate({ resolved: false, escalated: true });
@@ -175,7 +168,6 @@ const escalate = defineStep({
 
 export const agent = defineAgent({
   name: 'order-triage',
-  description: 'Triages incoming support orders end to end: classify, route, then auto-resolve or escalate to a human.',
   entry: 'intake',
   steps: { intake, classify, route, auto_resolve, escalate },
 });

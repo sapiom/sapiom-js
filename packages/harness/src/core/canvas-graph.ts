@@ -12,8 +12,7 @@
 import type { AgentManifest, AgentStepManifest } from "@sapiom/agent";
 import { runManifestCheck } from "./canvas-manifest-check.js";
 import {
-  detectWorkflowLaunches,
-  detectStepCapabilities,
+  scanWorkflowSources,
   type DetectedLaunch,
   type DetectedCapability,
 } from "./canvas-interconnections.js";
@@ -225,8 +224,9 @@ export async function extractWorkflowGraph(sourceDir: string): Promise<Extractio
   if (!result.ok) return { ok: false, reason: result.reason };
   const graph = graphFromManifest(result.manifest as AgentManifest, result.warnings);
   const stepIds = new Set(graph.nodes.map((n) => n.id));
-  const launches = await detectWorkflowLaunches(sourceDir, stepIds);
-  const capabilities = await detectStepCapabilities(sourceDir, stepIds);
+  // One walk over the sources yields both — halves the I/O on the auto-render
+  // hot path (this runs on every workflow-source save).
+  const { launches, capabilities } = await scanWorkflowSources(sourceDir, stepIds);
   const withLaunches = mergeLaunchesIntoGraph(graph, launches);
   return { ok: true, graph: mergeCapabilitiesIntoGraph(withLaunches, capabilities) };
 }
