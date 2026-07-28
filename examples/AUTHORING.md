@@ -145,6 +145,25 @@ choosing whether to use your template.
 Two files per template feed the UI. Keep them consistent — the same template, described
 the same way, at two levels of depth.
 
+### House-style limits (`pnpm examples:check` warns)
+
+The gallery card has finite room, and the rules below are sized from it — a name that wraps the
+title or a use case that can't sit on a chip is a layout bug, not a matter of taste.
+
+| Field | Limit |
+|---|---|
+| `name` | ≤ 32 chars. No `→`, no `/`, no parentheticals, no mechanism word (`saga`, `engine`, `pipeline`, `runner`, `endpoint`, `gate`, `durable`, `keep-alive`, …). |
+| `description` | ≤ 160 chars — one plain sentence. |
+| `whatItDoes` | ≤ 320 chars, and **lead with the verb**. "Create a cited account brief…", not "For turning a…". |
+| `useCases[]` | ≤ 40 chars each — a short noun phrase ("Relationship graph"), not a sentence. |
+
+**Name the outcome, not the machinery.** This is the same rule `category` already follows: the axis
+is *"what am I trying to produce?"* Mechanism words belong in `tags`, which is what drives search —
+putting one in the name doesn't make it more findable, it just spends the title on it.
+
+These are warnings today, not errors, because the existing 26 templates predate them. Don't add to
+the pile; the count is a burn-down.
+
 ### `examples/registry.json` — the gallery index (one entry per template)
 
 | Field | Shows up as | Write it as |

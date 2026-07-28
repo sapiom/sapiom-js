@@ -27,6 +27,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import { createManifestChecker } from "./examples-manifest-check.mjs";
+import { checkCopy } from "./examples-copy-check.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXAMPLES_DIR = path.join(ROOT, "examples");
@@ -70,6 +71,7 @@ for (let i = 0; i < ids.length; i++) {
 // manifest check needs the same resolved path — and because a manifest that only
 // had to *exist* is how `repoSlug: "my-app"` shipped.
 const checkManifest = createManifestChecker(ajv, manifestSchema);
+const manifests = new Map(); // id -> parsed manifest, reused by the copy check
 let manifestsChecked = 0;
 for (const t of templates) {
   if (!t.sourcePath) continue; // required-ness is a schema concern (check 1).
@@ -96,6 +98,7 @@ for (const t of templates) {
     continue;
   }
   errors.push(...checkManifest(t.id, manifest));
+  manifests.set(t.id, manifest);
   manifestsChecked++;
 }
 
@@ -139,6 +142,24 @@ for (const [label, ids] of [
       `warning: ${ids.length} template(s) missing \`${label}\`: ${ids.join(", ")}`,
     );
   }
+}
+
+// 6. House-style copy rules. Warnings on purpose — every limit fails every
+// template today, so a gate would block every PR. The count below is the
+// burn-down; when it hits zero, move the caps into the schemas as `maxLength`
+// and flip these to `errors.push`. See scripts/examples-copy-check.mjs.
+const copyWarnings = templates.flatMap((t) =>
+  checkCopy(t, manifests.get(t.id) ?? null),
+);
+if (copyWarnings.length > 0) {
+  const affected = new Set(
+    copyWarnings.map((w) => w.slice(w.indexOf('"') + 1, w.indexOf('" '))),
+  );
+  console.warn(
+    `\ncopy style: ${copyWarnings.length} warning(s) across ${affected.size} of ${templates.length} template(s) — not a gate yet:\n`,
+  );
+  for (const w of copyWarnings) console.warn(`  - ${w}`);
+  console.warn("");
 }
 
 console.log(
