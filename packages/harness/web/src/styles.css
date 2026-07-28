@@ -2675,7 +2675,11 @@ input {
      the bound is now the window rather than a pane, and a card taller than the
      viewport would put its own actions off-screen. */
   max-height: 100%;
-  overflow: hidden;
+  /* `auto`, never `hidden`. Hidden is how the cap got honoured by making content
+     unreachable — at a 420px viewport the card clipped its own bottom 225px. The
+     list below yields first (it is what grows with use); this is the scrollbar of
+     last resort, for a window too short to hold even the fixed part. */
+  overflow-y: auto;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
@@ -2694,6 +2698,13 @@ input {
   display: flex;
   flex-direction: column;
   gap: var(--sp3);
+  /* Load-bearing, and the reason the card's max-height alone was not enough: a
+     flex item will not shrink below its content without this, and the shrink has
+     to propagate through EVERY ancestor between the card and the list that
+     yields. With the chain broken here, the card honoured its cap by clipping
+     its own bottom — at a 420px viewport it hid 225px of content, putting the
+     recents rows below the fold with no way to scroll to them. */
+  min-height: 0;
 }
 
 .welcome-title {
@@ -2891,7 +2902,10 @@ input {
      full height and pushes the card past the cap anyway. The heading and the
      two actions above stay put; only the list scrolls, and only when it has
      to. */
-  min-height: 0;
+  /* Floor, not zero: a bare `min-height: 0` let the list crush to an 8px scroll
+     window at short viewports — technically scrollable, useless to read. It
+     yields to this point, and past it the card scrolls instead. */
+  min-height: 5rem;
   overflow-y: auto;
 }
 
