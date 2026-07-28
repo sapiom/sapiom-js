@@ -782,6 +782,11 @@ class MockApi implements HarnessApi {
       status: "starting",
       createdAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
+      // Mirrors the real server: portable continue only claims to have carried
+      // context when a record for that id exists. The fixtures have records for
+      // MOCK_SESSION_RECORDS' keys and nothing else.
+      rehydratedFrom:
+        req.rehydrateFrom && MOCK_SESSION_RECORDS[req.rehydrateFrom] ? req.rehydrateFrom : null,
       ready: false,
     };
     this.sessions = [...this.sessions, session];

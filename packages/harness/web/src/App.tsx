@@ -672,6 +672,10 @@ export const App = (): JSX.Element => {
           onToggleTelemetry={async (next) => {
             await harness.updateSettings({ telemetryOptIn: next });
           }}
+          rollingSummary={harness.settings?.rollingSummary === true}
+          onToggleRollingSummary={async (next) => {
+            await harness.updateSettings({ rollingSummary: next });
+          }}
           onStartAuth={harness.startAuth}
           onDisconnect={harness.disconnect}
           settingsOpen={settingsOpen}
@@ -809,6 +813,13 @@ export const App = (): JSX.Element => {
                   resumeMode={deadResumeMode}
                   loadRecord={harness.sessionRecord}
                   onResume={() => void harness.resumeSession(activeSession.id)}
+                  onContinue={() =>
+                    void harness.rehydrateSession({
+                      cwd: activeSession.cwd,
+                      harness: activeSession.harness,
+                      from: activeSession.id,
+                    })
+                  }
                   onClose={() => void harness.closeSession(activeSession.id)}
                 />
               ) : showAgentEmpty && focusedWorkflow ? (

@@ -161,6 +161,16 @@ export interface HarnessSession {
    *  HARNESS_CONTEXT_FILE in the session's cwd so the agent can read it. */
   boundWorkflowPath: string | null;
   /**
+   * The prior session this one was seeded from (portable continue — see
+   * core/rehydration.ts), when a brief was ACTUALLY produced and delivered.
+   * Null/absent otherwise, including when the client asked to rehydrate from
+   * an id our event log holds nothing for: this field is the record of what
+   * happened, not of what was requested, so the UI can never present an
+   * empty-handed fresh session as a continuation. Absent on sessions
+   * persisted by builds from before this existed.
+   */
+  rehydratedFrom?: string | null;
+  /**
    * `status === "running"` only means the pty is alive — the agent's TUI
    * can still be sitting on a blocking prompt (most commonly: "trust this
    * directory?") that isn't accepting real input yet. `ready` is the
@@ -288,7 +298,32 @@ export interface LaunchOpts {
   /** Only consulted by `launchTask` — hard cap on agent turns
    *  (`--max-turns`), so a bounded task can't run away. */
   maxTurns?: number;
+  /**
+   * Set by the launch-opts builder when this launch's context was seeded from
+   * a prior session's recorded events (portable continue — see
+   * core/rehydration.ts). Carries the id the brief was built from. Adapters
+   * ignore it entirely; `SessionManager.create()` copies it onto
+   * {@link HarnessSession.rehydratedFrom} so the UI can say whether the
+   * continue really carried context instead of implying it did.
+   */
+  rehydratedFrom?: string;
 }
+
+/**
+ * How a harness receives the rehydration brief for a continued session.
+ *
+ * - `launch-flag`: the adapter puts `LaunchOpts.systemPromptFile`'s contents in
+ *   front of the agent at spawn time (claude-code's `--append-system-prompt`,
+ *   codex's `developer_instructions`), so composing the brief into that file is
+ *   the whole delivery.
+ * - `post-ready-injection`: the harness has no such flag, so the brief is sent
+ *   through the ordinary input path once the session reports `ready` — gated on
+ *   readiness so it is never written into a TUI sitting on a trust prompt.
+ *
+ * See `systemPromptDeliveryFor` (core/rehydration.ts) for why the absent case
+ * resolves to the fallback rather than the flag.
+ */
+export type SystemPromptDelivery = "launch-flag" | "post-ready-injection";
 
 /**
  * One implementation per supported coding agent. Implementations must be
@@ -302,6 +337,14 @@ export interface HarnessAdapter {
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec;
   /** How analytics events are sourced for this harness. */
   eventSource: "hooks" | "transcript-tail";
+  /**
+   * Whether `launch`/`resume` actually put `LaunchOpts.systemPromptFile` in
+   * front of the agent. Declared rather than inferred, because the alternative
+   * — assuming every adapter honours the field — silently drops a rehydration
+   * brief for one that doesn't. Omitted resolves to `post-ready-injection`
+   * (see `systemPromptDeliveryFor` in core/rehydration.ts).
+   */
+  systemPromptDelivery?: SystemPromptDelivery;
   /** Past sessions this agent recorded for a directory (agent-side history).
    *  Reports what it found; `resumeMode` is the server's call — see
    *  {@link PastSessionRecord}. */
@@ -841,6 +884,19 @@ export interface CreateSessionRequest {
   harness: HarnessKind;
   /** Profile id; omit for default. */
   profile?: string;
+  /**
+   * Portable continue: seed this fresh session with a reconstruction of a
+   * prior one instead of asking the vendor to reattach. Accepts either a
+   * `harnessSessionId` or the agent's own session id — whichever the history
+   * row carries — and is what a `resumeMode: "rehydrate"` row posts.
+   *
+   * Best-effort by contract: an id our event log holds nothing for still
+   * creates the session, with `HarnessSession.rehydratedFrom` left null so the
+   * caller can tell that no context came across. Refusing instead would block
+   * the only thing still possible for that row (a fresh session in the same
+   * directory) on a summary that was never going to exist.
+   */
+  rehydrateFrom?: string;
 }
 
 /**
@@ -1172,6 +1228,14 @@ export interface HarnessSettings {
    * rather than a door value that silently diverges from a settings value.
    */
   projectRoot?: string;
+  /**
+   * Opt-in: periodically fold a live session's record into a ≤500-word rolling
+   * summary (see core/rolling-summary.ts), which a later portable continue
+   * reads to explain what the session was *for* rather than only what it last
+   * did. Off by default because it spends tokens on a background LLM call the
+   * user never asked for. With it off, briefs degrade to last-N-turns.
+   */
+  rollingSummary?: boolean;
 }
 
 // ---------------------------------------------------------------------------
