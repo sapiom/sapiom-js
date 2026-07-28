@@ -68,7 +68,7 @@
             "provisions": {
               "type": "array",
               "items": { "enum": ["postgres", "sandbox", "repository", "inbox"] },
-              "description": "Managed resource kinds the run provisions, driving the cost disclosure on the card. Author-declared — there is no declarative `resources[]` field in the manifest."
+              "description": "Managed resource kinds the run provisions, driving the cost disclosure on the card. DERIVED from the manifest's `resources[]` — the distinct kinds, sorted. Never hand-maintained: the `setup-provisions` check fails when this disagrees with the manifest, which is what stops the drift that let `capabilities[]` fill up with SDK method paths instead of catalog ids."
             },
             "degradedWithoutSetup": {
               "type": "string",

@@ -107,6 +107,39 @@
         }
       }
     },
+    "resources": {
+      "type": "array",
+      "description": "Sapiom-managed resources the template provisions. Declarative so deploy can pre-provision and seed, and the UI can state cost and lifetime BEFORE a run — today every template does this imperatively inside a step, which leaves the setup panel nothing to render. Resources key on the PAYMENT ACCOUNT, not the definition, so without this declaration a resource cannot be attributed to a workflow at all; the best a panel could honestly say is \"resources in your account this workflow can use\".",
+      "items": {
+        "type": "object",
+        "required": ["kind", "handle"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": ["postgres", "sandbox", "repository", "inbox"],
+            "description": "What gets provisioned. `setup.provisions[]` in the registry is derived from these."
+          },
+          "handle": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "description": "Stable lookup handle the step code addresses it by (`ctx.sapiom.database.get(handle)`). Unique within a template — two resources sharing one handle collide at lookup."
+          },
+          "duration": {
+            "enum": ["15m", "1h", "4h", "24h", "7d"],
+            "description": "postgres only. 7d is the maximum and there is NO renew verb — a managed Postgres is scratch space, not a datastore. A template that needs durable state must say so in `notes`."
+          },
+          "seed": {
+            "type": "string",
+            "description": "Path, relative to the example dir, of a .sql file run once after provisioning so the first run has data to work with. READ-SIDE ONLY: seed a table the template READS. Never seed a table that is the template's own OUTPUT — fabricating rows a user might act on is worse than an empty first run. The file must exist; the `manifest-resource-seed` check enforces that."
+          },
+          "ephemeral": {
+            "type": "boolean",
+            "default": true,
+            "description": "True when the resource is disposable per run. False signals the 7-day TTL problem applies and the template needs a durability story in `notes`."
+          }
+        }
+      }
+    },
     "defaultInput": {
       "type": "object",
       "description": "The input a zero-interaction run starts with. Merged UNDER the user's input and UNDER `settings` defaults, so an explicit value always wins. Distinct from `examples[0].input`, which is documentation and may legitimately contain values that cannot work on a fresh tenant (a repo slug, a live sandbox URL). The runtime guarantee lives in code (`z.string().min(1).default(\"Sapiom\")`); this is its declared, renderable projection — the UI cannot introspect a zod schema across a GitHub fetch — and it NEVER overrides code."

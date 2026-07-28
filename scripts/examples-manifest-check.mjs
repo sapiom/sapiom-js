@@ -40,6 +40,54 @@ export function isReservedSecretKey(key) {
 }
 
 /**
+ * The distinct resource kinds a manifest provisions, sorted — the value
+ * `registry.setup.provisions[]` must equal.
+ */
+export function deriveProvisions(manifest) {
+  const resources = Array.isArray(manifest?.resources) ? manifest.resources : [];
+  return [...new Set(resources.map((r) => r?.kind))].filter(Boolean).sort();
+}
+
+/**
+ * `setup.provisions[]` is denormalised into the thin registry index so the shelf
+ * can render it without fetching a manifest. Denormalised data with no source of
+ * truth is what let `capabilities[]` fill up with SDK method paths instead of
+ * catalog ids, so this verifies rather than trusts.
+ *
+ * @returns string[] — empty when `provisions` is absent (it is optional)
+ */
+export function checkSetupProvisions(template, manifest) {
+  const declared = template?.setup?.provisions;
+  if (!Array.isArray(declared)) return [];
+  const derived = deriveProvisions(manifest);
+  const actual = [...declared].sort();
+  if (JSON.stringify(actual) === JSON.stringify(derived)) return [];
+  return [
+    `setup-provisions: "${template?.id ?? "(unknown)"}" registry setup.provisions is [${actual.join(", ")}] but the manifest's resources[] derive [${derived.join(", ")}] — provisions is generated from the manifest, never hand-maintained.`,
+  ];
+}
+
+/**
+ * A declared seed that isn't on disk provisions an empty database and reports
+ * success — the exact failure `resources[].seed` exists to prevent.
+ *
+ * @param fileExists  (relativePath) => boolean, resolved against the example dir
+ */
+export function checkResourceSeeds(templateId, manifest, fileExists) {
+  const resources = Array.isArray(manifest?.resources) ? manifest.resources : [];
+  const errors = [];
+  resources.forEach((resource, i) => {
+    if (typeof resource?.seed !== "string") return;
+    if (!fileExists(resource.seed)) {
+      errors.push(
+        `manifest-resource-seed: "${templateId}" /resources/${i}/seed points at "${resource.seed}", which does not exist in the example directory.`,
+      );
+    }
+  });
+  return errors;
+}
+
+/**
  * Compile the manifest schema once and return a checker.
  *
  * @param ajv       the Ajv instance already built for the registry check
@@ -77,6 +125,24 @@ export function createManifestChecker(ajv, schema) {
           `manifest-secret-key: ${where} /requiredSecrets/${i}/key "${key}" is reserved — a secret key cannot be PATH and cannot start with SAPIOM_ or WORKFLOWS_, because the engine never lets a template override its own namespaces.`,
         );
       }
+    });
+
+    // Handles are how step code addresses a resource
+    // (`ctx.sapiom.database.get(handle)`), so a duplicate is a silent collision
+    // at lookup — the schema can constrain one handle's shape but not their
+    // uniqueness as a set.
+    const resources = Array.isArray(manifest?.resources) ? manifest.resources : [];
+    const seenHandles = new Map();
+    resources.forEach((resource, i) => {
+      const handle = resource?.handle;
+      if (typeof handle !== "string") return;
+      if (seenHandles.has(handle)) {
+        errors.push(
+          `manifest-resource-handle: ${where} /resources/${i}/handle "${handle}" duplicates /resources/${seenHandles.get(handle)} — step code looks a resource up by handle, so two resources sharing one collide.`,
+        );
+        return;
+      }
+      seenHandles.set(handle, i);
     });
 
     return errors;

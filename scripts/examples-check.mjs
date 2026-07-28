@@ -18,6 +18,8 @@
 //   6. house-style copy rules the schemas cannot express — see
 //      scripts/examples-copy-check.mjs. (The length caps ARE in the schemas,
 //      as `maxLength`, so they surface through checks 1 and 5.)
+//   6b. setup.provisions[] matches the kinds derived from the manifest's
+//      resources[]; a declared resources[].seed file exists.
 //   7. the authored `complexity` band against the one DERIVED from the declared
 //      shape; a 2+ band gap warns (see the divergence section for why).
 //
@@ -31,7 +33,11 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
-import { createManifestChecker } from "./examples-manifest-check.mjs";
+import {
+  checkResourceSeeds,
+  checkSetupProvisions,
+  createManifestChecker,
+} from "./examples-manifest-check.mjs";
 import { checkCopy } from "./examples-copy-check.mjs";
 import {
   complexityBandScore,
@@ -107,6 +113,13 @@ for (const t of templates) {
     continue;
   }
   errors.push(...checkManifest(t.id, manifest));
+
+  errors.push(
+    ...checkResourceSeeds(t.id, manifest, (seed) =>
+      existsSync(path.join(dir, seed)),
+    ),
+  );
+
   manifests.set(t.id, manifest);
   manifestsChecked++;
 }
@@ -138,6 +151,15 @@ for (const t of templates) {
 // word is the whole value of the message. See scripts/examples-copy-check.mjs.
 for (const t of templates) {
   errors.push(...checkCopy(t, manifests.get(t.id) ?? null));
+}
+
+// 6b. `setup.provisions[]` is DERIVED from the manifest's `resources[]`, so it
+// gets verified rather than trusted. An author-declared mirror with no source of
+// truth is the drift that let `capabilities[]` fill up with SDK method paths
+// instead of catalog ids; this is the same field shape, so it gets a check
+// before it can acquire the same problem.
+for (const t of templates) {
+  errors.push(...checkSetupProvisions(t, manifests.get(t.id) ?? null));
 }
 
 if (errors.length > 0) {

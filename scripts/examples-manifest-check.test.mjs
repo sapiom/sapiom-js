@@ -15,7 +15,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import Ajv from "ajv";
-import { createManifestChecker } from "./examples-manifest-check.mjs";
+import {
+  checkResourceSeeds,
+  checkSetupProvisions,
+  createManifestChecker,
+  deriveProvisions,
+} from "./examples-manifest-check.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestSchema = JSON.parse(
@@ -161,6 +166,74 @@ test("a secret key that violates the env-name pattern fails", () => {
   assert.match(errors[0], /\/requiredSecrets\/0\/key must match pattern/);
 });
 
+test("a fully declared resource is valid", () => {
+  assert.deepEqual(
+    check({
+      resources: [
+        { kind: "postgres", handle: "reports-db", duration: "7d", seed: "seed.sql" },
+        { kind: "sandbox", handle: "renderer", ephemeral: true },
+      ],
+    }),
+    [],
+  );
+});
+
+test("a resource missing kind or handle fails", () => {
+  assert.match(
+    check({ resources: [{ handle: "db" }] })[0],
+    /\/resources\/0 must have required property 'kind'/,
+  );
+  assert.match(
+    check({ resources: [{ kind: "postgres" }] })[0],
+    /\/resources\/0 must have required property 'handle'/,
+  );
+});
+
+test("a resource kind outside the closed vocabulary fails", () => {
+  const errors = check({ resources: [{ kind: "kafka", handle: "bus" }] });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\/resources\/0\/kind must be equal to one of/);
+});
+
+test("a duration outside the offered lifetimes fails", () => {
+  // 7d is the ceiling and there is no renew verb, so "30d" must not be quietly
+  // accepted — it would read as a durability promise the platform cannot keep.
+  const errors = check({
+    resources: [{ kind: "postgres", handle: "db", duration: "30d" }],
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\/resources\/0\/duration must be equal to one of/);
+});
+
+test("a handle that is not a lookup-safe slug fails", () => {
+  for (const handle of ["Reports_DB", "-leading", "has space"]) {
+    const errors = check({ resources: [{ kind: "postgres", handle }] });
+    assert.equal(errors.length, 1, `${handle} → ${errors.join("; ")}`);
+    assert.match(errors[0], /\/resources\/0\/handle must match pattern/);
+  }
+});
+
+test("two resources sharing a handle fail — step code looks up by handle", () => {
+  const errors = check({
+    resources: [
+      { kind: "postgres", handle: "store" },
+      { kind: "sandbox", handle: "store" },
+    ],
+  });
+  assert.deepEqual(errors, [
+    `manifest-resource-handle: "fixture" template.json /resources/1/handle "store" duplicates /resources/0 — step code looks a resource up by handle, so two resources sharing one collide.`,
+  ]);
+});
+
+test("a resource naming a storage location fails", () => {
+  // Same rule as requiredSecrets: a declaration says what a thing IS.
+  const errors = check({
+    resources: [{ kind: "postgres", handle: "db", vaultRef: "workflow:x" }],
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\/resources\/0 must NOT have additional properties/);
+});
+
 test("a settings entry missing default fails", () => {
   const errors = check({
     settings: [{ path: "deliverTo", label: "Recipient", type: "email" }],
@@ -257,8 +330,83 @@ test("defaultInput is an object and coexists with examples[0].input", () => {
   assert.match(errors[0], /\/defaultInput must be object/);
 });
 
+test("provisions derive as distinct kinds, sorted", () => {
+  assert.deepEqual(deriveProvisions({}), []);
+  assert.deepEqual(
+    deriveProvisions({
+      resources: [
+        { kind: "sandbox", handle: "a" },
+        { kind: "postgres", handle: "b" },
+        { kind: "sandbox", handle: "c" },
+      ],
+    }),
+    ["postgres", "sandbox"],
+  );
+});
+
+test("setup.provisions disagreeing with the manifest fails", () => {
+  const manifest = { resources: [{ kind: "postgres", handle: "db" }] };
+  const errors = checkSetupProvisions(
+    { id: "fixture", setup: { runsWithNoSetup: false, provisions: ["postgres", "sandbox"] } },
+    manifest,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^setup-provisions: "fixture" /);
+  assert.match(errors[0], /is \[postgres, sandbox\] but the manifest's resources\[\] derive \[postgres\]/);
+});
+
+test("setup.provisions matching the manifest passes, order-insensitively", () => {
+  const manifest = {
+    resources: [
+      { kind: "sandbox", handle: "s" },
+      { kind: "postgres", handle: "p" },
+    ],
+  };
+  const setup = { runsWithNoSetup: false, provisions: ["sandbox", "postgres"] };
+  assert.deepEqual(checkSetupProvisions({ id: "fixture", setup }, manifest), []);
+});
+
+test("an absent setup.provisions is not a mismatch", () => {
+  // Both fields are optional; only a declared mirror gets verified.
+  assert.deepEqual(checkSetupProvisions({ id: "fixture" }, { resources: [] }), []);
+  assert.deepEqual(
+    checkSetupProvisions({ id: "fixture", setup: { runsWithNoSetup: true } }, null),
+    [],
+  );
+});
+
+test("declaring provisions with no resources at all fails", () => {
+  // The case that motivated the check: a hand-written mirror with nothing
+  // behind it. Silent before, because provisions had no source of truth.
+  const errors = checkSetupProvisions(
+    { id: "fixture", setup: { runsWithNoSetup: false, provisions: ["postgres"] } },
+    { manifestVersion: 1 },
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /derive \[\]/);
+});
+
+test("a seed file that does not exist fails", () => {
+  const errors = checkResourceSeeds(
+    "fixture",
+    { resources: [{ kind: "postgres", handle: "db", seed: "seed.sql" }] },
+    () => false,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^manifest-resource-seed: "fixture" \/resources\/0\/seed points at "seed\.sql"/);
+});
+
+test("a seed file that exists passes, and no seed is not a problem", () => {
+  const resources = [{ kind: "postgres", handle: "db", seed: "seed.sql" }];
+  assert.deepEqual(checkResourceSeeds("fixture", { resources }, () => true), []);
+  assert.deepEqual(
+    checkResourceSeeds("fixture", { resources: [{ kind: "sandbox", handle: "s" }] }, () => false),
+    [],
+  );
+});
+
 test("no declaration field names a storage location", () => {
-  const declarations = ["requiredSecrets", "settings", "zeroSetup"];
+  const declarations = ["requiredSecrets", "settings", "resources", "zeroSetup"];
   const forbidden = ["vaultRef", "connectorId", "store"];
   const names = JSON.stringify(
     declarations.map((d) => manifestSchema.properties[d]),

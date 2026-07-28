@@ -243,10 +243,33 @@ lets it change without touching your template.
 
 | Field | Shows up as | Write it as |
 |---|---|---|
+| `resources` | "Sapiom will provision" in the setup panel, and the cost/lifetime line on the card | The managed things a run creates — a Postgres, a sandbox, a repo, an inbox. Each needs a `kind` and a `handle` (the slug your step code passes to `ctx.sapiom.database.get()`; unique within a template). `duration` is postgres-only, caps at **7d, and there is no renew verb** — if your template needs state that outlives that, say so in `notes` and set `ephemeral: false`. `seed` is read-side only; see below. |
 | `requiredSecrets` | The credential dialog on "Use this template" | Only credentials **Sapiom cannot broker** — a Slack token, the customer's own DB. Never a Sapiom API key, never a non-secret value. Each needs `key`, `label`, `provider`; `key` follows process-env rules — not `PATH`, not `SAPIOM_*`, not `WORKFLOWS_*`. Mark `optional: true` only when the run still reaches a terminal state without it and says what it skipped. |
 | `settings` | Ordinary form fields, merged into the run input | Non-secret config — a recipient, a lookback window, a row cap. **This is where a `RECIPIENT` belongs, not the vault**, which can't be listed, validated, or prompted for. `default` is required: a setting without one can't support a zero-interaction run, which is the point. |
 | `defaultInput` | The one-click Run path | The input a run starts with when the user supplies nothing. Merged **under** the user's input and under `settings` defaults, so an explicit value always wins. **Not the same as `examples[0].input`**, which is documentation and may legitimately hold a repo slug or a live URL that won't work on a fresh tenant. It never overrides your code's own defaults. |
 | `zeroSetup` | The shelf's "runs with no setup" claim | What an unconfigured run actually reaches: a `terminalState`, optional `expect[]` assertions over the terminal artifact (`nonEmptyArray`, `nonEmptyString`, `minLength`, `matches`, `equals`, `absent`), and a one-sentence `narrative`. Assert that the pattern **demonstrably ran and the output is honest about it** — not that the result is production-grade. The narrative renders verbatim, so it must never imply a send that won't happen. |
+
+#### `seed`: only seed what your template READS
+
+A freshly-provisioned database is empty, so a template that reads from one runs green and
+produces nothing — terminal, honest-looking, and useless as a first impression. `seed` fixes
+exactly that case and no other.
+
+**The rule is not "give every resource a seed."** Look at what the table is *for*:
+
+| Your table is… | Seed it? | Why |
+|---|---|---|
+| **Input** the template reads and did not write — a leads list, a metrics table, a corpus to query | **Yes** | Otherwise the first run has nothing to work on. `nl-db-query-endpoint`, `scheduled-db-insight-report`, `personalized-media-at-scale`, `durable-backfill`. |
+| **Output** the template itself writes — a log, a CRM store, a dedupe index, an audit trail | **No** | Seeding fabricates records a user might act on. `approval-chain`, `cold-outreach-engine`, `error-triage-digest`, `meeting-notes-crm`, `the-brain` all create and insert their own tables; an empty one on the first run is correct. |
+
+If you're unsure, ask whether a user reading the row would think a real thing happened. If yes,
+don't seed it.
+
+This is **not** canned capability responses. Sample mode was cut, and deliberately: a run
+labelled "sample" that really posts to Slack is a hazard. A real resource with real seed data
+means a real run — nothing pretends.
+
+`pnpm examples:check` fails if a declared `seed` file isn't in the example directory.
 
 ---
 
