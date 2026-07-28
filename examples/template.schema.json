@@ -25,14 +25,19 @@
         "url": { "type": "string", "description": "Optional link to the author (site, profile, or repo)." }
       }
     },
+    "whatItDoes": {
+      "type": "string",
+      "maxLength": 320,
+      "description": "The card's lead paragraph — about three sentences. LEAD WITH THE VERB (\"Create a cited account brief…\"), never with the audience (\"For turning a…\"). Lived in registry.json until SAP-2076: it is detail-only data (`toSummary` omits it, only `toDetail` reads it) and was 25% of the thin index the shelf fetches, for prose the shelf never renders. It now sits with the other three sections of the same card."
+    },
     "longDescription": {
       "type": "string",
-      "description": "Markdown prose describing what the template is and how it behaves. Shown on the detail view."
+      "description": "Markdown prose describing what the template is and how it behaves. Shown on the detail view under \"About\"."
     },
     "useCases": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Short phrases describing concrete things you'd use this template for."
+      "items": { "type": "string", "maxLength": 40 },
+      "description": "Concrete things you'd use this template for, as short noun phrases (\"Relationship graph\") — they render as chips, not sentences. Three is the house count."
     },
     "notes": {
       "type": "string",

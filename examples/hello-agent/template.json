@@ -5,11 +5,12 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
+  "whatItDoes": "Confirm the plumbing works before you build anything real. One step, `greet`, reads an optional name and returns a greeting — enough to prove build, deploy, and run end to end without spending anything or calling a capability.",
   "longDescription": "The smallest valid Sapiom agent. It's a smoke test: use it to check that your setup builds, deploys, and runs before you reach for a template that actually does work.\\n\\nThere is one step. `greet` takes an optional `name`, and returns `{ greeting: \\\"Hello, <name>!\\\" }` — or `Hello, world!` if you leave the name out. That's the whole agent. It calls no capabilities and touches no external services.\\n\\nOnce this deploys and runs cleanly, you know the path works. From there, fork a capability-backed template like Web Research Digest and build the real thing on top of a foundation you've already seen work.\\n\\nIt costs nothing to run — there are no capabilities to meter.",
   "useCases": [
-    "Confirm your setup builds, deploys, and runs before you build something real.",
-    "Check the deploy path end to end after a change, without spending anything.",
-    "Start from the smallest valid agent and grow it one step at a time."
+    "Build, deploy, run check",
+    "Smallest valid agent",
+    "Free end-to-end deploy test"
   ],
   "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\\n\\nThe `name` input is optional: pass `{ \\\"name\\\": \\\"Ada\\\" }` to get `Hello, Ada!`, or run it with no input to get `Hello, world!`. There are no capabilities, so every run costs nothing.\\n\\nPrefer to work from the code? Run it locally with `run_local` to trace the flow for free — since there are no capabilities, a local run and a real run behave identically — or edit and deploy it with the Sapiom MCP.",
   "examples": [

@@ -145,7 +145,7 @@ choosing whether to use your template.
 Two files per template feed the UI. Keep them consistent — the same template, described
 the same way, at two levels of depth.
 
-### House-style limits (`pnpm examples:check` warns)
+### House-style limits (`pnpm examples:check` enforces)
 
 The gallery card has finite room, and the rules below are sized from it — a name that wraps the
 title or a use case that can't sit on a chip is a layout bug, not a matter of taste.
@@ -161,20 +161,20 @@ title or a use case that can't sit on a chip is a layout bug, not a matter of ta
 is *"what am I trying to produce?"* Mechanism words belong in `tags`, which is what drives search —
 putting one in the name doesn't make it more findable, it just spends the title on it.
 
-These are warnings today, not errors, because the existing 26 templates predate them. Don't add to
-the pile; the count is a burn-down.
+All 26 templates meet these, so they are hard failures — the lengths come from the schemas
+(`maxLength`, reported with a JSON pointer) and the style rules from the check, which names the
+offending word.
 
 ### `examples/registry.json` — the gallery index (one entry per template)
 
 | Field | Shows up as | Write it as |
 |---|---|---|
-| `name` | Card title, detail H1 | Title Case, human. "Human-in-the-Loop Approval", not the slug. |
+| `name` | Card title, detail H1 | Title Case, human, ≤32 chars. Name the **outcome**: "Approval Before Action", not "Human-in-the-Loop Approval" and not the slug. |
 | `description` | Card subtitle, detail subtitle | **One sentence.** What it does, in plain words. See "The tagline" below. |
 | `tags` | Chips under the title | 3–4 lowercase, kebab or single words. Concrete, searchable ("approval", "hitl", "fallback"). This is where mechanism words go. |
 | `category` | Which gallery group it files under | One id from the enum. The **outcome**, not the mechanism — see [Categorize](#3-categorize). |
 | `cadence` | The "Trigger" fact | One id from the enum. What **starts** a run, not what it does mid-run — see [Categorize](#3-categorize). |
 | `capabilities` | Capability chips + est. cost | The exact `ctx.sapiom.*` capability ids the source calls. Must match the code (see "Capability ids"). |
-| `whatItDoes` | "What it does" (Overview tab) | **The beats.** 3–6 short sentences, capability-first, no jargon headline. See "What it does". |
 | `steps[].description` | Node labels in the Definition graph | One plain sentence per step: what THIS step does. Preserve `name`/`next`/`terminal`/`capability` exactly. |
 | `steps[].kind` | The step's glyph in the graph | `capability` / `llm` / `compute` / `pause`, one per step — see [Categorize](#3-categorize). |
 | `steps[].checkpoint` | The "Checkpoint" fact | `true` on the single step where a **person** approves, or omit. Never on a machine wait. |
@@ -183,8 +183,9 @@ the pile; the count is a burn-down.
 
 | Field | Shows up as | Write it as |
 |---|---|---|
+| `whatItDoes` | "What it does" (the card's lead) | ≤320 chars, about three sentences, **verb first**. "Create a cited account brief…", never "For turning a…". See "What it does". |
 | `longDescription` | "About" | 2–4 short paragraphs. The fuller story. Plain first; name the mechanism once, casually. |
-| `useCases` | "Use cases" (bullets) | 3 bullets. Each starts with a verb. Concrete situations, not features. |
+| `useCases` | "Use cases" (chips) | Exactly 3, each ≤40 chars. Short noun phrases — "Relationship graph", not a sentence. |
 | `notes` | "Notes" | **How to run it.** Easy path first (Use this template), advanced path second. See "How to run it". |
 | `examples` | "Examples" | Real `{ input, output }` pairs. Keep these accurate to the code; don't invent fields. |
 | `author` | "By …" | `{ "name": "Sapiom", "url": "https://sapiom.ai/" }` for first-party. |
@@ -237,10 +238,21 @@ The shape that works: **[what it does], [notable trait]**.
 
 ## What it does (`whatItDoes`)
 
-The Overview. 3–6 short sentences. Open with who it's for or when to reach for it, then walk
-the flow in plain terms. Name capabilities in passing, never as the lead.
+The card's lead. **≤320 characters, about three sentences, and it opens with a verb.** Say what
+it produces, then walk the flow in plain terms. Name capabilities in passing, never as the lead.
+
+**Do not open with the audience.** "For work where an agent can…" spends the first and most-read
+words on who it's for instead of what it makes. 19 of the original 26 did this; none do now, and
+`pnpm examples:check` rejects a leading "For".
 
 Think of it as **named beats** — each sentence is one move the workflow makes:
+
+> Do the legwork, then wait for a person before spending money or doing anything irreversible.
+> It ranks your candidates by fit and emails the top pick for approval, falling to the next on
+> the list if that one declines, and hands off to a human rather than failing quietly.
+
+The longer form below shows the same template written before the cap — useful for seeing which
+detail belongs in `longDescription` instead:
 
 > For work where an agent can do the legwork but a human makes the final call. It reads the
 > request, ranks your options, and emails the approver its recommendation — then pauses and
@@ -333,12 +345,13 @@ Never present the MCP path as the only way to build and run — the webapp does 
 
 **Copy**
 
-- [ ] `description`: one plain sentence, no internal jargon.
-- [ ] `whatItDoes`: 3–6 short sentences, capability named in passing, no pitch words.
+- [ ] `name`: ≤32 chars, names the outcome; no arrow, slash, parenthetical, or mechanism word.
+- [ ] `description`: one plain sentence, ≤160 chars, no internal jargon.
+- [ ] `whatItDoes`: ≤320 chars, verb-first, capability named in passing, no pitch words.
 - [ ] `steps[].description`: one plain sentence each; `name`/`next`/`terminal`/`capability` unchanged.
 - [ ] `capabilities`: exactly the `ctx.sapiom.*` ids the source calls (`models.run`, not `llm.generate`).
 - [ ] `longDescription`: 2–4 short paragraphs; cost stated simply at the end.
-- [ ] `useCases`: 3 verb-first bullets, concrete situations.
+- [ ] `useCases`: exactly 3, each ≤40 chars, short noun phrases.
 - [ ] `notes`: Use-this-template first; template-specific gotcha; advanced local path last.
 - [ ] `examples`: accurate `{ input, output }`, no invented fields.
 - [ ] Read it back out loud. If a sentence sounds like a release note or a pitch, rewrite it.

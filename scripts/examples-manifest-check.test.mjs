@@ -52,6 +52,18 @@ test("every existing manifest in the repo validates unchanged", () => {
   assert.ok(registry.templates.length >= 26);
 });
 
+test("the copy length caps are enforced by the schema, with a pointer", () => {
+  const cases = [
+    [{ whatItDoes: "Create ".repeat(60) }, /\/whatItDoes must NOT have more than 320 characters/],
+    [{ useCases: ["x".repeat(41)] }, /\/useCases\/0 must NOT have more than 40 characters/],
+  ];
+  for (const [extra, expected] of cases) {
+    const errors = check(extra);
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.match(errors[0], expected);
+  }
+});
+
 test("a typo'd top-level field fails rather than being silently stripped", () => {
   const errors = check({ requiredSecret: [] });
   assert.equal(errors.length, 1);

@@ -15,6 +15,9 @@
 //   5. every template.json validates against examples/template.schema.json,
 //      including the declaration surface (requiredSecrets, settings,
 //      defaultInput, zeroSetup) — see scripts/examples-manifest-check.mjs.
+//   6. house-style copy rules the schemas cannot express — see
+//      scripts/examples-copy-check.mjs. (The length caps ARE in the schemas,
+//      as `maxLength`, so they surface through checks 1 and 5.)
 //
 // Exits non-zero with a readable report on the first category of failure it
 // finds, so a bad registry fails CI before it reaches the backend.
@@ -123,6 +126,14 @@ for (const t of templates) {
   }
 }
 
+// 5. House-style copy rules the schemas cannot express. The length caps live in
+// the schemas as `maxLength` and are reported by check 1/3; these are the two
+// rules a `pattern` could reject but could not explain — naming the offending
+// word is the whole value of the message. See scripts/examples-copy-check.mjs.
+for (const t of templates) {
+  errors.push(...checkCopy(t, manifests.get(t.id) ?? null));
+}
+
 if (errors.length > 0) {
   console.error(`examples/ failed validation (${errors.length} problem(s)):\n`);
   for (const e of errors) console.error(`  - ${e}`);
@@ -142,24 +153,6 @@ for (const [label, ids] of [
       `warning: ${ids.length} template(s) missing \`${label}\`: ${ids.join(", ")}`,
     );
   }
-}
-
-// 6. House-style copy rules. Warnings on purpose — every limit fails every
-// template today, so a gate would block every PR. The count below is the
-// burn-down; when it hits zero, move the caps into the schemas as `maxLength`
-// and flip these to `errors.push`. See scripts/examples-copy-check.mjs.
-const copyWarnings = templates.flatMap((t) =>
-  checkCopy(t, manifests.get(t.id) ?? null),
-);
-if (copyWarnings.length > 0) {
-  const affected = new Set(
-    copyWarnings.map((w) => w.slice(w.indexOf('"') + 1, w.indexOf('" '))),
-  );
-  console.warn(
-    `\ncopy style: ${copyWarnings.length} warning(s) across ${affected.size} of ${templates.length} template(s) — not a gate yet:\n`,
-  );
-  for (const w of copyWarnings) console.warn(`  - ${w}`);
-  console.warn("");
 }
 
 console.log(

@@ -19,9 +19,9 @@
       "required": ["id", "name", "description", "sourcePath"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "minLength": 1, "description": "Stable gallery id + the example directory name." },
-        "name": { "type": "string", "minLength": 1, "description": "Display name shown on the card." },
-        "description": { "type": "string", "description": "One-line card description." },
+        "id": { "type": "string", "minLength": 1, "description": "Stable gallery id + the example directory name. Never changes — it is the directory name, the sourcePath, and the gallery's stable key. Renaming a template changes `name`, never this." },
+        "name": { "type": "string", "minLength": 1, "maxLength": 32, "description": "Display name shown on the card. Names the OUTCOME, not the machinery — the same axis `category` uses. No arrows, no slashes, no parentheticals, and no mechanism word (saga, engine, pipeline, runner, endpoint, gate, durable, keep-alive): those belong in `tags`, which is what drives search. Enforced by the `copy-name` check." },
+        "description": { "type": "string", "maxLength": 160, "description": "One-line card description — one plain sentence." },
         "tags": { "type": "array", "items": { "type": "string" }, "description": "Freeform browse tags." },
         "category": {
           "type": "string",
@@ -43,7 +43,6 @@
           "items": { "type": "string" },
           "description": "Declared catalog capability ids (dotted, e.g. `web.search`). Drives the estimated per-run cost without a built definition."
         },
-        "whatItDoes": { "type": "string", "description": "Prose shown on the inspect view." },
         "steps": {
           "type": "array",
           "items": { "$ref": "#/definitions/step" },
