@@ -6,12 +6,11 @@
  *   (default dir: ./harness-example; --install runs `npm install` in the
  *   scaffolded project afterward, to pre-warm node_modules ahead of a demo)
  *
- * Thin wrapper over the shared seeding module (src/core/example-seed.ts) —
- * the same code path the server's POST /api/sample-project (welcome panel's
- * "Run the sample project") uses, so the demo seed and the in-app sample
- * can never drift from each other. This wrapper always seeds with
- * `force: true` (wipe and regenerate), the historical behavior of this
- * script; the in-app path reuses an existing copy instead.
+ * Thin wrapper over the shared seeding module (src/core/example-seed.ts), and
+ * now its only caller: the in-app sample action and its
+ * `POST /api/sample-project` route were removed, so there is no longer a second
+ * path this could drift from. Always seeds with `force: true` (wipe and
+ * regenerate), the historical behavior of this script.
  *
  * Requires the harness package itself to already be built (`pnpm build` or
  * `build:server`) — this imports from dist/, the same way it already needs

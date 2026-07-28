@@ -28,9 +28,11 @@ export const HARNESS_PATHS = {
   settings: `${HARNESS_HOME}/settings.json`,
   /** Generated per-session agent config (claude settings/mcp-config files). */
   generated: `${HARNESS_HOME}/generated`,
-  /** The bundled example project, seeded lazily by POST /api/sample-project
-   *  (the welcome panel's "Run the sample project") — stable so re-running
-   *  the sample reuses the same copy instead of scattering fresh ones. */
+  /** Where the bundled example project is seeded. Written ONLY by
+   *  `scripts/seed-example.mjs` (demo prep) since the in-app sample action and
+   *  its `POST /api/sample-project` route were removed — the running Studio
+   *  neither seeds nor reads this path, so a directory here is leftover output.
+   *  Kept stable so re-seeding reuses one copy instead of scattering fresh ones. */
   sampleProject: `${HARNESS_HOME}/sample-project`,
 } as const;
 

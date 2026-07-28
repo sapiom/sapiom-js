@@ -1,13 +1,17 @@
 /**
  * Seeds the bundled example project — a directory the harness opens
- * beautifully on first run. Shared by two callers with different needs:
+ * beautifully on first run.
  *
- *   - `POST /api/sample-project` (the welcome panel's "Run the sample
- *     project" action) — seeds `~/.sapiom/harness/sample-project` lazily and
- *     idempotently: an already-seeded copy is reused as-is, including any
- *     edits the user's agent has made to it since.
- *   - `scripts/seed-example.mjs` (demo prep) — same seeding with
- *     `force: true`, which wipes and regenerates from scratch.
+ * ONE caller today: `scripts/seed-example.mjs` (demo prep), which seeds with
+ * `force: true` — wipe and regenerate from scratch.
+ *
+ * There was a second: `POST /api/sample-project`, behind the welcome panel's
+ * "Sample project" action, which seeded `~/.sapiom/harness/sample-project`
+ * lazily and idempotently. Both the route and the action were removed because
+ * the in-app flow did not work; this module was kept because the demo script
+ * still needs it. So an existing `~/.sapiom/harness/sample-project/` on a
+ * machine is leftover output, not state the app maintains — nothing in the
+ * running Studio reads or writes it.
  *
  * Produces:
  *   <targetRoot>/order-triage/    — a real scaffolded agent project
