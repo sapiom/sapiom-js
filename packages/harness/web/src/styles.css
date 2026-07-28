@@ -6050,9 +6050,9 @@ input {
   overflow: hidden;
 }
 
-/* Step count + per-run cost estimate on the card: the two facts that change
-   which template you pick. Cost may be an em dash (no estimate) — see
-   formatEstCost; it must never read as $0.00. */
+/* Step count + complexity band on the card: the two facts that change which
+   template you pick. The band may be an em dash when the catalog response
+   carried none — see formatComplexity. */
 .template-row-meta {
   display: flex;
   align-items: baseline;
@@ -6062,9 +6062,15 @@ input {
   color: var(--text-faint);
 }
 
-.template-row-cost {
-  font-family: var(--font-mono);
+/* The band reads as a WORD plus a score, so it drops the mono face the dollar
+   figure used — mono on "Moderate" reads as a code token. Tabular figures stay:
+   the `n/5` sits in a column down the right edge of the list and should not
+   shimmy between rows. Right-aligned so a one-word band and a two-word one end
+   at the same place. */
+.template-row-complexity {
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .template-row.is-selected .template-row-name,

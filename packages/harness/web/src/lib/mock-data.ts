@@ -43,9 +43,34 @@ export function hasMockCanvasDoc(sessionId: string): boolean {
 
 /**
  * A slice of the real template catalog for mock mode. Spans several categories
- * on purpose — the dialog groups by category and shows a per-run cost estimate,
- * and both need a mixed list (including a null `estCostPerRunUsd`, the majority
- * case upstream) to be exercised without a backend.
+ * on purpose — the dialog groups by category — and, since SAP-2088, one template
+ * per complexity band.
+ *
+ * The set was previously picked for COST-state coverage (an estimate, a sub-cent
+ * estimate, a null). Core no longer serves a cost, so the axis is the band:
+ * Minimal through Advanced, plus `complexity: null` on `web-research-digest` to
+ * exercise the absent-payload em dash. That null is not a claim about that
+ * template — it genuinely scores Minimal, which `hello-agent` already covers, so
+ * it is the one entry that can carry the "response predates the field" state
+ * without costing band coverage.
+ *
+ * Every `complexity` here is what core's `scoreTemplateComplexity` actually
+ * returns for the shape declared alongside it — the weights are `llmStep` 4,
+ * `chainedLlmStep` 3, `mediaCapability` 3, `capability` 0.4, `step` 0.2,
+ * `fanOut` 0.2 over `maxFanOut - 1`, banded at 1.5 / 4 / 7 / 11. Each `basis`
+ * agrees with the `stepCount` and `capabilities` on the same object, so the
+ * detail pane's explanation never contradicts the card above it. Change one and
+ * you must re-derive the other.
+ *
+ * Each band also matches what `examples/registry.json` now AUTHORS for that
+ * template (SAP-2086). Worth keeping true: once the backend prefers an authored
+ * band over a derived one (SAP-2087), a fixture that only satisfied the scorer
+ * would start disagreeing with the live catalog for the same id.
+ *
+ * Note `approval-chain`: 7 steps and a fan-out of 5, and still `Simple`. That
+ * ordering is the scorer's whole point, not a mistake in this fixture — the band
+ * tracks judgment and variance, not graph size, so a deterministic saga sits
+ * below a two-model pipeline.
  */
 export const MOCK_TEMPLATES: TemplateSummary[] = [
   {
@@ -57,7 +82,19 @@ export const MOCK_TEMPLATES: TemplateSummary[] = [
     cadence: "on-demand",
     stepCount: 1,
     capabilities: [],
-    estCostPerRunUsd: null,
+    // raw 0.2 → Minimal.
+    complexity: {
+      score: 1,
+      label: "Minimal",
+      basis: {
+        llmSteps: 0,
+        chainedLlmSteps: 0,
+        mediaCapabilities: 0,
+        capabilityCount: 0,
+        stepCount: 1,
+        maxFanOut: 0,
+      },
+    },
   },
   {
     id: "web-research-digest",
@@ -68,19 +105,10 @@ export const MOCK_TEMPLATES: TemplateSummary[] = [
     cadence: "on-demand",
     stepCount: 2,
     capabilities: ["web.search"],
-    estCostPerRunUsd: 0.006,
-  },
-  {
-    id: "dependency-upgrade",
-    name: "Dependency Upgrade",
-    description:
-      "On a schedule, a coding agent bumps a repo's dependencies in a sandbox, runs the tests, and opens a PR.",
-    tags: ["coding-agent", "scheduled"],
-    category: "product-engineering",
-    cadence: "scheduled",
-    stepCount: 5,
-    capabilities: ["sandbox.run"],
-    estCostPerRunUsd: 0.42,
+    // The absent-payload case: a backend older than the complexity field. Renders
+    // an em dash on the card and an honest "no band" line in the detail pane —
+    // the guard that keeps an old Studio pointed at an old stack from throwing.
+    complexity: null,
   },
   {
     id: "approval-chain",
@@ -92,7 +120,43 @@ export const MOCK_TEMPLATES: TemplateSummary[] = [
     cadence: "on-demand",
     stepCount: 7,
     capabilities: ["email.send", "database.create"],
-    estCostPerRunUsd: null,
+    // raw 3.0 → Simple. Wholly deterministic despite being the largest graph here.
+    complexity: {
+      score: 2,
+      label: "Simple",
+      basis: {
+        llmSteps: 0,
+        chainedLlmSteps: 0,
+        mediaCapabilities: 0,
+        capabilityCount: 2,
+        stepCount: 7,
+        maxFanOut: 5,
+      },
+    },
+  },
+  {
+    id: "scheduled-research-brief",
+    name: "Scheduled Research Brief",
+    description: "On a schedule, research a topic and deliver a written brief.",
+    tags: ["research", "scheduled", "llm"],
+    category: "data-knowledge",
+    cadence: "scheduled",
+    stepCount: 4,
+    capabilities: ["web.search", "models.run"],
+    // raw 5.6 → Moderate. One model step over a small graph: the mid-scale shape,
+    // and the band a reader is most likely to meet.
+    complexity: {
+      score: 3,
+      label: "Moderate",
+      basis: {
+        llmSteps: 1,
+        chainedLlmSteps: 0,
+        mediaCapabilities: 0,
+        capabilityCount: 2,
+        stepCount: 4,
+        maxFanOut: 1,
+      },
+    },
   },
   {
     id: "cold-outreach-engine",
@@ -104,7 +168,45 @@ export const MOCK_TEMPLATES: TemplateSummary[] = [
     cadence: "scheduled",
     stepCount: 6,
     capabilities: ["web.search", "email.send"],
-    estCostPerRunUsd: 0.13,
+    // raw 10.2 → Involved. Two model steps — enrichment and the per-prospect
+    // rewrite — are what lift it well past the saga above.
+    complexity: {
+      score: 4,
+      label: "Involved",
+      basis: {
+        llmSteps: 2,
+        chainedLlmSteps: 0,
+        mediaCapabilities: 0,
+        capabilityCount: 2,
+        stepCount: 6,
+        maxFanOut: 2,
+      },
+    },
+  },
+  {
+    id: "dependency-upgrade",
+    name: "Dependency Upgrade",
+    description:
+      "On a schedule, a coding agent bumps a repo's dependencies in a sandbox, runs the tests, and opens a PR.",
+    tags: ["coding-agent", "scheduled"],
+    category: "product-engineering",
+    cadence: "scheduled",
+    stepCount: 5,
+    capabilities: ["sandbox.run"],
+    // raw 12.6 → Advanced. Two model steps, one feeding the other: chained
+    // judgment is the heaviest signal in the scorer.
+    complexity: {
+      score: 5,
+      label: "Advanced",
+      basis: {
+        llmSteps: 2,
+        chainedLlmSteps: 1,
+        mediaCapabilities: 0,
+        capabilityCount: 1,
+        stepCount: 5,
+        maxFanOut: 2,
+      },
+    },
   },
 ];
 
@@ -183,6 +285,22 @@ export const MOCK_TEMPLATE_GRAPHS: Record<
     transitions: [
       { from: "enrich", to: "personalize", label: null, kind: "continue" },
       { from: "personalize", to: "send", label: null, kind: "continue" },
+    ],
+  },
+  // Four steps, matching this template's `stepCount` and the `basis.stepCount`
+  // its band was derived from — the linear search → summarize → deliver shape the
+  // registry declares, with the one model step the Moderate band turns on.
+  "scheduled-research-brief": {
+    steps: [
+      { name: "search", description: "Gather sources on the topic.", capabilities: ["web.search"], kind: "entry", sublabel: "entry" },
+      { name: "summarize", description: "Draft the brief from the sources.", capabilities: ["models.run"], kind: "step", sublabel: "step" },
+      { name: "review", description: "Check the brief covers the ask.", capabilities: [], kind: "step", sublabel: "step" },
+      { name: "deliver", description: "Send the finished brief.", capabilities: [], kind: "terminal-success", sublabel: "terminal · success" },
+    ],
+    transitions: [
+      { from: "search", to: "summarize", label: null, kind: "continue" },
+      { from: "summarize", to: "review", label: null, kind: "continue" },
+      { from: "review", to: "deliver", label: null, kind: "continue" },
     ],
   },
 };

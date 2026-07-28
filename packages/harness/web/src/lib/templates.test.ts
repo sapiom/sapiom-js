@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { TemplateDetailView, TemplateSummary } from "@shared/types";
+import type { TemplateComplexity, TemplateDetailView, TemplateSummary } from "@shared/types";
 
 import {
   STARTER_TEMPLATES,
   categoryLabel,
-  formatEstCost,
+  complexityBasisParts,
+  complexityBasisSummary,
+  formatComplexity,
   groupByCategory,
   matchesQuery,
   templateDirSuggestion,
@@ -13,6 +15,23 @@ import {
   useTemplatePrompt,
   type GalleryTemplate,
 } from "./templates";
+
+/** A complexity band as core would serve it. */
+function complexity(over: Partial<TemplateComplexity> = {}): TemplateComplexity {
+  return {
+    score: 3,
+    label: "Moderate",
+    basis: {
+      llmSteps: 1,
+      chainedLlmSteps: 0,
+      mediaCapabilities: 0,
+      capabilityCount: 1,
+      stepCount: 2,
+      maxFanOut: 1,
+    },
+    ...over,
+  };
+}
 
 /** A catalog summary as core would serve it. */
 function summary(over: Partial<TemplateSummary> = {}): GalleryTemplate {
@@ -26,7 +45,7 @@ function summary(over: Partial<TemplateSummary> = {}): GalleryTemplate {
     cadence: "on-demand",
     stepCount: 2,
     capabilities: ["web.search"],
-    estCostPerRunUsd: 0.006,
+    complexity: complexity(),
     ...over,
   };
 }
@@ -45,20 +64,89 @@ describe("bundled starters", () => {
   });
 });
 
-describe("formatEstCost", () => {
-  it("renders an em dash when core reports no estimate — never $0.00", () => {
-    // The majority case upstream (21 of 26 templates). Rendering $0.00 would
-    // assert a genuinely free run, which is a different and false claim.
-    expect(formatEstCost(null)).toBe("—");
+describe("formatComplexity", () => {
+  it("renders the band and its position on the scale", () => {
+    expect(formatComplexity(complexity())).toBe("Moderate 3/5");
   });
 
-  it("keeps sub-cent estimates legible instead of rounding them to zero", () => {
-    expect(formatEstCost(0.006)).toBe("$0.0060");
+  it("renders an em dash when the response carried no band, rather than throwing", () => {
+    // Core types `complexity` required, so this is unreachable against a current
+    // backend. It is NOT unreachable in the field: the Studio is published to
+    // npm, so a copy can be pointed at a stack older than the field. One card
+    // degrading beats the dialog crashing on an unguarded dereference.
+    expect(formatComplexity(null)).toBe("—");
   });
 
-  it("renders ordinary amounts to cents, and a true zero as $0", () => {
-    expect(formatEstCost(0.42)).toBe("$0.42");
-    expect(formatEstCost(0)).toBe("$0");
+  it("omits a score core did not send instead of printing 0/5", () => {
+    // `0/5` would read as a real band at the bottom of the scale — the same
+    // fabrication `$0.00` would have been for the cost this replaced.
+    expect(formatComplexity(complexity({ score: 0 }))).toBe("Moderate");
+  });
+});
+
+describe("complexityBasisParts", () => {
+  it("leads with the signals that move the score and stays silent about the rest", () => {
+    expect(
+      complexityBasisParts(
+        complexity({
+          basis: {
+            llmSteps: 2,
+            chainedLlmSteps: 1,
+            mediaCapabilities: 0,
+            capabilityCount: 1,
+            stepCount: 5,
+            maxFanOut: 2,
+          },
+        }),
+      ),
+      // No "0 media generators" — a signal that contributed nothing is omitted.
+    ).toBe("2 model steps, 1 chained, 5 steps, 1 capability");
+  });
+
+  it("names a wholly deterministic template as such", () => {
+    // The reason an elaborate saga can score below a two-step pipeline, so it is
+    // said outright rather than left to be inferred from an absence.
+    expect(
+      complexityBasisParts(
+        complexity({
+          label: "Simple",
+          score: 2,
+          basis: {
+            llmSteps: 0,
+            chainedLlmSteps: 0,
+            mediaCapabilities: 0,
+            capabilityCount: 2,
+            stepCount: 7,
+            maxFanOut: 5,
+          },
+        }),
+      ),
+    ).toBe("7 steps, 2 capabilities · deterministic");
+  });
+
+  it("counts media generators, which carry weight without being model steps", () => {
+    expect(
+      complexityBasisParts(
+        complexity({
+          basis: {
+            llmSteps: 1,
+            chainedLlmSteps: 0,
+            mediaCapabilities: 1,
+            capabilityCount: 3,
+            stepCount: 5,
+            maxFanOut: 1,
+          },
+        }),
+      ),
+    ).toBe("1 model step, 1 media generator, 5 steps, 3 capabilities");
+  });
+});
+
+describe("complexityBasisSummary", () => {
+  it("prefixes the label for a standalone tooltip, matching the dashboard's sentence", () => {
+    // The card's tooltip has no band rendered beside it, so unlike the detail
+    // pane's line it must name the band itself.
+    expect(complexityBasisSummary(complexity())).toBe("Moderate: 1 model step, 2 steps, 1 capability");
   });
 });
 

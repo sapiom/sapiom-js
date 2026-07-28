@@ -3,7 +3,12 @@ import type { JSX } from "react";
 
 import type { TemplateDetailView } from "@shared/types";
 
-import { formatEstCost, templateGraph, type StudioTemplate } from "../lib/templates";
+import {
+  complexityBasisParts,
+  formatComplexity,
+  templateGraph,
+  type StudioTemplate,
+} from "../lib/templates";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
@@ -120,36 +125,42 @@ function GalleryDetail({ detail }: { detail: TemplateDetailView }): JSX.Element 
         </section>
       )}
 
+      {/* Cost used to headline this section as a three-state note (an estimate, a
+          "no per-call price" apology, or "no metered capabilities"). Core no
+          longer serves an estimate, so the note is now one complexity line: the
+          band, and the counts it was derived from. The capability chips stay —
+          they are what the template actually needs, independent of any band. */}
       <section className="template-section">
-        <h4 className="template-section-title">Capabilities and cost</h4>
+        <h4 className="template-section-title">Capabilities and complexity</h4>
         {detail.capabilities.length > 0 ? (
-          <>
-            <div className="template-caps">
-              {detail.capabilities.map((capability) => (
-                <code key={capability} className="template-cap">
-                  {capability}
-                </code>
-              ))}
-            </div>
-            <p className="template-note" data-testid="template-cost-note">
-              {detail.estCostPerRunUsd === null ? (
-                <>
-                  Metered capabilities set the per-run price. Sapiom has no per-call price for these,
-                  so no estimate is shown. Local test runs stub every capability and are free.
-                </>
-              ) : (
-                <>
-                  Estimated <strong>{formatEstCost(detail.estCostPerRunUsd)}</strong> per run, from these
-                  capabilities at current prices. Local test runs stub every capability and are free.
-                </>
-              )}
-            </p>
-          </>
+          <div className="template-caps">
+            {detail.capabilities.map((capability) => (
+              <code key={capability} className="template-cap">
+                {capability}
+              </code>
+            ))}
+          </div>
         ) : (
-          <p className="template-note" data-testid="template-cost-note">
-            No metered capabilities, so runs record no capability cost.
+          // Zero capabilities is a fact worth stating, not an empty slot: it is
+          // what makes a template runnable with no metered service behind it.
+          <p className="template-note" data-testid="template-caps-none">
+            Declares no metered capabilities.
           </p>
         )}
+        <p className="template-note" data-testid="template-complexity-note">
+          {detail.complexity ? (
+            <>
+              <strong>{formatComplexity(detail.complexity)}</strong> —{" "}
+              {complexityBasisParts(detail.complexity)}. A rough estimate of how involved this
+              template is, not a price. Local test runs stub every capability and are free.
+            </>
+          ) : (
+            <>
+              This catalog response carried no complexity band, so none is shown. Local test runs
+              stub every capability and are free.
+            </>
+          )}
+        </p>
       </section>
 
       {detail.requiredSecrets.length > 0 && (

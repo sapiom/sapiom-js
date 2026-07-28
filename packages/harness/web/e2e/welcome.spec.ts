@@ -135,7 +135,7 @@ test.describe("returning user", () => {
 });
 
 test.describe("templates dialog", () => {
-  test("lists the live catalog grouped by category, with a per-run cost or an em dash", async ({ page }) => {
+  test("lists the live catalog grouped by category, with a complexity band or an em dash", async ({ page }) => {
     await openTemplates(page);
     const dialog = page.getByTestId("templates-dialog");
 
@@ -149,12 +149,19 @@ test.describe("templates dialog", () => {
     await expect(dialog).toContainText("Bundled starters");
     await expect(page.getByTestId("template-row-coding-pause")).toBeVisible();
 
-    // approval-chain declares capabilities but has no price → em dash, not $0.00.
-    const noEstimate = page.getByTestId("template-row-approval-chain");
-    await expect(noEstimate).toContainText("—");
-    await expect(noEstimate).not.toContainText("$0.00");
+    // The band rides on the card beside the step count. Two ends of the scale,
+    // so a regression that blanked the slot could not pass by matching one word.
+    await expect(page.getByTestId("template-row-dependency-upgrade")).toContainText("Advanced 5/5");
+    await expect(page.getByTestId("template-row-approval-chain")).toContainText("Simple 2/5");
 
-    await expect(page.getByTestId("template-row-dependency-upgrade")).toContainText("$0.42");
+    // A card whose payload carried no band degrades to an em dash — the guard
+    // that keeps a published Studio pointed at an older backend from throwing.
+    const noBand = page.getByTestId("template-row-web-research-digest");
+    await expect(noBand).toContainText("—");
+
+    // And nothing in this dialog reads as money any more (SAP-2085 removed the
+    // cost estimate; a card still printing one would mean we re-derived it).
+    expect(await page.getByTestId("templates-dialog").textContent()).not.toMatch(/\$\d/);
   });
 
   test("search filters across name, tag, and capability", async ({ page }) => {

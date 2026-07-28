@@ -787,12 +787,47 @@ export interface AppState {
 // ---------------------------------------------------------------------------
 
 /**
+ * The counts a complexity band was derived from, so a surface can explain the
+ * band instead of just asserting it. Mirrors core's `TemplateComplexityBasisDto`.
+ */
+export interface TemplateComplexityBasis {
+  /** Steps declared `kind: 'llm'` — each is a judgment point. */
+  llmSteps: number;
+  /** Model steps feeding directly into another model step (compounding variance). */
+  chainedLlmSteps: number;
+  /** Media-generation capabilities (image/video). */
+  mediaCapabilities: number;
+  capabilityCount: number;
+  stepCount: number;
+  /** Largest number of outgoing targets on any one step. */
+  maxFanOut: number;
+}
+
+/**
+ * How involved a template is, on a 1–5 band derived by core from the template's
+ * declared shape. `score` and `label` are redundant on purpose: the score orders
+ * and the label reads. A surface renders one of them, never a raw weighted sum —
+ * that would invite false precision on what is explicitly a rough estimate.
+ *
+ * Owned by core's `workflows/template-complexity.ts`. The Studio computes
+ * nothing: whether the band is derived (today) or authored (SAP-2086/2087), this
+ * type is unchanged and this surface reads whatever core serves.
+ */
+export interface TemplateComplexity {
+  /** 1–5, monotonic in `label`. */
+  score: number;
+  /** `Minimal` | `Simple` | `Moderate` | `Involved` | `Advanced`. A loose string
+   *  for the same reason `category` is: the band vocabulary is owned upstream. */
+  label: string;
+  basis: TemplateComplexityBasis;
+}
+
+/**
  * A gallery card, relayed verbatim from core's `GET /v1/workflows/templates`
  * (`TemplateSummaryDto`). The Studio does NOT own this taxonomy — the registry
- * in the public sapiom-js repo does, and the backend computes `estCostPerRunUsd`
- * from the declared capabilities against live gateway pricing. Fields are
- * carried through untouched so the Studio's list and the dashboard's Template
- * library can never disagree.
+ * in the public sapiom-js repo does, and core derives the complexity band from
+ * each template's declared shape. Fields are carried through untouched so the
+ * Studio's list and the dashboard's Template library can never disagree.
  */
 export interface TemplateSummary {
   id: string;
@@ -810,9 +845,23 @@ export interface TemplateSummary {
   stepCount: number;
   /** Dotted catalog capability ids (e.g. `web.search`). */
   capabilities: string[];
-  /** Null when the template declares no per-call-priced capability — render an
-   *  em dash, NEVER a fabricated `$0.00` (21 of 26 templates are null today). */
-  estCostPerRunUsd: number | null;
+  /**
+   * How involved the template is. Replaced an estimated per-run cost that core
+   * could only compute for 5 of 26 templates; a band is defined for every one.
+   *
+   * NULLABLE HERE THOUGH CORE TYPES IT REQUIRED, and that is not belt-and-braces.
+   * The Studio is a published npm package: an old copy can point at any backend,
+   * and a fresh copy can point at a backend that predates the field (a local
+   * stack, a self-hosted one, prod before the promotion). Typing it required
+   * would put an unguarded dereference in the row renderer and take out the whole
+   * dialog. One row degrading to an em dash is the right failure.
+   *
+   * Note the em dash means something new: it used to be "no cost estimate
+   * exists", the majority case; it now means "this response predates the band" —
+   * a different claim wearing the same glyph, and one nobody should ever see
+   * against a current backend.
+   */
+  complexity: TemplateComplexity | null;
 }
 
 /**

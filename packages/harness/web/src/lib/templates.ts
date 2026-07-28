@@ -21,7 +21,7 @@
  *   allowlist — so every catalog id works, not just the two once pinned here.
  * - Starters: `sapiom agents init <dir> -t <name>`, offline.
  */
-import type { TemplateDetailView, TemplateSummary } from "@shared/types";
+import type { TemplateComplexity, TemplateDetailView, TemplateSummary } from "@shared/types";
 
 import type { CanvasGraph } from "./canvas-graph";
 
@@ -128,16 +128,62 @@ export function groupByCategory(
 }
 
 /**
- * Format a per-run cost estimate. Core returns null for any template that
- * declares no per-call-priced capability (21 of 26 today) — that MUST render as
- * an em dash, never `$0.00`, which would assert a real free run. Sub-cent
- * estimates keep enough precision to not read as zero.
+ * A template's complexity band for the card: `Moderate 3/5`.
+ *
+ * Text only, no meter or dots — matching the dashboard's gallery, whose icon
+ * policy is that nothing keyed off a template's own data gets a glyph. The label
+ * carries the meaning and the `n/5` carries the ordering.
+ *
+ * The em dash is the absent-payload guard, not a band: core serves a band for
+ * every template, so this only fires against a backend that predates the field
+ * (see `TemplateSummary.complexity`). A score core did not send is omitted rather
+ * than printed as `0/5`, which would read as a real band at the bottom of the
+ * scale — the same mistake `$0.00` would have been for the cost this replaced.
  */
-export function formatEstCost(usd: number | null): string {
-  if (usd === null) return "—";
-  if (usd === 0) return "$0";
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  return `$${usd.toFixed(2)}`;
+export function formatComplexity(complexity: TemplateComplexity | null): string {
+  if (!complexity?.label) return "—";
+  return complexity.score > 0 ? `${complexity.label} ${complexity.score}/5` : complexity.label;
+}
+
+/**
+ * What drove this template's band, in the user's terms — the band is a rough
+ * estimate, and saying what produced it is what keeps it honest rather than an
+ * opaque verdict.
+ *
+ * Ordered by how much each signal moves the score, and silent about signals that
+ * contributed nothing. Bare phrase, no label: the detail pane already renders the
+ * band beside it, and repeating "Moderate" twice in one sentence reads as a bug.
+ */
+export function complexityBasisParts(complexity: TemplateComplexity): string {
+  const { basis } = complexity;
+  const parts: string[] = [];
+  if (basis.llmSteps > 0) {
+    parts.push(`${basis.llmSteps} model ${basis.llmSteps === 1 ? "step" : "steps"}`);
+  }
+  if (basis.chainedLlmSteps > 0) {
+    parts.push(`${basis.chainedLlmSteps} chained`);
+  }
+  if (basis.mediaCapabilities > 0) {
+    parts.push(`${basis.mediaCapabilities} media ${basis.mediaCapabilities === 1 ? "generator" : "generators"}`);
+  }
+  parts.push(`${basis.stepCount} ${basis.stepCount === 1 ? "step" : "steps"}`);
+  if (basis.capabilityCount > 0) {
+    parts.push(`${basis.capabilityCount} ${basis.capabilityCount === 1 ? "capability" : "capabilities"}`);
+  }
+  // No model call and no media means the run is fully deterministic — worth
+  // saying outright, because it is why an elaborate saga can score below a
+  // two-step pipeline.
+  const suffix = basis.llmSteps === 0 && basis.mediaCapabilities === 0 ? " · deterministic" : "";
+  return `${parts.join(", ")}${suffix}`;
+}
+
+/**
+ * The label-prefixed form, for a standalone tooltip with no band rendered beside
+ * it. Mirrors the dashboard's `complexityBasisSummary` so the Studio and the
+ * Template library explain a band with the same sentence.
+ */
+export function complexityBasisSummary(complexity: TemplateComplexity): string {
+  return `${complexity.label}: ${complexityBasisParts(complexity)}`;
 }
 
 /** Case-insensitive match over the fields a user would search by. */
