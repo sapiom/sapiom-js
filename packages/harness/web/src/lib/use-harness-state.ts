@@ -5,6 +5,7 @@ import type {
   BusMessage,
   RunView,
   CreateSessionRequest,
+  HarnessKind,
   HarnessSession,
   HarnessSettings,
   RunMacroRequest,
@@ -101,6 +102,17 @@ export interface HarnessStateHook {
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
+  /**
+   * Portable continue: a fresh session in `cwd`, seeded with our own
+   * reconstruction of the session `from` identifies (either id form). For a
+   * conversation the agent no longer holds — the only thing still possible for
+   * it, and now a real continuation rather than a blank start.
+   */
+  rehydrateSession: (req: {
+    cwd: string;
+    harness: HarnessKind;
+    from: string;
+  }) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
   /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
   closeSession: (id: string) => Promise<void>;
@@ -733,15 +745,43 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   /**
-   * Resumes a history entry, in the order that preserves the most context:
+   * Portable continue. A conversation the agent no longer holds can't be
+   * reattached by anyone, so this starts a fresh session and hands it our own
+   * reconstruction of the old one — the same path for every harness, including
+   * ones with no resume flag at all.
    *
-   *  1. A row the registry already tracks → resume that record.
-   *  2. A transcript-only row the agent still holds (`resumeMode:
-   *     "agent-resume"`, verified server-side) → adopt it into the registry
-   *     and resume for real. This is the case that used to silently start a
-   *     fresh session and throw the conversation away.
-   *  3. Anything else (`rehydrate`) → a fresh session in the same directory,
-   *     which is all that's possible until H3 lands portable continue.
+   * `rehydratedFrom` on the response is the server's account of what actually
+   * happened, not an echo of the request: when our event log held nothing for
+   * that id, it comes back null and this says so. Silence there would be the
+   * exact dishonesty this epic removes — a blank session presented as a
+   * continuation.
+   */
+  const rehydrateSession = useCallback(
+    async ({ cwd, harness, from }: { cwd: string; harness: HarnessKind; from: string }) => {
+      const session = await createSession({ cwd, harness, rehydrateFrom: from });
+      if (!session.rehydratedFrom) {
+        setToast("Nothing was recorded for that session, so this one starts fresh.");
+      }
+      return session;
+    },
+    [createSession],
+  );
+
+  /**
+   * Resumes a history entry by branching on the server-verified `resumeMode`
+   * — never on what we happen to hold. Before H1 this guessed (a row with an
+   * `agentSessionId` was treated as resumable), which made one in three rows a
+   * button guaranteed to fail; the mode is now resolved against the agent's
+   * own store by `GET /sessions/history`, and this just obeys it.
+   *
+   *  1. `agent-resume` + a registry record → resume that record; the agent
+   *     genuinely reattaches to the conversation.
+   *  2. `agent-resume`, transcript-only → adopt it into the registry first,
+   *     then resume for real.
+   *  3. `rehydrate` → the agent does NOT hold this conversation, so nothing
+   *     can reattach to it. Start a fresh session seeded with our own
+   *     reconstruction of it (`rehydrateFrom`), which is what makes continue
+   *     work for a harness with no resume flag at all.
    *
    * A failed adopt does NOT fall through to a fresh session: it surfaces the
    * server's reason as a toast, because quietly starting something different
@@ -752,36 +792,43 @@ export function useHarnessState(): HarnessStateHook {
       const harnessSessionId =
         summary.harnessSessionId ??
         state?.sessions.find((session) => session.agentSessionId === summary.agentSessionId)?.id;
-      if (harnessSessionId) return resumeSession(harnessSessionId);
-      if (summary.resumeMode === "agent-resume") {
-        try {
-          const adopted = await api.adoptSession({
-            agentSessionId: summary.agentSessionId,
-            harness: summary.harness,
-            cwd: summary.cwd,
-            title: summary.title,
-            lastActiveAt: summary.lastActiveAt,
-          });
-          // Upsert: the adopted record is new to the registry in the normal
-          // case, but the server resumes an existing one when the row was
-          // already tracked, and then this response is the fresher copy.
-          setState((prev) => {
-            if (!prev) return prev;
-            const sessions = prev.sessions.some((s) => s.id === adopted.id)
-              ? prev.sessions.map((s) => (s.id === adopted.id ? adopted : s))
-              : [...prev.sessions, adopted];
-            return { ...prev, sessions };
-          });
-          selectSession(adopted.id);
-          return adopted;
-        } catch (err) {
-          setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
-          throw err;
-        }
+      if (summary.resumeMode === "rehydrate") {
+        // Prefer our own id: it resolves the whole conversation (every harness
+        // session that shares this agent session), where the agent session id
+        // alone only finds it if our events recorded one.
+        return rehydrateSession({
+          cwd: summary.cwd,
+          harness: summary.harness,
+          from: harnessSessionId ?? summary.agentSessionId,
+        });
       }
-      return createSession({ cwd: summary.cwd, harness: summary.harness });
+      if (harnessSessionId) return resumeSession(harnessSessionId);
+      try {
+        const adopted = await api.adoptSession({
+          agentSessionId: summary.agentSessionId,
+          harness: summary.harness,
+          cwd: summary.cwd,
+          title: summary.title,
+          lastActiveAt: summary.lastActiveAt,
+        });
+        // Upsert: the adopted record is new to the registry in the normal
+        // case, but the server resumes an existing one when the row was
+        // already tracked, and then this response is the fresher copy.
+        setState((prev) => {
+          if (!prev) return prev;
+          const sessions = prev.sessions.some((s) => s.id === adopted.id)
+            ? prev.sessions.map((s) => (s.id === adopted.id ? adopted : s))
+            : [...prev.sessions, adopted];
+          return { ...prev, sessions };
+        });
+        selectSession(adopted.id);
+        return adopted;
+      } catch (err) {
+        setToast(err instanceof ApiError && err.reason ? err.reason : (err as Error).message);
+        throw err;
+      }
     },
-    [state, resumeSession, createSession, selectSession],
+    [state, resumeSession, rehydrateSession, selectSession],
   );
 
   const closeSession = useCallback(
@@ -975,6 +1022,7 @@ export function useHarnessState(): HarnessStateHook {
     getTemplate,
     sessionRecord,
     resumeSession,
+    rehydrateSession,
     resumeFromHistory,
     closeSession,
     connectWorkflow,

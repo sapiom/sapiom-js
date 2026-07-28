@@ -33,14 +33,14 @@ describe("settings persistence", () => {
   });
 
   it("loadSettings returns defaults when nothing is persisted", async () => {
-    expect(await loadSettings()).toEqual({ telemetryOptIn: false, recentDirs: [] });
+    expect(await loadSettings()).toEqual({ telemetryOptIn: false, recentDirs: [], rollingSummary: false });
   });
 
   it("round-trips saved settings", async () => {
     const a = await makeRealDir("a");
     await saveSettings({ telemetryOptIn: true, recentDirs: [a] });
     expect(await hasStoredSettings()).toBe(true);
-    expect(await loadSettings()).toEqual({ telemetryOptIn: true, recentDirs: [a] });
+    expect(await loadSettings()).toEqual({ telemetryOptIn: true, recentDirs: [a], rollingSummary: false });
   });
 
   describe("recordRecentDir", () => {
@@ -155,7 +155,7 @@ describe("settings persistence", () => {
       await saveSettings({ telemetryOptIn: true, recentDirs: [a] }, customPath);
 
       expect(await hasStoredSettings(customPath)).toBe(true);
-      expect(await loadSettings(customPath)).toEqual({ telemetryOptIn: true, recentDirs: [a] });
+      expect(await loadSettings(customPath)).toEqual({ telemetryOptIn: true, recentDirs: [a], rollingSummary: false });
       // The (mocked-home) default location was never touched.
       expect(await hasStoredSettings()).toBe(false);
     });

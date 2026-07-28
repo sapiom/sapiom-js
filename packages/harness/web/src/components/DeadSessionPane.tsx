@@ -19,16 +19,25 @@ interface DeadSessionPaneProps {
   /** Fetches the reconstructed transcript; resolves null when nothing was recorded. */
   loadRecord: (id: string) => Promise<SessionRecord | null>;
   onResume: () => void;
+  /**
+   * Portable continue: start a FRESH session here, seeded with the
+   * reconstruction below. Offered only when the agent can't hand this
+   * conversation back but we recorded it ourselves — the case that used to be
+   * a dead end with a disabled button and "start a new session instead".
+   */
+  onContinue: () => void;
   onClose: () => void;
 }
 
-/** Why a session can't be handed back, in the user's terms. Two distinct
- *  causes — never started vs. started but left no transcript — and conflating
- *  them is what made the old single message misleading for most rows. */
+/** Why the agent can't hand this session back, in the user's terms. Two
+ *  distinct causes — never started vs. started but left no transcript — and
+ *  conflating them is what made the old single message misleading for most
+ *  rows. Says nothing about what to do instead: that depends on whether we
+ *  recorded the session, which is a separate question (see `canContinue`). */
 function resumeBlockedReason(session: HarnessSession): string {
   return session.agentSessionId == null
-    ? "This session can't be resumed. It exited before establishing a session id."
-    : `${HARNESS_LABELS[session.harness]} has no saved conversation for this session, so there's nothing to hand back. That happens when a session ends before its first prompt — the agent never writes a transcript for those. Start a new session in this directory instead.`;
+    ? "This session can't be resumed: it exited before establishing a session id."
+    : `${HARNESS_LABELS[session.harness]} has no saved conversation for this session, so there's nothing to hand back. That happens when a session ends before its first prompt — the agent never writes a transcript for those.`;
 }
 
 /**
@@ -63,6 +72,7 @@ export function DeadSessionPane({
   resumeMode,
   loadRecord,
   onResume,
+  onContinue,
   onClose,
 }: DeadSessionPaneProps): JSX.Element {
   const canResume = session.agentSessionId != null && resumeMode !== "rehydrate";
@@ -71,6 +81,11 @@ export function DeadSessionPane({
   // "empty" collapses the section entirely rather than showing an empty box:
   // the metadata card alone is the honest pane for a session we never recorded.
   const showRecord = record.status !== "empty";
+  // The two questions are independent (see the header): the agent may be
+  // unable to hand this conversation back while OUR recording of it is right
+  // there. When both are true, the way forward is portable continue rather
+  // than the dead end this pane used to be.
+  const canContinue = !canResume && record.status === "ready";
 
   return (
     <div className="dead-session-pane" data-testid="dead-session-pane" data-has-record={showRecord}>
@@ -106,22 +121,31 @@ export function DeadSessionPane({
           </div>
         </dl>
         <div className="dead-session-actions">
-          <button
-            className="btn-primary"
-            data-testid="dead-session-resume"
-            onClick={onResume}
-            disabled={!canResume}
-            title={canResume ? undefined : resumeBlockedReason(session)}
-          >
-            Resume
-          </button>
+          {canContinue ? (
+            <button className="btn-primary" data-testid="dead-session-continue" onClick={onContinue}>
+              Continue here
+            </button>
+          ) : (
+            <button
+              className="btn-primary"
+              data-testid="dead-session-resume"
+              onClick={onResume}
+              disabled={!canResume}
+              title={canResume ? undefined : resumeBlockedReason(session)}
+            >
+              Resume
+            </button>
+          )}
           <button className="btn-ghost" data-testid="dead-session-close" onClick={onClose}>
             Close
           </button>
         </div>
         {!canResume && (
           <div className="dead-session-resume-reason" data-testid="dead-session-resume-reason">
-            {resumeBlockedReason(session)}
+            {resumeBlockedReason(session)}{" "}
+            {canContinue
+              ? "Continuing opens a fresh session in this directory, seeded with the reconstruction below — a briefing about this session, not its context. The new agent will need to check the repository before relying on any of it."
+              : "Start a new session in this directory instead; there is no recording of this one to carry over either."}
           </div>
         )}
       </div>
@@ -177,6 +201,11 @@ export function PastSessionPane({
   // server resolves either (see core/session-record.ts's resolveSessionIds).
   const recordId = summary.harnessSessionId ?? summary.agentSessionId;
   const record = useSessionRecord(recordId, loadRecord);
+  // What the button will ACTUALLY do for a non-resumable row now that portable
+  // continue exists: with a record, the fresh session is seeded with the
+  // reconstruction shown below; without one, it really is just a new session
+  // in this directory. The two must not read the same.
+  const canRehydrate = !resumable && record.status === "ready";
 
   return (
     <div className="past-session-pane" data-testid="past-session-pane">
@@ -189,7 +218,7 @@ export function PastSessionPane({
         </div>
         <div className="dead-session-actions">
           <button className="btn-primary" data-testid="past-session-start" onClick={onStart}>
-            {resumable ? "Resume" : "New session here"}
+            {resumable ? "Resume" : canRehydrate ? "Continue here" : "New session here"}
           </button>
           <button className="btn-ghost" data-testid="past-session-close" onClick={onClose}>
             Close
@@ -201,7 +230,10 @@ export function PastSessionPane({
         <div className="dead-session-resume-reason" data-testid="past-session-reason">
           {HARNESS_LABELS[summary.harness]} has no saved conversation for this session, so it can't
           be reattached — sessions that end before their first prompt are never written to the
-          agent's history. Starting opens a fresh session in the same directory.
+          agent's history.{" "}
+          {canRehydrate
+            ? "Continuing opens a fresh session here, seeded with the reconstruction below. The new agent gets a briefing about this session, not its context — it will need to check the repository before relying on any of it."
+            : "Starting opens a fresh session in the same directory, with no context from this one."}
         </div>
       )}
 

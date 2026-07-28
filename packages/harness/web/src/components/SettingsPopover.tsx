@@ -22,6 +22,9 @@ interface SettingsPopoverProps {
   /** Which env var forced telemetry off, when consentSource is "env-forced-off". */
   consentEnvReason?: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  /** `HarnessSettings.rollingSummary` — see the toggle's own note below. */
+  rollingSummary: boolean;
+  onToggleRollingSummary: (next: boolean) => Promise<void>;
   /** Kick off the browser OAuth flow — see HarnessApi.startAuth(). */
   onStartAuth: () => Promise<AuthStartResponse>;
   /** Sign out and clear credentials — see HarnessApi.disconnect(). */
@@ -35,6 +38,8 @@ export function SettingsPopover({
   consentSource,
   consentEnvReason,
   onToggleTelemetry,
+  rollingSummary,
+  onToggleRollingSummary,
   onStartAuth,
   onDisconnect,
 }: SettingsPopoverProps): JSX.Element {
@@ -51,6 +56,15 @@ export function SettingsPopover({
     try {
       await onToggleTelemetry(next);
       track("consent.changed", { optIn: next });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleToggleRollingSummary = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await onToggleRollingSummary(!rollingSummary);
     } finally {
       setBusy(false);
     }
@@ -169,6 +183,29 @@ export function SettingsPopover({
       <p className="settings-note">
         Prompts, tool calls, and session lifecycle events are always written locally to{" "}
         <code>{HARNESS_PATHS.events}</code>. With your consent, they&rsquo;re also sent to Sapiom.
+      </p>
+
+      <label className="settings-toggle-row">
+        <span>Summarize sessions in the background</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={rollingSummary}
+          data-testid="rolling-summary-toggle"
+          className={"toggle-switch" + (rollingSummary ? " is-on" : "")}
+          disabled={busy}
+          onClick={() => void handleToggleRollingSummary()}
+        >
+          <span className="toggle-knob" />
+        </button>
+      </label>
+
+      <p className="settings-note">
+        Off by default, because it uses tokens you didn&rsquo;t ask to use: every 10 turns, and
+        once at the end, a cheap one-shot agent run folds the session into a short summary.
+        Continuing a session the agent can no longer reattach to then explains what the work was{" "}
+        <em>for</em>, not just what it last did. With this off, continuing still works — it
+        carries the last few turns instead.
       </p>
     </>
   );

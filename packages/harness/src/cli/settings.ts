@@ -6,6 +6,10 @@ import { expandHome } from "./paths.js";
 const DEFAULT_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
   recentDirs: [],
+  // Opt-in: the rolling summary spends tokens on a background LLM call the
+  // user never asked for. Off, portable continue still works — its brief just
+  // degrades to the last N turns. See core/rolling-summary.ts.
+  rollingSummary: false,
 };
 
 const MAX_RECENT_DIRS = 8;

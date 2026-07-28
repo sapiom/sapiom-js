@@ -1,0 +1,14 @@
+---
+"@sapiom/harness": patch
+---
+
+Portable continue: a session the agent can no longer reattach to is now continuable, by seeding a fresh session with our own reconstruction of it (SAP-2059).
+
+H1 stopped offering Resume on rows that would fail; that left them with nowhere to go — a disabled button and "start a new session instead", even when our event log held the whole conversation. Resume-as-reattach can only ever work for the vendor that wrote the transcript, on the machine that wrote it. This adds the other half: `POST /api/sessions` takes `rehydrateFrom`, and the new session launches with a bounded markdown briefing about the old one.
+
+- New `src/core/resume-brief.ts`: `buildResumeBrief(record, opts)` renders a `SessionRecord` as ~6k tokens of markdown — what the session was (title, cwd, branch, bound workflow + `definitionId`), the rolling summary when present, the last N turns with tool calls collapsed to name + target, and files written / commands run derived from `tool.call` inputs. Over budget it drops turns oldest-first, then the (hard-capped) digests, and clamps the summary only as a last resort.
+- It leads with an honesty header and spells out each of the record's `limitations` in prose. A brief that reads like restored memory is worse than no brief: the agent would assert file contents and command results it never saw.
+- Delivery is per-adapter, declared not inferred (`HarnessAdapter.systemPromptDelivery`). Both shipped adapters use `launch-flag` — the brief is appended to the generated system-prompt file, which claude-code reads via `--append-system-prompt` and codex inlines as `developer_instructions`, so one code path serves both with no adapter change. A harness with no prompt flag declares `post-ready-injection` and gets the brief through the ordinary input path once the session reports `ready`, never into a TUI sitting on a trust prompt.
+- New `src/core/rolling-summary.ts`: opt-in via `HarnessSettings.rollingSummary` (off by default; toggle in Settings). Every 10 completed turns and once at session end, a bounded headless run (`launchTask`, cheap model, `--max-turns 1`) folds the record into `<generated>/<sessionId>/summary.md`. Fully detached from the ingest path — a turn is never slower or riskier for it. Codex has no `launchTask`, so its briefs degrade to last-N-turns, as does everyone's with the setting off.
+- `HarnessSession.rehydratedFrom` records what actually happened, not what was asked for: a `rehydrateFrom` id our log holds nothing for still creates the session, with the field null and the UI saying the continue carried no context.
+- UI: `resumeFromHistory` branches on the server-verified `resumeMode` instead of guessing, and the dead-session pane offers "Continue here" (with what will and won't carry over) wherever it has a record to seed from, instead of a disabled Resume.

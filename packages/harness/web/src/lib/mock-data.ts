@@ -367,6 +367,23 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     ready: false,
   },
   {
+    // Exited, and the agent's transcript for it is gone — so its history row
+    // is `rehydrate` even though we recorded the whole conversation (see
+    // MOCK_SESSION_RECORDS["sess-pricing"]). Continuing it starts a fresh
+    // session seeded from that record rather than resuming anything.
+    id: "sess-pricing",
+    agentSessionId: "4d8c1e77-9a03-4b52-8e61-0c2d5f7a1b93",
+    boundWorkflowPath: null,
+    harness: "claude-code",
+    cwd: "/Users/demo/acme-app",
+    title: "Rework the pricing tiers",
+    status: "exited",
+    createdAt: daysAgo(3),
+    lastActiveAt: daysAgo(3),
+    exitCode: 0,
+    ready: false,
+  },
+  {
     id: "sess-leasing-2",
     agentSessionId: "1a2b3c4d-5e6f-4a71-8b2c-3d4e5f6a7b8c",
     // A SECOND live session bound to leasing, so the focused agent's main-panel
@@ -476,6 +493,23 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       // turnCount comes from OUR event index and wins over messageCount when
       // both are present — the two disagreeing here is deliberate.
       turnCount: 3,
+    },
+    {
+      // The row portable continue exists for: the agent's transcript is gone
+      // (rotated, or the machine changed), so nothing can reattach — but WE
+      // recorded the conversation, so continuing it means a fresh session
+      // seeded from our own record. Contrast the phantom above, which is
+      // `rehydrate` with nothing recorded either side.
+      harnessSessionId: "sess-pricing",
+      agentSessionId: "4d8c1e77-9a03-4b52-8e61-0c2d5f7a1b93",
+      harness: "claude-code",
+      cwd: "/Users/demo/acme-app",
+      title: "Rework the pricing tiers",
+      lastActiveAt: daysAgo(3),
+      source: "registry",
+      resumeMode: "rehydrate",
+      gitBranch: "feat/pricing-tiers",
+      turnCount: 2,
     },
     {
       // A session the Studio never ran: the agent's own transcript knows it,
@@ -638,6 +672,62 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
       },
     ],
   },
+  // The rehydration fixture: a record whose agent no longer holds the
+  // conversation, so "Continue" seeds a fresh session from this instead of
+  // resuming. See its MOCK_HISTORY row.
+  "sess-pricing": {
+    harnessSessionId: "sess-pricing",
+    mergedSessionIds: ["sess-pricing"],
+    agentSessionId: "4d8c1e77-9a03-4b52-8e61-0c2d5f7a1b93",
+    harness: "claude-code",
+    cwd: "/Users/demo/acme-app",
+    startedAt: daysAgo(3),
+    endedAt: daysAgo(3),
+    turnCount: 2,
+    eventCount: 8,
+    reconstructed: true,
+    limitations: ["assistant-narration-gap"],
+    turns: [
+      {
+        index: 1,
+        prompt: "Rework the pricing tiers so the mid tier is usage-metered.",
+        promptAt: daysAgo(3),
+        toolCalls: [
+          {
+            name: "Edit",
+            input: '{"file_path":"/Users/demo/acme-app/src/pricing/tiers.ts"}',
+            responseSummary: "updated 1 hunk",
+            responseTruncated: false,
+            at: daysAgo(3),
+          },
+        ],
+        assistantText: "Mid tier is metered now; the annual discount still needs deciding.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 8210, outputTokens: 280 },
+        completedAt: daysAgo(3),
+        incomplete: false,
+      },
+      {
+        index: 2,
+        prompt: "Leave the discount for now — add the migration.",
+        promptAt: daysAgo(3),
+        toolCalls: [
+          {
+            name: "Write",
+            input: '{"file_path":"/Users/demo/acme-app/migrations/0042-pricing.sql"}',
+            responseSummary: "wrote 34 lines",
+            responseTruncated: false,
+            at: daysAgo(3),
+          },
+        ],
+        assistantText: "Migration 0042 added. Not run anywhere yet.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 8940, outputTokens: 160 },
+        completedAt: daysAgo(3),
+        incomplete: false,
+      },
+    ],
+  },
   "sess-rfq": {
     harnessSessionId: "sess-rfq",
     mergedSessionIds: ["sess-rfq"],
@@ -781,6 +871,9 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
 export const MOCK_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
   recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-workflows", "/Users/demo/onboarding-flow"],
+  // Matches the real default: opt-in, because it spends tokens on a background
+  // LLM call the user never asked for.
+  rollingSummary: false,
 };
 
 

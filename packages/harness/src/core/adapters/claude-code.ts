@@ -303,6 +303,10 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
 export class ClaudeCodeAdapter implements HarnessAdapter {
   readonly id = "claude-code" as const;
   readonly eventSource = "hooks" as const;
+  /** `--append-system-prompt` carries `systemPromptFile`'s contents on every
+   *  launch/resume path below, so a rehydration brief composed into that file
+   *  needs no separate delivery. */
+  readonly systemPromptDelivery = "launch-flag" as const;
   private readonly binary: string;
   private readonly homeDir: string;
   private readonly fullScanMaxBytes: number;
