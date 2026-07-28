@@ -23,6 +23,9 @@ const UNRECORDED_ROW = "history-5e7a0c94-3f22-4d18-b6e1-77c0a9b12d40";
 /** Exited registry sessions → dead-session pane. Codex and Claude Code. */
 const CODEX_EXITED_ROW = "exited-session-sess-rfq";
 const CLAUDE_EXITED_ROW = "exited-session-sess-leasing";
+/** A session old enough that its events are gone — it renders from the
+ *  compacted copy under `~/.sapiom/harness/records/`. */
+const ARCHIVED_ROW = "history-4a1c8e22-9b70-4f35-a1d2-3e4f5a6b7c8d";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
@@ -101,6 +104,27 @@ test("truncation and an unfinished turn are stated, not smoothed over", async ({
   const limitations = page.getByTestId("transcript-limitations");
   await expect(limitations).toContainText("truncated");
   await expect(limitations).toContainText("never completed");
+});
+
+test("a session whose events are gone still renders — from its archived copy, and says so", async ({ page }) => {
+  await openHistoryRow(page, ARCHIVED_ROW);
+
+  // This is the SAP-2060 case in the UI: events.ndjson swept this session out
+  // weeks ago, and the record still opens.
+  await expect(page.getByTestId("session-transcript")).toBeVisible();
+  const turns = page.getByTestId("transcript-turn");
+  await expect(turns).toHaveCount(2);
+  await expect(turns.nth(1).getByTestId("transcript-prompt")).toContainText("Ship the migration");
+
+  // Both costs of being an archive are stated, not left to be noticed: it's a
+  // stored copy, its tool payloads were shortened, and it holds fewer turns
+  // than the session had.
+  await expect(page.getByTestId("transcript-archived")).toContainText("Archived copy");
+  const limitations = page.getByTestId("transcript-limitations");
+  await expect(limitations).toContainText("shortened");
+  await expect(limitations).toContainText("earlier ones are gone");
+
+  await page.screenshot({ path: "web/e2e/screenshots/past-session-transcript-archived.png", fullPage: true });
 });
 
 test("tool calls are collapsed by default and expand to the stored input and result", async ({ page }) => {

@@ -31,6 +31,13 @@
  *     chronology, not the prose.
  *   - Codex's rollout has no equivalent of that field at all, so its turns
  *     carry tool calls and prompts but no assistant text.
+ *
+ * RETENTION — why a record can outlive the events it was folded from. The
+ * ndjson is capped at 50 MB / 30 days (collector/store-retention.ts), so a
+ * record built only from it would silently disappear a month later. At session
+ * end a compacted copy is written to `~/.sapiom/harness/records/` and the
+ * reader falls back to it once the log no longer covers the conversation
+ * (core/record-archive.ts; the rule is spelled out on `read` below).
  */
 
 import * as os from "node:os";
@@ -45,11 +52,9 @@ import type {
   SessionRecordTurn,
 } from "../shared/types.js";
 import { projectDirsFor } from "./adapters/claude-code.js";
+import { PAYLOAD_TRUNCATION_MARKER } from "./collector/normalizer.js";
 import { readLastAssistantTurn } from "./collector/transcript.js";
 import type { EventIndex, EventReader } from "./collector/store.js";
-
-/** The suffix `truncateForPayload` (core/collector/normalizer.ts) leaves behind. */
-const TRUNCATION_MARKER = /…\[truncated \d+ chars\]$/;
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -173,7 +178,7 @@ export function foldSessionRecord(
           name: stringOrNull(payload.toolName),
           input: stringOrNull(payload.toolInput),
           responseSummary,
-          responseTruncated: responseSummary !== null && TRUNCATION_MARKER.test(responseSummary),
+          responseTruncated: responseSummary !== null && PAYLOAD_TRUNCATION_MARKER.test(responseSummary),
           at: event.ts,
         });
         break;
@@ -215,6 +220,9 @@ export function foldSessionRecord(
     turnCount: turns.filter((turn) => turn.prompt !== null).length,
     eventCount: ordered.length,
     reconstructed: true,
+    // Folded from the live log, not read from the archive. The archive is the
+    // only thing that sets this (core/record-archive.ts).
+    archivedAt: null,
     limitations: computeLimitations(turns),
   };
 }
@@ -262,20 +270,47 @@ export type FinalTurnEnricher = (record: SessionRecord) => Promise<{
   usage: { inputTokens: number | null; outputTokens: number | null } | null;
 } | null>;
 
+/**
+ * The durable archive, as the reader needs it. Structural on purpose: the real
+ * implementation is `createRecordArchive` (core/record-archive.ts), and a test
+ * can hand in two functions.
+ */
+export interface ArchivedRecordSource {
+  read(id: string): Promise<SessionRecord | null>;
+  list(): Promise<readonly { keys: readonly string[]; turnCount: number }[]>;
+}
+
 export interface SessionRecordReader {
   /**
    * The record for `id`, which may be a harnessSessionId or the agent's own
    * session id (history rows the registry never tracked only have the latter).
-   * Null when our event log holds nothing for it — the honest answer, and
-   * what the route turns into a 404.
+   * Reads from whichever source still holds the whole conversation — the live
+   * event log, or its archived copy once retention has eaten into the log (see
+   * {@link createSessionRecordReader} for the rule). Null when neither holds
+   * anything for it — the honest answer, and what the route turns into a 404.
    */
   read(id: string): Promise<SessionRecord | null>;
   /**
-   * Exact human-turn counts from the index, keyed by BOTH harnessSessionId and
-   * agentSessionId so a history row can be looked up by whichever it has.
-   * Cheap at any file size (no transcript scan, no per-row I/O).
+   * The record folded from the event log ALONE, never from the archive. This is
+   * what gets archived (archiving an archive would compact an excerpt of an
+   * excerpt and re-stamp it as fresh), and what a caller wanting the
+   * uncompacted record while the events are still there should use.
+   */
+  readFromEvents(id: string): Promise<SessionRecord | null>;
+  /**
+   * Human-turn counts, keyed by BOTH harnessSessionId and agentSessionId so a
+   * history row can be looked up by whichever it has. Exact and cheap at any
+   * file size (no transcript scan, no per-row I/O): the event index for
+   * conversations the log still holds, the archive's own counts for the rest —
+   * so a row's count survives the sweep along with the record it links to.
    */
   turnCounts(): Promise<Map<string, number>>;
+  /**
+   * Every conversation the event log holds, by primary id, most recently active
+   * first. The archive's backfill pass walks this to find conversations that
+   * were never archived (see backfillSessionRecords).
+   */
+  conversationIds(): Promise<string[]>;
 }
 
 /**
@@ -312,9 +347,11 @@ function resolveSessionIds(index: EventIndex, id: string): string[] {
 }
 
 /**
- * Reader over the local event store. `read` touches only the byte spans the
- * index attributes to the session, so opening a record never rescans the (up
- * to 50 MB) ndjson.
+ * Reader over the local event store, and — when one is wired in — over the
+ * durable record archive that outlives it (core/record-archive.ts). `read`
+ * touches only the byte spans the index attributes to the session, so opening a
+ * record never rescans the (up to 50 MB) ndjson; see `read`'s own comment for
+ * how it chooses between the two sources.
  *
  * MEMORY CEILING — stated, because a global `(ts, seq)` order can't be produced
  * from a stream: `read` holds the whole session's events at once. That is ONE
@@ -333,10 +370,57 @@ function resolveSessionIds(index: EventIndex, id: string): string[] {
  */
 export function createSessionRecordReader(
   store: EventReader,
-  options: { enrichFinalTurn?: FinalTurnEnricher } = {},
+  options: { enrichFinalTurn?: FinalTurnEnricher; archive?: ArchivedRecordSource } = {},
 ): SessionRecordReader {
-  return {
+  const archive = options.archive;
+
+  const reader: SessionRecordReader = {
+    /**
+     * SOURCE SELECTION — the one rule worth reading twice.
+     *
+     * The ticket asked for "prefer the archive when it exists, fall back to
+     * scanning events". Taken literally that is wrong in two directions, so
+     * this prefers whichever source still holds the WHOLE conversation, which
+     * is the archive exactly when the log no longer does:
+     *
+     * - Preferring the archive for a session that ended a minute ago serves a
+     *   compacted excerpt (clipped tool payloads) when the full events are
+     *   right there. Scanning them is not the expensive thing it would have
+     *   been before H2's byte-offset index — a record open reads only that
+     *   session's spans.
+     * - A conversation that gets RESUMED keeps writing into the log after its
+     *   first archive. "Always prefer the archive" would freeze its record at
+     *   the first exit and quietly hide every later turn.
+     *
+     * The log holds the whole conversation when it still holds the beginning of
+     * it: the sweep truncates oldest-first (store-retention.ts), so coverage is
+     * always a suffix — an intact first event means nothing in between was
+     * dropped. Events newer than the archive mean the conversation continued,
+     * which makes the log the fuller source regardless.
+     *
+     * Neither source → null. A record that was never recorded and one that was
+     * swept both answer 404 today; what changed is that far fewer sessions
+     * reach that state.
+     */
     async read(id: string): Promise<SessionRecord | null> {
+      const archived = archive ? await archive.read(id).catch(() => null) : null;
+      if (!archived) return reader.readFromEvents(id);
+
+      const index = await store.index();
+      const sessionIds = resolveSessionIds(index, id);
+      const entries = sessionIds.map((sessionId) => index.bySession.get(sessionId)).filter(isPresent);
+      const firstTs = earliest(entries.map((entry) => entry.firstTs));
+      const lastTs = latest(entries.map((entry) => entry.lastTs));
+
+      const logHoldsTheBeginning =
+        firstTs !== null && (archived.startedAt === null || firstTs <= archived.startedAt);
+      const logHasNewerEvents =
+        lastTs !== null && archived.archivedAt !== null && lastTs > archived.archivedAt;
+      if (!logHoldsTheBeginning && !logHasNewerEvents) return archived;
+      return (await reader.readFromEvents(id)) ?? archived;
+    },
+
+    async readFromEvents(id: string): Promise<SessionRecord | null> {
       const index = await store.index();
       const sessionIds = resolveSessionIds(index, id);
       if (sessionIds.length === 0) return null;
@@ -398,9 +482,73 @@ export function createSessionRecordReader(
       for (const agentSessionId of index.byAgentSession.keys()) {
         counts.set(agentSessionId, totalFor(agentSessionId));
       }
+
+      // Then the archive, for every key the log can no longer speak for. `max`
+      // rather than "fill the gaps": a swept conversation's live count has
+      // decayed to a fraction of what happened (or to nothing at all), and a
+      // resumed one's live count is the larger, more current number. Taking the
+      // greater of the two is right in both directions.
+      if (archive) {
+        const archived = await archive.list().catch((err: unknown) => {
+          console.error("[harness] archived record counts failed:", err);
+          return [];
+        });
+        for (const entry of archived) {
+          for (const key of entry.keys) {
+            counts.set(key, Math.max(counts.get(key) ?? 0, entry.turnCount));
+          }
+        }
+      }
       return counts;
     },
+
+    async conversationIds(): Promise<string[]> {
+      const index = await store.index();
+      const primaries = new Map<string, string | null>();
+      for (const harnessSessionId of index.bySession.keys()) {
+        // resolveSessionIds returns the conversation earliest-first, so its
+        // head is the primary id every segment agrees on — which is what
+        // dedupes a resumed conversation down to one entry here.
+        const [primary] = resolveSessionIds(index, harnessSessionId);
+        if (primary === undefined || primaries.has(primary)) continue;
+        primaries.set(
+          primary,
+          latest(
+            resolveSessionIds(index, primary).map((id) => index.bySession.get(id)?.lastTs ?? null),
+          ),
+        );
+      }
+      return [...primaries.entries()]
+        .sort(([idA, tsA], [idB, tsB]) => {
+          if (tsA !== tsB) return (tsB ?? "") < (tsA ?? "") ? -1 : 1;
+          return idA < idB ? -1 : 1;
+        })
+        .map(([id]) => id);
+    },
   };
+
+  return reader;
+}
+
+function isPresent<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
+/** The smallest / largest non-null ISO timestamp, or null when there is none.
+ *  ISO-8601 in UTC sorts lexicographically, which is why these compare strings
+ *  rather than parsing dates. */
+function earliest(timestamps: readonly (string | null)[]): string | null {
+  return timestamps.reduce<string | null>(
+    (best, ts) => (ts === null ? best : best === null || ts < best ? ts : best),
+    null,
+  );
+}
+
+function latest(timestamps: readonly (string | null)[]): string | null {
+  return timestamps.reduce<string | null>(
+    (best, ts) => (ts === null ? best : best === null || ts > best ? ts : best),
+    null,
+  );
 }
 
 /**

@@ -57,6 +57,15 @@ export function truncateForPayload(value: unknown, maxLength = MAX_FIELD_LENGTH)
   return `${str.slice(0, maxLength)}…[truncated ${str.length - maxLength} chars]`;
 }
 
+/**
+ * The suffix {@link truncateForPayload} leaves behind, with the omitted count
+ * captured. Exported so every consumer that has to recognize truncated text —
+ * the record fold's `responseTruncated`, the archive's re-clip — tests for the
+ * same marker this function writes, instead of keeping its own copy of the
+ * format. No `g` flag: callers use `test`/`exec` freely.
+ */
+export const PAYLOAD_TRUNCATION_MARKER = /…\[truncated (\d+) chars\]$/;
+
 function stringField(payload: RawHookPayload, key: string): string | undefined {
   const value = payload[key];
   return typeof value === "string" ? value : undefined;

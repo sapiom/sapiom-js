@@ -1368,13 +1368,18 @@ describe("createRestRouter", () => {
       turnCount: 1,
       eventCount: 3,
       reconstructed: true,
+      archivedAt: null,
       limitations: [],
     };
 
     function stubRecords(overrides: Partial<SessionRecordReader> = {}): SessionRecordReader {
+      const find = async (id: string): Promise<SessionRecord | null> =>
+        id === "sess-1" || id === "agent-1" ? record : null;
       return {
-        read: async (id: string) => (id === "sess-1" || id === "agent-1" ? record : null),
+        read: find,
+        readFromEvents: find,
         turnCounts: async () => new Map([["agent-1", 7]]),
+        conversationIds: async () => ["sess-1"],
         ...overrides,
       };
     }

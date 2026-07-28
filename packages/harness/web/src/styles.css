@@ -3143,6 +3143,14 @@ input {
   line-height: 1.5;
 }
 
+/* Second line of the notice, for a record served from the durable archive
+   rather than the live event log. */
+.transcript-notice-archived {
+  margin-top: var(--sp1);
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
 .transcript-notice-list {
   margin: var(--sp1) 0 0;
   padding-left: var(--sp4);

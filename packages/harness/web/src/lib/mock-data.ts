@@ -528,6 +528,21 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       source: "transcript",
       resumeMode: "agent-resume",
     },
+    {
+      // Old enough that its events are long gone from events.ndjson (50 MB /
+      // 30 days) — it renders from its archived record instead, and says so.
+      // Its `turnCount` is the conversation's, not the archive's: the archive
+      // only had room for the last two turns.
+      harnessSessionId: "sess-migration",
+      agentSessionId: "4a1c8e22-9b70-4f35-a1d2-3e4f5a6b7c8d",
+      harness: "claude-code",
+      cwd: "/Users/demo/acme-app",
+      title: "Migrate the applicant schema",
+      lastActiveAt: daysAgo(45),
+      source: "registry",
+      resumeMode: "rehydrate",
+      turnCount: 9,
+    },
   ],
   "/Users/demo/rfq-workflows": [
     {
@@ -566,6 +581,8 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     turnCount: 2,
     eventCount: 9,
     reconstructed: true,
+    // Folded live from events.ndjson — nothing archived about it yet.
+    archivedAt: null,
     limitations: ["truncated-tool-output", "assistant-narration-gap", "incomplete-final-turn"],
     turns: [
       {
@@ -627,6 +644,7 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     turnCount: 3,
     eventCount: 11,
     reconstructed: true,
+    archivedAt: null,
     limitations: ["assistant-narration-gap"],
     turns: [
       {
@@ -686,6 +704,7 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     turnCount: 2,
     eventCount: 8,
     reconstructed: true,
+    archivedAt: null,
     limitations: ["assistant-narration-gap"],
     turns: [
       {
@@ -739,6 +758,7 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     turnCount: 1,
     eventCount: 4,
     reconstructed: true,
+    archivedAt: null,
     // Codex's rollout carries no equivalent of the Stop hook's final assistant
     // message, so a Codex record has the chronology but none of the prose.
     limitations: ["missing-assistant-text"],
@@ -760,6 +780,60 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
         model: null,
         usage: null,
         completedAt: daysAgo(1),
+        incomplete: false,
+      },
+    ],
+  },
+  /**
+   * An ARCHIVED record: this session's events aged out of events.ndjson weeks
+   * ago, and what's left is the compacted copy under
+   * `~/.sapiom/harness/records/` (see core/record-archive.ts). Shaped exactly
+   * like the real thing — `archivedAt` set, tool payloads clipped with the
+   * collector's own marker, `turnCount` still 9 while `turns` holds the last
+   * two, and both losses named in `limitations`.
+   */
+  "sess-migration": {
+    harnessSessionId: "sess-migration",
+    mergedSessionIds: ["sess-migration"],
+    agentSessionId: "4a1c8e22-9b70-4f35-a1d2-3e4f5a6b7c8d",
+    harness: "claude-code",
+    cwd: "/Users/demo/acme-app",
+    startedAt: daysAgo(45),
+    endedAt: daysAgo(45),
+    turnCount: 9,
+    eventCount: 61,
+    reconstructed: true,
+    archivedAt: daysAgo(45),
+    limitations: ["truncated-tool-output", "compacted-archive", "dropped-early-turns"],
+    turns: [
+      {
+        index: 8,
+        prompt: "Backfill the applicant rows that predate the schema change.",
+        promptAt: daysAgo(45),
+        toolCalls: [
+          {
+            name: "Bash",
+            input: '{"command":"pnpm migrate:applicants --backfill"}',
+            responseSummary: "migrating 41,203 rows…[truncated 3184 chars]",
+            responseTruncated: true,
+            at: daysAgo(45),
+          },
+        ],
+        assistantText: "Backfilled 41,203 applicant rows; 12 failed validation and are listed in `backfill-errors.json`.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 21400, outputTokens: 480 },
+        completedAt: daysAgo(45),
+        incomplete: false,
+      },
+      {
+        index: 9,
+        prompt: "Ship the migration and note the 12 failures in the changelog.",
+        promptAt: daysAgo(45),
+        toolCalls: [],
+        assistantText: "Shipped, with the 12 unmigrated applicants called out under Known issues.",
+        model: "claude-opus-4-6",
+        usage: { inputTokens: 22100, outputTokens: 130 },
+        completedAt: daysAgo(45),
         incomplete: false,
       },
     ],

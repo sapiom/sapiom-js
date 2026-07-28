@@ -17,9 +17,16 @@ import { describeLimitations, formatClockTime, formatUsage, toolCallLabel } from
  * server reported (`record.limitations`), and — per turn — no invented content
  * anywhere. A turn with no recorded prompt says exactly that; a truncated tool
  * result is marked truncated; a turn that never completed is marked as such.
+ *
+ * A record whose events have aged out of the local log comes from its archived
+ * copy (`record.archivedAt` set — see src/core/record-archive.ts), which is
+ * bounded and therefore lossier still. That, too, is stated here rather than
+ * left for the user to infer from a session that reads thinner than they
+ * remember.
  */
 export function SessionTranscript({ record }: { record: SessionRecord }): JSX.Element {
   const notes = describeLimitations(record.limitations);
+  const archivedAt = formatClockTime(record.archivedAt);
 
   return (
     <div className="transcript" data-testid="session-transcript">
@@ -29,6 +36,16 @@ export function SessionTranscript({ record }: { record: SessionRecord }): JSX.El
           <p className="transcript-notice-lead">
             Rebuilt from the harness's own recording of this session, not a replay of your terminal.
           </p>
+          {record.archivedAt !== null && (
+            <p
+              className="transcript-notice-lead transcript-notice-archived"
+              data-testid="transcript-archived"
+            >
+              {archivedAt
+                ? `Archived copy from ${archivedAt}, kept after this session's raw events aged out of the local log.`
+                : "Archived copy, kept after this session's raw events aged out of the local log."}
+            </p>
+          )}
           {notes.length > 0 && (
             <ul className="transcript-notice-list" data-testid="transcript-limitations">
               {notes.map((note) => (

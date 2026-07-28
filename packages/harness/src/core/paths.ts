@@ -26,6 +26,7 @@ export interface HarnessStatePaths {
   events: string;
   settings: string;
   generated: string;
+  records: string;
   sampleProject: string;
 }
 
@@ -53,6 +54,7 @@ export function resolveStatePaths(stateRoot?: string): HarnessStatePaths {
     events: join(root, relativeToHome(HARNESS_PATHS.events)),
     settings: join(root, relativeToHome(HARNESS_PATHS.settings)),
     generated: join(root, relativeToHome(HARNESS_PATHS.generated)),
+    records: join(root, relativeToHome(HARNESS_PATHS.records)),
     sampleProject: join(root, relativeToHome(HARNESS_PATHS.sampleProject)),
   };
 }

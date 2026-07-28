@@ -65,6 +65,7 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     turnCount: turns.filter((t) => t.prompt !== null).length,
     eventCount: turns.length * 2,
     reconstructed: true,
+    archivedAt: null, // folded from the live event log, not the archive
     limitations: [],
     ...overrides,
     turns,
