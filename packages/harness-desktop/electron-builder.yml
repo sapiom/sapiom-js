@@ -58,7 +58,11 @@ mac:
   target:
     - dmg
   category: public.app-category.developer-tools
-  icon: assets/icon.png
+  # macOS gets its own artwork: the same mark inset to ~82% of the canvas with a
+  # transparent margin, per Apple's icon grid, so the app sits the same visual
+  # size as its neighbours in the Dock. A full-bleed tile (correct on Linux and
+  # Windows) reads as conspicuously oversized next to system apps.
+  icon: assets/icon-mac.png
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: assets/entitlements.mac.plist
