@@ -28,6 +28,13 @@ export const HARNESS_PATHS = {
   settings: `${HARNESS_HOME}/settings.json`,
   /** Generated per-session agent config (claude settings/mcp-config files). */
   generated: `${HARNESS_HOME}/generated`,
+  /**
+   * Archived session records — one compacted `<harnessSessionId>.json` per
+   * conversation (core/record-archive.ts). Deliberately NOT under `generated`:
+   * that directory is deleted the moment a session's pty exits, and these have
+   * to outlive `events.ndjson`'s 30-day retention, not undercut it.
+   */
+  records: `${HARNESS_HOME}/records`,
   /** Where the bundled example project is seeded. Written ONLY by
    *  `scripts/seed-example.mjs` (demo prep) since the in-app sample action and
    *  its `POST /api/sample-project` route were removed — the running Studio
@@ -235,12 +242,13 @@ export interface SessionSummary {
    */
   messageCount?: number;
   /**
-   * Number of human prompts (turns) recorded in OUR event log for this
-   * session, from the event store's byte-offset index. Exact and cheap at any
+   * Number of human prompts (turns) the harness itself recorded for this
+   * session — from the event store's byte-offset index, or from the archived
+   * record once the events behind it have been swept. Exact and cheap at any
    * file size — unlike {@link messageCount}, which the claude-code adapter
    * leaves undefined above its full-scan cap. Undefined when the harness has
-   * no recorded events for the session (a transcript the Studio never ran).
-   * Prefer this over messageCount when both are present.
+   * neither events nor an archived record for the session (a transcript the
+   * Studio never ran). Prefer this over messageCount when both are present.
    */
   turnCount?: number;
 }
@@ -815,12 +823,20 @@ export interface SessionRecordTurn {
  *   (Codex, whose rollout carries no equivalent of the Stop hook's field).
  * - `incomplete-final-turn`: the last turn never completed — the session
  *   ended mid-turn.
+ * - `compacted-archive`: the record was read from its archived copy, whose
+ *   tool inputs and results are clipped to keep it bounded (see
+ *   core/record-archive.ts). The conversation is whole; the tool payloads
+ *   inside it are excerpts.
+ * - `dropped-early-turns`: the archived copy kept only the most recent turns —
+ *   `turns` holds fewer of them than `turnCount` says happened.
  */
 export type SessionRecordLimitation =
   | "truncated-tool-output"
   | "assistant-narration-gap"
   | "missing-assistant-text"
-  | "incomplete-final-turn";
+  | "incomplete-final-turn"
+  | "compacted-archive"
+  | "dropped-early-turns";
 
 /** `GET /api/sessions/:id/record` response. */
 export interface SessionRecord {
@@ -841,13 +857,29 @@ export interface SessionRecord {
    *  reported ending (killed, or crashed). */
   endedAt: string | null;
   turns: SessionRecordTurn[];
-  /** Human prompts in the record — `turns.filter(t => t.prompt != null).length`. */
+  /**
+   * Human prompts in the CONVERSATION — `turns.filter(t => t.prompt != null)
+   * .length` for a record folded from events, and still that same count for an
+   * archived record whose oldest turns were dropped to fit its size cap. It
+   * describes what happened, not what survived, so a history row's turn count
+   * doesn't change when its events get swept; `dropped-early-turns` in
+   * {@link limitations} is what says `turns` holds fewer than this.
+   */
   turnCount: number;
-  /** Events folded into this record (including ones no turn field shows). */
+  /** Events folded into this record (including ones no turn field shows).
+   *  Like {@link turnCount}, counted before any archive compaction. */
   eventCount: number;
   /** Always true. Present on the wire so no client can mistake a record for a
    *  verbatim replay of what the user saw in their terminal. */
   reconstructed: true;
+  /**
+   * ISO-8601 of when this record was written to the durable archive
+   * (`~/.sapiom/harness/records/`), or null when it was folded from the live
+   * event log. Non-null therefore means "this is the archived copy": bounded,
+   * compacted, and — unlike the events — still here after the analytics sink's
+   * retention sweep. The UI says so where the user reads it.
+   */
+  archivedAt: string | null;
   limitations: SessionRecordLimitation[];
 }
 

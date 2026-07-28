@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AnalyticsEvent, AnalyticsEventType } from "../shared/types.js";
 import { createEventStore } from "./collector/store.js";
+import { createRecordArchive, type RecordArchive } from "./record-archive.js";
 import {
   createClaudeTranscriptEnricher,
   createSessionRecordReader,
@@ -567,5 +568,199 @@ describe("createSessionRecordReader", () => {
     const record = await reader.read("sess-a");
     expect(record?.turns[0].assistantText).toBe("ours");
     expect(record?.turns[0].model).toBe("claude-opus-4-6");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The archive-aware reader: which of the two sources a record comes from.
+//
+// Against the real archive rather than a stub, because the thing under test is
+// the pair — a compacted file on disk and an event log retention has eaten
+// into — and a stub of one of them would prove only that the branch runs.
+// ---------------------------------------------------------------------------
+
+describe("createSessionRecordReader with a record archive", () => {
+  let tmpDir: string;
+  let filePath: string;
+  let recordsRoot: string;
+
+  /** Long enough that the archive clips it and the live fold doesn't — the
+   *  visible difference between the two sources. */
+  const LONG_INPUT = JSON.stringify({ old_string: "x".repeat(2000) });
+  const ARCHIVED_AT = "2026-07-01T11:00:00.000Z";
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-record-archive-"));
+    filePath = path.join(tmpDir, "events.ndjson");
+    recordsRoot = path.join(tmpDir, "records");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeArchive(): RecordArchive {
+    return createRecordArchive({ root: recordsRoot, now: () => Date.parse(ARCHIVED_AT) });
+  }
+
+  async function writeLines(events: AnalyticsEvent[]): Promise<void> {
+    await fs.writeFile(filePath, events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+  }
+
+  /** The conversation every test here starts from: two completed turns, the
+   *  first carrying a tool call whose input only the live log holds whole. */
+  const conversation = (): AnalyticsEvent[] => [
+    event({
+      type: "session.start",
+      ts: "2026-07-01T10:00:00.000Z",
+      agentSessionId: "agent-1",
+      payload: { cwd: "/repo" },
+    }),
+    prompt("2026-07-01T10:00:01.000Z", "first", { agentSessionId: "agent-1" }),
+    event({
+      type: "tool.call",
+      ts: "2026-07-01T10:00:02.000Z",
+      agentSessionId: "agent-1",
+      payload: { toolName: "Edit", toolInput: LONG_INPUT, toolResponseSummary: "ok" },
+    }),
+    completed("2026-07-01T10:00:03.000Z", "first reply", { agentSessionId: "agent-1" }),
+    prompt("2026-07-01T10:00:04.000Z", "second", { agentSessionId: "agent-1" }),
+    completed("2026-07-01T10:00:05.000Z", "second reply", { agentSessionId: "agent-1" }),
+  ];
+
+  /** Fold the conversation and archive it, as the server does at session end. */
+  async function archiveNow(archive: RecordArchive): Promise<void> {
+    const source = createSessionRecordReader(createEventStore(filePath));
+    const folded = await source.readFromEvents("sess-a");
+    expect(folded).not.toBeNull();
+    expect(await archive.write(folded!)).not.toBeNull();
+  }
+
+  it("falls back to the archive when the events behind it are gone", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    await archiveNow(archive);
+
+    // What a 30-day sweep leaves behind for this session: nothing.
+    await fs.writeFile(filePath, "", "utf8");
+
+    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    expect(record?.turns.map((t) => t.prompt)).toEqual(["first", "second"]);
+    expect(record?.archivedAt).toBe(ARCHIVED_AT);
+    expect(record?.limitations).toContain("compacted-archive");
+    // Reachable by the agent's own session id too, which is all a
+    // transcript-sourced history row has.
+    const byAgent = await createSessionRecordReader(createEventStore(filePath), { archive }).read("agent-1");
+    expect(byAgent?.harnessSessionId).toBe("sess-a");
+  });
+
+  it("falls back to the archive when the sweep took the beginning of the conversation", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    await archiveNow(archive);
+
+    // sweepNdjson truncates oldest-first: the last two lines survive.
+    await writeLines(conversation().slice(-2));
+
+    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    // The archive is the only source that still has the first turn.
+    expect(record?.turns.map((t) => t.prompt)).toEqual(["first", "second"]);
+    expect(record?.archivedAt).toBe(ARCHIVED_AT);
+  });
+
+  it("reads the live events while the log still covers the conversation — the archive is lossier", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    await archiveNow(archive);
+
+    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    expect(record?.archivedAt).toBeNull();
+    // The whole tool input, not the archive's 512-character excerpt.
+    expect(record?.turns[0].toolCalls[0].input).toBe(LONG_INPUT);
+    expect(record?.limitations).not.toContain("compacted-archive");
+  });
+
+  it("reads the live events when the conversation continued after it was archived", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    await archiveNow(archive);
+
+    // Swept back to a suffix AND resumed afterwards: the archive predates the
+    // new turn, so serving it would hide work the user just did.
+    await writeLines([
+      ...conversation().slice(-2),
+      prompt("2026-07-01T12:00:00.000Z", "third"),
+      completed("2026-07-01T12:00:01.000Z", "third reply"),
+    ]);
+
+    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    expect(record?.archivedAt).toBeNull();
+    expect(record?.turns.map((t) => t.prompt)).toEqual(["second", "third"]);
+  });
+
+  it("scans events when nothing was ever archived, and reports honestly when neither source has anything", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    const reader = createSessionRecordReader(createEventStore(filePath), { archive });
+
+    expect((await reader.read("sess-a"))?.turns).toHaveLength(2);
+    expect(await reader.read("sess-never-existed")).toBeNull();
+
+    await fs.writeFile(filePath, "", "utf8");
+    expect(await reader.read("sess-a")).toBeNull();
+  });
+
+  it("readFromEvents ignores the archive entirely, so a re-archive never compacts a compacted record", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    await archiveNow(archive);
+    const reader = createSessionRecordReader(createEventStore(filePath), { archive });
+
+    await fs.writeFile(filePath, "", "utf8");
+    expect(await reader.readFromEvents("sess-a")).toBeNull();
+    // …while the archive-aware read still answers.
+    expect(await reader.read("sess-a")).not.toBeNull();
+  });
+
+  it("keeps a history row's turn count after its events are swept", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    await archiveNow(archive);
+    const reader = createSessionRecordReader(createEventStore(filePath), { archive });
+
+    await fs.writeFile(filePath, "", "utf8");
+    const counts = await reader.turnCounts();
+    // Keyed by both ids, exactly as the live index keys them, so the row and
+    // the record it opens can't disagree.
+    expect(counts.get("sess-a")).toBe(2);
+    expect(counts.get("agent-1")).toBe(2);
+  });
+
+  it("prefers the larger count when the log has moved on past the archive", async () => {
+    await writeLines(conversation());
+    const archive = makeArchive();
+    await archiveNow(archive);
+
+    await writeLines([
+      ...conversation(),
+      prompt("2026-07-01T12:00:00.000Z", "third"),
+      completed("2026-07-01T12:00:01.000Z", "third reply"),
+    ]);
+
+    const counts = await createSessionRecordReader(createEventStore(filePath), { archive }).turnCounts();
+    expect(counts.get("sess-a")).toBe(3);
+  });
+
+  it("lists conversations newest-first for the backfill, merging resumed segments", async () => {
+    await writeLines([
+      prompt("2026-07-01T10:00:00.000Z", "old", { session: "sess-old", agentSessionId: "agent-old" }),
+      prompt("2026-07-02T10:00:00.000Z", "first", { session: "sess-a", agentSessionId: "agent-1" }),
+      prompt("2026-07-03T10:00:00.000Z", "resumed", { session: "sess-b", agentSessionId: "agent-1" }),
+    ]);
+
+    const ids = await createSessionRecordReader(createEventStore(filePath)).conversationIds();
+    // sess-a and sess-b are one conversation, named by where it began, and it
+    // sorts ahead of the older one on its most recent activity.
+    expect(ids).toEqual(["sess-a", "sess-old"]);
   });
 });

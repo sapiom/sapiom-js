@@ -58,6 +58,7 @@ function record(): SessionRecord {
     turnCount: 1,
     eventCount: 2,
     reconstructed: true,
+    archivedAt: null, // folded from the live event log, not the archive
     limitations: [],
   };
 }

@@ -57,6 +57,17 @@ export interface IngestDeps {
    *  command/output text to dev-server port detection. */
   onNormalizedEvent?: (event: AnalyticsEvent) => void;
   /**
+   * Called for every event AFTER it has been persisted to the local store —
+   * the seam for consumers that need to read the store back and see this event
+   * in it. Archiving a session's record on `session.end` is exactly that: fired
+   * from `onNormalizedEvent` it would race the append and store a record whose
+   * `endedAt` is null.
+   *
+   * Synchronous and best-effort, like the other hooks here: whatever it starts
+   * is the consumer's to detach, and it must not throw.
+   */
+  onEventPersisted?: (event: AnalyticsEvent) => void;
+  /**
    * Called for every raw hook event BEFORE normalization — fired even for
    * hook events that don't produce an analytics event. A UI-transport-only
    * passthrough seam (bypasses the analytics normalize/store pipeline) for
@@ -136,6 +147,7 @@ export async function processIngest(
 
   deps.onNormalizedEvent?.(finalEvent);
   await deps.store.append(finalEvent);
+  deps.onEventPersisted?.(finalEvent);
   deps.batcher.enqueue(finalEvent);
 
   if (hookEvent === "SessionEnd") {

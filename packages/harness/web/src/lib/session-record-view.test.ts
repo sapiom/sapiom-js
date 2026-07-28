@@ -20,6 +20,15 @@ describe("describeLimitations", () => {
     expect(describeLimitations([])).toEqual([]);
   });
 
+  it("spells out what an archived copy cost, in the order the losses happened", () => {
+    const notes = describeLimitations(["dropped-early-turns", "compacted-archive"]);
+    // Compaction (what's inside the turns that are here) reads before the turns
+    // that aren't.
+    expect(notes[0]).toMatch(/archived copy/);
+    expect(notes[0]).toMatch(/shortened/);
+    expect(notes[1]).toMatch(/earlier ones are gone/);
+  });
+
   it("dedupes repeated codes", () => {
     expect(describeLimitations(["truncated-tool-output", "truncated-tool-output"])).toHaveLength(1);
   });

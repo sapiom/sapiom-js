@@ -274,6 +274,10 @@ const LIMITATION_PROSE: Record<SessionRecordLimitation, string> = {
     "At least one turn has no assistant text at all (Codex records none). Those turns show prompts and tool calls only.",
   "incomplete-final-turn":
     "The last turn never completed — the session ended mid-turn, so its work may be half-applied.",
+  "compacted-archive":
+    "This brief was built from the session's archived copy, whose tool inputs and results are clipped to keep it bounded. The conversation is whole, but any payload quoted below is an excerpt — re-read the file or re-run the command rather than trusting it.",
+  "dropped-early-turns":
+    "The archived copy had room only for the most recent turns; earlier ones are gone. Treat what follows as the tail of a longer session — ask before assuming why something earlier was done.",
 };
 
 function renderTurn(turn: SessionRecordTurn, cwd: string | null): string {

@@ -16,6 +16,10 @@ const LIMITATION_NOTES: Record<SessionRecordLimitation, string> = {
   "truncated-tool-output": "Large tool results were truncated when recorded and can't be shown in full.",
   "missing-assistant-text": "This agent doesn't report assistant text to the harness, so replies aren't shown.",
   "incomplete-final-turn": "The last turn never completed — the session ended while it was still running.",
+  "compacted-archive":
+    "Read from this session's archived copy: the conversation is whole, but tool inputs and results were shortened to keep it small enough to keep.",
+  "dropped-early-turns":
+    "The archived copy only had room for the most recent turns — earlier ones are gone.",
 };
 
 const LIMITATION_ORDER: SessionRecordLimitation[] = [
@@ -23,6 +27,8 @@ const LIMITATION_ORDER: SessionRecordLimitation[] = [
   "truncated-tool-output",
   "missing-assistant-text",
   "incomplete-final-turn",
+  "compacted-archive",
+  "dropped-early-turns",
 ];
 
 /**
