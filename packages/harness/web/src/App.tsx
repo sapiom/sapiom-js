@@ -33,7 +33,7 @@ import { SessionBar } from "./components/SessionBar";
 import { SessionStepsBar } from "./components/SessionStepsBar";
 import { SessionTabs } from "./components/SessionTabs";
 import { TelemetryNotice } from "./components/TelemetryNotice";
-import { TemplatesDialog } from "./components/TemplatesDialog";
+import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
@@ -646,9 +646,8 @@ export const App = (): JSX.Element => {
           listHarnesses={harness.listHarnesses}
           onScaffoldSession={handleScaffoldSession}
           onScaffoldInSession={handleScaffoldInSession}
-          onUseTemplate={handleUseTemplate}
-          listTemplates={harness.listTemplates}
-          getTemplate={harness.getTemplate}
+          onBrowseTemplates={() => setTemplatesOpen(true)}
+          templatesActive={templatesOpen}
           onScanWorkflows={handleScanWorkflows}
           onOpenInEditor={openInEditor}
           onToast={harness.showToast}
@@ -697,17 +696,37 @@ export const App = (): JSX.Element => {
         )}
 
         <div
-          className="app"
+          className={"app" + (templatesOpen ? " is-browsing" : "")}
           style={{
-            gridTemplateColumns: isMobile
-              ? "minmax(0, 1fr)"
-              : rightCollapsed
-                ? `minmax(${CANVAS_MIN}px, 1fr)`
-                : widths.canvas == null
-                  ? `minmax(${CANVAS_MIN}px, 1fr) minmax(${CANVAS_MIN}px, 1fr)`
-                  : `minmax(${CANVAS_MIN}px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
+            gridTemplateColumns:
+              // Browsing takes the whole width: a two-column card grid inside
+              // half the shell is the letterbox this view exists to escape.
+              templatesOpen || isMobile
+                ? "minmax(0, 1fr)"
+                : rightCollapsed
+                  ? `minmax(${CANVAS_MIN}px, 1fr)`
+                  : widths.canvas == null
+                    ? `minmax(${CANVAS_MIN}px, 1fr) minmax(${CANVAS_MIN}px, 1fr)`
+                    : `minmax(${CANVAS_MIN}px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
           }}
         >
+          {/* Templates is a DESTINATION, not a session sub-view: it stands in
+              for the workbench rather than sitting inside it, and brings its own
+              header with the way back. Added as a sibling, with `.is-browsing`
+              hiding the panes in CSS — the right pane must never unmount, since
+              a running Visualize enrichment lives there. */}
+          {templatesOpen && (
+            <TemplatesPanel
+              projectRoot={projectRoot || null}
+              recentDirs={harness.settings?.recentDirs ?? []}
+              listDir={harness.listDir}
+              onExit={() => setTemplatesOpen(false)}
+              onUse={handleUseTemplate}
+              listTemplates={harness.listTemplates}
+              getTemplate={harness.getTemplate}
+            />
+          )}
+
           <div className="center-pane">
             <SessionBar
               overviewMode={showWelcome}
@@ -766,7 +785,6 @@ export const App = (): JSX.Element => {
                   recentDirs={harness.settings?.recentDirs ?? []}
                   sessions={state.sessions}
                   workflows={state.workflows}
-                  launchDir={state.launchDir ?? null}
                   projectRoot={projectRoot || null}
                   onConnect={async (cwd) => {
                     await harness.connectWorkflow(cwd);
@@ -777,9 +795,7 @@ export const App = (): JSX.Element => {
                   listDir={harness.listDir}
                   onCreateSession={handleCreateSession}
                   listHarnesses={harness.listHarnesses}
-                  onUseTemplate={handleUseTemplate}
-                  listTemplates={harness.listTemplates}
-                  getTemplate={harness.getTemplate}
+                  onBrowseTemplates={() => setTemplatesOpen(true)}
                   firstRun={state.firstRun === true}
                 />
               ) : showReview && reviewSummary ? (
@@ -1004,16 +1020,6 @@ export const App = (): JSX.Element => {
           onOpenPath={(cwd) => void handleCreateSession(cwd, "claude-code")}
           onBrowseTemplates={() => setTemplatesOpen(true)}
           onClose={() => setPaletteOpen(false)}
-        />
-      )}
-
-      {templatesOpen && (
-        <TemplatesDialog
-          projectRoot={projectRoot || null}
-          onClose={() => setTemplatesOpen(false)}
-          onUse={handleUseTemplate}
-          listTemplates={harness.listTemplates}
-          getTemplate={harness.getTemplate}
         />
       )}
 
