@@ -16,7 +16,18 @@ function upstreamSummary(over: Record<string, unknown> = {}): Record<string, unk
     cadence: "on-demand",
     stepCount: 2,
     capabilities: ["web.search"],
-    estCostPerRunUsd: 0.006,
+    complexity: {
+      score: 3,
+      label: "Moderate",
+      basis: {
+        llmSteps: 1,
+        chainedLlmSteps: 0,
+        mediaCapabilities: 0,
+        capabilityCount: 1,
+        stepCount: 2,
+        maxFanOut: 1,
+      },
+    },
     ...over,
   };
 }
@@ -145,17 +156,77 @@ describe("createTemplateCatalog", () => {
     expect(result.templates.map((t) => t.category)).toEqual(["brand-new-axis", null]);
   });
 
-  it("normalizes a missing cost estimate to null, never 0", async () => {
-    // The majority case upstream. A 0 here would render as "$0" — a claim that
-    // the run is free, which is different from "we have no estimate".
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue(jsonResponse([upstreamSummary({ estCostPerRunUsd: undefined })]));
+  it("carries the complexity band through untouched — the Studio derives nothing", async () => {
+    // Whether the band is derived (today) or authored (SAP-2086/2087), this
+    // client reads whatever core serves. Recomputing it here is how the Studio
+    // and the dashboard would come to disagree.
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse([upstreamSummary()]));
     const catalog = createTemplateCatalog({ apiKey: "sk_test", baseUrl: BASE, fetchImpl });
 
     const result = await catalog.list();
 
-    expect(result.templates[0].estCostPerRunUsd).toBeNull();
+    expect(result.templates[0].complexity).toEqual({
+      score: 3,
+      label: "Moderate",
+      basis: {
+        llmSteps: 1,
+        chainedLlmSteps: 0,
+        mediaCapabilities: 0,
+        capabilityCount: 1,
+        stepCount: 2,
+        maxFanOut: 1,
+      },
+    });
+  });
+
+  it("normalizes an absent complexity band to null rather than throwing", async () => {
+    // Core types the field required, so this cannot happen against a current
+    // backend. The Studio is a published npm package though — a copy can be
+    // pointed at a stack that predates the field, and the card must degrade to
+    // an em dash instead of taking the gallery down.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([upstreamSummary({ complexity: undefined })]));
+    const catalog = createTemplateCatalog({ apiKey: "sk_test", baseUrl: BASE, fetchImpl });
+
+    const result = await catalog.list();
+
+    expect(result.templates[0].complexity).toBeNull();
+  });
+
+  it("rejects a band with no readable label — the label is what the card renders", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([upstreamSummary({ complexity: { score: 3, basis: {} } })]));
+    const catalog = createTemplateCatalog({ apiKey: "sk_test", baseUrl: BASE, fetchImpl });
+
+    const result = await catalog.list();
+
+    expect(result.templates[0].complexity).toBeNull();
+  });
+
+  it("keeps a band whose basis is missing, defaulting the counts it cannot read", async () => {
+    // The basis only ever EXPLAINS a band. A malformed one should drop out of the
+    // explanation, not cost the user a band core did compute.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([upstreamSummary({ complexity: { score: 2, label: "Simple" } })]));
+    const catalog = createTemplateCatalog({ apiKey: "sk_test", baseUrl: BASE, fetchImpl });
+
+    const result = await catalog.list();
+
+    expect(result.templates[0].complexity).toEqual({
+      score: 2,
+      label: "Simple",
+      basis: {
+        llmSteps: 0,
+        chainedLlmSteps: 0,
+        mediaCapabilities: 0,
+        capabilityCount: 0,
+        stepCount: 0,
+        maxFanOut: 0,
+      },
+    });
   });
 
   it("drops an entry with no id rather than rendering a card that cannot be cloned", async () => {

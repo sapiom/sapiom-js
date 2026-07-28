@@ -5,7 +5,8 @@ import type { TemplateDetailView, TemplateListResponse } from "@shared/types";
 
 import {
   STARTER_TEMPLATES,
-  formatEstCost,
+  complexityBasisSummary,
+  formatComplexity,
   groupByCategory,
   matchesQuery,
   templateDirSuggestion,
@@ -50,16 +51,24 @@ function TemplateRow({
     >
       <span className="template-row-name">{template.name}</span>
       <span className="template-row-desc">{template.description}</span>
-      {/* Cost is the one number that changes the decision, so it rides on the
-          card. An em dash means "no per-call-priced capability declared" —
-          never rendered as $0.00 (see formatEstCost). */}
+      {/* Size and involvement: how many steps, and how much judgment they carry.
+          The band is what replaced a per-run cost estimate core could only
+          compute for 5 of 26 templates. An em dash means the response carried no
+          band at all — see formatComplexity. */}
       {template.kind === "gallery" && (
         <span className="template-row-meta">
           <span className="template-row-steps">
             {template.stepCount} {template.stepCount === 1 ? "step" : "steps"}
           </span>
-          <span className="template-row-cost" title="Estimated capability cost per run">
-            {formatEstCost(template.estCostPerRunUsd)}
+          <span
+            className="template-row-complexity"
+            title={
+              template.complexity
+                ? complexityBasisSummary(template.complexity)
+                : "This catalog response carried no complexity band."
+            }
+          >
+            {formatComplexity(template.complexity)}
           </span>
         </span>
       )}

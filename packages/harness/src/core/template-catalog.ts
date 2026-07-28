@@ -11,7 +11,7 @@
  * gallery renders. Reading the same endpoint is what keeps the two surfaces from
  * drifting; re-deriving the list from `registry.json` would just recreate the
  * drift with extra steps (core also merges each example's `template.json` and
- * computes the per-run cost estimate from live gateway pricing).
+ * derives the complexity band from the declared shape).
  *
  * Two non-obvious contract details, both verified against a local backend:
  *
@@ -29,6 +29,7 @@
  */
 
 import type {
+  TemplateComplexity,
   TemplateDetailView,
   TemplateListResponse,
   TemplateStepView,
@@ -78,6 +79,45 @@ function strArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
+/** A basis count. Absent or nonsense reads as 0 — the basis only ever explains a
+ *  band, so a missing count should drop out of the explanation, not sink it. */
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
+ * Narrow a complexity band, or null when the payload did not carry a usable one.
+ *
+ * Core types this field required and can compute it for every template, so
+ * against a current backend the null branch is dead. It is not dead against
+ * every backend: this is a published package that can be pointed at a stack
+ * predating the field (see `TemplateSummary.complexity`). Returning null lets one
+ * card render an em dash; dereferencing an absent band would throw inside the row
+ * renderer and lose the whole gallery.
+ *
+ * `label` is the gate because it is what the card actually renders — a band whose
+ * label we cannot read is not one we can show, whatever else came with it.
+ */
+function toComplexity(value: unknown): TemplateComplexity | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as Json;
+  const label = nullableStr(raw.label);
+  if (!label) return null;
+  const basis = typeof raw.basis === "object" && raw.basis !== null ? (raw.basis as Json) : {};
+  return {
+    label,
+    score: count(raw.score),
+    basis: {
+      llmSteps: count(basis.llmSteps),
+      chainedLlmSteps: count(basis.chainedLlmSteps),
+      mediaCapabilities: count(basis.mediaCapabilities),
+      capabilityCount: count(basis.capabilityCount),
+      stepCount: count(basis.stepCount),
+      maxFanOut: count(basis.maxFanOut),
+    },
+  };
+}
+
 /**
  * Narrow one summary. Defensive rather than trusting: the taxonomy and manifest
  * are owned upstream in a public repo, so a template with a field we don't know
@@ -93,12 +133,7 @@ function toSummary(raw: Json): TemplateSummary {
     cadence: nullableStr(raw.cadence),
     stepCount: typeof raw.stepCount === "number" ? raw.stepCount : 0,
     capabilities: strArray(raw.capabilities),
-    // Only a real number survives: null/undefined/NaN all mean "no estimate",
-    // which the UI must render as an em dash rather than $0.00.
-    estCostPerRunUsd:
-      typeof raw.estCostPerRunUsd === "number" && Number.isFinite(raw.estCostPerRunUsd)
-        ? raw.estCostPerRunUsd
-        : null,
+    complexity: toComplexity(raw.complexity),
   };
 }
 

@@ -61,22 +61,32 @@ test.describe("templates journey v0 (from the welcome panel)", () => {
     await expect(detail.locator(".template-cap").first()).toContainText("web.search");
   });
 
-  test("preview: cost is the estimate core computed, or an honest absence — never fabricated", async ({ page }) => {
-    // Core now serves estCostPerRunUsd, so a known estimate is SHOWN (it used to
-    // say "not surfaced here yet", which was true of the pinned index).
-    await page.getByTestId("template-row-web-research-digest").click();
-    await expect(page.getByTestId("template-cost-note")).toContainText("per run");
-    await expect(page.getByTestId("template-cost-note")).toContainText("$0.0060");
+  test("preview: the band core served, explained by what produced it — and never a price", async ({ page }) => {
+    // Replaced a per-run cost estimate core no longer computes (SAP-2085). The
+    // band is shown with the counts behind it, so it reads as an estimate of
+    // shape rather than an opaque verdict.
+    await page.getByTestId("template-row-dependency-upgrade").click();
+    const note = page.getByTestId("template-complexity-note");
+    await expect(note).toContainText("Advanced 5/5");
+    await expect(note).toContainText("2 model steps, 1 chained");
+    // Nothing on this surface may read as money any more.
+    expect(await note.textContent()).not.toMatch(/\$/);
 
-    // Capabilities but NO estimate: say so, never print $0.00.
+    // A deterministic saga: the largest graph in the catalog, and still Simple.
+    // The scorer weighs judgment, not topology — the point of the band.
     await page.getByTestId("template-row-approval-chain").click();
-    const absent = page.getByTestId("template-cost-note");
-    await expect(absent).toContainText("no per-call price");
-    expect(await absent.textContent()).not.toMatch(/\$\s*\d/);
+    await expect(page.getByTestId("template-complexity-note")).toContainText("Simple 2/5");
+    await expect(page.getByTestId("template-complexity-note")).toContainText("deterministic");
 
-    // Zero capabilities is its own honest state, not an empty slot.
+    // No band in the payload (a backend older than the field): say so plainly
+    // rather than throwing or inventing one.
+    await page.getByTestId("template-row-web-research-digest").click();
+    await expect(page.getByTestId("template-complexity-note")).toContainText("no complexity band");
+
+    // Zero capabilities stays its own stated fact, not an empty slot.
     await page.getByTestId("template-row-hello-agent").click();
-    await expect(page.getByTestId("template-cost-note")).toContainText("No metered capabilities");
+    await expect(page.getByTestId("template-caps-none")).toContainText("no metered capabilities");
+    await expect(page.getByTestId("template-complexity-note")).toContainText("Minimal 1/5");
   });
 
   test("preview: the handoff line tells the truth per kind (clone needs auth, starter is offline)", async ({
