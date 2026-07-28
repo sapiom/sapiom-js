@@ -42,8 +42,31 @@ import postgres from "postgres";
 // ─────────────────────────────────────────────────────────────── config ──
 /** Postgres handle the digest owns — created on first run, reused after. */
 const DEFAULT_DB_HANDLE = "error-triage-digest";
-/** Vault ref holding delivery config (e.g. a default RECIPIENT). Read at runtime. */
-const DELIVERY_VAULT_REF = "error-triage-digest";
+/**
+ * The batch a zero-input run triages. Real errors, because the clustering and the
+ * digest ARE the artifact — an empty batch produces an empty digest, which is a
+ * successful-looking run that did nothing. Two of the three collide on purpose so
+ * the dedupe step has something to do.
+ */
+const SAMPLE_ERRORS = [
+  {
+    message:
+      "TypeError: Cannot read properties of undefined (reading 'id') at checkout.js:42",
+    level: "error",
+    service: "checkout",
+  },
+  {
+    message:
+      "TypeError: Cannot read properties of undefined (reading 'id') at checkout.js:42",
+    level: "error",
+    service: "checkout",
+  },
+  {
+    message: "Timeout after 30000ms calling payments.charge",
+    level: "error",
+    service: "payments",
+  },
+];
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "error-triage";
 /** The named signal an external error pipeline fires to push a batch in. */
@@ -82,7 +105,7 @@ interface EntryInput {
   schedule?: string;
   /** Postgres handle for the dedup store; defaults to the template handle. */
   dbHandle?: string;
-  /** Recipient email; falls back to the vault-configured default when omitted. */
+  /** Recipient email. Omit it and the digest is returned inline instead of emailed. */
   deliverTo?: string;
   /** Compute the digest but skip the DB writes and the real send. */
   dryRun?: boolean;
@@ -120,6 +143,8 @@ interface Shared extends Record<string, unknown> {
   dryRun: boolean;
   schedule: string;
   batchSize: number;
+  /** Set when the run triaged the built-in sample batch rather than a real one. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -154,20 +179,6 @@ async function pullErrors(url: string): Promise<RawError[]> {
     ? body
     : ((body as { errors?: unknown }).errors ?? []);
   return normalizeErrors(arr);
-}
-
-/**
- * Resolve the recipient from the vault at runtime. A missing ref/key is an
- * expected outcome (returns null), not an error — the caller then falls back to
- * a preview. Never persisted in execution state.
- */
-async function recipientFromVault(ctx: Ctx): Promise<string | null> {
-  try {
-    return await ctx.sapiom.vault.get(DELIVERY_VAULT_REF, "RECIPIENT");
-  } catch (err) {
-    ctx.logger.warn("vault: no recipient configured", { err: String(err) });
-    return null;
-  }
 }
 
 /** Reuse an existing inbox to send from, else provision one. */
@@ -261,6 +272,17 @@ const collect = defineStep({
         resumeStep: "triage",
         correlationId: ctx.executionId,
       });
+    }
+
+    // Nothing passed in, no pull URL, and nobody is going to push one: triage the
+    // sample batch so the run really clusters and really writes a digest — and
+    // say in the output that the batch was ours.
+    if (errors.length === 0) {
+      errors = normalizeErrors(SAMPLE_ERRORS);
+      ctx.shared.set(
+        "note",
+        "Triaged the built-in sample batch of 3 errors. Pass your own `errors`, set a `pullUrl`, or set `webhook: true` to wait for a push.",
+      );
     }
 
     ctx.shared.set("batchSize", errors.length);
@@ -413,10 +435,10 @@ const digest = defineStep({
         ? "Error triage digest: all clear"
         : `Error triage digest: ${newClusters.length} new, ${recurringClusters.length} recurring`;
 
-    // Explicit input wins; otherwise resolve the default from the vault at
-    // runtime (never carried through state).
-    const deliverTo =
-      ctx.shared.get("deliverTo") || (await recipientFromVault(ctx));
+    // A recipient is ordinary configuration, so it arrives as run input (declared
+    // as a `deliverTo` setting in template.json) rather than from a write-only
+    // secret store nothing in the product can populate.
+    const deliverTo = ctx.shared.get("deliverTo");
 
     // Safe path: a dry run, or a live run with no recipient, returns the digest
     // without sending anything.
@@ -429,6 +451,15 @@ const digest = defineStep({
         delivered: false,
         dryRun,
         reason: dryRun ? "dry-run" : "no-recipient",
+        ...(dryRun ? {} : { unmet: ["deliverTo"] }),
+        note: [
+          dryRun
+            ? "`dryRun` was set, so nothing was emailed and nothing was written to the cluster table."
+            : "Nothing was emailed: no `deliverTo` address is set, so the digest is returned inline below.",
+          ctx.shared.get("note"),
+        ]
+          .filter(Boolean)
+          .join(" "),
         to: deliverTo ?? null,
         subject,
         digest: body,
@@ -455,6 +486,7 @@ const digest = defineStep({
       messageId: sent.messageId,
       newCount: newClusters.length,
       recurringCount: recurringClusters.length,
+      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
     });
   },
 });

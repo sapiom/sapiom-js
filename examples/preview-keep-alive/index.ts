@@ -32,8 +32,15 @@ import {
  *
  * Some apps need env at relaunch or they come up misconfigured (e.g. the server
  * reads DATABASE_URL/PORT). Pass literal `env`, and/or a `dbHandle` to inject
- * DATABASE_URL from a Sapiom-managed Postgres, and/or `vaultInject` to read
- * secrets from the vault at runtime — never baked into the schedule.
+ * DATABASE_URL from a Sapiom-managed Postgres, and/or `injectEnv` to forward
+ * secrets the platform put in this step's environment — never baked into the
+ * schedule.
+ *
+ * ── With no target ────────────────────────────────────────────────────────────
+ * Given no `sandboxName`, the run PROVISIONS a small demo sandbox, deploys a
+ * trivial health server into it, and then heals that — the same code path, on a
+ * target it owns. It never reports a healthy probe for an app it did not probe:
+ * this is a monitor, and a fabricated "healthy" inverts its entire meaning.
  */
 
 // ─────────────────────────────────────────────────────────── target config ──
@@ -54,14 +61,13 @@ interface Target {
   env?: Record<string, string>;
   /** If set, inject DATABASE_URL from this Sapiom Postgres handle. */
   dbHandle?: string;
-  /** Vault ref to read injected secrets from (paired with vaultInject). */
-  vaultRef?: string;
   /**
-   * Map of ENV_VAR -> vault key name. Each value is read from `vaultRef` at heal
-   * time and injected into the relaunched process — so a secret the app needs
-   * (e.g. its bootstrap SAPIOM_API_KEY) lives in the vault, never in the schedule.
+   * Names of env vars to forward from THIS step's environment into the relaunched
+   * process. Declare each one as a required secret in `template.json` and the
+   * platform injects it here at dispatch; the template never learns where it is
+   * stored. Values are read at heal time and never baked into the schedule.
    */
-  vaultInject?: Record<string, string>;
+  injectEnv?: string[];
 }
 
 const HEALTH_TIMEOUT_MS = 8000;
@@ -79,7 +85,33 @@ interface EntryInput extends Partial<Target> {
 interface Shared extends Record<string, unknown> {
   target: Target;
   dryRun: boolean;
+  /** Set when the run provisioned its own demo target instead of healing yours. */
+  note?: string;
 }
+
+/** Name of the demo sandbox a zero-config run provisions and then heals. */
+const DEMO_SANDBOX_NAME = "preview-keep-alive-demo";
+/** Port the demo server listens on. */
+const DEMO_PORT = 3000;
+/**
+ * A trivial health server, uploaded into the demo sandbox so `deployPreview` has
+ * real code to rebuild and restart. Node-only, no dependencies, so `build` is a
+ * no-op and the heal path is exactly the one a real target takes.
+ */
+const DEMO_SERVER_JS = `import { createServer } from "node:http";
+
+const port = Number(process.env.PORT ?? ${DEMO_PORT});
+createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, startedAt: new Date().toISOString() }));
+    return;
+  }
+  res.writeHead(200, { "content-type": "text/plain" });
+  res.end("preview-keep-alive demo target\\n");
+}).listen(port);
+console.log("demo target listening on " + port);
+`;
 
 type Ctx = AgentExecutionContext<Shared>;
 
@@ -98,8 +130,7 @@ function resolveTarget(input: EntryInput | undefined): Target {
     port: input?.port ?? 3000,
     env: input?.env,
     dbHandle: input?.dbHandle,
-    vaultRef: input?.vaultRef,
-    vaultInject: input?.vaultInject,
+    injectEnv: input?.injectEnv,
   };
 }
 
@@ -108,11 +139,19 @@ function resolveTarget(input: EntryInput | undefined): Target {
 /** Probe the app; route to heal only when it is actually down. */
 const check = defineStep({
   name: "check",
-  next: ["healthy", "heal"],
+  next: ["healthy", "heal", "provision"],
   async run(input: EntryInput, ctx: Ctx) {
     const target = resolveTarget(input);
     ctx.shared.set("target", target);
     ctx.shared.set("dryRun", input?.dryRun === true);
+
+    // No target to keep alive. Provision one and heal that, rather than probe an
+    // empty URL and report a heal failure. Never synthesise a healthy probe: this
+    // is a monitor, so a fabricated "healthy" inverts what it means.
+    if (!target.sandboxName && !input?.dryRun) {
+      ctx.logger.info("no sandboxName given — provisioning a demo target");
+      return goto("provision", {});
+    }
 
     if (input?.forceHeal || input?.dryRun) {
       ctx.logger.info("skipping probe — healing", {
@@ -146,6 +185,67 @@ const check = defineStep({
         err: String(err),
       });
       return goto("heal", { reason: String(err) });
+    }
+  },
+});
+
+/**
+ * Provision the demo target: a small sandbox with a trivial health server in it.
+ * `heal` then rebuilds and restarts exactly that, so the zero-config run
+ * exercises the real actuator against a real app it owns.
+ */
+const provision = defineStep({
+  name: "provision",
+  next: ["heal", "heal_failed"],
+  async run(_input: unknown, ctx: Ctx) {
+    const target = ctx.shared.get("target");
+    if (!target) {
+      return goto("heal_failed", {
+        status: "error",
+        logs: "no target resolved",
+      });
+    }
+    try {
+      // Reuse the demo sandbox across runs when it is still around — a fresh one
+      // per run would leak a sandbox on every tick of a schedule.
+      let box;
+      try {
+        await ctx.sapiom.sandboxes.get(DEMO_SANDBOX_NAME);
+        box = ctx.sapiom.sandboxes.attach(DEMO_SANDBOX_NAME);
+        ctx.logger.info("reusing the demo sandbox", {
+          name: DEMO_SANDBOX_NAME,
+        });
+      } catch {
+        box = await ctx.sapiom.sandboxes.create({
+          name: DEMO_SANDBOX_NAME,
+          ttl: "24h",
+          tier: "xs",
+          port: DEMO_PORT,
+        });
+        ctx.logger.info("created the demo sandbox", {
+          name: DEMO_SANDBOX_NAME,
+        });
+      }
+      await box.uploadFile("server.mjs", DEMO_SERVER_JS);
+
+      ctx.shared.set("target", {
+        ...target,
+        sandboxName: DEMO_SANDBOX_NAME,
+        healthPath: "/health",
+        build: "true",
+        start: "node server.mjs",
+        port: DEMO_PORT,
+      });
+      ctx.shared.set(
+        "note",
+        "No `sandboxName` was given, so the run provisioned its own demo sandbox and healed that. Point `sandboxName` and `url` at your preview to keep yours alive.",
+      );
+      return goto("heal", { reason: "provisioned a demo target" });
+    } catch (err) {
+      ctx.logger.error("could not provision the demo target", {
+        err: String(err),
+      });
+      return goto("heal_failed", { status: "error", logs: String(err) });
     }
   },
 });
@@ -187,7 +287,7 @@ const heal = defineStep({
     });
 
     // Assemble relaunch env: PORT + literal env, optional DATABASE_URL from a
-    // handle, plus any vault-injected secrets — all read at runtime.
+    // handle, plus any declared env forwarded from this step — all read at runtime.
     const env: Record<string, string> = {
       PORT: String(target.port),
       ...(target.env ?? {}),
@@ -204,25 +304,17 @@ const heal = defineStep({
         });
       }
     }
-    // Inject secrets from the vault (value fetched at runtime — never stored in
-    // the schedule or source).
-    if (target.vaultRef && target.vaultInject) {
-      for (const [envVar, vaultKey] of Object.entries(target.vaultInject)) {
-        try {
-          const secret = await ctx.sapiom.vault.get(target.vaultRef, vaultKey);
-          if (secret) env[envVar] = secret;
-          else
-            ctx.logger.warn("vault key missing/empty", {
-              ref: target.vaultRef,
-              key: vaultKey,
-            });
-        } catch (err) {
-          ctx.logger.warn("vault read failed", {
-            ref: target.vaultRef,
-            key: vaultKey,
-            err: String(err),
-          });
-        }
+    // Forward declared secrets from the environment the platform injected them
+    // into (read at runtime — never stored in the schedule or source).
+    const missingEnv: string[] = [];
+    for (const envVar of target.injectEnv ?? []) {
+      const value = process.env[envVar];
+      if (value) env[envVar] = value;
+      else {
+        missingEnv.push(envVar);
+        ctx.logger.warn("declared env var is not set — not forwarding", {
+          key: envVar,
+        });
       }
     }
 
@@ -238,6 +330,7 @@ const heal = defineStep({
         url: target.url || null,
         dryRun: true,
         envKeys: Object.keys(env),
+        unmet: missingEnv,
       });
     }
 
@@ -261,6 +354,8 @@ const heal = defineStep({
       return goto("healed", {
         status: res.status,
         url: res.url ?? target.url,
+        envKeys: Object.keys(env),
+        unmet: missingEnv,
       });
     } catch (err) {
       ctx.logger.error("deployPreview threw", {
@@ -277,18 +372,34 @@ const healed = defineStep({
   name: "healed",
   next: [],
   terminal: true,
-  async run(input: {
-    status: string;
-    url: string | null;
-    dryRun?: boolean;
-    envKeys?: string[];
-  }) {
+  async run(
+    input: {
+      status: string;
+      url: string | null;
+      dryRun?: boolean;
+      envKeys?: string[];
+      unmet?: string[];
+    },
+    ctx: Ctx,
+  ) {
+    const note = ctx.shared.get("note");
+    const unmet = input?.unmet ?? [];
     return terminate({
       healed: true,
       dryRun: input?.dryRun ?? false,
       status: input?.status ?? null,
       url: input?.url ?? null,
       envKeys: input?.envKeys ?? null,
+      ...(unmet.length ? { unmet } : {}),
+      note:
+        [
+          note,
+          unmet.length
+            ? `Declared env not set, so it was not forwarded to the app: ${unmet.join(", ")}.`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined,
     });
   },
 });
@@ -298,12 +409,14 @@ const heal_failed = defineStep({
   name: "heal_failed",
   next: [],
   terminal: true,
-  async run(input: { status: string; logs: string | null }) {
+  async run(input: { status: string; logs: string | null }, ctx: Ctx) {
+    const note = ctx.shared.get("note");
     return terminate({
       healed: false,
       failed: true,
       status: input?.status ?? null,
       logs: input?.logs ?? null,
+      ...(note ? { note } : {}),
     });
   },
 });
@@ -311,5 +424,5 @@ const heal_failed = defineStep({
 export const agent = defineAgent<EntryInput, Shared>({
   name: "preview-keep-alive",
   entry: "check",
-  steps: { check, healthy, heal, healed, heal_failed },
+  steps: { check, provision, healthy, heal, healed, heal_failed },
 });

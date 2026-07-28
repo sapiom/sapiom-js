@@ -131,11 +131,32 @@ const plan = defineStep({
     ctx.shared.set("testTail", null);
     ctx.shared.set("assessment", null);
 
+    // A repository is a RESOURCE: it has to exist. There is deliberately no
+    // default slug — naming a plausible one (`my-app`) turns a clean rejection
+    // into a 404 mid-run, and under `run_local` the stubbed `repositories.get`
+    // never 404s, so the mistake only surfaces for real users.
     if (!repoSlug) {
       return goto("rejected", {
         reason: "no-repo",
         detail:
-          "repoSlug is required — the coding agent needs a repository to upgrade.",
+          "No `repoSlug` was given, so there was no repository to upgrade and " +
+          "nothing was cloned, tested, or pushed. Create an in-network repo " +
+          "(`git_create_repo`) or point `repoSlug` at one you already have, then " +
+          "re-run.",
+        unmet: ["repoSlug"],
+      });
+    }
+    // Resolve the repo BEFORE launching a coding run against it: a bad slug
+    // should be a readable rejection, not a bare throw partway through `bump`.
+    try {
+      await ctx.sapiom.repositories.get(repoSlug);
+    } catch (err) {
+      return goto("rejected", {
+        reason: "repo-not-found",
+        detail:
+          `No in-network repository named \`${repoSlug}\` was found, so nothing ` +
+          `was cloned, tested, or pushed (${String(err)}).`,
+        unmet: ["repoSlug"],
       });
     }
     ctx.logger.info("planning dependency upgrade", { repoSlug });
@@ -383,10 +404,15 @@ const held = defineStep({
     return terminate({
       decision: "hold",
       pushed: false,
+      pending: true,
       risk: assessment?.risk ?? null,
       reason: "risk above the auto-merge threshold — held for human review",
       reportFileId: archived.fileId,
       summary: assessment?.summary ?? null,
+      note:
+        "The build is green but the risk is above your `maxAutoRisk` bar, so " +
+        "nothing was pushed. Read the archived report, then re-run with " +
+        "`allowRisky: true` (or raise `maxAutoRisk`) to publish it.",
     });
   },
 });
@@ -396,7 +422,10 @@ const rejected = defineStep({
   name: "rejected",
   next: [],
   terminal: true,
-  async run(input: { reason: string; detail?: string }, ctx: Ctx) {
+  async run(
+    input: { reason: string; detail?: string; unmet?: string[] },
+    ctx: Ctx,
+  ) {
     const dryRun = ctx.shared.get("dryRun") === true;
     const repoSlug = ctx.shared.get("repoSlug") ?? "unknown";
     const report = buildReport("rejected", ctx, input);
@@ -414,6 +443,9 @@ const rejected = defineStep({
       detail: input?.detail ?? null,
       reportFileId: archived.fileId,
       testTail: ctx.shared.get("testTail") ?? null,
+      ...(input?.unmet?.length
+        ? { unmet: input.unmet, note: input.detail ?? null }
+        : {}),
     });
   },
 });

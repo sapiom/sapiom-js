@@ -27,10 +27,10 @@ import type { Sapiom } from "@sapiom/tools";
  *
  * Side-effect discipline (copied from `mushroom-cloud` / `backlog-nudge`):
  *   - `dryRun` gates the real send: it computes the brief and returns it as a
- *     preview without emailing anyone. `run_local` uses this to trace the whole
+ *     preview without emailing anyone. Pass it to `run_local` to trace the whole
  *     graph offline (capabilities stubbed) for free before a billed, delivering
  *     deploy + run.
- *   - The recipient is resolved from the Sapiom vault at runtime and never
+ *   - The recipient is ordinary run input (a declared setting), not a secret, and
  *     persisted in execution state — the same seam you'd read a delivery secret
  *     from if you swapped in a bring-your-own channel (see `AGENTS.md`).
  *   - Each edge carries a slim payload; the large scraped bodies stay bounded and
@@ -47,8 +47,12 @@ const MAX_CANDIDATES = 5;
 const MAX_SCRAPES = 4;
 /** Truncate each scraped body — the ONLY large data on the search→curate path. */
 const MAX_BODY_CHARS = 1200;
-/** Vault ref holding delivery config (e.g. a default RECIPIENT). Read at runtime. */
-const DELIVERY_VAULT_REF = "scheduled-research-brief";
+/**
+ * The topic a zero-input run researches. `web.search` needs no credential, so a
+ * real search beats forwarding an empty candidate list and calling the empty
+ * brief that follows a successful run.
+ */
+const DEFAULT_TOPIC = "AI agent reliability incidents";
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "research-brief";
 
@@ -58,9 +62,12 @@ interface EntryInput {
   topic: string;
   /** Cron cadence this brief is meant to run on (e.g. "0 8 * * *"). */
   schedule?: string;
-  /** Recipient email; falls back to the vault-configured default when omitted. */
+  /** Recipient email. Omit it and the brief is returned inline instead of emailed. */
   deliverTo?: string;
-  /** Compute the brief but skip the real send. `run_local` passes this. */
+  /**
+   * Compute the brief but skip the real send. Nothing sets this for you — pass it
+   * explicitly. A run with no recipient also returns the brief without sending.
+   */
   dryRun?: boolean;
 }
 
@@ -90,26 +97,13 @@ interface Shared extends Record<string, unknown> {
   dryRun: boolean;
   brief: string;
   sources: Source[];
+  /** Set when the run researched the default topic rather than the caller's. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
 
 // ─────────────────────────────────────────────────────────────── helpers ──
-/**
- * Resolve the recipient from the vault at runtime. A missing ref/key is an
- * expected outcome (`vault.get` returns null), not an error — the caller then
- * falls back to a dry-run preview. This is also the seam where a bring-your-own
- * delivery secret would be read; it is never persisted in execution state.
- */
-async function recipientFromVault(ctx: Ctx): Promise<string | null> {
-  try {
-    return await ctx.sapiom.vault.get(DELIVERY_VAULT_REF, "RECIPIENT");
-  } catch (err) {
-    ctx.logger.warn("vault: no recipient configured", { err: String(err) });
-    return null;
-  }
-}
-
 /** Reuse an existing inbox to send from, else provision one. */
 async function resolveSenderInbox(ctx: Ctx): Promise<string> {
   const existing = await ctx.sapiom.email.inboxes.list({ limit: 1 });
@@ -126,16 +120,17 @@ const search = defineStep({
   name: "search",
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
-    const topic = input.topic?.trim() ?? "";
+    const supplied = input.topic?.trim() ?? "";
+    const topic = supplied || DEFAULT_TOPIC;
     ctx.shared.set("topic", topic);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
     ctx.shared.set("deliverTo", input.deliverTo?.trim() || null);
     ctx.shared.set("dryRun", input.dryRun === true);
-
-    if (!topic) {
-      // Nothing to research — hand an empty candidate list to the next step so
-      // the graph still traces end to end.
-      return goto("scrape", { candidates: [] as Candidate[] });
+    if (!supplied) {
+      ctx.shared.set(
+        "note",
+        `Researched the default topic ("${DEFAULT_TOPIC}"). Pass a \`topic\` to research yours.`,
+      );
     }
 
     ctx.logger.info("searching the web", { topic });
@@ -258,10 +253,10 @@ const deliver = defineStep({
     const sources = input.sources ?? [];
     const subject = `Research brief: ${topic}`;
 
-    // Explicit input wins; otherwise resolve the default from the vault at
-    // runtime (never carried through state).
-    const deliverTo =
-      ctx.shared.get("deliverTo") || (await recipientFromVault(ctx));
+    // A recipient is ordinary configuration, so it arrives as run input (declared
+    // as a `deliverTo` setting in template.json) rather than from a write-only
+    // secret store nothing in the product can populate.
+    const deliverTo = ctx.shared.get("deliverTo");
 
     // The safe path: a dry run — or a live run with no recipient configured yet —
     // returns the computed brief without sending anything.
@@ -276,6 +271,15 @@ const deliver = defineStep({
         delivered: false,
         dryRun,
         reason: dryRun ? "dry-run" : "no-recipient",
+        ...(dryRun ? {} : { unmet: ["deliverTo"] }),
+        note: [
+          dryRun
+            ? "`dryRun` was set, so nothing was emailed."
+            : "Nothing was emailed: no `deliverTo` address is set, so the brief is returned inline below.",
+          ctx.shared.get("note"),
+        ]
+          .filter(Boolean)
+          .join(" "),
         to: deliverTo ?? null,
         subject,
         brief,
@@ -302,6 +306,7 @@ const deliver = defineStep({
       subject,
       messageId: sent.messageId,
       sources,
+      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
     });
   },
 });

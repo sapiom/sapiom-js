@@ -146,7 +146,10 @@ interface EntryInput {
   reminderMs?: number;
   /** Reminders before a silent gate escalates. Default 2. */
   maxReminders?: number;
-  /** Skip the irreversible finalize action and live DB writes. `run_local` sets this. */
+  /**
+   * Skip the irreversible finalize action and live DB writes. Nothing sets this for
+   * you — pass it explicitly when you want the graph traced without side effects.
+   */
   dryRun?: boolean;
   /** String-only config bag (escalation / ledger fallbacks). */
   config?: Config;
@@ -323,13 +326,21 @@ async function persistTransition(
   }
 }
 
+/**
+ * What a zero-input run seeks sign-off on. There is deliberately no default
+ * approver list: a chain with a fabricated approver would email somebody we
+ * invented, and with nobody to sign off the run escalates instead — which is the
+ * honest outcome and the one this template already got right.
+ */
+const DEFAULT_SUBJECT = "Sample: renew the annual analytics contract ($18,000)";
+
 // ─────────────────────────────────────────────────────────────── steps ──
 const start = defineStep({
   name: "start",
   next: ["present", "escalate"],
   async run(input: EntryInput, ctx: Ctx) {
     const config = input.config ?? {};
-    const subject = input.subject?.trim() || "(untitled approval)";
+    const subject = input.subject?.trim() || DEFAULT_SUBJECT;
     const approvers = normalizeApprovers(input.approvers ?? []);
     ctx.shared.set("subject", subject);
     ctx.shared.set("approvers", approvers);
@@ -404,8 +415,13 @@ const present = defineStep({
       approver: current.id,
     });
 
-    // Suspend at $0 until this party fires the approval signal for this run. The
-    // `timeoutMs` is a best-effort auto-reminder where the engine supports it.
+    // Suspend at $0 until this party fires the approval signal for this run. This
+    // pause is kept on purpose: an approver IS assigned, so somebody can resume
+    // it, and the run detail ships one-click Approve/Reject.
+    //
+    // `timeoutMs` is a hint for the auto-reminder and is NOT a guarantee — no
+    // paused-run reaper exists today, so do not treat it as an escape hatch. The
+    // reminder loop is what actually chases a silent approver.
     return pauseUntilSignal({
       signal: APPROVAL_SIGNAL,
       resumeStep: "decide",
@@ -670,6 +686,21 @@ const escalate = defineStep({
       stalledApprover: stalledAt
         ? { id: stalledAt.id, name: stalledAt.name }
         : null,
+      trail: ctx.shared.get("trail") ?? [],
+      unmet: [
+        ...(reason === "no-approvers" ? ["approvers"] : []),
+        ...(ctx.shared.get("ledgerHandle") ? [] : ["ledgerHandle"]),
+      ],
+      note: [
+        reason === "no-approvers"
+          ? "No `approvers` were supplied, so there was no gate to present and nothing was committed — the chain escalated instead of waiting on a sign-off nobody could give. Pass an approver list to run the real chain."
+          : null,
+        ctx.shared.get("ledgerHandle")
+          ? null
+          : "No `ledgerHandle` was set, so the audit trail is in this run's output only and was not persisted to a database.",
+      ]
+        .filter(Boolean)
+        .join(" "),
     });
   },
 });

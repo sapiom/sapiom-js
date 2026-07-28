@@ -2,13 +2,13 @@
 
 This project defines exactly one Sapiom agent in `index.ts` — **Slack Notifier**
 — authored against `@sapiom/agent`. It has three worker paths from two steps:
-`validate` (checks input, resolves config) → `post` (reads a credential from the
-Vault and calls Slack via `fetch`), plus the terminal steps `posted` / `failed`
-/ `rejected`. Inside a step's `run`, Sapiom capabilities are pre-auth'd on
-`ctx.sapiom` (here, `ctx.sapiom.vault.get("slack", ...)`).
+`validate` (resolves input and config) → `post` (reads the injected credential and
+calls Slack via `fetch`), plus the terminal steps `posted` / `failed` / `rejected`.
+It calls no metered Sapiom capability at all — the Slack request goes out on your
+own token.
 
-The lesson is the "bring your own API" shape: **store a secret in the Vault,
-read it at runtime, call an external API with it.** Slack has no Sapiom
+The lesson is the "bring your own API" shape: **declare a secret, read it at
+runtime from the injected environment, call an external API with it.** Slack has no Sapiom
 capability namespace, so we call it directly with `fetch`.
 
 ## Authoring
@@ -17,13 +17,15 @@ capability namespace, so we call it directly with `fetch`.
   `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export.
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is
   defined by `@sapiom/tools` — read the types / use autocomplete rather than
-  guessing. `ctx.sapiom.vault.get(ref, key)` returns `string | null`.
-- **Never bake a secret into code.** Read it at runtime from the Vault. The
-  `post` step already does this; the `VAULT_REF` / key constants at the top of
-  `index.ts` are the only things to change when repointing to another API.
-- The `dryRun` / no-credential guard keeps the graph runnable offline. Keep it:
-  `run_local` stubs the Vault (returns null), and `dryRun` skips the network, so
-  the full graph traces for free before a token is set.
+  guessing.
+- **Never bake a secret into code, and never name a store.** The credential is
+  declared in `template.json` (`requiredSecrets[]`) and arrives as
+  `process.env[BOT_TOKEN_KEY]`. Those key constants at the top of `index.ts` — and
+  the matching declaration — are the only things to change when repointing to
+  another API.
+- The no-credential guard is the whole safety property. Keep it: with no token the
+  run composes the message, reports `posted: false, skipped: "no-credential"`, and
+  names the missing key in `unmet`. It must never report `posted: true`.
 
 ## Validating
 
@@ -35,11 +37,11 @@ run it after every small edit.
   capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full
   local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so
-  the Vault read returns null and the `no-credential` guard skips the post; the
+- **run_local** — runs your **real** step code against **stub capabilities**. With
+  no token in your environment the `no-credential` guard skips the post, so the
   agent runs end to end offline for free and returns a per-step trace.
-- **deploy**, then set your Slack token in the Vault (see `README.md`), then
-  **run** — posts to Slack for real.
+- **deploy**, then supply your Slack token (see `README.md`), then **run** — posts
+  to Slack for real.
 
 > Write each step the way it should run in production. `run_local` adapts to
 > your code (stub capabilities), not the other way around — never weaken or drop

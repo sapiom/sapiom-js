@@ -44,8 +44,17 @@ import postgres from "postgres";
 // ─────────────────────────────────────────────────────────────── config ──
 /** Postgres handle the CRM store lives under — created on first run, reused after. */
 const DEFAULT_DB_HANDLE = "meeting-notes-crm";
-/** Vault ref holding delivery config (e.g. a default RECIPIENT). Read at runtime. */
-const DELIVERY_VAULT_REF = "meeting-notes-crm";
+/**
+ * The transcript a zero-input run extracts from. A real one, because the whole
+ * artifact is what the model pulls out of it — an empty transcript produces an
+ * empty contact and an empty action list, which is a successful-looking run that
+ * did nothing.
+ */
+const SAMPLE_TRANSCRIPT =
+  "Call with Dana Ruiz, VP Eng at Northwind. She confirmed budget for the Q3 " +
+  "rollout and wants a security review before signing. I'll send the SOC 2 " +
+  "report by Friday and Dana will loop in their CISO next week. Deal looks like " +
+  "it's moving to contract stage.";
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "meeting-crm";
 /** The named signal a note-taker fires to push a finished transcript in. */
@@ -61,7 +70,7 @@ interface EntryInput {
   transcript?: string;
   /** Wait for a note-taker to push the transcript instead of passing one. */
   webhook?: boolean;
-  /** Recipient email; falls back to the vault-configured default when omitted. */
+  /** Recipient email. Omit it and the recap is returned inline instead of emailed. */
   deliverTo?: string;
   /** Postgres handle for the CRM store; defaults to the template handle. */
   dbHandle?: string;
@@ -118,6 +127,8 @@ interface Shared extends Record<string, unknown> {
   dryRun: boolean;
   /** ISO meeting date, or null to let the DB default it to now(). */
   meetingDate: string | null;
+  /** Set when the run extracted from the built-in sample transcript. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -164,20 +175,6 @@ function stableId(input: string): string {
     h = ((h << 5) + h + input.charCodeAt(i)) >>> 0;
   }
   return `ai_${h.toString(16)}`;
-}
-
-/**
- * Resolve the recipient from the vault at runtime. A missing ref/key is an
- * expected outcome (returns null), not an error — the caller then falls back to
- * a preview. Never persisted in execution state.
- */
-async function recipientFromVault(ctx: Ctx): Promise<string | null> {
-  try {
-    return await ctx.sapiom.vault.get(DELIVERY_VAULT_REF, "RECIPIENT");
-  } catch (err) {
-    ctx.logger.warn("vault: no recipient configured", { err: String(err) });
-    return null;
-  }
 }
 
 /** Reuse an existing inbox to send from, else provision one. */
@@ -251,7 +248,7 @@ const intake = defineStep({
     ctx.shared.set("dryRun", truthy(input.dryRun));
     ctx.shared.set("meetingDate", input.meetingDate?.trim() || null);
 
-    const transcript = normalizeTranscript(input.transcript);
+    let transcript = normalizeTranscript(input.transcript);
 
     // Nothing passed in and asked to wait: suspend at $0 until a note-taker
     // pushes a transcript. The resumed `extract` step's input IS the payload.
@@ -267,6 +264,17 @@ const intake = defineStep({
         resumeStep: "extract",
         correlationId: ctx.executionId,
       });
+    }
+
+    // Nothing passed in and nobody is going to push one: extract from the sample
+    // transcript so the run produces a real contact and real action items, and
+    // say in the output that the transcript was ours.
+    if (transcript.length === 0) {
+      transcript = normalizeTranscript(SAMPLE_TRANSCRIPT);
+      ctx.shared.set(
+        "note",
+        "Extracted from the built-in sample transcript. Pass your own `transcript`, or set `webhook: true` to wait for one.",
+      );
     }
 
     return goto("extract", { transcript });
@@ -429,10 +437,10 @@ const summary = defineStep({
       extraction.contact.company || extraction.contact.name || "the contact";
     const subject = `CRM updated: ${who} — ${newItems.length} new action item(s)`;
 
-    // Explicit input wins; otherwise resolve the default from the vault at
-    // runtime (never carried through state).
-    const deliverTo =
-      ctx.shared.get("deliverTo") || (await recipientFromVault(ctx));
+    // A recipient is ordinary configuration, so it arrives as run input (declared
+    // as a `deliverTo` setting in template.json) rather than from a write-only
+    // secret store nothing in the product can populate.
+    const deliverTo = ctx.shared.get("deliverTo");
 
     // Safe path: a dry run, or a live run with no recipient, returns the recap
     // without sending anything.
@@ -445,6 +453,15 @@ const summary = defineStep({
         delivered: false,
         dryRun,
         reason: dryRun ? "dry-run" : "no-recipient",
+        ...(dryRun ? {} : { unmet: ["deliverTo"] }),
+        note: [
+          dryRun
+            ? "`dryRun` was set, so nothing was emailed and nothing was written to the CRM table."
+            : "Nothing was emailed: no `deliverTo` address is set, so the recap is returned inline below.",
+          ctx.shared.get("note"),
+        ]
+          .filter(Boolean)
+          .join(" "),
         to: deliverTo ?? null,
         subject,
         summary: body,
@@ -473,6 +490,7 @@ const summary = defineStep({
       contact: extraction.contact,
       newCount: newItems.length,
       existingCount: existingItems.length,
+      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
     });
   },
 });

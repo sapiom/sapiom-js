@@ -24,7 +24,7 @@ snapshot  ──▶  narrate  ──▶  chart  ──▶  deliver  (terminal)
    torn down when the step ends; the SVG never enters shared state.
 4. **deliver** — emails the report (narrative + chart link + a metrics table). A
    `dryRun` guard reports on sample metrics and skips the real send; the recipient
-   is read from the Sapiom vault at runtime, never persisted.
+   is ordinary run input, not a secret.
 
 Input: `{ "schedule": "0 8 * * *", "deliverTo": "you@example.com" }`.
 
@@ -32,8 +32,10 @@ Input: `{ "schedule": "0 8 * * *", "deliverTo": "you@example.com" }`.
   and `value` columns. Omit it to introspect the database catalog.
 - `dbHandle` — the Sapiom Postgres to snapshot (get-or-created). To report on an
   external database instead, store its connection string under the
-  `scheduled-db-insight-report` vault ref (key `DATABASE_URL`).
-- `deliverTo` sets the recipient; omit it to use the vault-configured default
+  declared `REPORT_DATABASE_URL` credential, which Sapiom injects into the step's
+  environment at dispatch.
+- `deliverTo` sets the recipient; omit it and the report is returned in the run's
+  output instead of emailed
   (`RECIPIENT`).
 - `dryRun: true` reports on sample metrics and returns the report without emailing.
 

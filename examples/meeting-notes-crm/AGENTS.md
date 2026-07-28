@@ -1,6 +1,6 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Meeting Notes → CRM Updater** — authored against `@sapiom/agent`. It has four steps: `intake` (pause/take the transcript) → `extract` (calls `models.run`, the live LLM) → `upsert` (calls `database`) → `summary` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.models.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`, `ctx.sapiom.vault.get(...)`).
+This project defines exactly one Sapiom agent in `index.ts` — **Meeting Notes → CRM Updater** — authored against `@sapiom/agent`. It has four steps: `intake` (pause/take the transcript) → `extract` (calls `models.run`, the live LLM) → `upsert` (calls `database`) → `summary` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.models.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`).
 
 It combines a durability primitive with a real store: it can **pause at $0** for a pushed transcript (`pauseUntilSignal`) or take one directly, and it keeps a **Postgres CRM store** of contacts and action items so a re-processed transcript updates the record instead of duplicating it.
 
@@ -11,7 +11,7 @@ It combines a durability primitive with a real store: it can **pause at $0** for
 - **The pause is a static edge.** `intake` declares `pause: { signal: "transcript.ready", resumeStep: "extract" }` and returns `pauseUntilSignal({ signal, resumeStep, correlationId })` — the two must match. The resumed `extract` step's _input_ is the signal payload (`{ transcript: "..." }`); everything else survives the suspend in `ctx.shared`.
 - **Keep the edges slim.** The transcript is bounded (truncated to `MAX_TRANSCRIPT_CHARS`) before the model sees it, and only the small extracted object crosses the later edges — the raw transcript doesn't linger in `ctx.shared`. Large shared state stalls transitions on the cloud engine.
 - **Gate real side effects behind `dryRun`.** `upsert` skips the database and `summary` skips the send when `dryRun` is set (or no recipient resolves), returning the computed recap as a preview. Keep new external side effects behind the same guard.
-- **Read secrets/config at runtime, never persist them.** The recipient is read from the vault (`ctx.sapiom.vault.get("meeting-notes-crm", "RECIPIENT")`) inside `summary`, not carried through `ctx.shared`.
+- **Config is not a secret.** The recipient is ordinary run input (`deliverTo`, declared as a `settings[]` entry in `template.json`), not a vault key. With none set, `summary` returns the recap and says nothing was emailed.
 - **Key stability is the contract.** The contact key (email → company → name) and each action item's `stableId` must resolve the same across runs, so a re-processed transcript updates the same contact row and records each item once. If dedup looks wrong, `resolveContactKey` / `normalizeText` are the first place to look.
 
 ## Validating
@@ -39,7 +39,7 @@ await ctx.sapiom.memory.append({
 });
 ```
 
-Keep the same `dryRun` guard around it. Memory needs no recipient, so you can drop the vault lookup — or keep it to override the scope.
+Keep the same `dryRun` guard around it. Memory needs no recipient.
 
 ## Determinism
 

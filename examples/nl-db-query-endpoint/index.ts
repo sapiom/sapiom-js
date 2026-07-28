@@ -28,10 +28,12 @@ import {
  *      only deployed once the safe path is proven.
  *   5. deploy   — write a small server (which re-runs translate → guard → execute
  *      per request) into a sandbox and expose it at a stable URL
- *      (`sandboxes.deployPreview`). DATABASE_URL and the server's own
- *      SAPIOM_API_KEY (read from the vault at deploy time, `vault.get`) are
- *      injected as env — never baked into source.
- *   6. deployed / deploy_failed / rejected — terminal.
+ *      (`sandboxes.deployPreview`). DATABASE_URL and the server's own API key
+ *      (injected into this step's environment as `ENDPOINT_SAPIOM_API_KEY`) are
+ *      passed as env — never baked into source. With no key, nothing is deployed
+ *      and the run stops at `endpoint_skipped`: a URL whose only route cannot
+ *      answer is worse than no URL.
+ *   6. deployed / endpoint_skipped / deploy_failed / rejected — terminal.
  *
  * The read-only guardrail is defense-in-depth: the LLM is *told* to emit a SELECT,
  * the SQL is *checked* (single statement, starts with SELECT/WITH, no DDL/DML
@@ -62,11 +64,7 @@ interface EntryInput {
   maxRows?: number;
   /** Port the endpoint listens on (default 3000). */
   port?: number;
-  /** Vault ref holding the server's SAPIOM_API_KEY (best practice). */
-  vaultRef?: string;
-  /** Vault key name for the server's API key (default `sapiom_api_key`). */
-  vaultKey?: string;
-  /** Dev-only fallback: inject the server's SAPIOM_API_KEY directly. Prefer the vault. */
+  /** Dev-only fallback: inject the server's SAPIOM_API_KEY directly. */
   sapiomApiKey?: string;
   /**
    * Assemble everything but skip the real `deployPreview` — so `run_local` traces
@@ -83,16 +81,18 @@ interface Config {
   model: string;
   maxRows: number;
   port: number;
-  vaultRef: string;
-  vaultKey: string;
   sapiomApiKey: string;
   dryRun: boolean;
+  /** True when the run defaulted to the managed demo database. */
+  usingDemoDatabase: boolean;
 }
 
 interface Shared extends Record<string, unknown> {
   config: Config;
   connectionString: string;
   sampleSql: string;
+  /** One plain sentence about which database was used and what was skipped. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -101,19 +101,43 @@ const DEFAULT_SANDBOX = "nl-db-query-endpoint";
 const DEFAULT_QUESTION = "How many rows are in each table?";
 const DEFAULT_MAX_ROWS = 100;
 const DEFAULT_PORT = 3000;
-const DEFAULT_VAULT_KEY = "sapiom_api_key";
+/**
+ * Postgres handle used when the caller names no target. Declared in
+ * `template.json` as a `resources[]` entry with `seed: "seed.sql"`, so deploy
+ * provisions it and loads a small read-only dataset — a translation against a
+ * schema that does not exist is not a demonstration of anything.
+ */
+const DEFAULT_DB_HANDLE = "nl-db-query-demo";
+/**
+ * Env key holding the API key the DEPLOYED endpoint uses to call `models.run` on
+ * each request. Declared as a required secret in `template.json`; the platform
+ * injects it here and the step forwards it to the server as `SAPIOM_API_KEY`.
+ * The declared key cannot itself be named `SAPIOM_*` — that namespace belongs to
+ * the engine and a template may never override it.
+ *
+ * This is the template's one genuinely unsolved requirement: the endpoint needs a
+ * Sapiom credential of its own, and there is no primitive today that mints one
+ * scoped to a deployed preview. Until there is, a run with no key translates and
+ * guards for real and then stops, rather than publishing a URL whose only
+ * interesting route cannot answer.
+ */
+const ENDPOINT_API_KEY = "ENDPOINT_SAPIOM_API_KEY";
 
 function resolveConfig(input: EntryInput | undefined): Config {
+  const dbHandle = input?.dbHandle?.trim() ?? "";
+  const connectionString = input?.connectionString?.trim() ?? "";
+  const usingDemoDatabase = !dbHandle && !connectionString;
   return {
-    dbHandle: input?.dbHandle?.trim() ?? "",
-    connectionString: input?.connectionString?.trim() ?? "",
+    // Naming a plausible-looking handle (`analytics`) would 404 for every real
+    // user; the declared demo resource is one this template actually provisions.
+    dbHandle: usingDemoDatabase ? DEFAULT_DB_HANDLE : dbHandle,
+    connectionString,
+    usingDemoDatabase,
     sandboxName: input?.sandboxName?.trim() || DEFAULT_SANDBOX,
     sampleQuestion: input?.sampleQuestion?.trim() || DEFAULT_QUESTION,
     model: input?.model?.trim() ?? "",
     maxRows: input?.maxRows ?? DEFAULT_MAX_ROWS,
     port: input?.port ?? DEFAULT_PORT,
-    vaultRef: input?.vaultRef?.trim() ?? "",
-    vaultKey: input?.vaultKey?.trim() || DEFAULT_VAULT_KEY,
     sapiomApiKey: input?.sapiomApiKey ?? "",
     dryRun: input?.dryRun === true,
   };
@@ -331,11 +355,11 @@ const validate = defineStep({
   async run(input: EntryInput, ctx: Ctx) {
     const config = resolveConfig(input);
     ctx.shared.set("config", config);
-    if (!config.dbHandle && !config.connectionString) {
-      return goto("rejected", {
-        reason:
-          "provide a `dbHandle` or a `connectionString` for the target database",
-      });
+    if (config.usingDemoDatabase) {
+      ctx.shared.set(
+        "note",
+        `No \`dbHandle\` or \`connectionString\` was given, so the run used the managed demo database \`${DEFAULT_DB_HANDLE}\` and its seeded read-only dataset. Point \`dbHandle\` at your own database to query yours.`,
+      );
     }
     ctx.logger.info("input validated", {
       sandbox: config.sandboxName,
@@ -349,13 +373,37 @@ const validate = defineStep({
 /** Read the Postgres connection string to inject into the endpoint. */
 const resolve = defineStep({
   name: "resolve",
-  next: ["plan"],
+  next: ["plan", "rejected"],
   async run(_input: unknown, ctx: Ctx) {
     const config = ctx.shared.get("config")!;
     let connectionString = config.connectionString;
     if (!connectionString && config.dbHandle) {
-      const db = await ctx.sapiom.database.get(config.dbHandle);
-      connectionString = db.connection?.connectionString ?? "";
+      try {
+        const db = await ctx.sapiom.database.get(config.dbHandle);
+        connectionString = db.connection?.connectionString ?? "";
+      } catch (err) {
+        if (!config.usingDemoDatabase) {
+          // The caller named a handle that does not exist. Say so plainly rather
+          // than throw — and never fall back to a database they did not ask for.
+          return goto("rejected", {
+            reason: `no database named \`${config.dbHandle}\` was found (${String(err)})`,
+          });
+        }
+        // A resource-shaped need PROVISIONS rather than rejects. Deploy normally
+        // creates and seeds the declared demo database; this covers the case where
+        // it did not.
+        ctx.logger.info("provisioning the demo database", {
+          handle: config.dbHandle,
+        });
+        const created = await ctx.sapiom.database.create({
+          handle: config.dbHandle,
+          duration: "7d",
+          name: "NL DB Query demo",
+          description:
+            "Read-only demo dataset the endpoint answers questions over",
+        });
+        connectionString = created.connection?.connectionString ?? "";
+      }
     }
     if (!connectionString && config.dryRun) {
       // No live handle needed to trace the graph offline.
@@ -412,27 +460,16 @@ const guard = defineStep({
 /** Write the endpoint server into a sandbox and expose it at a stable URL. */
 const deploy = defineStep({
   name: "deploy",
-  next: ["deployed", "deploy_failed"],
+  next: ["deployed", "deploy_failed", "endpoint_skipped"],
   async run(_input: unknown, ctx: Ctx) {
     const config = ctx.shared.get("config")!;
     const connectionString = ctx.shared.get("connectionString") ?? "";
     const sampleSql = ctx.shared.get("sampleSql") ?? "";
 
-    // The server's own API key (used to call models.run per request): read from
-    // the vault at deploy time, or fall back to the dev-only input.
-    let apiKey = config.sapiomApiKey;
-    if (!apiKey && config.vaultRef) {
-      try {
-        apiKey =
-          (await ctx.sapiom.vault.get(config.vaultRef, config.vaultKey)) ?? "";
-      } catch (err) {
-        ctx.logger.warn("vault read failed", {
-          ref: config.vaultRef,
-          key: config.vaultKey,
-          err: String(err),
-        });
-      }
-    }
+    // The server's own API key (used to call models.run per request) comes from
+    // the environment the platform injected it into, or the dev-only input.
+    const apiKey =
+      config.sapiomApiKey || process.env[ENDPOINT_API_KEY]?.trim() || "";
 
     const env: Record<string, string> = {
       PORT: String(config.port),
@@ -441,6 +478,20 @@ const deploy = defineStep({
       MAX_ROWS: String(config.maxRows),
     };
     if (apiKey) env.SAPIOM_API_KEY = apiKey;
+
+    // No key means the deployed server cannot call `models.run`, so `/query` — the
+    // only interesting route — would return an error for every request. Publishing
+    // that URL is the worst failure mode this template has. Stop with the
+    // translated, guarded SQL instead and name what is missing.
+    if (!apiKey && !config.dryRun) {
+      ctx.logger.warn("no endpoint credential — not deploying", {
+        key: ENDPOINT_API_KEY,
+      });
+      return goto("endpoint_skipped", {
+        sampleQuestion: config.sampleQuestion,
+        sampleSql,
+      });
+    }
 
     const queryEndpoint = (url: string) => `${url.replace(/\/$/, "")}/query`;
     const healthEndpoint = (url: string) => `${url.replace(/\/$/, "")}/health`;
@@ -512,16 +563,19 @@ const deployed = defineStep({
   name: "deployed",
   next: [],
   terminal: true,
-  async run(input: {
-    dryRun: boolean;
-    url: string | null;
-    queryEndpoint: string | null;
-    healthEndpoint: string | null;
-    sampleQuestion: string;
-    sampleSql: string;
-    envKeys: string[];
-    serverBytes: number;
-  }) {
+  async run(
+    input: {
+      dryRun: boolean;
+      url: string | null;
+      queryEndpoint: string | null;
+      healthEndpoint: string | null;
+      sampleQuestion: string;
+      sampleSql: string;
+      envKeys: string[];
+      serverBytes: number;
+    },
+    ctx: Ctx,
+  ) {
     return terminate({
       deployed: !input?.dryRun,
       dryRun: input?.dryRun ?? false,
@@ -532,7 +586,41 @@ const deployed = defineStep({
       sampleSql: input?.sampleSql ?? null,
       envKeys: input?.envKeys ?? null,
       serverBytes: input?.serverBytes ?? null,
+      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
     });
+  },
+});
+
+/**
+ * Translated and guarded, but no endpoint was stood up because the server had no
+ * credential of its own. Terminal, and honest: the SQL below is real and was
+ * checked, and no URL is reported because none exists.
+ */
+const endpoint_skipped = defineStep({
+  name: "endpoint_skipped",
+  next: [],
+  terminal: true,
+  async run(input: { sampleQuestion: string; sampleSql: string }, ctx: Ctx) {
+    const note = ctx.shared.get("note");
+    return terminate(
+      {
+        deployed: false,
+        url: null,
+        queryEndpoint: null,
+        sampleQuestion: input?.sampleQuestion ?? null,
+        sampleSql: input?.sampleSql ?? null,
+        unmet: [ENDPOINT_API_KEY],
+        note: [
+          "The question was translated to SQL and passed the read-only guardrail — that part really ran.",
+          `No endpoint was deployed: the server needs its own \`${ENDPOINT_API_KEY}\` to translate each request, and none is set.`,
+          "Supply one to stand the endpoint up.",
+          note,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+      { reason: "no endpoint credential" },
+    );
   },
 });
 
@@ -570,6 +658,7 @@ export const agent = defineAgent<EntryInput, Shared>({
   name: "nl-db-query-endpoint",
   entry: "validate",
   steps: {
+    endpoint_skipped,
     validate,
     resolve,
     plan,

@@ -13,6 +13,12 @@
     "Runs as a child workflow"
   ],
   "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a run input: the `input` (the case), the `output` to grade, your `rubric` string, and optionally a `threshold` (default 0.7) and a judge `model`. The rubric is where all your opinion about quality lives — raise the threshold to be stricter, lower it to let more through.\n\nPrefer to work from the code? Run it locally with `run_local` to trace both branches for free — but the default stub reply carries no number and the parser throws on that by design, so supply a stub score (a high one routes to publish, a low one to revise). Then edit the rubric and deploy it with the Sapiom MCP.",
+  "defaultInput": {
+    "input": "Write a one-line product tagline for a privacy-first email app.",
+    "output": "Inbox peace, finally — email that never reads your mail.",
+    "rubric": "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
+    "threshold": 0.7
+  },
   "examples": [
     {
       "title": "High score → publish",

@@ -25,12 +25,15 @@ collect  ──▶  triage  ──▶  dedupe  ──▶  digest  (terminal)
    digest from re-alerting on the same known error every morning.
 4. **digest** — writes a markdown digest (new issues first, recurring below) and
    emails it. A `dryRun` computes the digest but skips the DB writes and the real
-   send; the recipient is read from the Sapiom vault at runtime, never persisted.
+   send; so does a run with no recipient set.
 
 Input: `{ "errors": [{ "message": "...", "level": "error", "service": "checkout" }], "deliverTo": "you@example.com", "schedule": "0 8 * * *" }`.
 
 - `errors` (or `pullUrl`, or the `errors.pushed` webhook) supplies the batch.
-- `deliverTo` sets the recipient; omit it to use the vault-configured default.
+- `deliverTo` sets the recipient; omit it and the digest is returned in the run's
+  output instead of emailed.
+- With no `errors`, no `pullUrl`, and no webhook, the run triages a built-in sample
+  batch of three errors and says so in its output.
 - `dryRun: true` returns the digest as a preview without writing or sending.
 
 ### Two ways in

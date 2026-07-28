@@ -12,7 +12,20 @@
     "Scheduled repurposing",
     "Draft-first dry run"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\n`source` is the only required input — paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it without paying for any images or video. A full run bills the LLM, one image per quote, one short image-to-video clip, and the email, so keep `numQuotes` small (default 2, max 4). To have it email the pack, set `deliverTo` or store a `RECIPIENT` under the `content-repurposing-pipeline` Vault ref; with neither set it returns the pack without sending. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step for free, or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\n`source` is the only required input — paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it without paying for any images or video. A full run bills the LLM, one image per quote, one short image-to-video clip, and the email, so keep `numQuotes` small (default 2, max 4). To have it email the pack, set `deliverTo`; without it the run returns the pack and says nothing was sent. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step for free, or edit and deploy it with the Sapiom MCP.",
+  "settings": [
+    {
+      "path": "deliverTo",
+      "label": "Email the pack to",
+      "description": "Where the pack is emailed. Leave it empty and the pack is returned in the run's output instead.",
+      "type": "email",
+      "default": "",
+      "example": "you@yourcompany.com"
+    }
+  ],
+  "defaultInput": {
+    "numQuotes": 2
+  },
   "examples": [
     {
       "title": "Draft only (dryRun — no billed media)",

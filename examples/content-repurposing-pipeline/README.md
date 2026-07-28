@@ -27,15 +27,15 @@ repurpose ──▶ graphics ──▶ clip ──▶ collectClip ──▶ pack
 6. **deliver** — emails the pack to your recipient (`email.messages.send`), and
    returns a summary of everything produced.
 
-Input: `{ "source": "<your blog post or transcript>", "title": "..." }`.
+Input: `{ "source": "<your blog post or transcript>", "title": "..." }`. With no
+`source` at all, the run repurposes a built-in sample post and says so in its output.
 Optional: `audience`, `numQuotes` (default 2, max 4), `deliverTo`, `schedule`
 (a cron string), `model` (an advanced image-to-video model id), and `dryRun` (copy only).
 
 ## Delivery
 
-Set `deliverTo`, or store a `RECIPIENT` key under the `content-repurposing-pipeline`
-Vault ref, and the pack is emailed. With neither set, the run returns the pack
-without sending. The full pack is always in the email body; the file-storage copy
+Set `deliverTo` and the pack is emailed. Without it, the run returns the pack and
+says nothing was sent. The full pack is always in the email body; the file-storage copy
 is a durable convenience link.
 
 ## Cost

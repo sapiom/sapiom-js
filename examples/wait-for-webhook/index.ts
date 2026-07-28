@@ -28,9 +28,10 @@ import {
  * resumed `decide` step's input IS the callback payload; everything else survives
  * the pause in `ctx.shared`.
  *
- * Offline: with no `CALLBACK_REGISTER_URL` configured (or `DRY_RUN` set), the
- * `dryRun` guard skips the live external POST, so `run_local` traces the full
- * graph — kickoff → paused → auto-resumed `decide` → branch — for free.
+ * Offline: with no `CALLBACK_REGISTER_URL` configured (or `DRY_RUN` set), no
+ * external job is registered — so nothing would ever fire the callback, and the
+ * run does NOT pause. It goes straight to `decide` on an empty payload and says
+ * so in its output. The durable pause is what a configured run does.
  */
 
 /** String-only config bag (matches how templates receive their `config`). */
@@ -68,6 +69,8 @@ interface Shared extends Record<string, unknown> {
   job: Record<string, unknown>;
   correlationId: string;
   jobId: string;
+  /** Set when no external job was registered, so no real callback ever arrived. */
+  note?: string;
 }
 
 /** The named signal the external callback fires to resume this run. */
@@ -120,7 +123,7 @@ async function registerJob(
 // ---- steps -----------------------------------------------------------------
 const kickoff = defineStep({
   name: "kickoff",
-  next: [],
+  next: ["decide"],
   // Static graph edge: on `SIGNAL`, resume at `decide`. Must match the directive.
   pause: { signal: SIGNAL, resumeStep: "decide" },
   async run(input: WaitForWebhookInput, ctx: AgentExecutionContext<Shared>) {
@@ -140,11 +143,20 @@ const kickoff = defineStep({
     };
 
     if (isDryRun(config)) {
-      // No live endpoint — skip the POST so run_local flows straight to the pause.
-      ctx.shared.set("jobId", "dry-run");
-      ctx.logger.info("dry run: skipping external job registration", {
-        correlationId: ctx.executionId,
-      });
+      // No live endpoint, so no external job was registered and nothing will ever
+      // fire the callback. Pausing here would suspend the run forever. Take the
+      // decide branch on an empty payload instead — a real model call over a
+      // callback that says, honestly, that no callback arrived.
+      ctx.shared.set("jobId", "not-registered");
+      ctx.shared.set(
+        "note",
+        "No `CALLBACK_REGISTER_URL` is configured, so no external job was started and no callback arrived — the decision below was made on an empty payload. Set the register URL to wait on a real job.",
+      );
+      ctx.logger.info(
+        "no register URL — deciding on an empty payload instead of pausing",
+        { correlationId: ctx.executionId },
+      );
+      return goto("decide", {} as CallbackPayload);
     } else {
       const { jobId } = await registerJob(config, { resume, job });
       ctx.shared.set("jobId", jobId);
@@ -201,8 +213,14 @@ const accept = defineStep({
   async run(_input: unknown, ctx: AgentExecutionContext<Shared>) {
     const decision = must(ctx.shared.get("decision"), "decision") as Decision;
     const jobId = must(ctx.shared.get("jobId"), "jobId");
+    const note = ctx.shared.get("note");
     ctx.logger.info("accepted", { jobId });
-    return terminate({ jobId, decision: "accept", summary: decision.summary });
+    return terminate({
+      jobId,
+      decision: "accept",
+      summary: decision.summary,
+      ...(note ? { unmet: ["CALLBACK_REGISTER_URL"], note } : {}),
+    });
   },
 });
 
@@ -219,6 +237,12 @@ const reject = defineStep({
       decision: "reject",
       summary: decision.summary,
       reasons: decision.reasons,
+      ...(ctx.shared.get("note")
+        ? {
+            unmet: ["CALLBACK_REGISTER_URL"],
+            note: ctx.shared.get("note"),
+          }
+        : {}),
     });
   },
 });

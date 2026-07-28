@@ -31,7 +31,7 @@ import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
  * Side-effect discipline:
  *   - `dryRun` gates every irreversible/billed step after research: it computes
  *     the report and returns it via the `drafted` off-ramp WITHOUT building,
- *     deploying, or touching DNS. `run_local` uses this to trace
+ *     deploying, or touching DNS. Pass it to `run_local` to trace
  *     search → scrape → synthesize offline (capabilities stubbed) for free before
  *     a billed deploy. The coding-agent build, the sandbox deploy, and their cost
  *     are only exercised on the deployed path.
@@ -55,6 +55,12 @@ const MAX_SECTIONS = 6;
 const MAX_SECTION_CHARS = 1200;
 /** Default host on the custom domain when the caller doesn't pass one. */
 const DEFAULT_SUBDOMAIN = "www";
+/**
+ * The topic a zero-input run builds a site about. `web.search` needs no
+ * credential, so a real search gives the coding agent something real to build
+ * from — and `synthesize` refuses to build at all from an empty report.
+ */
+const DEFAULT_TOPIC = "how durable workflow engines handle retries";
 /** Build/start config for the static site the coding agent produces. */
 const SITE_PORT = 3000;
 const SITE_START = "node server.js";
@@ -74,7 +80,8 @@ interface EntryInput {
   subdomain?: string;
   /**
    * Compute the report and return it as a preview, skipping the build, deploy,
-   * and DNS. `run_local` passes this to trace the graph offline for free.
+   * and DNS. Nothing sets this for you — pass it explicitly to trace the graph for
+   * free. A report too empty to build a site from also stops before the build.
    */
   dryRun?: boolean;
 }
@@ -128,6 +135,8 @@ interface Shared extends Record<string, unknown> {
   sandboxName: string | null;
   /** The live preview URL, once deployed. */
   liveUrl: string | null;
+  /** Set when the run researched the default topic rather than the caller's. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -230,7 +239,8 @@ const search = defineStep({
   name: "search",
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
-    const topic = input.topic?.trim() ?? "";
+    const suppliedTopic = input.topic?.trim() ?? "";
+    const topic = suppliedTopic || DEFAULT_TOPIC;
     ctx.shared.set("topic", topic);
     ctx.shared.set("audience", input.audience?.trim() || "a general audience");
     ctx.shared.set("customDomain", input.customDomain?.trim() || null);
@@ -238,11 +248,11 @@ const search = defineStep({
     ctx.shared.set("dryRun", input.dryRun === true);
     ctx.shared.set("sandboxName", null);
     ctx.shared.set("liveUrl", null);
-
-    if (!topic) {
-      // Nothing to research — forward an empty candidate list so the graph still
-      // traces end to end (and `synthesize` yields an empty report).
-      return goto("scrape", { candidates: [] as Candidate[] });
+    if (!suppliedTopic) {
+      ctx.shared.set(
+        "note",
+        `Researched the default topic ("${DEFAULT_TOPIC}"). Pass a \`topic\` to build a site about yours.`,
+      );
     }
 
     ctx.logger.info("searching the web", { topic });
@@ -360,10 +370,21 @@ const synthesize = defineStep({
       sources: report.sources.length,
     });
 
-    // Dry run (and `run_local`): return the report as a preview without building
-    // or deploying anything.
+    // Dry run: return the report as a preview without building or deploying.
     if (ctx.shared.get("dryRun") === true) {
       return goto("drafted", { report });
+    }
+    // An empty report has nothing to build a site FROM, and launching a coding
+    // agent and deploying a preview for it spends real money to publish nothing.
+    // Stop with the report instead — regardless of `dryRun`.
+    if (report.sections.length === 0 && report.sources.length === 0) {
+      ctx.logger.warn("empty report — not building a site", {
+        topic: ctx.shared.get("topic"),
+      });
+      return goto("drafted", {
+        report,
+        reason: "empty-report",
+      });
     }
     return goto("build", { report });
   },
@@ -522,14 +543,25 @@ const drafted = defineStep({
   name: "drafted",
   next: [],
   terminal: true,
-  async run(input: { report: Report }, ctx: Ctx) {
-    // The dry-run / run_local off-ramp: the report was computed but nothing was
-    // built, deployed, or mapped.
+  async run(input: { report: Report; reason?: string }, ctx: Ctx) {
+    // The off-ramp: the report was computed but nothing was built, deployed, or
+    // mapped. Two ways in — an explicit dry run, or a report too empty to build
+    // a site from.
+    const empty = input.reason === "empty-report";
     return terminate({
       published: false,
-      dryRun: true,
+      dryRun: !empty,
+      reason: input.reason ?? "dry-run",
       topic: ctx.shared.get("topic") || "",
       report: input.report,
+      note: [
+        empty
+          ? "The research came back empty, so no site was built or deployed — there was nothing to publish."
+          : "`dryRun` was set, so no site was built or deployed.",
+        ctx.shared.get("note"),
+      ]
+        .filter(Boolean)
+        .join(" "),
     });
   },
 });

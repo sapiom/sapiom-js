@@ -12,12 +12,35 @@
     "Cron dependency bumps",
     "Majors held for review"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `repoSlug` (an in-network repo the coding agent clones and upgrades). Set `testCommand` (default `npm test`) and `installCommand` (default `npm install`) to match the project, and `maxAutoRisk` (default `medium`) to control what pushes on its own versus what waits for you. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed workflow. Pass `dryRun: true` to trace the whole graph without pushing or uploading anything.\n\nPrefer to work from the code? Run it locally with `run_local` (pass `{ \"repoSlug\": \"my-app\", \"dryRun\": true }`) to trace plan → bump → verify → assess → publish for free — capabilities are stubbed and the push is skipped — or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `repoSlug` — an in-network repo the coding agent clones and upgrades. There is deliberately no default: a repository has to exist, and a run without one stops immediately and says so rather than failing partway through. Set `testCommand` (default `npm test`) and `installCommand` (default `npm install`) to match the project, and `maxAutoRisk` (default `medium`) to control what pushes on its own versus what waits for you. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed workflow. Pass `dryRun: true` to trace the whole graph without pushing or uploading anything.\n\nPrefer to work from the code? Run it locally with `run_local` (pass your own repo slug plus `\"dryRun\": true`) to trace plan → bump → verify → assess → publish for free — capabilities are stubbed and the push is skipped — or edit and deploy it with the Sapiom MCP.",
+  "settings": [
+    {
+      "path": "repoSlug",
+      "label": "Repository to upgrade",
+      "description": "An in-network repo the coding agent clones and upgrades. Without one the run stops immediately and says nothing was cloned.",
+      "type": "string",
+      "default": "",
+      "example": "your-repo-slug"
+    }
+  ],
+  "defaultInput": {
+    "maxAutoRisk": "medium"
+  },
   "examples": [
     {
-      "title": "A dry-run triage of a repo's upgrade",
+      "title": "No repository configured — nothing cloned",
+      "input": {},
+      "output": {
+        "decision": "reject",
+        "pushed": false,
+        "reason": "no-repo",
+        "unmet": ["repoSlug"],
+        "detail": "No `repoSlug` was given, so there was no repository to upgrade and nothing was cloned, tested, or pushed. Create an in-network repo (`git_create_repo`) or point `repoSlug` at one you already have, then re-run."
+      }
+    },
+    {
+      "title": "A dry-run triage of your repo's upgrade",
       "input": {
-        "repoSlug": "my-app",
         "testCommand": "npm test",
         "maxAutoRisk": "medium",
         "dryRun": true

@@ -27,9 +27,9 @@ import {
  * Side-effect discipline (copied from `scheduled-research-brief`):
  *   - `dryRun` gates the real send: it still searches, writes, and generates the
  *     header image, then returns the finished issue as a preview WITHOUT emailing
- *     anyone. `run_local` uses this to trace the whole graph offline (capabilities
+ *     anyone. Pass it to `run_local` to trace the whole graph offline (capabilities
  *     stubbed) for free before a billed, delivering deploy + run.
- *   - The subscriber list falls back to the Sapiom vault at runtime and is never
+ *   - The subscriber list is ordinary run input (a declared setting), not a secret,
  *     baked into the code — the same seam you'd read any delivery config from.
  *   - The header image is best-effort: if generation returns nothing (e.g. a
  *     stubbed `run_local`), the issue still goes out without it rather than
@@ -52,8 +52,12 @@ const MAX_SCRAPES = 4;
 const MAX_BODY_CHARS = 1200;
 /** Cap the fan-out of per-subscriber sends (keeps a run's cost bounded). */
 const MAX_RECIPIENTS = 50;
-/** Vault ref holding delivery config (a default SUBSCRIBERS list). Read at runtime. */
-const DELIVERY_VAULT_REF = "newsletter-autopilot";
+/**
+ * The niche a zero-input run writes about. `web.search` needs no credential, so a
+ * real search beats forwarding an empty candidate list and calling the empty
+ * issue that follows a successful run.
+ */
+const DEFAULT_NICHE = "indie game development";
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "newsletter";
 
@@ -65,9 +69,12 @@ interface EntryInput {
   newsletterName?: string;
   /** Cron cadence this newsletter is meant to run on (default weekly Monday 08:00). */
   schedule?: string;
-  /** Subscriber emails; falls back to the vault-configured list when omitted. */
+  /** Subscriber emails. Omit them and the issue is returned inline instead of sent. */
   subscribers?: string[];
-  /** Write + render the issue but skip the real send. `run_local` passes this. */
+  /**
+   * Write + render the issue but skip the real send. Nothing sets this for you —
+   * pass it explicitly. An empty subscriber list also returns the issue unsent.
+   */
   dryRun?: boolean;
 }
 
@@ -103,6 +110,8 @@ interface Shared extends Record<string, unknown> {
   schedule: string;
   subscribers: string[];
   dryRun: boolean;
+  /** Set when the run wrote about the default niche rather than the caller's. */
+  note?: string;
   subject: string;
   body: string;
   imagePrompt: string;
@@ -114,24 +123,6 @@ interface Shared extends Record<string, unknown> {
 type Ctx = AgentExecutionContext<Shared>;
 
 // ─────────────────────────────────────────────────────────────── helpers ──
-/**
- * Resolve the subscriber list from the vault at runtime. The stored value is a
- * comma- or newline-separated list of emails. A missing ref/key is an expected
- * outcome (`vault.get` returns null), not an error — the caller then falls back
- * to a dry-run preview. Never persisted in execution state.
- */
-async function subscribersFromVault(ctx: Ctx): Promise<string[]> {
-  try {
-    const raw = await ctx.sapiom.vault.get(DELIVERY_VAULT_REF, "SUBSCRIBERS");
-    return parseRecipients(raw);
-  } catch (err) {
-    ctx.logger.warn("vault: no subscriber list configured", {
-      err: String(err),
-    });
-    return [];
-  }
-}
-
 /** Split a raw address list (commas or newlines) into de-duped, trimmed emails. */
 function parseRecipients(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -231,7 +222,8 @@ const search = defineStep({
   name: "search",
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
-    const niche = input.niche?.trim() ?? "";
+    const suppliedNiche = input.niche?.trim() ?? "";
+    const niche = suppliedNiche || DEFAULT_NICHE;
     ctx.shared.set("niche", niche);
     ctx.shared.set(
       "newsletterName",
@@ -245,11 +237,11 @@ const search = defineStep({
         : [],
     );
     ctx.shared.set("dryRun", input.dryRun === true);
-
-    if (!niche) {
-      // Nothing to research — hand an empty candidate list forward so the graph
-      // still traces end to end.
-      return goto("scrape", { candidates: [] as Candidate[] });
+    if (!suppliedNiche) {
+      ctx.shared.set(
+        "note",
+        `Wrote about the default niche ("${DEFAULT_NICHE}"). Pass a \`niche\` to write about yours.`,
+      );
     }
 
     ctx.logger.info("searching the web", { niche });
@@ -422,12 +414,14 @@ const deliver = defineStep({
     };
     const html = renderHtml(issue, headerImageUrl);
 
-    // Explicit input list wins; otherwise resolve the default from the vault at
-    // runtime (never carried through state), capped to bound the fan-out.
-    const configured = ctx.shared.get("subscribers") ?? [];
-    const subscribers = (
-      configured.length > 0 ? configured : await subscribersFromVault(ctx)
-    ).slice(0, MAX_RECIPIENTS);
+    // A subscriber list is ordinary configuration, so it arrives as run input
+    // (declared as a `subscribers` setting in template.json) rather than from a
+    // write-only secret store nothing in the product can populate. Capped to bound
+    // the fan-out.
+    const subscribers = (ctx.shared.get("subscribers") ?? []).slice(
+      0,
+      MAX_RECIPIENTS,
+    );
 
     // The safe path: a dry run — or a live run with no subscribers configured yet —
     // returns the finished issue without sending anything.
@@ -442,6 +436,15 @@ const deliver = defineStep({
         delivered: false,
         dryRun,
         reason: dryRun ? "dry-run" : "no-subscribers",
+        ...(dryRun ? {} : { unmet: ["subscribers"] }),
+        note: [
+          dryRun
+            ? "`dryRun` was set, so nothing was emailed."
+            : "Nothing was emailed: the `subscribers` list is empty, so the issue is returned inline below.",
+          ctx.shared.get("note"),
+        ]
+          .filter(Boolean)
+          .join(" "),
         recipients: 0,
         subject,
         headerImageUrl,
@@ -487,6 +490,7 @@ const deliver = defineStep({
       headerImageUrl,
       messageIds,
       sources,
+      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
     });
   },
 });

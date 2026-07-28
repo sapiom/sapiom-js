@@ -16,7 +16,7 @@ check ──┤
         └──────────▶ heal ──┬──▶ healed       (terminal)
 (fetch probe)               └──▶ heal_failed  (terminal)
                     (sandboxes.attach + sandboxes.deployPreview,
-                     env from database.get + vault.get)
+                     env from database.get + injected secrets)
 ```
 
 1. **check** — probes `<url><healthPath>` (default `/health`, 8s timeout). Healthy
@@ -25,7 +25,7 @@ check ──┤
 2. **heal** — re-attaches the sandbox and calls `deployPreview` with source `fs`
    (rebuild + restart the code already uploaded there, same stable URL). The
    relaunch env is `{ PORT, ...env }` plus an optional `DATABASE_URL` from a
-   Postgres handle and any `vaultInject` secrets read at runtime.
+   Postgres handle and any `injectEnv` secrets read at runtime.
 3. **healed** / **heal_failed** — terminal; report the URL/status or surface the
    `deployPreview` logs.
 
@@ -40,20 +40,24 @@ definition keeps **N** previews alive — one schedule each:
 
 ```json
 {
-  "sandboxName": "my-app",
+  "sandboxName": "your-sandbox-name",
   "url": "https://your-preview-hash.preview.bl.run",
   "start": "node server.js",
   "port": 3000,
-  "dbHandle": "my-app-db",
-  "vaultRef": "my-app",
-  "vaultInject": { "SAPIOM_API_KEY": "sapiom_api_key" }
+  "dbHandle": "your-app-db",
+  "injectEnv": ["MY_APP_TOKEN"]
 }
 ```
 
 `healthPath` (default `/health`), `build` (default `npm install`), `start`
 (default `node server.js`), and `port` (default 3000) fall back to generic
-defaults. Secrets named in `vaultInject` are read from the vault at runtime via
-`vault.get` — never baked into the schedule or source.
+defaults. Secrets named in `injectEnv` are read at runtime from the environment
+Sapiom injected them into — never baked into the schedule or source. Declare each
+one under `requiredSecrets` in `template.json` so the platform knows to ask.
+
+With **no** `sandboxName`, the run provisions a small demo sandbox, deploys a
+trivial health server into it, and heals that — the same code path against a
+target it owns. It never reports a healthy probe for an app it did not probe.
 
 ## Run it with Claude + the Sapiom MCP
 
@@ -65,7 +69,7 @@ defaults. Secrets named in `vaultInject` are read from the vault at runtime via
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
    `sapiom_status`. Your agent becomes an API-key principal; the `heal` step
-   inherits that authority to attach the sandbox and read the DB handle / vault.
+   inherits that authority to attach the sandbox and read the DB handle.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`

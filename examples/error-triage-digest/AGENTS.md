@@ -1,6 +1,6 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Error / Log Triage Digest** — authored against `@sapiom/agent`. It has four steps: `collect` (pause/pull the batch) → `triage` (calls `models.run`, the live LLM) → `dedupe` (calls `database`) → `digest` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.models.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`, `ctx.sapiom.vault.get(...)`).
+This project defines exactly one Sapiom agent in `index.ts` — **Error / Log Triage Digest** — authored against `@sapiom/agent`. It has four steps: `collect` (pause/pull the batch) → `triage` (calls `models.run`, the live LLM) → `dedupe` (calls `database`) → `digest` (emails the result). Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (e.g. `ctx.sapiom.models.run(...)`, `ctx.sapiom.database.get(...)`, `ctx.sapiom.email.messages.send(...)`).
 
 It combines two durability primitives with real fan-in: it can **pause at $0** for a pushed webhook batch (`pauseUntilSignal`) or run on a **cron** with a pulled batch, and it keeps a **Postgres dedup store** so a daily digest surfaces new issues instead of re-alerting on known ones.
 
@@ -11,7 +11,7 @@ It combines two durability primitives with real fan-in: it can **pause at $0** f
 - **The pause is a static edge.** `collect` declares `pause: { signal: "errors.pushed", resumeStep: "triage" }` and returns `pauseUntilSignal({ signal, resumeStep, correlationId })` — the two must match. The resumed `triage` step's _input_ is the signal payload (`{ errors: [...] }`); everything else survives the suspend in `ctx.shared`.
 - **Keep the edges slim.** The raw error bodies are bounded (truncated, capped count) before the model sees them and don't linger in `ctx.shared`. Large shared state stalls transitions on the cloud engine.
 - **Gate real side effects behind `dryRun`.** `dedupe` skips the database and `digest` skips the send when `dryRun` is set (or no recipient resolves), returning the computed digest as a preview. Keep new external side effects behind the same guard.
-- **Read secrets/config at runtime, never persist them.** The recipient is read from the vault (`ctx.sapiom.vault.get("error-triage-digest", "RECIPIENT")`) inside `digest`, not carried through `ctx.shared`.
+- **Config is not a secret.** The recipient is ordinary run input (`deliverTo`, declared as a `settings[]` entry in `template.json`), not a vault key. With none set, `digest` returns the digest and says nothing was emailed.
 - **Fingerprint stability is the contract.** The model is asked to derive a fingerprint from an error's invariant parts and strip volatile bits, so the same recurring error keys the same row across runs. If dedup looks wrong, that prompt is the first place to look.
 
 ## Validating
@@ -39,7 +39,7 @@ await ctx.sapiom.memory.append({
 });
 ```
 
-Keep the same `dryRun` guard around it. Memory needs no recipient, so you can drop the vault lookup — or keep it to override the scope.
+Keep the same `dryRun` guard around it. Memory needs no recipient.
 
 ## Determinism
 

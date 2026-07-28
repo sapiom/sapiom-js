@@ -26,7 +26,11 @@ import type {
 } from "./lib/types.js";
 import { slugify, todayIso } from "./lib/util.js";
 
-const entryInput = z.object({ companyName: z.string().min(1) });
+// The default makes a zero-input run real rather than a schema rejection: the
+// search is a live one, just about us until you point it at your own company.
+const entryInput = z.object({
+  companyName: z.string().min(1).default("Sapiom"),
+});
 const SITE_PORT = 3000;
 
 const search = defineStep({

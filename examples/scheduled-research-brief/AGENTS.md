@@ -10,7 +10,7 @@ It is the scheduled, LLM-curated, delivered evolution of `web-research-digest`. 
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck.
 - **Keep the edges slim.** The scraped article bodies are the only large data here; they stay bounded (truncated, capped count) and die at the `curate` boundary — they never enter `ctx.shared`. Large shared state stalls transitions on the cloud engine (the `backlog-nudge` boundary lesson).
 - **Gate real side effects behind `dryRun`.** `deliver` sends email only on a live run with `dryRun` off and a recipient resolved; otherwise it returns the computed brief as a preview. Keep new external side effects behind the same guard.
-- **Read secrets/config at runtime, never persist them.** The recipient is read from the vault (`ctx.sapiom.vault.get("scheduled-research-brief", "RECIPIENT")`) inside `deliver`, not carried through `ctx.shared`. The same seam is where a bring-your-own delivery token would be read.
+- **Config is not a secret.** The recipient is ordinary run input (`deliverTo`, declared as a `settings[]` entry in `template.json`), not a vault key. With none set, `deliver` returns the brief and says nothing was emailed.
 
 ## Validating
 
@@ -37,7 +37,7 @@ await ctx.sapiom.memory.append({
 });
 ```
 
-Keep the same `dryRun` guard around it. Memory needs no recipient, so you can drop the vault lookup — or keep it to override the scope. Recall past briefs later with `ctx.sapiom.memory.recall({ query, scope })`.
+Keep the same `dryRun` guard around it. Memory needs no recipient. Recall past briefs later with `ctx.sapiom.memory.recall({ query, scope })`.
 
 ## Determinism
 

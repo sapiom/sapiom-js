@@ -79,7 +79,10 @@ interface EntryInput {
   framework?: string;
   /** Who is expected to sign off; recorded in the attestation. Informational. */
   signOffBy?: string;
-  /** Compute + pause but never perform the real archive upload. `run_local` sets this. */
+  /**
+   * Compute + pause but never perform the real archive upload. Nothing sets this
+   * for you — pass it explicitly when you want the graph traced without an upload.
+   */
   dryRun?: boolean;
 }
 
@@ -135,6 +138,8 @@ interface Shared extends Record<string, unknown> {
   report: ComplianceReport;
   /** Slim resource references for the attestation; scraped bodies do NOT live here. */
   resources: Array<{ id: string; label: string; url: string; error?: string }>;
+  /** Set when the run audited the built-in sample policy rather than the caller's. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -195,12 +200,31 @@ async function runPolicyCheck(
   return coerceReport(res.output);
 }
 
+/**
+ * The policy and evidence a zero-input run audits. The URL is a real, stable,
+ * public page — our own published security policy — so the run does a genuine
+ * scrape and the model checks genuine text. A placeholder host would 404 and the
+ * audit would report "unknown" for every requirement, which is a report about
+ * nothing.
+ */
+const SAMPLE_POLICY =
+  "Every service must publish a security contact, state a disclosure process, " +
+  "and name a response window.";
+const SAMPLE_RESOURCES: ResourceRef[] = [
+  {
+    id: "sapiom-js-security-policy",
+    url: "https://raw.githubusercontent.com/sapiom/sapiom-js/main/SECURITY.md",
+    label: "Sapiom SDK security policy",
+  },
+];
+
 // ─────────────────────────────────────────────────────────────── steps ──
 const collect = defineStep({
   name: "collect",
   next: ["audit"],
   async run(input: EntryInput, ctx: Ctx) {
-    const policy = input.policy?.trim() ?? "";
+    const suppliedPolicy = input.policy?.trim() ?? "";
+    const policy = suppliedPolicy || SAMPLE_POLICY;
     ctx.shared.set("policy", policy);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
     ctx.shared.set("framework", input.framework?.trim() || "General policy");
@@ -210,7 +234,17 @@ const collect = defineStep({
     // here and carry it forward rather than recomputing downstream.
     ctx.shared.set("collectedAt", new Date().toISOString());
 
-    const resources = (input.resources ?? []).slice(0, MAX_RESOURCES);
+    // Nothing to audit: use the sample policy and evidence so the run really
+    // scrapes and really checks, and say in the output that both were ours.
+    const supplied =
+      input.resources && input.resources.length > 0 ? input.resources : null;
+    if (!supplied) {
+      ctx.shared.set(
+        "note",
+        "Audited the built-in sample policy against Sapiom's own published security policy. Pass your own `policy` and `resources` to audit yours.",
+      );
+    }
+    const resources = (supplied ?? SAMPLE_RESOURCES).slice(0, MAX_RESOURCES);
     const collected: CollectedResource[] = [];
     for (const r of resources) {
       const base: ResourceRef = { id: r.id, url: r.url };
@@ -274,7 +308,7 @@ const audit = defineStep({
 
 const review = defineStep({
   name: "review",
-  next: [],
+  next: ["pending"],
   // Static graph edge: on the sign-off signal, resume at `onSignoff`. Must match
   // the `pauseUntilSignal` directive below.
   pause: { signal: SIGNOFF_SIGNAL, resumeStep: "onSignoff" },
@@ -282,6 +316,23 @@ const review = defineStep({
     const report = must(ctx.shared.get("report"), "report");
     const framework = ctx.shared.get("framework") ?? "General policy";
     const signOffBy = ctx.shared.get("signOffBy") ?? null;
+
+    // Nobody is assigned to sign off, so nothing will ever fire the sign-off
+    // signal and pausing here would suspend the run forever. Stop holding the
+    // DRAFT attestation instead.
+    //
+    // What this must never do: resuming with an empty payload fabricates no
+    // consent — `onSignoff` only proceeds on an explicit approve — but it lands
+    // on `rejected`, which reads to a first-run user as "the audit failed" and
+    // teaches the inverse of what the gate is for. And an attestation is a
+    // compliance artifact: nothing here may imply one was filed.
+    if (!signOffBy) {
+      ctx.logger.info("no signer configured — terminating at the gate", {
+        framework,
+        status: report.status,
+      });
+      return goto("pending", {});
+    }
 
     // No notification capability here (by design — this template's surface is
     // cron + scrape + LLM + pause + file storage). The pending attestation is in
@@ -299,6 +350,48 @@ const review = defineStep({
       resumeStep: "onSignoff",
       correlationId: ctx.executionId,
     });
+  },
+});
+
+/**
+ * The gate's off-ramp when no signer is assigned. Terminal, and deliberately
+ * neither `archived` nor `rejected`: nobody signed anything. The attestation is
+ * stamped as a draft, because a filed attestation is a compliance record and this
+ * is not one.
+ */
+const pending = defineStep({
+  name: "pending",
+  next: [],
+  terminal: true,
+  async run(_input: unknown, ctx: Ctx) {
+    const report = must(ctx.shared.get("report"), "report");
+    const framework = ctx.shared.get("framework") ?? "General policy";
+    const resources = ctx.shared.get("resources") ?? [];
+    const note = ctx.shared.get("note");
+    return terminate(
+      {
+        filed: false,
+        outcome: "pending-signoff",
+        pending: true,
+        attestation: "DRAFT — not a filed attestation. Nobody has signed this.",
+        framework,
+        status: report.status,
+        checks: report.checks,
+        resources,
+        signedBy: null,
+        unmet: ["signOffBy"],
+        note: [
+          "The attestation is drafted and nothing was signed, filed, or archived.",
+          "Set a `signOffBy` address and re-run to route it for sign-off, or fire the",
+          `\`${SIGNOFF_SIGNAL}\` signal with \`{ "decision": "approve", "signer": "you@example.com" }\``,
+          "to file it.",
+          note,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+      { reason: "no signer configured" },
+    );
   },
 });
 
@@ -562,5 +655,5 @@ function extractJson(output: string | null): Record<string, unknown> | null {
 export const agent = defineAgent<EntryInput, Shared>({
   name: "scheduled-compliance-audit",
   entry: "collect",
-  steps: { collect, audit, review, onSignoff, archive, rejected },
+  steps: { collect, audit, review, onSignoff, archive, pending, rejected },
 });

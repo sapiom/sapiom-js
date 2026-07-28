@@ -3,7 +3,7 @@
 This project defines exactly one Sapiom agent in `index.ts` — **Natural-Language DB
 Query Endpoint**, authored against `@sapiom/agent`. It provisions a live HTTP
 endpoint: `validate` → `resolve` (`database.get`) → `plan` (`models.run`) → `guard`
-(read-only check) → `deploy` (`vault.get` + `sandboxes.deployPreview`) → terminal
+(read-only check) → `deploy` (`sandboxes.deployPreview`) → terminal
 `deployed` / `deploy_failed` / `rejected`. Inside a step's `run`, Sapiom
 capabilities are pre-auth'd on `ctx.sapiom`.
 

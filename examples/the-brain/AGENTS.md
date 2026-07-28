@@ -5,7 +5,8 @@ authored against `@sapiom/agent`. It is a fleet orchestrator: a meta-workflow th
 runs a `scan → assess → actuate → report` loop over a set of child workflows,
 launching the right member as a child, never doing irreversible work itself.
 Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
-`ctx.sapiom.database.get/create`, `ctx.sapiom.models.run`, `ctx.sapiom.vault.get`).
+`ctx.sapiom.database.get/create`, `ctx.sapiom.models.run`). The Slack briefing goes
+out on the injected `SLACK_BOT_TOKEN` via a raw `fetch`.
 
 ## Authoring
 

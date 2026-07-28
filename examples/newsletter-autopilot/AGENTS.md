@@ -21,7 +21,7 @@ image, and emails it to a whole subscriber list on a cadence.
 - **Keep the edges slim.** The scraped article bodies are the only large data here; they stay bounded (truncated, capped count) and die at the `write` boundary — they never enter `ctx.shared`. Large shared state stalls transitions on the cloud engine (the `backlog-nudge` boundary lesson).
 - **Gate real side effects behind `dryRun`.** `deliver` sends email only on a live run with `dryRun` off and subscribers resolved; otherwise it returns the finished issue as a preview. Keep new external side effects behind the same guard.
 - **Keep best-effort steps best-effort.** `header` never throws — a missing image is a warning, not a failed run. This is also what lets `run_local` (which stubs image generation) trace the full graph.
-- **Read secrets/config at runtime, never persist them.** The subscriber list falls back to the vault (`ctx.sapiom.vault.get("newsletter-autopilot", "SUBSCRIBERS")`) inside `deliver`, not carried through `ctx.shared`.
+- **Config is not a secret.** The subscriber list is ordinary run input (`subscribers`, declared as a `settings[]` entry in `template.json`), not a vault key. With an empty list, `deliver` returns the issue and says nothing was sent.
 
 ## Validating
 
@@ -48,7 +48,7 @@ await ctx.sapiom.memory.append({
 });
 ```
 
-Keep the same `dryRun` guard around it. Memory needs no recipients, so you can drop the vault lookup. Recall past issues later with `ctx.sapiom.memory.recall({ query, scope })`.
+Keep the same `dryRun` guard around it. Memory needs no recipients. Recall past issues later with `ctx.sapiom.memory.recall({ query, scope })`.
 
 ## Determinism
 

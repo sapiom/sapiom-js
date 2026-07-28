@@ -97,7 +97,16 @@ interface Shared extends Record<string, unknown> {
   clips: Clip[];
   /** Index of the next shot to animate; advanced by `collect`. */
   animateIndex: number;
+  /** Set when the run shot the built-in sample scene rather than the caller's. */
+  note?: string;
 }
+
+/**
+ * The scene a zero-input run plans. Concrete enough that the shot list is a real
+ * artifact — the model needs something to decompose.
+ */
+const SAMPLE_SCENE =
+  "a paper boat drifting down a rain-soaked city gutter at night";
 
 /**
  * Default FAL image-to-video model. Kling 2.1 Pro is chosen for quality (the v1
@@ -187,8 +196,22 @@ const decompose = defineStep({
   next: ["keyframes"],
   terminal: true,
   async run(input: SceneInput, ctx: AgentExecutionContext<Shared>) {
-    const scene = input.scene?.trim();
-    if (!scene) throw new Error("`scene` is required");
+    // An omitted scene shoots the sample one, so a zero-input run really plans and
+    // renders. An explicitly-empty scene is a mistake worth naming.
+    if (input.scene !== undefined && input.scene.trim().length === 0) {
+      return terminate({
+        status: "rejected",
+        reason: "`scene` was empty — describe the scene to shoot.",
+      });
+    }
+    const usedSampleScene = input.scene === undefined;
+    const scene = usedSampleScene ? SAMPLE_SCENE : input.scene.trim();
+    if (usedSampleScene) {
+      ctx.shared.set(
+        "note",
+        `Shot the built-in sample scene ("${SAMPLE_SCENE}"). Pass your own \`scene\` to shoot yours.`,
+      );
+    }
     const numShots = clampShots(input.numShots);
     const aspectRatio = input.aspectRatio ?? "16:9";
 
@@ -220,10 +243,24 @@ const decompose = defineStep({
     ctx.shared.set("animateIndex", 0);
     ctx.logger.info("planned shots", { shots: plan.shots.length });
 
-    // dryRun: trace the graph without incurring image/video generation cost.
-    if (input.dryRun) {
+    // dryRun: trace the graph without incurring image/video generation cost. It
+    // defaults on ONLY when the scene was defaulted too — image and video are the
+    // priciest capabilities in the catalog, and a run nobody configured should not
+    // be the most expensive one in the gallery. Supply a scene and it really renders.
+    const dryRun = input.dryRun ?? usedSampleScene;
+    if (dryRun) {
       ctx.logger.info("dryRun — returning plan only");
-      return terminate({ dryRun: true, bible: plan.bible, shots: plan.shots });
+      return terminate({
+        dryRun: true,
+        bible: plan.bible,
+        shots: plan.shots,
+        note: [
+          ctx.shared.get("note"),
+          "No keyframes or clips were rendered — this is the shot plan only. Pass `dryRun: false` to render the video.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
     }
     return goto("keyframes", {});
   },
@@ -367,6 +404,7 @@ const finalize = defineStep({
       videoFileId: out?.fileId ?? null,
       downloadUrl: out?.downloadUrl ?? null,
       shots,
+      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
     });
   },
 });

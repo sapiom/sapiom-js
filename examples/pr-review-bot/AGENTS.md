@@ -24,8 +24,9 @@ analyzes it; `assess` turns the findings into a structured review with
   the pause.
 - `pauseUntilSignal` is a **runtime primitive, not a metered capability**. The
   billed calls are the coding run (`models.coding.run`), the model summary
-  (`models.run`), the email send (`email`), and — for Slack — the Vault read
-  (`vault.get`). Note: `ctx.sapiom.llm` does **not** exist — use `models.run`.
+  (`models.run`) and the email send (`email`). The Slack post goes out on the
+  injected `SLACK_BOT_TOKEN` via a raw `fetch`, which is not a metered capability.
+  Note: `ctx.sapiom.llm` does **not** exist — use `models.run`.
 
 ## Read-only review
 

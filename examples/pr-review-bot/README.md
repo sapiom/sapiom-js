@@ -2,7 +2,7 @@
 
 On a pull-request webhook, a coding agent checks out and analyzes the code,
 flags any change that shipped without matching tests, and posts the review to
-your email or a Slack channel — using a token you keep in the Vault.
+your email or a Slack channel — using your own bot token.
 
 The run **suspends at $0** while it waits for a PR, so it can sit idle for days
 between reviews and cost nothing until a webhook wakes it.
@@ -27,8 +27,8 @@ watch  ──(pause: wait for "pr.opened", $0 while idle)──▶  review  ─�
 4. **assess** — an LLM (`ctx.sapiom.models.run`) turns the raw findings into a
    structured review: a verdict, a summary, and the list of missing tests.
 5. **reportEmail | reportSlack** — posts the review. Email uses the built-in
-   `ctx.sapiom.email` capability; Slack uses a bot token you store in the Vault
-   (`ctx.sapiom.vault.get`) and a direct `fetch` — nothing baked into code.
+   `ctx.sapiom.email` capability; Slack uses a bot token Sapiom injects as
+   `SLACK_BOT_TOKEN` and a direct `fetch` — nothing baked into code.
 
 Input: `{ "repo": { "owner": "acme", "name": "api" }, "via": "email", "to": "you@example.com", "config": { "WEBHOOK_REGISTER_URL": "…" } }`.
 With no `WEBHOOK_REGISTER_URL` (or `DRY_RUN` set), `watch` runs offline via its
@@ -54,10 +54,10 @@ With no `WEBHOOK_REGISTER_URL` (or `DRY_RUN` set), `watch` runs offline via its
 ## Delivering to Slack (bring your own token)
 
 `review` and `assess` cost the same either way; only the report channel differs.
-To post to Slack, set `"via": "slack"` and `"to": "#your-channel"`, then store a
-[Slack bot token](https://api.slack.com/authentication/token-types#bot) in the
-Vault under the ref `slack`, key `bot_token`, scoped to this workflow. The token
-is read only at runtime and never lands in code. Without a token the run
+To post to Slack, set `"via": "slack"` and `"to": "#your-channel"`, then supply a
+[Slack bot token](https://api.slack.com/authentication/token-types#bot) as
+`SLACK_BOT_TOKEN` — Sapiom asks for it when you use the template and injects it into
+the step's environment. The token is read only at runtime and never lands in code. Without a token the run
 degrades to a skip (it still completes) so you can trace the graph first.
 
 ## Resuming a paused run in dev

@@ -24,7 +24,7 @@ validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ deploy ─┬─�
    deployed once the safe path is proven.
 5. **deploy** — writes a small server into a sandbox and exposes it at a stable URL
    (`sandboxes.deployPreview`). `DATABASE_URL` and the server's own
-   `SAPIOM_API_KEY` (read from the vault at deploy time, `vault.get`) are injected
+   `SAPIOM_API_KEY` (from the injected `ENDPOINT_SAPIOM_API_KEY`) are passed
    as env — never baked into source.
 6. **deployed** / **deploy_failed** / **rejected** — terminal; report the endpoint
    URL, surface the deploy logs, or explain the rejection.
@@ -60,7 +60,7 @@ Defense-in-depth, so a write can't slip through even if one layer is wrong:
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
    `sapiom_status`. Your agent becomes an API-key principal; the steps inherit that
-   authority to read the DB handle / vault and deploy the sandbox.
+   authority to read the DB handle and deploy the sandbox.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
@@ -75,8 +75,6 @@ Example `run_local` input:
 {
   "dbHandle": "analytics",
   "sampleQuestion": "How many rows are in each table?",
-  "vaultRef": "nl-db-query-endpoint",
-  "vaultKey": "sapiom_api_key",
   "dryRun": true
 }
 ```

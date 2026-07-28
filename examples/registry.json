@@ -294,10 +294,10 @@
         },
         {
           "name": "process",
-          "description": "Processes the current chunk in a sandbox, saves a result file and rewrites the checkpoint, then pauses for the next heartbeat — or finishes once the last chunk is done.",
-          "kind": "capability",
+          "description": "Process the current chunk, save its result and rewrite the checkpoint, then wait for the next heartbeat — or, running offline with nothing to fire one, loop straight to the next chunk. Finishes once the last chunk is done.",
+          "kind": "pause",
           "capability": "sandboxes.exec",
-          "next": ["finalize"]
+          "next": ["finalize", "process"]
         },
         {
           "name": "finalize",
@@ -436,11 +436,11 @@
         },
         {
           "name": "notifyApprover",
-          "description": "Email the approver the ranked recommendation, then pause and wait for their decision — costing nothing while idle (resumes at 'onDecision').",
+          "description": "Email the approver the ranked recommendation, then pause and wait for their decision — costing nothing while idle. With no approver set, stop at the gate with the shortlist instead of waiting forever.",
           "kind": "pause",
           "checkpoint": true,
           "capability": "email.send",
-          "next": ["onDecision"]
+          "next": ["onDecision", "pending"]
         },
         {
           "name": "onDecision",
@@ -472,6 +472,12 @@
           "description": "The one irreversible step — runs only after a human approved and a candidate accepted; a dry run makes it a no-op offline.",
           "kind": "capability",
           "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "pending",
+          "description": "No approver was set, so the run stops holding the ranked shortlist and the signal that continues it. Nothing was offered, and nothing was approved.",
+          "kind": "compute",
           "terminal": true
         },
         {
@@ -633,12 +639,7 @@
       "cadence": "on-event",
       "complexity": "involved",
       "sourcePath": "examples/nl-db-query-endpoint",
-      "capabilities": [
-        "database.get",
-        "models.run",
-        "sandboxes.deployPreview",
-        "vault.get"
-      ],
+      "capabilities": ["database.get", "models.run", "sandboxes.deployPreview"],
       "steps": [
         {
           "name": "validate",
@@ -651,7 +652,7 @@
           "description": "Reads the target Postgres connection string from a Sapiom database handle to inject into the endpoint.",
           "kind": "capability",
           "capability": "database.get",
-          "next": ["plan"]
+          "next": ["plan", "rejected"]
         },
         {
           "name": "plan",
@@ -668,10 +669,16 @@
         },
         {
           "name": "deploy",
-          "description": "Writes the endpoint server into a sandbox and exposes it at a stable URL, injecting DATABASE_URL and a vault-read API key.",
+          "description": "Write the endpoint server into a sandbox and expose it at a stable URL, injecting DATABASE_URL and the endpoint's own API key. With no key, nothing is deployed.",
           "kind": "capability",
           "capability": "sandboxes.deployPreview",
-          "next": ["deployed", "deploy_failed"]
+          "next": ["deployed", "deploy_failed", "endpoint_skipped"]
+        },
+        {
+          "name": "endpoint_skipped",
+          "description": "The endpoint needs an API key of its own to translate each request; without one nothing is deployed, and the run returns the translated, guarded SQL instead of a URL that cannot answer.",
+          "kind": "compute",
+          "terminal": true
         },
         {
           "name": "deployed",
@@ -755,16 +762,11 @@
       "cadence": "on-webhook",
       "complexity": "advanced",
       "sourcePath": "examples/pr-review-bot",
-      "capabilities": [
-        "models.coding",
-        "models.run",
-        "email.send",
-        "vault.get"
-      ],
+      "capabilities": ["models.coding", "models.run", "email.send"],
       "steps": [
         {
           "name": "watch",
-          "description": "Registers a PR webhook and how to resume this run, then pauses and waits for a pull request — costing nothing while idle.",
+          "description": "Register with the webhook source and pause until a PR opens — costing nothing while idle. With no source configured, review the built-in sample PR instead of waiting forever.",
           "kind": "pause",
           "next": ["review"]
         },
@@ -791,9 +793,8 @@
         },
         {
           "name": "reportSlack",
-          "description": "Reads your Slack bot token from the Vault and posts the review to the configured channel.",
-          "kind": "capability",
-          "capability": "vault.get",
+          "description": "Post the review to the configured channel with your Slack bot token. Without one, the review is returned in the run's output and nothing is posted.",
+          "kind": "compute",
           "next": ["posted", "failed"]
         },
         {
@@ -822,15 +823,21 @@
       "capabilities": [
         "sandboxes.deployPreview",
         "sandboxes.attach",
-        "database.get",
-        "vault.get"
+        "database.get"
       ],
       "steps": [
         {
           "name": "check",
-          "description": "Fetches the preview's health path. Sends it on to heal only when the app is actually down.",
+          "description": "Fetch the preview's health path and send it on to heal only when the app is actually down. With no target given, provision one first.",
           "kind": "compute",
-          "next": ["healthy", "heal"]
+          "next": ["healthy", "heal", "provision"]
+        },
+        {
+          "name": "provision",
+          "description": "With no target given, create a small sandbox with a trivial health server in it, so the heal step has a real app to relaunch.",
+          "kind": "capability",
+          "capability": "sandboxes.create",
+          "next": ["heal", "heal_failed"]
         },
         {
           "name": "healthy",
@@ -840,7 +847,7 @@
         },
         {
           "name": "heal",
-          "description": "Re-attaches the sandbox and redeploys the code already uploaded there, restarting it at the same URL. First assembles the startup env, adding a DATABASE_URL from a Postgres handle and any vault secrets read at run time.",
+          "description": "Re-attach the sandbox and redeploy the code already uploaded there, restarting it at the same URL. First assembles the startup env, adding a DATABASE_URL from a Postgres handle and any declared secrets the platform injected.",
           "kind": "capability",
           "capability": "sandboxes.deployPreview",
           "next": ["healed", "heal_failed"]
@@ -880,7 +887,7 @@
           "description": "An LLM turns the request into a structured proposal — title, summary, scope, and priced line items — then the totals are computed in code, not trusted from the model.",
           "kind": "llm",
           "capability": "models.run",
-          "next": ["render"]
+          "next": ["render", "rejected"]
         },
         {
           "name": "render",
@@ -891,11 +898,11 @@
         },
         {
           "name": "review",
-          "description": "Email the approver a summary and the PDF link, then pause and wait for their decision — costing nothing while idle (resumes at 'onDecision').",
+          "description": "Email the approver a summary and the PDF link, then pause and wait for their decision — costing nothing while idle. With no approver set, stop at the gate with the drafted proposal instead of waiting forever.",
           "kind": "pause",
           "checkpoint": true,
           "capability": "email.send",
-          "next": ["onDecision"]
+          "next": ["onDecision", "pending"]
         },
         {
           "name": "onDecision",
@@ -908,6 +915,12 @@
           "description": "The one outward step — email the approved proposal to the client. A dry run skips the send.",
           "kind": "capability",
           "capability": "email.send",
+          "terminal": true
+        },
+        {
+          "name": "pending",
+          "description": "No approver was set, so the run stops holding the drafted proposal and the signal that continues it. Nothing was sent, and nothing was approved.",
+          "kind": "compute",
           "terminal": true
         },
         {
@@ -952,7 +965,7 @@
         },
         {
           "name": "synthesize",
-          "description": "Hand the sources to an LLM to write a structured, cited report. A dry run stops here and returns the report.",
+          "description": "Hand the sources to an LLM to write a structured, cited report. A dry run — or a report too empty to build a site from — stops here and returns the report.",
           "kind": "llm",
           "capability": "models.run",
           "next": ["build", "drafted"]
@@ -960,7 +973,7 @@
         {
           "name": "build",
           "description": "Launch a coding agent to build a self-contained static site from the report, then pause until it finishes — costing nothing while it works.",
-          "kind": "llm",
+          "kind": "pause",
           "capability": "models.coding",
           "next": ["publish"]
         },
@@ -1087,10 +1100,10 @@
         },
         {
           "name": "review",
-          "description": "Pause and wait for a human sign-off signal, costing nothing while idle (resumes at 'onSignoff').",
+          "description": "Hold the drafted attestation and pause for a human sign-off — costing nothing while idle. With no signer set, stop at the gate with the draft instead of waiting forever.",
           "kind": "pause",
           "checkpoint": true,
-          "next": ["onSignoff"]
+          "next": ["onSignoff", "pending"]
         },
         {
           "name": "onSignoff",
@@ -1103,6 +1116,12 @@
           "description": "Write the signed attestation to durable file storage and return its file id and download link; a dry run skips the upload.",
           "kind": "capability",
           "capability": "fileStorage.upload",
+          "terminal": true
+        },
+        {
+          "name": "pending",
+          "description": "No signer was set, so the run stops holding a DRAFT attestation. Nothing was signed, filed, or archived.",
+          "kind": "compute",
           "terminal": true
         },
         {
@@ -1129,8 +1148,7 @@
         "sandboxes.create",
         "fileStorage.upload",
         "fileStorage.getDownloadUrl",
-        "email.send",
-        "vault.get"
+        "email.send"
       ],
       "steps": [
         {
@@ -1206,13 +1224,13 @@
     {
       "id": "slack-notifier",
       "name": "Slack Notifier",
-      "description": "Post a message to Slack with a token you store in the Vault — the starter for wiring up any external API.",
+      "description": "Post a message to Slack with your own bot token — the starter for wiring up any external API.",
       "tags": ["integration", "starter", "slack"],
       "category": "starter",
       "cadence": "on-demand",
       "complexity": "minimal",
       "sourcePath": "examples/slack-notifier",
-      "capabilities": ["vault"],
+      "capabilities": [],
       "steps": [
         {
           "name": "validate",
@@ -1222,10 +1240,9 @@
         },
         {
           "name": "post",
-          "description": "Read your Slack token from the Vault and post the message to Slack.",
-          "kind": "capability",
-          "capability": "vault",
-          "next": ["posted", "failed"]
+          "description": "Post the message to Slack with your bot token. Without one, the message is returned in the run's output and nothing is posted.",
+          "kind": "compute",
+          "next": ["posted", "failed", "rejected"]
         },
         {
           "name": "posted",
@@ -1256,12 +1273,7 @@
       "cadence": "scheduled",
       "complexity": "involved",
       "sourcePath": "examples/the-brain",
-      "capabilities": [
-        "models.run",
-        "database.get",
-        "database.create",
-        "vault.get"
-      ],
+      "capabilities": ["models.run", "database.get", "database.create"],
       "steps": [
         {
           "name": "scan",
@@ -1304,7 +1316,7 @@
       "steps": [
         {
           "name": "kickoff",
-          "description": "Starts the external job, registers how to resume this run, then pauses and waits for the callback — costing nothing while idle.",
+          "description": "Register the resume contract with the external job and pause until it calls back — costing nothing while idle. With no register URL, no job was started, so it decides on an empty payload rather than waiting forever.",
           "kind": "pause",
           "next": ["decide"]
         },

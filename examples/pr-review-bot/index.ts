@@ -23,8 +23,8 @@ import {
  *                  structured review: a verdict, a summary, and a list of the
  *                  missing tests.
  *   3. report    — posts the review through the configured channel: your own
- *                  email (`email.send`) or a bring-your-own Slack token read
- *                  from the Vault (`vault.get`) — never baked into code.
+ *                  email (`email.send`) or a bring-your-own Slack token the
+ *                  platform injects as `SLACK_BOT_TOKEN` — never baked into code.
  *
  *   watch ──(pause: wait for `pr.opened`, $0 while idle)──▶ review ──▶ assess ─┬─▶ reportEmail ─┬─▶ posted
  *                                                                              └─▶ reportSlack ─┤
@@ -35,22 +35,22 @@ import {
  * opened (in dev, via the MCP `signal_workflow` / `workflow_signal` tool — see
  * README). The resumed `review` step's input IS the PR payload.
  *
- * Offline: with no `WEBHOOK_REGISTER_URL` configured (or `DRY_RUN` set), the
- * `dryRun` guard skips the live registration POST and the report steps skip the
- * real send, so `run_local` traces the full graph — watch → paused →
- * auto-resumed review → assess → report → posted — for free. When the resume
- * payload is empty (as in a local run), `review` falls back to a built-in
- * sample PR so the coding agent always has something to analyze.
+ * Offline: with no `WEBHOOK_REGISTER_URL` configured (or `DRY_RUN` set), nothing
+ * is registered — so no PR event will ever arrive and the run does NOT pause. It
+ * goes straight to `review` on the built-in sample PR, skips the real send, and
+ * says both things in its output. The durable pause is what a configured run does.
  */
 
 // ─────────────────────────────────────────────────────────────── config ──
 /** String-only config bag (matches how templates receive their `config`). */
 type Config = Record<string, string>;
 
-/** Vault ref that holds this workflow's Slack credential (BYO channel). */
-const VAULT_REF = "slack";
-/** Vault key for the Slack bot token used by `chat.postMessage`. */
-const BOT_TOKEN_KEY = "bot_token";
+/**
+ * Env key for the Slack bot token used by `chat.postMessage`. Declared in
+ * template.json as a required secret; the platform injects it into the step's
+ * environment. The template says what the credential IS, never where it lives.
+ */
+const BOT_TOKEN_KEY = "SLACK_BOT_TOKEN";
 /** Username for the inbox we send review emails from (created once, reused). */
 const SENDER_USERNAME = "pr-review-bot";
 /** The named signal the PR webhook fires to resume this run. */
@@ -117,6 +117,10 @@ interface ReportResult extends Record<string, unknown> {
   skipped: string | null;
   via: Channel;
   verdict: Review["verdict"];
+  /** Requirement keys the run needed and did not have. Empty when it delivered. */
+  unmet?: string[];
+  /** One plain sentence about what did or did not leave the run. */
+  note?: string;
 }
 
 /** Pre-pause + cross-step state; everything here survives the suspend. */
@@ -131,6 +135,8 @@ interface Shared extends Record<string, unknown> {
   pr: PrEvent;
   rawFindings: string;
   review: Review;
+  /** Set when no webhook source was configured, so the sample PR was reviewed. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -264,7 +270,7 @@ function renderReview(pr: PrEvent, review: Review): string {
 // ───────────────────────────────────────────────────────────────── steps ──
 const watch = defineStep({
   name: "watch",
-  next: [],
+  next: ["review"],
   // Static graph edge: on `SIGNAL`, resume at `review`. Must match the directive.
   pause: { signal: SIGNAL, resumeStep: "review" },
   async run(input: PrReviewInput, ctx: Ctx) {
@@ -292,9 +298,18 @@ const watch = defineStep({
     };
 
     if (dryRun) {
-      ctx.logger.info("dry run: skipping webhook registration", {
-        correlationId: ctx.executionId,
-      });
+      // No webhook source registered, so no PR event will ever arrive and the
+      // pause below would suspend the run forever. Review the sample PR instead —
+      // a real model review of a real diff — and say whose PR it was.
+      ctx.shared.set(
+        "note",
+        "No `WEBHOOK_REGISTER_URL` is configured, so no PR event was awaited — this is a review of the built-in sample PR. Point the template at a webhook source to review real ones.",
+      );
+      ctx.logger.info(
+        "no webhook source — reviewing the sample PR instead of pausing",
+        { correlationId: ctx.executionId },
+      );
+      return goto("review", {} as PrEvent);
     } else {
       await registerWebhook(config, { resume, repo });
       ctx.logger.info("webhook registered; pausing for PR", {
@@ -417,7 +432,7 @@ const reportEmail = defineStep({
     // state, not a failure — degrade to a skip so the graph still completes.
     if (!to) {
       ctx.logger.warn("no email recipient configured — skipping send");
-      return goto("posted", skip("no-recipient", "email", review));
+      return goto("posted", skip("no-recipient", "email", review, ["to"]));
     }
 
     try {
@@ -459,21 +474,19 @@ const reportSlack = defineStep({
       return goto("posted", skip("no-recipient", "slack", review));
     }
 
-    // Read the BYO token at runtime — never baked into code.
-    let token: string | null = null;
-    try {
-      token = await ctx.sapiom.vault.get(VAULT_REF, BOT_TOKEN_KEY);
-    } catch (err) {
-      ctx.logger.warn("vault: no slack token", { err: String(err) });
-    }
-    // No-key guard: behave like dryRun so a fresh fork traces end to end before
-    // you have stored a token.
+    // Read the BYO token from the environment the platform injected it into —
+    // never baked into code.
+    const token = process.env[BOT_TOKEN_KEY]?.trim() || null;
+    // No-key guard: compose the review and report that nothing was posted. This
+    // template's job is the side effect, so a missing token can only mean skip.
     if (!token) {
-      ctx.logger.warn("no slack token in vault — skipping post", {
-        ref: VAULT_REF,
+      ctx.logger.warn("no slack token set — skipping post", {
         key: BOT_TOKEN_KEY,
       });
-      return goto("posted", skip("no-credential", "slack", review));
+      return goto(
+        "posted",
+        skip("no-credential", "slack", review, [BOT_TOKEN_KEY]),
+      );
     }
 
     try {
@@ -496,8 +509,12 @@ const posted = defineStep({
   name: "posted",
   next: [],
   terminal: true,
-  async run(input: ReportResult) {
-    return terminate(input);
+  async run(input: ReportResult, ctx: Ctx) {
+    const sampleNote = ctx.shared.get("note");
+    return terminate({
+      ...input,
+      note: [sampleNote, input.note].filter(Boolean).join(" ") || undefined,
+    });
   },
 });
 
@@ -516,8 +533,28 @@ const failed = defineStep({
 
 // ─────────────────────────────────────────────────────────────── parsing ──
 /** Build a "skipped" report result (no send happened, but the run succeeded). */
-function skip(reason: string, via: Channel, review: Review): ReportResult {
-  return { posted: false, skipped: reason, via, verdict: review.verdict };
+const SKIP_NOTES: Record<string, string> = {
+  dryRun: "`DRY_RUN` was set, so the review was written but not delivered.",
+  "no-recipient":
+    "Nothing was delivered: no `to` address is set, so the review is in this run's output only.",
+  "no-credential":
+    "Nothing was posted to Slack: no `SLACK_BOT_TOKEN` is set, so the review is in this run's output only.",
+};
+
+function skip(
+  reason: string,
+  via: Channel,
+  review: Review,
+  unmet: string[] = [],
+): ReportResult {
+  return {
+    posted: false,
+    skipped: reason,
+    via,
+    verdict: review.verdict,
+    unmet,
+    note: SKIP_NOTES[reason] ?? `Nothing was delivered (${reason}).`,
+  };
 }
 
 /** Extract the structured review from model output; fall back to a safe default. */

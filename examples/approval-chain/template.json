@@ -13,6 +13,19 @@
     "Audit trail in your Postgres"
   ],
   "notes": "`run_local` stubs the capabilities and auto-resumes each pause with no payload, so the default offline trace walks present → reminder(s) → escalate to a terminal for free — with no `ledgerHandle`, no live Postgres is touched. Set a small `maxReminders` (default 2) so the offline trace terminates quickly.\n\nA real `deploy` + `run` pauses for real at each gate. To drive it in dev, fire the signals via the MCP `signal_workflow` / `workflow_signal` tool with `correlationId` = the paused run's `executionId`. Approve a gate: `{ \"signal\": \"approval.decision\", \"correlationId\": \"<executionId>\", \"payload\": { \"decision\": \"approve\" } }` — repeat once per approver to reach `finalize`. Send `{ \"decision\": \"reject\" }` to walk the compensation path, or `{ \"decision\": \"remind\" }` / `{ \"decision\": \"timeout\" }` to exercise the reminder / escalation branches.\n\nTo persist the audit trail to Postgres, pass a `ledgerHandle` (or `config.LEDGER_HANDLE`) and run deployed with `dryRun: false`; verify the rows land in the `approval_chain_ledger` table. See `README.md` and `AGENTS.md`.",
+  "settings": [
+    {
+      "path": "escalateTo",
+      "label": "Escalate to",
+      "description": "Where a stalled or unapprovable chain is handed off. Leave it empty and the escalation stays in the run's output.",
+      "type": "email",
+      "default": "",
+      "example": "you@yourcompany.com"
+    }
+  ],
+  "defaultInput": {
+    "subject": "Sample: renew the annual analytics contract ($18,000)"
+  },
   "examples": [
     {
       "title": "Two-party contract sign-off, both approve",

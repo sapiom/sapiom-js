@@ -39,19 +39,38 @@ import { buildJudgePrompt, parseScore } from "./judge.js";
 interface EvalShared extends Record<string, unknown> {
   /** The pass bar, stashed by `judge` so `gate` can branch on it. */
   threshold: number;
+  /** Set when the run graded the built-in sample case rather than the caller's. */
+  note?: string;
 }
+
+/**
+ * The sample case a zero-input run grades. Every entry field defaults from it,
+ * so `{}` produces a real judge call instead of a schema rejection — and the
+ * terminal artifact says the sample was used, so nobody mistakes it for theirs.
+ */
+const SAMPLE_CASE = {
+  input: "Write a one-line product tagline for a privacy-first email app.",
+  output: "Inbox peace, finally — email that never reads your mail.",
+  rubric:
+    "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
+} as const;
 
 const judgeInputSchema = z
   .object({
     input: z
       .unknown()
+      .default(SAMPLE_CASE.input)
       .describe(
         "The case the output was produced from (task, prompt, question…).",
       ),
-    output: z.unknown().describe("The produced output to grade."),
+    output: z
+      .unknown()
+      .default(SAMPLE_CASE.output)
+      .describe("The produced output to grade."),
     rubric: z
       .string()
       .min(1)
+      .default(SAMPLE_CASE.rubric)
       .describe(
         "YOUR criteria. The judge scores the output against this — we ship no scorer taxonomy.",
       ),
@@ -71,16 +90,7 @@ const judgeInputSchema = z
       ),
   })
   .meta({
-    examples: [
-      {
-        input:
-          "Write a one-line product tagline for a privacy-first email app.",
-        output: "Inbox peace, finally — email that never reads your mail.",
-        rubric:
-          "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
-        threshold: 0.7,
-      },
-    ],
+    examples: [{ ...SAMPLE_CASE, threshold: 0.7 }],
   });
 
 /** What the workflow is kicked off with. */
@@ -97,6 +107,14 @@ const judge = defineStep({
   inputSchema: judgeInputSchema,
   async run(input: EvalGateInput, ctx: AgentExecutionContext<EvalShared>) {
     ctx.shared.set("threshold", input.threshold);
+    if (input.rubric === SAMPLE_CASE.rubric) {
+      // Say so in the artifact: a real score against OUR sample is not a score
+      // against yours, and the number alone doesn't distinguish them.
+      ctx.shared.set(
+        "note",
+        "Graded the built-in sample case. Pass your own `input`, `output`, and `rubric` to grade yours.",
+      );
+    }
     const prompt = buildJudgePrompt({
       input: input.input,
       output: input.output,
@@ -170,6 +188,7 @@ const publish = defineStep({
         score: input.score,
         threshold: input.threshold,
         rationale: input.rationale,
+        ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
       },
       { reason: "score met threshold" },
     );
@@ -190,6 +209,7 @@ const revise = defineStep({
         score: input.score,
         threshold: input.threshold,
         rationale: input.rationale,
+        ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
       },
       { reason: "score below threshold" },
     );

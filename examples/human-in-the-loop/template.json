@@ -13,6 +13,24 @@
     "Handoff instead of failure"
   ],
   "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nThis workflow pauses twice and waits for a real signal, so you drive it as it runs. First it pauses for the approver's decision; send the approval with the MCP `workflow_signal` tool: signal `approval.decision`, `correlationId` set to the run's executionId, payload `{ \"decision\": \"approve\" }` (or `{ \"decision\": \"reject\" }` to stop). After approval it pauses on the offer; send signal `candidate.confirm` with payload `{ \"decision\": \"accept\" }` to commit, or `{ \"decision\": \"decline\" }` to fall through to the next candidate.\n\nPrefer to work from the code? Run it locally with `run_local` — it stubs the capabilities and auto-resumes both pauses (a resume with no decision takes the safe branch, and the dryRun guard makes the commit a no-op), so the whole graph traces end to end for free. Then edit and deploy it with the Sapiom MCP.",
+  "settings": [
+    {
+      "path": "approver",
+      "label": "Approver",
+      "description": "Who signs off before anything is offered or committed. Leave it empty and the run stops at the gate with the ranked shortlist.",
+      "type": "email",
+      "default": "",
+      "example": "you@yourcompany.com"
+    },
+    {
+      "path": "escalateTo",
+      "label": "Escalate to",
+      "description": "Where an exhausted shortlist is handed off. Leave it empty and the escalation stays in the run's output.",
+      "type": "email",
+      "default": "",
+      "example": "you@yourcompany.com"
+    }
+  ],
   "examples": [
     {
       "title": "Rank, approve, and commit to the top candidate",

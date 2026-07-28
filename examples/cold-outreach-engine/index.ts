@@ -541,6 +541,34 @@ const launch = defineStep({
       });
     }
 
+    // Nobody to write to. Stop here rather than provision a database, enter the
+    // drip, and then suspend on a reply signal no prospect can ever send — and
+    // rather than report an empty campaign as a completed one. There is
+    // deliberately no default lead list: emailing a prospect we invented is the
+    // one thing this template must never do.
+    if (deliverable.length === 0) {
+      ctx.logger.info("no deliverable contacts — nothing to launch", {
+        enriched: contacts.length,
+      });
+      return terminate(
+        {
+          campaign,
+          dryRun: false,
+          reason: "no-deliverable-contacts",
+          touches: 0,
+          enriched: contacts.length,
+          deliverable: 0,
+          sent: 0,
+          unmet: ["leads"],
+          note:
+            contacts.length === 0
+              ? "No `leads` were given, so there was nobody to write to and nothing was sent. Pass a lead list — a name, an email, and a company each — to run a real campaign."
+              : `None of the ${contacts.length} lead(s) verified as deliverable, so nothing was sent.`,
+        },
+        { reason: "no deliverable contacts" },
+      );
+    }
+
     // Live path: persist the campaign roster (best-effort), then start the drip.
     const handle = ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE;
     const sql = await openSql(ctx, handle);

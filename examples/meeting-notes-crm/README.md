@@ -25,13 +25,14 @@ intake  ──▶  extract  ──▶  upsert  ──▶  summary  (terminal)
    records each action item under a **stable id** so a re-run logs it once.
 4. **summary** — writes a markdown recap (fields updated, action items new vs.
    already tracked) and emails it. A `dryRun` computes the recap but skips the DB
-   writes and the real send; the recipient is read from the Sapiom vault at
-   runtime, never persisted.
+   writes and the real send; so does a run with no recipient set.
 
 Input: `{ "transcript": "Call with Dana Ruiz, VP Eng at Northwind. ...", "deliverTo": "you@example.com", "meetingDate": "2026-07-22" }`.
 
-- `transcript` (or the `transcript.ready` webhook) supplies the notes.
-- `deliverTo` sets the recipient; omit it to use the vault-configured default.
+- `transcript` (or the `transcript.ready` webhook) supplies the notes. With neither,
+  the run extracts from a built-in sample call and says so in its output.
+- `deliverTo` sets the recipient; omit it and the recap is returned in the run's
+  output instead of emailed.
 - `meetingDate` (ISO) stamps the contact's last-meeting time.
 - `dryRun: true` returns the recap as a preview without writing or sending.
 

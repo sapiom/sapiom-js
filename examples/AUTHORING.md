@@ -7,8 +7,10 @@ can follow it end to end.
 
 The path is five steps:
 
-1. **[Develop](#1-develop)** — write the agent and its manifest in a new directory.
-2. **[Build & test](#2-build--test)** — compile it, trace a run for free, and validate the files.
+1. **[Develop](#1-develop)** — write the agent and its manifest in a new directory, against
+   the bar in **[Make it runnable with nothing](#1a-make-it-runnable-with-nothing)**: `{}` in,
+   a real terminal run out.
+2. **[Build & test](#2-build--test)** — compile it, run it deployed with `{}`, validate the files.
 3. **[Categorize](#3-categorize)** — set its category, cadence, complexity, and step kinds.
 4. **[Write the copy](#4-write-the-copy)** — the words a user reads. This is most of the work.
 5. **[Submit](#5-submit)** — open a PR; once merged, Sapiom picks it up automatically.
@@ -46,6 +48,115 @@ aren't published to npm yet, publish the workspace packages to a local registry 
 template at them: `pnpm registry:local` in one shell, `pnpm publish:local` in another. Most
 authors don't need this — the published `@sapiom/*` versions are enough.
 
+## 1a. Make it runnable with nothing
+
+**The rule: a user who clicks "Use this template" and then "Run once", supplying nothing at
+all, must get a run that reaches a terminal state and produces something real.** No inputs, no
+secrets, no database, no connected accounts. A template that needs setup before it does
+anything is not ready to publish.
+
+"Something real" does not mean "something faked". The rule that resolves every case:
+
+> **Simulate the world's *response*. Never simulate your *effect* on the world.**
+
+A stand-in search result, sample transcript, or seeded database row is fine — you are supplying
+an input the user would have supplied. Reporting that you sent an email, posted to Slack,
+pushed a commit, or filed an attestation when you did not is never fine, however it is
+labelled. The user's next action is to go and look.
+
+| ✅ Honest | ❌ Dishonest |
+|---|---|
+| `{ posted: false, skipped: "no-credential" }` | `{ posted: true }` with no token |
+| Seeded demo rows in a provisioned database | A hardcoded `rows` array posing as the user's data |
+| `{ status: "draft", previewUrl: null }` | `{ status: "published", url: "…" }` for a site never deployed |
+| `{ outcome: "pending-approval", pending: true }` at a gate | `{ approved: true }` because nobody answered |
+
+### Every required input needs a default, and no entry step throws
+
+```ts
+const entryInput = z.object({
+  topic: z.string().min(1).default("AI agent reliability incidents"),
+  lookbackDays: z.number().int().positive().default(7),
+});
+```
+
+A missing or malformed input is an expected outcome, not a crash — route it to a `rejected`
+terminal so the run completes with a readable reason:
+
+```ts
+// ❌ throw new Error("`source` is required");
+if (source === "") return goto("rejected", { reason: "`source` is required" });
+```
+
+**Defaults are safe for settings, never for resources.** A **setting** is non-secret config (a
+topic, a recipient, a row cap) — give it a real default. A **resource** must *exist*: a
+repository, a database, a sandbox. Never default one to a plausible-looking name;
+`repoSlug: "my-app"` and `dbHandle: "analytics"` do not exist in a new account, and naming them
+turns a clean rejection into a 404 mid-run. Declare it under `resources[]` and provision it, or
+stop with a stated reason. A **connection** is a third-party credential: never default it and
+never fake it — read it, and when it is absent, skip the side effect and say so.
+
+### Pause discipline
+
+Before you write a pause, decide **who fires the signal**, because a zero-config run has no
+answer for most of them.
+
+**Machine wait** — a render job, a coding agent, a webhook callback, a drip interval. If the
+thing that would fire the signal does not exist, **do not pause**: take a fallback path and
+label it in the output.
+
+```ts
+// Nothing will call back on an unconfigured run — use the fallback and keep going.
+if (!callbackRegistered) return goto("decide", {});
+return pauseUntilSignal({
+  signal: SIGNAL,
+  resumeStep: "decide",
+  correlationId: ctx.executionId,
+});
+```
+
+**Human checkpoint** — `kind: "pause"` **and** `checkpoint: true`, at most one per template.
+Where a participant *is* assigned, **keep the pause**: that is correct behaviour, and the run
+detail already ships one-click Approve/Reject. Where nobody is assigned, **terminate at the
+gate** with the pending artifact and the signal that continues the run:
+
+```ts
+if (!approver) {
+  // The artifact awaiting a decision, and how to continue.
+  return goto("pending", { artifact: draft, unmet: ["approver"], note });
+}
+```
+
+**Never auto-approve a checkpoint, and never auto-resume one into a rejection.** Fabricating
+human consent is the worst output a template can produce. Auto-resuming into `rejected` is
+honest but reads to a first-run user as "the demo broke", and teaches the inverse of the lesson.
+
+### Say what you skipped
+
+A run that took a degraded branch names it in its own output — `unmet[]` for the requirement
+keys it did not have, and one plain sentence in `note` for the person reading the result:
+
+```ts
+return goto("posted", {
+  posted: false,
+  skipped: "no-credential",
+  unmet: ["SLACK_BOT_TOKEN"],
+  note: "No `SLACK_BOT_TOKEN` is set, so nothing was posted to Slack. The message above is what would have been sent.",
+});
+```
+
+### Credentials come from the environment, never from a store you name
+
+Declare each third-party credential under `requiredSecrets[]` and read it as
+`process.env[KEY]`. Sapiom collects it when the user takes the template and injects it into the
+step at dispatch. Do **not** call `ctx.sapiom.vault.get(ref, key)` for a template credential:
+that reads a tenant-wide ref the deploy panel never writes, so a user who fills in the dialog
+still gets `skipped: "no-credential"`. Declaring what a credential *is*, rather than where it
+lives, is what lets resolution change without touching your template.
+
+Supplying config or a credential never requires a redeploy: settings are run input read per
+run, and secrets are read at step dispatch.
+
 ## 2. Build & test
 
 1. **Compile.** From your template directory: `npm install`, then `npm run typecheck`. It must
@@ -54,7 +165,18 @@ authors don't need this — the published `@sapiom/*` versions are enough.
    whole graph locally and traces every step without spending anything, so you can watch the
    flow before you deploy. The lifecycle is `check → run_local → link → deploy → run`; each
    template's `README.md` shows it.
-3. **Validate the registry and your manifest.** Run `pnpm examples:check` from the repo root.
+
+   **Be aware of what it does not check.** Every capability is stubbed, so `database.get`
+   returns a `localhost` connection string and `repositories.get` returns a plausible
+   repository — *neither ever fails*. A `run_local` pass proves your control flow, **not** that
+   the resources your template names exist. Pauses are auto-resumed locally too, so a pause
+   nothing will ever fire still looks fine.
+3. **Then run it deployed, with no input at all.** `deploy` and `run` it with `{}`. It must
+   reach a terminal state and produce something real (see [§1a](#1a-make-it-runnable-with-nothing)).
+   This is the check that catches what `run_local` cannot: a resource handle that doesn't
+   exist, a pause with no resumer, a required input with no default. Assert on the trace —
+   `steps[].directive` — not on the status.
+4. **Validate the registry and your manifest.** Run `pnpm examples:check` from the repo root.
    It checks that `registry.json` matches the schema (including a valid `category`, `cadence`,
    `complexity`, and step `kind`), is sorted by `id`, that every `sourcePath` points at a real
    directory with a `template.json`, that any `checkpoint` is a single genuine human gate, that
@@ -63,12 +185,16 @@ authors don't need this — the published `@sapiom/*` versions are enough.
    `additionalProperties: false`, so a mistyped field name fails here rather than being
    silently dropped by the backend parser. Run `pnpm examples:sort` first to put your entry in
    order.
-4. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
+5. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
    must be the exact `ctx.sapiom.*` ids your code actually calls — see
    [Capability ids](#capability-ids-correctness-not-style). The LLM path is `models.run`
    (`models.coding` for a coding agent), **not** `llm.generate`.
-5. **Keep the manifest honest.** The `examples` you list must be real `{ input, output }` pairs
-   the code produces — don't invent fields.
+6. **Keep the manifest runnable, not just honest.** The `examples` you list must be real
+   `{ input, output }` pairs the code produces — don't invent fields. And `examples[0].input`
+   must **produce a terminal run when deployed**: in particular it must not name a resource (a
+   repo, a database, a sandbox, a domain) that a brand-new account will not have. Under
+   `run_local` those calls are stubbed and never 404, so a placeholder passes locally and fails
+   for every real user.
 
 ## 3. Categorize
 
@@ -405,7 +531,14 @@ Never present the MCP path as the only way to build and run — the webapp does 
 
 - [ ] One directory `examples/<id>/` with `index.ts`, `template.json`, `package.json`, `tsconfig.json`.
 - [ ] `npm run typecheck` passes in the template directory.
-- [ ] Traced a `run_local` end to end (free) before deploying.
+- [ ] Traced a `run_local` end to end (free), understanding that it stubs every capability.
+- [ ] **Deployed it and ran it with `{}` — it reached a terminal state and produced something real.**
+- [ ] Every entry-step input has a default; no entry step `throw`s.
+- [ ] No default names a resource a new account wouldn't have.
+- [ ] Every pause has a known resumer, or a labelled fallback for when it doesn't.
+- [ ] No `checkpoint` auto-approves or auto-resumes; with nobody assigned it terminates at the gate.
+- [ ] Every credential is read from `process.env[KEY]` and declared in `requiredSecrets`; no config filed as a secret.
+- [ ] Nothing in the output claims an effect on the world that did not happen; a degraded branch names itself in `unmet[]` and `note`.
 - [ ] One `category` (the outcome, not the mechanism) and one `cadence`; `tags` kept freeform.
 - [ ] One `complexity`, picked by counting judgment points — not by counting steps.
 - [ ] A `kind` on every step, and `checkpoint: true` only on a real human approval gate.

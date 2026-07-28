@@ -20,7 +20,16 @@ type WebSearchResponse = Awaited<ReturnType<Sapiom["search"]["webSearch"]>>;
  */
 interface Shared extends Record<string, unknown> {
   topic: string;
+  /** Set when the run researched the default topic rather than the caller's. */
+  note?: string;
 }
+
+/**
+ * The topic a zero-input run researches. `web.search` needs no credential, so a
+ * real search is strictly better than forwarding an empty response and calling
+ * the resulting empty digest a successful run.
+ */
+const DEFAULT_TOPIC = "what is an LLM agent?";
 
 const search = defineStep({
   name: "search",
@@ -29,11 +38,12 @@ const search = defineStep({
     input: { topic: string },
     ctx: AgentExecutionContext<Shared>,
   ) {
-    const topic = input.topic?.trim();
-    if (!topic) {
-      // Nothing to search — hand an empty response to the digest step.
-      const empty: WebSearchResponse = { query: "", results: [] };
-      return goto("summarize", empty);
+    const topic = input.topic?.trim() || DEFAULT_TOPIC;
+    if (topic === DEFAULT_TOPIC && input.topic?.trim() !== DEFAULT_TOPIC) {
+      ctx.shared.set(
+        "note",
+        `Researched the default topic ("${DEFAULT_TOPIC}"). Pass a \`topic\` to research yours.`,
+      );
     }
     ctx.shared.set("topic", topic);
     ctx.logger.info("searching the web", { topic });
@@ -72,7 +82,8 @@ const summarize = defineStep({
         : ["_No sources found._"]),
     ].join("\n");
     ctx.logger.info("digest ready", { topic, sourceCount: sources.length });
-    return terminate({ topic, digest, sources });
+    const note = ctx.shared.get("note");
+    return terminate({ topic, digest, sources, ...(note ? { note } : {}) });
   },
 });
 

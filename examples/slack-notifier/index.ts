@@ -9,44 +9,51 @@ import {
 /**
  * Slack Notifier — the "bring your own API" teaching template.
  *
- * The lesson: store *your own* credential in the Sapiom Vault, then call an
+ * The lesson: declare *your own* credential, then call an
  * external API with it at runtime. The concrete hook is Slack ("post a message
  * to my channel"), but the shape is transferable — swap the endpoint and the
  * secret key and you can call any API you can reach with a token.
  *
  * Slack has no Sapiom capability namespace, so the deployed agent calls the
- * Slack API directly via `fetch`, using a credential read from the Vault
- * (`ctx.sapiom.vault.get(ref, key)`) — never baked into code. Two auth modes:
+ * Slack API directly via `fetch`, using a credential the platform injects into
+ * the step's environment — never baked into code. Two auth modes:
  *
  *   - `bot` (default) — a bot token calls `chat.postMessage`; returns the
  *     resolved channel id + message `ts` (timestamp).
  *   - `webhook` — an incoming-webhook URL; the channel is baked into the URL,
  *     so there is no `ts` to return.
  *
- * SAFETY / onboarding: `dryRun` (set by `run_local`) exercises the full control
- * flow — validate → post — without touching the network. A missing credential
- * is treated the same way (a "no-key guard"), so you can trace the graph before
- * you have set a token. A real `deploy` + `run` posts to Slack for real.
+ * SAFETY / onboarding: with no credential set, the run composes the message,
+ * reports `posted: false, skipped: "no-credential"`, and reaches a terminal
+ * state — so you can trace the graph before you have a token, and nothing ever
+ * claims a message was delivered when it was not. A real `deploy` + `run` with a
+ * token posts to Slack for real.
  *
- * Where the key lives: after you deploy, set your token in the Vault under the
- * ref `slack` (key `bot_token` or `webhook_url`) — scoped to this workflow. See
- * README.md for the exact command and how to generalize this to any API.
+ * Where the key lives: the credentials declared in `template.json`
+ * (`SLACK_BOT_TOKEN`, `SLACK_WEBHOOK_URL`) are collected when you use this
+ * template and arrive as `process.env` on the step. The template declares what
+ * the credential IS; where it is stored is the platform's business. See
+ * README.md for how to generalize this to any API.
  */
 
 // ─────────────────────────────────────────────────────────────── config ──
-/** Vault ref that holds this workflow's Slack credential. */
-const VAULT_REF = "slack";
-/** Vault key for a bot token (used by the `bot` auth mode). */
-const BOT_TOKEN_KEY = "bot_token";
-/** Vault key for an incoming-webhook URL (used by the `webhook` auth mode). */
-const WEBHOOK_KEY = "webhook_url";
+/** Env key for a bot token (used by the `bot` auth mode). */
+const BOT_TOKEN_KEY = "SLACK_BOT_TOKEN";
+/** Env key for an incoming-webhook URL (used by the `webhook` auth mode). */
+const WEBHOOK_KEY = "SLACK_WEBHOOK_URL";
 /** Slack's per-message text limit. Oversized messages are rejected, not sent. */
 const MAX_MESSAGE_LENGTH = 4000;
+/**
+ * What a zero-input run posts. A default message is what lets the template reach
+ * its own no-credential guard instead of self-rejecting before it gets there.
+ */
+const DEFAULT_MESSAGE =
+  "Hello from Sapiom — this message was composed by the slack-notifier template.";
 
 type AuthMode = "bot" | "webhook";
 
 interface EntryInput {
-  /** The message text to post. Required (unless `dryRun`, which uses a stub). */
+  /** The message text to post. Defaults to a fixed hello so `{}` runs. */
   message?: string;
   /**
    * Target channel for the `bot` mode — a name (`#general`) or id (`C0123`).
@@ -57,7 +64,11 @@ interface EntryInput {
   via?: AuthMode;
   /** Optional formatting hint: override the bot's display name for this post. */
   username?: string;
-  /** Skip the real Slack call (network I/O). Set by `run_local`. */
+  /**
+   * Skip the real Slack call (network I/O). Nothing sets this for you — pass it
+   * explicitly (`run_local` with `{ "dryRun": true }`) when you want the graph
+   * traced without a post attempt.
+   */
   dryRun?: boolean;
 }
 
@@ -69,6 +80,10 @@ interface PostResult extends Record<string, unknown> {
   channel: string | null;
   /** Slack message timestamp (`bot` mode only); null otherwise. */
   ts: string | null;
+  /** Credential keys the run needed and did not have. Empty when it posted. */
+  unmet?: string[];
+  /** One plain sentence about what did or did not reach Slack. */
+  note?: string;
 }
 
 interface Shared extends Record<string, unknown> {
@@ -151,25 +166,18 @@ const validate = defineStep({
   async run(input: EntryInput, ctx: Ctx) {
     const dryRun = input?.dryRun === true;
     const via: AuthMode = input?.via === "webhook" ? "webhook" : "bot";
-    const message = (input?.message ?? "").trim();
+    const message = (input?.message ?? "").trim() || DEFAULT_MESSAGE;
     const channel = (input?.channel ?? "").trim() || null;
     const username = (input?.username ?? "").trim() || null;
 
-    if (!message) {
-      return goto("rejected", { reason: "message is required" });
-    }
     if (message.length > MAX_MESSAGE_LENGTH) {
       return goto("rejected", {
         reason: `message length ${message.length} exceeds cap ${MAX_MESSAGE_LENGTH}`,
       });
     }
-    // Bot mode needs a channel; webhook mode carries it in the URL.
-    if (via === "bot" && !channel && !dryRun) {
-      return goto("rejected", {
-        reason:
-          "channel is required for `bot` mode (e.g. '#general' or 'C0123')",
-      });
-    }
+    // The channel is only required once we actually have a token to post with, so
+    // `post` checks it after the credential. Rejecting here would stop a
+    // no-credential run before it reached the guard that explains itself.
 
     ctx.shared.set("dryRun", dryRun);
     ctx.shared.set("via", via);
@@ -182,10 +190,10 @@ const validate = defineStep({
   },
 });
 
-/** Read the credential from the Vault and post to Slack. */
+/** Read the injected credential and post to Slack. */
 const post = defineStep({
   name: "post",
-  next: ["posted", "failed"],
+  next: ["posted", "failed", "rejected"],
   async run(_input: unknown, ctx: Ctx) {
     const dryRun = ctx.shared.get("dryRun") ?? false;
     const via = ctx.shared.get("via") ?? "bot";
@@ -193,8 +201,7 @@ const post = defineStep({
     const message = ctx.shared.get("message")!;
     const username = ctx.shared.get("username") ?? null;
 
-    // dryRun (run_local): skip the network, synthesize a plausible result so the
-    // full graph runs offline for free.
+    // Explicit dryRun: skip the network so the full graph runs offline for free.
     if (dryRun) {
       ctx.logger.info("dryRun — skipping Slack post", { via, channel });
       return goto("posted", {
@@ -203,22 +210,21 @@ const post = defineStep({
         via,
         channel,
         ts: null,
+        unmet: [],
+        note: "`dryRun` was set, so nothing was posted. The message above is what would have been sent.",
       } satisfies PostResult);
     }
 
-    // Read the credential at runtime — never baked into code.
+    // Read the credential from the environment the platform injected it into —
+    // never baked into code, and never a store name the template has to know.
     const secretKey = via === "webhook" ? WEBHOOK_KEY : BOT_TOKEN_KEY;
-    let secret: string | null = null;
-    try {
-      secret = await ctx.sapiom.vault.get(VAULT_REF, secretKey);
-    } catch (err) {
-      ctx.logger.warn("vault: no slack credential", { err: String(err) });
-    }
-    // No-key guard: behave like dryRun so a fresh fork traces end to end before
-    // you have set a token.
+    const secret = process.env[secretKey]?.trim() || null;
+
+    // No-key guard: compose but don't post, and say so. Posting is the entire
+    // point of this template, so a missing token can only ever mean "skip" —
+    // reporting `posted: true` with no token would be a lie about the outside world.
     if (!secret) {
-      ctx.logger.warn("no slack credential in vault — skipping post", {
-        ref: VAULT_REF,
+      ctx.logger.warn("no slack credential set — skipping post", {
         key: secretKey,
       });
       return goto("posted", {
@@ -227,7 +233,18 @@ const post = defineStep({
         via,
         channel,
         ts: null,
+        unmet: [secretKey],
+        note: `No \`${secretKey}\` is set, so nothing was posted to Slack. The message above is what would have been sent — add the credential and re-run to post it.`,
       } satisfies PostResult);
+    }
+
+    // With a token in hand, bot mode does need a channel; webhook mode has it in
+    // the URL.
+    if (via === "bot" && !channel) {
+      return goto("rejected", {
+        reason:
+          "channel is required for `bot` mode (e.g. '#general' or 'C0123')",
+      });
     }
 
     try {

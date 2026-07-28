@@ -6,7 +6,7 @@ heartbeat: `check` probes a preview's health; if it is down, `heal` re-attaches
 the sandbox and calls `deployPreview` (source `fs`) to rebuild + restart the
 uploaded code at the same stable URL. Inside a step's `run`, Sapiom capabilities
 are pre-auth'd on `ctx.sapiom` (here: `ctx.sapiom.sandboxes.attach`,
-`box.deployPreview`, `ctx.sapiom.database.get`, `ctx.sapiom.vault.get`).
+`box.deployPreview`, `ctx.sapiom.sandboxes.create`, `ctx.sapiom.database.get`).
 
 ## Authoring
 
@@ -19,9 +19,12 @@ are pre-auth'd on `ctx.sapiom` (here: `ctx.sapiom.sandboxes.attach`,
   the healthy path is a terminal no-op. Relaunching a live app would stack a
   second process and EADDRINUSE the port — don't remove that guard.
 - **Never bake secrets into the schedule.** A secret the app needs at start is
-  named in `vaultInject` (`ENV_VAR -> vaultKey`) and read from the vault at
-  runtime via `ctx.sapiom.vault.get(vaultRef, key)`. The schedule input carries
-  the reference, never the value.
+  named in `injectEnv` (a list of env var names), declared under `requiredSecrets`
+  in `template.json`, and read at runtime from the environment the platform
+  injected it into. The schedule input carries the name, never the value.
+- **Never synthesise a healthy probe.** This is a monitor: reporting `healthy` for
+  an app that was not probed inverts its meaning. With no target, `provision`
+  stands up a real demo sandbox and `heal` heals that.
 - **One definition, many previews.** The target is per-run via the schedule
   input (`sandboxName`, `url`, `start`, …), so one deploy keeps N previews alive.
 

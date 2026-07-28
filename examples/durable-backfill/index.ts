@@ -362,7 +362,7 @@ const plan = defineStep({
 
 const processStep = defineStep({
   name: "process",
-  next: ["finalize"],
+  next: ["finalize", "process"],
   // Self-loop: after checkpointing a chunk, pause until the heartbeat fires and
   // resume this same step for the next chunk.
   pause: { signal: HEARTBEAT, resumeStep: "process" },
@@ -445,8 +445,21 @@ const processStep = defineStep({
       processed: nextProcessed,
     });
 
-    // Last chunk done? Finalize now. Otherwise wait for the next heartbeat.
+    // Last chunk done? Finalize now.
     if (nextCursor >= total) return goto("finalize", {});
+
+    // Offline, nothing is wired to fire the heartbeat — no cron trigger, no
+    // external scheduler — so pausing here would suspend the run forever after
+    // one chunk of real work. Loop directly instead and finish the backfill. The
+    // durable-pause path is what a live run takes; this one still exercises the
+    // same chunk-and-checkpoint loop, just without waiting for a clock.
+    if (ctx.shared.get("dryRun") === true) {
+      ctx.logger.info("offline — looping to the next chunk without waiting", {
+        jobId,
+        cursor: nextCursor,
+      });
+      return goto("process", {});
+    }
     return pauseUntilSignal({
       signal: HEARTBEAT,
       resumeStep: "process",
@@ -494,6 +507,16 @@ const finalize = defineStep({
       checkpointFileId,
       manifestFileId,
       resultFileIds,
+      ...(dryRun
+        ? {
+            unmet: ["dbHandle"],
+            note:
+              `Ran offline: no \`dbHandle\` was given, so all ${chunkIndex} chunks were ` +
+              "processed in-process and nothing was written to a database, a sandbox, or " +
+              "file storage. Point `dbHandle` at a dataset to back the loop with real reads " +
+              "and durable checkpoints.",
+          }
+        : {}),
     });
   },
 });

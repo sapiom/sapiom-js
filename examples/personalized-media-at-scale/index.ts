@@ -114,6 +114,8 @@ interface Shared extends Record<string, unknown> {
   assets: Asset[];
   /** Index of the next row to animate; advanced by `collectClip`. */
   clipIndex: number;
+  /** One plain sentence about whose rows these are and whether we provisioned them. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -145,17 +147,25 @@ function buildPrompt(row: Recipient, medium: Medium, style: string): string {
 /**
  * Open a Postgres client (creating the database if absent), or null when no
  * connection string is available — e.g. under stubbed capabilities in
- * `run_local`. Mirrors `the-brain`'s create-if-missing seam. Reading rows is
- * free, so this runs on a dry run too; only generation + email are gated.
+ * `run_local`. Reading rows is free, so this runs on a dry run too; only
+ * generation + email are gated.
+ *
+ * `provisioned` is load-bearing, not decoration. A managed Postgres caps at 7
+ * days with no renew verb, so `get` failing means either "never existed" or
+ * "expired" and the API cannot tell you which. Without reporting it, a scheduled
+ * run silently reverts to the demo rows after the caller's own data expires —
+ * a confident, successful-looking run over data that vanished.
  */
 async function openSql(
   ctx: Ctx,
   handle: string,
-): Promise<ReturnType<typeof postgres> | null> {
+): Promise<{ sql: ReturnType<typeof postgres>; provisioned: boolean } | null> {
   let db;
+  let provisioned = false;
   try {
     db = await ctx.sapiom.database.get(handle);
   } catch {
+    provisioned = true;
     db = await ctx.sapiom.database.create({
       handle,
       duration: "7d",
@@ -168,11 +178,20 @@ async function openSql(
     ctx.logger.warn("database: no connection string", { handle });
     return null;
   }
-  return postgres(conn, { ssl: "require" });
+  return { sql: postgres(conn, { ssl: "require" }), provisioned };
 }
 
-/** Create the recipient table and seed a few demo rows the first time only. */
-async function ensureSeeded(sql: ReturnType<typeof postgres>): Promise<void> {
+/**
+ * Create the recipient table and seed a few demo rows the first time only.
+ * Returns whether it seeded, so the run can say the rows are ours.
+ *
+ * Read-side only: these rows are the INPUT the agent renders media for, not
+ * anything it wrote. Deploy runs `seed.sql` for the declared resource; this is
+ * the fallback for a handle deploy did not provision.
+ */
+async function ensureSeeded(
+  sql: ReturnType<typeof postgres>,
+): Promise<boolean> {
   await sql`
     create table if not exists ${sql(TABLE)} (
       id         bigserial primary key,
@@ -183,7 +202,7 @@ async function ensureSeeded(sql: ReturnType<typeof postgres>): Promise<void> {
     )`;
   const [{ count }] = await sql<{ count: number }[]>`
     select count(*)::int as count from ${sql(TABLE)}`;
-  if (count > 0) return;
+  if (count > 0) return false;
   await sql`
     insert into ${sql(TABLE)} ${sql(
       [
@@ -207,6 +226,26 @@ async function ensureSeeded(sql: ReturnType<typeof postgres>): Promise<void> {
       "email",
       "context",
     )}`;
+  return true;
+}
+
+/**
+ * True for an address RFC 2606 reserves for documentation. Mail to these is
+ * guaranteed not to arrive, and the seeded demo recipients use them — so we
+ * render their media and report `delivered: 0` rather than count a send that went
+ * nowhere. A real address is never affected.
+ */
+function isReservedAddress(email: string): boolean {
+  const domain = email.split("@")[1]?.toLowerCase() ?? "";
+  return (
+    domain === "example.com" ||
+    domain === "example.net" ||
+    domain === "example.org" ||
+    domain === "example" ||
+    domain.endsWith(".example") ||
+    domain.endsWith(".invalid") ||
+    domain.endsWith(".test")
+  );
 }
 
 /** Reuse an existing inbox to send from, else provision one. */
@@ -246,11 +285,13 @@ const fetch = defineStep({
     // Read the recipient rows (free — runs on a dry run too). Under stubbed
     // capabilities in run_local there's no connection string, so `rows` stays
     // empty and the graph still traces end to end.
-    const sql = await openSql(ctx, dbHandle);
+    const opened = await openSql(ctx, dbHandle);
     let rows: Recipient[] = [];
-    if (sql) {
+    let seeded = false;
+    if (opened) {
+      const { sql } = opened;
       try {
-        await ensureSeeded(sql);
+        seeded = await ensureSeeded(sql);
         rows = await sql<Recipient[]>`
           select id, name, email, context
           from ${sql(TABLE)}
@@ -260,6 +301,22 @@ const fetch = defineStep({
         await sql.end({ timeout: 5 });
       }
     }
+    ctx.shared.set(
+      "note",
+      [
+        opened?.provisioned
+          ? `Provisioned the \`${dbHandle}\` database on this run. A Sapiom Postgres caps at 7 days with no renew verb, so on a schedule an earlier run's rows may have expired.`
+          : null,
+        seeded
+          ? `Seeded ${TABLE} with 3 demo recipients, so the media below is rendered for them, not for your list. Insert your own rows (or point \`dbHandle\` at your database) to render yours.`
+          : null,
+        opened
+          ? null
+          : `No connection to \`${dbHandle}\` was available, so no recipients were read and nothing was rendered.`,
+      ]
+        .filter(Boolean)
+        .join(" ") || undefined,
+    );
     ctx.shared.set("rows", rows);
     ctx.logger.info("fetched recipients", { rows: rows.length, medium });
 
@@ -274,11 +331,30 @@ const fetch = defineStep({
           email: r.email,
           prompt: buildPrompt(r, medium, style),
         })),
+        note: [
+          "`dryRun` was set, so nothing was rendered or emailed — this is the plan only.",
+          ctx.shared.get("note"),
+        ]
+          .filter(Boolean)
+          .join(" "),
       });
     }
     if (rows.length === 0) {
-      // No rows to render — end cleanly rather than fanning out over nothing.
-      return terminate({ medium, rendered: 0, delivered: 0, assets: [] });
+      // No rows to render — end cleanly rather than fanning out over nothing, and
+      // say why there was nothing rather than reporting a clean zero.
+      return terminate({
+        medium,
+        rendered: 0,
+        delivered: 0,
+        assets: [],
+        unmet: [dbHandle],
+        note: [
+          `No recipient rows were readable from \`${dbHandle}\`, so nothing was rendered or emailed.`,
+          ctx.shared.get("note"),
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
     }
     return goto(medium === "video" ? "renderClip" : "renderImages", {});
   },
@@ -388,15 +464,51 @@ const deliver = defineStep({
     const medium = must(ctx.shared.get("medium"), "medium");
     const schedule = ctx.shared.get("schedule") ?? DEFAULT_SCHEDULE;
     const assets = input.assets ?? ctx.shared.get("assets") ?? [];
+    const note = ctx.shared.get("note");
     if (assets.length === 0) {
-      return terminate({ medium, schedule, rendered: 0, delivered: 0 });
+      return terminate({
+        medium,
+        schedule,
+        rendered: 0,
+        delivered: 0,
+        ...(note ? { note } : {}),
+      });
+    }
+
+    // Every recipient's address is a documentation placeholder — which is what the
+    // seeded demo rows carry. The media below is real and downloadable; sending it
+    // is what gets skipped, because mail to those domains cannot arrive and
+    // counting it as delivered would be a claim about the outside world.
+    const deliverable = assets.filter((a) => !isReservedAddress(a.email));
+    if (deliverable.length === 0) {
+      ctx.logger.info("all recipients are reserved addresses — not sending", {
+        rendered: assets.length,
+      });
+      return terminate({
+        medium,
+        schedule,
+        rendered: assets.length,
+        delivered: 0,
+        assets: assets.map((a) => ({
+          recipientId: a.recipientId,
+          name: a.name,
+          downloadUrl: a.downloadUrl ?? null,
+        })),
+        unmet: ["recipients"],
+        note: [
+          `Rendered ${assets.length} personalized ${medium}(s) — the links above are real. Nothing was emailed: every recipient address is a documentation placeholder that cannot receive mail.`,
+          note,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
     }
 
     // One shared inbox sends every recipient their own personalized asset.
     const inboxId = await resolveSenderInbox(ctx);
     const results: { recipientId: number; to: string; messageId?: string }[] =
       [];
-    for (const asset of assets) {
+    for (const asset of deliverable) {
       const link = asset.downloadUrl ?? "(asset link unavailable)";
       const subject = `${asset.name}, here's something we made for you`;
       const text =
@@ -429,12 +541,22 @@ const deliver = defineStep({
       rendered: assets.length,
       delivered,
     });
+    const skipped = assets.length - deliverable.length;
     return terminate({
       medium,
       schedule,
       rendered: assets.length,
       delivered,
       recipients: results,
+      note:
+        [
+          skipped > 0
+            ? `${skipped} recipient(s) were skipped: their addresses are documentation placeholders that cannot receive mail.`
+            : null,
+          note,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined,
     });
   },
 });

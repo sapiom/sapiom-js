@@ -45,7 +45,7 @@ report   post a briefing to a low-noise channel, append a brain.briefing row,
    (allow-list re-check, drop `no_action`, escalate-only, only-surfaced-targets,
    per-day cooldown, single-open, fan-out cap). Each launch carries an idempotency
    key `<play>-<target>-<yyyy-mm-dd>` and appends a `member.launched` row.
-4. **report** — posts a briefing (raw Slack + vault token), appends a
+4. **report** — posts a briefing (raw Slack + the injected `SLACK_BOT_TOKEN`), appends a
    `brain.briefing` row, advances the cursor, terminates.
 
 ## The fleet
@@ -114,7 +114,7 @@ surfaces `cooldown_due`. Swap the slugs for your real fleet.
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
    `sapiom_status`. Your agent becomes an API-key principal; `scan`/`assess`/
    `actuate`/`report` inherit that authority to read the DB handle, call
-   `models.run`, read the vault, and launch children.
+   `models.run` and launch children.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`

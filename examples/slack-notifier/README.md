@@ -1,52 +1,63 @@
 # Slack Notifier
 
-Post a message to Slack using **your own** credential, stored in the Sapiom
-Vault. This is the "bring your own API" on-ramp: store a secret, read it at
-runtime, call an external service. Slack is just the concrete hook — the pattern
-transfers to any API.
+Post a message to Slack using **your own** credential. This is the "bring your
+own API" on-ramp: declare a secret, read it at runtime, call an external service.
+Slack is just the concrete hook — the pattern transfers to any API.
 
 ## What it does
 
 ```
 validate  ──▶  post  ──▶  posted   (terminal)
-              (vault +    ├▶  failed    (terminal, on API error)
-               fetch)     └▶  ...
+              (fetch)     ├▶  failed    (terminal, on API error)
+                          └▶  rejected  (terminal, bot mode with no channel)
 validate  ──▶  rejected   (terminal, on bad input)
 ```
 
-1. **validate** — checks the message (non-empty, under the length cap) and
-   resolves config (auth mode, channel). Bad input → `rejected`.
-2. **post** — reads your credential with `ctx.sapiom.vault.get("slack", ...)`
-   and calls Slack via `fetch`:
+1. **validate** — resolves the message (defaulting to a fixed hello, and rejecting
+   anything over the length cap) and the config (auth mode, channel).
+2. **post** — reads your credential from the injected environment and calls Slack
+   via `fetch`:
    - `bot` mode (default) — a bot token calls `chat.postMessage`; returns the
      resolved channel id + message `ts`.
    - `webhook` mode — an incoming-webhook URL; the channel is baked into the URL.
 
 Input: `{ "message": "Deploy finished :rocket:", "channel": "#general" }`.
 
+## It runs with nothing
+
+Run it with `{}` and it composes the default message, finds no credential, and
+terminates with:
+
+```json
+{
+  "posted": false,
+  "skipped": "no-credential",
+  "unmet": ["SLACK_BOT_TOKEN"],
+  "note": "No `SLACK_BOT_TOKEN` is set, so nothing was posted to Slack. …"
+}
+```
+
+That is the point. Posting is this template's entire purpose, so with no token it
+composes the message, skips the send, and says so — it never reports
+`posted: true` for a message nobody received.
+
 ## Where the key lives (and how it's injected)
 
-The Slack credential is **never** in code. It lives in the Sapiom Vault, scoped
-to this workflow (`workflow:{definitionId}`), under the ref `slack`:
+The Slack credential is **never** in code, and the template never names a storage
+location. It declares what the credential *is*, in `template.json`:
 
-| Auth mode        | Vault key     | What to store                                   |
-| ---------------- | ------------- | ----------------------------------------------- |
-| `bot` (default)  | `bot_token`   | A Slack bot token (`xoxb-…`) with `chat:write`. |
-| `webhook`        | `webhook_url` | A Slack incoming-webhook URL.                   |
+| Auth mode       | Declared key        | What to supply                                  |
+| --------------- | ------------------- | ----------------------------------------------- |
+| `bot` (default) | `SLACK_BOT_TOKEN`   | A Slack bot token (`xoxb-…`) with `chat:write`. |
+| `webhook`       | `SLACK_WEBHOOK_URL` | A Slack incoming-webhook URL.                   |
 
-On `deploy`, the agent is authorized to read the Vault via the injected
-`SAPIOM_API_KEY` leaf token, so `ctx.sapiom.vault.get(...)` resolves your secret
-at runtime with no extra wiring.
+Sapiom collects the declared credentials when you use the template, keeps them
+scoped to the deployed workflow, and injects them into the step's environment at
+dispatch — so `process.env.SLACK_BOT_TOKEN` resolves your secret at runtime with
+no extra wiring, and where it is stored can change without touching this template.
 
-Set the token after deploy (until the in-UI "set a secret at creation" flow
-lands):
-
-```bash
-curl -X POST "$SAPIOM_API_URL/workflows/definitions/$DEFINITION_ID/secrets" \
-  -H "Authorization: Bearer $SAPIOM_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{ "ref": "slack", "secrets": { "bot_token": "xoxb-your-token" } }'
-```
+Supplying a credential needs no redeploy: secrets are read at step dispatch, so
+setting one and re-running is enough.
 
 ## Swap Slack for any other API
 
@@ -54,11 +65,11 @@ This template is a shape, not a Slack integration. To notify Discord,
 PagerDuty, or your own service instead:
 
 1. In `index.ts`, change the `fetch` URL (and request body) to your API.
-2. Change `VAULT_REF` / the secret key to match your credential.
-3. Store your API's key in the Vault under that ref (same `POST .../secrets`).
+2. Change `BOT_TOKEN_KEY` to your credential's key name.
+3. Declare that key under `requiredSecrets` in `template.json`.
 
-Everything else — validation, the `dryRun` / no-key guard, reading the secret at
-runtime — stays the same.
+Everything else — validation, the no-key guard, reading the secret at runtime —
+stays the same.
 
 ## Run it with Claude + the Sapiom MCP
 
@@ -69,13 +80,12 @@ runtime — stays the same.
    ```
 
 2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
-   `sapiom_status`. Your agent becomes an API-key principal; the `post` step
-   inherits that authority to read the Vault.
+   `sapiom_status`.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
-   `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` (Vault stubbed, no
-   network, free) → `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` → set
-   your token (above) → `sapiom_dev_agents_run` (posts to Slack for real).
+   `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` (no network, free) →
+   `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` → supply your token →
+   `sapiom_dev_agents_run` (posts to Slack for real).
 
 ## Files
 

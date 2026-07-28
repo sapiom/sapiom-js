@@ -24,13 +24,14 @@ search  ──▶  scrape  ──▶  write  ──▶  header  ──▶  deliv
    back, the issue still goes out without it.
 5. **deliver** — emails each subscriber their own copy. A `dryRun` guard writes
    and renders the full issue but skips the real send; the subscriber list is
-   read from the Sapiom vault at runtime, never persisted.
+   ordinary run input, not a secret.
 
 Input: `{ "niche": "indie game development", "newsletterName": "Pixel Weekly", "schedule": "0 8 * * 1", "subscribers": ["you@example.com"] }`.
 
 - `niche` and `newsletterName` set what it writes about and the masthead.
 - `schedule` is the cron cadence — it defaults to Mondays at 08:00.
-- `subscribers` is the recipient list; omit it to use the vault-configured list.
+- `subscribers` is the recipient list; omit it and the issue is returned in the
+  run's output instead of sent.
 - `dryRun: true` returns the finished issue as a preview without emailing anyone.
 
 ### `scheduled-research-brief` vs. this

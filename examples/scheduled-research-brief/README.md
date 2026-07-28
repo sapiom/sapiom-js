@@ -21,13 +21,14 @@ search  ──▶  scrape  ──▶  curate  ──▶  deliver  (terminal)
    sourced brief. This is the step `web-research-digest` deliberately omits (it
    formats in-process, no LLM).
 4. **deliver** — emails the brief to the recipient. A `dryRun` guard computes the
-   brief but skips the real send; the recipient is read from the Sapiom vault at
+   brief but skips the real send; so does a run with no recipient set. The recipient is
    runtime, never persisted.
 
 Input: `{ "topic": "AI agent reliability incidents", "schedule": "0 8 * * *", "deliverTo": "you@example.com" }`.
 
 - `topic` and `schedule` are the two knobs — what to research, and how often.
-- `deliverTo` sets the recipient; omit it to use the vault-configured default.
+- `deliverTo` sets the recipient; omit it and the brief is returned in the run's
+  output instead of emailed.
 - `dryRun: true` returns the brief as a preview without emailing anyone.
 
 ### `web-research-digest` vs. this

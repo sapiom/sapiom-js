@@ -84,7 +84,7 @@ interface RepurposeInput {
   audience?: string;
   /** How many quote graphics to make (default 2, clamped 1–4). */
   numQuotes?: number;
-  /** Recipient email; falls back to the vault-configured default when omitted. */
+  /** Recipient email. Omit it and the pack is returned inline instead of emailed. */
   deliverTo?: string;
   /** Cron cadence this pipeline is meant to run on (carried + reported). */
   schedule?: string;
@@ -106,6 +106,8 @@ interface Shared extends Record<string, unknown> {
   clip: Clip | null;
   packFileId: string | null;
   packDownloadUrl: string | null;
+  /** Set when the run repurposed the built-in sample post rather than the caller's. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -124,10 +126,24 @@ const DEFAULT_SCHEDULE = "0 9 * * 1";
 /** Fan-out bounds on the pull-quote list. */
 const DEFAULT_NUM_QUOTES = 2;
 const MAX_QUOTES = 4;
-/** Vault ref holding delivery config (e.g. a default RECIPIENT). Read at runtime. */
-const DELIVERY_VAULT_REF = "content-repurposing-pipeline";
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "content-repurposing";
+
+/** Title paired with `SAMPLE_SOURCE`. */
+const SAMPLE_TITLE = "Why small teams ship faster";
+/**
+ * The post a zero-input run repurposes. Real prose, because the model output is
+ * the artifact — a one-line placeholder produces a content pack about nothing.
+ */
+const SAMPLE_SOURCE = `Small teams ship faster, and it is not because they work harder.
+
+Every additional person on a project adds communication paths, not just capacity. Three people have three pairs to keep in sync; ten people have forty-five. That arithmetic is why a team of ten rarely produces three times what a team of three does — most of the extra effort is spent on staying aligned rather than on the work itself.
+
+The second reason is that small teams cannot afford process theatre. There is no room for a weekly status meeting whose only output is a document nobody reads, or a design review whose purpose is to distribute blame. When four people can see the whole system, coordination happens in the code and in a two-minute conversation. Process gets added when trust or context runs out, and small teams have plenty of both.
+
+The third reason is the one people miss: small teams make smaller decisions. A large team has to plan far ahead, because reversing course means re-aligning everyone. A small team can try something on Tuesday and abandon it on Thursday, so it takes more shots and learns faster. Speed here is a consequence of cheap reversal, not of typing quickly.
+
+None of this means small is always right. Some problems genuinely need more hands, and a team of four cannot staff an on-call rotation without burning out. The useful question is not "how do we grow?" but "what is the smallest team that can own this end to end?" Answer that honestly, and the shipping speed follows.`;
 
 function clampQuotes(n: number | undefined): number {
   if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_NUM_QUOTES;
@@ -266,9 +282,26 @@ const repurpose = defineStep({
   next: ["graphics"],
   terminal: true,
   async run(input: RepurposeInput, ctx: Ctx) {
-    const source = input.source?.trim();
-    if (!source) throw new Error("`source` is required");
-    const title = input.title?.trim() || "Untitled";
+    // An omitted source runs the sample post, so a zero-input run produces a real
+    // content pack. An explicitly-empty one is a mistake worth reporting, not a
+    // reason to substitute our prose for the caller's.
+    if (input.source !== undefined && input.source.trim().length === 0) {
+      return terminate({
+        status: "rejected",
+        reason:
+          "`source` was empty — pass the post or transcript to repurpose.",
+      });
+    }
+    const usedSampleSource = input.source === undefined;
+    const source = usedSampleSource ? SAMPLE_SOURCE : input.source.trim();
+    if (usedSampleSource) {
+      ctx.shared.set(
+        "note",
+        "Repurposed the built-in sample post. Pass your own `source` to repurpose yours.",
+      );
+    }
+    const title =
+      input.title?.trim() || (usedSampleSource ? SAMPLE_TITLE : "Untitled");
     const audience =
       input.audience?.trim() || "a general professional audience";
     const numQuotes = clampQuotes(input.numQuotes);
@@ -313,9 +346,22 @@ const repurpose = defineStep({
     });
 
     // dryRun: trace the graph and read the copy without paying for graphics/clip.
-    if (input.dryRun) {
+    // It defaults on ONLY when the source was defaulted too — image and video are
+    // the priciest capabilities here, and a run nobody configured should not be the
+    // most expensive one in the gallery. Supply a source and the full pack renders.
+    if (input.dryRun ?? usedSampleSource) {
       ctx.logger.info("dryRun — returning copy only");
-      return terminate({ dryRun: true, title, pack });
+      return terminate({
+        dryRun: true,
+        title,
+        pack,
+        note: [
+          ctx.shared.get("note"),
+          "No quote graphics or teaser clip were rendered, and nothing was emailed — this is the copy only. Pass `dryRun: false` for the full pack.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
     }
     return goto("graphics", {});
   },
@@ -462,20 +508,6 @@ const packageStep = defineStep({
   },
 });
 
-/**
- * Resolve the recipient from the vault at runtime. A missing ref/key is an expected
- * outcome (`vault.get` returns null), not an error — the caller falls back to
- * returning the pack without sending.
- */
-async function recipientFromVault(ctx: Ctx): Promise<string | null> {
-  try {
-    return await ctx.sapiom.vault.get(DELIVERY_VAULT_REF, "RECIPIENT");
-  } catch (err) {
-    ctx.logger.warn("vault: no recipient configured", { err: String(err) });
-    return null;
-  }
-}
-
 /** Reuse an existing inbox to send from, else provision one. */
 async function resolveSenderInbox(ctx: Ctx): Promise<string> {
   const existing = await ctx.sapiom.email.inboxes.list({ limit: 1 });
@@ -517,10 +549,11 @@ const deliver = defineStep({
       clipFileId: value?.fileId ?? null,
     };
 
-    // Explicit input wins; otherwise resolve the default from the vault at runtime
-    // (never carried through state).
-    const deliverTo =
-      ctx.shared.get("deliverTo") || (await recipientFromVault(ctx));
+    // A recipient is ordinary configuration, so it arrives as run input (declared
+    // as a `deliverTo` setting in template.json) rather than from a write-only
+    // secret store nothing in the product can populate.
+    const deliverTo = ctx.shared.get("deliverTo");
+    const note = ctx.shared.get("note");
 
     // The safe path: no recipient configured yet returns the pack without sending.
     if (!deliverTo) {
@@ -529,6 +562,13 @@ const deliver = defineStep({
         ...summary,
         delivered: false,
         reason: "no-recipient",
+        unmet: ["deliverTo"],
+        note: [
+          "Nothing was emailed: no `deliverTo` address is set, so the pack is returned inline below.",
+          note,
+        ]
+          .filter(Boolean)
+          .join(" "),
         to: null,
         subject,
         markdown,
@@ -551,6 +591,7 @@ const deliver = defineStep({
       to: deliverTo,
       subject,
       messageId: sent.messageId,
+      ...(note ? { note } : {}),
     });
   },
 });

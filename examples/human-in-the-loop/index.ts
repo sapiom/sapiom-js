@@ -96,7 +96,10 @@ interface EntryInput {
   approver?: string;
   /** Human channel to escalate to when the ranked list is exhausted. Falls back to `config.ESCALATION_EMAIL`. */
   escalateTo?: string;
-  /** Compute + notify but never perform the irreversible commit. `run_local` sets this. */
+  /**
+   * Compute + notify but never perform the irreversible commit. Nothing sets this
+   * for you — pass it explicitly when you want the graph traced without side effects.
+   */
   dryRun?: boolean;
   /** String-only config bag (approver / escalation fallbacks). */
   config?: Config;
@@ -127,6 +130,8 @@ interface Shared extends Record<string, unknown> {
   approver: string | null;
   escalateTo: string | null;
   dryRun: boolean;
+  /** Set when the run ranked the built-in sample shortlist rather than the caller's. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -212,12 +217,39 @@ async function rankCandidates(
   return applyRanking(res.output, candidates);
 }
 
+/**
+ * The request a zero-input run fulfils, with a shortlist to rank it against.
+ * Deliberately NO email addresses: an uncontactable candidate is exactly what
+ * these are, so a run that somehow got past the approval gate could never send a
+ * provisional offer to somebody we invented.
+ */
+const SAMPLE_REQUEST =
+  "Find someone to repaint the lobby by Friday, quality over price.";
+const SAMPLE_CANDIDATES: Candidate[] = [
+  {
+    id: "a",
+    name: "Acme Painting",
+    attributes: { rating: 4.8, price: 1200, availability: "Thu" },
+  },
+  {
+    id: "b",
+    name: "Budget Coats",
+    attributes: { rating: 3.9, price: 700, availability: "Fri" },
+  },
+  {
+    id: "c",
+    name: "Meridian Finishes",
+    attributes: { rating: 4.5, price: 1500, availability: "Wed" },
+  },
+];
+
 // ─────────────────────────────────────────────────────────────── steps ──
 const parse = defineStep({
   name: "parse",
   next: ["rank"],
   async run(input: EntryInput, ctx: Ctx) {
-    const request = input.request?.trim() ?? "";
+    const suppliedRequest = input.request?.trim() ?? "";
+    const request = suppliedRequest || SAMPLE_REQUEST;
     const config = input.config ?? {};
     ctx.shared.set("request", request);
     ctx.shared.set("index", 0);
@@ -231,6 +263,22 @@ const parse = defineStep({
     );
     ctx.shared.set("dryRun", input.dryRun === true);
 
+    // Nothing to fulfil and nobody to rank: use the sample so the run really
+    // parses and really ranks, and say in the output that the shortlist was ours.
+    const suppliedCandidates =
+      input.candidates && input.candidates.length > 0 ? input.candidates : null;
+    const candidates = suppliedCandidates ?? SAMPLE_CANDIDATES;
+    const defaulted = [
+      suppliedRequest ? null : "`request`",
+      suppliedCandidates ? null : "`candidates`",
+    ].filter(Boolean);
+    if (defaulted.length > 0) {
+      ctx.shared.set(
+        "note",
+        `Used the built-in sample for ${defaulted.join(" and ")}. The sample candidates carry no email address, so none of them can be sent an offer. Pass your own to rank and offer for real.`,
+      );
+    }
+
     // Reversible prep: understand the request before touching any candidate.
     const parsed = await parseRequest(ctx, request);
     ctx.shared.set("parsed", parsed);
@@ -238,7 +286,7 @@ const parse = defineStep({
       summary: parsed.summary,
       criteria: parsed.criteria.length,
     });
-    return goto("rank", { candidates: input.candidates ?? [] });
+    return goto("rank", { candidates });
   },
 });
 
@@ -259,7 +307,7 @@ const rank = defineStep({
 
 const notifyApprover = defineStep({
   name: "notifyApprover",
-  next: [],
+  next: ["pending"],
   // Static graph edge: on the approval signal, resume at `onDecision`. Must match
   // the `pauseUntilSignal` directive below.
   pause: { signal: APPROVAL_SIGNAL, resumeStep: "onDecision" },
@@ -267,6 +315,18 @@ const notifyApprover = defineStep({
     const parsed = must(ctx.shared.get("parsed"), "parsed");
     const ranked = must(ctx.shared.get("ranked"), "ranked");
     const approver = ctx.shared.get("approver") ?? null;
+
+    // Nobody is assigned to approve, so nothing will ever fire the decision
+    // signal and pausing here would suspend the run forever. Stop holding the
+    // ranked shortlist instead. Never as approved — fabricating a human yes is
+    // the worst output this template could produce — and never auto-rejected
+    // either, which reads as breakage when nobody actually said no.
+    if (!approver) {
+      ctx.logger.info("no approver configured — terminating at the gate", {
+        ranked: ranked.length,
+      });
+      return goto("pending", {});
+    }
 
     // Reversible prep: notify the approver with the ranked recommendation.
     await notify(
@@ -329,7 +389,7 @@ const revert = defineStep({
 
 const offer = defineStep({
   name: "offer",
-  next: [],
+  next: ["resolve"],
   // Static graph edge: on a candidate's confirm, resume at `resolve`.
   pause: { signal: CONFIRM_SIGNAL, resumeStep: "resolve" },
   async run(_input: unknown, ctx: Ctx) {
@@ -339,6 +399,16 @@ const offer = defineStep({
     if (!candidate) {
       // Invariant guard — callers only route here with a valid index.
       throw new Error(`no candidate at index ${index} of ${ranked.length}`);
+    }
+
+    // No way to reach this candidate, so no confirm will ever arrive: treat it as
+    // a decline and move down the list rather than suspend forever.
+    if (!candidate.email) {
+      ctx.logger.info("candidate has no email — advancing without an offer", {
+        candidate: candidate.id,
+        index,
+      });
+      return goto("resolve", {});
     }
 
     // Provisional, NON-committing offer to the current top-ranked candidate.
@@ -448,6 +518,47 @@ const commit = defineStep({
       selected: selectedRef,
       notified,
     });
+  },
+});
+
+/**
+ * The gate's off-ramp when no approver is assigned. Terminal, and deliberately
+ * neither `approved` nor `reverted`: nobody decided anything. It carries the
+ * ranked shortlist and the signal that continues the run, so the work survives.
+ */
+const pending = defineStep({
+  name: "pending",
+  next: [],
+  terminal: true,
+  async run(_input: unknown, ctx: Ctx) {
+    const parsed = must(ctx.shared.get("parsed"), "parsed");
+    const ranked = must(ctx.shared.get("ranked"), "ranked");
+    const note = ctx.shared.get("note");
+    return terminate(
+      {
+        committed: false,
+        outcome: "pending-approval",
+        pending: true,
+        summary: parsed.summary,
+        criteria: parsed.criteria,
+        shortlist: ranked.map((c) => ({
+          id: c.id,
+          name: c.name,
+          score: c.score,
+          rationale: c.rationale,
+        })),
+        unmet: ["approver"],
+        note: [
+          "The shortlist is ranked and nothing was offered or committed.",
+          "Set an `approver` email and re-run to have it sent for sign-off, or fire the",
+          `\`${APPROVAL_SIGNAL}\` signal with \`{ "decision": "approve" }\` to continue this run.`,
+          note,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+      { reason: "no approver configured" },
+    );
   },
 });
 
@@ -647,6 +758,7 @@ export const agent = defineAgent<EntryInput, Shared>({
     offer,
     resolve,
     commit,
+    pending,
     escalate,
   },
 });

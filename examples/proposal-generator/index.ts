@@ -141,9 +141,21 @@ interface Shared extends Record<string, unknown> {
   quoteNumber: string;
   fileId: string | null;
   downloadUrl: string | null;
+  /** Set when the run drafted from the built-in sample brief rather than the caller's. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
+
+/**
+ * The brief a zero-input run quotes. Real enough that the model produces genuine
+ * line items and a defensible total — a one-line placeholder produces neither.
+ */
+const SAMPLE_REQUEST = `We're a 40-person logistics company and our customer support inbox is drowning. About 300 emails a day, and roughly half are the same four questions: where is my shipment, can I change the delivery address, how do I get an invoice copy, and how do I file a damage claim.
+
+We want an automated first-response layer that answers those four cases directly from our shipment database, and routes everything else to a human with a summary attached. Must integrate with our existing Zendesk and our internal shipment API. We'd like a pilot on the "where is my shipment" case first so we can measure it before committing to the rest.
+
+Timeline: pilot live within six weeks. Budget is not fixed but we'll need the pilot under $25k to get it approved. Please break out the pilot separately from the full build.`;
 
 // ─────────────────────────────────────────────────────────────── helpers ──
 function must<T>(value: T | undefined, name: string): T {
@@ -246,10 +258,23 @@ async function draftProposal(
 // ─────────────────────────────────────────────────────────────── steps ──
 const draft = defineStep({
   name: "draft",
-  next: ["render"],
+  next: ["render", "rejected"],
   async run(input: EntryInput, ctx: Ctx) {
-    const request = input.request?.trim() ?? "";
-    if (!request) throw new Error("`request` is required");
+    // An omitted request drafts against the sample brief, so a zero-input run
+    // produces a real priced proposal. An explicitly-empty one is a mistake.
+    if (input.request !== undefined && input.request.trim().length === 0) {
+      return goto("rejected", {
+        notes: "`request` was empty — paste the client's brief or RFP.",
+      });
+    }
+    const usedSampleRequest = input.request === undefined;
+    const request = usedSampleRequest ? SAMPLE_REQUEST : input.request.trim();
+    if (usedSampleRequest) {
+      ctx.shared.set(
+        "note",
+        "Drafted from the built-in sample brief. Pass your own `request` to quote a real one.",
+      );
+    }
     const config = input.config ?? {};
     const currency = (input.currency?.trim() || "USD").toUpperCase();
     const taxRate =
@@ -383,7 +408,7 @@ const render = defineStep({
 
 const review = defineStep({
   name: "review",
-  next: [],
+  next: ["pending"],
   // Static graph edge: on the decision signal, resume at `onDecision`. Must match
   // the `pauseUntilSignal` directive below.
   pause: { signal: DECISION_SIGNAL, resumeStep: "onDecision" },
@@ -394,6 +419,21 @@ const review = defineStep({
     const quoteNumber = must(ctx.shared.get("quoteNumber"), "quoteNumber");
     const approver = ctx.shared.get("approver") ?? null;
     const downloadUrl = ctx.shared.get("downloadUrl") ?? null;
+
+    // Nobody is assigned to approve, so nothing will ever fire the decision
+    // signal: pausing here would suspend the run forever. Stop holding the draft
+    // instead — never as approved, and never auto-rejected either.
+    if (!approver) {
+      ctx.logger.info("no approver configured — terminating at the gate", {
+        quoteNumber,
+      });
+      return goto("pending", {
+        title: draftDoc.title,
+        total: totals.total,
+        currency,
+        downloadUrl,
+      });
+    }
 
     // Email the internal approver a summary + the PDF link before anything goes
     // to the client.
@@ -489,6 +529,52 @@ const send = defineStep({
       total: totals.total,
       notes: input?.notes ?? null,
     });
+  },
+});
+
+/**
+ * The gate's off-ramp when no approver is assigned. Terminal, and deliberately
+ * NOT `rejected`: nobody decided anything. It carries the drafted proposal and
+ * the signal that continues the run, so the work is not lost.
+ */
+const pending = defineStep({
+  name: "pending",
+  next: [],
+  terminal: true,
+  async run(
+    input: {
+      title: string;
+      total: number;
+      currency: string;
+      downloadUrl: string | null;
+    },
+    ctx: Ctx,
+  ) {
+    const quoteNumber = ctx.shared.get("quoteNumber") ?? null;
+    const note = ctx.shared.get("note");
+    return terminate(
+      {
+        sent: false,
+        outcome: "pending-approval",
+        pending: true,
+        quoteNumber,
+        title: input.title,
+        total: input.total,
+        currency: input.currency,
+        downloadUrl: input.downloadUrl,
+        fileId: ctx.shared.get("fileId") ?? null,
+        unmet: ["approver"],
+        note: [
+          "The proposal is drafted and nothing was sent to the client.",
+          "Set an `approver` email and re-run to have it emailed for sign-off, or fire the",
+          `\`${DECISION_SIGNAL}\` signal with \`{ "decision": "approve" }\` to continue this run.`,
+          note,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+      { reason: "no approver configured" },
+    );
   },
 });
 
@@ -770,5 +856,5 @@ writeFileSync(\`\${quoteNumber}.pdf\`, await pdf.save());
 export const agent = defineAgent<EntryInput, Shared>({
   name: "proposal-generator",
   entry: "draft",
-  steps: { draft, render, review, onDecision, send, rejected },
+  steps: { draft, render, review, onDecision, send, pending, rejected },
 });

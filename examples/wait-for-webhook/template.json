@@ -41,9 +41,7 @@
         "jobId": "dry-run",
         "decision": "reject",
         "summary": "The external job reported a failure status.",
-        "reasons": [
-          "status=\"failed\""
-        ]
+        "reasons": ["status=\"failed\""]
       }
     }
   ]

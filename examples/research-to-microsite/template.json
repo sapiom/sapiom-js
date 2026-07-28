@@ -13,6 +13,9 @@
     "Optional custom subdomain"
   ],
   "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `topic` (what to research) and, optionally, an `audience` to tune the tone. To publish under your own domain, register/own the domain in Sapiom first, then pass `customDomain` (a domain you own) and an optional `subdomain` (defaults to `www`) — it adds a free CNAME to the live site. Leave the domain off and you still get a shareable preview URL. Pass `dryRun: true` to get the report back without building or deploying anything.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"topic\": \"...\", \"dryRun\": true }` to trace search → scrape → synthesize and read the report for free (capabilities stubbed, nothing built), or edit and deploy it with the Sapiom MCP.",
+  "defaultInput": {
+    "topic": "how durable workflow engines handle retries"
+  },
   "examples": [
     {
       "title": "Preview the report before publishing",

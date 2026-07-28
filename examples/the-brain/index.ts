@@ -64,7 +64,12 @@ import postgres from "postgres";
 // ──────────────────────────────────────────────────────────── config / types ──
 
 const DB_HANDLE = "the-brain";
-const SLACK_VAULT_REF = "slack";
+/**
+ * Env key for the Slack bot token used to post the briefing. Declared as a
+ * required secret in `template.json`; the platform injects it into the step's
+ * environment. The template says what the credential IS, never where it lives.
+ */
+const SLACK_BOT_TOKEN_KEY = "SLACK_BOT_TOKEN";
 
 // Daily members surface `no_child_ran_today` only after this UTC hour, so a run
 // early in the day doesn't flag a member that simply hasn't fired yet.
@@ -200,6 +205,8 @@ interface FleetState {
 interface Shared extends Record<string, unknown> {
   dryRun: boolean;
   observeOnly: boolean;
+  /** Plays that produced no launch, with why — read by `report`. */
+  skipped?: string[];
   nowIso: string;
   briefingChannelId: string;
   fleet: Member[];
@@ -467,19 +474,11 @@ function computeSituations(
   return situations;
 }
 
-// ── Slack (raw fetch, vault token) ──
+// ── Slack (raw fetch, injected token) ──
 
-async function getSlackToken(
-  ctx: Ctx,
-  dryRun: boolean,
-): Promise<string | null> {
+function getSlackToken(dryRun: boolean): string | null {
   if (dryRun) return null;
-  try {
-    return await ctx.sapiom.vault.get(SLACK_VAULT_REF, "bot_token");
-  } catch (err) {
-    ctx.logger.warn("vault: no slack token", { err: String(err) });
-    return null;
-  }
+  return process.env[SLACK_BOT_TOKEN_KEY]?.trim() || null;
 }
 /**
  * Resolve a post target into a channel id chat.postMessage will accept. A `U…`
@@ -535,10 +534,15 @@ async function slackPost(
 }
 
 // ── child-workflow launch (the key detail + risk) ──
-// The @sapiom/agent SDK's ctx.sapiom.agents.launch posts to a /agents/v1 route
-// that 404s on the deployed backend today. Launch children directly against the
-// working engine API by definitionId, using the API key present in the runtime.
-const WF_BASE = "https://api.sapiom.ai/v1/workflows";
+// This launches children directly against the engine API by definitionId, using
+// the API key present in the runtime, rather than through the SDK's
+// ctx.sapiom.agents.launch. That route was reported as 404ing, but the report was
+// never reproduced against production — treat it as unverified, and prefer the SDK
+// once it is confirmed working.
+// Derived from the environment, NOT hardcoded: a fork running against a local or
+// staging stack must not launch child workflows into production, which is exactly
+// what a baked-in prod URL does.
+const WF_BASE = `${(process.env.SAPIOM_API_BASE_URL ?? "https://api.sapiom.ai").replace(/\/+$/, "")}/v1/workflows`;
 // Static fallback slug->definitionId map. definitionIds are ENVIRONMENT-SPECIFIC:
 // they don't exist until you deploy the child workflows. After deploying your
 // children (e.g. `hello-agent`), capture each definitionId and seed it here.
@@ -574,23 +578,43 @@ async function resolveDefId(slug: string, key: string): Promise<string> {
   return defIdCache?.[slug] ?? DEF_IDS[slug] ?? "";
 }
 
-/** Launch a child workflow fire-and-forget. Synthetic dryrun id when no key (run_local). */
+/** Human-readable reasons a play produced no launch. */
+const LAUNCH_SKIP_REASONS: Record<string, string> = {
+  "no-api-key":
+    "no API key was available in the run, so no child workflow was started",
+  "child-not-deployed":
+    "the child workflow is not deployed in this tenant yet, so there was nothing to launch",
+  "no-execution-id":
+    "the engine accepted the launch but returned no execution id",
+};
+
+/**
+ * Launch a child workflow fire-and-forget.
+ *
+ * Returns `{ skipped }` rather than throwing when the child cannot be resolved: a
+ * fresh tenant has not deployed the children yet, and a missing sibling is an
+ * expected first-run state, not a crash. The caller records the skip and its
+ * reason in the event log so the briefing says what did not happen.
+ */
 async function launchChild(
   slug: string,
   input: unknown,
   idempotencyKey?: string,
-): Promise<{ executionId: string; dryRun: boolean }> {
+): Promise<{ executionId: string | null; dryRun: boolean; skipped?: string }> {
   const key = process.env.SAPIOM_API_KEY ?? "";
   if (!key)
     return {
-      executionId: `dryrun-${slug}-${idempotencyKey ?? "x"}`,
+      executionId: null,
       dryRun: true,
+      skipped: "no-api-key",
     };
   const definitionId = await resolveDefId(slug, key);
   if (!definitionId)
-    throw new Error(
-      `launchChild: no definitionId for '${slug}' — deploy the child and seed DEF_IDS`,
-    );
+    return {
+      executionId: null,
+      dryRun: false,
+      skipped: "child-not-deployed",
+    };
   const res = await fetch(`${WF_BASE}/executions`, {
     method: "POST",
     headers: { "x-api-key": key, "content-type": "application/json" },
@@ -604,7 +628,7 @@ async function launchChild(
   const data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
   const executionId = String(data.executionId ?? data.id ?? "");
   if (!executionId)
-    throw new Error(`launchChild ${slug}: no executionId in response`);
+    return { executionId: null, dryRun: false, skipped: "no-execution-id" };
   return { executionId, dryRun: false };
 }
 
@@ -798,6 +822,7 @@ const actuate = defineStep({
     const inFlight = new Set(inFlightIds);
     const day = nowIso.slice(0, 10);
     const launched: string[] = [];
+    const skipped: string[] = [];
     let launchCount = 0;
 
     // The event bus is opened once for the whole actuation, then closed.
@@ -871,6 +896,29 @@ const actuate = defineStep({
         }
 
         const child = await launchChild(member.slug, member.input ?? {}, idem);
+        if (child.skipped) {
+          // Nothing was launched. Record the skip and its reason so the briefing
+          // says so, and release the cooldown — a launch that never happened must
+          // not suppress the next attempt.
+          cooldown.delete(item.target);
+          await appendEvent(sql, {
+            type: "member.launch_skipped",
+            source: "the-brain",
+            entity: { kind: "workflow", id: member.slug },
+            summary: `Did not launch ${member.slug} for ${item.target}: ${child.skipped}`,
+            payload: {
+              memberId: item.target,
+              slug: member.slug,
+              play: item.play,
+              skipped: child.skipped,
+              idempotencyKey: idem,
+            },
+          });
+          skipped.push(
+            `${member.slug}: ${LAUNCH_SKIP_REASONS[child.skipped] ?? child.skipped}`,
+          );
+          continue;
+        }
         await appendEvent(sql, {
           type: "member.launched",
           source: "the-brain",
@@ -891,9 +939,11 @@ const actuate = defineStep({
     }
 
     ctx.shared.set("launched", launched);
+    ctx.shared.set("skipped", skipped);
     ctx.shared.set("needsHuman", needsHuman);
     ctx.logger.info("actuated", {
       launched: launched.length,
+      skipped: skipped.length,
       needsHuman: needsHuman.length,
     });
     return goto("report", {});
@@ -916,6 +966,7 @@ const report = defineStep({
     const briefing = must(ctx.shared.get("briefing"), "briefing");
     const needsHuman = must(ctx.shared.get("needsHuman"), "needsHuman");
     const launched = must(ctx.shared.get("launched"), "launched");
+    const skipped = ctx.shared.get("skipped") ?? [];
     const cursor = must(ctx.shared.get("cursor"), "cursor");
 
     const actionLabel = observeOnly ? "Would launch" : "Launched";
@@ -935,9 +986,9 @@ const report = defineStep({
     const text = lines.join("\n");
 
     // Post the briefing to the channel (raw Slack), append it to the bus, advance cursor.
+    const token = getSlackToken(dryRun);
     const sql = await openSql(ctx, DB_HANDLE, dryRun);
     try {
-      const token = await getSlackToken(ctx, dryRun);
       if (token && briefingChannelId) {
         await slackPost(token, briefingChannelId, text).catch((err) =>
           ctx.logger.warn("briefing post failed", { err: String(err) }),
@@ -972,9 +1023,35 @@ const report = defineStep({
     return terminate({
       lookedAt: situations.length,
       launched,
+      skipped,
       needsHuman,
       briefing,
       cursor,
+      unmet: [
+        ...(token || dryRun ? [] : [SLACK_BOT_TOKEN_KEY]),
+        ...(briefingChannelId ? [] : ["briefingChannelId"]),
+      ],
+      note: [
+        situations.length === 0
+          ? "The event log held nothing to act on, so no plays were run — that is the correct outcome for an empty log, not a failure. Append events (or deploy fleet members that emit them) and the next run will have something to notice."
+          : null,
+        skipped.length > 0
+          ? `Some plays produced no launch: ${skipped.join("; ")}.`
+          : null,
+        token && briefingChannelId
+          ? null
+          : `The briefing was not posted to Slack: ${
+              dryRun
+                ? "`dryRun` was set"
+                : !token && !briefingChannelId
+                  ? `no \`${SLACK_BOT_TOKEN_KEY}\` and no \`briefingChannelId\` are set`
+                  : !token
+                    ? `no \`${SLACK_BOT_TOKEN_KEY}\` is set`
+                    : "no `briefingChannelId` is set"
+            }. It is in this run's output below.`,
+      ]
+        .filter(Boolean)
+        .join(" "),
     });
   },
 });

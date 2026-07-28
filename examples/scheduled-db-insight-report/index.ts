@@ -39,16 +39,25 @@ import postgres from "postgres";
  *   - The real SQL is gated behind `dryRun`: a dry run reports on sample metrics so
  *     the graph traces offline without connecting to a database.
  *   - The recipient — and an optional external database URL — are read from the
- *     Sapiom vault at runtime and never persisted in execution state.
+ *     injected environment for a DSN, and ordinary run input for the recipient.
  *   - Non-deterministic values (the snapshot timestamp) are captured once at the DB
  *     boundary via Postgres `now()`, not recomputed per step.
  */
 
 // ─────────────────────────────────────────────────────────────── config ──
-/** Postgres handle the report reads from — created on first run, reused after. */
-const DEFAULT_DB_HANDLE = "scheduled-db-insight-report";
-/** Vault ref holding delivery + connection config. Read at runtime. */
-const VAULT_REF = "scheduled-db-insight-report";
+/**
+ * Postgres handle the report reads from. Declared in `template.json` as a
+ * `resources[]` entry with `seed: "seed.sql"`, so deploy provisions it and loads
+ * demo rows before the first run — a freshly-provisioned database is empty, and a
+ * report over an empty database is a successful run that says nothing.
+ */
+const DEFAULT_DB_HANDLE = "db-insight-demo";
+/**
+ * Env key holding a connection string for YOUR OWN database. A DSN is a real
+ * third-party credential, so it is declared as a required secret in
+ * `template.json` and the platform injects it into this step's environment.
+ */
+const DATABASE_URL_KEY = "REPORT_DATABASE_URL";
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "db-insight-report";
 /** Default cadence documented for the cron trigger: 08:00 every day. */
@@ -115,7 +124,7 @@ interface EntryInput {
   schedule?: string;
   /** Postgres handle to snapshot; defaults to the template handle. */
   dbHandle?: string;
-  /** Recipient email; falls back to the vault-configured default when omitted. */
+  /** Recipient email. Omit it and the report is returned inline instead of emailed. */
   deliverTo?: string;
   /** Report on sample metrics and skip the DB query and the real send. */
   dryRun?: boolean;
@@ -137,6 +146,12 @@ interface Shared extends Record<string, unknown> {
   dryRun: boolean;
   generatedAt: string;
   narrative: string;
+  /** True when the snapshot came from the caller's own database. */
+  external?: boolean;
+  /** True when this run had to provision the managed Postgres itself. */
+  provisioned?: boolean;
+  /** One plain sentence about which database was read and what was defaulted. */
+  note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
@@ -191,47 +206,93 @@ function toMetric(name: string, rows: Record<string, unknown>[]): Metric {
   return { name, kind: "series", points };
 }
 
+/** What `resolveConnectionString` connected to, so the report can say so. */
+interface Target {
+  connectionString: string;
+  /** True when the DSN came from the injected env — i.e. your own database. */
+  external: boolean;
+  /** True when this run had to provision the managed Postgres itself. */
+  provisioned: boolean;
+}
+
 /**
- * Resolve the connection string at runtime. An external `DATABASE_URL` in the
- * vault wins (report on your own database, secret never persisted); otherwise a
- * Sapiom-managed Postgres is looked up by handle, provisioned on first run.
+ * Resolve the connection string at runtime. An injected DSN wins (report on your
+ * own database, value never persisted); otherwise the declared Sapiom-managed
+ * Postgres is looked up by handle, and provisioned here if deploy did not.
  */
 async function resolveConnectionString(
   ctx: Ctx,
   handle: string,
-): Promise<string | null> {
-  try {
-    const external = await ctx.sapiom.vault.get(VAULT_REF, "DATABASE_URL");
-    if (external) return external;
-  } catch (err) {
-    ctx.logger.warn("vault: no DATABASE_URL configured", { err: String(err) });
+): Promise<Target | null> {
+  const external = process.env[DATABASE_URL_KEY]?.trim();
+  if (external) {
+    return { connectionString: external, external: true, provisioned: false };
   }
   let db;
+  let provisioned = false;
   try {
     db = await ctx.sapiom.database.get(handle);
   } catch {
+    // Two ways to land here and the API cannot tell them apart: the handle has
+    // never existed, or it expired. A managed Postgres caps at 7d with no renew
+    // verb, so on a schedule the second case is the likely one — which is why the
+    // run reports that it provisioned rather than silently starting over.
+    provisioned = true;
     db = await ctx.sapiom.database.create({
       handle,
       duration: "7d",
-      name: "DB Insight Report",
-      description: "Database the scheduled insight report snapshots",
+      name: "DB Insight Report demo",
+      description: "Demo dataset the scheduled insight report snapshots",
     });
   }
-  return db.connection?.connectionString ?? null;
+  const connectionString = db.connection?.connectionString ?? null;
+  if (!connectionString) return null;
+  return { connectionString, external: false, provisioned };
 }
 
 /**
- * Resolve the recipient from the vault at runtime. A missing ref/key is an
- * expected outcome (returns null), not an error — the caller then falls back to a
- * preview. Never persisted in execution state.
+ * Create and populate the demo tables when they are missing or empty. Deploy runs
+ * `seed.sql` for the declared resource, so this only fires when it did not (a
+ * local run, or a handle this run had to provision itself). Idempotent by
+ * construction: it inserts only into an empty table.
+ *
+ * Read-side only. These tables are what the report READS; nothing here writes the
+ * template's own output, which must never be seeded.
  */
-async function recipientFromVault(ctx: Ctx): Promise<string | null> {
-  try {
-    return await ctx.sapiom.vault.get(VAULT_REF, "RECIPIENT");
-  } catch (err) {
-    ctx.logger.warn("vault: no recipient configured", { err: String(err) });
-    return null;
-  }
+async function ensureSeeded(ctx: Ctx, sql: Sql): Promise<boolean> {
+  await sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS demo_orders (
+      id bigserial PRIMARY KEY,
+      placed_on date NOT NULL,
+      region text NOT NULL,
+      amount_usd numeric(10,2) NOT NULL,
+      status text NOT NULL
+    )`);
+  await sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS demo_signups (
+      id bigserial PRIMARY KEY,
+      signed_up_on date NOT NULL,
+      plan text NOT NULL,
+      source text NOT NULL
+    )`);
+  const [{ count }] = await sql<{ count: number }[]>`
+    select count(*)::int as count from demo_orders`;
+  if (count > 0) return false;
+  ctx.logger.info("seeding the demo dataset");
+  await sql.unsafe(`
+    INSERT INTO demo_orders (placed_on, region, amount_usd, status)
+    SELECT (CURRENT_DATE - (n % 28))::date,
+           (ARRAY['us-east','us-west','eu-central','apac'])[1 + (n % 4)],
+           ROUND((45 + (n * 37) % 900)::numeric, 2),
+           (ARRAY['paid','paid','paid','refunded','pending'])[1 + (n % 5)]
+    FROM generate_series(1, 240) AS s(n)`);
+  await sql.unsafe(`
+    INSERT INTO demo_signups (signed_up_on, plan, source)
+    SELECT (CURRENT_DATE - (n % 28))::date,
+           (ARRAY['free','free','pro','enterprise'])[1 + (n % 4)],
+           (ARRAY['organic','referral','paid-search','partner'])[1 + (n % 4)]
+    FROM generate_series(1, 130) AS s(n)`);
+  return true;
 }
 
 /** Reuse an existing inbox to send from, else provision one. */
@@ -266,16 +327,22 @@ const snapshot = defineStep({
     }
 
     const queries = resolveQueries(input.queries);
-    const conn = await resolveConnectionString(ctx, handle);
-    if (!conn) {
+    const target = await resolveConnectionString(ctx, handle);
+    if (!target) {
       ctx.logger.warn("no database connection; snapshotting nothing", {
         handle,
       });
       ctx.shared.set("generatedAt", "");
+      ctx.shared.set(
+        "note",
+        `Could not open a connection to \`${handle}\`, so the report has no metrics in it.`,
+      );
       return goto("narrate", { metrics: [] as Metric[] });
     }
+    ctx.shared.set("external", target.external);
+    ctx.shared.set("provisioned", target.provisioned);
 
-    const sql = postgres(conn, {
+    const sql = postgres(target.connectionString, {
       ssl: "require",
       max: 1,
       idle_timeout: 5,
@@ -286,6 +353,33 @@ const snapshot = defineStep({
     });
     const metrics: Metric[] = [];
     try {
+      // Only the managed demo database gets seeded — never the caller's own.
+      let seeded = false;
+      if (!target.external) {
+        try {
+          seeded = await ensureSeeded(ctx, sql);
+        } catch (err) {
+          ctx.logger.warn("could not seed the demo dataset", {
+            err: String(err),
+          });
+        }
+      }
+      ctx.shared.set(
+        "note",
+        target.external
+          ? undefined
+          : [
+              `Reported on the managed demo database \`${handle}\`, not your data.`,
+              target.provisioned
+                ? "This run provisioned it: a Sapiom Postgres caps at 7 days with no renew verb, so on a schedule an earlier run's data may have expired."
+                : null,
+              seeded ? "Demo rows were loaded before the snapshot." : null,
+              `Set \`${DATABASE_URL_KEY}\` or point \`dbHandle\` at your own database to report on real data.`,
+            ]
+              .filter(Boolean)
+              .join(" "),
+      );
+
       // Capture the snapshot time server-side so it stays deterministic on retry.
       const nowRow = await sql<{ now: unknown }[]>`select now() as now`;
       ctx.shared.set(
@@ -491,10 +585,10 @@ const deliver = defineStep({
     const report = renderReport(narrative, metrics, chartUrl, generatedAt);
     const subject = "Database insight report";
 
-    // Explicit input wins; otherwise resolve the default from the vault at
-    // runtime (never carried through state).
-    const deliverTo =
-      ctx.shared.get("deliverTo") || (await recipientFromVault(ctx));
+    // A recipient is ordinary configuration, so it arrives as run input (declared
+    // as a `deliverTo` setting in template.json) rather than from a write-only
+    // secret store nothing in the product can populate.
+    const deliverTo = ctx.shared.get("deliverTo");
 
     // Safe path: a dry run, or a live run with no recipient, returns the report
     // without sending anything.
@@ -514,6 +608,15 @@ const deliver = defineStep({
         chartUrl,
         metricCount: metrics.length,
         report,
+        ...(dryRun ? {} : { unmet: ["deliverTo"] }),
+        note: [
+          dryRun
+            ? "`dryRun` was set, so no database was read and nothing was emailed."
+            : "Nothing was emailed: no `deliverTo` address is set, so the report is returned inline below.",
+          ctx.shared.get("note"),
+        ]
+          .filter(Boolean)
+          .join(" "),
       });
     }
 
@@ -537,6 +640,7 @@ const deliver = defineStep({
       chartUrl,
       metricCount: metrics.length,
       messageId: sent.messageId,
+      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
     });
   },
 });
