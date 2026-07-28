@@ -121,19 +121,26 @@ test.describe("returning user", () => {
     await expect(page.getByTestId("welcome-browse-templates")).toBeVisible();
   });
 
-  test("keeps the hero image on Overview, as the shorter band", async ({ page }) => {
-    // It used to be first-run only, so the returning card opened with a bare
-    // "Overview" heading. Same image, ~half the height — asserted in pixels
-    // because "the hero is present but half height" is the whole change.
+  test("carries no screenshot of itself, and fits its pane without scrolling", async ({ page }) => {
+    // The card briefly opened with a cropped capture of the app above the copy.
+    // It cost ~120px of a panel whose whole job is to be read at a glance, and
+    // read as a fragment of a UI rather than a picture of the product — so the
+    // image is gone and the row cap came down with it.
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openOverview(page);
 
-    const hero = page.getByTestId("welcome-hero");
-    await expect(hero).toBeVisible();
-    await expect(hero).toHaveClass(/welcome-hero--returning/);
-    const box = await hero.boundingBox();
-    expect(box?.height).toBeLessThan(160);
+    await expect(page.getByTestId("welcome-hero")).toHaveCount(0);
+    await expect(page.locator(".welcome-panel img")).toHaveCount(0);
+
+    // The real regression risk is height: this list grows with use, so the card
+    // has to stay inside the pane that holds it rather than making an
+    // orientation surface something you scroll.
+    const card = page.locator(".welcome-card");
+    const panel = page.getByTestId("welcome-panel");
+    const cardBox = await card.boundingBox();
+    const panelBox = await panel.boundingBox();
+    expect(cardBox?.height).toBeLessThanOrEqual((panelBox?.height ?? 0) + 1);
 
     await page.screenshot({ path: "web/e2e/screenshots/welcome-overview.png", fullPage: true });
   });

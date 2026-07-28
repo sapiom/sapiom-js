@@ -10,12 +10,6 @@ import { loadUiPrefs } from "../lib/ui-prefs";
 import { Icon } from "./Icon";
 import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
 
-/* Real screenshots of THIS app (the current Studio shell in mock mode),
- * regenerated via e2e/capture-welcome-hero.mjs into public/ — BASE_URL keeps
- * the path correct under the Pages base (/sapiom-studio/). */
-const welcomeHeroDark = `${import.meta.env.BASE_URL}welcome-hero-dark.png`;
-const welcomeHeroLight = `${import.meta.env.BASE_URL}welcome-hero-light.png`;
-
 interface WelcomePanelProps {
   /** Launch dirs (settings.recentDirs). One input to the Overview list, and
    *  still the picker's recents chips inside the add-workspace dialog. */
@@ -50,28 +44,33 @@ interface WelcomePanelProps {
    *  not a dialog this panel owns — see TemplatesPanel. */
   onBrowseTemplates: () => void;
   /**
-   * True only on a genuine first run of this install (AppState.firstRun) — the
-   * hero pitch is for someone who has never seen the product. A returning user
-   * gets the recent-workspaces view instead: the pitch is noise once you have
-   * workspaces, and this panel also backs the Overview tab, which returning
-   * users open deliberately.
+   * True only on a genuine first run of this install (AppState.firstRun).
+   * Changes the greeting and nothing else — "Welcome to" is a thing you say
+   * once. It used to select between two whole layouts.
    */
   firstRun: boolean;
 }
 
-/** How many workspace rows Overview shows before deferring to the rail. Eight
- *  fits the card without scrolling it; the remainder is stated, not dropped. */
-const MAX_OVERVIEW_ROWS = 8;
+/** How many workspace rows Overview shows before deferring to the rail.
+ *
+ *  Five, not eight. This list is the only part of the card that grows with use,
+ *  and at eight the card outgrew the pane it sits in — which is how a panel
+ *  whose job is orientation ended up needing to be scrolled. The remainder is
+ *  stated rather than dropped, and the rail has all of them. */
+const MAX_OVERVIEW_ROWS = 5;
 
 /**
  * Overview / first-run panel — rendered in the terminal slot when no session is
  * live, and whenever the Overview tab is selected.
  *
- * Two states, because the audiences are different. On a genuine first run the
- * hero pitches the product. For a returning user (the Overview tab's usual
- * visitor) the pitch is dead weight — they get their recent workspaces, which is
- * the thing they actually came here to pick from. Both states share the action
- * band, so Templates / New workspace are always one click away.
+ * ONE anatomy for both audiences: what Studio is, the two ways in, the docs, and
+ * where you have already been. It carried a cropped screenshot of the app above
+ * all that; the image cost ~120px of a panel whose whole job is to be read at a
+ * glance, and read as a fragment of a UI rather than a picture of the product.
+ * Removed, along with the two 390KB captures. The `e2e/capture-welcome-hero.mjs`
+ * that comment named as their source does not exist and did not when this was
+ * written — a reference outliving the thing it pointed at, same as the
+ * sample-project route's.
  */
 export function WelcomePanel({
   recentDirs,
@@ -134,32 +133,9 @@ export function WelcomePanel({
     }
   };
 
-  /* Product-as-hero: the app itself, cropped to its top band with a fade into
-     the card — the pitch is the picture, not paragraphs. Each theme ships its
-     own capture: CSS shows the matching one so the fade always lands on the
-     card surface behind it, never a dark shot dissolving into a white card.
-     Both are real screenshots; regenerate via e2e/capture-welcome-hero.mjs.
-
-     Shown in BOTH states. It began as first-run-only on the reasoning that a
-     returning user needs a working surface rather than a pitch — but the image
-     is the product, not a pitch, and Overview looked unfinished without it. The
-     returning variant is a shorter band (see .welcome-hero--returning) so the
-     list it sits above stays the thing you came for. */
-  const hero = (
-    <div
-      className={"welcome-hero" + (firstRun ? "" : " welcome-hero--returning")}
-      data-testid="welcome-hero"
-      aria-hidden="true"
-    >
-      <img className="welcome-hero-dark" src={welcomeHeroDark} alt="" />
-      <img className="welcome-hero-light" src={welcomeHeroLight} alt="" />
-    </div>
-  );
   return (
     <div className="welcome-panel" data-testid="welcome-panel">
       <div className="welcome-card">
-        {hero}
-
         <div className="welcome-body">
           {/* One greeting, two readings: "Welcome to" is a thing you say once.
               This card used to fork into two whole layouts — a product pitch for

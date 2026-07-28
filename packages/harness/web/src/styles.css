@@ -2669,58 +2669,6 @@ input {
   box-shadow: var(--shadow-sm);
 }
 
-/* The app itself as the card's hero: full-bleed against the card's top and
-   sides, cropped to the shot's upper band, fading into the card surface so
-   the copy below sits on clean ground. */
-.welcome-hero {
-  margin: -28px -28px 0;
-  height: 200px;
-  overflow: hidden;
-  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-}
-
-/* Focus the crop on the right pane's upper band (canvas tabs + the trigger
-   snippet) rather than the whole shell — a recognizable product detail, not
-   an app-inside-the-app thumbnail. Slightly scaled so it reads at card
-   width. */
-.welcome-hero img {
-  display: block;
-  width: 100%;
-  height: auto;
-  object-fit: cover;
-  object-position: 82% 12%;
-  transform: scale(1.25);
-  transform-origin: 82% 12%;
-}
-
-/* Theme-matched hero variants: the mask above fades the shot into
-   the card surface behind it, so each theme must show its own capture — a
-   dark screenshot dissolving through white read as a rendering glitch in
-   light mode. The img-scoped selectors outweigh `.welcome-hero img` above. */
-.welcome-hero img.welcome-hero-light {
-  display: none;
-}
-
-[data-theme="light"] .welcome-hero img.welcome-hero-dark {
-  display: none;
-}
-
-[data-theme="light"] .welcome-hero img.welcome-hero-light {
-  display: block;
-}
-
-/* Overview keeps the hero, but as a BAND: roughly half height and faded out
-   sooner, so it reads as the product's letterhead above a working list rather
-   than a pitch the returning user has to scroll past. */
-.welcome-hero--returning {
-  height: 104px;
-  mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
-}
-
-/* The card's content column. Padding stays on .welcome-card so the hero's
-   negative margins keep bleeding to its edges. */
 .welcome-body {
   display: flex;
   flex-direction: column;
@@ -2729,7 +2677,7 @@ input {
 
 .welcome-title {
   margin: 0;
-  font-size: var(--type-h2);
+  font-size: var(--type-title);
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text);
@@ -2737,7 +2685,7 @@ input {
 
 .welcome-intro {
   margin: 0;
-  font-size: var(--type-ui);
+  font-size: var(--type-body);
   line-height: 1.6;
   color: var(--text-dim);
 }
