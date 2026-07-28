@@ -1,10 +1,19 @@
 import { useRef, useState } from "react";
 import type { JSX } from "react";
 import { SPAWNABLE_HARNESS_KINDS } from "@shared/types";
-import type { HarnessEntry, HarnessKind, TemplateDetailView, TemplateListResponse } from "@shared/types";
+import type {
+  HarnessEntry,
+  HarnessKind,
+  HarnessSession,
+  TemplateDetailView,
+  TemplateListResponse,
+  WorkflowInfo,
+} from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
+import { recentWorkspaces, unlistedAgentCount } from "../lib/recent-workspaces";
+import { relativeTimeLabel } from "../lib/relative-time";
 import { loadUiPrefs } from "../lib/ui-prefs";
 import { Icon } from "./Icon";
 import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
@@ -17,7 +26,19 @@ const welcomeHeroDark = `${import.meta.env.BASE_URL}welcome-hero-dark.png`;
 const welcomeHeroLight = `${import.meta.env.BASE_URL}welcome-hero-light.png`;
 
 interface WelcomePanelProps {
+  /** Launch dirs (settings.recentDirs). One input to the Overview list, and
+   *  still the picker's recents chips inside the add-workspace dialog. */
   recentDirs: string[];
+  /**
+   * The session registry, live AND exited. This is what makes "Recent
+   * workspaces" true: every directory work has happened in, with a real
+   * lastActiveAt. See lib/recent-workspaces.ts for why recentDirs alone was
+   * never that list.
+   */
+  sessions: HarnessSession[];
+  /** The workflow registry — used only to count agent projects per row (and to
+   *  say how many the rail knows), never as rows of its own. */
+  workflows: WorkflowInfo[];
   launchDir: string | null;
   /** Where NEW projects are created — the templates dialog's destination.
    *  Distinct from launchDir, which is where a SESSION opens. */
@@ -51,11 +72,9 @@ interface WelcomePanelProps {
   firstRun: boolean;
 }
 
-/** Basename of a workspace path — the folder name is what the rail shows. */
-function folderName(dir: string): string {
-  const parts = dir.replace(/[\\/]+$/, "").split(/[\\/]/);
-  return parts[parts.length - 1] || dir;
-}
+/** How many workspace rows Overview shows before deferring to the rail. Eight
+ *  fits the card without scrolling it; the remainder is stated, not dropped. */
+const MAX_OVERVIEW_ROWS = 8;
 
 /**
  * Overview / first-run panel — rendered in the terminal slot when no session is
@@ -69,6 +88,8 @@ function folderName(dir: string): string {
  */
 export function WelcomePanel({
   recentDirs,
+  sessions,
+  workflows,
   launchDir,
   projectRoot,
   listDir,
@@ -91,6 +112,13 @@ export function WelcomePanel({
   const [opening, setOpening] = useState<string | null>(null);
   const startProjectRef = useRef<HTMLButtonElement>(null);
   const templatesTriggerRef = useRef<HTMLButtonElement>(null);
+
+  // Cheap enough to derive every render (a few dozen entries, string compares)
+  // and always consistent with the props that drove it — memoizing would only
+  // add a dependency array to get wrong.
+  const workspaces = recentWorkspaces(sessions, recentDirs, workflows);
+  const shownWorkspaces = workspaces.slice(0, MAX_OVERVIEW_ROWS);
+  const unlisted = unlistedAgentCount(workflows, shownWorkspaces);
 
   const openWorkspace = async (dir: string): Promise<void> => {
     // Guarded because opening spans two awaits (registry, then session create)
@@ -122,6 +150,28 @@ export function WelcomePanel({
       setOpening(null);
     }
   };
+
+  /* Product-as-hero: the app itself, cropped to its top band with a fade into
+     the card — the pitch is the picture, not paragraphs. Each theme ships its
+     own capture: CSS shows the matching one so the fade always lands on the
+     card surface behind it, never a dark shot dissolving into a white card.
+     Both are real screenshots; regenerate via e2e/capture-welcome-hero.mjs.
+
+     Shown in BOTH states. It began as first-run-only on the reasoning that a
+     returning user needs a working surface rather than a pitch — but the image
+     is the product, not a pitch, and Overview looked unfinished without it. The
+     returning variant is a shorter band (see .welcome-hero--returning) so the
+     list it sits above stays the thing you came for. */
+  const hero = (
+    <div
+      className={"welcome-hero" + (firstRun ? "" : " welcome-hero--returning")}
+      data-testid="welcome-hero"
+      aria-hidden="true"
+    >
+      <img className="welcome-hero-dark" src={welcomeHeroDark} alt="" />
+      <img className="welcome-hero-light" src={welcomeHeroLight} alt="" />
+    </div>
+  );
 
   const actions = (
     <div className="welcome-footer">
@@ -159,16 +209,7 @@ export function WelcomePanel({
       <div className={"welcome-card" + (firstRun ? "" : " welcome-card--returning")}>
         {firstRun ? (
           <>
-            {/* Product-as-hero: the app itself, cropped to its top band with a
-                fade into the card — the pitch is the picture, not paragraphs.
-                Each theme ships its own capture: CSS shows the matching one so
-                the fade always lands on the card surface behind it, never a dark
-                shot dissolving into a white card. Both are real screenshots;
-                regenerate via e2e/capture-welcome-hero.mjs. */}
-            <div className="welcome-hero" aria-hidden="true">
-              <img className="welcome-hero-dark" src={welcomeHeroDark} alt="" />
-              <img className="welcome-hero-light" src={welcomeHeroLight} alt="" />
-            </div>
+            {hero}
 
             <div className="welcome-copy">
               <h1 className="welcome-title">Sapiom Studio for full-stack agentic products.</h1>
@@ -199,45 +240,71 @@ export function WelcomePanel({
             </div>
           </>
         ) : (
-          <div className="welcome-copy welcome-copy--returning">
-            <h1 className="welcome-title welcome-title--returning">Overview</h1>
-            {error && <div className="welcome-error">{error}</div>}
-            {recentDirs.length > 0 ? (
-              <>
-                <h2 className="welcome-recents-title">Recent workspaces</h2>
-                <ul className="welcome-recents" data-testid="welcome-recents">
-                  {recentDirs.slice(0, 8).map((dir) => (
-                    <li key={dir}>
-                      <button
-                        type="button"
-                        className="welcome-recent"
-                        data-testid={`welcome-recent-${folderName(dir)}`}
-                        title={dir}
-                        disabled={opening !== null}
-                        onClick={() => void openWorkspace(dir)}
-                      >
-                        <Icon name="Folder" size={13} />
-                        <span className="welcome-recent-name">{folderName(dir)}</span>
-                        <span className="welcome-recent-path">
-                          {opening === dir ? "Opening…" : dir}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : (
-              // Reachable: a workspace can be in the rail without ever having
-              // hosted a session (a scanned folder), so recents can be empty
-              // for someone who is not a first-run user.
-              <p className="welcome-intro" data-testid="welcome-no-recents">
-                No recent workspaces yet. Open a folder or start from a template.
-              </p>
-            )}
-            <span className="welcome-hints-kbd">
-              or press <kbd>⌘K</kbd>
-            </span>
-          </div>
+          <>
+            {hero}
+
+            <div className="welcome-copy welcome-copy--returning">
+              <h1 className="welcome-title welcome-title--returning">Overview</h1>
+              {error && <div className="welcome-error">{error}</div>}
+              {workspaces.length > 0 ? (
+                <>
+                  <h2 className="welcome-recents-title">Recent workspaces</h2>
+                  <ul className="welcome-recents" data-testid="welcome-recents">
+                    {shownWorkspaces.map((workspace) => (
+                      <li key={workspace.cwd}>
+                        <button
+                          type="button"
+                          className="welcome-recent"
+                          data-testid={`welcome-recent-${workspace.label}`}
+                          title={workspace.cwd}
+                          disabled={opening !== null}
+                          onClick={() => void openWorkspace(workspace.cwd)}
+                        >
+                          <Icon name="Folder" size={13} />
+                          <span className="welcome-recent-name">{workspace.label}</span>
+                          <span className="welcome-recent-path">
+                            {opening === workspace.cwd ? "Opening…" : workspace.cwd}
+                          </span>
+                          {/* What the row is worth knowing beyond its name: how
+                              many agents are in it, and when it was last worked
+                              in. A launch dir that never hosted a session has no
+                              honest timestamp, so it shows none. */}
+                          <span className="welcome-recent-meta">
+                            {workspace.agentCount > 0 &&
+                              `${workspace.agentCount} agent${workspace.agentCount === 1 ? "" : "s"}`}
+                            {workspace.agentCount > 0 && workspace.lastActiveAt && " · "}
+                            {workspace.lastActiveAt &&
+                              relativeTimeLabel(Date.parse(workspace.lastActiveAt))}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {/* The gap this panel used to hide: the rail scans recursively
+                      for sapiom.json and routinely knows dozens of projects,
+                      while this list is scoped to where work happened and capped.
+                      Say so, rather than letting a short list imply a small
+                      installation. */}
+                  {unlisted > 0 && (
+                    <p className="welcome-recents-note" data-testid="welcome-recents-note">
+                      {workflows.length} agent {workflows.length === 1 ? "project" : "projects"} known
+                      in total — the rail lists them all.
+                    </p>
+                  )}
+                </>
+              ) : (
+                // Reachable: a workspace can be in the rail without ever having
+                // hosted a session (a scanned folder), so this can be empty for
+                // someone who is not a first-run user.
+                <p className="welcome-intro" data-testid="welcome-no-recents">
+                  No recent workspaces yet. Open a folder or start from a template.
+                </p>
+              )}
+              <span className="welcome-hints-kbd">
+                or press <kbd>⌘K</kbd>
+              </span>
+            </div>
+          </>
         )}
 
         {/* Bottom-anchored action band: docs link leftmost, then the CTAs build

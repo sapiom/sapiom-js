@@ -760,6 +760,8 @@ export const App = (): JSX.Element => {
               {showWelcome ? (
                 <WelcomePanel
                   recentDirs={harness.settings?.recentDirs ?? []}
+                  sessions={state.sessions}
+                  workflows={state.workflows}
                   launchDir={state.launchDir ?? null}
                   projectRoot={projectRoot || null}
                   onConnect={async (cwd) => {

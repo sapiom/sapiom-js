@@ -6,9 +6,11 @@
  * auto boot session then). The default fixtures (a lived-in install) double as
  * the returning-user case.
  *
- * The panel has two states and they are NOT interchangeable: the hero pitch is
- * first-run only, and a returning user gets their recent workspaces instead. The
- * bug this guards is the hero rendering for someone who already has workspaces.
+ * The panel has two states and they are NOT interchangeable — but the line
+ * between them moved: the PITCH (headline, value copy, hint chips) is still
+ * first-run only, while the hero IMAGE now renders in both, shorter on Overview.
+ * So the bug guarded here is the *pitch copy* reaching someone who already has
+ * workspaces; the image reaching them is intended, and has its own test.
  */
 import { expect, test } from "@playwright/test";
 
@@ -102,10 +104,63 @@ test.describe("returning user", () => {
 
     const panel = page.getByTestId("welcome-panel");
     await expect(panel).not.toContainText("Sapiom Studio for full-stack agentic products.");
+    // The pitch's chips go with it; the hero image deliberately does not (below).
+    await expect(page.getByTestId("welcome-hints")).toHaveCount(0);
     await expect(page.getByTestId("welcome-recents")).toBeVisible();
     // The action band is shared by both states.
     await expect(page.getByTestId("welcome-start-project")).toBeVisible();
     await expect(page.getByTestId("welcome-browse-templates")).toBeVisible();
+  });
+
+  test("keeps the hero image on Overview, as the shorter band", async ({ page }) => {
+    // It used to be first-run only, so the returning card opened with a bare
+    // "Overview" heading. Same image, ~half the height — asserted in pixels
+    // because "the hero is present but half height" is the whole change.
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openOverview(page);
+
+    const hero = page.getByTestId("welcome-hero");
+    await expect(hero).toBeVisible();
+    await expect(hero).toHaveClass(/welcome-hero--returning/);
+    const box = await hero.boundingBox();
+    expect(box?.height).toBeLessThan(160);
+
+    await page.screenshot({ path: "web/e2e/screenshots/welcome-overview.png", fullPage: true });
+  });
+
+  test("lists workspaces from session history, not just launch dirs", async ({ page }) => {
+    // The defect: the list read settings.recentDirs, which recordRecentDir only
+    // ever fills with the LAUNCH dir — one entry forever, under a heading
+    // promising workspaces, while the rail knew dozens. /Users/demo/scratch is
+    // the proof: a session cwd in the fixtures that is absent from recentDirs,
+    // so it could not appear before this change.
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openOverview(page);
+
+    await expect(page.getByTestId("welcome-recent-scratch")).toBeVisible();
+    // Newest activity first: acme-app (a live session) above rfq-workflows (a day old).
+    const rows = page.getByTestId("welcome-recents").locator("li");
+    await expect(rows.first()).toContainText("acme-app");
+    await expect(rows).toHaveCount(4);
+  });
+
+  test("rows carry their agent count, and claim nothing for a bare folder", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openOverview(page);
+
+    // acme-app holds one agent project (leasing) in the fixtures.
+    await expect(page.getByTestId("welcome-recent-acme-app")).toContainText("1 agent");
+    // scratch is bare — a first-class workspace with nothing in it yet, so no
+    // count is claimed for it.
+    await expect(page.getByTestId("welcome-recent-scratch")).not.toContainText("agent");
+    // All three fixture agents sit inside the visible rows, so nothing is
+    // omitted and the note must stay away. Its positive case (a registry bigger
+    // than the list) is unit-tested — unlistedAgentCount in
+    // lib/recent-workspaces.test.ts — since the mock fixtures never produce it.
+    await expect(page.getByTestId("welcome-recents-note")).toHaveCount(0);
   });
 
   test("clicking a recent workspace opens a session in it", async ({ page }) => {
@@ -119,6 +174,37 @@ test.describe("returning user", () => {
 
     await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
     await expect(page.getByTestId("session-context-title")).toContainText("acme-app");
+  });
+
+  test("creating a session promotes its folder in recentDirs instead of wiping the list", async ({
+    page,
+  }) => {
+    // Pins the contract createSession has to keep: opening a folder PROMOTES it
+    // and keeps the rest. Both the mock and the real server merge a settings
+    // patch, so a client that sends an empty array erases the persisted list.
+    //
+    // Honest scope: this test does NOT fail against the pre-fix code, which
+    // built the patch body inside a setSettings updater. React's eager-updater
+    // optimization runs that synchronously whenever the hook has no pending
+    // update, which is the common case — so the old form passes here too. The
+    // fix removed the dependence on that internal behaviour; this test guards
+    // the behaviour itself, and would catch a future patch that sends a stale or
+    // empty list outright.
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    await openOverview(page);
+    await page.getByTestId("welcome-recent-rfq-workflows").click();
+    await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
+
+    // The directory picker's chips are the surface that still reads recentDirs
+    // directly, so they show what actually survived.
+    await page.getByTestId("add-workspace").click();
+    await page.getByTestId("aw-door-have").click();
+    const chips = page.locator(".recent-dir-chip");
+    await expect(chips).toHaveCount(3); // all three fixtures kept, none dropped
+    // The folder just opened moves to the front rather than replacing the list.
+    await expect(chips.first()).toHaveAttribute("title", "/Users/demo/rfq-workflows");
   });
 
   test("rows disable while one is opening, so a second click cannot double-fire", async ({ page }) => {
