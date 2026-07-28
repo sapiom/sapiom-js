@@ -8,7 +8,7 @@
 //
 // Checks:
 //   1. registry.json validates against examples/registry.schema.json
-//      (draft-07, includes the `category` enum).
+//      (draft-07, includes the `category` and `complexity` enums).
 //   2. `templates` is sorted by `id` ascending  (run `pnpm examples:sort` to fix).
 //   3. every `sourcePath` dir exists and contains a `template.json`.
 //   4. checkpoint discipline (human gates only, at most one per template).
@@ -18,6 +18,8 @@
 //   6. house-style copy rules the schemas cannot express — see
 //      scripts/examples-copy-check.mjs. (The length caps ARE in the schemas,
 //      as `maxLength`, so they surface through checks 1 and 5.)
+//   7. the authored `complexity` band against the one DERIVED from the declared
+//      shape; a 2+ band gap warns (see the divergence section for why).
 //
 // Exits non-zero with a readable report on the first category of failure it
 // finds, so a bad registry fails CI before it reaches the backend.
@@ -31,6 +33,10 @@ import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import { createManifestChecker } from "./examples-manifest-check.mjs";
 import { checkCopy } from "./examples-copy-check.mjs";
+import {
+  complexityBandScore,
+  scoreTemplateComplexity,
+} from "./lib/template-complexity.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXAMPLES_DIR = path.join(ROOT, "examples");
@@ -140,11 +146,65 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
+// 7. Complexity divergence. The `complexity` enum itself is hard-validated by
+// the schema (check 1); this compares the AUTHORED band against the one derived
+// from `steps[].kind` / `capabilities` and warns at a 2+ band gap.
+//
+// The derived score is the guardrail here, not the answer. It is a proxy for
+// what the band communicates — how much variation and judgment is in the
+// output — and it reads only what the author declared, so a wide gap means one
+// of two things, both worth a human look: the label is wrong, or the declared
+// shape is wrong. The second case is the valuable one: a step that calls a model
+// but says `kind: "compute"` also draws the wrong glyph in the gallery graph, so
+// catching it pays for itself beyond this field.
+//
+// A warning and not an error on purpose. An author who has read the rubric and
+// still disagrees with the scorer should be able to land that; a hard gate would
+// make the proxy authoritative again, which is exactly what authoring this field
+// was meant to stop.
+const divergences = [];
+for (const t of templates) {
+  const authored = complexityBandScore(t.complexity);
+  // Unset or unknown: the schema owns invalid values, the nudge below owns absent ones.
+  if (authored === null) continue;
+  const derived = scoreTemplateComplexity(t);
+  const gap = Math.abs(authored - derived.score);
+  if (gap > 0)
+    divergences.push({ id: t.id, authored: t.complexity, derived, gap });
+}
+
+for (const d of divergences.filter((x) => x.gap >= 2)) {
+  const { basis, raw, label } = d.derived;
+  console.warn(
+    `warning: complexity: "${d.id}" declares "${d.authored}" but its declared shape derives ` +
+      `"${label}" (raw ${raw}: llm=${basis.llmSteps} chained=${basis.chainedLlmSteps} ` +
+      `media=${basis.mediaCapabilities} caps=${basis.capabilityCount} steps=${basis.stepCount} ` +
+      `fanOut=${basis.maxFanOut}) — a ${d.gap}-band gap. Either the band is wrong, or a ` +
+      `\`steps[].kind\` is (a model step declared "compute" also draws the wrong glyph). ` +
+      `See AUTHORING.md §3.`,
+  );
+}
+
+// One band apart is expected and fine — the rubric's nudge is a whole band wide.
+// Reported as a single line so a day-one divergence stays visible without
+// becoming noise that trains authors to ignore the warnings above.
+const nearMisses = divergences.filter((x) => x.gap === 1);
+if (nearMisses.length > 0) {
+  console.log(
+    `note: ${nearMisses.length} template(s) one band from the derived score (authored → derived): ` +
+      nearMisses
+        .map((d) => `${d.id} ${d.authored}→${d.derived.label}`)
+        .join(", "),
+  );
+}
+
 const uncategorized = templates.filter((t) => !t.category).map((t) => t.id);
 const noCadence = templates.filter((t) => !t.cadence).map((t) => t.id);
+const noComplexity = templates.filter((t) => !t.complexity).map((t) => t.id);
 for (const [label, ids] of [
   ["category", uncategorized],
   ["cadence", noCadence],
+  ["complexity", noComplexity],
 ]) {
   // Both are optional in the schema, so this is a nudge, not a gate — flip to
   // `errors.push` once every template carries them and the field goes required.
