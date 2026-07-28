@@ -224,14 +224,15 @@ jobs:
           if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
             echo "no notarization credentials — nothing to query"; exit 0
           fi
+          # Queried once and reused — two calls would be two round-trips to Apple
+          # for the same answer.
+          history="$(xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+                     --password "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1)"
           echo "--- recent submissions ---"
-          xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1 | head -40
+          echo "$history" | head -40
           # Apple's verdict on the newest submission, with the rejection reasons
           # when it is Invalid.
-          id="$(xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
-                --password "$APPLE_APP_SPECIFIC_PASSWORD" 2>/dev/null \
-                | awk '/id:/ {print $2; exit}')"
+          id="$(echo "$history" | awk '/id:/ {print $2; exit}')"
           if [ -n "${id:-}" ]; then
             echo "--- log for submission $id ---"
             xcrun notarytool log "$id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \

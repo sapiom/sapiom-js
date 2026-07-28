@@ -75,6 +75,15 @@ here, each OS builds on its own runner.
 - **You do not need a Mac to create the certificate.** Generate the CSR with openssl, upload it at
   developer.apple.com (Certificates → Developer ID Application), then bundle the `.cer` with the key
   into a `.p12`. On OpenSSL 3 add `-legacy` to `pkcs12 -export`, or macOS refuses the resulting file.
+  `scripts/mac-signing-secrets.sh` does all of that and sets the secrets; only an **Account Holder**
+  can issue the certificate, and it must be bound to *our* CSR or the private key won't match it.
+- **Notarization takes ~35 minutes on this account**, not the 5–15 Apple's docs suggest, and
+  `notarytool submit --wait` blocks with no timeout of its own. Hence `timeout-minutes: 45` on the
+  packaging step and **75 on the job** — the job cap must exceed the step cap, or the step timeout
+  can never fire and the job dies first, taking the diagnostic with it. Three early runs were killed
+  at 25–33 minutes; `notarytool history` later showed every one had come back **Accepted**. If a
+  build appears to hang in signing, read that diagnostic before touching entitlements: the app was
+  never the problem, the timeout was.
 - An unsigned `.dmg` needs `xattr -dr com.apple.quarantine` before it opens — which is exactly what
   signing removes, and the reason a tester build is worth signing.
 
