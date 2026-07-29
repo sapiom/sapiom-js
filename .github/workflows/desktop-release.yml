@@ -318,6 +318,29 @@ jobs:
         with:
           path: dist-artifacts
 
+      # Stable filenames, so a permanent download link exists.
+      #
+      # GitHub's only stable URL is
+      #   /releases/latest/download/<EXACT-FILENAME>
+      # — there is no wildcard, so a versioned name like Sapiom-0.1.0-arm64.dmg
+      # can never be linked to permanently. These are COPIES, not renames: the
+      # versioned assets stay attached for archival and support ("which build are
+      # you on?"), and each also appears under a name that never changes.
+      #
+      # Note the other half of the contract: /releases/latest resolves to the
+      # latest NON-prerelease. While `prerelease: true` below, these links 404 —
+      # they start working the moment a release ships as final.
+      - name: Add stable-named copies for permanent links
+        run: |
+          set -euo pipefail
+          cd dist-artifacts
+          shopt -s nullglob globstar
+          for f in **/*.dmg;      do cp "$f" "Sapiom-macOS-arm64.dmg";      break; done
+          for f in **/*.AppImage; do cp "$f" "Sapiom-Linux-x86_64.AppImage"; break; done
+          for f in **/*.deb;      do cp "$f" "Sapiom-Linux-amd64.deb";      break; done
+          for f in **/*.exe;      do cp "$f" "Sapiom-Windows-x64.exe";      break; done
+          ls -la
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
