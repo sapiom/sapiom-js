@@ -1,5 +1,95 @@
 # @sapiom/harness
 
+## 0.2.0
+
+### Minor Changes
+
+- 3f96e37: Canvas board redesign + deterministic step/workflow metadata.
+
+  - **Board redesign** matching the new design: in-drawer step navigation removed (the chart is beside it), chat split into a standalone toggleable panel independent of the info panel, the board subheader dropped with the deployed pill and expand relocated to the tab bar, and the manual "Render diagram" button replaced by auto-render on bind/session-start.
+  - **Deterministic metadata:** the renderer surfaces per-step `description` / `inputSchema` / `capabilities` / `timeoutMs` and a workflow Overview payload, all read from the manifest (no LLM in the render path). When a step doesn't call a capability or declare a description, the field is simply absent — the shape summary still renders.
+  - **Capability auto-detect** from `sapiom.*` call sites in the workflow source, attributed to the `defineStep` block the call sits in (calls in shared helpers are left unattributed rather than mis-billed to the nearest step).
+
+  Reads the new optional `description` / `capabilities` fields from `@sapiom/agent`; workflows on an older SDK render with those fields blank.
+
+- 7b98507: Studio: show a template's complexity band where the per-run cost estimate used to be.
+
+  The Templates dialog rendered `estCostPerRunUsd`, relayed from the same core endpoint the dashboard's Template library reads. Core stopped serving that field: it could only price capabilities metered per `call`, so the estimate was `null` for 21 of 26 templates, and a number that honest for 5 of them was not worth a slot on every card. Core now derives a **complexity band** — `Minimal` through `Advanced`, 1–5 — from each template's declared shape.
+
+  Without this change nothing errored, which is why it would have gone unnoticed: `template-catalog.ts`'s defensive narrowing turned the missing field into `null` and the formatter turned that into an em dash, so **every** template read `—` where a cost used to be.
+
+  `TemplateSummary.estCostPerRunUsd` is replaced by `TemplateSummary.complexity`, and the new `TemplateComplexity` / `TemplateComplexityBasis` types are exported alongside it. **Breaking for embedders** (hence `minor`): `src/index.ts` re-exports `./shared/types.js`, so code reading `estCostPerRunUsd` off a summary stops compiling.
+
+  The band is read, never computed. Whether core derives it (today) or serves an authored one later, this surface is unchanged.
+
+  `complexity` is typed nullable here even though core types it required, and that is deliberate rather than belt-and-braces. This is a published npm package: an old copy can point at any backend, and a fresh copy can point at a backend that predates the field — a local stack, a self-hosted one, production before a promotion. An unguarded dereference in the row renderer would take out the whole dialog, so a band that isn't there degrades that one row to an em dash instead. Note the glyph's meaning has changed: it used to mean "no cost estimate exists", the majority case; it now means "this response predates the band", and nobody should ever see it against a current backend.
+
+  On the card the band rides beside the step count, with the counts behind it in the tooltip. In the detail pane, the section retitles to "Capabilities and complexity" and the old three-state cost note collapses to a single line — the band plus what produced it ("2 model steps, 1 chained, 5 steps, 1 capability"), so it reads as an estimate of shape rather than an opaque verdict. Text only, no meter or dots, matching the dashboard's gallery.
+
+- b199f93: Studio: read the template gallery live, and stop pitching the product at returning users.
+
+  **Templates come from the real catalog.** `web/src/lib/templates.ts` shipped a hardcoded copy of two registry entries (pinned at harness 0.1.4 / `f0e3406`) because, as its header said, no listing API exposed the gallery to any client. One exists now, so the Studio showed 2 templates while the dashboard's Template library showed 26. New `GET /api/templates` and `GET /api/templates/:id` relay core's `GET /v1/workflows/templates{,/:id}` — the same endpoint the dashboard renders, so the two surfaces can no longer drift. The dialog gains category grouping, search, and a per-template complexity band. Two contract details, both verified against a running backend: the core surface authenticates with `Authorization: Bearer` (the `x-sapiom-api-key` header the _agents_ surface takes returns 401 here), and the path carries the `/v1` prefix. The API key stays server-side, as with the runs router; a 401/403 triggers one credential refresh and retry. Signed out or with core unreachable, the dialog falls back to the bundled offline starters **and says which** — silence is what let a two-entry list read as the whole gallery.
+
+  The detail pane now projects the graph core actually serves — the engine's `DefinitionStepDto`/`DefinitionTransitionDto` shapes, where a step carries `stepName` and a singular `capabilityId`, edges reference steps by namespaced `id`, and a step's role is decided by its transition kinds rather than array order. Node kinds come from `classifyStepKind`, extracted from `canvas-graph.ts`'s `classifyNode` and now shared: the preview claims parity with the canvas, so it must not own a second copy of that precedence. All four kinds (`continue`/`pause`/`terminate`/`fail`) survive the projection — a fail-only sink renders amber "needs attention" rather than a green success exit, a `continue`-plus-`terminate` gate stays a mid-flow step, and a pause step shows its signal.
+
+  **Overview is a working surface, not a pitch.** `showWelcome` was `overviewSelected || (firstRun && !hasLiveSession)`, so the first-run hero rendered whenever the Overview tab was selected — including for someone with a rail full of workspaces. The hero is now genuine-first-run only; returning users get their recent workspaces, with the Docs / Templates / New workspace action band shared by both states.
+
+  **Workspace terminology.** A workspace is a folder, matching the rail and the editor convention users arrive with: the rail header reads "Workspaces", and "New project" / "Add project" / "Project directory" become their workspace equivalents. "Agent project" is left alone deliberately — that is the SDK's own term for a `sapiom.json` directory, and `sapiom agents init` and `AGENTS.md` both use it.
+
+  **The Sample project action is gone**, along with `POST /api/sample-project` and the exported `SampleProjectSeedResponse` type (nothing else in the repo referenced either). `core/example-seed.ts` remains — `scripts/seed-example.mjs` still uses it for demo prep.
+
+  **Breaking for embedders** (hence `minor`, not `patch`): `src/index.ts` re-exports `./shared/types.js`, so `SampleProjectSeedResponse` was part of the published surface, and `HarnessServerOptions` loses its `sampleProjectRoot` field. Code typed against either stops compiling. `TemplateStepView` also carries `kind`/`sublabel` rather than a `terminal` boolean — see above for why that collapse was wrong. No in-repo consumer is affected.
+
+### Patch Changes
+
+- c32f818: Session history now outlives the event log it is rebuilt from (SAP-2060).
+
+  H2 made past sessions readable by folding them out of `events.ndjson`. That file is an analytics sink with an analytics sink's retention — 50 MB / 30 days, truncated oldest-first — so a session a user could read today would quietly stop existing next month, with no way to tell "never recorded" from "swept".
+
+  - New `src/core/record-archive.ts`: at session end the folded `SessionRecord` is compacted and written to `~/.sapiom/harness/records/<harnessSessionId>.json`. Tool inputs and results are clipped hard (they are most of the bytes and the least useful part of a months-old record); prompts and assistant text — the conversation — are kept whole. Over ~64 KB it drops whole turns oldest-first, never below one. Both losses are declared as new `SessionRecord.limitations` codes (`compacted-archive`, `dropped-early-turns`) and the transcript view spells them out, alongside a note naming the record as an archived copy (`SessionRecord.archivedAt`).
+  - Bounded, not merely durable: the store enforces a 16 MB total and a 365-day age cap, oldest-first, swept after every write and once at boot. `turnCount` deliberately keeps the conversation's count even when turns were dropped, so a history row's count doesn't change when its events are swept.
+  - Written on the normal end of a session (the `SessionEnd` hook's event, via a new `onEventPersisted` ingest seam — fired from `onNormalizedEvent` it would race the append and store a record with no `endedAt`) and on an abnormal one (the session's transition to `exited`, which is all a killed pty gives us). A boot pass archives conversations the log still holds but the archive doesn't, which is what keeps history that predates this feature — and any session lost to a force-kill — from disappearing at its 30-day mark.
+  - Reads prefer whichever source still holds the WHOLE conversation. The ticket asked for "prefer the archive, fall back to events"; taken literally that serves a compacted excerpt for a session that ended a minute ago, and freezes a resumed conversation's record at its first exit. Since retention truncates oldest-first, an intact first event means the log lost nothing, so: the log when it still holds the beginning or has events newer than the archive, the archive otherwise, null when neither has anything (still an honest 404).
+  - Records live in their own root, NOT under `<generated>/<sessionId>/` as the ticket suggested: that directory is deleted the moment a session's pty exits and swept 7 days after going stale, both shorter than the 30 days of events the archive exists to outlive.
+
+- 460bfc1: Expose the embedding surface so a second host (the Electron desktop app) can reuse the harness instead of forking it: re-export `startServer`/`HarnessServer`/`HarnessServerOptions` plus the setup helpers (`runDoctor`, `pickDefaultHarness`, `ensureAuthenticated`, `getOrCreateMachineId`, `ensureSpawnHelperExecutable`, settings, install-command constants) from the package entry. `saveSettings` is part of that surface: a host that prompts for telemetry consent natively (instead of through the TTY-shaped `ensureConsent`) must persist the answer itself, or the settings file — which the UI's analytics indicator and the next launch both read — never learns about it. No CLI behavior change.
+
+  Also run the Canvas step-graph check subprocess correctly when embedded in Electron: it spawns `process.execPath` (the Electron binary when embedded), so it now passes `ELECTRON_RUN_AS_NODE=1` — guarded by `process.versions.electron`, a no-op under the CLI's real Node. And `packageRoot()` (used as the subprocess `cwd`) now translates an `app.asar` path to its `app.asar.unpacked` twin, since a `cwd` inside the asar archive fails with `spawn ENOTDIR` (the host must `asarUnpack` the harness + its deps).
+
+- c32f818: Portable continue: a session the agent can no longer reattach to is now continuable, by seeding a fresh session with our own reconstruction of it (SAP-2059).
+
+  H1 stopped offering Resume on rows that would fail; that left them with nowhere to go — a disabled button and "start a new session instead", even when our event log held the whole conversation. Resume-as-reattach can only ever work for the vendor that wrote the transcript, on the machine that wrote it. This adds the other half: `POST /api/sessions` takes `rehydrateFrom`, and the new session launches with a bounded markdown briefing about the old one.
+
+  - New `src/core/resume-brief.ts`: `buildResumeBrief(record, opts)` renders a `SessionRecord` as ~6k tokens of markdown — what the session was (title, cwd, branch, bound workflow + `definitionId`), the rolling summary when present, the last N turns with tool calls collapsed to name + target, and files written / commands run derived from `tool.call` inputs. Over budget it drops turns oldest-first, then the (hard-capped) digests, and clamps the summary only as a last resort.
+  - It leads with an honesty header and spells out each of the record's `limitations` in prose. A brief that reads like restored memory is worse than no brief: the agent would assert file contents and command results it never saw.
+  - Delivery is per-adapter, declared not inferred (`HarnessAdapter.systemPromptDelivery`). Both shipped adapters use `launch-flag` — the brief is appended to the generated system-prompt file, which claude-code reads via `--append-system-prompt` and codex inlines as `developer_instructions`, so one code path serves both with no adapter change. A harness with no prompt flag declares `post-ready-injection` and gets the brief through the ordinary input path once the session reports `ready`, never into a TUI sitting on a trust prompt.
+  - New `src/core/rolling-summary.ts`: opt-in via `HarnessSettings.rollingSummary` (off by default; toggle in Settings). Every 10 completed turns and once at session end, a bounded headless run (`launchTask`, cheap model, `--max-turns 1`) folds the record into `<generated>/<sessionId>/summary.md`. Fully detached from the ingest path — a turn is never slower or riskier for it. Codex has no `launchTask`, so its briefs degrade to last-N-turns, as does everyone's with the setting off.
+  - `HarnessSession.rehydratedFrom` records what actually happened, not what was asked for: a `rehydrateFrom` id our log holds nothing for still creates the session, with the field null and the UI saying the continue carried no context.
+  - UI: `resumeFromHistory` branches on the server-verified `resumeMode` instead of guessing, and the dead-session pane offers "Continue here" (with what will and won't carry over) wherever it has a record to seed from, instead of a disabled Resume.
+
+- b7f5b02: Verify resumability before offering Resume, so no past-session row is a button that's guaranteed to fail (SAP-2057).
+
+  A row's Resume badge was `agentSessionId != null` — "our SessionStart hook fired once", not "the agent still has this conversation". Since neither Claude Code nor Codex writes any transcript for a session that never received a prompt, one in three registry rows on a real machine (16 of 49 measured) offered Resume and answered with `No conversation found with session ID: …`, exit 1, and a dead pane offering Resume again. Transcript-only rows had the inverse bug: hardcoded un-resumable even when the transcript was right there, so opening one silently started a fresh session and dropped the conversation.
+
+  - `HarnessAdapter` gains `canResume(agentSessionId, cwd)` (never throws): one `stat` on the encoded transcript path for claude-code, a `session_meta` id+cwd match for codex.
+  - Both adapters now resolve symlinked cwds. Claude Code encodes the cwd's **realpath**, so a session in `/tmp/foo` (macOS: `/tmp` → `/private/tmp`) stores its transcript under a different encoding than the registry's cwd string — history discovery silently missed those rows before, and a resumability probe would have gone further and refused a resume that works.
+  - `SessionSummary` gains `resumeMode: "agent-resume" | "rehydrate"`, resolved server-side in `GET /api/sessions/history` for both row sources. Adapters now return `PastSessionRecord`, so they can't decide it themselves.
+  - `SessionManager.resume()` pre-flights `canResume()` and throws `SessionNotResumeableError` (409, with a reason naming the agent) instead of spawning a doomed pty.
+  - New `POST /api/sessions/adopt` wires up `registerHistorical()`: a transcript-only row whose conversation the agent really holds is adopted into the registry and genuinely resumed. The server re-verifies resumability itself, and the route is idempotent.
+  - Truthful durations: a resume that never reaches a live pty no longer stamps `lastActiveAt`, so an idle session stops reporting "Ran for 6h 25m" after a failed Resume, and `formatDuration` returns null on a zero span instead of inventing "under a minute".
+  - UI: rows render the verified `resumeMode` (`resumable` / `archived`, `checking…` until known); the dead pane and past-session pane disable Resume with the real reason instead of a generic one.
+
+- 460bfc1: Install the seeded sample project's dependencies on first creation, so the Canvas step-graph renders on first view instead of failing with "Could not resolve @sapiom/agent / zod". `seedExampleProject` now runs a best-effort `npm install` right after scaffolding (before the initial commit, keeping the gitignored `node_modules` out of history); it's non-fatal (missing/offline npm falls back to the existing "ask your agent to fix it" Canvas prompt) and skippable via the new `installDependencies` option (default true; tests pass false to stay offline). Adds `dependenciesInstalled` to `SeedExampleProjectResult`.
+- 2d25205: Fix starting a session on Windows. An agent installed by npm is `claude.cmd`, and node-pty spawns via `CreateProcess`, which performs no `PATHEXT` resolution and cannot execute a `.cmd` at all — so every session failed with `Cannot create process, error code: 2` while `doctor` reported the agent present (detection shells `where`, which _does_ resolve `PATHEXT`). Background tasks and macros failed the same way through `child_process.spawn`.
+
+  Both paths now resolve the shim to what it really runs — Claude Code ships a native `bin\claude.exe`, other packages a `cli.js` run under node — and spawn that directly. Deliberately **not** via `cmd.exe`: node-pty escapes `"` as `\"` for `CreateProcess`, but cmd only counts raw quotes, so one embedded quote desynchronises its parser and any following `&`/`|` becomes a command separator (CVE-2024-27980's class, reachable on every session since the codex adapter passes `JSON.stringify(prompt)` as an argument). Resolving the target keeps arguments in exactly one quoting layer, with no shell involved.
+
+  Also exports `resolveSpawnTarget` and `createClaudeCodeAdapter` for hosts that spawn a pty themselves or need to point the adapter at a different binary. No change on macOS or Linux.
+
+- Updated dependencies [3f96e37]
+  - @sapiom/agent@0.7.0
+  - @sapiom/agent-core@0.9.10
+
 ## 0.1.6
 
 ### Patch Changes

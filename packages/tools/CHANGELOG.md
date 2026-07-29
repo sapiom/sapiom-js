@@ -1,5 +1,11 @@
 # @sapiom/tools
 
+## 0.22.1
+
+### Patch Changes
+
+- 5f875de: Accept synchronous video responses and status-URL-only asynchronous handles from content-generation providers.
+
 ## 0.22.0
 
 ### Minor Changes
