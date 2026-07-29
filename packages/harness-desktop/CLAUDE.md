@@ -214,6 +214,36 @@ against a hand-written `dev-app-update.yml`. `SAPIOM_UPDATE_CHANNEL=latest|beta`
 `SAPIOM_DISABLE_UPDATER=1` turns it off. A smoke run ignores the force flag — CI must never depend on
 the network.
 
+## What the app installs for the user
+
+Three shims (`runtime-shims.ts`, PATH-prepended) plus two npm installs into
+`userData/npm-global` (`agent-install.ts`, on PATH via `agentBinDir()`):
+
+| Provided | Why |
+| --- | --- |
+| `node`, `npm`, **`npx`** shims | Electron bundles Node but not npm, and the machine may have neither |
+| Claude Code (if no agent on PATH) | the app is useless without an agent |
+| `@sapiom/cli` (if `sapiom` not on PATH) | macros and templates hand the agent `sapiom agents …` |
+
+`npx` and the CLI were both missing until they were added together, and both failed
+**silently**: the per-session MCP config launches the sapiom-dev server with
+`command: "npx"`, so a Node-less machine simply got no Sapiom tools, and the agent
+that was told to run `sapiom agents deploy` got `command not found` and improvised.
+Neither showed up as an error anywhere. If you add a door that shells out to a
+binary, it belongs in this table or in the doctor — the direct in-app actions
+(Deploy, Local Run) need none of it, which is why the gap survived so long.
+
+The CLI install is gated by `install-policy.ts`: never in `--smoke` (CI must not
+depend on the network), never in dev, and never when the user already has their own
+`sapiom` — that last one is also what makes it one-shot rather than once-per-launch,
+since the prefix is on PATH by the time the check runs.
+
+> `userData` is `$XDG_CONFIG_HOME/@sapiom/harness-desktop` on Linux (and
+> `~/Library/Application Support/@sapiom/harness-desktop` on macOS) — `app.getName()`
+> falls back to the *scoped npm name*, so the scope becomes a directory. It works,
+> but it litters, and changing it later orphans everything installed above. Decide
+> before wide release, not after.
+
 ## Before claiming an OS works
 
 Run the automated check first — it covers the packaging-specific layers and takes seconds:

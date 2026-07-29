@@ -20,6 +20,8 @@
  *                   (covers the rebuild AND the +x spawn-helper) — no agent needed
  *   unpacked-deps   what the plain-Node Canvas subprocess imports exists ON DISK,
  *                   not just inside the archive
+ *   runtime-shims   node/npm/npx shims exist AND execute (npx was missing for the
+ *                   app's whole life, silently breaking the sapiom-dev MCP server)
  *   run-local       POST /api/runs/local's child process really starts (its cwd,
  *                   its script path and ELECTRON_RUN_AS_NODE were all wrong, so
  *                   every local run answered `spawn ENOTDIR`)
@@ -32,15 +34,18 @@
  * Exit code is 0 only if every check passes; each result is printed as one line
  * so a CI log shows exactly which layer broke.
  */
+import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { app } from "electron";
 import { resolveSpawnTarget } from "@sapiom/harness";
 import { createSetupWindow } from "./windows.js";
 import { resolveWebDir } from "./paths.js";
+import { shimDir } from "./runtime-shims.js";
 import { CHANNEL_ENV_VAR, resolveUpdateChannel } from "./update-policy.js";
 import type { BootResult } from "./boot.js";
 
@@ -404,6 +409,41 @@ async function loadBundleForDeploy(): Promise<BundleForDeploy> {
 }
 
 /**
+ * Do the runtime shims exist AND run?
+ *
+ * The app bundles Node (as Electron) and npm, and exposes them to the agent as
+ * `node`/`npm`/`npx` shims on PATH so a machine with no system Node can still
+ * work. `npx` was missing for the app's whole life, and nothing noticed: the
+ * per-session MCP config launches the sapiom-dev server with `command: "npx"`, so
+ * on a Node-less machine that server silently never started and the agent quietly
+ * had none of the Sapiom tools. Existence is not enough — a shim that points at
+ * the wrong CLI path or lost its +x bit is equally dead — so each one is executed.
+ *
+ * Offline and deterministic: `--version` on all three touches no network.
+ */
+async function checkRuntimeShims(): Promise<string> {
+  const dir = shimDir();
+  const exec = promisify(execFile);
+  const suffix = process.platform === "win32" ? ".cmd" : "";
+  const reports: string[] = [];
+
+  for (const name of ["node", "npm", "npx"] as const) {
+    const shim = path.join(dir, `${name}${suffix}`);
+    if (!existsSync(shim)) throw new Error(`no ${name} shim at ${shim}`);
+    try {
+      // shell on Windows: a .cmd cannot be spawned directly (CVE-2024-27980).
+      const { stdout } = await exec(shim, ["--version"], { shell: process.platform === "win32" });
+      const version = stdout.trim().split("\n")[0] ?? "";
+      if (!version) throw new Error("no version output");
+      reports.push(`${name} ${version}`);
+    } catch (err) {
+      throw new Error(`${name} shim did not run: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return reports.join(", ");
+}
+
+/**
  * Can `POST /api/runs/local` actually reach its child process?
  *
  * The "Local Run" button was dead in every packaged build, answering with
@@ -620,6 +660,7 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     await check("preload-bridge", checkPreloadBridge),
     await check("node-pty", checkNodePty),
     await check("unpacked-deps", checkUnpackedDeps),
+    await check("runtime-shims", checkRuntimeShims),
     await check("run-local", () => checkRunLocal(base, token)),
     await check("deploy-bundle", checkDeployBundle),
     await check("update-config", checkUpdateConfig),

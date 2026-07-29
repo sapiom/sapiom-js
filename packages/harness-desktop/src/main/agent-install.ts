@@ -17,11 +17,19 @@
  * the setup-window progress plumbing and the guided-install fallback.
  */
 import { app } from "electron";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { CLAUDE_INSTALL_COMMAND } from "@sapiom/harness";
+import {
+  SAPIOM_CLI_PACKAGE,
+  shouldInstallSapiomCli,
+  type SapiomCliDecision,
+} from "./install-policy.js";
+
+const isWindows = process.platform === "win32";
 
 const require = createRequire(import.meta.url);
 
@@ -47,13 +55,18 @@ const require = createRequire(import.meta.url);
  * `unpackedPath()` in `@sapiom/harness`'s `core/asar-path.ts` if it turns out to
  * need translating.
  */
-export function resolveNpmCli(): string {
+export function resolveNpmBin(name: "npm" | "npx"): string {
   const pkgJsonPath = require.resolve("npm/package.json");
   const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as {
-    bin?: { npm?: string };
+    bin?: Record<string, string | undefined>;
   };
-  const relBin = pkg.bin?.npm ?? "bin/npm-cli.js";
+  const relBin = pkg.bin?.[name] ?? `bin/${name}-cli.js`;
   return path.join(path.dirname(pkgJsonPath), relBin);
+}
+
+/** Back-compat alias: the npm CLI specifically. */
+export function resolveNpmCli(): string {
+  return resolveNpmBin("npm");
 }
 
 /**
@@ -107,9 +120,76 @@ const LOG_TAIL_LINES = 40;
 export function installClaudeCode(
   onLine: (line: string) => void,
 ): Promise<InstallResult> {
+  return installNpmGlobal(packageSpecFromInstallCommand(CLAUDE_INSTALL_COMMAND), onLine);
+}
+
+/**
+ * Install the `sapiom` CLI into the same per-user prefix, for the same reason and
+ * by the same mechanism as the agent: the app hands the coding agent
+ * `sapiom agents …` commands (macros, templates) and shipped nothing that
+ * provides them. `boot.ts` gates this on {@link shouldInstallSapiomCli} — never
+ * in smoke (no network in CI), never in dev, and never when the user already has
+ * their own `sapiom` on PATH.
+ *
+ * Non-fatal by contract: the app must still boot, and every direct in-app action
+ * (Deploy, Local Run) works without the CLI.
+ */
+export function installSapiomCli(
+  onLine: (line: string) => void,
+): Promise<InstallResult> {
+  return installNpmGlobal(SAPIOM_CLI_PACKAGE, onLine);
+}
+
+/**
+ * Is `sapiom` already on PATH, and where?
+ *
+ * Shells `which`/`where` — the same mechanism `harness/src/cli/doctor.ts` uses for
+ * claude/codex/git, mirrored rather than imported because that helper is private
+ * to the doctor. Deliberately NOT `resolveSpawnTarget`: on non-Windows that
+ * returns the command unchanged without touching the filesystem
+ * (`core/spawn-target.ts:187`), so it would report "found" for anything and the
+ * install would never run on macOS — the platform this is for.
+ */
+async function whichSapiom(): Promise<string | null> {
+  const exec = promisify(execFile);
+  try {
+    const { stdout } = await exec(isWindows ? "where" : "which", ["sapiom"]);
+    return stdout.trim().split("\n")[0]?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Install the `sapiom` CLI if this launch should. Returns the decision either way
+ * so the caller can log it — a silent skip is how the missing CLI stayed
+ * invisible. Never throws: a failed install is reported, not fatal.
+ */
+export async function ensureSapiomCli(
+  opts: { smoke: boolean; devMode: boolean },
+  onLine: (line: string) => void,
+): Promise<SapiomCliDecision & { result?: InstallResult }> {
+  const decision = shouldInstallSapiomCli({
+    // Skip the PATH probe entirely when we already know we won't install — it
+    // spawns a process on the boot path.
+    onPath: opts.smoke || opts.devMode ? null : await whichSapiom(),
+    smoke: opts.smoke,
+    devMode: opts.devMode,
+  });
+  if (!decision.install) return decision;
+  return { ...decision, result: await installSapiomCli(onLine) };
+}
+
+/**
+ * Drive the bundled npm to install one package into the per-user prefix.
+ * Streams npm's line-buffered output through `onLine`. Resolves (never rejects).
+ */
+function installNpmGlobal(
+  packageSpec: string,
+  onLine: (line: string) => void,
+): Promise<InstallResult> {
   const npmCli = resolveNpmCli();
   const prefix = agentPrefixDir();
-  const packageSpec = packageSpecFromInstallCommand(CLAUDE_INSTALL_COMMAND);
 
   // `--no-audit --no-fund` keep the run quiet/fast; `--loglevel=info` gives us
   // meaningful progress lines to stream. `--prefix` makes it a per-user install

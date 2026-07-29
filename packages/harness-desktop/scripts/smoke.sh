@@ -44,6 +44,14 @@ if [ -z "${CI:-}" ]; then
   # A Windows developer needs the real profile shape, not just the directory.
   mkdir -p "$smoke_home/AppData/Roaming" "$smoke_home/AppData/Local"
   export HOME="$app_home" USERPROFILE="$app_home" APPDATA="$(native "$smoke_home/AppData/Roaming")"
+  # HOME is NOT enough on Linux: Electron derives `userData` from XDG_CONFIG_HOME
+  # when it is set, so relocating only HOME left every local smoke run writing to
+  # the developer's real ~/.config/@sapiom/… — installing packages and app state
+  # into the very profile these lines exist to protect. Found while verifying the
+  # sapiom-CLI install: the app reported success and the files were nowhere near
+  # the temp HOME.
+  mkdir -p "$smoke_home/.config"
+  export XDG_CONFIG_HOME="$(native "$smoke_home/.config")"
 else
   echo "[smoke] CI detected — leaving HOME/USERPROFILE/APPDATA alone (ephemeral runner)"
 fi

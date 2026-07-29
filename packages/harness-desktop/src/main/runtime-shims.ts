@@ -15,7 +15,7 @@
 import { app } from "electron";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { resolveNpmCli } from "./agent-install.js";
+import { resolveNpmBin } from "./agent-install.js";
 
 const isWindows = process.platform === "win32";
 
@@ -34,28 +34,34 @@ export function installRuntimeShims(): string {
   const dir = shimDir();
   mkdirSync(dir, { recursive: true });
   const exec = process.execPath;
-  const npmCli = resolveNpmCli();
 
-  if (isWindows) {
-    // `%*` forwards args; ELECTRON_RUN_AS_NODE makes Electron behave as Node.
-    writeFileSync(
-      path.join(dir, "node.cmd"),
-      `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exec}" %*\r\n`,
-    );
-    writeFileSync(
-      path.join(dir, "npm.cmd"),
-      `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exec}" "${npmCli}" %*\r\n`,
-    );
-    return dir;
+  // node, npm AND npx. npx was the one missing, and its absence was silent: the
+  // per-session MCP config launches the sapiom-dev server with `command: "npx"`
+  // (`harness/src/core/inject/mcp-config.ts`), so on a machine with no system
+  // Node that server simply never started and the agent quietly lacked every
+  // Sapiom tool. The bundled npm package ships an `npx` bin, so this is the same
+  // one-line shim as the other two — it just was not written.
+  const clis: Array<[name: string, cli: string | null]> = [
+    ["node", null],
+    ["npm", resolveNpmBin("npm")],
+    ["npx", resolveNpmBin("npx")],
+  ];
+
+  for (const [name, cli] of clis) {
+    if (isWindows) {
+      // `%*` forwards args; ELECTRON_RUN_AS_NODE makes Electron behave as Node.
+      const body = cli
+        ? `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exec}" "${cli}" %*\r\n`
+        : `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exec}" %*\r\n`;
+      writeFileSync(path.join(dir, `${name}.cmd`), body);
+      continue;
+    }
+    const body = cli
+      ? `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec "${exec}" "${cli}" "$@"\n`
+      : `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec "${exec}" "$@"\n`;
+    const shimPath = path.join(dir, name);
+    writeFileSync(shimPath, body);
+    chmodSync(shimPath, 0o755);
   }
-
-  const nodeShim = `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec "${exec}" "$@"\n`;
-  const npmShim = `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec "${exec}" "${npmCli}" "$@"\n`;
-  const nodePath = path.join(dir, "node");
-  const npmPath = path.join(dir, "npm");
-  writeFileSync(nodePath, nodeShim);
-  writeFileSync(npmPath, npmShim);
-  chmodSync(nodePath, 0o755);
-  chmodSync(npmPath, 0o755);
   return dir;
 }
