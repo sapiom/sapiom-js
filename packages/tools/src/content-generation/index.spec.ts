@@ -273,6 +273,57 @@ describe("createClient().contentGeneration.images.create", () => {
 // ---------------------------------------------------------------------------
 
 describe("contentGeneration.video.create()", () => {
+  it("returns a synchronous video result without trying to poll", async () => {
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({
+              video: {
+                url: "https://media/merged.mp4",
+                content_type: "video/mp4",
+              },
+            })
+          : null,
+    ]);
+
+    const out = await createVideo({ prompt: "merge" }, transport, BASE);
+
+    expect(out).toEqual({
+      video: {
+        url: "https://media/merged.mp4",
+        contentType: "video/mp4",
+      },
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("derives the result URL when Fal returns only status_url", async () => {
+    const { transport, calls } = makeTransport([
+      (c) =>
+        c.init.method === "POST"
+          ? jsonResponse({
+              request_id: "req-status-only",
+              status_url: `${BASE}/queue/fal-ai/ffmpeg-api/requests/req-status-only/status`,
+            })
+          : null,
+      (c) =>
+        c.init.method === "GET"
+          ? jsonResponse({ video: { url: "https://media/merged.mp4" } })
+          : null,
+    ]);
+
+    const out = await createVideo(
+      { prompt: "merge", pollIntervalMs: 1 },
+      transport,
+      BASE,
+    );
+
+    expect(out.video?.url).toBe("https://media/merged.mp4");
+    expect(calls[1]!.url).toBe(
+      `${BASE}/queue/fal-ai/ffmpeg-api/requests/req-status-only`,
+    );
+  });
+
   it("submits the default video model, polls until ready, and maps the result to camelCase", async () => {
     let polls = 0;
     const { transport, calls } = makeTransport([
@@ -534,6 +585,23 @@ function makeLaunchTransport(
 }
 
 describe("contentGeneration.video.launch()", () => {
+  it("accepts a status_url-only submit handle", async () => {
+    const { transport } = makeLaunchTransport(
+      {
+        request_id: "req-status-only",
+        status_url: `${BASE}/queue/fal-ai/ffmpeg-api/requests/req-status-only/status`,
+      },
+      { video: { url: "https://media/merged.mp4" } },
+    );
+
+    const handle = await launchVideo({ prompt: "merge" }, transport, BASE);
+
+    expect(handle.requestId).toBe("req-status-only");
+    await expect(handle.wait({ pollMs: 1 })).resolves.toMatchObject({
+      video: { url: "https://media/merged.mp4" },
+    });
+  });
+
   it("submits to the right URL and method, returns a handle with requestId and dispatch", async () => {
     const { transport, calls } = makeLaunchTransport(
       {

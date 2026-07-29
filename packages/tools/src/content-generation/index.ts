@@ -334,6 +334,21 @@ interface QueueHandle {
   status_url?: string;
 }
 
+/**
+ * Fal occasionally omits `response_url` while still returning the canonical
+ * `.../requests/:id/status` URL. The result endpoint is the same URL without
+ * the final `/status` segment, so keep async video launches usable in that
+ * valid response shape.
+ */
+function queueResultUrl(handle: QueueHandle): string | undefined {
+  if (handle.response_url) return handle.response_url;
+  if (!handle.status_url) return undefined;
+  const url = new URL(handle.status_url);
+  if (!url.pathname.endsWith("/status")) return undefined;
+  url.pathname = url.pathname.slice(0, -"/status".length);
+  return url.toString();
+}
+
 function mapVideo(raw: RawMedia): GeneratedVideo {
   return {
     url: raw.url,
@@ -387,8 +402,13 @@ export async function createVideo(
     }),
     "Failed to submit video generation",
   );
-  const handle = (await submitRes.json()) as QueueHandle;
-  if (!handle.response_url) {
+  const submitted = (await submitRes.json()) as QueueHandle & RawVideoResult;
+  // Some Fal video operations (notably ffmpeg merge) complete synchronously and
+  // return the final `video` object instead of a queue handle.
+  if (submitted.video?.url) return mapVideoResult(submitted);
+  const handle = submitted;
+  const responseUrl = queueResultUrl(handle);
+  if (!responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");
   }
 
@@ -398,7 +418,7 @@ export async function createVideo(
   const timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await transport.fetch(handle.response_url, { method: "GET" });
+    const res = await transport.fetch(responseUrl, { method: "GET" });
     if (res.ok) {
       const raw = (await res.json()) as RawVideoResult;
       if (raw.video?.url) return mapVideoResult(raw);
@@ -527,12 +547,12 @@ export async function launchVideo(
     "Failed to submit video generation",
   );
   const handle = (await submitRes.json()) as QueueHandle;
-  if (!handle.response_url) {
+  const responseUrl = queueResultUrl(handle);
+  if (!responseUrl) {
     throw new Error("Video submit did not return a result URL to poll");
   }
 
   const requestId = handle.request_id ?? "unknown";
-  const responseUrl = handle.response_url;
 
   const wait = async ({
     timeoutMs = input.timeoutMs ?? DEFAULT_VIDEO_TIMEOUT_MS,
