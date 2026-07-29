@@ -48,13 +48,57 @@ dir.replace(/([\\/])app\.asar([\\/])/, "$1app.asar.unpacked$2");
 
 Any **new** code that resolves a path relative to this package (templates, fixtures, scaffolds,
 binaries) needs that translation, or the file has to be covered by
-`packages/harness-desktop/electron-builder.yml`'s `asarUnpack`.
+`packages/harness-desktop/electron-builder.yml`'s `asarUnpack`. Use the shared
+`core/asar-path.ts` helper — this was four hand-written copies of the same regex, and the fifth call
+site that needed one (`POST /api/runs/local`) simply didn't have it.
+
+**Spawning a child is three separate hazards, not one.** `core/canvas-manifest-check.ts` gets all three
+right and is the model; `server/actions.ts`'s run-local spawn got none, so every local run in the
+packaged app answered `spawn ENOTDIR` (and ENOTDIR is not in Node's deferred-error list, so `spawn`
+throws *synchronously*):
+
+1. **`cwd`** — translate it. **This is the one that actually bit.** A cwd is applied by `exec` itself,
+   so no `fs` patch can ever cover it, and `spawn` **throws synchronously** (ENOTDIR is not in Node's
+   deferred-error list) rather than reporting on the child. Measured, both children:
+   `spawn(…, {cwd: "<app.asar>/node_modules/@sapiom/harness"})` → `THREW ENOTDIR: spawn ENOTDIR`.
+2. **every path in `argv`** — translate those too, but know why. Measured: reading a file inside
+   `app.asar` **succeeds** in an `ELECTRON_RUN_AS_NODE` child (it is still the Electron binary, so the
+   `fs` patch is retained) and **fails with ENOTDIR under real `node`**. So an in-archive path is safe
+   only while the consumer happens to be Electron — it breaks the moment that argument reaches the CLI's
+   real `node`, a compiler, `git`, or any other third-party binary. Translate by default; do not rely on
+   the patch to cover for you.
+3. **`ELECTRON_RUN_AS_NODE: "1"`** — set it (guarded on `process.versions.electron`, so the CLI is
+   untouched). `process.execPath` is the Electron binary; without the flag you launch a second copy of
+   the app instead of running your script, and the parent waits forever for output that never comes.
+
+And what you *don't* pass matters: the env you hand a child is inherited wholesale by everything it
+spawns. `HOST_ESBUILD_PIN` (`core/asar-path.ts`) has to be stripped from every child environment —
+`session-manager`, `task-manager` and the run-local spec all do — or the user's own repo builds against
+our esbuild binary and dies with a version mismatch.
+
+**`asarUnpack` alone is not the fix.** It puts the file on disk; it does not change the path
+`require.resolve` reports. This is what broke deploy: `server/actions.ts` runs agent-core's
+`bundleForDeploy()` **in this process**, esbuild locates its native binary with `require.resolve` and
+`spawn`s it, and the user got `Failed to bundle the agent for deploy. (spawn ENOTDIR)` in the desktop
+app while `npx` was fine. So a **dependency** that execs a sidecar binary is subject to this rule too,
+not just our own code — and the fix has to reach inside that dependency's resolution. esbuild takes
+`ESBUILD_BINARY_PATH`, which the desktop host sets from its entry point's **first** import
+(`harness-desktop/src/main/esbuild-binary.ts`) — esbuild snapshots that variable when its module is
+evaluated, so setting it any later, including inside `startServer`'s caller, is silently ignored.
+Adding another dependency of this shape means finding its equivalent hook, or moving the work into a
+child process the way `core/canvas-manifest-check.ts` does.
 
 ### 3. `process.execPath` is Electron, not `node`
 
 Spawning "node" means spawning the Electron binary. It only behaves like Node with
 `ELECTRON_RUN_AS_NODE: "1"`, and that subprocess is **plain Node with no asar support** — so
 everything it imports must exist unpacked on disk (this is why `asarUnpack` is `**/node_modules/**`).
+
+> Measured nuance, since it changes what you may rely on: such a child *can* in fact read paths inside
+> `app.asar` (it is the Electron binary, patch included — `readFileSync` of an in-archive file returns
+> its bytes, while real `node` gets ENOTDIR). Keep unpacking and keep translating anyway: `cwd` is
+> unpatchable in every child, and any path that escapes to a non-Electron consumer breaks immediately.
+> The rule survives; the reason is narrower than "it cannot see the archive at all".
 Guard on `process.versions.electron` so the CLI path stays untouched; see
 `core/canvas-manifest-check.ts:99`.
 

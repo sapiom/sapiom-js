@@ -108,6 +108,26 @@ describe("TaskManager", () => {
     expect(manager.list()).toHaveLength(1);
   });
 
+  /**
+   * The same leak SessionManager.spawn had: this manager copies the whole parent
+   * environment into the child, so the desktop host's `ESBUILD_BINARY_PATH` pin
+   * (set because it cannot exec a binary from inside app.asar) reached background
+   * agent tasks too, breaking any project on a different esbuild version.
+   */
+  it("never leaks the host's ESBUILD_BINARY_PATH pin into a background task", async () => {
+    process.env["ESBUILD_BINARY_PATH"] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
+    try {
+      const { manager, spawned } = makeManager();
+      await manager.run(runRequest);
+      expect(spawned).toHaveLength(1);
+      expect("ESBUILD_BINARY_PATH" in spawned[0].options.env).toBe(false);
+      // Targeted strip, not a clean environment — the agent still needs the rest.
+      expect(spawned[0].options.env.PATH).toBe(process.env["PATH"]);
+    } finally {
+      delete process.env["ESBUILD_BINARY_PATH"];
+    }
+  });
+
   it("appends parsed status lines from stdout and re-broadcasts the task on each", async () => {
     const { manager, spawned, statuses } = makeManager();
     const task = await manager.run(runRequest);

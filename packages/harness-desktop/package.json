@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@sapiom/harness": "workspace:^",
+    "electron-updater": "^6.8.9",
     "node-pty": "^1.1.0",
     "npm": "^10.9.0"
   },

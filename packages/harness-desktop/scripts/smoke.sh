@@ -65,13 +65,22 @@ if [ "$(uname -s)" != "Linux" ] && [ "$(uname -s)" != "Darwin" ]; then
   # to see through. A stub that were a plain .cmd (or an .exe) would exercise a path
   # real agents never take, and is now correctly refused rather than shelled out.
   stub="$smoke_home/stub-agent.cmd"
-  printf 'setTimeout(() => process.exit(0), 3000);\n' > "$smoke_home/stub-agent.js"
+  # Dumps its own environment first — see SAPIOM_SMOKE_AGENT_ENV below.
+  printf 'const f = process.env.SAPIOM_SMOKE_AGENT_ENV;\nif (f) require("fs").writeFileSync(f, Object.entries(process.env).map(([k, v]) => k + "=" + v).join("\\n") + "\\n");\nsetTimeout(() => process.exit(0), 3000);\n' > "$smoke_home/stub-agent.js"
   printf '@echo off\r\n"%%dp0%%\\node.exe" "%%dp0%%\\stub-agent.js" %%*\r\n' > "$stub"
 else
   stub="$smoke_home/stub-agent.sh"
-  printf '#!/bin/sh\nsleep 3\nexit 0\n' > "$stub"
+  printf '#!/bin/sh\n[ -n "$SAPIOM_SMOKE_AGENT_ENV" ] && env > "$SAPIOM_SMOKE_AGENT_ENV"\nsleep 3\nexit 0\n' > "$stub"
   chmod +x "$stub"
 fi
+# Where the stub agent writes its environment, so a check can assert on what the
+# AGENT actually inherited rather than on what the main process meant to pass.
+# This caught a real regression: the desktop host pins ESBUILD_BINARY_PATH so its
+# own bundler can exec a binary outside app.asar, and the whole parent env is
+# copied into the pty — so every agent, and every tool it ran in the user's repo,
+# inherited a pin to OUR esbuild build ("Host version X does not match binary
+# version Y" on a project that builds fine outside the app).
+export SAPIOM_SMOKE_AGENT_ENV="$(native "$smoke_home/agent-env.txt")"
 # Native, because resolveSpawnTarget resolves this inside the app: a POSIX
 # path has no drive letter, so the Windows lookup would never find it.
 export SAPIOM_SMOKE_STUB_AGENT="$(native "$stub")"

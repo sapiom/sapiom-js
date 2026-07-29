@@ -22,6 +22,7 @@ import {
   type SpawnSpec,
 } from "../shared/types.js";
 import { expandHome } from "./paths.js";
+import { HOST_ESBUILD_PIN } from "./asar-path.js";
 import { resolveSpawnTarget } from "./spawn-target.js";
 import {
   AdapterNotFoundError,
@@ -882,6 +883,7 @@ export class SessionManager {
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined) env[key] = value;
     }
+    delete env[HOST_ESBUILD_PIN];
     for (const [key, value] of Object.entries(spec.env)) {
       if (value === null) delete env[key];
       else env[key] = value;

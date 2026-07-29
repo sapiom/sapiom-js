@@ -5,10 +5,19 @@
  * Lifecycle mirrors bin.ts's SIGINT path: on quit we `server.close()` so all
  * live claude/codex PTYs are killed rather than orphaned.
  */
+// FIRST, and it has to stay first: this pins esbuild's native binary to a path
+// outside app.asar, and esbuild reads that setting once, when its own module is
+// evaluated. Every import below reaches @sapiom/harness → agent-core → esbuild,
+// so anything ahead of this line makes a packaged deploy fail with
+// `spawn ENOTDIR`. See esbuild-binary.ts.
+import "./esbuild-binary.js";
+import { writeFileSync } from "node:fs";
 import { app, dialog, Menu } from "electron";
+import { resolveInstanceLockAction } from "./single-instance.js";
 import { createSetupWindow } from "./windows.js";
 import { boot, type BootResult } from "./boot.js";
 import { runSmokeChecks, reportSmoke } from "./smoke.js";
+import { initUpdater } from "./updater.js";
 
 const devMode = process.argv.includes("--dev");
 /** `--smoke`: boot, verify the packaged bundle, print results, exit. See smoke.ts. */
@@ -23,10 +32,48 @@ app.commandLine.appendSwitch("enable-features", "OverlayScrollbar");
 
 let bootResult: BootResult | null = null;
 let quitting = false;
+/**
+ * Memoized server shutdown, shared by the quit hook and the updater.
+ *
+ * Both paths need the PTYs dead, and they can race: applying an update calls this
+ * directly (see updater.ts — `quitAndInstall` can hand off to the NSIS installer
+ * before an async `before-quit` completes), and `quitAndInstall` then quits, which
+ * fires `before-quit`. Memoizing means the second caller awaits the first close
+ * instead of starting a second one against an already-closing server.
+ */
+let shuttingDown: Promise<void> | null = null;
+function shutdownServer(): Promise<void> {
+  if (!bootResult) return Promise.resolve();
+  // Set synchronously, before any await: the quit hook reads it to decide whether
+  // to intercept, and a later assignment would let it intercept its own re-quit.
+  quitting = true;
+  shuttingDown ??= bootResult.server.close().catch(() => {
+    /* close() is internally race-bounded to 5s; ignore errors on shutdown */
+  });
+  return shuttingDown;
+}
 
-// Single-instance: focus the existing window instead of booting twice.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+// Single-instance: focus the existing window instead of booting twice — except
+// under --smoke, where losing the lock means the run verified NOTHING and must
+// say so instead of exiting 0. See single-instance.ts.
+const lock = resolveInstanceLockAction({
+  gotLock: app.requestSingleInstanceLock(),
+  smokeMode: smokeMode,
+});
+if (lock.action === "fail") {
+  console.log(lock.message);
+  const outFile = process.env.SAPIOM_SMOKE_OUT;
+  if (outFile) {
+    // Same reason reportSmoke writes this file: on Windows a GUI-subsystem exe
+    // has no console to print to, so stdout alone loses the diagnostic.
+    try {
+      writeFileSync(outFile, lock.message + "\n", "utf8");
+    } catch {
+      /* nothing better to do — the exit code still fails the run */
+    }
+  }
+  app.exit(lock.exitCode);
+} else if (lock.action === "quit") {
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -58,10 +105,19 @@ if (!gotLock) {
         // windows first, or window-all-closed → quit → before-quit would close
         // the server a second time.
         const code = reportSmoke(await runSmokeChecks(bootResult));
-        await bootResult.server.close().catch(() => {});
+        await shutdownServer();
         app.exit(code);
         return;
       }
+      // Last, and only for a real launch: initUpdater gates itself on
+      // packaged/!dev/!smoke, but starting it after the window is up also keeps a
+      // network round-trip off the boot path entirely.
+      initUpdater({
+        mainWindow: bootResult.mainWindow,
+        devMode,
+        smoke: smokeMode,
+        shutdown: shutdownServer,
+      });
     } catch (err) {
       if (smokeMode) {
         // A boot failure IS the smoke result — report it as one and fail fast
@@ -89,13 +145,7 @@ if (!gotLock) {
 app.on("before-quit", (event) => {
   if (quitting || !bootResult) return;
   event.preventDefault();
-  quitting = true;
-  void bootResult.server
-    .close()
-    .catch(() => {
-      /* close() is internally race-bounded to 5s; ignore errors on shutdown */
-    })
-    .finally(() => app.quit());
+  void shutdownServer().finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {

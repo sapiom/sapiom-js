@@ -12,6 +12,24 @@ CI cannot do (see [Bootstrapping a new package](#bootstrapping-a-new-package)).
 > quarantined out of the workspace (see `pnpm-workspace.yaml`) and are not
 > published by this flow.
 
+## Desktop installers are a separate flow
+
+`@sapiom/harness-desktop` is `private` and never goes to npm. It ships as signed
+installers attached to a GitHub Release by
+`.github/workflows/desktop-release.yml`, on its own tag namespace so it can never
+trigger the npm publish above:
+
+| Tag | Release | Update channel |
+| --- | --- | --- |
+| `harness-desktop-v1.2.3` | final | `latest` — every user |
+| `harness-desktop-v1.2.3-beta.1` | pre-release | `beta` — testers only |
+
+Bump `packages/harness-desktop/package.json` **first**: the tag must match it
+exactly or the build fails, by design — that field names the artifacts and drives
+auto-update. Installed apps then update themselves in place, so a release only
+has to reach people once. Details and pitfalls:
+`packages/harness-desktop/CLAUDE.md`.
+
 ## The normal flow (automated)
 
 1. **In your change PR, add a changeset** describing the bump:

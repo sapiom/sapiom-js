@@ -13,10 +13,19 @@ name: Desktop Release
 # de-risking. Code signing + notarization (mac) and EV signing (win) come in
 # Phases 5–6 and layer on top of this same build.
 #
-# Trigger:
-#   - push a tag `harness-desktop-v1.2.3`  → build all OSes + publish a Release
-#   - workflow_dispatch (manual)           → build all OSes, artifacts only
-#     (no tag ⇒ no Release; download them from the run's Artifacts).
+# Trigger, and the tag convention that drives the update channel:
+#   - `harness-desktop-v1.2.3`        → FINAL release, `latest` channel. Every user
+#                                       gets it, and it becomes the target of the
+#                                       permanent /releases/latest/download/… links.
+#   - `harness-desktop-v1.2.3-beta.1` → PRE-release, `beta` channel. Only installs
+#                                       already following betas are offered it.
+#   - workflow_dispatch (manual)      → build all OSes, artifacts only
+#                                       (no tag ⇒ no Release; download them from
+#                                       the run's Artifacts).
+#
+# The tag must match `packages/harness-desktop/package.json`'s version exactly —
+# the `prepare` job enforces it, because that field is what names the artifacts and
+# what the installed app reports as its own version.
 
 on:
   push:
@@ -40,7 +49,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Resolve version/channel ONCE, and fail fast on a bad tag.
+  #
+  # Separate job on purpose: the guard below costs ~15 seconds, and catching a
+  # version mismatch here means we haven't already spent 40 minutes of macOS
+  # notarization on an artifact we're going to throw away. Three matrix legs
+  # computing the same thing three times would also be three chances to disagree.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      channel: ${{ steps.meta.outputs.channel }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version and update channel
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/harness-desktop/package.json').version")"
+
+          # THE source of truth is package.json, not the tag. electron-builder
+          # names every artifact from it, and the installed app derives its own
+          # channel from app.getVersion() — which is the same field (see
+          # src/main/update-policy.ts). Deriving the channel here from anything
+          # else would let the artifact and the app that runs it disagree.
+          #
+          # Strip build metadata before looking for a pre-release tag: `0.1.2+pr-44`
+          # is a FINAL release whose metadata happens to contain a hyphen.
+          core="${version%%+*}"
+          case "$core" in
+            *-*) channel=beta;    prerelease=true  ;;
+            *)   channel=latest;  prerelease=false ;;
+          esac
+
+          # A tag that disagrees with package.json is the one mistake that breaks
+          # updates permanently and silently: electron-builder writes the artifact
+          # names and `latest.yml` from package.json, so the release would advertise
+          # a version that no asset matches (or, worse, one the installed app
+          # already has) and every client would re-offer the same update forever.
+          # We have already tagged v0.1.0 against a package that later became
+          # 0.1.1 — this is a mistake we've made, not one we're imagining.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            expected="harness-desktop-v${version}"
+            if [ "${{ github.ref_name }}" != "$expected" ]; then
+              echo "::error::Tag '${{ github.ref_name }}' does not match packages/harness-desktop/package.json (${version}). Expected '${expected}'. Bump the package version or retag."
+              exit 1
+            fi
+          fi
+
+          echo "version=$version"       >> "$GITHUB_OUTPUT"
+          echo "channel=$channel"       >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Building $version on the \"$channel\" channel (prerelease=$prerelease)."
+
   build:
+    needs: prepare
     strategy:
       # Build every OS even if one fails — a Linux failure must not hide the
       # macOS result (or vice-versa). Windows is additionally non-blocking below.
@@ -49,10 +115,24 @@ jobs:
         include:
           - os: ubuntu-latest
             packflag: "--linux"
-            # The shippable Linux installers.
+            # Suffix of the update manifest this OS produces; the channel is
+            # prefixed at check time (latest-linux.yml / beta-linux.yml).
+            metadata_suffix: "-linux.yml"
+            # The shippable Linux installers, PLUS the update manifest.
+            #
+            # The manifest globs are not optional extras: without them
+            # electron-builder generates the metadata and this step throws it
+            # away, producing a release that looks complete and silently breaks
+            # every future update. `latest*`/`beta*` rather than `*.yml` so
+            # builder-debug.yml doesn't get attached to a public release.
+            #
+            # No .blockmap on Linux — the AppImage embeds its own block map, so
+            # there is no separate file to collect (unlike the NSIS .exe).
             artifact_path: |
               packages/harness-desktop/release/*.AppImage
               packages/harness-desktop/release/*.deb
+              packages/harness-desktop/release/latest*.yml
+              packages/harness-desktop/release/beta*.yml
           - os: macos-14 # Apple Silicon; builds an arm64 .app → .dmg
             packflag: "--mac"
             # The .dmg is what a tester should get: signed + notarized, it opens
@@ -62,20 +142,34 @@ jobs:
             # unwrapping, at the cost of needing `chmod -R +x` + `xattr -dr
             # com.apple.quarantine` by hand — which signing exists to remove.)
             #
-            # .dmg ONLY — no .zip. electron-builder's macOS `zip` target is the
-            # auto-update artifact (Squirrel.Mac), a second full copy of the same
-            # .app; with no updater wired up yet it just doubled the download.
-            # It's no longer built (electron-builder.yml mac.target); re-add it
-            # here and there when auto-update ships in Phase 5+.
+            metadata_suffix: "-mac.yml"
+            # .dmg for humans, .zip for Squirrel.Mac. The zip is what the updater
+            # actually downloads — macOS auto-update cannot consume a dmg — and
+            # `latest-mac.yml` is only written when a zip target exists. It was
+            # deliberately dropped while there was no updater (it was just a second
+            # copy of the same .app); it is now load-bearing.
             artifact_path: |
               packages/harness-desktop/release/*.dmg
+              packages/harness-desktop/release/*.zip
+              packages/harness-desktop/release/latest*.yml
+              packages/harness-desktop/release/beta*.yml
+              packages/harness-desktop/release/*.blockmap
           # Pinned to windows-2022 (VS 2022 / v17). windows-latest rolled to an
           # image with Visual Studio 18, whose version node-gyp's VS detection
           # doesn't recognize ("unknown version undefined") → the node-pty
           # rebuild can't find a usable compiler. VS 2022 is fully supported.
           - os: windows-2022
             packflag: "--win"
-            artifact_path: packages/harness-desktop/release/*.exe
+            # Windows' manifest is unsuffixed: latest.yml / beta.yml.
+            metadata_suffix: ".yml"
+            # The .exe.blockmap is what makes differential updates work: without it
+            # attached, electron-updater silently falls back to downloading the
+            # whole ~100 MB installer instead of the few MB that changed.
+            artifact_path: |
+              packages/harness-desktop/release/*.exe
+              packages/harness-desktop/release/*.blockmap
+              packages/harness-desktop/release/latest*.yml
+              packages/harness-desktop/release/beta*.yml
 
     runs-on: ${{ matrix.os }}
     # Windows stays non-blocking while we bring it up (Phase 6). Keep it in the
@@ -203,6 +297,12 @@ jobs:
               notarize_flag="-c.mac.notarize=true"
             fi
           fi
+          # The channel is NOT passed from here. pack.mjs derives it from
+          # package.json using the app's own update-policy rule, so this workflow,
+          # the PR smoke job in test.yml, and a local `pnpm dist` all agree without
+          # three copies of "does this version have a pre-release tag?" in bash.
+          # The `prepare` job's channel output is then an independent expectation,
+          # and the metadata check below is what catches the two disagreeing.
           # shellcheck disable=SC2086 # intentional: empty must vanish
           node packages/harness-desktop/scripts/pack.mjs ${{ matrix.packflag }} $notarize_flag
 
@@ -243,6 +343,34 @@ jobs:
         # `shell: bash` runs under git-bash on the Windows runner too, so one ls works.
         shell: bash
         run: ls -la packages/harness-desktop/release
+
+      # Fail here rather than ship a release that can never update anything.
+      #
+      # The manifest is the entire auto-update contract, and its absence is
+      # invisible: the installers build, launch, and pass smoke. Every plausible
+      # way to lose it is a silent one — dropping the `publish` block from
+      # electron-builder.yml, a deploy dir that didn't receive the config, or
+      # electron-builder changing when it decides to emit metadata. So assert it
+      # exists, and assert the version inside it matches what we think we built
+      # (a mismatch makes clients re-offer the same update forever).
+      - name: Verify update metadata was generated
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="packages/harness-desktop/release/${{ needs.prepare.outputs.channel }}${{ matrix.metadata_suffix }}"
+          if [ ! -f "$manifest" ]; then
+            echo "::error::$manifest is missing — auto-update would be dead in this build. Check the 'publish' block in electron-builder.yml."
+            ls -la packages/harness-desktop/release
+            exit 1
+          fi
+          echo "--- $manifest ---"
+          cat "$manifest"
+          expected="${{ needs.prepare.outputs.version }}"
+          if ! grep -qx "version: ${expected}" "$manifest"; then
+            echo "::error::$manifest does not advertise version ${expected}."
+            exit 1
+          fi
+          echo "Update manifest OK: $(basename "$manifest") advertises ${expected}."
 
       # Release gate: launch the packaged app on the OSes only this workflow builds.
       #
@@ -307,7 +435,7 @@ jobs:
   # Collect every OS's artifacts and attach them to the GitHub Release — only
   # on a real tag push (workflow_dispatch has no tag, so it stops at Artifacts).
   release:
-    needs: build
+    needs: [prepare, build]
     if: startsWith(github.ref, 'refs/tags/harness-desktop-v')
     runs-on: ubuntu-latest
     permissions:
@@ -341,25 +469,76 @@ jobs:
           for f in **/*.exe;      do cp "$f" "Sapiom-Windows-x64.exe";      break; done
           ls -la
 
+      # Make the channels a hierarchy rather than two dead ends.
+      #
+      # A beta install reads `beta.yml`. Final releases only publish `latest*.yml`,
+      # so without this a tester who installed a beta would be stranded the moment
+      # we stopped cutting betas: their manifest simply stops existing and every
+      # check 404s. Copying the stable manifest under the beta name means they roll
+      # forward onto the stable build — which is what "beta gets betas AND newer
+      # finals" has to mean in practice.
+      #
+      # The copy is sound because the manifest names no channel: it holds a version,
+      # the file list, and sha512s (verified in release/latest-linux.yml). Only the
+      # FILENAME distinguishes channels.
+      #
+      # Beta releases deliberately do not get the reverse treatment: they publish
+      # only `beta*.yml`, and a stable install (allowPrerelease=false) skips
+      # pre-releases outright, so it can never be offered one.
+      - name: Mirror stable manifests onto the beta channel
+        if: needs.prepare.outputs.channel == 'latest'
+        run: |
+          set -euo pipefail
+          cd dist-artifacts
+          shopt -s nullglob globstar
+          for f in **/latest.yml **/latest-mac.yml **/latest-linux.yml; do
+            base="$(basename "$f")"
+            cp "$f" "beta${base#latest}"
+            echo "mirrored $base → beta${base#latest}"
+          done
+          ls -la
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Pre-release while Windows is unsigned (and currently non-launching).
-          prerelease: true
+          # Driven by the version, not hardcoded: `0.1.2-beta.1` publishes a
+          # pre-release on the beta channel, `0.1.2` publishes a final one. This is
+          # also what makes the permanent /releases/latest/download/… links resolve
+          # — GitHub points "latest" at the newest NON-prerelease, so while every
+          # release was marked pre-release those links 404'd.
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
           fail_on_unmatched_files: false
-          # Every OS now uploads installer FILES only (macOS: .dmg, not the raw
+          # Every OS uploads installer FILES only (macOS: .dmg/.zip, not the raw
           # .app bundle), so this glob attaches a handful of assets rather than
-          # the hundreds of inner files an .app directory would produce.
+          # the hundreds of inner files an .app directory would produce. The
+          # `latest*.yml` / `beta*.yml` manifests and `.blockmap` files ride along —
+          # they are not optional decoration, they ARE the update mechanism.
           files: dist-artifacts/**/*
           body: |
             Desktop installers built by CI. Each one was **launched by CI before
             being attached** (`--smoke`: the app boots, serves the SPA from inside
-            the asar, spawns a PTY, and its preload bridge loads).
+            the asar, spawns a PTY, its preload bridge loads, and its auto-update
+            config is present).
+
+            Channel: **${{ needs.prepare.outputs.channel }}** (v${{ needs.prepare.outputs.version }}).
 
             | Platform | Status |
             | --- | --- |
             | macOS (Apple Silicon) | `.dmg` — signed + notarized when Apple credentials are configured; otherwise unsigned (Gatekeeper will ask for right-click → Open) |
             | Linux | `.AppImage` / `.deb` |
-            | Windows | `.exe` — **unsigned, and a known launch bug is open**; SmartScreen will warn |
+            | Windows | `.exe` — **unsigned**; SmartScreen will warn |
+
+            **Updating:** an installed app checks for new releases on its own
+            channel and offers a restart when one has downloaded — you should not
+            need to reinstall again. Restarting ends any running agent sessions, so
+            it always asks first.
+
+            - `.zip` (macOS) and `.blockmap` (Windows) are update artifacts, not
+              downloads — take the `.dmg` / `.exe`.
+            - Windows updates run an unsigned installer until code signing lands,
+              so SmartScreen warns on each update.
+            - An `.AppImage` can only self-update while running as the AppImage;
+              `.deb` updates go through the system package manager and will ask for
+              your password.
 
             Intel Macs are not covered yet: CI builds arm64 only.

@@ -30,6 +30,7 @@ import {
   type DoctorReport,
 } from "@sapiom/harness";
 import { augmentProcessPath } from "./env.js";
+import { esbuildBinaryPath } from "./esbuild-binary.js";
 import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
 import { installClaudeCode } from "./agent-install.js";
@@ -253,6 +254,11 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   const runtimeShimDir = installRuntimeShims();
   augmentProcessPath(agentBinDir(), runtimeShimDir);
   resolveTargetEnvironment();
+
+  // 1b. esbuild's native binary was pinned by index.ts's first import — far
+  //     earlier than here, because esbuild reads the setting when its module
+  //     loads (esbuild-binary.ts). Only traced here, where the boot log is.
+  debug(`esbuild binary: ${esbuildBinaryPath ?? "left to esbuild's own resolution"}`);
 
   // 2. Doctor.
   progress(setupWin, { phase: "doctor", message: "Checking your environment…", status: "active" });

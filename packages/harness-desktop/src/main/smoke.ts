@@ -20,17 +20,28 @@
  *                   (covers the rebuild AND the +x spawn-helper) — no agent needed
  *   unpacked-deps   what the plain-Node Canvas subprocess imports exists ON DISK,
  *                   not just inside the archive
+ *   run-local       POST /api/runs/local's child process really starts (its cwd,
+ *                   its script path and ELECTRON_RUN_AS_NODE were all wrong, so
+ *                   every local run answered `spawn ENOTDIR`)
+ *   deploy-bundle   agent-core's in-process bundler can actually SPAWN esbuild's
+ *                   native binary (a path inside app.asar gave `spawn ENOTDIR`,
+ *                   so every deploy from the packaged app failed)
+ *   update-config   the auto-update metadata is baked in and electron-updater
+ *                   loads — otherwise the app runs fine and never updates again
  *
  * Exit code is 0 only if every check passes; each result is printed as one line
  * so a CI log shows exactly which layer broke.
  */
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
+import { app } from "electron";
 import { resolveSpawnTarget } from "@sapiom/harness";
 import { createSetupWindow } from "./windows.js";
 import { resolveWebDir } from "./paths.js";
+import { CHANNEL_ENV_VAR, resolveUpdateChannel } from "./update-policy.js";
 import type { BootResult } from "./boot.js";
 
 const require = createRequire(import.meta.url);
@@ -258,7 +269,8 @@ async function checkSessionCreate(base: string, token: string | null): Promise<s
     const found = state.sessions?.find((s) => s.id === session.id);
     if (!found) throw new Error(`session ${session.id} missing from /api/state`);
 
-    return `spawned a session in ${path.basename(cwd)} (status ${found.status ?? session.status ?? "?"})`;
+    const inherited = await checkAgentEnvironment(session.id);
+    return `spawned a session in ${path.basename(cwd)} (status ${found.status ?? session.status ?? "?"}); ${inherited}`;
   } finally {
     // Best-effort ONLY, and deliberately so: this directory is the live pty's
     // cwd, and Windows refuses to delete a directory that is a running
@@ -271,6 +283,56 @@ async function checkSessionCreate(base: string, token: string | null): Promise<s
       /* the pty still holds it; nothing to do and nothing worth reporting */
     }
   }
+}
+
+/**
+ * What did the AGENT actually inherit?
+ *
+ * Asserting on what the main process *meant* to pass is not the same as asserting
+ * on what arrived: `SessionManager.spawn` copies the whole parent environment into
+ * the pty, and the desktop host puts `ESBUILD_BINARY_PATH` in that environment so
+ * its own in-process bundler can exec a binary outside app.asar. The agent — and
+ * every tool the agent runs in the USER'S repo — inherited a pin to our esbuild
+ * build, so any project on a different version died with
+ * `Cannot start service: Host version "0.25.12" does not match binary version
+ * "0.28.1"` on a repo that builds fine outside the app. A fix in the harness is
+ * invisible from here unless the check reads the child's real environment.
+ *
+ * The stub agent writes it (scripts/smoke.sh). Skips loudly when run without that
+ * harness rather than passing silently, and keys on the new session's own id so a
+ * stale file from an earlier run can never be mistaken for this one's.
+ */
+async function checkAgentEnvironment(sessionId: string): Promise<string> {
+  const file = process.env.SAPIOM_SMOKE_AGENT_ENV;
+  if (!file) return "agent env NOT CHECKED (no SAPIOM_SMOKE_AGENT_ENV — run via scripts/smoke.sh)";
+
+  // The pty spawns asynchronously; give the stub a moment to write.
+  const deadline = Date.now() + 5_000;
+  let lines: string[] = [];
+  for (;;) {
+    if (existsSync(file)) {
+      lines = readFileSync(file, "utf8").split("\n");
+      if (lines.some((l) => l === `SAPIOM_HARNESS_SESSION_ID=${sessionId}`)) break;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        existsSync(file)
+          ? `agent env dump is not this session's (no SAPIOM_HARNESS_SESSION_ID=${sessionId})`
+          : `agent never wrote ${file} — the stub did not run`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  const leaked = lines.filter((l) => /^ESBUILD_BINARY_PATH=/.test(l));
+  if (leaked.length) {
+    throw new Error(`agent inherited the host's esbuild pin: ${leaked[0]!.slice(0, 160)}`);
+  }
+  // PATH must still be there — this is a targeted strip, not a clean env.
+  if (!lines.some((l) => /^PATH=/.test(l))) {
+    throw new Error("agent inherited no PATH — the env strip took too much");
+  }
+  return `agent env clean (${lines.length} vars, no esbuild pin)`;
 }
 
 /**
@@ -301,6 +363,227 @@ async function checkUnpackedDeps(): Promise<string> {
   const missing = targets.filter(([, p]) => !existsSync(p)).map(([name, p]) => `${name} (${p})`);
   if (missing.length) throw new Error(`not on disk: ${missing.join(", ")}`);
   return `${targets.length} entry points present on disk (asar-translated)`;
+}
+
+type BundleForDeploy = (sourceDir: string) => Promise<{
+  code: string;
+  dependencies: Record<string, string>;
+}>;
+
+/**
+ * Load agent-core's `bundleForDeploy` the way the harness server loads it.
+ *
+ * agent-core is the HARNESS's dependency, not ours — under pnpm's isolated
+ * node_modules it isn't visible from this package at all, hence the two-step
+ * resolve and the structural type above rather than an `import type`. It also
+ * ships dual CJS/ESM, and the harness (ESM) gets the `import` condition while
+ * `createRequire().resolve` would hand back the CJS copy — a different module
+ * instance, and named-export interop we don't want to be testing here. So read
+ * the ESM entry out of the exports map and import that.
+ */
+async function loadBundleForDeploy(): Promise<BundleForDeploy> {
+  const fromHarness = createRequire(require.resolve("@sapiom/harness/package.json"));
+  const pkgPath = fromHarness.resolve("@sapiom/agent-core/package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+    exports?: { ".": { import?: string } };
+    module?: string;
+    main?: string;
+  };
+  const rel = pkg.exports?.["."]?.import ?? pkg.module ?? pkg.main;
+  if (!rel) throw new Error(`@sapiom/agent-core (${pkgPath}) declares no entry point`);
+  const entry = path.resolve(path.dirname(pkgPath), rel);
+
+  const mod = (await import(pathToFileURL(entry).href)) as Record<string, unknown> & {
+    default?: Record<string, unknown>;
+  };
+  const fn = mod.bundleForDeploy ?? mod.default?.bundleForDeploy;
+  if (typeof fn !== "function") {
+    throw new Error(`${entry} exports no bundleForDeploy (got ${Object.keys(mod).join(", ") || "nothing"})`);
+  }
+  return fn as BundleForDeploy;
+}
+
+/**
+ * Can `POST /api/runs/local` actually reach its child process?
+ *
+ * The "Local Run" button was dead in every packaged build, answering with
+ * `{"kind":"error","error":"spawn ENOTDIR"}` — three packaging defects in one
+ * four-line spawn (asar cwd, asar script path, and no `ELECTRON_RUN_AS_NODE`, so
+ * `process.execPath` would have booted a SECOND COPY OF THE APP). Unit tests pin
+ * the path math; only a packaged launch proves the child really starts.
+ *
+ * The trick is asserting on a child that we can make fail *for a known domain
+ * reason*: point it at an empty directory and agent-core answers "No index.ts
+ * found". That single line proves the whole chain — cwd valid, bootstrap script
+ * readable off disk, the child ran as Node rather than relaunching the app, and
+ * its `import "@sapiom/agent-core"` resolved unpacked. No workflow project, no
+ * dependencies, no network, and deterministic. A packaging regression cannot
+ * produce that error; it produces ENOTDIR, ERR_MODULE_NOT_FOUND, or silence.
+ */
+async function checkRunLocal(base: string, token: string | null): Promise<string> {
+  if (!token) throw new Error("boot url carried no token");
+
+  const dir = mkdtempSync(path.join(tmpdir(), "sapiom-smoke-runlocal-"));
+  try {
+    const res = await fetch(`${base}/api/runs/local`, {
+      method: "POST",
+      headers: { "X-Harness-Token": token, "content-type": "application/json" },
+      body: JSON.stringify({ sourceDir: dir }),
+    });
+    const body = await res.text();
+    if (res.status !== 200) throw new Error(`POST /api/runs/local → ${res.status}: ${body.slice(0, 200)}`);
+
+    const lines = body.trim().split("\n").filter(Boolean);
+    if (lines.length === 0) {
+      // No NDJSON at all is the signature of the child never running — e.g. the
+      // app relaunching itself instead of executing the bootstrap.
+      throw new Error("no NDJSON from the run-local child (did it spawn at all?)");
+    }
+    const terminal = JSON.parse(lines[lines.length - 1]) as { kind?: string; error?: string };
+    const message = terminal.error ?? "";
+    if (/ENOTDIR|ENOENT|ERR_MODULE_NOT_FOUND|Cannot find (module|package)/i.test(message)) {
+      throw new Error(`packaging failure reached the child: ${message.slice(0, 300)}`);
+    }
+    if (!/index\.ts/i.test(message)) {
+      throw new Error(
+        `expected agent-core's "No index.ts found" from a real child, got ${terminal.kind}: ${message.slice(0, 300)}`,
+      );
+    }
+    return `child ran and answered from agent-core (${lines.length} NDJSON line(s), terminal kind "${terminal.kind}")`;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Can a deploy bundle anything?
+ *
+ * `POST /api/workflows/:id/deploy` runs agent-core's `bundleForDeploy()` in the
+ * main process, and esbuild shells out to a native binary it locates with
+ * `require.resolve` — which under Electron names the virtual `app.asar/…` path.
+ * Reads through it work (Electron patches fs), `spawn` does not, so every deploy
+ * from the packaged app died with `Failed to bundle the agent for deploy.
+ * (spawn ENOTDIR)` while `npx` was fine. `esbuild-binary.ts` is the fix — and it
+ * only works because of WHERE it is imported, which no unit test can see, so this
+ * is the only thing that proves it against a real artifact.
+ *
+ * Bundles a throwaway two-file project rather than calling esbuild directly: the
+ * relative import means a pass also covers the resolution esbuild does on the
+ * author's behalf, and it exercises the exact entry point deploy uses. Network-
+ * free — `bundleForDeploy` only reads the local tree.
+ */
+async function checkDeployBundle(): Promise<string> {
+  const bundleForDeploy = await loadBundleForDeploy();
+
+  const dir = mkdtempSync(path.join(tmpdir(), "sapiom-smoke-bundle-"));
+  try {
+    writeFileSync(path.join(dir, "shared.ts"), "export const answer: number = 42;\n");
+    writeFileSync(
+      path.join(dir, "index.ts"),
+      'import { answer } from "./shared.js";\nexport default { answer };\n',
+    );
+    // agent-core puts the real cause in `hint` (esbuild's own message) and keeps
+    // `message` generic, so a bare rethrow reports "Failed to bundle the agent
+    // for deploy." and nothing else — which is precisely the useless diagnostic
+    // this check produced on its first run. Flatten both, plus the binary we
+    // pinned, since that is the next thing anyone would ask.
+    const { code } = await bundleForDeploy(dir).catch((err: unknown) => {
+      const hint = (err as { hint?: unknown }).hint;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `${message}${typeof hint === "string" ? ` (${hint})` : ""} ` +
+          `[ESBUILD_BINARY_PATH=${process.env.ESBUILD_BINARY_PATH ?? "unset"}]`,
+      );
+    });
+    // The relative import must have been INLINED — that's the whole job.
+    if (!code.includes("42")) {
+      throw new Error(`bundle did not inline ./shared.ts: ${code.slice(0, 200)}`);
+    }
+    const binPath = process.env.ESBUILD_BINARY_PATH;
+    return `bundled a 2-file project (${code.length} bytes) via ${binPath ? path.basename(path.dirname(binPath)) + "/" + path.basename(binPath) : "esbuild's own resolution"}`;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Is this build actually capable of updating itself?
+ *
+ * This is the archetypal packaged-only invariant: nothing observable goes wrong
+ * when it's broken. `resources/app-update.yml` is written by electron-builder ONLY
+ * when a publish provider is configured, so dropping that config (or building with
+ * a config the deploy dir didn't receive) produces an app that installs, launches,
+ * passes every other check here — and then never updates, silently, forever. The
+ * failure surfaces weeks later as "why is that tester still on 0.1.1?".
+ *
+ * It also loads electron-updater for real. That module is CommonJS inside an ESM
+ * app whose `node_modules` are asar-unpacked, and `autoUpdater` is a getter that
+ * constructs a platform-specific updater on first read — three things that can
+ * only be confirmed against a packaged artifact on the platform in question.
+ */
+async function checkUpdateConfig(): Promise<string> {
+  if (!app.isPackaged) {
+    return "SKIPPED — unpackaged build has no app-update.yml (run scripts/smoke.sh)";
+  }
+
+  const configPath = path.join(process.resourcesPath, "app-update.yml");
+  if (!existsSync(configPath)) {
+    throw new Error(
+      `no ${configPath} — electron-builder writes it only when a publish provider is ` +
+        `configured, so auto-update is dead in this build`,
+    );
+  }
+  // Read the few fields we care about directly rather than pulling in a YAML
+  // parser: js-yaml is only a TRANSITIVE dependency here (via electron-updater),
+  // and depending on one of those is how an unrelated upgrade breaks a build.
+  const raw = readFileSync(configPath, "utf8");
+  const field = (key: string): string | undefined =>
+    raw.match(new RegExp(`^${key}:\\s*(\\S+)`, "m"))?.[1];
+
+  const provider = field("provider");
+  const owner = field("owner");
+  const repo = field("repo");
+  if (provider !== "github") {
+    throw new Error(`app-update.yml provider is "${provider ?? "(none)"}", expected "github"`);
+  }
+  if (!owner || !repo) {
+    throw new Error(`app-update.yml names no owner/repo (owner="${owner}", repo="${repo}")`);
+  }
+
+  // Reading the getter is the test: it constructs the updater for THIS packaging
+  // format (MacUpdater / NsisUpdater / AppImageUpdater / DebUpdater), which is
+  // where a CJS-in-ESM or unpacked-module problem would surface.
+  const { autoUpdater } = (await import("electron-updater")).default;
+  const kind = autoUpdater.constructor.name;
+
+  // Two independent things decide which manifest this install reads: the channel
+  // electron-builder BAKED IN at package time (from `-c.publish.channel`, absent
+  // meaning "latest") and the one the app RESOLVES at runtime from its own version.
+  // They must agree, or the artifact was published to one channel while the app
+  // that runs it looks at another — updates that exist and are never found.
+  //
+  // They agree by construction: CI derives the pack flag from package.json's
+  // version, and update-policy.ts derives the runtime channel from the same field
+  // by the same rule. This asserts that construction actually held, which is
+  // exactly the kind of two-sided invariant no unit test can see.
+  const bakedChannel = field("channel") ?? "latest";
+  const { channel } = resolveUpdateChannel(app.getVersion(), process.env);
+  // An env override is a deliberate disagreement (pin this machine to another
+  // channel), so it suspends the check rather than failing it.
+  const overridden = (process.env[CHANNEL_ENV_VAR] ?? "").trim() !== "";
+  if (!overridden && bakedChannel !== channel) {
+    throw new Error(
+      `channel mismatch: packaged for "${bakedChannel}" but v${app.getVersion()} resolves to ` +
+        `"${channel}" — this build would publish to one channel and look for updates on another`,
+    );
+  }
+
+  // Report the channel so a CI log answers "which channel did this artifact ship
+  // on?" without anyone having to reason about the tag.
+  return (
+    `${kind} → ${provider}:${owner}/${repo}, channel "${channel}"` +
+    `${overridden ? " (env override)" : ""} (v${app.getVersion()})`
+  );
 }
 
 /**
@@ -337,6 +620,9 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     await check("preload-bridge", checkPreloadBridge),
     await check("node-pty", checkNodePty),
     await check("unpacked-deps", checkUnpackedDeps),
+    await check("run-local", () => checkRunLocal(base, token)),
+    await check("deploy-bundle", checkDeployBundle),
+    await check("update-config", checkUpdateConfig),
   ];
 }
 

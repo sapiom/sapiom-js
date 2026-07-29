@@ -1116,6 +1116,34 @@ describe("SessionManager", () => {
     delete process.env["HARNESS_TEST_UNSET_ME"];
   });
 
+  /**
+   * The desktop host pins `ESBUILD_BINARY_PATH` at an esbuild binary outside
+   * app.asar, because it cannot exec one from inside the archive. That pin must
+   * not reach the agent: this loop copies the WHOLE parent environment into the
+   * pty, so the agent — and everything the agent spawns in the user's own repo —
+   * inherited a pin to OUR esbuild build. Any project on a different esbuild
+   * version (vite, vitest, tsup, tsx, astro…) then dies with
+   * `Cannot start service: Host version "0.25.12" does not match binary version
+   * "0.28.1"` on a project that builds fine outside the app.
+   */
+  it("never leaks the host's ESBUILD_BINARY_PATH pin into the agent's environment", async () => {
+    process.env["ESBUILD_BINARY_PATH"] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
+    const capturedEnvs: Record<string, string | undefined>[] = [];
+    const spawnPty: PtySpawnFn = (_file, _args, options) => {
+      capturedEnvs.push(options.env ?? {});
+      const fake = createFakePty();
+      return fake.pty as unknown as ReturnType<PtySpawnFn>;
+    };
+    const { manager } = makeManager({ spawnPty });
+    await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+    expect(capturedEnvs[0]?.["ESBUILD_BINARY_PATH"]).toBeUndefined();
+    // Everything else still comes through — this is a targeted strip, not a
+    // switch to a clean environment (the agent needs PATH, HOME, the lot).
+    expect(capturedEnvs[0]?.["PATH"]).toBe(process.env["PATH"]);
+    delete process.env["ESBUILD_BINARY_PATH"];
+  });
+
   describe("awaitable kill — liveness-fallback resolution", () => {
     beforeEach(() => {
       vi.useFakeTimers();

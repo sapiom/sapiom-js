@@ -7,9 +7,10 @@
  * every subprocess it spawned. These tests pin the ordering contract.
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { augmentProcessPath } from "./env.js";
+import { augmentProcessPath, configureEsbuildBinary, unpackedPath } from "./env.js";
 
 const AGENT_BIN = "/tmp/userData/npm-global/bin";
 const SHIMS = "/tmp/userData/runtime-bin";
@@ -107,5 +108,74 @@ describe("augmentProcessPath", () => {
     } finally {
       Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
     }
+  });
+});
+
+describe("unpackedPath", () => {
+  it("redirects an app.asar path to its on-disk twin", () => {
+    expect(unpackedPath("/Applications/Sapiom.app/Contents/Resources/app.asar/node_modules/esbuild/lib/main.js")).toBe(
+      "/Applications/Sapiom.app/Contents/Resources/app.asar.unpacked/node_modules/esbuild/lib/main.js",
+    );
+  });
+
+  it("handles Windows separators", () => {
+    expect(unpackedPath("C:\\Users\\u\\AppData\\Local\\Sapiom\\resources\\app.asar\\node_modules\\x")).toBe(
+      "C:\\Users\\u\\AppData\\Local\\Sapiom\\resources\\app.asar.unpacked\\node_modules\\x",
+    );
+  });
+
+  it("leaves an unpackaged path alone", () => {
+    const p = "/home/dev/repo/node_modules/esbuild/lib/main.js";
+    expect(unpackedPath(p)).toBe(p);
+  });
+
+  it("only rewrites app.asar as a whole path segment", () => {
+    // A directory that merely STARTS with "app.asar" is not the archive.
+    const p = "/opt/app.asarbackup/node_modules/x";
+    expect(unpackedPath(p)).toBe(p);
+  });
+});
+
+/**
+ * The regression these pin: deploying a workflow from the packaged app died with
+ * `Failed to bundle the agent for deploy. (spawn ENOTDIR)`. agent-core's
+ * `bundleForDeploy` runs esbuild IN-PROCESS (unlike the Canvas check, which
+ * already gets a child process with a translated cwd), and esbuild resolves its
+ * native binary with `require.resolve` — which under Electron reports the virtual
+ * `app.asar/…` path. Reads through it work (Electron patches fs); `spawn` does
+ * not (app.asar is a file), hence ENOTDIR. Only `npx` was unaffected.
+ */
+describe("configureEsbuildBinary", () => {
+  const saved = process.env.ESBUILD_BINARY_PATH;
+
+  beforeEach(() => {
+    delete process.env.ESBUILD_BINARY_PATH;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ESBUILD_BINARY_PATH;
+    else process.env.ESBUILD_BINARY_PATH = saved;
+  });
+
+  it("points ESBUILD_BINARY_PATH at a real, on-disk esbuild binary", () => {
+    const result = configureEsbuildBinary();
+    expect(result).not.toBeNull();
+    expect(process.env.ESBUILD_BINARY_PATH).toBe(result);
+    // The whole point: whatever we set must be a file a spawn can actually exec.
+    // (Unpackaged that's the repo's own binary; packaged, the unpacked twin.)
+    expect(existsSync(result!)).toBe(true);
+    expect(result).not.toMatch(/app\.asar[\\/]/);
+  });
+
+  it("resolves esbuild through the harness, not this package", () => {
+    // esbuild is a transitive dep (harness → agent-core → esbuild) and pnpm's
+    // isolated node_modules make it invisible from harness-desktop. Resolving it
+    // from here would work in a hoisted tree and fail in the real one.
+    expect(configureEsbuildBinary()).toContain("esbuild");
+  });
+
+  it("never overrides a deliberate override", () => {
+    process.env.ESBUILD_BINARY_PATH = "/custom/esbuild";
+    expect(configureEsbuildBinary()).toBeNull();
+    expect(process.env.ESBUILD_BINARY_PATH).toBe("/custom/esbuild");
   });
 });

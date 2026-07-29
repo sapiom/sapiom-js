@@ -10,6 +10,24 @@ directories:
   output: release
   buildResources: assets
 
+# Auto-update metadata. This block is NOT here to upload anything — the release
+# workflow attaches assets itself (softprops/action-gh-release), and pack.mjs
+# passes `--publish never` so electron-builder never races it.
+#
+# It is here because a publish provider is what makes electron-builder
+#   (a) emit `latest.yml` / `latest-mac.yml` / `latest-linux.yml` — the manifests
+#       electron-updater reads to learn a newer version exists, and
+#   (b) bake `resources/app-update.yml` into the app — how the INSTALLED app knows
+#       where to look.
+# Without it the build succeeds, the app runs, and updates silently never happen.
+# The packaged `update-config` smoke check exists to catch exactly that.
+#
+# The repo is public, so the app needs no token to read releases.
+publish:
+  provider: github
+  owner: sapiom
+  repo: sapiom-js
+
 # Default file globbing packs production node_modules + package.json. We add
 # our built output explicitly and keep source/maps out of the bundle.
 files:
@@ -49,14 +67,20 @@ linux:
   synopsis: One-click Sapiom harness — run your coding agent on Sapiom.
 
 mac:
-  # dmg only. electron-builder also emits a `zip` for macOS auto-update
-  # (Squirrel.Mac consumes zips, not dmgs), but no updater is wired up yet
-  # (Phase 4: unsigned, no publish provider), so the zip was a second full copy
-  # of the same .app — doubling the artifact a tester downloads for nothing.
-  # Re-add `zip` here (and to the upload glob in desktop-release.yml) when macOS
-  # auto-update ships in Phase 5+.
+  # dmg AND zip. The zip is not a duplicate download for testers — it is the
+  # auto-update artifact: Squirrel.Mac consumes a zip, never a dmg, and
+  # `latest-mac.yml` is only written when a zip target exists. Without it the
+  # installed app fails every check with "Could not get latest version".
+  #
+  # (It genuinely was dead weight before — Phase 4 had no updater and no publish
+  # provider, so it was a second copy of the same .app. That is what changed.)
+  #
+  # Squirrel.Mac also requires the update to be validly SIGNED before it will
+  # apply it, so macOS auto-update only became possible once the Developer ID
+  # cert landed. An unsigned build still installs by hand; it just cannot update.
   target:
     - dmg
+    - zip
   category: public.app-category.developer-tools
   # macOS gets its own artwork: the same mark inset to ~82% of the canvas with a
   # transparent margin, per Apple's icon grid, so the app sits the same visual
@@ -90,3 +114,15 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # Differential updates: ship only the changed blocks instead of the whole
+  # installer. The app is ~100 MB and a typical harness fix touches a few MB of
+  # JS, so this is the difference between a background download nobody notices
+  # and one they do. Requires the generated `.exe.blockmap` to be attached to the
+  # release alongside the installer (see the artifact globs in
+  # desktop-release.yml) — without it electron-updater silently falls back to the
+  # full download.
+  #
+  # `perMachine: false` above matters here too: a per-user install updates without
+  # a UAC prompt. (The installer is still unsigned until the EV cert lands, so
+  # SmartScreen will warn regardless — Phase 6.)
+  differentialPackage: true

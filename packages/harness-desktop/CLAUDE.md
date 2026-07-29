@@ -68,6 +68,15 @@ touching this package, and how to tell whether a change actually works on the OS
 
 ### All platforms
 
+**`pnpm dist` does NOT rebuild the workspace packages it bundles.** It runs *this* package's `build`
+and then packs, and `pnpm deploy --prod` copies `@sapiom/harness`'s **`dist/`** — so a harness-side fix
+you have not built is silently absent from the artifact, and the app runs the old code. This is not
+hypothetical: two new smoke checks were written against fixed source, packaged, and both failed with
+the exact pre-fix errors (`spawn ENOTDIR`, the leaked esbuild pin) because only the desktop package had
+been rebuilt. Before packaging anything that depends on a harness change:
+`pnpm --filter @sapiom/harness build`. When a check fails on an artifact and the source looks right,
+verify the code is *in* the bundle before debugging the code (`grep -c <symbol> packages/harness/dist/...`).
+
 `pack.mjs` runs `pnpm deploy --prod --legacy` into a throwaway dir because electron-builder needs
 every packed file under the app dir, then runs electron-builder there. That deploy materializes
 node_modules with **relative** symlinks, which is why the deploy dir's *location* keeps breaking
@@ -75,6 +84,20 @@ things (see mac/Windows below). `asarUnpack: **/node_modules/**` is deliberate: 
 plain Node with no asar support, so their whole import tree must exist on disk. `npmRebuild`
 recompiles node-pty against the Electron ABI **on the packaging OS** — there is no cross-compiling
 here, each OS builds on its own runner.
+
+**A dependency that execs a sidecar binary needs more than `asarUnpack`.** Unpacking puts the file on
+disk but leaves every path `require.resolve` reports pointing at `app.asar`, and `spawn` — unlike
+`fs` — is not patched, so it fails with `ENOTDIR`. This shipped in 0.1.0: deploying a workflow died
+with `Failed to bundle the agent for deploy. (spawn ENOTDIR)` on macOS *and* Linux (Windows escaped it
+only because we set `asar: false` there), because the harness runs agent-core's esbuild bundler
+in-process. `configureEsbuildBinary()` (`env.ts`) points `ESBUILD_BINARY_PATH` at the unpacked twin —
+**from `index.ts`'s first import**, via `esbuild-binary.ts`. That ordering is the whole fix: esbuild
+snapshots the variable into a module-level constant when its own module is evaluated, so the first
+attempt at this — setting it inside `boot()` — logged the correct path and changed nothing, because
+`import … from "@sapiom/harness"` had already loaded agent-core → esbuild. `index.test.ts` pins the
+import order and the `deploy-bundle` smoke check catches it packaged. node-pty is the same class of
+problem solved a different way (its spawn-helper path comes from the module itself, already unpacked).
+Any new dependency of this shape needs its own path hook or a child process.
 
 ### macOS
 
@@ -135,12 +158,61 @@ here, each OS builds on its own runner.
 
 ## CI
 
-`.github/workflows/desktop-release.yml` — one job per OS (`ubuntu-latest`, `macos-14`,
-`windows-2022`), `fail-fast: false`, Windows `continue-on-error` while Phase 6 is open. Tag
-`harness-desktop-v*` builds all three and publishes a prerelease Release; `workflow_dispatch` builds
-artifacts only (14-day retention). There is a **TEMP branch trigger on `ewan/feat/harness-desktop`
-that must be removed before merge.** Keep the runner pins and the Python pin: each has a comment
-explaining the failure it prevents — don't "modernize" them without reproducing that failure.
+`.github/workflows/desktop-release.yml` — a `prepare` job (resolves version + channel, fails fast on
+a tag that disagrees with `package.json`), then one build job per OS (`ubuntu-latest`, `macos-14`,
+`windows-2022`), `fail-fast: false`, Windows `continue-on-error` while Phase 6 is open.
+`workflow_dispatch` builds artifacts only (14-day retention). Keep the runner pins and the Python
+pin: each has a comment explaining the failure it prevents — don't "modernize" them without
+reproducing that failure.
+
+Tag conventions, which drive everything downstream:
+
+| Tag | Release | Channel | Who gets it |
+| --- | --- | --- | --- |
+| `harness-desktop-v1.2.3` | final | `latest` | everyone, and `/releases/latest/download/…` resolves |
+| `harness-desktop-v1.2.3-beta.1` | pre-release | `beta` | only installs already following betas |
+
+The tag **must** equal `package.json`'s version. `prepare` enforces it, because that field is what
+names every artifact and what the app reports as its own version; a mismatch publishes a manifest
+advertising a version no asset matches, and clients then re-offer the same update forever.
+
+## Auto-update
+
+`electron-updater` replaces the whole app, so an update also carries Electron and node-pty — not just
+our JS. Policy lives in `src/main/update-policy.ts` (pure, unit-tested), wiring in
+`src/main/updater.ts` (electron-facing, covered by `--smoke`). That split is required: `vitest.config.ts`
+only tests modules that don't import `electron`.
+
+Things that will bite you:
+
+- **`import { autoUpdater } from "electron-updater"` does not work.** It's CommonJS and `autoUpdater`
+  is a *getter*, invisible to `cjs-module-lexer`, so ESM link fails with
+  `SyntaxError: Named export 'autoUpdater' not found`. Default-import and read the property — lazily,
+  since the getter constructs a platform updater on first read.
+- **Close the harness server before `quitAndInstall()`.** It can hand off to the NSIS installer before
+  an async `before-quit` finishes, leaving live `claude` processes holding files the installer wants.
+  `index.ts` exposes a memoized `shutdownServer()` for exactly this; use it, don't add a second path.
+- **macOS needs the `zip` target and a valid signature.** Squirrel.Mac cannot consume a `.dmg`, and
+  `latest-mac.yml` is only written when a zip target exists. It also refuses to apply an unsigned
+  update — so auto-update on macOS depends on the Developer ID cert, not just on this code.
+- **The `publish:` block in `electron-builder.yml` is load-bearing even though we never publish from
+  electron-builder** (`pack.mjs` passes `--publish never` so it can't race the release job). Without a
+  publish provider, no `latest*.yml` is generated and no `resources/app-update.yml` is baked in — the
+  app then runs perfectly and never updates. The `update-config` smoke check exists for that, and it
+  also cross-checks the *baked* channel against the one the app resolves at runtime.
+- **Don't derive the channel in a workflow.** `pack.mjs` imports `resolveUpdateChannel` from the built
+  `dist/` and passes the flag itself, so the release workflow, the PR smoke job and a local
+  `pnpm dist` cannot disagree.
+- **Artifact globs must include `latest*.yml` / `beta*.yml` / `*.blockmap`** (and macOS `*.zip`).
+  They're `latest*`/`beta*` rather than `*.yml` on purpose — `builder-debug.yml` also lands in
+  `release/`. Drop these and the metadata is built and then thrown away.
+- A build **before** this feature cannot update *to* anything: only installs from the first
+  auto-update-capable release onward will ever update themselves.
+
+Dev loop without cutting tags: `SAPIOM_FORCE_UPDATER=1` runs the updater from an unpackaged build
+against a hand-written `dev-app-update.yml`. `SAPIOM_UPDATE_CHANNEL=latest|beta` repoints one machine;
+`SAPIOM_DISABLE_UPDATER=1` turns it off. A smoke run ignores the force flag — CI must never depend on
+the network.
 
 ## Before claiming an OS works
 
@@ -152,10 +224,21 @@ HOME=$(mktemp -d) SAPIOM_TELEMETRY_DISABLED=1 \
 ```
 
 `--smoke` (`src/main/smoke.ts`) boots the app and asserts the SPA is served from inside the asar, the
-REST surface answers and rejects an untokened request, the setup window's preload bridge loaded,
-node-pty loads under Electron's ABI and can spawn, and the plain-Node subprocess's imports exist on
-disk. Exit code is the signal; CI runs it per OS after packaging. **Add a check here whenever you fix
-a packaging bug** — that's what stops it recurring silently.
+REST surface answers and rejects an untokened request, a real session spawns, the setup window's
+preload bridge loaded, node-pty loads under Electron's ABI and can spawn, the plain-Node subprocess's
+imports exist on disk, a deploy can bundle and a local run's child really starts (both spawn-from-asar
+bugs — see below), the agent inherits a clean environment, and the auto-update config is baked in. Exit
+code is the signal; CI runs it per OS after packaging.
+
+Two properties of the harness itself, learned the hard way:
+
+- **A check that cannot run must FAIL, not pass.** `--smoke` used to `app.quit()` — exit **0** — when it
+  lost the single-instance lock, so a stale app on the machine turned the packaging gate into a green
+  light over zero checks. `single-instance.ts` makes that a loud exit 1.
+- **Assert on what the child received, not on what the parent meant to send.** The esbuild-pin leak into
+  every agent process was invisible to every parent-side test; it took having the stub agent dump its own
+  environment (`SAPIOM_SMOKE_AGENT_ENV` in `scripts/smoke.sh`) for a check to see it. **Add a check here whenever you fix a packaging bug** — that's what stops it
+recurring silently.
 
 Then, for anything it can't cover (a real agent, a real workflow, a human flow):
 

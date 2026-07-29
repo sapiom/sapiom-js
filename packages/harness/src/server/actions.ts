@@ -42,6 +42,7 @@ import {
 } from "@sapiom/agent-core";
 
 import { resolveCoreBaseUrl } from "../core/definition-slug-resolver.js";
+import { unpackedPath } from "../core/asar-path.js";
 import type { RunLocalRequest } from "../core/run-local-bootstrap.js";
 import {
   type ApiKeyProvider,
@@ -122,20 +123,73 @@ export function resolveRunLocalBootstrapPath(moduleUrl: string): string {
   return join(dirname(here), "..", "core", `run-local-bootstrap${ext}`);
 }
 
+/** Everything needed to launch the run-local child, resolved but not yet spawned
+ *  — so the packaging-sensitive path math is unit-testable. */
+export interface RunLocalChildSpec {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}
+
 /**
- * The default spawn: `node <bootstrap>` with `cwd` set to this package's root
- * so the bootstrap's `import "@sapiom/agent-core"` resolves against the
- * harness's real dependency (same technique as canvas-manifest-check). A `.ts`
- * bootstrap (dev only) is loaded through the `tsx` register hook; the built
- * `.js` runs on bare node. stdin is piped so the route can write the request.
+ * Resolve how to launch the run-local bootstrap child: `node <bootstrap>` with
+ * `cwd` at this package's root, so the bootstrap's `import "@sapiom/agent-core"`
+ * resolves against the harness's real dependency. A `.ts` bootstrap (dev only)
+ * goes through the `tsx` register hook; the built `.js` runs on bare node.
+ *
+ * Three things here exist ONLY for the packaged desktop app, and their absence
+ * is why every local run failed there with `spawn ENOTDIR` while the CLI was
+ * fine. `canvas-manifest-check.ts` already does all three; this call site did
+ * none of them:
+ *
+ *  1. **cwd must be the unpacked twin.** `import.meta.url` reports a path inside
+ *     `app.asar`; nothing translates a child's cwd, so `chdir` fails. ENOTDIR is
+ *     not in Node's deferred-error list, so `spawn` throws SYNCHRONOUSLY and the
+ *     route answers `{"kind":"error","error":"spawn ENOTDIR"}`.
+ *  2. **the script path must be the unpacked twin too.** The child is plain Node
+ *     with no asar support whatsoever — it cannot read a file inside the archive,
+ *     however well Electron's own `fs` copes.
+ *  3. **`ELECTRON_RUN_AS_NODE=1` under Electron.** `process.execPath` is the
+ *     Sapiom binary there; without the flag it boots a SECOND COPY OF THE APP
+ *     instead of running the script. Only set when actually inside Electron, so
+ *     the CLI (real node) is untouched.
+ *
+ * `ESBUILD_BINARY_PATH` is dropped: the desktop host pins it so its in-process
+ * bundler can exec a binary outside app.asar, but no child needs it (a child
+ * resolves real on-disk paths itself) and a workflow step body that shells out
+ * to the project's own toolchain would hit an esbuild version mismatch.
  */
-function defaultRunLocalSpawn(): RunLocalChildProcess {
-  const bootstrap = resolveRunLocalBootstrapPath(import.meta.url);
-  const nodeArgs = bootstrap.endsWith(".ts")
+export function resolveRunLocalChildSpec(
+  moduleUrl: string,
+  runtime: { execPath: string; env: NodeJS.ProcessEnv; isElectron: boolean },
+): RunLocalChildSpec {
+  const bootstrap = unpackedPath(resolveRunLocalBootstrapPath(moduleUrl));
+  const args = bootstrap.endsWith(".ts")
     ? ["--import", "tsx", bootstrap]
     : [bootstrap];
-  return spawnChildProcess(process.execPath, nodeArgs, {
-    cwd: join(dirname(fileURLToPath(import.meta.url)), "..", ".."),
+  const { ESBUILD_BINARY_PATH: _pin, ...inherited } = runtime.env;
+  return {
+    command: runtime.execPath,
+    args,
+    cwd: unpackedPath(join(dirname(fileURLToPath(moduleUrl)), "..", "..")),
+    env: {
+      ...inherited,
+      ...(runtime.isElectron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    },
+  };
+}
+
+/** The default spawn. stdin is piped so the route can write the request. */
+function defaultRunLocalSpawn(): RunLocalChildProcess {
+  const spec = resolveRunLocalChildSpec(import.meta.url, {
+    execPath: process.execPath,
+    env: process.env,
+    isElectron: Boolean(process.versions.electron),
+  });
+  return spawnChildProcess(spec.command, spec.args, {
+    cwd: spec.cwd,
+    env: spec.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
 }

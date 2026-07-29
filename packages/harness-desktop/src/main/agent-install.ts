@@ -28,8 +28,24 @@ const require = createRequire(import.meta.url);
 /**
  * Absolute path to the bundled npm CLI. npm's `exports` map does NOT expose
  * `./bin/npm-cli.js`, so we resolve its (exported) `package.json`, read the
- * `bin.npm` field, and join it onto npm's dir — asar-safe (resolve returns the
- * unpacked path under Electron) and robust to npm changing its bin layout.
+ * `bin.npm` field, and join it onto npm's dir — robust to npm changing its bin
+ * layout.
+ *
+ * This path DOES name `app.asar` in a packaged build (measured:
+ * `…/resources/app.asar/node_modules/npm/bin/npm-cli.js`) — the previous comment
+ * here claimed `require.resolve` hands back the unpacked path, and that is simply
+ * false. It works regardless, for a different reason: the child below is spawned
+ * with `ELECTRON_RUN_AS_NODE`, so it is still the Electron binary and keeps the
+ * asar `fs` patch, and reading an in-archive file succeeds (real `node` would get
+ * ENOTDIR). Deliberately left as-is rather than "fixed", because first-run agent
+ * install is the highest-stakes path in the app and this is empirically working.
+ *
+ * What that does NOT cover: paths npm derives from this location and hands to a
+ * NON-Electron process — `npm_config_node_gyp` and the node-gyp bin dir it puts
+ * on PATH, consumed by python/make/cc when a dependency has a native addon.
+ * Unverified (it needs a real native-addon install to reproduce); see
+ * `unpackedPath()` in `@sapiom/harness`'s `core/asar-path.ts` if it turns out to
+ * need translating.
  */
 export function resolveNpmCli(): string {
   const pkgJsonPath = require.resolve("npm/package.json");

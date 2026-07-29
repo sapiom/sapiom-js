@@ -11,9 +11,9 @@
 //   (defaults to the HOST platform; any further args pass through, e.g.
 //   -c.mac.notarize=true)
 import { execFileSync } from "node:child_process";
-import { cpSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as os from "node:os";
 
 const pkgDir = dirname(dirname(fileURLToPath(import.meta.url))); // packages/harness-desktop
@@ -38,6 +38,34 @@ const platform = process.argv[2] ?? HOST_PLATFORM_FLAG;
 // otherwise reach electron-builder as a bogus empty argument.
 const passthrough = process.argv.slice(3).filter((arg) => arg.length > 0);
 const isWindows = process.platform === "win32";
+
+// The update channel this artifact publishes to, derived HERE rather than by each
+// caller.
+//
+// It decides the manifest filename (`latest-linux.yml` vs `beta-linux.yml`), and it
+// must match the channel the packaged app resolves at runtime — otherwise the
+// release is published to one channel while the app that runs it looks at another,
+// and updates exist but are never found. The packaged `update-config` smoke check
+// asserts exactly that pair.
+//
+// So we reuse the app's OWN rule (`dist/main/update-policy.js`, which is pure and
+// unit-tested) instead of reimplementing "does this version have a pre-release
+// tag?" in every workflow that packages. Two workflows call this script, plus every
+// local `pnpm dist`; a copy of the rule in each one is three chances to disagree —
+// and the disagreement would only show up as updates quietly not arriving.
+//
+// `{}` for the env, deliberately: SAPIOM_UPDATE_CHANNEL is a per-machine RUNTIME
+// override for a tester, and letting it leak from a developer's shell into what
+// gets packaged would build a beta-channel artifact by accident.
+const { version } = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+const { resolveUpdateChannel } = await import(
+  pathToFileURL(join(pkgDir, "dist", "main", "update-policy.js")).href
+);
+const { channel } = resolveUpdateChannel(version, {});
+// An explicit caller flag still wins — the passthrough args land after ours.
+const channelFlag = passthrough.some((arg) => arg.startsWith("-c.publish.channel"))
+  ? []
+  : [`-c.publish.channel=${channel}`];
 
 // Deploy-target base. `pnpm deploy` materializes the app's node_modules using
 // RELATIVE symlinks, so the base must satisfy two constraints:
@@ -77,7 +105,7 @@ cpSync(join(pkgDir, "dist"), join(deployDir, "dist"), { recursive: true });
 cpSync(join(pkgDir, "electron-builder.yml"), join(deployDir, "electron-builder.yml"));
 cpSync(join(pkgDir, "assets"), join(deployDir, "assets"), { recursive: true });
 
-console.log(`[pack] electron-builder ${platform} → ${outputDir}`);
+console.log(`[pack] electron-builder ${platform} → ${outputDir} (v${version}, channel "${channel}")`);
 // The `.bin` entry is `electron-builder.cmd` on Windows, `electron-builder` on POSIX.
 const electronBuilder = join(
   pkgDir,
@@ -85,6 +113,28 @@ const electronBuilder = join(
   ".bin",
   isWindows ? "electron-builder.cmd" : "electron-builder",
 );
-run(electronBuilder, [platform, `-c.directories.output=${outputDir}`, ...passthrough], deployDir);
+// `--publish never`, explicitly. electron-builder.yml declares a github publish
+// provider — it has to, or no auto-update metadata is generated at all — and
+// electron-builder's DEFAULT policy publishes when it detects CI plus a tag. That
+// is precisely our release condition, so left alone it would try to create the
+// GitHub release itself, in parallel with the workflow's own release job: two
+// writers on one release, and a build job that would need a write-scoped token it
+// currently does not have.
+//
+// Generating the metadata and uploading it are separate concerns; we want the
+// first and not the second. It comes BEFORE the passthrough args so a caller who
+// really wants to publish can still override it.
+run(
+  electronBuilder,
+  [
+    platform,
+    "--publish",
+    "never",
+    ...channelFlag,
+    `-c.directories.output=${outputDir}`,
+    ...passthrough,
+  ],
+  deployDir,
+);
 
 console.log(`[pack] done → ${outputDir}`);

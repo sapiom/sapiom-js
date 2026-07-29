@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createActionsRouter,
   resolveRunLocalBootstrapPath,
+  resolveRunLocalChildSpec,
   type ActionsRouterOpts,
   type RunLocalChildProcess,
 } from "./actions.js";
@@ -988,6 +989,79 @@ describe("createActionsRouter", () => {
         "file:///app/packages/harness/src/server/actions.ts",
       );
       expect(p).toBe("/app/packages/harness/src/core/run-local-bootstrap.ts");
+    });
+  });
+
+  // ── run-local child spec (pure) ───────────────────────────────────────────
+
+  /**
+   * `POST /api/runs/local` shipped in the desktop app answering every request
+   * with `{"kind":"error","error":"spawn ENOTDIR"}` — three separate packaging
+   * defects in one four-line spawn, none of which the CLI can see:
+   *
+   *   1. `cwd` was `…/app.asar/node_modules/@sapiom/harness`. Electron patches
+   *      `fs` but nothing translates a child process's cwd, so chdir → ENOTDIR
+   *      (and ENOTDIR is not in Node's deferred-error list, so `spawn` THROWS).
+   *   2. the bootstrap SCRIPT path was inside the archive too — and the child is
+   *      plain Node, which has no asar support and cannot read it.
+   *   3. no `ELECTRON_RUN_AS_NODE=1`, so `process.execPath` (the Sapiom binary
+   *      under Electron) would have booted A SECOND COPY OF THE APP.
+   *
+   * `canvas-manifest-check.ts` already got all three right; this call site got
+   * none. These tests pin each one independently.
+   */
+  describe("resolveRunLocalChildSpec", () => {
+    const PACKAGED = "file:///Applications/Sapiom.app/Contents/Resources/app.asar/node_modules/@sapiom/harness/dist/server/actions.js";
+    const CLI = "file:///home/u/.npm/_npx/abc/node_modules/@sapiom/harness/dist/server/actions.js";
+
+    it("points the child's cwd at the unpacked twin, never into the archive", () => {
+      const spec = resolveRunLocalChildSpec(PACKAGED, { execPath: "/Applications/Sapiom.app/Contents/MacOS/Sapiom", env: {}, isElectron: true });
+      expect(spec.cwd).toBe("/Applications/Sapiom.app/Contents/Resources/app.asar.unpacked/node_modules/@sapiom/harness");
+      expect(spec.cwd).not.toContain("app.asar/");
+    });
+
+    it("points the bootstrap script at the unpacked twin — a plain-Node child cannot read the archive", () => {
+      const spec = resolveRunLocalChildSpec(PACKAGED, { execPath: "/x/Sapiom", env: {}, isElectron: true });
+      const script = spec.args.at(-1)!;
+      expect(script).toBe("/Applications/Sapiom.app/Contents/Resources/app.asar.unpacked/node_modules/@sapiom/harness/dist/core/run-local-bootstrap.js");
+      expect(spec.args.join(" ")).not.toContain("app.asar/");
+    });
+
+    it("sets ELECTRON_RUN_AS_NODE under Electron, so execPath runs the script instead of booting the app", () => {
+      const spec = resolveRunLocalChildSpec(PACKAGED, { execPath: "/x/Sapiom", env: { PATH: "/usr/bin" }, isElectron: true });
+      expect(spec.env["ELECTRON_RUN_AS_NODE"]).toBe("1");
+      expect(spec.env["PATH"]).toBe("/usr/bin"); // inherits the rest
+    });
+
+    it("leaves the CLI path untouched — no flag, no rewriting, real node", () => {
+      const spec = resolveRunLocalChildSpec(CLI, { execPath: "/usr/bin/node", env: { PATH: "/usr/bin" }, isElectron: false });
+      expect(spec.env["ELECTRON_RUN_AS_NODE"]).toBeUndefined();
+      expect(spec.cwd).toBe("/home/u/.npm/_npx/abc/node_modules/@sapiom/harness");
+      expect(spec.args).toEqual(["/home/u/.npm/_npx/abc/node_modules/@sapiom/harness/dist/core/run-local-bootstrap.js"]);
+      expect(spec.command).toBe("/usr/bin/node");
+    });
+
+    it("keeps the tsx register hook for a .ts bootstrap (dev server)", () => {
+      const spec = resolveRunLocalChildSpec("file:///repo/packages/harness/src/server/actions.ts", {
+        execPath: "/usr/bin/node",
+        env: {},
+        isElectron: false,
+      });
+      expect(spec.args).toEqual(["--import", "tsx", "/repo/packages/harness/src/core/run-local-bootstrap.ts"]);
+    });
+
+    it("does not leak the desktop host's esbuild pin into the child", () => {
+      // The pin exists ONLY so in-process (Electron main) esbuild can exec a
+      // binary outside app.asar. No child needs it — a child is plain Node and
+      // resolves real on-disk paths itself — and a workflow step body that
+      // shells out to the project's own toolchain would hit a version mismatch.
+      // So the rule is uniform: the pin never crosses a process boundary.
+      const spec = resolveRunLocalChildSpec(PACKAGED, {
+        execPath: "/x/Sapiom",
+        env: { ESBUILD_BINARY_PATH: "/app/resources/app.asar.unpacked/node_modules/@esbuild/darwin-arm64/bin/esbuild" },
+        isElectron: true,
+      });
+      expect(spec.env["ESBUILD_BINARY_PATH"]).toBeUndefined();
     });
   });
 });
