@@ -380,13 +380,37 @@ const graphics = defineStep({
     // persists each output so we get a durable `fileId` + a ready-to-use URL to
     // hand the clip step as its start frame and to link from the pack.
     const generated = await Promise.all(
-      pack.quoteGraphics.map((q) =>
-        ctx.sapiom.contentGeneration.images.create({
-          prompt: q.imagePrompt,
-          numImages: 1,
-          storage: { visibility: "private" },
-        }),
-      ),
+      pack.quoteGraphics.map(async (q, index) => {
+        const maxAttempts = 3;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            return await ctx.sapiom.contentGeneration.images.create({
+              prompt: q.imagePrompt,
+              numImages: 1,
+              storage: { visibility: "private" },
+            });
+          } catch (error) {
+            const message = String(error);
+            const transient =
+              /\b(408|425|429|500|502|503|504)\b/.test(message) ||
+              /application error|network|socket|timed?\s*out|temporar/i.test(
+                message,
+              );
+            if (!transient || attempt === maxAttempts) throw error;
+
+            const delayMs = 500 * 2 ** (attempt - 1);
+            ctx.logger.warn("transient image generation failure; retrying", {
+              quote: index + 1,
+              attempt,
+              maxAttempts,
+              delayMs,
+              error: message.slice(0, 500),
+            });
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+        }
+        throw new Error("unreachable image retry state");
+      }),
     );
     const results: Graphic[] = generated.map((result, i) => {
       const img = result.images?.[0];

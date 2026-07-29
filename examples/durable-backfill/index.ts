@@ -136,13 +136,18 @@ function checkpointFileName(jobId: string): string {
  * A sandbox name is lowercase alphanumeric + hyphens, 2–63 chars. Derive a legal
  * one from the job id and chunk offset.
  */
-function sandboxName(jobId: string, offset: number): string {
+function sandboxName(jobId: string, offset: number, attempt: number): string {
   const base = `backfill-${jobId}-c${offset}`
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  return (base || "backfill").slice(0, 63);
+  // Blaxel enforces 49 characters (stricter than the generic SDK's 63-char
+  // validation). Preserve an attempt suffix so a retry never collides with a
+  // sandbox whose cleanup was delayed after the prior attempt.
+  const suffix = `-a${attempt}`;
+  const prefix = (base || "backfill").slice(0, 49 - suffix.length);
+  return `${prefix}${suffix}`;
 }
 
 /** Read the last integer printed by the chunk command; fall back to the chunk size. */
@@ -273,7 +278,11 @@ async function processChunk(
   }
 
   const box = await ctx.sapiom.sandboxes.create({
-    name: sandboxName(args.jobId, args.offset),
+    name: sandboxName(args.jobId, args.offset, ctx.attempts),
+    // Pin the tier explicitly so a platform-default change cannot silently
+    // change the workflow's cost curve. The sandbox is still settled from its
+    // actual runtime when it is destroyed below.
+    tier: "s",
     ttl: CHUNK_SANDBOX_TTL,
     envs: {
       ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}),

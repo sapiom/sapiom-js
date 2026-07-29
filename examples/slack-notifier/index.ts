@@ -5,6 +5,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { createFetch } from "@sapiom/fetch";
 
 /**
  * Slack Notifier — the "bring your own API" teaching template.
@@ -15,8 +16,9 @@ import {
  * secret key and you can call any API you can reach with a token.
  *
  * Slack has no Sapiom capability namespace, so the deployed agent calls the
- * Slack API directly via `fetch`, using a credential the platform injects into
- * the step's environment — never baked into code. Two auth modes:
+ * Slack API through the metered `@sapiom/fetch` wrapper, using a credential the
+ * platform injects into the step's environment — never baked into code. Two
+ * auth modes:
  *
  *   - `bot` (default) — a bot token calls `chat.postMessage`; returns the
  *     resolved channel id + message `ts` (timestamp).
@@ -104,6 +106,7 @@ type Ctx = AgentExecutionContext<Shared>;
  * not the HTTP status, so we check `ok` explicitly.
  */
 async function postViaBot(
+  meteredFetch: typeof fetch,
   token: string,
   channel: string,
   text: string,
@@ -116,7 +119,7 @@ async function postViaBot(
     unfurl_media: "false",
   });
   if (username) form.set("username", username);
-  const res = await fetch("https://slack.com/api/chat.postMessage", {
+  const res = await meteredFetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
@@ -140,13 +143,14 @@ async function postViaBot(
  * JSON, so we check the HTTP status.
  */
 async function postViaWebhook(
+  meteredFetch: typeof fetch,
   url: string,
   text: string,
   username: string | null,
 ): Promise<void> {
   const body: Record<string, unknown> = { text };
   if (username) body.username = username;
-  const res = await fetch(url, {
+  const res = await meteredFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -247,9 +251,19 @@ const post = defineStep({
       });
     }
 
+    // Fail closed: do not send a Slack message if Core cannot authorize and
+    // attribute the external request to this workflow execution.
+    const meteredFetch = createFetch({
+      apiKey: process.env.SAPIOM_API_KEY,
+      agentName: "slack-notifier",
+      serviceName: "slack",
+      traceExternalId: ctx.executionId,
+      failureMode: "closed",
+    });
+
     try {
       if (via === "webhook") {
-        await postViaWebhook(secret, message, username);
+        await postViaWebhook(meteredFetch, secret, message, username);
         ctx.logger.info("posted to slack via webhook");
         return goto("posted", {
           posted: true,
@@ -259,7 +273,13 @@ const post = defineStep({
           ts: null,
         } satisfies PostResult);
       }
-      const resolved = await postViaBot(secret, channel!, message, username);
+      const resolved = await postViaBot(
+        meteredFetch,
+        secret,
+        channel!,
+        message,
+        username,
+      );
       ctx.logger.info("posted to slack via bot token", resolved);
       return goto("posted", {
         posted: true,

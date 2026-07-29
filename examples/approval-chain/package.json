@@ -12,11 +12,10 @@
   "dependencies": {
     "@sapiom/agent": "^0.6.0",
     "@sapiom/tools": "^0.20.0",
-    "pg": "^8.11.5"
+    "postgres": "^3.4.5"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
-    "@types/pg": "^8.11.5",
     "typescript": "^5.4.2"
   }
 }

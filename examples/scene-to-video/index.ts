@@ -27,8 +27,8 @@ import { VIDEO_RESULT_SIGNAL, type VideoResultPayload } from "@sapiom/tools";
  *      `collect` when that clip is ready.
  *   4. collect — record the finished clip, then loop back to `animate` for the
  *      next shot, or advance to `stitch` once every clip is in.
- *   5. stitch — concat the N clips into one video (a FAL ffmpeg-merge job), again
- *      async: pause on it and resume at `finalize`.
+ *   5. stitch — concat the N clips into one video with FAL's synchronous
+ *      ffmpeg-merge endpoint, then advance directly to `finalize`.
  *   6. finalize — terminal; return the stitched video's durable `videoFileId` +
  *      `downloadUrl`.
  *
@@ -48,7 +48,7 @@ interface Shot {
   image_prompt: string;
   /** Motion prompt for the clip: subject → action → camera → duration → lighting → style. */
   motion_prompt: string;
-  /** Clip length in seconds (kept short, ≤10s). */
+  /** Clip length in seconds (Kling 2.1 Pro accepts only 5 or 10). */
   duration: number;
   /** Transition into the next shot (e.g. "cut", "dissolve"). */
   transition: string;
@@ -120,6 +120,15 @@ const DEFAULT_NUM_SHOTS = 3;
 const MAX_SHOTS = 6;
 /** Per-clip cap (seconds) — image-to-video models animate short clips best. */
 const MAX_CLIP_SECONDS = 10;
+const SHORT_CLIP_SECONDS = 5;
+
+/** Normalize an authored/model-proposed duration to Kling 2.1 Pro's 5-or-10 second enum. */
+function normalizeClipDuration(duration: number | undefined): number {
+  if (typeof duration !== "number" || !Number.isFinite(duration)) {
+    return MAX_CLIP_SECONDS;
+  }
+  return duration <= SHORT_CLIP_SECONDS ? SHORT_CLIP_SECONDS : MAX_CLIP_SECONDS;
+}
 
 function clampShots(n: number | undefined): number {
   if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_NUM_SHOTS;
@@ -167,10 +176,7 @@ function parsePlan(
     const shots: Shot[] = rawShots.slice(0, MAX_SHOTS).map((s, i): Shot => {
       const shot = (s ?? {}) as Partial<Shot>;
       const dflt = fallback.shots[Math.min(i, fallback.shots.length - 1)];
-      const duration =
-        typeof shot.duration === "number" && Number.isFinite(shot.duration)
-          ? Math.max(1, Math.min(MAX_CLIP_SECONDS, shot.duration))
-          : dflt.duration;
+      const duration = normalizeClipDuration(shot.duration);
       return {
         image_prompt:
           typeof shot.image_prompt === "string" && shot.image_prompt.trim()
@@ -221,7 +227,7 @@ const decompose = defineStep({
       "color, lighting, and lens) and an ordered list of shots. Repeat the bible VERBATIM at " +
       "the start of every shot's image_prompt so keyframes stay consistent. Order each " +
       "motion_prompt as subject -> action -> camera -> duration -> lighting -> style. " +
-      `Return between 1 and ${numShots} shots, each clip <= ${MAX_CLIP_SECONDS}s. ` +
+      `Return between 1 and ${numShots} shots; duration must be exactly ${SHORT_CLIP_SECONDS} or ${MAX_CLIP_SECONDS} seconds. ` +
       "Reply with ONLY minified JSON: " +
       '{"bible":string,"shots":[{"image_prompt":string,"motion_prompt":string,"duration":number,"transition":string}]}.';
     const prompt = `Scene: ${scene}\nNumber of shots: ${numShots}\nAspect ratio: ${aspectRatio}`;
@@ -317,15 +323,15 @@ const animate = defineStep({
 
     ctx.logger.info("animating shot", { index: index + 1, of: shots.length });
     // Launch the image-to-video job and pause the step on its result signal. A
-    // fixed seed + the shared aspect ratio keep the clips visually consistent.
+    // The shared aspect ratio keeps the clips visually consistent. Kling 2.1
+    // Pro accepts duration only as the string enum "5" or "10".
     const handle = await ctx.sapiom.contentGeneration.video.launch({
       model,
       prompt: shot.motion_prompt,
       params: {
         image_url: imageUrl,
-        duration: shot.duration,
+        duration: String(normalizeClipDuration(shot.duration)),
         aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
-        seed: 42,
       },
       storage: { visibility: "private" },
     });
@@ -342,6 +348,12 @@ const collect = defineStep({
     const index = must(ctx.shared.get("animateIndex"), "animateIndex");
 
     const out = result.outputs?.[0];
+    if (!out?.fileId && !out?.downloadUrl) {
+      const storageError = out?.storageError ? `: ${out.storageError}` : "";
+      throw new Error(
+        `video generation completed without a usable output for shot ${index + 1}${storageError}`,
+      );
+    }
     const clip: Clip = {
       ...(out?.fileId !== undefined && { fileId: out.fileId }),
       ...(out?.downloadUrl !== undefined && { downloadUrl: out.downloadUrl }),
@@ -362,30 +374,72 @@ const collect = defineStep({
 
 const stitch = defineStep({
   name: "stitch",
-  next: [],
-  // Stitching is another async video job (FAL ffmpeg merge): pause on its result
-  // and resume at `finalize` with the stitched video.
-  pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: "finalize" },
+  next: ["finalize"],
+  // The SDK handles both synchronous Fal merge responses and queued jobs.
   async run(_input: unknown, ctx: AgentExecutionContext<Shared>) {
     const scene = must(ctx.shared.get("scene"), "scene");
     const clips = must(ctx.shared.get("clips"), "clips");
     // Ready-to-use URLs for the merge input. For a longer-lived reference re-mint
     // from each clip's `fileId` via `ctx.sapiom.fileStorage.getDownloadUrl(fileId)`.
-    const videoUrls = clips
-      .map((c) => c.downloadUrl)
-      .filter((u): u is string => Boolean(u));
+    const videoUrls = await Promise.all(
+      clips.map(async (clip) => {
+        if (clip.downloadUrl) return clip.downloadUrl;
+        if (!clip.fileId) return null;
+        const signed = await ctx.sapiom.fileStorage.getDownloadUrl(clip.fileId);
+        return signed.downloadUrl;
+      }),
+    ).then((urls) => urls.filter((u): u is string => Boolean(u)));
     ctx.logger.info("stitching clips", { clips: videoUrls.length });
 
-    // `prompt` is required by the capability guard; the merge endpoint ignores it,
-    // so we pass the scene for traceability. `video_urls` is the FAL merge input,
-    // forwarded verbatim via `params`.
-    const handle = await ctx.sapiom.contentGeneration.video.launch({
+    if (videoUrls.length === 0) {
+      throw new Error(
+        "cannot stitch scene: no generated clip has a usable download URL",
+      );
+    }
+    // FAL's merge endpoint requires at least two URLs. A one-shot scene is
+    // already a finished video, so bypass the merge rather than making an
+    // invalid request.
+    if (videoUrls.length === 1) {
+      const only = clips[0];
+      ctx.logger.info("single clip scene — bypassing merge");
+      return goto("finalize", {
+        outputs: [
+          {
+            ...(only.fileId !== undefined && { fileId: only.fileId }),
+            downloadUrl: videoUrls[0],
+          },
+        ],
+      });
+    }
+
+    const merged = await ctx.sapiom.contentGeneration.video.create({
       model: MERGE_MODEL,
       prompt: scene,
       params: { video_urls: videoUrls },
       storage: { visibility: "private" },
     });
-    return await pauseUntilSignal(handle, { resumeStep: "finalize" });
+    if (
+      !merged.video?.fileId &&
+      !merged.video?.downloadUrl &&
+      !merged.video?.url
+    ) {
+      throw new Error(
+        `video merge completed without a usable output${merged.video?.storageError ? `: ${merged.video.storageError}` : ""}`,
+      );
+    }
+    return goto("finalize", {
+      outputs: [
+        {
+          ...(merged.video.fileId !== undefined && {
+            fileId: merged.video.fileId,
+          }),
+          downloadUrl: merged.video.downloadUrl ?? merged.video.url,
+          ...(merged.video.downloadUrlExpiresAt !== undefined && {
+            downloadUrlExpiresAt: merged.video.downloadUrlExpiresAt,
+          }),
+        },
+      ],
+    });
   },
 });
 

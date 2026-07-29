@@ -6,7 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
-import { Client } from "pg";
+import postgres from "postgres";
 
 /**
  * Multi-Party Approval Chain (Saga) — a durable, sequential sign-off flow.
@@ -290,10 +290,12 @@ async function persistTransition(
     });
     return;
   }
-  const client = new Client({ connectionString });
-  await client.connect();
+  // `postgres` is ESM-friendly and is included in the self-contained workflow
+  // artifact. A hidden runtime import of `pg` built successfully but left the
+  // driver out of the deployed bundle, so live ledger writes always failed.
+  const sql = postgres(connectionString, { ssl: "require", max: 1 });
   try {
-    await client.query(
+    await sql.unsafe(
       `CREATE TABLE IF NOT EXISTS ${LEDGER_TABLE} (
          execution_id text NOT NULL,
          seq          integer NOT NULL,
@@ -306,7 +308,7 @@ async function persistTransition(
          PRIMARY KEY (execution_id, seq)
        )`,
     );
-    await client.query(
+    await sql.unsafe(
       `INSERT INTO ${LEDGER_TABLE}
          (execution_id, seq, subject, gate_index, approver_id, phase, note)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -322,7 +324,7 @@ async function persistTransition(
       ],
     );
   } finally {
-    await client.end();
+    await sql.end({ timeout: 5 });
   }
 }
 
