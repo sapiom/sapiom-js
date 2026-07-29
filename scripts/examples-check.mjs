@@ -12,6 +12,8 @@
 //   2. `templates` is sorted by `id` ascending  (run `pnpm examples:sort` to fix).
 //   3. every `sourcePath` dir exists and contains a `template.json`.
 //   4. checkpoint discipline (human gates only, at most one per template).
+//   4b. `discipline` sits under its row's `category` — a cross-field constraint
+//      draft-07 cannot express readably. See scripts/examples-discipline-check.mjs.
 //   5. every template.json validates against examples/template.schema.json,
 //      including the declaration surface (requiredSecrets, settings,
 //      defaultInput, zeroSetup) — see scripts/examples-manifest-check.mjs.
@@ -39,6 +41,7 @@ import {
   createManifestChecker,
 } from "./examples-manifest-check.mjs";
 import { checkCopy } from "./examples-copy-check.mjs";
+import { checkDiscipline } from "./examples-discipline-check.mjs";
 import {
   complexityBandScore,
   scoreTemplateComplexity,
@@ -145,6 +148,15 @@ for (const t of templates) {
   }
 }
 
+// 4b. `discipline` agrees with `category`. A hard error, not a warning like the
+// complexity divergence below: that one compares an author's judgment against a
+// proxy and the author can be right, whereas a discipline outside its category's
+// set is not a judgment call — one of the two fields is simply wrong, and the
+// gallery would file the card in one group while badging it as another.
+for (const t of templates) {
+  errors.push(...checkDiscipline(t));
+}
+
 // 5. House-style copy rules the schemas cannot express. The length caps live in
 // the schemas as `maxLength` and are reported by check 1/3; these are the two
 // rules a `pattern` could reject but could not explain — naming the offending
@@ -223,10 +235,12 @@ if (nearMisses.length > 0) {
 const uncategorized = templates.filter((t) => !t.category).map((t) => t.id);
 const noCadence = templates.filter((t) => !t.cadence).map((t) => t.id);
 const noComplexity = templates.filter((t) => !t.complexity).map((t) => t.id);
+const noDiscipline = templates.filter((t) => !t.discipline).map((t) => t.id);
 for (const [label, ids] of [
   ["category", uncategorized],
   ["cadence", noCadence],
   ["complexity", noComplexity],
+  ["discipline", noDiscipline],
 ]) {
   // Both are optional in the schema, so this is a nudge, not a gate — flip to
   // `errors.push` once every template carries them and the field goes required.

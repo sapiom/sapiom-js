@@ -11,7 +11,7 @@ The path is five steps:
    the bar in **[Make it runnable with nothing](#1a-make-it-runnable-with-nothing)**: `{}` in,
    a real terminal run out.
 2. **[Build & test](#2-build--test)** — compile it, run it deployed with `{}`, validate the files.
-3. **[Categorize](#3-categorize)** — set its category, cadence, complexity, and step kinds.
+3. **[Categorize](#3-categorize)** — set its category, discipline, cadence, complexity, and step kinds.
 4. **[Write the copy](#4-write-the-copy)** — the words a user reads. This is most of the work.
 5. **[Submit](#5-submit)** — open a PR; once merged, Sapiom picks it up automatically.
 
@@ -177,8 +177,9 @@ run, and secrets are read at step dispatch.
    exist, a pause with no resumer, a required input with no default. Assert on the trace —
    `steps[].directive` — not on the status.
 4. **Validate the registry and your manifest.** Run `pnpm examples:check` from the repo root.
-   It checks that `registry.json` matches the schema (including a valid `category`, `cadence`,
-   `complexity`, and step `kind`), is sorted by `id`, that every `sourcePath` points at a real
+   It checks that `registry.json` matches the schema (including a valid `category`, `discipline`,
+   `cadence`, `complexity`, and step `kind`), is sorted by `id`, that your `discipline` is one
+   allowed under your `category`, that every `sourcePath` points at a real
    directory with a `template.json`, that any `checkpoint` is a single genuine human gate, that
    your `complexity` doesn't sit 2+ bands from the one derived from your declared shape, and
    that **each `template.json` matches `template.schema.json`**. The manifest schema is
@@ -198,9 +199,9 @@ run, and secrets are read at step dispatch.
 
 ## 3. Categorize
 
-Set four things in your `registry.json` entry: one `category`, one `cadence`, one `complexity`,
-and a `kind` on every step. They drive how the gallery groups, filters, and describes your
-template.
+Set five things in your `registry.json` entry: one `category`, one `discipline`, one `cadence`,
+one `complexity`, and a `kind` on every step. They drive how the gallery groups, filters, and
+describes your template.
 
 ### `category` — the outcome, not the mechanism
 
@@ -223,8 +224,36 @@ in freeform `tags`, which drive search and the chips on a card. Put them there a
 findable without competing with the outcome axis.
 
 If nothing fits cleanly, pick the closest and say so in your PR — the enum can grow, and a
-template that fits nowhere is useful signal. (The display label, icon, and section order are
-chosen by the app; you only set the id.)
+template that fits nowhere is useful signal. (The display label and section order are chosen by
+the app; you only set the id.)
+
+### `discipline` — the badge on your card
+
+Same outcome axis, one zoom level in: `category` decides which gallery group your template files
+under, `discipline` is the short label printed on the card itself. So two templates in one
+category routinely differ — `pr-review-bot` and `dependency-upgrade` are both
+`product-engineering`, but the first is `Engineering` and the second is `Release engineering`.
+
+Unlike `category`, this string is rendered **verbatim** — it is not an id the app relabels, so
+write it as you want it read. The app supplies only the glyph beside it.
+
+| `category` | Allowed `discipline` |
+|---|---|
+| `starter` | `Starter` |
+| `product-engineering` | `Engineering`, `Release engineering`, `AI operations` |
+| `reliability-governance` | `Reliability`, `Security`, `Governance`, `FinOps` |
+| `revenue-marketing` | `Revenue`, `Marketing`, `Strategy` |
+| `customer-experience` | `Support`, `Customer success`, `Product` |
+| `data-knowledge` | `Data`, `Knowledge`, `Research`, `Operations` |
+| `finance-legal-people` | `Finance`, `Legal`, `People`, `Operations` |
+
+The enum in `registry.schema.json` is the union of that whole column, so the schema will accept
+`Support` on a `finance-legal-people` row — `pnpm examples:check` is what rejects it. Pick the
+discipline from **your** category's row.
+
+Omitting it is not fatal: the card falls back to a short label derived from your `category`. But
+the fallback is one label for the whole group, so a card without a discipline is
+indistinguishable from its neighbours.
 
 ### `cadence` — what starts a run
 
@@ -342,6 +371,7 @@ offending word.
 | `description` | Card subtitle, detail subtitle | **One sentence.** What it does, in plain words. See "The tagline" below. |
 | `tags` | Chips under the title | 3–4 lowercase, kebab or single words. Concrete, searchable ("approval", "hitl", "fallback"). This is where mechanism words go. |
 | `category` | Which gallery group it files under | One id from the enum. The **outcome**, not the mechanism — see [Categorize](#3-categorize). |
+| `discipline` | The badge printed on the card | One value from **your category's** row, rendered verbatim — see [Categorize](#3-categorize). |
 | `cadence` | The "Trigger" fact | One id from the enum. What **starts** a run, not what it does mid-run — see [Categorize](#3-categorize). |
 | `complexity` | The "Complexity" band | One id from the enum. Variance and judgment in the output, **not** graph size — see [Categorize](#3-categorize). |
 | `capabilities` | Capability chips + est. cost | The exact `ctx.sapiom.*` capability ids the source calls. Must match the code (see "Capability ids"). |
@@ -540,6 +570,7 @@ Never present the MCP path as the only way to build and run — the webapp does 
 - [ ] Every credential is read from `process.env[KEY]` and declared in `requiredSecrets`; no config filed as a secret.
 - [ ] Nothing in the output claims an effect on the world that did not happen; a degraded branch names itself in `unmet[]` and `note`.
 - [ ] One `category` (the outcome, not the mechanism) and one `cadence`; `tags` kept freeform.
+- [ ] One `discipline`, taken from your `category`'s row — the enum alone will not catch a wrong pair.
 - [ ] One `complexity`, picked by counting judgment points — not by counting steps.
 - [ ] A `kind` on every step, and `checkpoint: true` only on a real human approval gate.
 - [ ] `pnpm examples:sort` then `pnpm examples:check` both clean.

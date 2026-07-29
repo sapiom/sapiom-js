@@ -28,6 +28,11 @@
           "enum": ["starter", "product-engineering", "reliability-governance", "revenue-marketing", "customer-experience", "data-knowledge", "finance-legal-people"],
           "description": "Primary gallery category (the source-of-truth taxonomy). Exactly one per template; the frontend owns the display label, icon, and section order keyed off this id. The axis is OUTCOME — \"what am I trying to produce?\" — not mechanism: `starter` aside, a template belongs to the business job it does, never to the primitive it demonstrates. Mechanism words (durable, pause-resume, hitl, evals, media, orchestration) stay in freeform `tags`, which drive secondary browse/search. Optional for now — every template should carry one, and the examples CI check flags any invalid value."
         },
+        "discipline": {
+          "type": "string",
+          "enum": ["AI operations", "Customer success", "Data", "Engineering", "FinOps", "Finance", "Governance", "Knowledge", "Legal", "Marketing", "Operations", "People", "Product", "Release engineering", "Reliability", "Research", "Revenue", "Security", "Starter", "Strategy", "Support"],
+          "description": "The one-or-two-word FUNCTION shown on the card's badge — who owns this outcome. Finer than `category`, on the same OUTCOME axis: `category` groups the gallery rail, `discipline` labels the individual card, so two templates in one category routinely carry different disciplines (both `pr-review-bot` and `dependency-upgrade` are `product-engineering`; only the second is `Release engineering`). Human-readable and rendered VERBATIM — unlike `category`, this is not an id the app relabels. The app owns only the glyph beside it. Must be one of the disciplines allowed for this row's `category`, a cross-field constraint JSON Schema cannot express and `examples:check` therefore gates; the enum here is the union across all categories, not the set valid for any one of them. Optional — a template without one falls back to a short label derived from its `category`, so the badge never disappears."
+        },
         "complexity": {
           "type": "string",
           "enum": ["minimal", "simple", "moderate", "involved", "advanced"],
