@@ -10,7 +10,7 @@ agent from a plain script.
 
 ```
 decompose ──▶ keyframes ──▶ animate ⇄ collect ──▶ stitch ──▶ finalize
-(models.run)  (images.create) (video.launch) (drain) (video.launch) (terminal)
+(models.run)  (images.create) (video.launch) (drain) (video.create) (terminal)
 ```
 
 1. **decompose** — an LLM (`ctx.sapiom.models.run`) turns the scene into a global
@@ -22,9 +22,10 @@ decompose ──▶ keyframes ──▶ animate ⇄ collect ──▶ stitch ─
    and pauses on it; the FAL webhook resumes `collect` when the clip is ready.
 4. **collect** — records the clip, then loops back to `animate` for the next shot,
    or advances to `stitch` once every clip is in.
-5. **stitch** — concats the N clips into one video (a FAL ffmpeg-merge job), again
-   async: pause → resume at `finalize`.
+5. **stitch** — concats every clip through FAL's synchronous merge endpoint. The
+   SDK has a bounded polling fallback if the provider unexpectedly queues it.
 6. **finalize** — terminal; returns `{ videoFileId, downloadUrl, shots }`.
+   `videoFileId` is `null` when persistence did not produce a durable file.
 
 Input: `{ "scene": "a paper boat drifting down a rain-soaked city gutter at night", "numShots": 3 }`.
 Optional: `aspectRatio` (default `"16:9"`), `model` (FAL image-to-video id), and

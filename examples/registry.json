@@ -1055,8 +1055,8 @@
         },
         {
           "name": "stitch",
-          "description": "Join the clips into one video with a merge job, then pause until it's ready.",
-          "kind": "pause",
+          "description": "Join every clip with the synchronous merge endpoint, using a bounded polling fallback if the provider unexpectedly queues it.",
+          "kind": "capability",
           "capability": "contentGeneration.video",
           "next": ["finalize"]
         },
@@ -1240,7 +1240,7 @@
         },
         {
           "name": "post",
-          "description": "Post the message to Slack with your bot token. Without one, the message is returned in the run's output and nothing is posted.",
+          "description": "Post with authorized HTTP in bot mode, or protect the credential-bearing URL in webhook mode. Without a credential, return the message without posting.",
           "kind": "compute",
           "next": ["posted", "failed", "rejected"]
         },

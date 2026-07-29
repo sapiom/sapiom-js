@@ -1,20 +1,24 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Scene → Images → Video** — authored against `@sapiom/agent`. It is the richest onboarding template: a real multi-step generative pipeline, not a one-shot text-to-image. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.models.run`, `ctx.sapiom.contentGeneration.images.create`, and `ctx.sapiom.contentGeneration.video.launch`).
+This project defines exactly one Sapiom agent in `index.ts` — **Scene → Images → Video** — authored against `@sapiom/agent`. It is the richest onboarding template: a real multi-step generative pipeline, not a one-shot text-to-image. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.models.run`, `ctx.sapiom.contentGeneration.images.create`, and `ctx.sapiom.contentGeneration.video.{launch,create}`).
 
 ## The graph
 
 ```
 decompose ─▶ keyframes ─▶ animate ⇄ collect ─▶ stitch ─▶ finalize
-(models.run) (images.create) (video.launch) (drain)  (video.launch) (terminal)
+(models.run) (images.create) (video.launch) (drain)  (video.create) (terminal)
 ```
 
 - **decompose** — an LLM decomposes the scene into a global style/identity **bible** + an ordered shot list. A `dryRun` input terminates here with the plan only (no paid generation).
 - **keyframes** — one keyframe image per shot, **fanned out in-process** (`Promise.all`), each persisted (`storage`) for a durable `fileId`.
 - **animate** — launches an async image-to-video job for one shot and `pauseUntilSignal`s on it. The `pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: 'collect' }` declaration is the graph edge; the FAL webhook fires the signal to resume `collect`.
 - **collect** — records the finished clip, then loops back to `animate` for the next shot or advances to `stitch`.
-- **stitch** — a FAL ffmpeg-merge job concats the clips into one video, again async: pause → resume at `finalize`.
-- **finalize** — terminal; returns the stitched video's `videoFileId` + `downloadUrl`.
+- **stitch** — FAL's synchronous ffmpeg-merge endpoint concats every resolved
+  clip. `video.create` returns immediately for that contract and has an explicit
+  12-minute polling fallback for an unexpected queued response, below the
+  runner's 15-minute step deadline.
+- **finalize** — terminal; returns the stitched video's `videoFileId` when
+  persistence succeeded, plus its available `downloadUrl`.
 
 ## Authoring
 

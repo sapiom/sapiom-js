@@ -560,6 +560,7 @@ async function resolveDefId(
   slug: string,
   key: string,
   tenantId: string,
+  logger: Ctx["logger"],
 ): Promise<string> {
   let tenantDefinitions = defIdCache.get(tenantId);
   if (!tenantDefinitions) {
@@ -567,7 +568,7 @@ async function resolveDefId(
       const res = await fetch(`${WF_BASE}/definitions`, {
         headers: {
           "x-api-key": key,
-          "Sapiom-Scope": `tenant:${tenantId}`,
+          "sapiom-scope": `tenant:${tenantId}`,
         },
       });
       if (res.ok) {
@@ -582,8 +583,21 @@ async function resolveDefId(
             .map((d) => [String(d.slug ?? d.name), String(d.id)]),
         );
         defIdCache.set(tenantId, tenantDefinitions);
+      } else {
+        const detail = await res.text().catch(() => res.statusText);
+        logger.warn("child definition lookup failed", {
+          slug,
+          tenantId,
+          status: res.status,
+          detail: detail.slice(0, 300),
+        });
       }
-    } catch {
+    } catch (error) {
+      logger.warn("child definition lookup errored", {
+        slug,
+        tenantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       // fall back to the static map below
     }
   }
@@ -610,12 +624,13 @@ const LAUNCH_SKIP_REASONS: Record<string, string> = {
  * expected first-run state, not a crash. The caller records the skip and its
  * reason in the event log so the briefing says what did not happen.
  */
-async function launchChild(
+export async function launchChild(
   slug: string,
   explicitDefinitionId: string | undefined,
   input: unknown,
   tenantId: string | null,
   traceExternalId: string,
+  logger: Ctx["logger"],
   idempotencyKey?: string,
 ): Promise<{ executionId: string | null; dryRun: boolean; skipped?: string }> {
   const key = process.env.SAPIOM_API_KEY ?? "";
@@ -625,14 +640,16 @@ async function launchChild(
       dryRun: true,
       skipped: "no-api-key",
     };
-  if (!tenantId)
-    return {
-      executionId: null,
-      dryRun: false,
-      skipped: "no-tenant-id",
-    };
-  const definitionId =
-    explicitDefinitionId ?? (await resolveDefId(slug, key, tenantId));
+  let definitionId = explicitDefinitionId;
+  if (!definitionId) {
+    if (!tenantId)
+      return {
+        executionId: null,
+        dryRun: false,
+        skipped: "no-tenant-id",
+      };
+    definitionId = await resolveDefId(slug, key, tenantId, logger);
+  }
   if (!definitionId)
     return {
       executionId: null,
@@ -644,7 +661,7 @@ async function launchChild(
     headers: {
       "x-api-key": key,
       "content-type": "application/json",
-      "Sapiom-Scope": `tenant:${tenantId}`,
+      ...(tenantId ? { "sapiom-scope": `tenant:${tenantId}` } : {}),
       "x-sapiom-trace-external-id": traceExternalId,
     },
     body: JSON.stringify({ definitionId, input, idempotencyKey }),
@@ -930,6 +947,7 @@ const actuate = defineStep({
           member.input ?? {},
           ctx.tenantId,
           ctx.executionId,
+          ctx.logger,
           idem,
         );
         if (child.skipped) {

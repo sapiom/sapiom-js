@@ -290,10 +290,12 @@ async function persistTransition(
     });
     return;
   }
-  // `postgres` is ESM-friendly and is included in the self-contained workflow
-  // artifact. A hidden runtime import of `pg` built successfully but left the
-  // driver out of the deployed bundle, so live ledger writes always failed.
-  const sql = postgres(connectionString, { ssl: "require", max: 1 });
+  // Both drivers are externalized into the deploy manifest. `postgres` works
+  // here because its ESM default export is stable; `pg` builds `module.exports`
+  // dynamically, so the previous named ESM import failed at runtime.
+  // Leave TLS policy to LEDGER_DATABASE_URL (`sslmode=...`) so local and
+  // in-network non-TLS databases keep working.
+  const sql = postgres(connectionString, { max: 1 });
   try {
     await sql.unsafe(
       `CREATE TABLE IF NOT EXISTS ${LEDGER_TABLE} (

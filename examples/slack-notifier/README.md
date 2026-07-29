@@ -15,11 +15,11 @@ validate  ──▶  rejected   (terminal, on bad input)
 
 1. **validate** — resolves the message (defaulting to a fixed hello, and rejecting
    anything over the length cap) and the config (auth mode, channel).
-2. **post** — reads your credential from the injected environment and calls Slack
-   via `fetch`:
-   - `bot` mode (default) — a bot token calls `chat.postMessage`; returns the
-     resolved channel id + message `ts`.
-   - `webhook` mode — an incoming-webhook URL; the channel is baked into the URL.
+2. **post** — reads your credential from the injected environment and calls Slack:
+   - `bot` mode (default) — fail-closed metered fetch calls
+     `chat.postMessage`; returns the resolved channel id + message `ts`.
+   - `webhook` mode — native fetch calls an incoming-webhook URL. The URL is
+     itself a credential, so it is intentionally excluded from request facts.
 
 Input: `{ "message": "Deploy finished :rocket:", "channel": "#general" }`.
 
@@ -44,7 +44,7 @@ composes the message, skips the send, and says so — it never reports
 ## Where the key lives (and how it's injected)
 
 The Slack credential is **never** in code, and the template never names a storage
-location. It declares what the credential *is*, in `template.json`:
+location. It declares what the credential _is_, in `template.json`:
 
 | Auth mode       | Declared key        | What to supply                                  |
 | --------------- | ------------------- | ----------------------------------------------- |

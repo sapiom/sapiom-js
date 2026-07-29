@@ -37,8 +37,9 @@ went silent). Inside a step's `run`, Sapiom capabilities are pre-auth'd on
 The canonical state is `ctx.shared`. The `database` capability is an **optional,
 best-effort** durable copy: `recordTransition` appends every transition to
 `ctx.shared.trail` and, when a `ledgerHandle` is configured and it's not a
-`dryRun`, also to a Postgres `approval_chain_ledger` table (via a `pg` client on
-the provisioned connection string). A missing handle, a `dryRun`, or any DB error
+`dryRun`, also to a Postgres `approval_chain_ledger` table (via the ESM-safe
+`postgres` client on the provisioned connection string). TLS behavior follows
+the connection string's `sslmode`; a missing handle, a `dryRun`, or any DB error
 degrades to shared + logs and never fails the chain. Rows are keyed on
 `(execution_id, seq)` with `ON CONFLICT DO NOTHING`, so a step retry is idempotent.
 

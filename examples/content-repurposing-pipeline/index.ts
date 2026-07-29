@@ -128,6 +128,7 @@ const DEFAULT_NUM_QUOTES = 2;
 const MAX_QUOTES = 4;
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "content-repurposing";
+const TRANSIENT_IMAGE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 /** Title paired with `SAMPLE_SOURCE`. */
 const SAMPLE_TITLE = "Why small teams ship faster";
@@ -153,6 +154,35 @@ function clampQuotes(n: number | undefined): number {
 function must<T>(v: T | undefined, name: string): T {
   if (v === undefined) throw new Error(`missing shared state: ${name}`);
   return v;
+}
+
+function numericStatus(value: unknown): number | undefined {
+  const status =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : Number.NaN;
+  return Number.isInteger(status) ? status : undefined;
+}
+
+/** Prefer structured HTTP status and use message parsing only as a narrow fallback. */
+export function isTransientImageError(error: unknown): boolean {
+  if (error && typeof error === "object") {
+    const direct = numericStatus((error as { status?: unknown }).status);
+    const nested = numericStatus(
+      (error as { response?: { status?: unknown } }).response?.status,
+    );
+    const status = direct ?? nested;
+    if (status !== undefined) return TRANSIENT_IMAGE_STATUSES.has(status);
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /\b(?:http|status(?:\s+code)?)\s*[:=]?\s*(408|425|429|500|502|503|504)\b/i.test(
+      message,
+    ) || /application error|network|socket|timed?\s*out|temporar/i.test(message)
+  );
 }
 
 /**
@@ -390,12 +420,9 @@ const graphics = defineStep({
               storage: { visibility: "private" },
             });
           } catch (error) {
-            const message = String(error);
-            const transient =
-              /\b(408|425|429|500|502|503|504)\b/.test(message) ||
-              /application error|network|socket|timed?\s*out|temporar/i.test(
-                message,
-              );
+            const message =
+              error instanceof Error ? error.message : String(error);
+            const transient = isTransientImageError(error);
             if (!transient || attempt === maxAttempts) throw error;
 
             const delayMs = 500 * 2 ** (attempt - 1);

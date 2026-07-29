@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: turn one blog post or transcript into a tweet thread, LinkedIn post, newsletter, quote graphics, and a short clip with an LLM (models.run), image + async video generation, then package it to file storage and email it.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.2"
   }
 }

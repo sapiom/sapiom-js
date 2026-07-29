@@ -338,29 +338,25 @@ const render = defineStep({
       draft: draftDoc,
       totals,
     });
-    const renderDir = `/tmp/${boxName}`;
-    const proposalJsonBase64 = Buffer.from(proposalJson).toString("base64");
-    const renderScriptBase64 = Buffer.from(RENDER_SCRIPT).toString("base64");
+    const renderDir = `render-a${ctx.attempts}`;
 
     // Lay out the PDF in a throwaway sandbox, then read the bytes back as base64.
     // A sandbox is torn down in `finally` so a render failure never leaks compute.
     let pdfBase64 = "";
     const box = await ctx.sapiom.sandboxes.create({ name: boxName });
     try {
-      // The Blaxel API currently reports `/blaxel` as the workspace root even
-      // when its file API writes elsewhere. Materialize both files into one
-      // explicit absolute temp directory so write, cwd, render, and read agree.
-      // Base64 keeps the generated script/JSON out of shell quoting.
+      // Keep file writes and process execution in one explicit directory under
+      // the sandbox workspace. This avoids both the old cwd mismatch and putting
+      // the generated proposal on a shell command line.
+      await box.exec(`mkdir -p ${renderDir}`);
+      await box.writeFile(`${renderDir}/proposal.json`, proposalJson);
+      await box.writeFile(`${renderDir}/render.mjs`, RENDER_SCRIPT);
       const built = await box.exec(
         [
-          `mkdir -p ${renderDir}`,
-          `printf '%s' '${proposalJsonBase64}' | base64 -d > ${renderDir}/proposal.json`,
-          `printf '%s' '${renderScriptBase64}' | base64 -d > ${renderDir}/render.mjs`,
-          `cd ${renderDir}`,
           `npm install --no-save --no-audit --no-fund --loglevel=error ${PDF_PACKAGE}`,
           "node render.mjs",
         ].join(" && "),
-        { timeout: 180_000 },
+        { cwd: renderDir, timeout: 180_000 },
       );
       if (built.exitCode !== 0) {
         ctx.logger.error("pdf render failed", {
@@ -375,7 +371,10 @@ const render = defineStep({
       }
       // Read the PDF as base64 so binary bytes survive the text-only exec channel.
       const read = await box.exec(
-        `base64 -w0 ${renderDir}/${fileName} || base64 ${renderDir}/${fileName}`,
+        `base64 -w0 ${fileName} || base64 ${fileName}`,
+        {
+          cwd: renderDir,
+        },
       );
       pdfBase64 = read.stdout.replace(/\s+/g, "");
     } finally {

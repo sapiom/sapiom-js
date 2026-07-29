@@ -133,10 +133,14 @@ function checkpointFileName(jobId: string): string {
 }
 
 /**
- * A sandbox name is lowercase alphanumeric + hyphens, 2–63 chars. Derive a legal
- * one from the job id and chunk offset.
+ * Blaxel sandbox names are lowercase alphanumeric + hyphens, 2–49 chars. Derive
+ * a legal, retry-specific name from the job id and chunk offset.
  */
-function sandboxName(jobId: string, offset: number, attempt: number): string {
+export function sandboxName(
+  jobId: string,
+  offset: number,
+  attempt: number,
+): string {
   const base = `backfill-${jobId}-c${offset}`
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "-")
@@ -146,7 +150,9 @@ function sandboxName(jobId: string, offset: number, attempt: number): string {
   // validation). Preserve an attempt suffix so a retry never collides with a
   // sandbox whose cleanup was delayed after the prior attempt.
   const suffix = `-a${attempt}`;
-  const prefix = (base || "backfill").slice(0, 49 - suffix.length);
+  const prefix =
+    (base || "backfill").slice(0, 49 - suffix.length).replace(/-+$/, "") ||
+    "backfill";
   return `${prefix}${suffix}`;
 }
 
@@ -279,10 +285,6 @@ async function processChunk(
 
   const box = await ctx.sapiom.sandboxes.create({
     name: sandboxName(args.jobId, args.offset, ctx.attempts),
-    // Pin the tier explicitly so a platform-default change cannot silently
-    // change the workflow's cost curve. The sandbox is still settled from its
-    // actual runtime when it is destroyed below.
-    tier: "s",
     ttl: CHUNK_SANDBOX_TTL,
     envs: {
       ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}),
@@ -432,8 +434,7 @@ const processStep = defineStep({
     // Rewrite the durable checkpoint, rotating out the previous file.
     if (!dryRun) {
       const prevCheckpoint = ctx.shared.get("checkpointFileId") as
-        | string
-        | null;
+        string | null;
       const cpId = await uploadJson(ctx, checkpointFileName(jobId), {
         jobId,
         cursor: nextCursor,

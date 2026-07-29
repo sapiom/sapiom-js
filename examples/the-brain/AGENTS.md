@@ -32,9 +32,12 @@ out on the injected `SLACK_BOT_TOKEN` via a raw `fetch`.
   idempotent.
 - **Child launch is a raw HTTP call.** `ctx.sapiom.agents.launch` 404s on the
   deployed backend today; `launchChild` posts to `/v1/workflows/executions` with
-  `x-api-key` and resolves slug→definitionId from `/definitions` + the static
-  `DEF_IDS` map. definitionIds are environment-specific — deploy children first
-  and seed the map.
+  `x-api-key`. A member's explicit `definitionId` can launch without discovery;
+  otherwise the tenant-scoped `/definitions` lookup resolves slug→definitionId
+  and caches it per tenant, with `DEF_IDS` as a static fallback. Lookup failures
+  log their HTTP status instead of silently looking like a missing child.
+  Definition ids are environment-specific — deploy children first and seed the
+  member or fallback map.
 - **Slim `ctx.shared`.** Large cross-step payloads silently stall the cloud
   engine. Pass only compact ids/counts/the plan array across steps; re-read bulk
   data (event rows) in the step that needs it.

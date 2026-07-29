@@ -3,13 +3,15 @@
 This project defines exactly one Sapiom agent in `index.ts` — **Slack Notifier**
 — authored against `@sapiom/agent`. It has three worker paths from two steps:
 `validate` (resolves input and config) → `post` (reads the injected credential and
-calls Slack via `fetch`), plus the terminal steps `posted` / `failed` / `rejected`.
-It calls no metered Sapiom capability at all — the Slack request goes out on your
-own token.
+calls Slack), plus the terminal steps `posted` / `failed` / `rejected`. Bot mode
+uses fail-closed `@sapiom/fetch` so its public endpoint is authorized and metered.
+Webhook mode uses native fetch because the credential is embedded in the URL and
+must never be copied into metering request facts.
 
 The lesson is the "bring your own API" shape: **declare a secret, read it at
 runtime from the injected environment, call an external API with it.** Slack has no Sapiom
-capability namespace, so we call it directly with `fetch`.
+capability namespace. Bot mode uses the generic metered HTTP wrapper; secret URL
+credentials such as incoming webhooks must bypass URL-level request recording.
 
 ## Authoring
 
