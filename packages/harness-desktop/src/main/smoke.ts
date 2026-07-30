@@ -28,6 +28,9 @@
  *   deploy-bundle   agent-core's in-process bundler can actually SPAWN esbuild's
  *                   native binary (a path inside app.asar gave `spawn ENOTDIR`,
  *                   so every deploy from the packaged app failed)
+ *   desktop-bridge  the main window's preload exposed window.sapiomDesktop — the
+ *                   SPA feature-detects it, so a broken preload just makes the
+ *                   "Check for updates" button silently absent
  *   update-config   the auto-update metadata is baked in and electron-updater
  *                   loads — otherwise the app runs fine and never updates again
  *
@@ -561,6 +564,107 @@ async function checkDeployBundle(): Promise<string> {
  * constructs a platform-specific updater on first read — three things that can
  * only be confirmed against a packaged artifact on the platform in question.
  */
+/**
+ * Does the SPA actually get the desktop bridge?
+ *
+ * The "Check for updates" button in the Settings popover is rendered only when
+ * `window.sapiomDesktop` exists, and the SPA feature-detects it because the same
+ * bundle also runs in a plain browser. That makes a broken preload *invisible*:
+ * no error, no blank screen — the button silently isn't there, and looks like a
+ * missing feature rather than a bug. The setup window had exactly this failure
+ * once (an ESM preload won't load in a sandboxed renderer, and onboarding hung
+ * with nothing in any log).
+ *
+ * Asserted against the REAL main window, and asserted through the same shape check
+ * the SPA uses, so a bridge that loads but is incomplete still fails here.
+ */
+async function checkDesktopBridge(boot: BootResult): Promise<string> {
+  const win = boot.mainWindow;
+  if (win.isDestroyed()) throw new Error("main window is gone");
+
+  // `boot()` does NOT await the main window's load — it only registers a
+  // `did-finish-load` handler to close the setup window (boot.ts) — so without
+  // this we can execute against the initial empty document and report "the
+  // preload did not run" as a pure race. It passes today only because the checks
+  // ahead of this one happen to take long enough, which is not a guarantee.
+  if (win.webContents.isLoading()) {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("main window did not finish loading in 15s")), 15_000);
+      const done = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      win.webContents.once("did-finish-load", done);
+      win.webContents.once("did-fail-load", (_e, code, desc) => {
+        clearTimeout(timer);
+        reject(new Error(`main window failed to load: ${desc} (${code})`));
+      });
+    });
+  }
+
+  const shape = (await win.webContents.executeJavaScript(
+    "({ bridge: typeof window.sapiomDesktop," +
+      " check: typeof window.sapiomDesktop?.checkForUpdates," +
+      " restart: typeof window.sapiomDesktop?.restartToUpdate," +
+      " version: window.sapiomDesktop?.appVersion })",
+  )) as { bridge: string; check: string; restart: string; version: unknown };
+
+  if (shape.bridge !== "object") {
+    throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
+  }
+  if (shape.check !== "function" || shape.restart !== "function") {
+    throw new Error(`bridge incomplete: ${JSON.stringify(shape)}`);
+  }
+  // Not cosmetic-only: the version arrives via `additionalArguments`, which is the
+  // documented way to pass a value to a preload precisely because reading a
+  // mutated `process.env` from a renderer is not dependable. An empty string here
+  // means that mechanism silently failed.
+  if (typeof shape.version !== "string" || shape.version.length === 0) {
+    throw new Error(
+      `bridge exposes no appVersion (${JSON.stringify(shape.version)}) — the ` +
+        `additionalArguments hand-off did not reach the preload`,
+    );
+  }
+
+  // Now actually CALL it. Shape alone would still pass if no `ipcMain` handler were
+  // registered — `ipcRenderer.invoke` on an unhandled channel rejects, and the only
+  // place that shows up is a user clicking the button in a real build.
+  //
+  // Hermetic on purpose: a smoke run has updates gated off, so this returns
+  // `disabled` and short-circuits before any network call. That still exercises the
+  // whole path — preload → invoke → handler → structured outcome back across the
+  // boundary — which is exactly why the handlers are registered regardless of the
+  // gate rather than only when updates are on.
+  const outcome = (await win.webContents.executeJavaScript(
+    "window.sapiomDesktop.checkForUpdates().then(" +
+      "(o) => ({ ok: true, kind: o && o.kind, reason: o && o.reason })," +
+      "(e) => ({ ok: false, kind: String((e && e.message) || e) }))",
+  )) as { ok: boolean; kind?: string; reason?: string };
+  if (!outcome.ok) {
+    throw new Error(`checkForUpdates() rejected: ${outcome.kind} (is the ipcMain handler registered?)`);
+  }
+  if (outcome.kind !== "disabled") {
+    // A smoke run must never reach the network; any other outcome means the gate
+    // leaked and CI would start depending on GitHub.
+    throw new Error(`expected a "disabled" outcome under --smoke, got "${outcome.kind}"`);
+  }
+  // The REASON is what makes this check meaningful now that senders are validated.
+  // A rejected sender also answers `disabled`, so matching on the kind alone could
+  // not tell "the gate is off" (correct) from "the main window is not trusted"
+  // (broken button in every real build). Only the gate says "smoke run".
+  if (outcome.reason !== "smoke run") {
+    throw new Error(
+      `expected the gate's reason ("smoke run"), got "${outcome.reason}" — ` +
+        `the main window was not accepted as a trusted IPC sender`,
+    );
+  }
+
+  return (
+    `window.sapiomDesktop exposes checkForUpdates + restartToUpdate (v${shape.version}); ` +
+    `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
+  );
+}
+
 async function checkUpdateConfig(): Promise<string> {
   if (!app.isPackaged) {
     return "SKIPPED — unpackaged build has no app-update.yml (run scripts/smoke.sh)";
@@ -663,6 +767,7 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     await check("runtime-shims", checkRuntimeShims),
     await check("run-local", () => checkRunLocal(base, token)),
     await check("deploy-bundle", checkDeployBundle),
+    await check("desktop-bridge", () => checkDesktopBridge(boot)),
     await check("update-config", checkUpdateConfig),
   ];
 }

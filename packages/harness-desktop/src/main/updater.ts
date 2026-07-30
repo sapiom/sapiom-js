@@ -29,10 +29,11 @@
  *    installer is trying to replace. So the update path calls the caller's
  *    `shutdown()` and awaits it, rather than relying on the quit hook.
  */
-import { BrowserWindow, app, dialog } from "electron";
+import { BrowserWindow, app, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
 // CJS: default-import then read the property. See trap 1 above.
 import electronUpdater from "electron-updater";
 import type { UpdateInfo } from "electron-updater";
+import { UPDATE_CHECK, UPDATE_RESTART, type UpdateCheckOutcome } from "./ipc.js";
 import {
   CHANNEL_ENV_VAR,
   resolveUpdateChannel,
@@ -77,17 +78,114 @@ const declined = new Set<string>();
 let promptOpen = false;
 
 /**
+ * Who we serve, set on every launch regardless of the gate.
+ *
+ * Separate from `active` on purpose: sender validation and the failure dialogs
+ * need the main window even when updates are switched off. Deriving the window
+ * from `active` instead made `isTrustedSender` reject *everything* in a build with
+ * updates disabled, so the SPA reported the useless "not available here" in place
+ * of the real reason ("not a packaged build").
+ */
+let host: UpdaterDeps | null = null;
+/** Live updater, once initialised. Null means checks are off — `disabledReason` says why. */
+let active: { autoUpdater: typeof electronUpdater.autoUpdater; channel: string; deps: UpdaterDeps } | null = null;
+let disabledReason: string | null = null;
+/**
+ * An update that has finished downloading and is waiting for a restart. Held so
+ * an on-demand check can answer "ready — restart" instead of "up to date", which
+ * is what it would otherwise say: electron-updater reports the *installed*
+ * version, and a downloaded-but-unapplied update doesn't change that.
+ */
+let pending: UpdateInfo | null = null;
+/** In-flight on-demand check, so a double-click doesn't start two. */
+let checkInFlight: Promise<UpdateCheckOutcome> | null = null;
+
+/**
+ * How long to wait for `quitAndInstall` to actually end the process before
+ * concluding the handoff failed. It normally quits within a second; 15s is slack
+ * for Squirrel.Mac's staging step, not a guess at a happy path.
+ */
+const HANDOFF_GRACE_MS = 15 * 1_000;
+
+/**
+ * Hand off to the platform installer, having first closed the harness server.
+ *
+ * Two hard-won constraints pull in opposite directions here:
+ *
+ *  - The server MUST close before the installer runs (trap 2 at the top): an
+ *    orphaned pty holding the install directory is a failed update on Windows,
+ *    and an orphaned `claude` everywhere.
+ *  - But closing it kills every agent session, and `quitAndInstall` is NOT
+ *    guaranteed to quit. Squirrel.Mac refuses an update it cannot verify, and the
+ *    mac build is unsigned whenever `CSC_LINK` is absent; an extracted AppImage
+ *    and a `.deb` with no usable package manager can't self-install either. This
+ *    file's own error handler lists all three as things that happen in the field.
+ *
+ * Doing the irreversible half first meant that in every one of those cases the
+ * user lost their work AND stayed on the old version, looking at a dead SPA, with
+ * one stderr line as the only evidence. So: refuse up front when the updater
+ * cannot install, and if the handoff still doesn't happen, relaunch rather than
+ * leave a hollow app.
+ */
+async function applyUpdate(version: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!active) return { ok: false, reason: "updates are not initialised" };
+
+  // Checked BEFORE touching the server, because this is the whole point: no
+  // installer, no reason to take anything away from the user.
+  if (!active.autoUpdater.isUpdaterActive()) {
+    log(`refusing to apply ${version}: the updater is not active for this install`);
+    return {
+      ok: false,
+      reason:
+        "This build can't install updates itself — it's unsigned, or installed in a format " +
+        "that can't self-update. Download the new version instead; your sessions are untouched.",
+    };
+  }
+
+  log(`applying ${version} — closing the harness server first`);
+  await active.deps.shutdown();
+  try {
+    // (true, true) = install without the NSIS wizard, then relaunch. Both are
+    // Windows-only knobs; macOS always relaunches and Linux ignores them. Without
+    // isForceRunAfter a "Restart now" would quit and NOT come back, which is not
+    // what the button says.
+    active.autoUpdater.quitAndInstall(true, true);
+  } catch (err) {
+    log(`quitAndInstall threw: ${err instanceof Error ? err.message : String(err)}`);
+    relaunchAfterFailedHandoff();
+    return { ok: false, reason: "The installer could not be started; restarting Sapiom." };
+  }
+
+  // Still running after the grace period means the handoff silently failed — and
+  // the server is already closed, so there is nothing to go back to. Relaunching
+  // on the OLD version is a worse outcome than updating and a much better one than
+  // an app with no server behind it.
+  setTimeout(() => {
+    log("quitAndInstall did not quit — relaunching on the current version");
+    relaunchAfterFailedHandoff();
+  }, HANDOFF_GRACE_MS).unref();
+  return { ok: true };
+}
+
+function relaunchAfterFailedHandoff(): void {
+  // `pending` is cleared by the caller; this process is about to be replaced.
+  app.relaunch();
+  app.exit(0);
+}
+
+/**
  * Offer the update, and apply it only if the user agrees.
  *
- * A native dialog rather than something injected into the page: the main window
- * shows the harness SPA, served by the harness itself, and reaching into it would
- * couple this app to a UI another person is actively refactoring. It also matches
- * how the rest of onboarding already talks to the user.
+ * A native dialog, not something injected into the page: this fires whenever a
+ * background download finishes, and it must work regardless of what the main
+ * window happens to be showing. (The SPA's Settings popover has its own,
+ * *user-initiated* path — see `checkForUpdatesNow`.)
  *
  * Declining is remembered per version FOR THIS RUN only. Re-prompting on every
  * check would nag someone who already said no; forgetting entirely across
  * launches would mean a deferred update is never mentioned again. Prompting once
- * per launch is the middle that needs no extra state on disk.
+ * per launch is the middle that needs no extra state on disk — and an explicit
+ * "check for updates" clears it, because asking IS undeclining.
  */
 async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
   const { version } = info;
@@ -95,6 +193,9 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
   if (deps.mainWindow.isDestroyed()) return;
 
   promptOpen = true;
+  // Held across the apply, not just the dialog: shutdown takes seconds, and
+  // releasing early let a second `update-downloaded` stack another dialog on top
+  // of an app that was already installing.
   try {
     const { response } = await dialog.showMessageBox(deps.mainWindow, {
       type: "info",
@@ -114,19 +215,112 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
       log(`user deferred ${version}`);
       return;
     }
+
+    const result = await applyUpdate(version);
+    if (!result.ok) {
+      // Never silently: the user pressed "Restart now" and nothing happened, so
+      // say what and why. Their sessions are still alive in the refuse-up-front
+      // case, which is exactly what the message needs to tell them.
+      pending = null;
+      await dialog.showMessageBox(deps.mainWindow, {
+        type: "warning",
+        buttons: ["OK"],
+        message: `Sapiom ${version} could not be installed.`,
+        detail: result.reason ?? "The update could not be applied.",
+      });
+    }
   } finally {
     promptOpen = false;
   }
+}
 
-  log(`applying ${version} — closing the harness server first`);
-  // Await it: see trap 2. An orphaned pty holding the install directory is a
-  // failed update on Windows, and an orphaned `claude` on every platform.
-  await deps.shutdown();
-  // (true, true) = install without the NSIS wizard, then relaunch. Both are
-  // Windows-only knobs; macOS always relaunches and Linux ignores them. Without
-  // isForceRunAfter a "Restart now" would quit and NOT come back, which is not
-  // what the button says.
-  electronUpdater.autoUpdater.quitAndInstall(true, true);
+/**
+ * Check right now, on the user's behalf, and describe what happened.
+ *
+ * This is the Settings popover's "Check for updates" button. It differs from the
+ * scheduled check in three ways, and each one is a thing users notice:
+ *  - it REPORTS an outcome. A silent background check is fine; a button that
+ *    appears to do nothing is broken.
+ *  - it clears the declined set, so someone who chose "Later" can change their
+ *    mind without restarting the app.
+ *  - it answers "downloaded" for an update already waiting, rather than the
+ *    literally-true-but-useless "you're up to date".
+ *
+ * Never throws: every failure becomes a `failed` outcome the UI can render.
+ */
+export async function checkForUpdatesNow(): Promise<UpdateCheckOutcome> {
+  if (!active) {
+    return { kind: "disabled", reason: disabledReason ?? "updates are not available in this build" };
+  }
+  // Asking is undeclining — and it has to happen BEFORE the `pending` shortcut
+  // below, or it never happens in the one case that matters: choosing "Later"
+  // sets `pending`, so returning early would leave the version declined for the
+  // rest of the run and the native prompt would never come back.
+  declined.clear();
+  // Something already downloaded and waiting to be applied: report that instead
+  // of asking GitHub again. Note this is checked AFTER undeclining, and that
+  // `pending` is cleared whenever an apply fails — otherwise one failed install
+  // would wedge the button on "ready to install" forever, with the restart doing
+  // nothing and a genuinely newer version never being offered.
+  if (pending) return { kind: "downloaded", version: pending.version };
+  // Coalesce concurrent asks rather than firing two requests at GitHub.
+  checkInFlight ??= runCheck(active);
+  try {
+    return await checkInFlight;
+  } finally {
+    checkInFlight = null;
+  }
+}
+
+async function runCheck(current: NonNullable<typeof active>): Promise<UpdateCheckOutcome> {
+  try {
+    const result = await current.autoUpdater.checkForUpdates();
+    if (!result) {
+      // electron-updater returns null when it declines to check at all (no
+      // update config, or a check already running). Not an error, but not an
+      // answer either — don't dress it up as "up to date".
+      return { kind: "failed", message: "The update check did not run." };
+    }
+    if (result.isUpdateAvailable) {
+      log(`on-demand check: ${result.updateInfo.version} available`);
+      return { kind: "available", version: result.updateInfo.version };
+    }
+    return { kind: "up-to-date", version: app.getVersion(), channel: current.channel };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`on-demand check failed: ${message}`);
+    return { kind: "failed", message };
+  }
+}
+
+/**
+ * Apply an update the user asked to install from the SPA. No-op if none is waiting.
+ *
+ * On failure `pending` is cleared so the button recovers: it goes back to being a
+ * real check instead of permanently re-offering an install that cannot happen.
+ */
+export async function restartToUpdate(): Promise<void> {
+  if (!pending) {
+    log("restart requested with no downloaded update — ignoring");
+    return;
+  }
+  const version = pending.version;
+  const result = await applyUpdate(version);
+  if (!result.ok) {
+    pending = null;
+    log(`could not apply ${version}: ${result.reason ?? "unknown"}`);
+    // The SPA gets a void back, so tell the user here — this is the same dead-end
+    // the native path reports, and silence would look like a broken button.
+    const win = host?.mainWindow;
+    if (win && !win.isDestroyed()) {
+      await dialog.showMessageBox(win, {
+        type: "warning",
+        buttons: ["OK"],
+        message: `Sapiom ${version} could not be installed.`,
+        detail: result.reason ?? "The update could not be applied.",
+      });
+    }
+  }
 }
 
 /**
@@ -139,11 +333,73 @@ async function offerUpdate(info: UpdateInfo, deps: UpdaterDeps): Promise<void> {
  * must never cost someone their app.
  */
 export function initUpdater(deps: UpdaterDeps): void {
+  host = deps;
+  // Registered BEFORE (and regardless of) the gate. The SPA's button is wired to
+  // these channels, and `ipcRenderer.invoke` on a channel with no handler REJECTS
+  // — so skipping registration for a build with updates disabled would turn a
+  // clear "updates are off in this build" into an opaque renderer-side error.
+  registerHandlers();
   try {
     startUpdater(deps);
   } catch (err) {
+    disabledReason = `initialisation failed: ${err instanceof Error ? err.message : String(err)}`;
     log(`could not initialise: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * Only the harness SPA, in the main window's top frame, may drive these.
+ *
+ * `restartToUpdate` kills every running agent session, so "which renderer asked?"
+ * is a security question, not bookkeeping. Two things could otherwise ask:
+ *  - another window — a pop-out inherits webPreferences unless we prevent it
+ *    (windows.ts does now, and this is the check that still holds if that ever
+ *    regresses);
+ *  - the main window itself after navigating to agent-authored content, which the
+ *    harness serves at `/canvas/:sessionId/*` on this same origin.
+ *
+ * Hence both an identity check and a path check. The SPA lives at `/` and never
+ * navigates the top frame over http (its one `location.href` is an editor scheme,
+ * which `will-navigate` sends to the OS), so requiring `/` is exact today. If the
+ * SPA ever adopts routing this fails CLOSED and says why, rather than quietly
+ * widening.
+ */
+function isTrustedSender(event: IpcMainInvokeEvent): boolean {
+  const win = host?.mainWindow ?? null;
+  if (!win || win.isDestroyed()) return false;
+  if (event.sender !== win.webContents) {
+    log("rejected an update IPC from a non-main-window renderer");
+    return false;
+  }
+  // The top frame, not the calling frame: a subframe must never qualify even if
+  // `nodeIntegrationInSubFrames` is switched on later.
+  const frameUrl = event.sender.mainFrame.url;
+  try {
+    if (new URL(frameUrl).pathname !== "/") {
+      log(`rejected an update IPC from ${frameUrl} — only the SPA root may ask`);
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/** Idempotent: `ipcMain.handle` throws if a channel is registered twice. */
+let handlersRegistered = false;
+function registerHandlers(): void {
+  if (handlersRegistered) return;
+  handlersRegistered = true;
+  ipcMain.handle(UPDATE_CHECK, async (event): Promise<UpdateCheckOutcome> => {
+    // Answer, rather than throw, so an unexpected caller gets a dead end instead
+    // of a stack trace to probe.
+    if (!isTrustedSender(event)) return { kind: "disabled", reason: "not available here" };
+    return checkForUpdatesNow();
+  });
+  ipcMain.handle(UPDATE_RESTART, async (event): Promise<void> => {
+    if (!isTrustedSender(event)) return;
+    await restartToUpdate();
+  });
 }
 
 function startUpdater(deps: UpdaterDeps): void {
@@ -154,6 +410,7 @@ function startUpdater(deps: UpdaterDeps): void {
     env: process.env,
   });
   if (!gate.enabled) {
+    disabledReason = gate.reason ?? "updates are disabled";
     log(`disabled — ${gate.reason}`);
     return;
   }
@@ -193,6 +450,10 @@ function startUpdater(deps: UpdaterDeps): void {
     log(`up to date on "${decision.channel}" (${app.getVersion()})`);
   });
   autoUpdater.on("update-downloaded", (info: UpdateInfo) => {
+    // Recorded before we prompt: whatever the user answers, this version is now
+    // on disk and applying it is a restart away — which is what the SPA's button
+    // needs to know to say "restart" instead of "up to date".
+    pending = info;
     void offerUpdate(info, deps).catch((err: unknown) => {
       log(`failed to apply ${info.version}: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -216,6 +477,10 @@ function startUpdater(deps: UpdaterDeps): void {
     `enabled — channel "${decision.channel}", allowPrerelease=${decision.allowPrerelease}` +
       `${gate.forced ? ", forced (dev config)" : ""}`,
   );
+  // Last: publishing `active` is what enables the on-demand path, so it happens
+  // only once everything above has been configured without throwing.
+  active = { autoUpdater, channel: decision.channel, deps };
+  disabledReason = null;
   // .unref() so a pending check can't hold the process alive during quit.
   setTimeout(check, FIRST_CHECK_DELAY_MS).unref();
   setInterval(check, CHECK_INTERVAL_MS).unref();

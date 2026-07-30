@@ -6,6 +6,11 @@ import { HARNESS_PATHS } from "@shared/types";
 import type { AuthStartResponse } from "../lib/api";
 import { Icon } from "./Icon";
 import { track } from "../lib/track";
+import {
+  describeUpdateOutcome,
+  getDesktopBridge,
+  type UpdateStatusView,
+} from "../lib/desktop";
 
 /** Sign-in progress state in the Settings popover. */
 type AuthProgress =
@@ -45,6 +50,13 @@ export function SettingsPopover({
 }: SettingsPopoverProps): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [authProgress, setAuthProgress] = useState<AuthProgress>({ status: "idle" });
+  // Null in a browser (`npx @sapiom/harness`), where there is nothing to update —
+  // the whole update section is then absent rather than disabled. Read once per
+  // render; the preload either injected it before first paint or never will.
+  const desktop = getDesktopBridge();
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusView | null>(null);
+  const [restarting, setRestarting] = useState(false);
   // An env override outranks any stored preference; flipping the toggle here
   // would silently lose to it on the next boot, so the control locks instead.
   const envForced = consentSource === "env-forced-off";
@@ -93,6 +105,46 @@ export function SettingsPopover({
       await onDisconnect();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleCheckForUpdates = async (): Promise<void> => {
+    if (!desktop) return;
+    setUpdateChecking(true);
+    // Clear the previous result first: leaving "Up to date" on screen while a new
+    // check runs makes the button look like it did nothing.
+    setUpdateStatus(null);
+    try {
+      setUpdateStatus(describeUpdateOutcome(await desktop.checkForUpdates()));
+    } catch (err) {
+      // The bridge is documented as never rejecting, but it crosses a process
+      // boundary — if that contract ever breaks, the user gets a message rather
+      // than a spinner that never stops.
+      setUpdateStatus({
+        text: err instanceof Error ? err.message : "The update check failed.",
+        tone: "error",
+      });
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
+
+  const handleRestartToUpdate = async (): Promise<void> => {
+    if (!desktop || restarting) return;
+    // Latched, and never released on success: the app is about to be replaced, so
+    // the button must not come back and invite a second install. A double-click
+    // would otherwise call quitAndInstall twice.
+    setRestarting(true);
+    try {
+      await desktop.restartToUpdate();
+    } catch (err) {
+      // Reaching here means the install did not happen — the app would be gone
+      // otherwise. Re-arm the button and say so.
+      setRestarting(false);
+      setUpdateStatus({
+        text: err instanceof Error ? err.message : "The update could not be installed.",
+        tone: "error",
+      });
     }
   };
 
@@ -155,6 +207,56 @@ export function SettingsPopover({
             <Icon name="LogOut" size={13} />
             {busy ? "Signing out…" : "Disconnect"}
           </button>
+        </div>
+      )}
+
+      {/* Desktop app only. In a browser there is no bundle to replace, so the
+          whole section is absent rather than present-and-disabled — a control that
+          can never work is worse than no control. */}
+      {desktop && (
+        <div className="settings-auth-row" data-testid="settings-update-row">
+          <button
+            type="button"
+            className="settings-update-btn"
+            data-testid="settings-update-btn"
+            disabled={updateChecking}
+            onClick={() => void handleCheckForUpdates()}
+          >
+            <Icon name={updateChecking ? "Loader" : "RefreshCw"} size={13} />
+            {updateChecking ? "Checking…" : "Check for updates"}
+          </button>
+          {updateStatus && (
+            <p
+              className="settings-note settings-update-status"
+              data-testid="settings-update-status"
+              // Announced, because the outcome is the entire point of pressing
+              // the button and it appears without any focus change.
+              role="status"
+            >
+              {updateStatus.text}
+            </p>
+          )}
+          {updateStatus?.tone === "action" && (
+            <button
+              type="button"
+              className="settings-update-restart-btn"
+              data-testid="settings-update-restart-btn"
+              disabled={restarting}
+              onClick={() => void handleRestartToUpdate()}
+              // Same warning the native prompt gives. The user may have an agent
+              // mid-task, and this button ends it — so it says so before the click,
+              // not after.
+              title="Ends any running agent sessions"
+            >
+              <Icon name={restarting ? "Loader" : "RefreshCw"} size={13} />
+              {restarting ? "Installing…" : "Restart now — ends running sessions"}
+            </button>
+          )}
+          {desktop.appVersion && (
+            <p className="settings-note settings-update-version" data-testid="settings-app-version">
+              Sapiom {desktop.appVersion}
+            </p>
+          )}
         </div>
       )}
 

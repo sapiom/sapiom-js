@@ -28,3 +28,9 @@ export function setupHtmlPath(): string {
 export function setupPreloadPath(): string {
   return path.join(mainDir, "..", "preload", "setup.mjs");
 }
+
+/** Preload for the MAIN window (the harness SPA) — exposes `window.sapiomDesktop`.
+ *  Same `.mjs` + sandbox-off requirement as the setup preload. */
+export function desktopPreloadPath(): string {
+  return path.join(mainDir, "..", "preload", "desktop.mjs");
+}

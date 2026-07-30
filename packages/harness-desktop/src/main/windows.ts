@@ -1,5 +1,6 @@
-import { BrowserWindow, shell } from "electron";
-import { setupHtmlPath, setupPreloadPath } from "./paths.js";
+import { BrowserWindow, app, shell } from "electron";
+import { APP_VERSION_ARG } from "./ipc.js";
+import { desktopPreloadPath, setupHtmlPath, setupPreloadPath } from "./paths.js";
 
 /**
  * The setup/onboarding window shown BEFORE the harness SPA — drives the boot
@@ -37,9 +38,14 @@ export function createSetupWindow(): BrowserWindow {
 
 /**
  * The main window: loads the harness SPA from the local server at its
- * boot-token URL. No preload — it is just the harness web app. External
- * (non-localhost) links open in the system browser; in-app navigation is
- * confined to the local server.
+ * boot-token URL. External (non-localhost) links open in the system browser;
+ * in-app navigation is confined to the local server.
+ *
+ * It carries a preload — a deliberately minimal one. The SPA is the same bundle
+ * `npx @sapiom/harness` serves to a plain browser, so this window is the only
+ * place it can offer anything desktop-specific (today: "Check for updates" in the
+ * Settings popover). The SPA feature-detects `window.sapiomDesktop` and simply
+ * omits those affordances in a browser — see `harness/web/src/lib/desktop.ts`.
  */
 export function createMainWindow(loadUrl: string): BrowserWindow {
   const win = new BrowserWindow({
@@ -48,17 +54,46 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
     show: false, // show on ready-to-show to avoid a white flash
     title: "Sapiom",
     webPreferences: {
+      preload: desktopPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
+      // Same constraint as the setup window: Electron will not load an ESM
+      // preload in a sandboxed renderer. contextIsolation stays ON, so the page
+      // still gets only the frozen bridge and never `ipcRenderer` itself.
+      sandbox: false,
+      // How the preload learns the app version. `process.env` would mean relying
+      // on a renderer inheriting a variable mutated after startup; this is the
+      // documented channel. See APP_VERSION_ARG.
+      additionalArguments: [`${APP_VERSION_ARG}${app.getVersion()}`],
     },
+  });
+
+  // A silently-failing preload is the exact bug the setup window once had: the
+  // window looks fine and the bridge is just absent. Here it would mean the
+  // update button vanishing with no error anywhere, so say so.
+  win.webContents.on("preload-error", (_e, preloadPath, error) => {
+    console.error(`[main] preload failed to load: ${preloadPath}\n${error?.stack ?? error}`);
   });
 
   win.once("ready-to-show", () => win.show());
 
   // Anything that isn't our local server opens in the user's real browser
   // (OAuth continuations, docs links, agent-opened URLs).
+  //
+  // Local URLs get a window we build ourselves rather than `{ action: "allow" }`.
+  // A window opened by `allow` INHERITS the parent's webPreferences — including
+  // this window's preload — and "local" is not the same as "ours": the harness
+  // serves agent-authored files at `/canvas/:sessionId/*` from
+  // `<cwd>/.sapiom/canvas/`, on this very origin. xterm linkifies whatever the
+  // agent prints, so a URL in the terminal is one click from a window holding
+  // `window.sapiomDesktop` — i.e. an agent could call `restartToUpdate()` and kill
+  // every live session. Denying and opening explicitly is deterministic; it
+  // doesn't depend on override-merge semantics.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (isLocalUrl(url)) return { action: "allow" };
+    if (isLocalUrl(url)) {
+      createPreviewWindow(url);
+      return { action: "deny" };
+    }
     void shell.openExternal(url);
     return { action: "deny" };
   });
@@ -70,6 +105,36 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
   });
 
   void win.loadURL(loadUrl);
+  return win;
+}
+
+/**
+ * A plain window for a local page the SPA or the agent asked to pop out (a canvas
+ * preview, a dev server). Deliberately has NO preload and IS sandboxed: this is
+ * where agent-authored content ends up, and it must not reach the main process.
+ *
+ * Everything the main window needs and this one must not have is absent by
+ * construction rather than by override, which is the point — see the window-open
+ * handler above.
+ */
+export function createPreviewWindow(url: string): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 1024,
+    height: 768,
+    title: "Sapiom",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  // A preview window is a leaf: it gets no bridge, and it cannot spawn further
+  // windows that might. Off-origin links still go to the real browser.
+  win.webContents.setWindowOpenHandler(({ url: next }) => {
+    if (!isLocalUrl(next)) void shell.openExternal(next);
+    return { action: "deny" };
+  });
+  void win.loadURL(url);
   return win;
 }
 

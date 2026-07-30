@@ -189,9 +189,16 @@ Things that will bite you:
   is a *getter*, invisible to `cjs-module-lexer`, so ESM link fails with
   `SyntaxError: Named export 'autoUpdater' not found`. Default-import and read the property — lazily,
   since the getter constructs a platform updater on first read.
-- **Close the harness server before `quitAndInstall()`.** It can hand off to the NSIS installer before
-  an async `before-quit` finishes, leaving live `claude` processes holding files the installer wants.
-  `index.ts` exposes a memoized `shutdownServer()` for exactly this; use it, don't add a second path.
+- **Close the harness server before `quitAndInstall()`** — it can hand off to the NSIS installer
+  before an async `before-quit` finishes, leaving live `claude` processes holding files the installer
+  wants. `index.ts` exposes a memoized `shutdownServer()`; use it, don't add a second path.
+- **…but check `isUpdaterActive()` FIRST.** Closing the server kills every agent session, and
+  `quitAndInstall` is not guaranteed to quit: Squirrel.Mac refuses an update it can't verify (and the
+  mac build is unsigned whenever `CSC_LINK` is absent), an extracted AppImage can't self-update, nor
+  can a `.deb` with no usable package manager. Doing the irreversible half first meant the user lost
+  their work *and* stayed on the old version, staring at a dead SPA. Refuse up front, and if the
+  handoff still doesn't happen within `HANDOFF_GRACE_MS`, `app.relaunch()` rather than leave a hollow
+  app. Clear `pending` on any failed apply, or the button wedges on "ready to install" forever.
 - **macOS needs the `zip` target and a valid signature.** Squirrel.Mac cannot consume a `.dmg`, and
   `latest-mac.yml` is only written when a zip target exists. It also refuses to apply an unsigned
   update — so auto-update on macOS depends on the Developer ID cert, not just on this code.
@@ -213,6 +220,51 @@ Dev loop without cutting tags: `SAPIOM_FORCE_UPDATER=1` runs the updater from an
 against a hand-written `dev-app-update.yml`. `SAPIOM_UPDATE_CHANNEL=latest|beta` repoints one machine;
 `SAPIOM_DISABLE_UPDATER=1` turns it off. A smoke run ignores the force flag — CI must never depend on
 the network.
+
+### The "Check for updates" button, and the main-window preload
+
+There are two ways an update reaches the user, and they are not interchangeable:
+
+- **Scheduled** (30 s after boot, then every 4 h) → silent, and only ever surfaces the native
+  "restart to install" dialog. That dialog stays native because it fires whenever a background
+  download finishes and must work regardless of what the window is showing.
+- **On demand** → the Settings popover's button, via `window.sapiomDesktop.checkForUpdates()`. It
+  differs in three ways that each matter: it *reports* an outcome (a button that appears to do
+  nothing is broken), it clears the per-run "Later" set (asking is undeclining), and it answers
+  `downloaded` for an update already on disk instead of the true-but-useless "up to date".
+
+The main window carries a preload (`src/preload/desktop.mts`) — it did not before. Watch out for:
+
+- **The SPA is not ours alone.** The identical bundle is served to a plain browser by
+  `npx @sapiom/harness`. Everything exposed here must be feature-detected on the SPA side
+  (`harness/web/src/lib/desktop.ts`), and the contract is *mirrored* there, not imported: the
+  dependency runs desktop → harness, never back.
+- **`sandbox: false` is required**, as for the setup window — Electron will not load an ESM preload
+  in a sandboxed renderer. `contextIsolation` stays on; the page never gets `ipcRenderer`.
+- **Never `{ action: "allow" }` a window from the main window.** An allowed child window INHERITS the
+  parent's `webPreferences`, preload included — and "local" is not "ours": the harness serves
+  agent-authored files at `/canvas/:sessionId/*` on the same origin, and xterm linkifies whatever the
+  agent prints. That made an agent-printed URL one click from a window holding `restartToUpdate()`,
+  i.e. an agent could kill every live session. Local pop-outs go through `createPreviewWindow`
+  (no preload, `sandbox: true`), which is explicit rather than dependent on override-merge semantics.
+- **Validate the IPC sender.** `isTrustedSender` requires the main window's `webContents` *and* a top
+  frame at `/`, because the main window could itself navigate to agent content on the same origin. It
+  reads the window from `host` (set every launch) and not from `active` (set only when updates are
+  on) — deriving it from `active` made a disabled build reject every sender and report
+  "not available here" instead of the real reason.
+- **The app version reaches the preload via `webPreferences.additionalArguments`**, not `process.env`.
+  Setting env in main and reading it in a renderer depends on inheriting a variable mutated after
+  startup. The `desktop-bridge` smoke check fails on an empty `appVersion` precisely so this stays
+  honest.
+- **Register `ipcMain` handlers regardless of the updater gate, and before any early return.**
+  `ipcRenderer.invoke` on an unhandled channel *rejects*, so a build with updates off must still
+  answer (with `{kind:"disabled"}`) rather than throw at the renderer. This was wrong once: `index.ts`
+  returned in `--smoke` before `initUpdater`, and the packaged check failed with
+  `No handler registered for 'update:check'` against an app that worked fine in production. Handler
+  registration must not depend on which branch of boot we exit through.
+- The `desktop-bridge` check **invokes** the channel, it doesn't just look for the function. Shape
+  alone would pass with no handler registered — and the only place that shows up otherwise is a user
+  clicking the button.
 
 ## What the app installs for the user
 

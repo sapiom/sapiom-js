@@ -98,6 +98,20 @@ if (lock.action === "fail") {
         // server booted without driving the GUI.
         console.log(`[harness-desktop] ready: ${bootResult.url}`);
       }
+      // BEFORE the smoke branch, deliberately. initUpdater gates itself on
+      // packaged/!dev/!smoke — it starts no timers and touches no network under
+      // --smoke — but it also registers the IPC handlers the SPA's "Check for
+      // updates" button invokes. Calling it only on the non-smoke path left the
+      // smoke run with no handler, so the packaged check could not exercise the
+      // real wiring: it failed with "No handler registered for 'update:check'"
+      // against an app that works fine in production. Handler registration must
+      // not depend on where in this sequence we happen to return.
+      initUpdater({
+        mainWindow: bootResult.mainWindow,
+        devMode,
+        smoke: smokeMode,
+        shutdown: shutdownServer,
+      });
       if (smokeMode) {
         // Verify the packaged bundle, then leave — never wait for a user. The
         // exit code is the CI signal. `app.exit` skips the before-quit handler,
@@ -109,15 +123,6 @@ if (lock.action === "fail") {
         app.exit(code);
         return;
       }
-      // Last, and only for a real launch: initUpdater gates itself on
-      // packaged/!dev/!smoke, but starting it after the window is up also keeps a
-      // network round-trip off the boot path entirely.
-      initUpdater({
-        mainWindow: bootResult.mainWindow,
-        devMode,
-        smoke: smokeMode,
-        shutdown: shutdownServer,
-      });
     } catch (err) {
       if (smokeMode) {
         // A boot failure IS the smoke result — report it as one and fail fast
