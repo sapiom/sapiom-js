@@ -55,8 +55,13 @@ export const APP_VERSION_ARG = "--sapiom-app-version=";
 
 /** SPA → main (invoke): check for an update now. Returns `UpdateCheckOutcome`. */
 export const UPDATE_CHECK = "update:check";
-/** SPA → main (invoke): apply a downloaded update and relaunch. Returns void. */
-export const UPDATE_RESTART = "update:restart";
+/*
+ * There is deliberately NO "apply the update" channel. The restart is destructive —
+ * it ends every running agent session — and the page that would call it is the same
+ * origin as the agent-authored files the harness serves at `/canvas/:sessionId/*`.
+ * Rather than exposing that and guarding it, the confirmation lives in a native
+ * dialog the main process raises: page content cannot reach it at all.
+ */
 
 /**
  * The result of an on-demand check.

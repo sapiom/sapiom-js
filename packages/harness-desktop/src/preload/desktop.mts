@@ -13,12 +13,7 @@
  * on and `ipcRenderer` is never handed to the page.
  */
 import { contextBridge, ipcRenderer } from "electron";
-import {
-  APP_VERSION_ARG,
-  UPDATE_CHECK,
-  UPDATE_RESTART,
-  type UpdateCheckOutcome,
-} from "../main/ipc.js";
+import { APP_VERSION_ARG, UPDATE_CHECK, type UpdateCheckOutcome } from "../main/ipc.js";
 
 const api = {
   /** The desktop app's version — NOT the harness's (the SPA already knows that one). */
@@ -28,10 +23,9 @@ const api = {
   checkForUpdates(): Promise<UpdateCheckOutcome> {
     return ipcRenderer.invoke(UPDATE_CHECK) as Promise<UpdateCheckOutcome>;
   },
-  /** Apply a downloaded update: closes sessions, installs, relaunches. */
-  restartToUpdate(): Promise<void> {
-    return ipcRenderer.invoke(UPDATE_RESTART) as Promise<void>;
-  },
+  // No restart method, on purpose — see ipc.ts. An update that is ready to install
+  // is confirmed through a native dialog, so nothing the page can call ends a
+  // user's sessions.
 };
 
 export type DesktopBridge = typeof api;

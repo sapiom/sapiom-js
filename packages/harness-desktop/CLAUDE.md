@@ -228,7 +228,10 @@ There are two ways an update reaches the user, and they are not interchangeable:
 - **Scheduled** (30 s after boot, then every 4 h) → silent, and only ever surfaces the native
   "restart to install" dialog. That dialog stays native because it fires whenever a background
   download finishes and must work regardless of what the window is showing.
-- **On demand** → the Settings popover's button, via `window.sapiomDesktop.checkForUpdates()`. It
+- **On demand** → the profile menu's "Check for updates" item, via
+  `window.sapiomDesktop.checkForUpdates()`. Note WHICH menu: the rail's profile drawer has a
+  Disconnect button and so does the Settings popover one level deeper — the item belongs in the
+  drawer, which is what users mean by "where Disconnect is". It
   differs in three ways that each matter: it *reports* an outcome (a button that appears to do
   nothing is broken), it clears the per-run "Later" set (asking is undeclining), and it answers
   `downloaded` for an update already on disk instead of the true-but-useless "up to date".
@@ -247,6 +250,11 @@ The main window carries a preload (`src/preload/desktop.mts`) — it did not bef
   agent prints. That made an agent-printed URL one click from a window holding `restartToUpdate()`,
   i.e. an agent could kill every live session. Local pop-outs go through `createPreviewWindow`
   (no preload, `sandbox: true`), which is explicit rather than dependent on override-merge semantics.
+- **There is no "apply the update" channel, and there must not be.** A restart ends every running
+  agent session, and page code shares an origin with agent-authored files. The confirmation is a
+  native dialog only; an on-demand check with something already downloaded re-raises it. The
+  `desktop-bridge` smoke check asserts the bridge exposes NOTHING beyond `appVersion` and
+  `checkForUpdates`, so a future addition has to be deliberate.
 - **Validate the IPC sender.** `isTrustedSender` requires the main window's `webContents` *and* a top
   frame at `/`, because the main window could itself navigate to agent content on the same origin. It
   reads the window from `host` (set every launch) and not from `active` (set only when updates are

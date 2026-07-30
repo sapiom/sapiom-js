@@ -29,20 +29,20 @@ describe("getDesktopBridge", () => {
 
   it("returns the bridge when the desktop preload injected a complete one", () => {
     const bridge = getDesktopBridge({
-      sapiomDesktop: { appVersion: "0.1.2", checkForUpdates: noop, restartToUpdate: noop },
+      sapiomDesktop: { appVersion: "0.1.2", checkForUpdates: noop },
     });
     expect(bridge).not.toBeNull();
     expect(bridge?.appVersion).toBe("0.1.2");
   });
 
-  it("rejects a bridge missing a method — an older desktop build must read as a browser", () => {
-    const host = { sapiomDesktop: { appVersion: "0.1.0", checkForUpdates: noop } };
+  it("rejects a bridge missing its method — an older desktop build must read as a browser", () => {
+    const host = { sapiomDesktop: { appVersion: "0.1.0" } };
     expect(getDesktopBridge(host)).toBeNull();
   });
 
   it("tolerates a missing appVersion rather than refusing the bridge", () => {
     // Cosmetic field; losing it must not cost the user the button.
-    const host = { sapiomDesktop: { checkForUpdates: noop, restartToUpdate: noop } };
+    const host = { sapiomDesktop: { checkForUpdates: noop } };
     expect(getDesktopBridge(host)?.appVersion).toBe("");
   });
 
@@ -84,8 +84,9 @@ describe("describeUpdateOutcome", () => {
   });
 
   it("offers a restart for exactly one outcome", () => {
-    // The Settings row keys its restart button off `tone === "action"`, so an
-    // extra one here would offer a restart with nothing downloaded.
+    // Exactly one outcome means "you must restart" — the desktop app raises that
+    // prompt itself, so a second actionable state here would be a claim nothing
+    // acts on.
     const outcomes: Parameters<typeof describeUpdateOutcome>[0][] = [
       { kind: "available", version: "1.0.0" },
       { kind: "downloaded", version: "1.0.0" },

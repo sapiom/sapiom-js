@@ -19,6 +19,7 @@ import { Icon } from "./Icon";
 import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
+import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import { WorkflowRow } from "./WorkflowRow";
 import { isMockMode } from "../lib/api";
 import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
@@ -661,6 +662,7 @@ export function WorkflowsRail({
 
       <div className="rail-footer">
         <ProfileRow
+          onToast={onToast}
           authenticated={authenticated}
           organizationName={organizationName}
           telemetryOptIn={telemetryOptIn}
@@ -745,6 +747,7 @@ function ProfileRow({
   onSetSettingsOpen,
   overviewSelected,
   onSelectOverview,
+  onToast,
 }: {
   authenticated: boolean;
   organizationName: string | null;
@@ -760,6 +763,7 @@ function ProfileRow({
   onSetSettingsOpen: (open: boolean) => void;
   overviewSelected: boolean;
   onSelectOverview: () => void;
+  onToast: (message: string) => void;
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const [authProgress, setAuthProgress] = useState<ProfileAuthProgress>({ status: "idle" });
@@ -769,6 +773,28 @@ function ProfileRow({
 
   const demo = isMockMode();
   const isPending = authProgress.status === "pending";
+  // Null in a browser (`npx @sapiom/harness`), where there is nothing to update —
+  // the item is then absent rather than present-and-dead.
+  const desktop = getDesktopBridge();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  const handleCheckForUpdates = async (): Promise<void> => {
+    if (!desktop || checkingUpdate) return;
+    setCheckingUpdate(true);
+    closeMenu();
+    try {
+      // A toast, because the menu closes on click and the outcome is the entire
+      // point of pressing this. When an update is already downloaded the main
+      // process ALSO re-raises its native "Restart now / Later" prompt — that
+      // dialog is the only way to apply one, deliberately (see the desktop app's
+      // ipc.ts: page code has no restart channel).
+      onToast(describeUpdateOutcome(await desktop.checkForUpdates()).text);
+    } catch {
+      onToast("Couldn't check for updates.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   // When auth.changed arrives and authenticated flips to true, clear pending.
   if (authenticated && authProgress.status === "pending") {
@@ -895,6 +921,18 @@ function ProfileRow({
           <Icon name="Settings" size={13} />
           Settings
         </button>
+        {desktop && (
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            data-testid="profile-check-updates"
+            disabled={checkingUpdate}
+            onClick={() => void handleCheckForUpdates()}
+          >
+            <Icon name={checkingUpdate ? "Loader" : "RefreshCw"} size={13} />
+            {checkingUpdate ? "Checking…" : "Check for updates"}
+          </button>
+        )}
         {!demo && !authenticated && (
           <button
             role="menuitem"

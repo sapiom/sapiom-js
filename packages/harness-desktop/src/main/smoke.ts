@@ -605,15 +605,23 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   const shape = (await win.webContents.executeJavaScript(
     "({ bridge: typeof window.sapiomDesktop," +
       " check: typeof window.sapiomDesktop?.checkForUpdates," +
-      " restart: typeof window.sapiomDesktop?.restartToUpdate," +
       " version: window.sapiomDesktop?.appVersion })",
-  )) as { bridge: string; check: string; restart: string; version: unknown };
+  )) as { bridge: string; check: string; version: unknown };
 
   if (shape.bridge !== "object") {
     throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
   }
-  if (shape.check !== "function" || shape.restart !== "function") {
+  if (shape.check !== "function") {
     throw new Error(`bridge incomplete: ${JSON.stringify(shape)}`);
+  }
+  // The bridge must stay MINIMAL as well as present. A restart method would let
+  // same-origin agent-authored content end every running session, which is why
+  // applying an update is a native dialog and has no channel (ipc.ts).
+  const extra = (await win.webContents.executeJavaScript(
+    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates')",
+  )) as string[];
+  if (extra.length > 0) {
+    throw new Error(`bridge exposes unexpected members to page code: ${extra.join(", ")}`);
   }
   // Not cosmetic-only: the version arrives via `additionalArguments`, which is the
   // documented way to pass a value to a preload precisely because reading a
@@ -660,7 +668,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   }
 
   return (
-    `window.sapiomDesktop exposes checkForUpdates + restartToUpdate (v${shape.version}); ` +
+    `window.sapiomDesktop exposes checkForUpdates only (v${shape.version}); ` +
     `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
   );
 }

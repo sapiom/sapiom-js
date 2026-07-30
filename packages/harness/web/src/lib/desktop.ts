@@ -29,7 +29,9 @@ export interface DesktopBridge {
   /** The desktop app's own version (may be empty on older builds). */
   appVersion: string;
   checkForUpdates: () => Promise<UpdateCheckOutcome>;
-  restartToUpdate: () => Promise<void>;
+  // No restart method: applying an update is confirmed by a native dialog in the
+  // desktop app, so page code — which shares an origin with agent-authored files
+  // the harness serves — has no way to end a user's sessions.
 }
 
 declare global {
@@ -62,18 +64,16 @@ export function getDesktopBridge(host: DesktopHost | undefined = defaultHost()):
   if (!candidate || typeof candidate !== "object") return null;
   const bridge = candidate as Partial<DesktopBridge>;
   if (typeof bridge.checkForUpdates !== "function") return null;
-  if (typeof bridge.restartToUpdate !== "function") return null;
   return {
     appVersion: typeof bridge.appVersion === "string" ? bridge.appVersion : "",
     checkForUpdates: bridge.checkForUpdates,
-    restartToUpdate: bridge.restartToUpdate,
   };
 }
 
 /** How the Settings popover should render a check result. */
 export interface UpdateStatusView {
   text: string;
-  /** `action` means "offer the restart button" — the only outcome with a next step. */
+  /** `action` means the user must restart — the desktop app raises that prompt itself. */
   tone: "info" | "action" | "error";
 }
 

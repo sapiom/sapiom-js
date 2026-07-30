@@ -33,7 +33,7 @@ import { BrowserWindow, app, dialog, ipcMain, type IpcMainInvokeEvent } from "el
 // CJS: default-import then read the property. See trap 1 above.
 import electronUpdater from "electron-updater";
 import type { UpdateInfo } from "electron-updater";
-import { UPDATE_CHECK, UPDATE_RESTART, type UpdateCheckOutcome } from "./ipc.js";
+import { UPDATE_CHECK, type UpdateCheckOutcome } from "./ipc.js";
 import {
   CHANNEL_ENV_VAR,
   resolveUpdateChannel,
@@ -257,12 +257,21 @@ export async function checkForUpdatesNow(): Promise<UpdateCheckOutcome> {
   // sets `pending`, so returning early would leave the version declined for the
   // rest of the run and the native prompt would never come back.
   declined.clear();
-  // Something already downloaded and waiting to be applied: report that instead
-  // of asking GitHub again. Note this is checked AFTER undeclining, and that
-  // `pending` is cleared whenever an apply fails — otherwise one failed install
-  // would wedge the button on "ready to install" forever, with the restart doing
-  // nothing and a genuinely newer version never being offered.
-  if (pending) return { kind: "downloaded", version: pending.version };
+  // Something already downloaded and waiting to be applied: report that instead of
+  // asking GitHub again, and RE-RAISE the native prompt. That prompt is the only
+  // way to actually apply an update — the SPA has no restart channel, by design —
+  // and it already carries the wording that matters ("this ends running agent
+  // sessions"). Re-offering here is what `declined.clear()` above exists for: a
+  // user who chose "Later" and then asked again gets asked again.
+  if (pending) {
+    const info = pending;
+    if (host) {
+      void offerUpdate(info, host).catch((err: unknown) => {
+        log(`re-offer failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
+    return { kind: "downloaded", version: info.version };
+  }
   // Coalesce concurrent asks rather than firing two requests at GitHub.
   checkInFlight ??= runCheck(active);
   try {
@@ -294,36 +303,6 @@ async function runCheck(current: NonNullable<typeof active>): Promise<UpdateChec
 }
 
 /**
- * Apply an update the user asked to install from the SPA. No-op if none is waiting.
- *
- * On failure `pending` is cleared so the button recovers: it goes back to being a
- * real check instead of permanently re-offering an install that cannot happen.
- */
-export async function restartToUpdate(): Promise<void> {
-  if (!pending) {
-    log("restart requested with no downloaded update — ignoring");
-    return;
-  }
-  const version = pending.version;
-  const result = await applyUpdate(version);
-  if (!result.ok) {
-    pending = null;
-    log(`could not apply ${version}: ${result.reason ?? "unknown"}`);
-    // The SPA gets a void back, so tell the user here — this is the same dead-end
-    // the native path reports, and silence would look like a broken button.
-    const win = host?.mainWindow;
-    if (win && !win.isDestroyed()) {
-      await dialog.showMessageBox(win, {
-        type: "warning",
-        buttons: ["OK"],
-        message: `Sapiom ${version} could not be installed.`,
-        detail: result.reason ?? "The update could not be applied.",
-      });
-    }
-  }
-}
-
-/**
  * Wire up update checking. Safe to call unconditionally — it decides for itself
  * whether to do anything, and NEVER throws.
  *
@@ -350,8 +329,10 @@ export function initUpdater(deps: UpdaterDeps): void {
 /**
  * Only the harness SPA, in the main window's top frame, may drive these.
  *
- * `restartToUpdate` kills every running agent session, so "which renderer asked?"
- * is a security question, not bookkeeping. Two things could otherwise ask:
+ * A check reaches the network and reveals that this machine runs Sapiom, so "which
+ * renderer asked?" is a security question, not bookkeeping. (The destructive half —
+ * applying an update — has no channel at all; see ipc.ts.) Two things could
+ * otherwise ask:
  *  - another window — a pop-out inherits webPreferences unless we prevent it
  *    (windows.ts does now, and this is the check that still holds if that ever
  *    regresses);
@@ -395,10 +376,6 @@ function registerHandlers(): void {
     // of a stack trace to probe.
     if (!isTrustedSender(event)) return { kind: "disabled", reason: "not available here" };
     return checkForUpdatesNow();
-  });
-  ipcMain.handle(UPDATE_RESTART, async (event): Promise<void> => {
-    if (!isTrustedSender(event)) return;
-    await restartToUpdate();
   });
 }
 
