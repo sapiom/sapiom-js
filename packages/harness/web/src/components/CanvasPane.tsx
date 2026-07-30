@@ -16,6 +16,11 @@ import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 /** How many of a running task's trailing status lines the activity view shows. */
 const ACTIVITY_LINES_SHOWN = 8;
 
+/** Safety net for the loading skeleton: if the iframe never fires `onLoad` (a
+ *  bad / legacy / errored document), settle the overlay after this long so it
+ *  can't strand opaquely over an otherwise-usable board. */
+const FRAME_LOAD_TIMEOUT_MS = 4000;
+
 interface CanvasPaneProps {
   sessionId: string | null;
   lastMessage: BusMessage | null;
@@ -106,12 +111,12 @@ export function CanvasPane({
   // the document loads instantly, so the reload reads as a real refresh
   // instead of an imperceptible blink.
   const skeletonHoldUntilRef = useRef(0);
-  const settleFrameLoaded = (): void => {
+  const settleFrameLoaded = useCallback((): void => {
     setFrameLoading(false);
     setSkeletonFading(true);
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
     fadeTimerRef.current = setTimeout(() => setSkeletonFading(false), 360);
-  };
+  }, []);
   const handleFrameLoaded = (): void => {
     const holdLeft = skeletonHoldUntilRef.current - Date.now();
     if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
@@ -125,6 +130,15 @@ export function CanvasPane({
     },
     [],
   );
+  // Safety net: a document that never fires `onLoad` (a bad / legacy / errored
+  // doc, or the iframe's own onError below) must not leave the opaque skeleton
+  // stranded over the board — that reads as "the canvas is stuck" even though
+  // pan/zoom still work underneath. Force it to settle after a grace period.
+  useEffect(() => {
+    if (!frameLoading) return;
+    const timer = window.setTimeout(settleFrameLoaded, FRAME_LOAD_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [frameLoading, settleFrameLoaded]);
   // View controls for the rendered document: zoom scales the iframe ELEMENT
   // (with size compensation) — the sandboxed doc is never touched; expand
   // lifts the frame to a fixed overlay without remounting it, so the
@@ -183,22 +197,35 @@ export function CanvasPane({
     let tries = 12;
     const apply = (): void => {
       const computed = computeFit();
-      if (!computed) {
-        if (tries-- > 0) requestAnimationFrame(apply);
+      if (computed) {
+        // Adapt the zoom-out floor to this graph: a large graph fits below 0.25,
+        // so let the user reach that; a small graph keeps the ordinary 0.25 floor.
+        setMinZoom(Math.min(0.25, computed.zoom));
+        // An explicit fit hands the view back to auto-follow: subsequent pane
+        // resizes keep it fitted until the user moves the view again.
+        userAdjustedRef.current = false;
+        setZoom(computed.zoom);
+        setPan({ x: computed.x, y: computed.y });
+        setRestView(computed);
         return;
       }
-      // Adapt the zoom-out floor to this graph: a large graph fits below 0.25,
-      // so let the user reach that; a small graph keeps the ordinary 0.25 floor.
-      setMinZoom(Math.min(0.25, computed.zoom));
-      // An explicit fit hands the view back to auto-follow: subsequent pane
-      // resizes keep it fitted until the user moves the view again.
+      // computeFit failed. If the document posted a size, the pane may just not
+      // be measurable yet — retry a few frames. But if there's NO size to fit to
+      // (a legacy / errored doc that never posts one), retrying can't help, so
+      // fall back to a defined identity view instead of the old silent no-op
+      // that left the Fit button looking dead.
+      if (graphSize && tries-- > 0) {
+        requestAnimationFrame(apply);
+        return;
+      }
+      setMinZoom(0.25);
       userAdjustedRef.current = false;
-      setZoom(computed.zoom);
-      setPan({ x: computed.x, y: computed.y });
-      setRestView(computed);
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      setRestView({ zoom: 1, x: 0, y: 0 });
     };
     apply();
-  }, [computeFit]);
+  }, [computeFit, graphSize]);
 
   // Fit on first render (the document announces its size once laid out)…
   useEffect(() => {
@@ -494,8 +521,12 @@ export function CanvasPane({
     setHoveredNode(false);
     hoveredNodeRef.current = false;
     // The old document's fit inputs and any manual view are meaningless for
-    // the incoming one — start at rest and let its size message refit.
+    // the incoming one — start at rest and let its size message refit. Resetting
+    // zoom/pan (not just restView) matters when the incoming doc posts NO size:
+    // without it, a reload strands the previous zoom with the Fit button dead.
     setGraphSize(null);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
     setRestView({ zoom: 1, x: 0, y: 0 });
     userAdjustedRef.current = false;
   }, [sessionId, reloadKey]);
@@ -1005,6 +1036,9 @@ export function CanvasPane({
                 );
               }
             }}
+            // A failed load settles the skeleton too, so the overlay never
+            // strands opaquely over the board.
+            onError={settleFrameLoaded}
           />
           {/* Gesture surface over the sandboxed document: drag pans, wheel
               zooms, double-click fits. The doc itself is a render target
