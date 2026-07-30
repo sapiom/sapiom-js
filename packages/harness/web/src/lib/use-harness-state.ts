@@ -254,6 +254,12 @@ export function useHarnessState(): HarnessStateHook {
   // affects the render, and both are read/written within a single call.
   const inFlightHistory = useRef<Map<string, Promise<SessionSummary[]>>>(new Map());
   const historyLoads = useRef(0);
+  // Deploys in flight, keyed by workflow path. A second click while one is
+  // running must not start another: for an UNLINKED project each deploy calls
+  // link({ create: true }), which is a read-then-write with no uniqueness
+  // guard, so two concurrent deploys create two remote agents. Same shape as
+  // inFlightHistory above.
+  const inFlightDeploys = useRef<Map<string, Promise<void>>>(new Map());
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
@@ -935,51 +941,78 @@ export function useHarnessState(): HarnessStateHook {
   // the registry so a linked/rebuilt workflow's Deployed chip flips. Swallows
   // failures into the toast (like runMacro) — its caller fires it unawaited.
   const deploy = useCallback(
-    async (workflowPath: string): Promise<void> => {
-      setToast("Deploying — building on Sapiom…");
-      try {
-        const terminal = await api.deploy(workflowPath, (event) => {
-          // A never-linked project (a fresh template clone) gets its agent
-          // created first — say so, rather than claiming we're building.
-          if (event.phase === "linking") {
-            setToast(`Deploying — creating the agent "${event.name}" on Sapiom…`);
-          } else if (event.phase === "building") {
-            setToast("Deploying — building on Sapiom…");
-          }
-        });
-        if (terminal.phase === "ready") {
-          setToast("Deployed to Sapiom.");
-          // Clear any prior deploy error for this workflow — it succeeded.
-          setLastDeployErrorByPath((prev) => {
-            if (!prev.has(workflowPath)) return prev;
-            const next = new Map(prev);
-            next.delete(workflowPath);
-            return next;
+    (workflowPath: string): Promise<void> => {
+      // A second click while one is running returns the SAME in-flight
+      // promise instead of starting another — see inFlightDeploys above.
+      const existing = inFlightDeploys.current.get(workflowPath);
+      if (existing) return existing;
+
+      const run = (async (): Promise<void> => {
+        setToast("Deploying — building on Sapiom…");
+        // Which non-terminal phase was last seen, so a terminal `error` can
+        // say whether linking or building failed — both are the same wire
+        // shape, told apart only by what preceded them.
+        let lastNonTerminalPhase: "linking" | "building" | null = null;
+        try {
+          const terminal = await api.deploy(workflowPath, (event) => {
+            // A never-linked project (a fresh template clone) gets its agent
+            // created first — say so, rather than claiming we're building.
+            if (event.phase === "linking") {
+              lastNonTerminalPhase = "linking";
+              setToast(`Deploying — creating the agent "${event.name}" on Sapiom…`);
+            } else if (event.phase === "warning") {
+              // Non-terminal and advisory: the agent was created but its id
+              // couldn't be written back to sapiom.json. The message is
+              // already a complete, user-facing sentence composed
+              // server-side — pass it through verbatim. A later `building`
+              // legitimately replaces this toast.
+              setToast(event.message);
+            } else if (event.phase === "building") {
+              lastNonTerminalPhase = "building";
+              setToast("Deploying — building on Sapiom…");
+            }
           });
-          // A successful deploy links/rebuilds the agent — re-read the registry
-          // so definitionId (the Draft→Deployed truth) and the deploy-gated
-          // actions update without waiting on a bus refresh.
-          await refreshWorkflows();
-        } else if (terminal.phase === "error") {
-          const msg = terminal.hint
-            ? `Deploy failed: ${terminal.message} (${terminal.hint})`
-            : `Deploy failed: ${terminal.message}`;
+          if (terminal.phase === "ready") {
+            setToast("Deployed to Sapiom.");
+            // Clear any prior deploy error for this workflow — it succeeded.
+            setLastDeployErrorByPath((prev) => {
+              if (!prev.has(workflowPath)) return prev;
+              const next = new Map(prev);
+              next.delete(workflowPath);
+              return next;
+            });
+            // A successful deploy links/rebuilds the agent — re-read the registry
+            // so definitionId (the Draft→Deployed truth) and the deploy-gated
+            // actions update without waiting on a bus refresh.
+            await refreshWorkflows();
+          } else if (terminal.phase === "error") {
+            // Same error shape for a link failure and a build failure —
+            // distinguish them by whichever non-terminal phase preceded it.
+            const prefix = lastNonTerminalPhase === "linking" ? "Couldn't create the agent" : "Deploy failed";
+            const msg = terminal.hint
+              ? `${prefix}: ${terminal.message} (${terminal.hint})`
+              : `${prefix}: ${terminal.message}`;
+            setToast(msg);
+            // Persist the failure so the action bar can distinguish "last deploy
+            // failed" from "never deployed" after the toast is dismissed.
+            setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
+          }
+        } catch (err) {
+          const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
           setToast(msg);
-          // Persist the failure so the action bar can distinguish "last deploy
-          // failed" from "never deployed" after the toast is dismissed.
+          // An exception from the deploy stream (e.g. network error) also counts
+          // as a deploy failure — persist so the action bar reflects it.
           setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
+        } finally {
+          // Signal that a deploy action settled (success or failure) so the
+          // SessionStepsBar can clear its pending ring for this button.
+          bumpDirectActionSettleSeq();
+          inFlightDeploys.current.delete(workflowPath);
         }
-      } catch (err) {
-        const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;
-        setToast(msg);
-        // An exception from the deploy stream (e.g. network error) also counts
-        // as a deploy failure — persist so the action bar reflects it.
-        setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
-      } finally {
-        // Signal that a deploy action settled (success or failure) so the
-        // SessionStepsBar can clear its pending ring for this button.
-        bumpDirectActionSettleSeq();
-      }
+      })();
+
+      inFlightDeploys.current.set(workflowPath, run);
+      return run;
     },
     [refreshWorkflows, bumpDirectActionSettleSeq],
   );

@@ -80,11 +80,14 @@ export type RunLocalLine =
 /**
  * One line of the `POST /api/workflows/:id/deploy` NDJSON stream (mirrors
  * `DeployStreamEvent` in src/server/actions.ts): an optional `linking` line
- * when the server has to resolve-or-create the remote agent first, a `building`
- * line, then exactly one terminal `ready` | `error` line closing the stream.
+ * when the server has to resolve-or-create the remote agent first, an
+ * optional `warning` line (non-terminal, advisory — the agent was created but
+ * its id couldn't be written back to sapiom.json), a `building` line, then
+ * exactly one terminal `ready` | `error` line closing the stream.
  */
 export type DeployStreamEvent =
   | { phase: "linking"; name: string }
+  | { phase: "warning"; message: string }
   | { phase: "building"; definitionId: string }
   | { phase: "ready"; definitionId: string; buildRunId: string; status: string }
   | { phase: "error"; code: string; message: string; hint?: string };

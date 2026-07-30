@@ -57,6 +57,17 @@ describe("terminalDeployEvent", () => {
     ];
     expect(terminalDeployEvent(events)).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
   });
+
+  it("treats a warning line as non-terminal", async () => {
+    // `warning` is advisory (the agent was created but its id couldn't be
+    // written to sapiom.json) — it never closes the stream on its own.
+    const events: DeployStreamEvent[] = [
+      { phase: "linking", name: "order-triage" },
+      { phase: "warning", message: "Couldn't save the agent id to sapiom.json." },
+      { phase: "building", definitionId: "42" },
+    ];
+    expect(terminalDeployEvent(events)).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
+  });
 });
 
 describe("parseNdjsonLine of a linking event", () => {
@@ -64,6 +75,17 @@ describe("parseNdjsonLine of a linking event", () => {
     expect(parseNdjsonLine<DeployStreamEvent>('{"phase":"linking","name":"order-triage"}')).toEqual({
       phase: "linking",
       name: "order-triage",
+    });
+  });
+});
+
+describe("parseNdjsonLine of a warning event", () => {
+  it("parses the warning phase and its message", () => {
+    expect(
+      parseNdjsonLine<DeployStreamEvent>('{"phase":"warning","message":"Couldn\'t save the agent id."}'),
+    ).toEqual({
+      phase: "warning",
+      message: "Couldn't save the agent id.",
     });
   });
 });

@@ -176,6 +176,30 @@ test.describe("Deploy button — direct route, NDJSON build stream, no pty write
     // updates its local workflow copy, and refreshWorkflows re-reads it.
     await expect(page.getByTestId("session-lifecycle-chip")).toContainText("Deployed", { timeout: 3_000 });
   });
+
+  test("double-clicking Deploy on an undeployed workflow only creates the agent once", async ({ page }) => {
+    // rfq is unlinked (definitionId=null), so each deploy would call
+    // link({ create: true }) — a read-then-write with no uniqueness guard.
+    // Two concurrent deploys must not create two remote agents: the state
+    // layer's inFlightDeploys guard should collapse the second click into the
+    // first call's in-flight promise.
+    await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
+    await page.getByTestId("open-agent-start-session").click();
+    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+
+    const deployBtn = page.getByTestId("session-step-deploy");
+    await expect(deployBtn).toBeEnabled();
+
+    // Click twice in immediate succession, before the first deploy settles.
+    await deployBtn.click();
+    await deployBtn.click();
+
+    await expect(page.getByTestId("toast")).toContainText("Deployed to Sapiom.", { timeout: 5_000 });
+
+    const hook = await readTestHook(page);
+    const deploys = (hook?.directActions as Array<{ action: string }>).filter((a) => a.action === "deploy");
+    expect(deploys).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
