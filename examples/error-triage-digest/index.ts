@@ -3,6 +3,7 @@ import {
   defineStep,
   goto,
   pauseUntilSignal,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -240,7 +241,10 @@ const collect = defineStep({
   // Static graph edge: on SIGNAL, resume at `triage`. Must match the directive.
   pause: { signal: SIGNAL, resumeStep: "triage" },
   async run(input: EntryInput, ctx: Ctx) {
-    ctx.shared.set("dbHandle", input.dbHandle?.trim() || DEFAULT_DB_HANDLE);
+    ctx.shared.set(
+      "dbHandle",
+      resolveResourceHandle(input, { fallback: DEFAULT_DB_HANDLE }),
+    );
     ctx.shared.set("deliverTo", input.deliverTo?.trim() || null);
     ctx.shared.set("dryRun", truthy(input.dryRun));
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);

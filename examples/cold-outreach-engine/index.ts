@@ -3,6 +3,7 @@ import {
   defineStep,
   goto,
   pauseUntilSignal,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -291,7 +292,10 @@ const enrich = defineStep({
         : DEFAULT_DRIP_DAYS;
 
     ctx.shared.set("campaign", input.campaign?.trim() || "cold-outreach");
-    ctx.shared.set("dbHandle", input.dbHandle?.trim() || DEFAULT_DB_HANDLE);
+    ctx.shared.set(
+      "dbHandle",
+      resolveResourceHandle(input, { fallback: DEFAULT_DB_HANDLE }),
+    );
     ctx.shared.set("dryRun", truthy(input.dryRun));
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
     ctx.shared.set("senderName", input.senderName?.trim() || "The team");

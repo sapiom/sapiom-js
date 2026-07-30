@@ -2,6 +2,7 @@ import {
   defineAgent,
   defineStep,
   goto,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -312,7 +313,9 @@ const snapshot = defineStep({
   next: ["narrate"],
   async run(input: EntryInput, ctx: Ctx) {
     const dryRun = truthy(input.dryRun);
-    const handle = input.dbHandle?.trim() || DEFAULT_DB_HANDLE;
+    const handle = resolveResourceHandle(input, {
+      fallback: DEFAULT_DB_HANDLE,
+    });
     ctx.shared.set("dbHandle", handle);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
     ctx.shared.set("deliverTo", input.deliverTo?.trim() || null);

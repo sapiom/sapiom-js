@@ -3,6 +3,7 @@ import {
   defineStep,
   goto,
   pauseUntilSignal,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -265,7 +266,9 @@ const fetch = defineStep({
   next: ["renderImages", "renderClip"],
   terminal: true,
   async run(input: EntryInput, ctx: Ctx) {
-    const dbHandle = input.dbHandle?.trim() || DEFAULT_DB_HANDLE;
+    const dbHandle = resolveResourceHandle(input, {
+      fallback: DEFAULT_DB_HANDLE,
+    });
     const medium: Medium = input.medium === "video" ? "video" : "image";
     const dryRun = input.dryRun === true;
     const style = input.style?.trim() ?? "";

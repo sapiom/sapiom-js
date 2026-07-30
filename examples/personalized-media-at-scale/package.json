@@ -10,8 +10,8 @@
     "format:check": "prettier --check \"**/*.ts\""
   },
   "dependencies": {
-    "@sapiom/agent": "^0.6.0",
-    "@sapiom/tools": "^0.20.0",
+    "@sapiom/agent": "^0.8.0",
+    "@sapiom/tools": "^0.24.0",
     "postgres": "^3.4.5"
   },
   "devDependencies": {
