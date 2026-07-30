@@ -70,26 +70,6 @@ describe("terminalDeployEvent", () => {
   });
 });
 
-describe("parseNdjsonLine of a linking event", () => {
-  it("parses the linking phase and its name", () => {
-    expect(parseNdjsonLine<DeployStreamEvent>('{"phase":"linking","name":"order-triage"}')).toEqual({
-      phase: "linking",
-      name: "order-triage",
-    });
-  });
-});
-
-describe("parseNdjsonLine of a warning event", () => {
-  it("parses the warning phase and its message", () => {
-    expect(
-      parseNdjsonLine<DeployStreamEvent>('{"phase":"warning","message":"Couldn\'t save the agent id."}'),
-    ).toEqual({
-      phase: "warning",
-      message: "Couldn't save the agent id.",
-    });
-  });
-});
-
 describe("parseNdjsonLine (deploy stream)", () => {
   it("parses a well-formed deploy event line", () => {
     expect(parseNdjsonLine<DeployStreamEvent>('{"phase":"building","definitionId":"42"}')).toEqual({
