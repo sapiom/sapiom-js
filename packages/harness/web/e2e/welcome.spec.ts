@@ -80,8 +80,11 @@ test.describe("first run", () => {
     await expect(page.locator(".modal-new-session")).toHaveCount(0);
     await expect(page.getByTestId("aw-doors")).toHaveCount(0);
 
-    // Already at door 1: pick a fixture folder that holds an agent project.
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-workflows");
+    // Already at door 1: navigate to a fixture folder via FolderBrowser's
+    // "or type a path" secondary input.
+    await page.getByTestId("folder-browser-type-toggle").click();
+    await page.getByTestId("folder-browser-type-input").fill("/Users/demo/rfq-workflows");
+    await page.getByTestId("folder-browser-type-input").press("Enter");
     await page.getByTestId("aw-have-continue").click();
     await expect(page.getByTestId("aw-result")).toContainText("This is an agent project");
     await page.getByTestId("aw-add").click();
@@ -233,11 +236,13 @@ test.describe("returning user", () => {
     await page.getByTestId("welcome-recent-rfq-workflows").click();
     await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
 
-    // The directory picker's chips are the surface that still reads recentDirs
-    // directly, so they show what actually survived.
+    // FolderBrowser's recents section is the surface that reads recentDirs
+    // directly, so it shows what actually survived.
     await page.getByTestId("add-workspace").click();
     await page.getByTestId("aw-door-have").click();
-    const chips = page.locator(".recent-dir-chip");
+    const recents = page.getByTestId("folder-browser-recents");
+    await expect(recents).toBeVisible();
+    const chips = recents.locator(".folder-browser-recent-btn");
     await expect(chips).toHaveCount(3); // all three fixtures kept, none dropped
     // The folder just opened moves to the front rather than replacing the list.
     // Asserted on the label, not `title`: TooltipLayer moves a title into

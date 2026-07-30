@@ -54,7 +54,26 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
     res.json(deps.listMacros());
   });
 
+  /**
+   * IDs that are present in DEFAULT_MACROS (so the Studio renders their
+   * buttons) but are executed through the Studio's direct API routes —
+   * never through the PTY inject path. Reject them here so a direct curl
+   * cannot bypass the direct-API layer and start a pty-injected agent run.
+   * The Studio client never hits this route for these ids (App.tsx routes
+   * them via directActionKind), so this 4xx is invisible to normal use.
+   */
+  const DIRECT_ACTION_IDS = new Set(["run_local", "deploy", "prod_run"]);
+
   router.post("/api/macros/:id/run", async (req, res) => {
+    if (DIRECT_ACTION_IDS.has(req.params.id)) {
+      res
+        .status(409)
+        .json({
+          error: `Macro '${req.params.id}' is handled by the Studio's direct API, not the macro route. Use the dedicated run/deploy endpoints instead.`,
+        });
+      return;
+    }
+
     const macro = deps.listMacros().find((m) => m.id === req.params.id);
     if (!macro) {
       res.status(404).json({ error: `Unknown macro '${req.params.id}'` });

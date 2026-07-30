@@ -30,7 +30,7 @@ import type {
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
-import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSION_RECORDS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATE_GRAPHS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
+import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_HOME, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSION_RECORDS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATE_GRAPHS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
 
 /**
  * Body for `POST /api/runs/local` — run the agent project at `sourceDir`
@@ -194,6 +194,54 @@ export interface AuthStartResponse {
   started: boolean;
 }
 
+/** Response from POST /api/connect/github — the path of the cloned directory. */
+export interface ConnectGitHubResponse {
+  path: string;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Device Flow wire types (matched to src/server/github-device.ts).
+// ---------------------------------------------------------------------------
+
+/** Response from POST /api/github/device/start. */
+export interface GitHubDeviceStartResponse {
+  user_code: string;
+  verification_uri: string;
+  device_code: string;
+  interval: number;
+  expires_in: number;
+}
+
+/** Response from POST /api/github/device/poll. */
+export interface GitHubDevicePollResponse {
+  status: "authorized" | "pending" | "slow_down" | "expired" | "denied";
+  interval?: number;
+}
+
+/** One repo entry from GET /api/github/repos. */
+export interface GitHubApiRepoEntry {
+  fullName: string;
+  cloneUrl: string;
+  private: boolean;
+  description: string | null;
+  updatedAt: string | null;
+}
+
+/** Response from GET /api/github/status. */
+export interface GitHubStatusResponse {
+  connected: boolean;
+  configured?: boolean;
+  login?: string;
+}
+
+/** Request body for POST /api/connect/github. */
+export interface ConnectGitHubRequest {
+  /** GitHub URL — HTTPS or SSH form. */
+  repoUrl: string;
+  /** Absolute target path for the clone. Derived from repo name when omitted. */
+  targetDir?: string;
+}
+
 export interface HarnessApi {
   /**
    * Kick off the browser OAuth flow (`POST /api/auth/start`). Returns
@@ -288,6 +336,25 @@ export interface HarnessApi {
    * `{ executionId }`, which the caller hands to the run-inspector poller.
    */
   run(req: { definitionId: string; input?: unknown }): Promise<RunResponse>;
+  /**
+   * Clone a GitHub repository using the user's local git credentials and
+   * register the resulting directory in the workspace rail.
+   * POST /api/connect/github.
+   */
+  connectGitHub(req: ConnectGitHubRequest): Promise<ConnectGitHubResponse>;
+
+  // ── GitHub Device Flow ────────────────────────────────────────────────────
+
+  /** POST /api/github/device/start — begin the Device Flow. */
+  githubDeviceStart(): Promise<GitHubDeviceStartResponse>;
+  /** POST /api/github/device/poll — poll for authorization result. */
+  githubDevicePoll(deviceCode: string): Promise<GitHubDevicePollResponse>;
+  /** GET /api/github/repos — list the authed user's repos. */
+  githubListRepos(): Promise<GitHubApiRepoEntry[]>;
+  /** GET /api/github/status — check whether a GitHub token is stored. */
+  githubStatus(): Promise<GitHubStatusResponse>;
+  /** POST /api/github/disconnect — remove the stored token. */
+  githubDisconnect(): Promise<void>;
 }
 
 class RealApi implements HarnessApi {
@@ -501,6 +568,38 @@ class RealApi implements HarnessApi {
 
   async run(req: { definitionId: string; input?: unknown }): Promise<RunResponse> {
     return this.request<RunResponse>("/api/runs", { method: "POST", body: JSON.stringify(req) });
+  }
+
+  connectGitHub(req: ConnectGitHubRequest): Promise<ConnectGitHubResponse> {
+    return this.request<ConnectGitHubResponse>("/api/connect/github", {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
+  }
+
+  githubDeviceStart(): Promise<GitHubDeviceStartResponse> {
+    return this.request<GitHubDeviceStartResponse>("/api/github/device/start", {
+      method: "POST",
+    });
+  }
+
+  githubDevicePoll(deviceCode: string): Promise<GitHubDevicePollResponse> {
+    return this.request<GitHubDevicePollResponse>("/api/github/device/poll", {
+      method: "POST",
+      body: JSON.stringify({ device_code: deviceCode }),
+    });
+  }
+
+  githubListRepos(): Promise<GitHubApiRepoEntry[]> {
+    return this.request<GitHubApiRepoEntry[]>("/api/github/repos");
+  }
+
+  githubStatus(): Promise<GitHubStatusResponse> {
+    return this.request<GitHubStatusResponse>("/api/github/status");
+  }
+
+  async githubDisconnect(): Promise<void> {
+    await this.request<{ ok: true }>("/api/github/disconnect", { method: "POST" });
   }
 
   /**
@@ -997,7 +1096,11 @@ class MockApi implements HarnessApi {
     if (mockErrorTargets().has("listDir")) {
       throw new ApiError(500, "GET /api/fs → 500 (mock)", "Could not read that directory");
     }
-    const requested = path && path.trim() ? path.trim() : MOCK_LAUNCH_DIR;
+    const raw = path && path.trim() ? path.trim() : MOCK_LAUNCH_DIR;
+    // Expand ~ the same way the real server does (os.homedir()), so the
+    // FolderBrowser's favorites (~/Desktop etc.) resolve correctly in mock mode.
+    const expanded = raw === "~" ? MOCK_HOME : raw.startsWith("~/") ? `${MOCK_HOME}/${raw.slice(2)}` : raw;
+    const requested = expanded;
     // Walk up to the nearest ancestor the fixture tree actually has — lets the
     // caller distinguish "you're browsing X" from "you typed part of a name
     // inside X" by comparing the response's `path` to what it asked for.
@@ -1120,8 +1223,22 @@ class MockApi implements HarnessApi {
   // so the inspector visibly lights up step-by-step. Lets the mock/demo build
   // and Playwright exercise the run-local inspector with no server, mirroring
   // the real NDJSON stream's ordering (traces first, terminal line last).
+  //
+  // Test-only failure mode: `?mockError=runLocalInput` makes the run emit an
+  // error line with a missing-input validation message so Playwright can verify
+  // the run-first input dialog opens reactively.
   async runLocal(args: RunLocalArgs, onLine: (line: RunLocalLine) => void): Promise<void> {
-    this.recordDirectAction("runLocal", { sourceDir: args.sourceDir });
+    this.recordDirectAction("runLocal", { sourceDir: args.sourceDir, input: args.input });
+    if (mockErrorTargets().has("runLocalInput")) {
+      await delay(140);
+      onLine({
+        kind: "error",
+        outcome: "failed",
+        error:
+          "Input for step 'research' failed validation: topic: must have required property 'topic'",
+      });
+      return;
+    }
     const traces: LocalStepTrace[] = [
       {
         step: "intake",
@@ -1213,9 +1330,115 @@ class MockApi implements HarnessApi {
   async run(req: { definitionId: string; input?: unknown }): Promise<RunResponse> {
     this.recordDirectAction("run", req);
     await delay(200);
+    // Test-only failure mode: `?mockError=prodRunInput` makes the API reject
+    // with a missing-input validation error so Playwright can verify the run-first
+    // dialog opens reactively for prod runs.
+    if (mockErrorTargets().has("prodRunInput")) {
+      throw new ApiError(
+        422,
+        "must have required property 'topic'",
+        "must have required property 'topic'",
+      );
+    }
     // A fresh, non-"local" id so the run-state fixture returns the prod
     // steps and the inspector poller has something to follow.
     return { executionId: `exec-mock-prod-${Date.now()}` };
+  }
+
+  async connectGitHub(req: ConnectGitHubRequest): Promise<ConnectGitHubResponse> {
+    await delay(400);
+    // Test-only failure mode: `?mockError=connectGitHub` simulates a clone error.
+    if (mockErrorTargets().has("connectGitHub")) {
+      throw new ApiError(500, "git clone failed: repository not found", "git clone failed: repository not found");
+    }
+    // Test-only success: record the call and add a workflow to the mock state.
+    const repoName = req.repoUrl.split("/").pop()?.replace(/\.git$/, "") ?? "repo";
+    const clonedPath = `/Users/demo/sapiom/${repoName}`;
+    const info = {
+      name: repoName,
+      path: clonedPath,
+      definitionId: null,
+      definitionSlug: null,
+      source: "connect" as const,
+    };
+    this.workflows = [...this.workflows.filter((w) => w.path !== clonedPath), info];
+    if (typeof window !== "undefined") {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastConnectGitHub: req };
+    }
+    return { path: clonedPath };
+  }
+
+  // ---------------------------------------------------------------------------
+  // GitHub Device Flow mocks
+  // ---------------------------------------------------------------------------
+
+  /** Mock GitHub Device Flow state — flipped per-test via mockGitHubConnected. */
+  private _githubConnected = false;
+  private _githubLogin = "mock-user";
+  private _mockRepos: GitHubApiRepoEntry[] = [
+    {
+      fullName: "mock-user/my-agent",
+      cloneUrl: "https://github.com/mock-user/my-agent.git",
+      private: false,
+      description: "A mock public repo",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      fullName: "mock-user/private-project",
+      cloneUrl: "https://github.com/mock-user/private-project.git",
+      private: true,
+      description: null,
+      updatedAt: "2026-01-02T00:00:00Z",
+    },
+  ];
+
+  async githubDeviceStart(): Promise<GitHubDeviceStartResponse> {
+    await delay(200);
+    if (mockErrorTargets().has("githubNotConfigured")) {
+      throw new ApiError(503, "notConfigured", "notConfigured");
+    }
+    return {
+      user_code: "ABCD-1234",
+      verification_uri: "https://github.com/login/device",
+      device_code: "mock-device-code",
+      interval: 1,
+      expires_in: 900,
+    };
+  }
+
+  async githubDevicePoll(_deviceCode: string): Promise<GitHubDevicePollResponse> {
+    await delay(300);
+    if (mockErrorTargets().has("githubPollDenied")) {
+      return { status: "denied" };
+    }
+    if (mockErrorTargets().has("githubPollExpired")) {
+      return { status: "expired" };
+    }
+    // Default: simulate authorization completing immediately.
+    this._githubConnected = true;
+    return { status: "authorized" };
+  }
+
+  async githubListRepos(): Promise<GitHubApiRepoEntry[]> {
+    await delay(200);
+    return this._mockRepos;
+  }
+
+  async githubStatus(): Promise<GitHubStatusResponse> {
+    await delay(100);
+    if (mockErrorTargets().has("githubNotConfigured")) {
+      return { connected: false, configured: false };
+    }
+    if (this._githubConnected) {
+      return { connected: true, configured: true, login: this._githubLogin };
+    }
+    return { connected: false, configured: true };
+  }
+
+  async githubDisconnect(): Promise<void> {
+    await delay(150);
+    this._githubConnected = false;
   }
 
   /** Test-only escape hatch (mock mode only): record a direct-action call so

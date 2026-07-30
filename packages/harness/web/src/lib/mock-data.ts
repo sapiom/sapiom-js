@@ -427,11 +427,17 @@ export const MOCK_SESSIONS: HarnessSession[] = [
  *  tab you are not already looking at, without a real pty. */
 export const MOCK_ACTIVITY_SESSION_ID = "sess-leasing-2";
 
+/** Mock home directory (the "~" equivalent used in fake filesystem lookups). */
+export const MOCK_HOME = "/Users/demo";
+
 /** Fake filesystem for the new-session directory picker (GET /api/fs/list). Keys are absolute paths. */
 export const MOCK_FS_TREE: Record<string, string[]> = {
   "/": ["Users"],
   "/Users": ["demo"],
-  "/Users/demo": ["acme-app", "rfq-workflows", "onboarding-flow", "scratch"],
+  "/Users/demo": ["acme-app", "rfq-workflows", "onboarding-flow", "scratch", "Desktop", "Documents", "Downloads"],
+  "/Users/demo/Desktop": [],
+  "/Users/demo/Documents": [],
+  "/Users/demo/Downloads": [],
   "/Users/demo/acme-app": ["leasing", "src", "docs"],
   "/Users/demo/acme-app/leasing": [],
   "/Users/demo/acme-app/src": [],

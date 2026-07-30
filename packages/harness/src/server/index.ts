@@ -124,6 +124,8 @@ import {
   createAuthRouter,
   createMutableAuthState,
 } from "./auth-routes.js";
+import { createConnectGitHubRouter } from "./connect-github.js";
+import { createGitHubDeviceRouter, getGitHubToken } from "./github-device.js";
 // resolveAgentsBaseUrl is imported above from definition-slug-resolver.js
 // (an identical helper); the runs router reuses it for its agents base URL.
 
@@ -1191,6 +1193,13 @@ export const startServer = async (
   );
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
+    // GitHub Device Flow endpoints (/api/github/device/start, /poll, /repos,
+    // /status, /disconnect). All sit under /api so the boot-token middleware
+    // mounted above already gates them.
+    createGitHubDeviceRouter(),
+    // The clone endpoint: pass the getToken seam so authenticated clones can
+    // use the token stored by the Device Flow without exposing it to the browser.
+    createConnectGitHubRouter({ registry: enrichedWorkflowRegistry, getToken: getGitHubToken }),
     createFsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,

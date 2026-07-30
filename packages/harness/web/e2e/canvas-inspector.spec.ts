@@ -14,6 +14,9 @@
  *   ui-prefs); double-clicking the handle resets to auto-hug.
  * - When a run has been observed, the selected step's inspector carries its
  *   run truth (status, duration) — the Studio surface is cost-free.
+ * - The canvas inspector is DATA-ONLY: it shows run facts, IO, capability
+ *   calls, and links, but does NOT carry debug macro buttons. Macros live
+ *   in the Steps tab (RunStepsList / StepDebugMacros).
  */
 import { expect, test, type Page } from "@playwright/test";
 
@@ -225,4 +228,19 @@ test("an observed run's truth reaches the selected step's inspector", async ({ p
   await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
   await expect(page.getByTestId("canvas-inspector-run")).toContainText("passed");
   await expect(page.getByTestId("canvas-inspector-run")).not.toContainText("$");
+});
+
+test("canvas inspector is data-only: no debug macro buttons", async ({ page }) => {
+  // Even after picking a node the inspector must not carry any macro buttons.
+  // Macros live in the Steps tab (RunStepsList / StepDebugMacros), not here.
+  await pickNode(page, "intake");
+  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
+
+  // None of the old canvas-inspector macro testids must be present.
+  await expect(page.getByTestId("canvas-inspector-macros")).toHaveCount(0);
+  await expect(page.getByTestId("canvas-macro-debug")).toHaveCount(0);
+  await expect(page.getByTestId("canvas-macro-slow")).toHaveCount(0);
+  await expect(page.getByTestId("canvas-macro-explain")).toHaveCount(0);
+  await expect(page.getByTestId("canvas-freeform-input")).toHaveCount(0);
+  await expect(page.getByTestId("canvas-freeform-ask")).toHaveCount(0);
 });

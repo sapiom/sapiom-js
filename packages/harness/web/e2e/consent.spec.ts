@@ -201,9 +201,9 @@ test.describe("UI event tracking (track() calls)", () => {
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
 
-    // Use the existing MOCK_LAUNCH_DIR path from the picker.
-    // The directory field is prefilled — just click Start.
-    const startBtn = page.locator(".modal-new-session .btn-primary");
+    // Use the existing MOCK_LAUNCH_DIR path from the folder browser.
+    // FolderBrowser's "Open this folder" button starts the session.
+    const startBtn = page.getByRole("button", { name: "Start session" });
     await expect(startBtn).toBeEnabled();
     await startBtn.click();
 

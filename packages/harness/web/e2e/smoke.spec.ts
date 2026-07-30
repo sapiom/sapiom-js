@@ -477,8 +477,11 @@ test("add project: the rail's + registers a bare folder through the 'Open a fold
   await expect(modal).toBeVisible();
   await expect(modal.getByTestId("harness-select")).toHaveCount(0);
 
-  const input = modal.getByTestId("dir-picker-input");
-  await input.fill("/Users/demo/scratch");
+  // FolderBrowser: use "or type a path" secondary to navigate to scratch.
+  await modal.getByTestId("folder-browser-type-toggle").click();
+  const typeInput = modal.getByTestId("folder-browser-type-input");
+  await typeInput.fill("/Users/demo/scratch");
+  await typeInput.press("Enter");
   await modal.getByTestId("aw-have-continue").click();
 
   // scratch holds no sapiom.json, so detection says so — and registering it as
@@ -491,38 +494,42 @@ test("add project: the rail's + registers a bare folder through the 'Open a fold
   await expect(page.getByTestId("workflow-scratch")).toBeVisible();
 });
 
-test("new-session modal: directory picker navigates and validates", async ({ page }) => {
+test("new-session modal: folder browser navigates and validates", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
   await expect(page.locator(".modal-new-session")).toBeVisible();
 
   const startButton = page.getByRole("button", { name: "Start session" });
-  const input = page.getByTestId("dir-picker-input");
+  const modal = page.locator(".modal-new-session");
 
-  // Seeded from launchDir; browsing shows its subdirectories.
-  await expect(input).toHaveValue("/Users/demo/acme-app");
-  await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();
-
-  // Type-ahead: an unrecognized tail filters the nearest real ancestor's children.
-  await input.fill("/Users/demo/rf");
-  await expect(page.getByTestId("dir-picker-item-rfq-workflows")).toBeVisible();
-  await expect(page.getByTestId("dir-picker-item-onboarding-flow")).toHaveCount(0);
+  // Seeded from launchDir; FolderBrowser shows /Users/demo/acme-app and its children.
+  await expect(modal.getByTestId("folder-browser-item-leasing")).toBeVisible();
 
   // Clicking a listed directory drills into it.
-  await page.getByTestId("dir-picker-item-rfq-workflows").click();
-  await expect(input).toHaveValue("/Users/demo/rfq-workflows");
-  await expect(page.getByTestId("dir-picker-item-src")).toBeVisible();
+  await modal.getByTestId("folder-browser-item-leasing").click();
+  await expect(modal.getByTestId("folder-browser-crumb-leasing")).toBeVisible();
+  // Wait for the leasing listing to fully resolve before clicking Up, so that
+  // `parent` state is set to acme-app (not the stale initial value).
+  // leasing has no subfolders, so the empty-state text confirms listing resolved.
+  await expect(modal.getByTestId("folder-browser-listing")).toContainText("No subfolders");
 
-  // "Up" walks to the parent.
-  await page.getByTestId("dir-picker-up").click();
-  await expect(input).toHaveValue("/Users/demo");
-  await expect(page.getByTestId("dir-picker-item-acme-app")).toBeVisible();
+  // "Up" button walks to the parent; the listing returns to acme-app's children.
+  await modal.getByTestId("folder-browser-up").click();
+  // src is a direct child of acme-app — its appearance confirms we are back.
+  await expect(modal.getByTestId("folder-browser-item-src")).toBeVisible();
 
   await page.screenshot({ path: "web/e2e/screenshots/new-session-modal.png" });
 
-  await input.fill("");
-  await expect(startButton).toBeDisabled();
-  await input.fill("/tmp/example-project");
+  // "or type a path" secondary allows entering an arbitrary path.
+  await modal.getByTestId("folder-browser-type-toggle").click();
+  // Cancelling the type input keeps the start button enabled (browse path is still set).
+  await modal.getByTestId("folder-browser-type-cancel").click();
+  await expect(startButton).toBeEnabled();
+
+  // Typing a new path updates the controlled value and enables the button.
+  await modal.getByTestId("folder-browser-type-toggle").click();
+  await modal.getByTestId("folder-browser-type-input").fill("/tmp/example-project");
+  await modal.getByTestId("folder-browser-type-input").press("Enter");
   await expect(startButton).toBeEnabled();
 
   await page.getByRole("button", { name: "Cancel" }).click();
@@ -538,13 +545,13 @@ test("new-session modal: a failed directory read shows an error, not an empty li
   await page.getByTestId("new-session-btn").click();
   await expect(page.locator(".modal-new-session")).toBeVisible();
 
-  const err = page.getByTestId("dir-picker-error");
+  const err = page.getByTestId("folder-browser-error");
   await expect(err).toBeVisible({ timeout: 3_000 });
   await expect(err).toContainText("Couldn't read that directory");
 
   // On error the listing shows neither directory items nor the "no
-  // subdirectories" empty — the error replaces both.
-  await expect(page.getByTestId("dir-picker-item-leasing")).toHaveCount(0);
+  // subfolders" empty — the error replaces both.
+  await expect(page.getByTestId("folder-browser-item-leasing")).toHaveCount(0);
 });
 
 test("command palette: a failed path read shows an error but still offers the typed path", async ({ page }) => {
@@ -1325,16 +1332,24 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
     await expect(chip).toContainText("Deployed");
     await expect(chip).toHaveAttribute("data-deployed", "true");
 
-    // Actions sit right-anchored with Deploy at the right edge.
+    // The deployed/draft status chip now lives in the canvas header (right pane),
+    // separate from the operate buttons (Local Run / Prod Run / Deploy) which
+    // remain in the middle bar. Verify each is in its expected container.
+    const canvasHeader = page.getByTestId("workflow-actions-header");
+    await expect(canvasHeader).toBeVisible();
+    await expect(canvasHeader.getByTestId("session-lifecycle-chip")).toBeVisible();
+    // Operate buttons are in the middle bar's session-steps container.
+    await expect(page.getByTestId("session-step-run")).toBeVisible();
+    await expect(page.getByTestId("session-step-deploy")).toBeVisible();
+    // Deploy still sits to the right of Run in the middle bar.
     const runBox = await page.getByTestId("session-step-run").boundingBox();
     const deployBox = await page.getByTestId("session-step-deploy").boundingBox();
-    const chipBox = await chip.boundingBox();
     expect((deployBox?.x ?? 0)).toBeGreaterThan(runBox?.x ?? 0);
-    expect((runBox?.x ?? 0)).toBeGreaterThan(chipBox?.x ?? 0);
 
     // Run fires the DIRECT prod-run route (no pty inject / user LLM credits):
     // it records lastDirectAction, never lastMacroRun, and carries leasing's
-    // definitionId as the runs route wants it (a string).
+    // definitionId as the runs route wants it (a string). With run-first, the
+    // click fires immediately using the last-used input (or {}) — no dialog.
     await page.getByTestId("session-step-run").click();
     await page.waitForFunction(
       () =>
@@ -1599,16 +1614,15 @@ test.describe("session menu copy path", () => {
   });
 });
 
-test("directory picker: arrow keys move the highlight and Enter drills into it", async ({ page }) => {
+test("folder browser: clicking an item navigates into it", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
-  const input = page.getByTestId("dir-picker-input");
-  await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();
+  const modal = page.locator(".modal-new-session");
+  await expect(modal.getByTestId("folder-browser-item-leasing")).toBeVisible();
 
-  await input.press("ArrowDown");
-  await expect(page.getByTestId("dir-picker-item-src")).toHaveClass(/is-selected/);
-  await input.press("Enter");
-  await expect(input).toHaveValue("/Users/demo/acme-app/src");
+  await modal.getByTestId("folder-browser-item-leasing").click();
+  // The breadcrumb tail updates after drilling in.
+  await expect(modal.getByTestId("folder-browser-crumb-leasing")).toBeVisible();
 });
 
 test("canvas controls: the board widget zooms; the subheader's expand lifts the pane to an overlay", async ({ page }) => {

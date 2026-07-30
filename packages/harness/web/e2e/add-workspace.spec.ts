@@ -7,12 +7,29 @@
  * intents and nothing else, door 1 says WHAT IT FOUND before offering an
  * action, and door 3 cannot submit a name that would break the scaffold.
  *
+ * Door 1 now uses FolderBrowser (browse-first): paths are entered via the
+ * "or type a path" secondary input and confirmed with the Continue button
+ * (or FolderBrowser's "Open this folder" button).
+ *
  * Runs in the same mock mode as smoke.spec.ts. The mock filesystem gives a
  * deliberate spread under /Users/demo: `rfq-workflows` and `onboarding-flow`
  * hold agent projects, `acme-app` is a container whose child `leasing` is one,
  * and `scratch` is a plain folder.
  */
 import { expect, test } from "@playwright/test";
+
+/** Helper: type a path into the FolderBrowser's secondary "or type a path" input. */
+async function typePathInBrowser(
+  page: import("@playwright/test").Page,
+  container: import("@playwright/test").Locator,
+  path: string,
+): Promise<void> {
+  await container.getByTestId("folder-browser-type-toggle").click();
+  const input = container.getByTestId("folder-browser-type-input");
+  await expect(input).toBeVisible();
+  await input.fill(path);
+  await input.press("Enter");
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -70,7 +87,7 @@ test.describe("the resting state", () => {
     await page.getByTestId("add-workspace").click();
 
     // The point of the redesign: nothing is asked for until an intent is picked.
-    await expect(page.locator(".dir-picker")).toBeHidden();
+    await expect(page.locator(".folder-browser")).toBeHidden();
     // And none of the old permanent escape hatches are present.
     await expect(page.getByTestId("mcp-install")).toHaveCount(0);
     await expect(page.getByTestId("modal-scan-btn")).toHaveCount(0);
@@ -81,7 +98,7 @@ test.describe("the resting state", () => {
     await page.getByTestId("aw-door-have").click();
 
     await expect(page.locator(".modal-add-workspace")).toBeVisible();
-    await expect(page.locator(".dir-picker")).toBeVisible();
+    await expect(page.locator(".folder-browser")).toBeVisible();
     // The menu IS the list, so the dialog must not restate it — and must not
     // offer a back button pointing at a state this dialog was never in. The
     // way back is closing it and pressing + again.
@@ -115,10 +132,11 @@ test.describe("entry points", () => {
 
     await expect(page.locator(".modal-add-workspace")).toBeVisible();
     await expect(page.locator(".modal-new-session")).toHaveCount(0);
-    // It lands ON the folder question. The row is called "Open a folder"; it
-    // used to answer that click with three intents, one of which was opening a
-    // folder — the same question asked twice, in two vocabularies.
-    await expect(page.locator(".dir-picker")).toBeVisible();
+    // It lands ON the folder question with FolderBrowser. The row is called
+    // "Open a folder"; it used to answer that click with three intents, one of
+    // which was opening a folder — the same question asked twice, in two
+    // vocabularies.
+    await expect(page.locator(".folder-browser")).toBeVisible();
     await expect(page.getByTestId("aw-doors")).toHaveCount(0);
   });
 });
@@ -126,9 +144,10 @@ test.describe("entry points", () => {
 test.describe("door 1 — Open a folder", () => {
   test("states that the picked folder is an agent project, then offers one action", async ({ page }) => {
     await page.getByTestId("aw-door-have").click();
+    const modal = page.locator(".modal-add-workspace");
 
-    const input = page.locator(".dir-picker-input");
-    await input.fill("/Users/demo/rfq-workflows");
+    // Use the "or type a path" secondary input to navigate to a known path.
+    await typePathInBrowser(page, modal, "/Users/demo/rfq-workflows");
     await page.getByTestId("aw-have-continue").click();
 
     const result = page.getByTestId("aw-result");
@@ -143,8 +162,9 @@ test.describe("door 1 — Open a folder", () => {
 
   test("counts the projects inside a container folder and offers to add them all", async ({ page }) => {
     await page.getByTestId("aw-door-have").click();
+    const modal = page.locator(".modal-add-workspace");
 
-    await page.locator(".dir-picker-input").fill("/Users/demo/acme-app");
+    await typePathInBrowser(page, modal, "/Users/demo/acme-app");
     await page.getByTestId("aw-have-continue").click();
 
     const result = page.getByTestId("aw-result");
@@ -155,8 +175,9 @@ test.describe("door 1 — Open a folder", () => {
 
   test("offers scaffold and template — not Add — for a folder with no project", async ({ page }) => {
     await page.getByTestId("aw-door-have").click();
+    const modal = page.locator(".modal-add-workspace");
 
-    await page.locator(".dir-picker-input").fill("/Users/demo/scratch");
+    await typePathInBrowser(page, modal, "/Users/demo/scratch");
     await page.getByTestId("aw-have-continue").click();
 
     const result = page.getByTestId("aw-result");
@@ -166,14 +187,31 @@ test.describe("door 1 — Open a folder", () => {
     await expect(page.getByTestId("aw-add")).toHaveCount(0);
   });
 
-  test("Change returns to the picker without losing the path", async ({ page }) => {
+  test("Change returns to the browser with the path still selected", async ({ page }) => {
     await page.getByTestId("aw-door-have").click();
-    await page.locator(".dir-picker-input").fill("/Users/demo/rfq-workflows");
+    const modal = page.locator(".modal-add-workspace");
+
+    await typePathInBrowser(page, modal, "/Users/demo/rfq-workflows");
     await page.getByTestId("aw-have-continue").click();
     await expect(page.getByTestId("aw-result")).toBeVisible();
 
     await page.getByRole("button", { name: "Change" }).click();
-    await expect(page.locator(".dir-picker-input")).toHaveValue("/Users/demo/rfq-workflows");
+    // The FolderBrowser is visible again; the breadcrumb tail reflects the path.
+    await expect(modal.getByTestId("folder-browser-breadcrumbs")).toBeVisible();
+    await expect(modal.getByTestId("folder-browser-crumb-rfq-workflows")).toBeVisible();
+  });
+
+  test("FolderBrowser's 'Open this folder' also triggers detection", async ({ page }) => {
+    await page.getByTestId("aw-door-have").click();
+    const modal = page.locator(".modal-add-workspace");
+
+    await typePathInBrowser(page, modal, "/Users/demo/rfq-workflows");
+    // Primary CTA of FolderBrowser detects just like the Continue button.
+    await modal.getByTestId("folder-browser-open").click();
+
+    await expect(page.getByTestId("aw-result")).toContainText("This is an agent project", {
+      timeout: 5000,
+    });
   });
 });
 
@@ -220,9 +258,9 @@ test.describe("door 3 — start from an idea", () => {
     await expect(page.getByTestId("aw-scaffold-it")).toBeDisabled();
   });
 
-  test("the root is changeable from inside the door", async ({ page }) => {
+  test("the root is changeable from inside the door, via FolderBrowser", async ({ page }) => {
     await page.getByTestId("aw-door-idea").click();
     await page.getByTestId("aw-change-root").click();
-    await expect(page.locator(".dir-picker")).toBeVisible();
+    await expect(page.locator(".folder-browser")).toBeVisible();
   });
 });

@@ -12,7 +12,7 @@ import {
 import { loadUiPrefs } from "../lib/ui-prefs";
 import { useDismissable } from "../lib/use-dismissable";
 import { AnchoredPopover } from "./AnchoredPopover";
-import { DirectoryPicker } from "./DirectoryPicker";
+import { FolderBrowser } from "./FolderBrowser";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { HarnessMenuItems } from "./HarnessMenuItems";
 import { Icon } from "./Icon";
@@ -123,10 +123,10 @@ export function NewSessionModal({
 
         <div className="modal-body">
           <section className="modal-section">
-            <DirectoryPicker
+            <FolderBrowser
               value={cwd}
               onChange={setCwd}
-              onSubmit={() => void submit()}
+              onOpen={() => void submit()}
               recentDirs={recentDirs}
               listDir={listDir}
             />

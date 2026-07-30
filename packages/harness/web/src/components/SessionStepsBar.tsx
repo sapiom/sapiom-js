@@ -35,21 +35,26 @@ interface SessionStepsBarProps {
    * and `lastDeployError` stays null (so neither dep would flip otherwise).
    */
   directActionSettleSeq: number;
+  /**
+   * Fires a deploy action — delegated from the deployment popover's Deploy /
+   * Redeploy / Retry buttons so the popover doesn't duplicate deploy logic.
+   */
+  onDeploy: () => void;
 }
 
 /**
- * The agent's action bar on the shared subheader row. NOT a stepper: per
+ * The agent's operate bar on the shared subheader row. NOT a stepper: per
  * Sapiom's own model (docs.sapiom.ai /agents) these are repeatable ACTIONS,
  * not one-way stages — you run local as often as you test, deploy as often
- * as you ship. The only durable state is "deployed" (definitionId), shown as
- * the left-anchored status chip. Actions sit right-anchored, Deploy at the
- * right edge as the primary:
+ * as you ship. Actions sit right-anchored, Deploy at the right edge as the
+ * primary:
  *   Local Run = run_local  (test run, capabilities stubbed)
  *   Prod Run  = prod_run   (real cloud execution; needs a deploy)
  *   Deploy    = deploy     (push + cloud build)
  *
- * The "Go to dashboard" affordance (open_prod equivalent) lives in the canvas
- * header's WorkflowActionsHeader when a definitionId is set.
+ * The deployed/draft status chip and DeploymentPopover live in the canvas
+ * header (WorkflowActionsHeader, board surface). The "Go to dashboard" link
+ * lives in the right-pane tab bar (App.tsx).
  */
 export function SessionStepsBar({
   workflow,
@@ -61,6 +66,7 @@ export function SessionStepsBar({
   lastDeployError,
   authenticated,
   directActionSettleSeq,
+  onDeploy,
 }: SessionStepsBarProps): JSX.Element {
   const macroFor = (id: string): MacroDef | undefined => macros.find((m) => m.id === id);
   const deployed = workflow.definitionId != null;
@@ -125,28 +131,6 @@ export function SessionStepsBar({
 
   return (
     <div className="session-steps" data-testid="session-steps" aria-label="Agent actions">
-      {/* The one durable truth, left-anchored: has this agent been deployed? */}
-      <span
-        className="status-tag session-lifecycle-chip"
-        data-testid="session-lifecycle-chip"
-        data-deployed={deployed}
-        data-deploy-error={lastDeployError != null && !deployed ? "" : undefined}
-        data-tooltip={
-          deployed
-            ? `Deployed to Sapiom (definition ${workflow.definitionId}). Run starts real cloud executions.`
-            : lastDeployError != null
-              ? "Last deploy failed. Retry Deploy to push to Sapiom."
-              : "Draft: exists locally only. Building here uses your Claude Code account; Deploy publishes to Sapiom."
-        }
-      >
-        <Icon name={deployed ? "Cloud" : "CloudOff"} size={13} />
-        {/* display: contents at rest, hidden by the bar's container query
-            below 380px — the icon + tooltip keep carrying the state. */}
-        <span className="session-lifecycle-label">
-          {deployed ? "Deployed" : lastDeployError != null ? "Deploy failed" : "Draft"}
-        </span>
-      </span>
-
       {/* One-click preview loop, v0: the server detected a dev
           server this session's agent started - one click opens the app. */}
       {preview && (

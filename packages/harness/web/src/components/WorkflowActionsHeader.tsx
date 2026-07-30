@@ -7,6 +7,7 @@ import { nodeKindLabel } from "../lib/canvas-graph";
 import { relativeTimeLabel } from "../lib/relative-time";
 import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { AnchoredPopover } from "./AnchoredPopover";
+import { DeploymentPopover } from "./DeploymentPopover";
 import { Icon } from "./Icon";
 
 interface WorkflowActionsHeaderProps {
@@ -28,6 +29,17 @@ interface WorkflowActionsHeaderProps {
    *  run picker on the chip. */
   runs: ObservedRun[];
   onSelectRun: (executionId: string) => void;
+  /**
+   * Error from the last failed deploy for this workflow — drives the chip's
+   * error state and popover content. Null when the last deploy succeeded or
+   * no deploy has run.
+   */
+  lastDeployError: string | null;
+  /**
+   * Fires a deploy/redeploy action from the deployment popover. Delegated to
+   * the parent so the popover doesn't duplicate deploy logic.
+   */
+  onDeploy: () => void;
 }
 
 /** Chip copy: "prod run completed" / "local run running". Cost-free — the
@@ -38,10 +50,10 @@ function runChipLabel(run: RunView, target: RunTarget | null): string {
 }
 
 /**
- * The canvas pane's subheader. Renders only for the Steps list and a drilled
- * step — the board shows no subheader at all (its deployed pill and
- * expand/collapse live in the tab bar, its name in the rail), so this returns
- * null in that case.
+ * The canvas pane's subheader. Three modes:
+ * - Board surface: a slim header carrying the deployed/draft status chip
+ *   (+ full DeploymentPopover). The expand/collapse control and "Go to
+ *   dashboard" link live in the right-pane tab bar (App.tsx).
  * - Steps list: the workflow name and the real step count, info left, no
  *   competing actions (rows are the interface).
  * - Step detail: 1×1 back left-anchored, the step's name and kind, then the
@@ -59,6 +71,8 @@ export function WorkflowActionsHeader({
   runTarget,
   runs,
   onSelectRun,
+  lastDeployError,
+  onDeploy,
 }: WorkflowActionsHeaderProps): JSX.Element | null {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -68,6 +82,12 @@ export function WorkflowActionsHeader({
   const [runMenuOpen, setRunMenuOpen] = useState(false);
   const runMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const closeRunMenu = useCallback(() => setRunMenuOpen(false), []);
+  // The deployment chip + popover: lives in the board header next to the
+  // "Go to dashboard" link (moved here from the middle bar so the canvas
+  // header carries the full deployed state at a glance).
+  const [deployPopoverOpen, setDeployPopoverOpen] = useState(false);
+  const deployChipRef = useRef<HTMLButtonElement>(null);
+  const closeDeployPopover = useCallback(() => setDeployPopoverOpen(false), []);
 
   if (detailStep) {
     return (
@@ -161,9 +181,11 @@ export function WorkflowActionsHeader({
         data-testid="workflow-actions-header"
       >
         <span className="workflow-actions-name">{workflow.name}</span>
-        <span className="workflow-actions-count" data-testid="canvas-steps-count">
-          {stepsSummary ?? "no steps"}
-        </span>
+        {stepsSummary && (
+          <span className="workflow-actions-count" data-testid="canvas-steps-count">
+            {stepsSummary}
+          </span>
+        )}
         {/* One observed run: a plain status chip. Several: the chip is
             the run picker — any past run is one click away. */}
         {run && runs.length <= 1 && (
@@ -229,8 +251,48 @@ export function WorkflowActionsHeader({
     );
   }
 
-  // The board renders no subheader at all: its deployed pill (→ dashboard) and
-  // expand/collapse live in the tab bar, its name in the rail. Tidjane's board
-  // design has nothing between the tabs and the canvas, so return null here.
-  return null;
+  // The board surface: a thin header carrying the deployed/draft status chip
+  // (with the full deployment popover) so the canvas header shows the
+  // workflow's deployment state at a glance. The "Go to dashboard" external
+  // link lives in the right-pane tab bar (App.tsx); here we show only the
+  // status chip with its clickable popover.
+  const deployed = workflow.definitionId != null;
+  return (
+    <div className="workflow-actions-header workflow-actions-header--board" data-testid="workflow-actions-header">
+      <button
+        ref={deployChipRef}
+        type="button"
+        className="status-tag status-tag-action session-lifecycle-chip"
+        data-testid="session-lifecycle-chip"
+        data-deployed={deployed}
+        data-deploy-error={lastDeployError != null && !deployed ? "" : undefined}
+        data-tooltip={
+          deployed
+            ? `Deployed to Sapiom (definition ${workflow.definitionId}). Click for details.`
+            : lastDeployError != null
+              ? "Last deploy failed. Click for details."
+              : "Draft: not yet deployed. Click for details."
+        }
+        aria-haspopup="dialog"
+        aria-expanded={deployPopoverOpen}
+        onClick={() => setDeployPopoverOpen((prev) => !prev)}
+      >
+        <Icon name={deployed ? "Cloud" : "CloudOff"} size={13} />
+        <span className="session-lifecycle-label">
+          {deployed ? "Deployed" : lastDeployError != null ? "Deploy failed" : "Draft"}
+        </span>
+      </button>
+      <DeploymentPopover
+        open={deployPopoverOpen}
+        anchorRef={deployChipRef}
+        onDismiss={closeDeployPopover}
+        workflow={workflow}
+        lastDeployError={lastDeployError}
+        onDeploy={() => {
+          closeDeployPopover();
+          onDeploy();
+        }}
+      />
+    </div>
+  );
 }

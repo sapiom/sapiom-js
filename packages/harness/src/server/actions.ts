@@ -34,6 +34,7 @@ import {
   AgentOperationError,
   createClient,
   deploy as coreDeploy,
+  getDefinition as coreGetDefinition,
   link as coreLink,
   run as coreRun,
   readConfig as coreReadConfig,
@@ -99,6 +100,13 @@ export interface ActionsCoreDeps {
   link: typeof coreLink;
   /** Cache the linked id back into `sapiom.json` (merges; never clobbers). */
   writeConfig: typeof coreWriteConfig;
+  /**
+   * Verify that a definition id is accessible under the current API key.
+   * Returns the definition summary on success; throws `AgentOperationError`
+   * (code `HTTP_404` | `HTTP_403` | `HTTP_401` | `NETWORK` | …) on failure.
+   * Used by `ensureDefinitionId` to detect foreign ids before falling back.
+   */
+  getDefinition: typeof coreGetDefinition;
 }
 
 const DEFAULT_CORE_DEPS: ActionsCoreDeps = {
@@ -108,6 +116,7 @@ const DEFAULT_CORE_DEPS: ActionsCoreDeps = {
   readConfig: coreReadConfig,
   link: coreLink,
   writeConfig: coreWriteConfig,
+  getDefinition: coreGetDefinition,
 };
 
 /**
@@ -124,6 +133,8 @@ export interface RunLocalChildProcess {
   stderr: NodeJS.ReadableStream | null;
   on(event: "exit", listener: (code: number | null) => void): unknown;
   on(event: "error", listener: (err: Error) => void): unknown;
+  /** Send a signal to the child process (mirrors node's ChildProcess.kill). */
+  kill(signal?: NodeJS.Signals | number): boolean;
 }
 
 /** Spawn the run-local bootstrap child. Test seam — defaults to `node`ing the
@@ -226,6 +237,22 @@ function defaultRunLocalSpawn(): RunLocalChildProcess {
 const RUN_LOCAL_STDERR_TAIL_CHARS = 2_000;
 
 /**
+ * Maximum wall-clock time a run-local child is allowed to run before being
+ * forcefully terminated. After this limit the child receives SIGTERM (then
+ * SIGKILL after a short grace) and a terminal error line is written to the
+ * response stream so the UI displays a clear "timed out" message.
+ */
+const RUN_LOCAL_MAX_DURATION_MS = 5 * 60 * 1_000; // 5 minutes
+
+/**
+ * Grace period between the initial SIGTERM and the hard SIGKILL when killing
+ * a run-local child (client disconnect or wall-clock timeout). Long enough for
+ * the child to flush and exit cleanly, short enough that an unresponsive child
+ * does not orphan for long.
+ */
+const RUN_LOCAL_KILL_GRACE_MS = 3_000; // 3 seconds
+
+/**
  * The run-local request body the SPA POSTs. `sourceDir` is required; the rest
  * mirror {@link RunLocalRequest} and are forwarded to the bootstrap as-is.
  */
@@ -300,6 +327,16 @@ export interface ActionsRouterOpts {
    * runs.ts and the `spawnProcess` seam in task-manager.ts.
    */
   runLocalSpawn?: RunLocalSpawnFn;
+  /**
+   * Called after a deploy writes a new `definitionId` to `sapiom.json`, so the
+   * server can refresh its workflow cache and broadcast `workflows.changed` to
+   * connected clients. The path is the project directory whose `sapiom.json`
+   * was updated. Optional — when omitted the cache is refreshed by the
+   * client-side `refreshWorkflows()` call that fires after the deploy stream
+   * ends, but the server-side broadcast is skipped (so other open clients see
+   * the stale id until their next poll).
+   */
+  onWorkflowConfigChanged?: (workflowPath: string) => void | Promise<void>;
 }
 
 /**
@@ -372,6 +409,26 @@ function isAuthRejectionError(err: unknown): boolean {
 }
 
 /**
+ * Whether a thrown value is a definitive "the definition is not accessible
+ * under this account" — 404 (not found) or 403/401 (forbidden/unauthorized).
+ * These warrant falling back to link-by-name; transient errors (5xx, NETWORK,
+ * connection reset) do not — a blip must never silently duplicate an agent.
+ *
+ * Note: HTTP_401/403 from a definition-verify call mean "this id is not yours"
+ * (distinguished from an expired API key because the key was already validated
+ * to reach this point). We therefore treat them as definitive ownership failures
+ * rather than auth rejections worthy of a refresh retry.
+ */
+function isDefinitiveOwnershipFailure(err: unknown): boolean {
+  return (
+    err instanceof AgentOperationError &&
+    (err.code === "HTTP_404" ||
+      err.code === "HTTP_403" ||
+      err.code === "HTTP_401")
+  );
+}
+
+/**
  * Run a core operation with the current API key and, when it fails with an auth
  * rejection, refresh the shared credential store once and retry with the newer
  * key — the deploy/prod-run analogue of run-state.ts's refresh-on-401 recovery.
@@ -416,6 +473,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   const deps: ActionsCoreDeps = { ...DEFAULT_CORE_DEPS, ...opts.coreDeps };
   const baseUrl = opts.coreBaseUrl ?? resolveCoreBaseUrl();
   const runLocalSpawn = opts.runLocalSpawn ?? defaultRunLocalSpawn;
+  const { onWorkflowConfigChanged } = opts;
   // Normalize to a provider so deploy/prod-run always authenticate with the
   // held API key and can refresh + retry when that key is rejected — a plain
   // string|null becomes a no-op static provider (no refresh). Mirrors the runs
@@ -471,7 +529,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
     }
 
     // From here the outcome is streamed in-band as NDJSON — status is 200 and
-    // headers are committed before the (potentially long) build runs.
+    // headers are committed before the (potentially long) link+build runs.
     res.status(200);
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
@@ -480,25 +538,56 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
     };
 
     /**
-     * The definition id to build against: the linked one, or a freshly
-     * resolved-or-created one for a project that has never been linked (a
-     * gallery-template clone lands exactly this way — `clone` writes the fork
-     * provenance and leaves `definitionId` for deploy to fill in).
+     * The definition id to build against: the linked one (verified as
+     * accessible under the current key), or a freshly resolved-or-created one
+     * when the project has never been linked or when the committed id belongs
+     * to a different account (e.g. a GitHub-cloned repo someone else had
+     * deployed).
      *
-     * `link({ create: true })` matches an existing remote agent by name/slug
-     * BEFORE creating one, so this is resync-or-create: re-deploying never
-     * duplicates an agent, and a template already deployed from another machine
-     * re-attaches to the same definition.
+     * For a linked project: first verify ownership via a GET on the definition.
+     * If it resolves, return it (redeploy the same definition — precise,
+     * rename-safe). If it returns 404/403/401 (definitive not-found/forbidden),
+     * fall back to `link({ create: true })` — the exact resolve-or-create-by-
+     * name path the unlinked branch uses; the same `linking` stream line is
+     * emitted. Transient/5xx/NETWORK errors are NOT caught here — a blip must
+     * never silently duplicate an agent.
+     *
+     * For an unlinked project: `link({ create: true })` matches an existing
+     * remote agent by name/slug BEFORE creating one, so this is resync-or-
+     * create: re-deploying never duplicates an agent, and a template already
+     * deployed from another machine re-attaches to the same definition.
      */
     const ensureDefinitionId = async (): Promise<string> => {
-      if (configState.kind === "linked") return configState.definitionId;
+      if (configState.kind === "linked") {
+        const { definitionId } = configState;
+        // Verify the id is reachable under the current key. A definitive
+        // not-found/forbidden (HTTP 404/403/401) means the id belongs to
+        // another account; fall through to link-by-name. Any other error
+        // (5xx, NETWORK) propagates — a transient blip must not trigger the
+        // fork and risk duplicating an agent.
+        try {
+          await withKeyRefreshRetry(provider, clientFor, (client) =>
+            deps.getDefinition(definitionId, client),
+          );
+          return definitionId;
+        } catch (err) {
+          if (!isDefinitiveOwnershipFailure(err)) throw err;
+          // Fall through to link-by-name (same path as the unlinked branch).
+        }
+      }
 
       const fromSeam = opts.resolveDefinitionName
         ? await opts.resolveDefinitionName(workflow).catch(() => null)
         : null;
+      // `configState.name` exists only on the "unlinked" variant. A "linked"
+      // project reaching here means the id failed ownership verification and we
+      // are falling back to link-by-name — treat the cached name as absent for
+      // naming purposes (it was the server-side name from the foreign account).
+      const cachedName =
+        configState.kind === "unlinked" ? configState.name : undefined;
       const name =
         fromSeam?.trim() ||
-        configState.name?.trim() ||
+        cachedName?.trim() ||
         workflow.name?.trim() ||
         basename(workflow.path);
 
@@ -541,6 +630,11 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       return linked.definitionId;
     };
 
+    // Capture the pre-deploy definitionId (if any) so we can tell whether a
+    // successful deploy changed it — the cache-invalidation callback fires only
+    // when there is something new for connected clients to pick up.
+    const prevDefinitionId = configState.kind === "linked" ? configState.definitionId : undefined;
+
     try {
       // A link failure throws out of here and is mapped by the same
       // toDeployErrorEvent below — reported as itself, never as a build
@@ -562,6 +656,17 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
         buildRunId: result.buildRunId,
         status: result.status,
       });
+      // Only broadcast a config change when the definitionId actually changed —
+      // a redeploy of an already-linked workflow with the same id is a no-op
+      // for any cache that derives from sapiom.json, so don't wake every
+      // connected client unnecessarily.
+      if (onWorkflowConfigChanged && result.definitionId !== prevDefinitionId) {
+        try {
+          await onWorkflowConfigChanged(workflow.path);
+        } catch {
+          // Non-fatal — the deploy succeeded; the broadcast is best-effort.
+        }
+      }
     } catch (err) {
       write(toDeployErrorEvent(err));
     } finally {
@@ -673,8 +778,18 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
     res.setHeader("Cache-Control", "no-store");
 
     // Hand the request to the child, then close its stdin so the bootstrap's
-    // read-to-EOF completes.
-    child.stdin?.end(JSON.stringify(request));
+    // read-to-EOF completes. Guard the write against an EPIPE (child exits
+    // before draining stdin) — without an "error" listener the writable stream
+    // would emit an unhandled-error event and crash the long-lived server.
+    if (child.stdin) {
+      child.stdin.on("error", (err: Error) => {
+        // EPIPE / ERR_STREAM_DESTROYED — the child is already gone; the exit
+        // handler below will settle the response. Swallow so it never becomes
+        // an uncaughtException.
+        console.error("[run-local] stdin write error (swallowed):", err.message);
+      });
+      child.stdin.end(JSON.stringify(request));
+    }
 
     // Forward each well-formed JSON line straight through — the bootstrap emits
     // exactly the wire shapes, so no re-shaping happens here. A line that isn't
@@ -712,9 +827,12 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
     // deferred to `settle()` so a still-buffered summary line is never clobbered.
     let settled = false;
     let crashReason: string | null = null;
-    const settle = (): void => {
+    const settle = (terminalErrorMessage?: string): void => {
       if (settled) return;
       settled = true;
+      // Clear lifecycle resources so nothing fires after the response is done.
+      clearTimeout(wallClockTimer);
+      res.off("close", onClientClose);
       // Only synthesize a terminal line when the child produced none — otherwise
       // the stream already ended well-formed with the bootstrap's own summary.
       if (!sawTerminalLine) {
@@ -723,12 +841,48 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
             kind: "error",
             outcome: "failed",
             error:
-              stderrTail.trim() || crashReason || "run-local produced no output",
+              terminalErrorMessage ||
+              stderrTail.trim() ||
+              crashReason ||
+              "run-local produced no output",
           }) + "\n",
         );
       }
       res.end();
     };
+
+    /**
+     * Send SIGTERM to the child, then SIGKILL after the grace period if it has
+     * not exited. Safe to call after the child has already exited — kill() on a
+     * dead process is a no-op (returns false) and the SIGKILL timer is cleared
+     * by the exit handler or settle().
+     */
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const killChild = (): void => {
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), RUN_LOCAL_KILL_GRACE_MS);
+    };
+
+    // Wall-clock timeout — kill the child and write a terminal error line so
+    // the UI shows a clear "timed out" message rather than a hung spinner.
+    const wallClockTimer = setTimeout(() => {
+      killChild();
+      settle("run-local timed out — the workflow exceeded the maximum allowed run duration");
+    }, RUN_LOCAL_MAX_DURATION_MS);
+
+    // Client disconnect before the run settled — kill the child so no orphan
+    // process is left running after the user navigates away or closes the tab.
+    // `res.on("close")` fires when the response is closed; `res.writableEnded`
+    // distinguishes a server-initiated close (normal completion, already settled)
+    // from a client-initiated close (navigation away, connection drop). Using
+    // `res` rather than `req` avoids the false-positive where `req`'s IncomingMessage
+    // stream emits "close" once its body has been fully consumed by body-parser.
+    const onClientClose = (): void => {
+      if (settled || res.writableEnded) return;
+      killChild();
+      settle();
+    };
+    res.on("close", onClientClose);
 
     // Drive the terminal decision off stdout's close (readline "close" fires
     // only after every line has been emitted), so a summary line buffered when
@@ -737,19 +891,25 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
     if (child.stdout) {
       const lines = createInterface({ input: child.stdout });
       lines.on("line", onLine);
-      lines.on("close", settle);
+      lines.on("close", () => {
+        clearTimeout(killTimer);
+        settle();
+      });
       child.on("error", (err) => {
         crashReason = err.message;
       });
       child.on("exit", (code) => {
+        clearTimeout(killTimer);
         crashReason ??= `run-local process exited with code ${code ?? "null"}`;
       });
     } else {
       child.on("error", (err) => {
+        clearTimeout(killTimer);
         crashReason = err.message;
         settle();
       });
       child.on("exit", (code) => {
+        clearTimeout(killTimer);
         crashReason ??= `run-local process exited with code ${code ?? "null"}`;
         settle();
       });

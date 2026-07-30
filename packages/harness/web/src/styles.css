@@ -809,6 +809,356 @@ input {
   overflow-y: auto;
 }
 
+/* "+" add-project menu (AddProjectMenu / ConnectGitHubForm). */
+.add-project-menu {
+  width: min(260px, calc(100vw - var(--sp4)));
+}
+
+/* Menu item buttons — full-width, left-aligned, icon + label. */
+.add-project-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  justify-content: flex-start;
+  padding: var(--sp2) var(--sp3);
+  font-size: var(--type-label);
+  border-radius: var(--radius-sm);
+}
+
+/* GitHub connect form inside the popover. */
+.connect-github-form {
+  display: contents;
+}
+
+.connect-github-body {
+  gap: var(--sp3);
+}
+
+.connect-github-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.connect-github-label {
+  font-size: var(--type-label);
+  font-weight: 510;
+  color: var(--text-faint);
+}
+
+.connect-github-label-hint {
+  font-weight: 400;
+  color: var(--text-faintest, var(--text-faint));
+}
+
+.connect-github-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.connect-github-input.is-error {
+  border-color: var(--red, #e05252);
+  outline-color: var(--red, #e05252);
+}
+
+.connect-github-field-error {
+  font-size: var(--type-label);
+  color: var(--red-text, #d33);
+}
+
+.connect-github-field-hint {
+  font-size: var(--type-label);
+  color: var(--text-faint);
+}
+
+.connect-github-path-preview {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--type-label);
+  background: var(--surface-inset-strong, var(--surface-inset));
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.connect-github-actions {
+  display: flex;
+  gap: var(--sp2);
+  justify-content: flex-end;
+  padding-top: var(--sp1);
+}
+
+/* GitHub Device Flow component */
+.github-device-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  font-size: var(--type-label);
+  color: var(--text-faint);
+}
+
+.github-device-awaiting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.github-device-code {
+  font-family: var(--font-mono, monospace);
+  font-size: 20px;
+  font-weight: 590;
+  letter-spacing: 0.12em;
+  text-align: center;
+  padding: var(--sp3) 0;
+  color: var(--text);
+  background: var(--surface-inset-strong, var(--surface-inset));
+  border-radius: var(--radius-sm, 3px);
+}
+
+.github-device-link {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  justify-content: center;
+  text-decoration: none;
+}
+
+.github-device-waiting {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+
+.github-device-connected {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  font-size: var(--type-label);
+  color: var(--text);
+}
+
+/* Account header bar: check mark + login + disconnect link */
+.github-device-connected-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-label);
+  color: var(--text-faint);
+  padding-bottom: var(--sp1);
+}
+
+.github-repo-account-login {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-label);
+  color: var(--text-dim);
+  font-weight: 510;
+}
+
+/* Disconnect: text-only action, no border — a secondary affordance */
+.github-device-disconnect,
+.github-device-disconnect-inline {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--transition-fast);
+}
+
+.github-device-disconnect:hover,
+.github-device-disconnect-inline:hover {
+  color: var(--text);
+}
+
+.github-device-disconnect:focus-visible,
+.github-device-disconnect-inline:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Repo list container */
+.github-repo-list-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.github-repo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(240px, 45vh);
+  overflow-y: auto;
+}
+
+/* Each repo: a clean horizontal row, left-aligned, no pill border */
+.github-repo-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  text-align: left;
+  padding: 7px var(--sp2);
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius);
+  font-size: var(--type-label);
+  color: var(--text-dim);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.github-repo-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.github-repo-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.github-repo-item:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Active cloning row: slightly dimmed, others are also dimmed via :disabled */
+.github-repo-item.is-cloning {
+  opacity: 1;
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+/* Leading icon slot: lock (private) or book (public) */
+.github-repo-item-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  color: var(--text-faint);
+}
+
+/* Body: stacks name line + optional desc line */
+.github-repo-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Name line: owner (muted) + reponame (emphasized) */
+.github-repo-item-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--type-label);
+  line-height: 1.4;
+}
+
+.github-repo-item-owner {
+  color: var(--text-faint);
+  font-weight: 400;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-repo-item-reponame {
+  font-weight: 560;
+  color: inherit;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Description: single line, ellipsis — never overlaps next row */
+.github-repo-item-desc {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+}
+
+/* Trailing slot: updated time at rest, clone label on hover */
+.github-repo-item-trail {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  min-width: 0;
+}
+
+/* Updated timestamp: quiet, secondary */
+.github-repo-item-updated {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: opacity var(--transition-fast);
+}
+
+/* "Clone" affordance: hidden at rest, revealed on row hover */
+.github-repo-clone-label {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.github-repo-item:hover:not(:disabled) .github-repo-clone-label {
+  opacity: 1;
+  color: var(--text-dim);
+}
+
+/* On hover, hide the updated timestamp so only "Clone" shows */
+.github-repo-item:hover:not(:disabled) .github-repo-item-updated {
+  opacity: 0;
+}
+
+/* Cloning state: spinner + "Cloning…" inline */
+.github-repo-cloning-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* Empty state for filtered-out results */
+.github-repo-empty {
+  padding: var(--sp2) var(--sp2);
+  font-size: var(--type-label);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.github-device-unconfigured {
+  padding: var(--sp1) 0;
+}
+
 /* Add-menu variant: the same door rows the dialog shows, on the menu inset.
    Matched to .history-card so the two popovers hanging off adjacent buttons
    are visibly one control, not two designs. */
@@ -1067,9 +1417,9 @@ input {
   display: contents;
 }
 
-/* Tight bar: SECONDARY buttons drop their labels first, keeping icons —
-   every one of them still carries aria-label + data-tooltip, so icon-only
-   stays legible. The primary Deploy keeps its label at every width:
+/* Tight bar (standalone): SECONDARY buttons drop their labels first, keeping
+   icons — every one of them still carries aria-label + data-tooltip, so
+   icon-only stays legible. The primary Deploy keeps its label at every width:
    the bar's one emphasized verb must never degrade to a bare cloud glyph.
    Container queries measure the CONTENT box, so the thresholds below are
    the intended 460px/380px bar widths minus its 2 × --pane-pad-x padding. */
@@ -1079,9 +1429,25 @@ input {
   }
 }
 
-/* Tighter still: the lifecycle chip keeps its cloud glyph and the Preview
-   chip keeps its port; only the words go. */
+/* Tighter still (standalone): the lifecycle chip keeps its cloud glyph and
+   the Preview chip keeps its port; only the words go. */
 @container (max-width: 347px) {
+  .session-lifecycle-label,
+  .session-preview-label {
+    display: none;
+  }
+}
+
+/* When hosted inside the combined chrome bar, the named session-chrome-bar
+   container measures the full pane width — the same thresholds now apply
+   to the bar's total width rather than the narrow actions-section alone. */
+@container session-chrome-bar (max-width: 427px) {
+  .session-step:not(.session-action-primary) .session-step-label {
+    display: none;
+  }
+}
+
+@container session-chrome-bar (max-width: 347px) {
   .session-lifecycle-label,
   .session-preview-label {
     display: none;
@@ -1105,6 +1471,131 @@ input {
    existing motion rules above. */
 .session-lifecycle-chip[data-deploy-error] {
   color: var(--text-warning);
+}
+
+/* ── Deployment popover ──────────────────────────────────────────────────────
+   Rides the ONE popover recipe (.deployment-popover): bg-2, border-strong,
+   radius, soft-md shadow, pop-in. Distinct from status-tag so colours come
+   from the shared state tokens, never raw hex. */
+.deployment-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tree-row-gap);
+  padding: var(--sp3);
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 30;
+  min-width: 220px;
+  max-width: 320px;
+  animation: pop-in var(--transition-fast) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deployment-popover {
+    animation: none;
+  }
+}
+
+.deployment-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.deployment-popover-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-label);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Error state heading uses the shared warning token. */
+.deployment-popover-heading--error {
+  color: var(--text-warning);
+}
+
+.deployment-popover-details {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.deployment-popover-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp2);
+}
+
+.deployment-popover-label {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.deployment-popover-value {
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  margin: 0;
+}
+
+/* Build id + relative time — slightly smaller, muted. */
+.deployment-popover-meta {
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Muted hint text (draft/error state). */
+.deployment-popover-hint {
+  margin: 0;
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.deployment-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding-top: var(--sp1);
+}
+
+/* External dashboard link — flat, inline, underline on hover. */
+.deployment-popover-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+  color: var(--text-dim);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.deployment-popover-link:hover {
+  text-decoration: underline;
+  color: var(--text);
+}
+
+.deployment-popover-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Primary deploy/redeploy button — inherits the shared btn-primary recipe. */
+.deployment-popover-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
 }
 
 .session-actions {
@@ -1990,12 +2481,70 @@ input {
   background: var(--text-faint);
 }
 
+/* Combined session chrome bar -----------------------------------------------
+
+   ONE header row that merges the session tab strip (left, horizontally
+   scrollable) with the agent action bar (right, non-scrolling). No vertical
+   space is wasted between tabs and actions. The bar is a flex row:
+     [scroll-region: tabs + "+" pinned] | [actions: lifecycle chip + buttons]
+
+   The divider between tabs and actions is a single 1px right-border on the
+   scroll region; it vanishes when neither section is present.
+
+   Named container so the action bar's label-degradation container queries can
+   reference the PANE width (via the chrome bar's full width), not the narrow
+   width of the actions section itself. */
+.session-chrome-bar {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-width: 0;
+  height: var(--pane-header-h);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  container-type: inline-size;
+  container-name: session-chrome-bar;
+}
+
+/* Inside the chrome bar the tab strip becomes the scrollable left section:
+   it takes all remaining width, clips without wrapping, and lets the "+"
+   trail naturally. The standalone border/background are suppressed — the
+   parent bar owns those. */
+.session-chrome-bar > .session-tabs {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+  background: none;
+  /* Right border acts as the visual divider between tabs and the actions
+     section; only rendered when a SessionStepsBar sibling exists. */
+}
+
+.session-chrome-bar > .session-tabs:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+/* Inside the chrome bar the action bar drops its own standalone bar geometry
+   (no own height, no own border-bottom, no own background) and becomes an
+   inline section of the combined row. Setting container-type to normal
+   removes its own container context, so the label-degradation @container
+   queries bubble up to the named session-chrome-bar container and measure
+   the full pane width instead of the narrow actions-section width. */
+.session-chrome-bar > .session-steps {
+  flex: 0 0 auto;
+  height: auto;
+  border-bottom: none;
+  background: none;
+  container-type: normal;
+  overflow-x: visible;
+}
+
 /* Session tab strip -------------------------------------------------------
 
    One tab per live session belonging to the FOCUSED agent. Sits
    directly under the session bar; session switching lives here. The strip
    scrolls horizontally under pressure so the panes never widen past their
-   grid track. */
+   grid track. Standalone: full-height bar with its own border and bg.
+   Inside .session-chrome-bar: scroll region only (see overrides above). */
 .session-tabs {
   display: flex;
   align-items: center;
@@ -2545,9 +3094,9 @@ input {
 
 /* Terminal panel ------------------------------------------------------- */
 
-/* Full-bleed block: a slim status subheader over the raw PTY screen. The
-   xterm canvas colors come from the same tokens at runtime (Terminal.tsx),
-   so panel and screen always agree. */
+/* Full-bleed block: the PTY screen fills all available space. A compact
+   status footer at the bottom carries the connection dot + label — it
+   reclaims the old full-header-height row (56px) as usable terminal space. */
 .harness-terminal {
   display: flex;
   flex-direction: column;
@@ -2558,18 +3107,22 @@ input {
   overflow: hidden;
 }
 
+/* Compact connection-status strip: the dot + a short text label in a single
+   slim row (22px). Sits below the PTY screen (not above) so the very first
+   output lines are never hidden behind a header. The label is readable but
+   unobtrusive — mono font at --type-micro, muted ink. */
 .terminal-statusbar {
   display: flex;
   align-items: center;
   gap: var(--sp2);
   flex-shrink: 0;
-  height: var(--pane-header-h);
+  height: 22px;
   padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--ui-line);
+  border-top: 1px solid var(--ui-line);
   font-family: var(--font-mono);
-  font-size: var(--type-meta);
+  font-size: var(--type-micro);
   font-variant-numeric: tabular-nums;
-  color: var(--text-dim);
+  color: var(--text-faint);
 }
 
 .terminal-status-dot {
@@ -2597,10 +3150,13 @@ input {
   color: var(--red-text);
 }
 
+/* flex-order: screen comes before the compact status strip — the strip sits
+   at the BOTTOM of the terminal even though it appears second in the DOM. */
 .terminal-screen {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  order: -1;
 }
 
 /* The inner inset lives on the .xterm element ITSELF, not the wrapper: the
@@ -3937,6 +4493,51 @@ input {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Debug macros block inside the Steps tab's per-step expanded area.
+   Three preset buttons stack full-width (inherit .btn-ghost / .btn-primary)
+   plus a free-form ask row. Set off from the Logs block by a hairline.
+   All on shared step-expand tokens so it reads as native to the panel. */
+.step-macros {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  padding-top: var(--sp2);
+  border-top: 1px solid var(--ui-line);
+}
+
+.step-macro-btn {
+  width: 100%;
+  text-align: left;
+}
+
+.step-macros-freeform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+
+.step-macros-freeform-input {
+  width: 100%;
+  resize: vertical;
+  padding: var(--sp1) var(--sp2);
+  font: inherit;
+  font-size: var(--type-label);
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+}
+
+.step-macros-freeform-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--ui-line-strong);
+}
+
+.step-macros-freeform-ask {
+  align-self: flex-end;
 }
 
 /* Steps subheader run chip: the flat .status-tag recipe — run truth is a
@@ -5533,6 +6134,16 @@ input {
   padding: 0;
 }
 
+/* The workspace modal's body can be taller than the session modal's because
+   FolderBrowser (favorites + breadcrumbs + listing) adds height, and the
+   secondary affordances below it (MCP-install prompts, Browse templates,
+   Scan) must stay reachable. Bound the body and let it scroll vertically so
+   none of these affordances are pushed out of view. */
+.modal-add-workspace .modal-body {
+  max-height: min(55vh, 520px);
+  overflow-y: auto;
+}
+
 .modal-confirm {
   width: 400px;
 }
@@ -6003,11 +6614,13 @@ input {
   gap: var(--sp1);
 }
 
-/* Deploy pill in the canvas tab bar — the board dropped its subheader, so the
-   deploy status + dashboard link sit up here beside expand/collapse. */
-.right-pane-deployed {
-  flex: 0 0 auto;
-  gap: 4px;
+/* Dashboard icon link in the canvas tab bar. The Deployed status badge was
+   removed (it duplicated the middle panel's DeploymentPopover chip); this
+   is the surviving navigational action — an icon-only link styled as a ghost
+   toggle. text-decoration:none so the underline never appears on an icon. */
+.right-pane-dashboard-link {
+  text-decoration: none;
+  cursor: pointer;
 }
 
 /* The canvas-pane child panel must fill the slot fully. */
@@ -6514,6 +7127,57 @@ input {
   color: var(--text-dim);
   text-align: right;
   overflow-wrap: anywhere;
+}
+
+/* Run-input dialog: a focused JSON editor for supplying workflow input
+   before a Local Run or Prod Run fires. Inherits the standard .modal
+   anatomy (header/body/footer separated by hairlines). The editor textarea
+   uses the mono font and keeps a fixed height to avoid jumping on content
+   changes — tall enough for a 6-field JSON object comfortably. */
+.modal-run-input {
+  width: 440px;
+}
+
+.modal-run-input .modal-header {
+  display: flex;
+  align-items: center;
+}
+
+.run-input-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  margin-top: var(--sp2);
+}
+
+/* Hint line: dimmed, meta-size, shows the entry step's expected fields. */
+.run-input-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+/* JSON editor: monospaced, fixed height, same border/bg as .modal-input. */
+.run-input-editor {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  padding: var(--sp2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+  transition: border-color var(--transition-fast);
+}
+
+.run-input-editor:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 /* ── Shared primitives the template browser introduced ───────────────────── */
@@ -7278,3 +7942,278 @@ input {
     transition: none;
   }
 }
+
+/* FolderBrowser — browse-first Open Folder picker (workspace mode only) --- */
+
+.folder-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Quick-links area: favorites + recents stacked in one block */
+.folder-browser-quicklinks {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-inline: calc(-1 * var(--modal-pad-x, var(--sp5)));
+  border-bottom: 1px solid var(--ui-line);
+}
+
+/* Favorites row */
+.folder-browser-favorites {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp1);
+  padding: var(--sp2) var(--modal-pad-x, var(--sp5));
+  border-bottom: 1px solid var(--border);
+}
+
+.folder-browser-fav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.folder-browser-fav-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.folder-browser-fav-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Recents row */
+.folder-browser-recents {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  padding: var(--sp2) var(--modal-pad-x, var(--sp5));
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.folder-browser-recents::-webkit-scrollbar {
+  display: none;
+}
+
+.folder-browser-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  flex: 0 0 auto;
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+  white-space: nowrap;
+  margin-right: var(--sp1);
+}
+
+.folder-browser-recent-btn {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.folder-browser-recent-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.folder-browser-recent-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Breadcrumb bar */
+.folder-browser-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+  height: var(--pane-header-h);
+  margin-inline: calc(-1 * var(--modal-pad-x, var(--sp5)));
+  padding-inline: var(--modal-pad-x, var(--sp5));
+  border-bottom: 1px solid var(--ui-line);
+  background: var(--bg-3);
+}
+
+.folder-browser-up {
+  flex: 0 0 auto;
+  width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.folder-browser-up:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--ui-line-strong);
+  color: var(--text);
+}
+
+.folder-browser-up:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.folder-browser-up:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.folder-browser-crumb-row {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 0;
+}
+
+.folder-browser-crumb-row::-webkit-scrollbar {
+  display: none;
+}
+
+.folder-browser-crumb-segment {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.folder-browser-crumb-sep {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  margin: 0 1px;
+}
+
+.folder-browser-crumb-btn {
+  background: transparent;
+  border: none;
+  padding: 2px var(--sp1);
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast);
+}
+
+.folder-browser-crumb-btn:not(:disabled):hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.folder-browser-crumb-btn.is-current {
+  color: var(--text);
+  cursor: default;
+  font-weight: 500;
+}
+
+.folder-browser-crumb-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Folder listing — reuses dir-picker-* item styles */
+.folder-browser-listing {
+  margin-inline: calc(-1 * var(--modal-pad-x, var(--sp5)));
+  border-bottom: 1px solid var(--ui-line);
+  background: var(--surface-inset);
+  min-height: 100px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Primary "Open this folder" button area */
+.folder-browser-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-block: var(--sp3);
+}
+
+.folder-browser-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+
+/* Secondary "or type a path" toggle and input row */
+.folder-browser-type-path {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  padding-bottom: var(--sp1);
+}
+
+.folder-browser-type-toggle {
+  align-self: flex-start;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+  text-decoration: none;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.folder-browser-type-toggle:hover {
+  color: var(--text-dim);
+}
+
+.folder-browser-type-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+
+.folder-browser-type-input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--type-label);
+}
+
+.folder-browser-type-go,
+.folder-browser-type-cancel {
+  flex: 0 0 auto;
+}
+

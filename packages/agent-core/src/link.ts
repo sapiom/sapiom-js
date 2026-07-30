@@ -77,3 +77,19 @@ async function linkOperation(opts: LinkOptions, client: GatewayClient): Promise<
 
   return { definitionId: def.id, name: def.name };
 }
+
+/**
+ * Fetch a single agent definition by id to verify it is accessible under the
+ * current API key. Returns the summary on success.
+ *
+ * Throws `AgentOperationError` (code `HTTP_404` | `HTTP_403` | `HTTP_401` |
+ * `NETWORK` | …) when the definition is not found or not accessible. The
+ * caller is responsible for distinguishing definitive not-found/forbidden
+ * (fall back to link-by-name) from transient errors (propagate as-is).
+ */
+export async function getDefinition(
+  definitionId: string,
+  client: GatewayClient,
+): Promise<DefinitionSummary> {
+  return client.get<DefinitionSummary>(`/definitions/${encodeURIComponent(definitionId)}`);
+}

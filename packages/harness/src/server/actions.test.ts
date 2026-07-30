@@ -32,6 +32,8 @@ function makeCoreDeps(overrides: Partial<ActionsRouterOpts["coreDeps"]> = {}) {
     readConfig: vi.fn().mockReturnValue({ definitionId: "def_123" }),
     link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "order-triage" }),
     writeConfig: vi.fn(),
+    // By default, getDefinition resolves (the id belongs to this account).
+    getDefinition: vi.fn().mockResolvedValue({ id: "def_123", name: "my-agent" }),
     ...overrides,
   } as NonNullable<ActionsRouterOpts["coreDeps"]> & { __client?: unknown };
 }
@@ -105,6 +107,9 @@ class FakeChild extends EventEmitter implements RunLocalChildProcess {
     }
   })(this);
 
+  /** Signals received via kill() — inspectable in lifecycle tests. */
+  readonly killSignals: Array<NodeJS.Signals | number | undefined> = [];
+
   /** Emit a line on stdout (the route reads it via readline). */
   emitLine(obj: unknown): void {
     this.stdout.write(JSON.stringify(obj) + "\n");
@@ -119,6 +124,15 @@ class FakeChild extends EventEmitter implements RunLocalChildProcess {
     this.stderr.end();
     // Let the readline "line" handlers drain before the exit handler runs.
     setImmediate(() => this.emit("exit", code));
+  }
+  /**
+   * Satisfy the RunLocalChildProcess.kill() contract. Records the signal for
+   * assertion and optionally auto-exits the child so tests can assert the
+   * response settles after a kill.
+   */
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.killSignals.push(signal);
+    return true;
   }
 }
 
@@ -541,6 +555,168 @@ describe("createActionsRouter", () => {
       ]);
     });
 
+    // ── ownership-aware fallback (linked + foreign id) ──────────────────────
+
+    it("linked + id resolves → redeploys the same definition, link() NOT called", async () => {
+      // The happy path for a linked project: the definition id is accessible
+      // under this account, so Deploy reuses it. No link(), no linking line.
+      const coreDeps = makeCoreDeps({
+        getDefinition: vi.fn().mockResolvedValue({ id: "def_123", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      const events = parseNdjson(await res.text());
+
+      // getDefinition verified ownership — link() must NOT have been called.
+      expect(coreDeps.getDefinition).toHaveBeenCalledOnce();
+      expect(coreDeps.getDefinition).toHaveBeenCalledWith("def_123", expect.anything());
+      expect(coreDeps.link).not.toHaveBeenCalled();
+      expect(coreDeps.writeConfig).not.toHaveBeenCalled();
+      // Stream shape unchanged — no extra linking line.
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_123" },
+        { phase: "ready", definitionId: "def_123", buildRunId: "build_9", status: "ready" },
+      ]);
+    });
+
+    it("linked + id 404 → falls back to link({name, create:true}), emits linking", async () => {
+      // The foreign-id scenario: sapiom.json has a definitionId from someone
+      // else's account. getDefinition returns 404, so Deploy falls back to
+      // link-by-name — re-attaches or creates under your account.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const coreDeps = makeCoreDeps({
+        getDefinition: vi.fn().mockRejectedValue(
+          new AgentOperationError({ code: "HTTP_404", message: "Definition not found." }),
+        ),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_mine", name: "order-triage" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_mine",
+          buildRunId: "build_2",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", name: "order-triage" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      const events = parseNdjson(await res.text());
+
+      // A linking line must precede building (same as the unlinked path).
+      expect(events[0]).toEqual({ phase: "linking", name: "order-triage" });
+      expect(events[1]).toEqual({ phase: "building", definitionId: "def_mine" });
+      expect(events[2]).toMatchObject({ phase: "ready", definitionId: "def_mine" });
+
+      // link() was called with create:true — resync-or-create under this account.
+      expect(coreDeps.link).toHaveBeenCalledWith(
+        { name: "order-triage", create: true },
+        expect.anything(),
+      );
+      // The new id was written back to sapiom.json.
+      expect(coreDeps.writeConfig).toHaveBeenCalledWith("/proj/agent", {
+        definitionId: "def_mine",
+        name: "order-triage",
+      });
+    });
+
+    it("linked + id 403/forbidden → falls back to link(), same as 404", async () => {
+      // 403 (forbidden) is also a definitive ownership failure — the id exists
+      // but is not accessible to this account. Same fallback as 404.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const coreDeps = makeCoreDeps({
+        getDefinition: vi.fn().mockRejectedValue(
+          new AgentOperationError({ code: "HTTP_403", message: "Forbidden." }),
+        ),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_mine", name: "order-triage" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_mine",
+          buildRunId: "build_3",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", name: "order-triage" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      const events = parseNdjson(await res.text());
+
+      expect(events[0]).toEqual({ phase: "linking", name: "order-triage" });
+      expect(coreDeps.link).toHaveBeenCalledWith(
+        { name: "order-triage", create: true },
+        expect.anything(),
+      );
+    });
+
+    it("linked + id transient/5xx → does NOT fork; error propagates, no duplicate agent", async () => {
+      // A network blip or 5xx on the verify must not trigger the fallback —
+      // that would risk silently duplicating an agent under this account.
+      // The error propagates and is reported as a terminal error line.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const coreDeps = makeCoreDeps({
+        getDefinition: vi.fn().mockRejectedValue(
+          new AgentOperationError({ code: "HTTP_500", message: "Internal server error." }),
+        ),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_4",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      const events = parseNdjson(await res.text());
+
+      // The transient error must surface as a terminal error line.
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ phase: "error", code: "HTTP_500" });
+      // link() must NOT have been called — no fork, no duplicate.
+      expect(coreDeps.link).not.toHaveBeenCalled();
+      expect(coreDeps.deploy).not.toHaveBeenCalled();
+    });
+
+    it("linked + NETWORK error on verify → does NOT fork; error propagates", async () => {
+      // Same as 5xx: a NETWORK error (connection reset, DNS failure) on the
+      // verify must not trigger the fallback.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const coreDeps = makeCoreDeps({
+        getDefinition: vi.fn().mockRejectedValue(
+          new AgentOperationError({ code: "NETWORK", message: "Could not reach host." }),
+        ),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      const events = parseNdjson(await res.text());
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ phase: "error", code: "NETWORK" });
+      expect(coreDeps.link).not.toHaveBeenCalled();
+    });
+
     it("ends the stream with one terminal error when linking fails, without building", async () => {
       const { AgentOperationError } = await import("@sapiom/agent-core");
       const coreDeps = makeCoreDeps({
@@ -791,6 +967,8 @@ describe("createActionsRouter", () => {
     it("recovers a 401 by refreshing the key and retrying, streaming ready", async () => {
       // First deploy attempt is rejected (stale key); the router refreshes to a
       // newer key and the retry succeeds — a single building line, then ready.
+      // Note: link runs first (succeeds on first try with sk-stale); deploy then
+      // fails 401 and retries with sk-fresh.
       const provider = refreshingProvider("sk-stale", "sk-fresh");
       const deploy = vi
         .fn()
@@ -804,7 +982,7 @@ describe("createActionsRouter", () => {
       start({
         apiKey: provider,
         coreBaseUrl: "https://api.test",
-        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "test-agent" }),
         coreDeps,
       });
 
@@ -825,12 +1003,10 @@ describe("createActionsRouter", () => {
 
       expect(provider.refreshCalls).toBe(1);
       expect(deploy).toHaveBeenCalledTimes(2);
-      // Retry re-minted the client with the refreshed key.
-      expect(coreDeps.createClient).toHaveBeenNthCalledWith(1, {
-        host: "https://api.test",
-        apiKey: "sk-stale",
-      });
-      expect(coreDeps.createClient).toHaveBeenNthCalledWith(2, {
+      // The deploy retry re-minted the client with the refreshed key.
+      // createClient is called once for link (sk-stale), once for the first
+      // deploy (sk-stale), and once for the deploy retry (sk-fresh).
+      expect(coreDeps.createClient).toHaveBeenCalledWith({
         host: "https://api.test",
         apiKey: "sk-fresh",
       });
@@ -861,6 +1037,135 @@ describe("createActionsRouter", () => {
       // router did not burn a second attempt.
       expect(deploy).toHaveBeenCalledTimes(1);
       expect(provider.refreshCalls).toBe(1);
+    });
+
+    it("calls onWorkflowConfigChanged after a successful deploy that changes the definitionId", async () => {
+      // The canonical post-deploy state-sync: a deploy that resolves a new id
+      // (link returned def_new, sapiom.json had def_old) must notify the server
+      // so it can refresh its cache and broadcast workflows.changed — keeping
+      // every connected client's chip, canvas badge, and Prod Run in sync
+      // without a harness restart.
+      const onWorkflowConfigChanged = vi.fn().mockResolvedValue(undefined);
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      // The callback must have been invoked with the workflow's project path.
+      expect(onWorkflowConfigChanged).toHaveBeenCalledOnce();
+      expect(onWorkflowConfigChanged).toHaveBeenCalledWith("/proj/agent");
+    });
+
+    it("does not call onWorkflowConfigChanged when link returns the same id already in sapiom.json", async () => {
+      // A redeploy of an already-linked workflow: link returned the same id that
+      // is already on disk, so writeConfig was skipped — no cache invalidation
+      // needed and onWorkflowConfigChanged must not fire.
+      const onWorkflowConfigChanged = vi.fn();
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_123" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_123", name: "test-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "test-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "ready" });
+
+      expect(onWorkflowConfigChanged).not.toHaveBeenCalled();
+    });
+
+    it("does not call onWorkflowConfigChanged when the deploy build fails", async () => {
+      // A build failure means no new definitionId was committed — no cache
+      // refresh needed. The terminal error line is still streamed in-band.
+      const { AgentOperationError } = await import("@sapiom/agent-core");
+      const onWorkflowConfigChanged = vi.fn();
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockRejectedValue(
+          new AgentOperationError({ code: "BUILD_FAILED", message: "Build failed." }),
+        ),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      expect(events.at(-1)).toMatchObject({ phase: "error" });
+
+      expect(onWorkflowConfigChanged).not.toHaveBeenCalled();
+    });
+
+    it("streams ready even when onWorkflowConfigChanged throws (non-fatal)", async () => {
+      // A cache-refresh failure must not corrupt the stream or throw — the
+      // deploy succeeded; the broadcast is best-effort.
+      const onWorkflowConfigChanged = vi.fn().mockRejectedValue(new Error("cache write failed"));
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({ definitionId: "def_old" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "my-agent" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_5",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", definitionSlug: "my-agent" }),
+        coreDeps,
+        onWorkflowConfigChanged,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+      // The ready line was already written before onWorkflowConfigChanged was
+      // called — both lines must still be present. building uses the
+      // pre-deploy (config) id; ready uses the result id from the build.
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_old" },
+        { phase: "ready", definitionId: "def_new", buildRunId: "build_5", status: "ready" },
+      ]);
     });
   });
 
@@ -1367,6 +1672,162 @@ describe("createActionsRouter", () => {
           error: "node binary not found",
         },
       ]);
+    });
+
+    // ── lifecycle hardening ──────────────────────────────────────────────────
+
+    it("kills the child with SIGTERM on client disconnect, response settles, no orphan", async () => {
+      // Use fake timers scoped to setTimeout/clearTimeout only — preserving
+      // setImmediate so spawnFake's whenSpawned promise resolves correctly.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      // Start the fetch but don't await — we need to drive the child first.
+      const controller = new AbortController();
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+        signal: controller.signal,
+      }).catch(() => null); // AbortError is expected when we abort below
+
+      await whenSpawned;
+
+      // Simulate client navigating away — abort the fetch. This closes the
+      // underlying TCP connection, causing the server's `res.on("close")` to
+      // fire with res.writableEnded === false (the run was still in progress).
+      controller.abort();
+
+      // Give the server's res.on("close") handler time to fire. Use a real
+      // setImmediate + a small poll loop since we only fake setTimeout.
+      await new Promise<void>((resolve) => {
+        const check = (): void => {
+          if (child.killSignals.length > 0) { resolve(); return; }
+          setImmediate(check);
+        };
+        setImmediate(check);
+      });
+
+      // The child must have received SIGTERM.
+      expect(child.killSignals).toContain("SIGTERM");
+
+      // Now let the child exit so the response stream closes and the test server
+      // can shut down cleanly in afterEach.
+      child.finish(null);
+      await resPromise;
+
+      vi.useRealTimers();
+    }, 10_000);
+
+    it("sends SIGKILL after the grace period when the child ignores SIGTERM on disconnect", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const controller = new AbortController();
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+        signal: controller.signal,
+      }).catch(() => null);
+
+      await whenSpawned;
+
+      controller.abort();
+
+      // Wait for SIGTERM to be sent.
+      await new Promise<void>((resolve) => {
+        const check = (): void => {
+          if (child.killSignals.length > 0) { resolve(); return; }
+          setImmediate(check);
+        };
+        setImmediate(check);
+      });
+
+      // SIGTERM should already be queued.
+      expect(child.killSignals).toContain("SIGTERM");
+
+      // Advance past the SIGKILL grace period (3 s).
+      await vi.advanceTimersByTimeAsync(3_500);
+
+      // SIGKILL must follow SIGTERM.
+      expect(child.killSignals).toContain("SIGKILL");
+      expect(child.killSignals.indexOf("SIGTERM")).toBeLessThan(
+        child.killSignals.indexOf("SIGKILL"),
+      );
+
+      child.finish(null);
+      await resPromise;
+
+      vi.useRealTimers();
+    }, 10_000);
+
+    it("kills the child and writes a timed-out terminal line when the wall-clock limit expires", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+
+      await whenSpawned;
+
+      // Advance past the 5-minute wall-clock timeout.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 + 500);
+
+      // The handler kills the child and settle() writes the terminal error and
+      // calls res.end(). The fetch() will resolve once it reads the ended stream.
+      // The child's stdout and stderr are still open — end them so Node.js
+      // doesn't leave open handles dangling after the response has settled.
+      child.stdout.end();
+      child.stderr.end();
+
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      const lines = parseNdjson(await res.text());
+      // The wall-clock timer must have sent SIGTERM.
+      expect(child.killSignals).toContain("SIGTERM");
+      // Exactly one terminal line whose message mentions "timed out".
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ kind: "error", outcome: "failed" });
+      expect(String(lines[0].error)).toMatch(/timed out/i);
+
+      vi.useRealTimers();
+    }, 10_000);
+
+    it("swallows a stdin EPIPE / write error without crashing the server", async () => {
+      const { child, spawn, whenSpawned } = spawnFake();
+      start({ apiKey: null, resolveWorkflow: () => null, runLocalSpawn: spawn });
+
+      const resPromise = fetch(`${baseUrl}/api/runs/local`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceDir: "/proj/agent" }),
+      });
+
+      await whenSpawned;
+
+      // Emit an "error" on the child's stdin (simulates EPIPE — child exited
+      // before the route finished writing). This must NOT propagate as an
+      // uncaughtException; the route catches and swallows it.
+      const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      child.stdin.emit("error", epipe);
+
+      // The run still completes normally — emit a summary and finish.
+      child.emitLine({ kind: "summary", outcome: "completed", unusedStubs: [], stubWarnings: [] });
+      child.finish(0);
+
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      const lines = parseNdjson(await res.text());
+      // The summary (not a synthesized error) must be the terminal line.
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ kind: "summary", outcome: "completed" });
     });
   });
 

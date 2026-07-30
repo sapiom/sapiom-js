@@ -21,7 +21,7 @@ import type { JSX, RefObject } from "react";
 import type { FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
 import { useDismissable } from "../lib/use-dismissable";
-import { DirectoryPicker } from "./DirectoryPicker";
+import { FolderBrowser } from "./FolderBrowser";
 import { Icon } from "./Icon";
 
 export function TemplateUseDialog({
@@ -89,10 +89,10 @@ export function TemplateUseDialog({
         </div>
 
         <div className="modal-body">
-          <DirectoryPicker
+          <FolderBrowser
             value={dest}
             onChange={setDest}
-            onSubmit={() => void submit()}
+            onOpen={() => void submit()}
             recentDirs={recentDirs}
             listDir={listDir}
           />

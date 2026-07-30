@@ -201,10 +201,18 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
   // 4. Record the provenance so `link`/`deploy`/`run` know what this is. The
   // definitionId path writes `definitionId` directly — the checkout is
   // pre-linked, so a subsequent `link` is never required before `deploy`.
+  //
+  // For templateId/forkId clones: the forked repo may carry a committed
+  // `sapiom.json` whose `definitionId` belongs to the source template's
+  // deployment on a different account. `writeConfig` merges over the existing
+  // file, so passing `definitionId: undefined` here overrides and drops any
+  // such foreign id from the merge result — `JSON.stringify` omits undefined
+  // values — ensuring a template/fork clone is always unlinked. The user's own
+  // definition is assigned at `link`/`deploy` time.
   writeConfig(targetDir, {
     repoFullName: token.repoFullName,
     defaultBranch: token.defaultBranch,
-    ...(definitionId ? { definitionId } : { forkId: resolvedForkId as string }),
+    ...(definitionId ? { definitionId } : { forkId: resolvedForkId as string, definitionId: undefined }),
     ...(resolvedTemplateId ? { templateId: resolvedTemplateId } : {}),
   });
 

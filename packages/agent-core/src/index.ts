@@ -62,7 +62,7 @@ export { bundleForDeploy } from "./bundle.js";
 export type { DeployBundle } from "./bundle.js";
 
 // link (networked)
-export { link } from "./link.js";
+export { link, getDefinition } from "./link.js";
 export type { LinkOptions, LinkResult, DefinitionSummary } from "./link.js";
 
 // clone — fork + materialize a template locally (networked; template handoff, SAP-1357)

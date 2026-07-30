@@ -333,13 +333,125 @@ function OpenLaunchedWorkflow({
 }
 
 /**
+ * Debug macros block for a single run step in the Steps tab.
+ *
+ * Renders three preset questions (Why slow / Debug / Explain) plus a
+ * free-form ask textarea. Each injects
+ * `extractStepContext(step, { input, output, calls }) + "\n\n" + question`
+ * into the active terminal session.
+ *
+ * Gating rule: the block renders ONLY when `onInjectPrompt` is provided
+ * (i.e. a live session can receive the inject). Absent when no session is
+ * live — honest absence, no disabled "dead" buttons.
+ *
+ * "Debug this step" is primary-styled on a failed step, ghost otherwise.
+ */
+export function StepDebugMacros({
+  step,
+  onInjectPrompt,
+}: {
+  step: StepView;
+  onInjectPrompt: (text: string) => void;
+}): JSX.Element {
+  const [freeformText, setFreeformText] = useState("");
+
+  function injectMacro(question: string): void {
+    const trace = {
+      input: step.input,
+      output: step.output,
+      calls: step.calls,
+    };
+    const ctx = extractStepContext(step, trace);
+    onInjectPrompt(`${ctx}\n\n${question}`);
+  }
+
+  function handleFreeformAsk(): void {
+    const trimmed = freeformText.trim();
+    if (!trimmed) return;
+    injectMacro(trimmed);
+    setFreeformText("");
+  }
+
+  return (
+    <div className="step-macros" data-testid="step-macros">
+      <button
+        className="step-macro-btn btn-ghost"
+        data-testid="step-macro-slow"
+        onClick={() => injectMacro("Why is this step slow / stuck?")}
+      >
+        Why is this step slow / stuck?
+      </button>
+      <button
+        className={
+          "step-macro-btn " +
+          (step.status === "failed" ? "btn-primary" : "btn-ghost")
+        }
+        data-testid="step-macro-debug"
+        onClick={() => injectMacro("Debug this step")}
+      >
+        Debug this step
+      </button>
+      <button
+        className="step-macro-btn btn-ghost"
+        data-testid="step-macro-explain"
+        onClick={() => injectMacro("Explain this step")}
+      >
+        Explain this step
+      </button>
+      <div className="step-macros-freeform">
+        <textarea
+          className="step-macros-freeform-input"
+          data-testid="step-freeform-input"
+          placeholder="Ask about this step…"
+          rows={2}
+          value={freeformText}
+          onChange={(e) => setFreeformText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              handleFreeformAsk();
+            }
+          }}
+        />
+        <button
+          className="btn-primary step-macros-freeform-ask"
+          data-testid="step-freeform-ask"
+          disabled={!freeformText.trim()}
+          onClick={handleFreeformAsk}
+        >
+          Ask
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Run-only steps view: when a run has been observed but the canvas
  * has not posted a structural graph (nothing visualized, or a document
  * without the graph contract), the real per-step data still renders —
  * name, status, latency, error, logs — instead of "No steps yet".
  * Structure (transitions, contracts) needs Visualize; the hint says so.
+ *
+ * When `onInjectPrompt` is provided (a live session), each step's
+ * expanded area includes the debug macros block ({@link StepDebugMacros}).
+ *
+ * When `onOpenDetail` is provided, each expanded step shows a
+ * "Full details →" button that drills into the step's full detail pane,
+ * matching the affordance available in {@link CanvasStepsList}.
  */
-export function RunStepsList({ run, target }: { run: RunView; target: RunTarget | null }): JSX.Element {
+export function RunStepsList({
+  run,
+  target,
+  onInjectPrompt,
+  onOpenDetail,
+}: {
+  run: RunView;
+  target: RunTarget | null;
+  onInjectPrompt?: (text: string) => void;
+  /** Opens the full detail pane for a run step (by step id). */
+  onOpenDetail?: (id: string) => void;
+}): JSX.Element {
   return (
     <div className="canvas-steps-list" data-testid="canvas-run-fallback">
       <div className="canvas-steps-label">
@@ -352,6 +464,7 @@ export function RunStepsList({ run, target }: { run: RunView; target: RunTarget 
         const meta = [
           step.latencyMs !== undefined ? formatTimeout(step.latencyMs) : null,
         ].filter((v): v is string => v !== null);
+        const hasExpand = Boolean(step.error || step.logSlice || onInjectPrompt || onOpenDetail);
         return (
           <div key={step.id} className="canvas-step-item">
             <div className="canvas-step-row is-static" data-testid={`canvas-run-step-${step.name}`}>
@@ -365,7 +478,7 @@ export function RunStepsList({ run, target }: { run: RunView; target: RunTarget 
               <span className="canvas-step-meta">{meta.join(" · ")}</span>
               <span aria-hidden="true" />
             </div>
-            {(step.error || step.logSlice) && (
+            {hasExpand && (
               <div className="canvas-step-expand">
                 {step.error && <pre className="canvas-run-error">{step.error}</pre>}
                 {step.logSlice && (
@@ -373,6 +486,18 @@ export function RunStepsList({ run, target }: { run: RunView; target: RunTarget 
                     <summary>Logs</summary>
                     <pre>{step.logSlice}</pre>
                   </details>
+                )}
+                {onOpenDetail && (
+                  <button
+                    className="canvas-step-open"
+                    data-testid={`canvas-run-step-open-${step.name}`}
+                    onClick={() => onOpenDetail(step.id)}
+                  >
+                    Full details <Icon name="ArrowRight" size={12} />
+                  </button>
+                )}
+                {onInjectPrompt && (
+                  <StepDebugMacros step={step} onInjectPrompt={onInjectPrompt} />
                 )}
               </div>
             )}
@@ -409,6 +534,7 @@ export function CanvasStepsList({
   expandedId,
   onToggle,
   onOpenDetail,
+  onInjectPrompt,
 }: {
   graph: CanvasGraph;
   /** The session's shown run; per-step status/latency render only
@@ -423,6 +549,9 @@ export function CanvasStepsList({
   expandedId: string | null;
   onToggle: (id: string) => void;
   onOpenDetail: (id: string) => void;
+  /** Inject a prompt into the active terminal session (debug macros).
+   *  Absent when no session is live; the macro block is hidden in that case. */
+  onInjectPrompt?: (text: string) => void;
 }): JSX.Element {
   // Same validity rule as the board's group bands: a group referencing a
   // step that no longer exists is stale enrichment and renders nowhere, so
@@ -510,6 +639,16 @@ export function CanvasStepsList({
                 >
                   Full details <Icon name="ArrowRight" size={12} />
                 </button>
+                {/* Debug macros on every step, run or not. A not-yet-run step
+                    still injects its name (+ run data once it exists) so Explain
+                    / free-form work before the first run — the macros live per
+                    step in the Steps tab, not gated behind a run. */}
+                {onInjectPrompt && (
+                  <StepDebugMacros
+                    step={runStep ?? { id: node.id, name: node.label, status: "pending" }}
+                    onInjectPrompt={onInjectPrompt}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -742,11 +881,9 @@ export function CanvasStepDetail({
  * step's observed run facts when a run exists — status, duration, error.
  * Absent fields stay absent.
  *
- * Debug macros (restored from the pre-SAP-1767 StepDetailPanel) fire when
- * a session is live: each prepends `extractStepContext(runStep, trace, facts)`
- * to its question and injects the result into the active terminal. The inject
- * path is identical to the action-bar macros (App → harness.injectInput). No
- * cost data is injected — `extractStepContext` is cost-free by contract.
+ * Debug macros live in the Steps tab ({@link RunStepsList}) — not here.
+ * The canvas inspector is data-only: it shows the step's run facts, IO,
+ * capability calls, and links, but does not inject prompts.
  */
 export function CanvasStepInspector({
   node,

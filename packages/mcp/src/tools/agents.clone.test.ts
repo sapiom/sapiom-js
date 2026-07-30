@@ -94,6 +94,9 @@ describe("sapiom_dev_agents_clone tool", () => {
     );
     const out = parse(res);
     expect(out.forkId).toBe("fork-1");
+    // A templateId clone must not carry a definitionId — the user's own
+    // definition is assigned at link/deploy time.
+    expect(out.definitionId).toBeUndefined();
     expect(out.hint).toContain("sapiom_dev_agents_link");
     // The credential must never surface in the tool output.
     expect(res.content[0].text).not.toContain("x-access-token");

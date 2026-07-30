@@ -10,7 +10,9 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 
-import type { AuthStartResponse, FsListResponse } from "../lib/api";
+import type { AuthStartResponse, ConnectGitHubRequest, FsListResponse } from "../lib/api";
+import type { GitHubDeviceApi } from "./GitHubDeviceConnect";
+import { AddProjectMenu } from "./AddProjectMenu";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
@@ -44,6 +46,14 @@ interface WorkflowsRailProps {
   onFocusAgent: (path: string) => void;
   onOpenPalette: () => void;
   onConnect: (path: string) => Promise<void>;
+  /** Clone a GitHub repo via the user's local git and register it in the workspace. */
+  onConnectGitHub: (req: ConnectGitHubRequest) => Promise<string>;
+  /**
+   * GitHub Device Flow API adapter. When provided the Device Flow panel is
+   * offered as the primary GitHub connect experience; the URL-paste form becomes
+   * a fallback. When absent only the URL-paste form is shown.
+   */
+  githubDeviceApi?: GitHubDeviceApi;
   /** Collapses the rail — the session bar grows an expand affordance. */
   onCollapse: () => void;
   /** Selects a session from the history menu (a past/exited session). */
@@ -306,6 +316,7 @@ export function WorkflowsRail({
   onFocusAgent,
   onOpenPalette,
   onConnect,
+  onConnectGitHub,
   onCollapse,
   onSelectSession,
   overviewSelected,
@@ -340,8 +351,10 @@ export function WorkflowsRail({
   onDisconnect,
   settingsOpen,
   onSetSettingsOpen,
+  githubDeviceApi,
 }: WorkflowsRailProps): JSX.Element {
   const [addDialogMode, setAddDialogMode] = useState<"session" | "workspace" | null>(null);
+  const [githubMenuOpen, setGithubMenuOpen] = useState(false);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
 
   /**
@@ -555,8 +568,36 @@ export function WorkflowsRail({
                 setAddDialogMode("workspace");
               }}
             />
+            <DoorRow
+              icon="GitBranch"
+              title="Connect to GitHub"
+              sub="Clone and register a GitHub repo"
+              testid="aw-door-github"
+              onClick={() => {
+                setAddMenuOpen(false);
+                setGithubMenuOpen(true);
+              }}
+            />
           </div>
         </AnchoredPopover>
+        {/* GitHub connect sub-flow: Device Flow (primary) or URL-paste (fallback).
+            Anchors to the same + trigger so it appears in the same position. */}
+        <AddProjectMenu
+          triggerRef={connectTriggerRef}
+          open={githubMenuOpen}
+          onDismiss={() => setGithubMenuOpen(false)}
+          onOpenFolder={() => {
+            setGithubMenuOpen(false);
+            setAddDoor("have");
+            setAddDialogMode("workspace");
+          }}
+          onConnectGitHub={onConnectGitHub}
+          onAfterConnect={(path) => {
+            // The server already registered the path; focus the new entry.
+            void onConnect(path);
+          }}
+          githubDeviceApi={githubDeviceApi}
+        />
 
         <AnchoredPopover
           open={historyOpen}

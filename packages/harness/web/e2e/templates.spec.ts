@@ -19,9 +19,10 @@
  *    belongs to the use-confirm dialog, which is where a commit is now asked
  *    for;
  *  - the destination folder is asked once, in that dialog, by the same
- *    DirectoryPicker the session and workspace flows use (`dir-picker-input`).
- *    It is therefore no longer a persistent field that can be hand-edited and
- *    carried across template switches — that behaviour is gone deliberately.
+ *    FolderBrowser the session and workspace flows use (browse-and-click,
+ *    or "or type a path" secondary). It is therefore no longer a persistent
+ *    field that can be hand-edited and carried across template switches —
+ *    that behaviour is gone deliberately.
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
@@ -184,10 +185,10 @@ test.describe("templates journey (from the welcome panel)", () => {
     await page.getByTestId("template-use-btn").click();
 
     // The destination is asked once, and defaults to a new folder named after
-    // the template under the resolved project root.
-    await expect(page.getByTestId("dir-picker-input")).toHaveValue(
-      "/Users/demo/acme-app/projects/web-research-digest",
-    );
+    // the template under the resolved project root. FolderBrowser shows the
+    // leaf of the path in the breadcrumb tail.
+    const dialog = page.getByTestId("template-use-dialog");
+    await expect(dialog.getByTestId("folder-browser-crumb-web-research-digest")).toBeVisible();
     await page.getByTestId("template-use-confirm").click();
 
     // The browser yields to the session it just started — leaving it mounted
@@ -209,9 +210,9 @@ test.describe("templates journey (from the welcome panel)", () => {
   test("use (starter): the real bundled-template init command", async ({ page }) => {
     await open(page, "coding-pause");
     await page.getByTestId("template-use-btn").click();
-    await expect(page.getByTestId("dir-picker-input")).toHaveValue(
-      "/Users/demo/acme-app/projects/coding-pause",
-    );
+    // Breadcrumb tail shows the default destination folder name.
+    const dialog = page.getByTestId("template-use-dialog");
+    await expect(dialog.getByTestId("folder-browser-crumb-coding-pause")).toBeVisible();
     await page.getByTestId("template-use-confirm").click();
 
     await expect(page.getByTestId("session-context-title")).toContainText("coding-pause");
@@ -226,10 +227,10 @@ test.describe("templates journey (from the welcome panel)", () => {
     // Someone who already knows the template shouldn't have to open it first.
     await page.getByTestId("template-card-info-hello-agent").click();
     await page.getByTestId("template-facts-use-hello-agent").click();
-    await expect(page.getByTestId("template-use-dialog")).toBeVisible();
-    await expect(page.getByTestId("dir-picker-input")).toHaveValue(
-      "/Users/demo/acme-app/projects/hello-agent",
-    );
+    const dialog = page.getByTestId("template-use-dialog");
+    await expect(dialog).toBeVisible();
+    // FolderBrowser shows the leaf of the default destination in the breadcrumb.
+    await expect(dialog.getByTestId("folder-browser-crumb-hello-agent")).toBeVisible();
   });
 
   test("read: the step graph renders in the canvas vocabulary before anything is cloned", async ({
@@ -308,6 +309,7 @@ test("the 'start from a template' door hands straight off to the templates brows
 }) => {
   await page.goto("/");
   await expect(page.locator(".rail-workflows")).toBeVisible();
+  // The rail's + opens AddProjectMenu first; "Open Folder" enters the dialog.
   await page.getByTestId("add-workspace").click();
   await page.getByTestId("aw-door-template").click();
   // No intermediate step, and the dialog it came from closes behind it: the

@@ -50,11 +50,14 @@ const loadStepsTab = async (page: Page): Promise<void> => {
   await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
 };
 
-/** Trigger the "Local" action-bar button (run_local macro → MockApi.runLocal). */
+/** Trigger the "Local" action-bar button: run-first mode fires the run directly
+ *  using the last-used input (or {}) — no dialog opens for a clean run. */
 const clickLocalButton = async (page: Page): Promise<void> => {
   const btn = page.getByTestId("session-step-local");
   await expect(btn).toBeEnabled();
   await btn.click();
+  // Run-first: the button fires immediately with no dialog (the mock run
+  // succeeds with no input-validation error, so the dialog is never opened).
 };
 
 /** Publish a bus message via the test escape hatch (same pattern as
@@ -353,5 +356,124 @@ test.describe("prod run — run-state poll via mocked endpoint", () => {
     const stepsList = page.getByTestId("canvas-steps-list");
     await expect(stepsList).toBeVisible();
     await expect(stepsList.getByTestId("canvas-run-stub-chip")).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (c) RunStepsList fallback — "Full details →" button opens the step detail
+// ---------------------------------------------------------------------------
+
+test.describe("RunStepsList fallback — Full details button drills into step detail", () => {
+  test.beforeEach(async ({ page }) => {
+    await loadStepsTab(page);
+  });
+
+  test("each run step in the fallback list shows a 'Full details' button that opens the step detail pane", async ({
+    page,
+  }) => {
+    // Trigger a local run so step data is available. The Steps tab is already
+    // open (loadStepsTab). After the run, the Steps tab may show CanvasStepsList
+    // (if a graph was posted) or RunStepsList (no graph yet). Both paths must
+    // expose a "Full details" drill-down; this test covers RunStepsList.
+    //
+    // To isolate RunStepsList, we use the pre-run path where no canvas graph is
+    // posted. Trigger a run, switch to Steps, and check which list rendered.
+    const localBtn = page.getByTestId("session-step-local");
+    await expect(localBtn).toBeEnabled();
+    await localBtn.click();
+
+    // Wait for the run chip to confirm the run started/completed.
+    const runChip = page.getByTestId("canvas-run-chip");
+    await expect(runChip).toBeVisible({ timeout: 8000 });
+    await expect(runChip).toContainText("local run completed", { timeout: 8000 });
+
+    // If the CanvasStepsList is already showing (graph posted from iframe), the
+    // Full details button is already exercised in other tests — skip to avoid
+    // duplicate coverage. Check for the RunStepsList fallback.
+    const fallback = page.getByTestId("canvas-run-fallback");
+    const stepsList = page.getByTestId("canvas-steps-list");
+    const hasFallback = (await fallback.count()) > 0;
+    const hasStepsList = (await stepsList.count()) > 0;
+
+    if (!hasFallback && !hasStepsList) {
+      throw new Error("Neither RunStepsList fallback nor CanvasStepsList is visible after a run");
+    }
+
+    if (hasFallback) {
+      // RunStepsList: the "Full details" button is inside the step's expand area.
+      // MockApi.runLocal emits: intake, screen, approve.
+      // The expand area always shows when onOpenDetail is provided, even without
+      // an error or logSlice, so the button is always present on every step.
+      const intakeOpenBtn = page.getByTestId("canvas-run-step-open-intake");
+      await expect(intakeOpenBtn).toBeVisible({ timeout: 5000 });
+      await expect(intakeOpenBtn).toContainText("Full details");
+
+      // Click it — should transition to the step detail pane.
+      await intakeOpenBtn.click();
+      const detailPane = page.getByTestId("canvas-step-detail");
+      await expect(detailPane).toBeVisible({ timeout: 5000 });
+
+      // The detail header (WorkflowActionsHeader) should show the back button.
+      await expect(page.getByTestId("canvas-detail-back")).toBeVisible();
+    } else {
+      // CanvasStepsList is showing — Full details is already covered in
+      // run-inspector.spec.ts and canvas-inspector.spec.ts. Just verify the
+      // button exists in the expanded row.
+      await page.getByTestId("canvas-step-row-intake").click();
+      const openBtn = page.getByTestId("canvas-step-open-intake");
+      await expect(openBtn).toBeVisible({ timeout: 5000 });
+      await expect(openBtn).toContainText("Full details");
+    }
+  });
+
+  test("RunStepsList Full details button uses the step's id to open the canvas-step-detail", async ({
+    page,
+  }) => {
+    // Seed a prod run that delivers per-step data so RunStepsList has populated
+    // step rows. Use execution.started to trigger the poller which fills in ids.
+    await seedRunState(page, "exec-runsteps-detail", {
+      executionId: "exec-runsteps-detail",
+      status: "completed",
+      steps: [
+        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 100, error: "test error details" },
+        { id: "screen", name: "screen", status: "passed" as const, latencyMs: 200 },
+      ],
+    });
+
+    await publish(page, {
+      type: "execution.started",
+      harnessSessionId: "sess-boot",
+      executionId: "exec-runsteps-detail",
+      target: "prod",
+    });
+
+    // Wait for the run to land in the inspector.
+    const runChip = page.getByTestId("canvas-run-chip");
+    await expect(runChip).toBeVisible({ timeout: 8000 });
+    await expect(runChip).toContainText("completed", { timeout: 8000 });
+
+    // Check if the RunStepsList fallback is showing (vs CanvasStepsList).
+    const fallback = page.getByTestId("canvas-run-fallback");
+    if ((await fallback.count()) === 0) {
+      // CanvasStepsList is showing — test the CanvasStepsList flow instead,
+      // which has its own Full details button coverage. Skip the RunStepsList
+      // specific assertion.
+      return;
+    }
+
+    // In the RunStepsList, the intake step has an error — the expand area
+    // is always shown. The "Full details" button must be present.
+    const openBtn = page.getByTestId("canvas-run-step-open-intake");
+    await expect(openBtn).toBeVisible({ timeout: 5000 });
+    await expect(openBtn).toContainText("Full details");
+
+    // Click Full details → the CanvasStepDetail pane opens with the back button.
+    await openBtn.click();
+    await expect(page.getByTestId("canvas-step-detail")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("canvas-detail-back")).toBeVisible();
+
+    // Navigate back.
+    await page.getByTestId("canvas-detail-back").click();
+    await expect(page.getByTestId("canvas-step-detail")).toHaveCount(0);
   });
 });

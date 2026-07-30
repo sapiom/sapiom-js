@@ -11,7 +11,7 @@ import {
 import { loadUiPrefs } from "../lib/ui-prefs";
 import { useDismissable } from "../lib/use-dismissable";
 import { Icon } from "./Icon";
-import { DirectoryPicker } from "./DirectoryPicker";
+import { FolderBrowser } from "./FolderBrowser";
 import { track } from "../lib/track";
 import type { HarnessEntry, HarnessKind } from "@shared/types";
 
@@ -399,10 +399,10 @@ function HaveProjectDoor({
     <>
       <div className="modal-body">
         <section className="modal-section">
-          <DirectoryPicker
+          <FolderBrowser
             value={cwd}
             onChange={setCwd}
-            onSubmit={() => void detect()}
+            onOpen={() => void detect()}
             recentDirs={recentDirs}
             listDir={listDir}
             onNewDirChange={setNewDirTyped}
@@ -418,7 +418,7 @@ function HaveProjectDoor({
           Cancel
         </button>
         <button
-          className="btn-primary modal-primary-cta"
+          className="btn-ghost"
           data-testid="aw-have-continue"
           onClick={() => void detect()}
           disabled={checking || !cwd.trim()}
@@ -766,19 +766,16 @@ function IdeaDoor({
 
         {rootEditing ? (
           <section className="modal-section aw-root-picker">
-            <DirectoryPicker
+            <FolderBrowser
               value={root}
               onChange={setRoot}
-              onSubmit={() => void saveRoot(root)}
+              onOpen={() => void saveRoot(root)}
               recentDirs={[]}
               listDir={listDir}
             />
             <div className="aw-root-actions">
               <button type="button" className="btn-ghost" onClick={() => setRootEditing(false)}>
                 Cancel
-              </button>
-              <button type="button" className="btn-ghost" onClick={() => void saveRoot(root)}>
-                Use this folder
               </button>
             </div>
           </section>

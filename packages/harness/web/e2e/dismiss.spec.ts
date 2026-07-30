@@ -85,7 +85,8 @@ test.describe("new-session modal", () => {
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
 
-    await page.getByTestId("dir-picker-input").click();
+    // Click on a folder item inside the FolderBrowser (same panel, must not dismiss).
+    await page.getByTestId("folder-browser-breadcrumbs").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
 
     // The panel is centered, so the backdrop's top-left corner is outside it.

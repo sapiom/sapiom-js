@@ -68,6 +68,21 @@ interface CanvasPaneProps {
    *  navigating to a launched workflow is an explicit act on it, so it
    *  rebinds, same as running a macro against it. */
   onOpenWorkflow: (path: string) => void;
+  /**
+   * Called whenever a new canvas graph is posted for the bound workflow.
+   * App.tsx lifts this to maintain a per-workflow graph cache so the
+   * run-input dialog can prefill a skeleton from the entry step's fields.
+   * Called with `null` when the document is invalidated (session swap, reload).
+   */
+  onGraphChange?: (graph: import("../lib/canvas-graph").CanvasGraph | null) => void;
+  /**
+   * Error from the last failed deploy for the bound workflow. Forwarded into
+   * WorkflowActionsHeader so the board-surface chip/popover reflects the
+   * current deploy state.
+   */
+  lastDeployError: string | null;
+  /** Fires a deploy action — delegated from the deployment popover. */
+  onDeploy: () => void;
 }
 
 export function CanvasPane({
@@ -91,6 +106,9 @@ export function CanvasPane({
   onSelectRun,
   workflows,
   onOpenWorkflow,
+  onGraphChange,
+  lastDeployError,
+  onDeploy,
 }: CanvasPaneProps): JSX.Element {
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -530,6 +548,16 @@ export function CanvasPane({
     setRestView({ zoom: 1, x: 0, y: 0 });
     userAdjustedRef.current = false;
   }, [sessionId, reloadKey]);
+
+  // Propagate graph changes to the parent (App) so it can maintain a
+  // per-workflow graph cache for the run-input dialog skeleton.
+  useEffect(() => {
+    onGraphChange?.(graph);
+  // onGraphChange is intentionally excluded: a stable callback ref from App
+  // won't change, but listing it would re-fire on every parent render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph]);
+
   const detailNode = graph && detailStepId ? (graph.nodes.find((n) => n.id === detailStepId) ?? null) : null;
   // The slide-out must not empty mid-flight: keep the LAST drilled step
   // rendered in the off-going pane so back reads as the detail sliding away,
@@ -645,6 +673,33 @@ export function CanvasPane({
     userAdjustedRef.current = false;
   }, [boundWorkflowPath]);
 
+  // When the bound workflow's definitionId changes (e.g. a deploy that
+  // links-or-creates the agent for the first time), the served canvas board
+  // bakes the "deployed" / "local only" badge from the id at render time.
+  // Reload the iframe so the server re-serves the board with the fresh value
+  // — the path effect above doesn't fire (path is unchanged), so this is the
+  // only mechanism that keeps the badge in sync post-deploy.
+  const boundWorkflowDefinitionId = boundWorkflow?.definitionId ?? null;
+  const prevDefinitionIdRef = useRef<{
+    path: string | null;
+    definitionId: number | string | null;
+  }>({ path: boundWorkflowPath, definitionId: boundWorkflowDefinitionId });
+  useEffect(() => {
+    const prev = prevDefinitionIdRef.current;
+    prevDefinitionIdRef.current = { path: boundWorkflowPath, definitionId: boundWorkflowDefinitionId };
+    // When the path changed, the path effect above already scheduled a reload —
+    // skip here to avoid a redundant double-reload on the same render cycle.
+    if (prev.path !== boundWorkflowPath) return;
+    // Only reload when the id actually transitions (null → id or id → different
+    // id). An id-to-null transition (unlikely but possible if the registry is
+    // pruned) doesn't warrant a reload — the path effect already handles
+    // full binding changes.
+    if (prev.definitionId === boundWorkflowDefinitionId) return;
+    if (boundWorkflowDefinitionId == null) return;
+    setFrameLoading(true);
+    setReloadKey((key) => key + 1);
+  }, [boundWorkflowPath, boundWorkflowDefinitionId]);
+
   // Background-task state for THIS session's pane, scoped to the CURRENT
   // binding: a task that carries a workflowPath only surfaces while the pane
   // is showing that workflow — switching the binding mid-run must not bleed
@@ -691,6 +746,8 @@ export function CanvasPane({
           runTarget={runTarget}
           runs={runs}
           onSelectRun={onSelectRun}
+          lastDeployError={lastDeployError}
+          onDeploy={onDeploy}
         />
       )}
 
@@ -791,7 +848,7 @@ export function CanvasPane({
         /* No diagram yet, but a run was observed: the live per-step data
            renders instead of "No steps yet". */
         <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
-          <RunStepsList run={run} target={runTarget} />
+          <RunStepsList run={run} target={runTarget} onInjectPrompt={onInjectPrompt} onOpenDetail={setDetailStepId} />
         </div>
       ) : !showsContent && sessionExited ? (
         /* nothing was generated and the session is dead — a render here would
@@ -1067,11 +1124,12 @@ export function CanvasPane({
                   expandedId={expandedStepId}
                   onToggle={(id) => setExpandedStepId((cur) => (cur === id ? null : id))}
                   onOpenDetail={setDetailStepId}
+                  onInjectPrompt={onInjectPrompt}
                 />
               ) : run ? (
                 /* No structural graph, but a real run was observed:
                    its per-step truth renders instead of a dead end. */
-                <RunStepsList run={run} target={runTarget} />
+                <RunStepsList run={run} target={runTarget} onInjectPrompt={onInjectPrompt} onOpenDetail={setDetailStepId} />
               ) : (
                 /* Same title as the pre-render empty state; the hint names
                    this cause (a rendered canvas that posted no graph). */
