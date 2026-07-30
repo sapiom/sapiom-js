@@ -129,6 +129,7 @@ const MAX_QUOTES = 4;
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "content-repurposing";
 const TRANSIENT_IMAGE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_ERROR_MESSAGE_LENGTH = 4_096;
 
 /** Title paired with `SAMPLE_SOURCE`. */
 const SAMPLE_TITLE = "Why small teams ship faster";
@@ -166,6 +167,78 @@ function numericStatus(value: unknown): number | undefined {
   return Number.isInteger(status) ? status : undefined;
 }
 
+function isAsciiWordChar(char: string | undefined): boolean {
+  if (!char) return false;
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    code === 95 ||
+    (code >= 97 && code <= 122)
+  );
+}
+
+function skipWhitespace(value: string, start: number): number {
+  let cursor = start;
+  while (
+    cursor < value.length &&
+    (value[cursor] === " " ||
+      value[cursor] === "\t" ||
+      value[cursor] === "\n" ||
+      value[cursor] === "\r" ||
+      value[cursor] === "\f")
+  ) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+/** Parse common HTTP/status-code phrases without a backtracking regular expression. */
+function hasTransientStatus(message: string): boolean {
+  const value = message.slice(0, MAX_ERROR_MESSAGE_LENGTH).toLowerCase();
+
+  for (const marker of ["http", "status"]) {
+    let searchFrom = 0;
+    while (searchFrom < value.length) {
+      const markerIndex = value.indexOf(marker, searchFrom);
+      if (markerIndex === -1) break;
+      searchFrom = markerIndex + marker.length;
+
+      if (
+        isAsciiWordChar(value[markerIndex - 1]) ||
+        isAsciiWordChar(value[searchFrom])
+      ) {
+        continue;
+      }
+
+      let cursor = skipWhitespace(value, searchFrom);
+      if (
+        marker === "status" &&
+        value.startsWith("code", cursor) &&
+        !isAsciiWordChar(value[cursor + 4])
+      ) {
+        cursor = skipWhitespace(value, cursor + 4);
+      }
+      if (value[cursor] === ":" || value[cursor] === "=") {
+        cursor = skipWhitespace(value, cursor + 1);
+      }
+
+      const codeText = value.slice(cursor, cursor + 3);
+      const code = Number(codeText);
+      if (
+        codeText.length === 3 &&
+        Number.isInteger(code) &&
+        !isAsciiWordChar(value[cursor + 3]) &&
+        TRANSIENT_IMAGE_STATUSES.has(code)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /** Prefer structured HTTP status and use message parsing only as a narrow fallback. */
 export function isTransientImageError(error: unknown): boolean {
   if (error && typeof error === "object") {
@@ -179,9 +252,10 @@ export function isTransientImageError(error: unknown): boolean {
 
   const message = error instanceof Error ? error.message : String(error);
   return (
-    /\b(?:http|status(?:\s+code)?)\s*[:=]?\s*(408|425|429|500|502|503|504)\b/i.test(
-      message,
-    ) || /application error|network|socket|timed?\s*out|temporar/i.test(message)
+    hasTransientStatus(message) ||
+    /application error|network|socket|timed?\s*out|temporar/i.test(
+      message.slice(0, MAX_ERROR_MESSAGE_LENGTH),
+    )
   );
 }
 
