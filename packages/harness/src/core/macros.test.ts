@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest";
 import { DEFAULT_MACROS } from "./macros.js";
 
 describe("DEFAULT_MACROS", () => {
-  it("defines the 5 registered macros (open_prod is served by the API but is no longer an action-rail button)", () => {
+  it("defines the 6 registered macros (open_prod is served by the API but is no longer an action-rail button; describe runs headless)", () => {
     expect(DEFAULT_MACROS.map((m) => m.id)).toEqual([
       "run_local",
       "deploy",
       "prod_run",
       "open_prod",
       "visualize",
+      "describe",
     ]);
   });
 
@@ -39,6 +40,17 @@ describe("DEFAULT_MACROS", () => {
     // (and therefore no {{workflow.path}} to throw on when unbound).
     expect(macro.requiresWorkflow).toBeFalsy();
     expect(macro.action).toEqual({ kind: "render-canvas" });
+  });
+
+  it("describe runs headless (execution:background) and carries the SPA-built prompt as {{subject}}", () => {
+    const macro = DEFAULT_MACROS.find((m) => m.id === "describe")!;
+    expect(macro.requiresWorkflow).toBe(true);
+    expect(macro.execution).toBe("background");
+    expect(macro.action.kind).toBe("inject");
+    if (macro.action.kind === "inject") {
+      expect(macro.action.text).toBe("{{subject}}");
+      expect(macro.action.submit).toBe(true);
+    }
   });
 
   it("the old ai-visualize macro (LLM writes the whole HTML page) is gone — enrichment replaced it", () => {

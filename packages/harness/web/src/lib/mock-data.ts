@@ -880,6 +880,17 @@ export const MOCK_MACROS: MacroDef[] = [
     action: { kind: "render-canvas" },
     requiresWorkflow: false,
   },
+  {
+    // "Describe with AI" — headless background authoring pass. Mirrors the real
+    // DEFAULT_MACROS contract (src/core/macros.ts). Invoked programmatically by
+    // the canvas overview button, never rendered in the action rail.
+    id: "describe",
+    label: "Describe with AI",
+    icon: "Sparkles",
+    action: { kind: "inject", text: "{{subject}}", submit: true },
+    requiresWorkflow: true,
+    execution: "background",
+  },
 ];
 
 /** Adapter registry fixture (GET /api/harnesses): mirrors the upstream

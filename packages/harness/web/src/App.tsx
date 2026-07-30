@@ -47,6 +47,7 @@ import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
 import { resolveMacroUrl } from "./lib/macro-gating";
 import { directActionKind } from "./lib/macro-actions";
+import { describeWorkflowPrompt } from "./lib/describe-prompt";
 import { sessionDisplayName } from "./lib/session-name";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
@@ -617,6 +618,23 @@ export const App = (): JSX.Element => {
     })();
   };
 
+  // "Describe with AI": run the describe macro HEADLESS (execution:"background")
+  // so the agent edits the workflow source out of sight — never the interactive
+  // terminal. The prompt is passed as the macro's `subject`; the source watcher
+  // re-renders the canvas when the agent saves. The button's loading state is
+  // driven by the resulting background task (see CanvasPane `describeRunning`).
+  const handleDescribeWithAI = (workflow: WorkflowInfo): void => {
+    void (async () => {
+      const sessionId = (await handleBindWorkflow(workflow.path)) ?? harness.activeSessionId;
+      if (!sessionId) return;
+      void harness.runMacro("describe", {
+        harnessSessionId: sessionId,
+        workflowPath: workflow.path,
+        subject: describeWorkflowPrompt(workflow),
+      });
+    })();
+  };
+
   return (
     <div className="app-shell">
       {isMobile && !railCollapsed && (
@@ -995,6 +1013,7 @@ export const App = (): JSX.Element => {
                 onInjectPrompt={(text) => {
                   if (harness.activeSessionId) void harness.injectInput(harness.activeSessionId, text);
                 }}
+                onDescribeWorkflow={handleDescribeWithAI}
               />
             </div>
 

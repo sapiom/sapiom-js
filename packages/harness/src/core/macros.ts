@@ -66,4 +66,19 @@ export const DEFAULT_MACROS: MacroDef[] = [
     requiresWorkflow: false,
     action: { kind: "render-canvas" },
   },
+  {
+    // "Describe with AI": runs the bound agent HEADLESS (claude -p, no pty, no
+    // board takeover) to author the `description` fields in the workflow
+    // source. execution:"background" routes it to the TaskManager instead of
+    // the interactive terminal; the prompt is passed as {{subject}} (the SPA
+    // builds it, web/src/lib/describe-prompt.ts). The source watcher re-renders
+    // the canvas on save. Invoked programmatically (the canvas overview button),
+    // never rendered in the action rail.
+    id: "describe",
+    label: "Describe with AI",
+    icon: "Sparkles",
+    requiresWorkflow: true,
+    action: { kind: "inject", submit: true, text: "{{subject}}" },
+    execution: "background",
+  },
 ];
