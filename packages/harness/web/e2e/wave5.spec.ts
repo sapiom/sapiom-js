@@ -140,7 +140,7 @@ test.describe("add workspace (three doors)", () => {
   });
 
   test("the harness picker renders from the adapter registry", async ({ page }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("add-workspace").click();
     await page.getByTestId("new-session-btn").click();
     const trigger = page.getByTestId("harness-select");
     await expect(trigger).toBeVisible();
@@ -176,7 +176,7 @@ test.describe("add workspace (three doors)", () => {
 // ---------------------------------------------------------------------------
 
 test("recent-path chips middle-truncate long paths and keep the full path in the tooltip", async ({ page }) => {
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
 
   const chip = page.locator(".recent-dir-chip").first();
@@ -226,7 +226,7 @@ test("the directory picker's read failure carries its own Retry", async ({ page 
   await page.goto("/?mockError=listDir");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
 
   const err = page.getByTestId("dir-picker-error");

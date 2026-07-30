@@ -110,7 +110,7 @@ test("session header: compact identity (name only; path in the tooltip); New ses
 
   await page.screenshot({ path: "web/e2e/screenshots/session-header.png" });
 
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
   await expect(page.locator(".modal-new-session")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
@@ -492,7 +492,7 @@ test("add project: the rail's + registers a bare folder through the 'Open a fold
 });
 
 test("new-session modal: directory picker navigates and validates", async ({ page }) => {
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
   await expect(page.locator(".modal-new-session")).toBeVisible();
 
@@ -534,7 +534,7 @@ test("new-session modal: a failed directory read shows an error, not an empty li
   await page.goto("/?mockError=listDir&seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
   await expect(page.locator(".modal-new-session")).toBeVisible();
 
@@ -1600,7 +1600,7 @@ test.describe("session menu copy path", () => {
 });
 
 test("directory picker: arrow keys move the highlight and Enter drills into it", async ({ page }) => {
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
   const input = page.getByTestId("dir-picker-input");
   await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();

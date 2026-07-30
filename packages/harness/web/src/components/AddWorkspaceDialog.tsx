@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { JSX, RefObject } from "react";
+import type { JSX, ReactNode, RefObject } from "react";
 import type { FsListResponse } from "../lib/api";
 import {
   isValidProjectName,
@@ -200,34 +200,72 @@ export function AddWorkspaceDialog({
 }
 
 /**
+ * One row of the add menu: icon · title · sub · chevron.
+ *
+ * Exported because the rail's Add popover leads with a row this dialog has no
+ * door for — "New session…", which starts an agent rather than adding a
+ * workspace. That row has to be indistinguishable from the doors beside it, so
+ * it is the same component rather than a hand-matched copy of the markup.
+ */
+export function DoorRow({
+  icon,
+  title,
+  sub,
+  testid,
+  onClick,
+}: {
+  icon: string;
+  title: string;
+  sub: string;
+  testid: string;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button type="button" className="aw-door" data-testid={testid} onClick={onClick}>
+      <span className="aw-door-icon" aria-hidden="true">
+        <Icon name={icon} size={15} />
+      </span>
+      <span className="aw-door-text">
+        <span className="aw-door-title">{title}</span>
+        <span className="aw-door-sub">{sub}</span>
+      </span>
+      <span className="aw-door-arrow" aria-hidden="true">
+        <Icon name="ArrowRight" size={14} />
+      </span>
+    </button>
+  );
+}
+
+/**
  * The resting state: three mutually exclusive intents, no path field in sight.
  *
  * Exported so the rail's Add popover can BE this list rather than restate it.
- * The row anatomy (icon · title · sub · chevron) is the same on both surfaces,
- * so it is one component and one stylesheet rule, not two that drift.
+ * The row anatomy is the same on both surfaces, so it is one component and one
+ * stylesheet rule, not two that drift.
+ *
+ * `leading` is for rows that belong to the MENU but not to this dialog — the
+ * rail passes "New session…". It rides inside the same `.aw-doors` wrapper so
+ * it inherits the list's spacing and separators instead of needing its own.
  */
-export function DoorList({ onPick }: { onPick: (door: Door) => void }): JSX.Element {
+export function DoorList({
+  onPick,
+  leading,
+}: {
+  onPick: (door: Door) => void;
+  leading?: ReactNode;
+}): JSX.Element {
   return (
     <div className="aw-doors" data-testid="aw-doors">
+      {leading}
       {DOORS.map((entry) => (
-        <button
+        <DoorRow
           key={entry.id}
-          type="button"
-          className="aw-door"
-          data-testid={`aw-door-${entry.id}`}
+          icon={entry.icon}
+          title={entry.title}
+          sub={entry.sub}
+          testid={`aw-door-${entry.id}`}
           onClick={() => onPick(entry.id)}
-        >
-          <span className="aw-door-icon" aria-hidden="true">
-            <Icon name={entry.icon} size={15} />
-          </span>
-          <span className="aw-door-text">
-            <span className="aw-door-title">{entry.title}</span>
-            <span className="aw-door-sub">{entry.sub}</span>
-          </span>
-          <span className="aw-door-arrow" aria-hidden="true">
-            <Icon name="ArrowRight" size={14} />
-          </span>
-        </button>
+        />
       ))}
     </div>
   );

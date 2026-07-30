@@ -45,10 +45,29 @@ test.describe("the resting state", () => {
     expect(Math.abs(panel.y - trigger.y)).toBeLessThan(2);
   });
 
-  test("offers exactly three doors and no path field", async ({ page }) => {
+  test("offers a session row, exactly three doors, and no path field", async ({ page }) => {
     const doors = page.getByTestId("aw-doors");
     await expect(doors).toBeVisible();
-    await expect(doors.locator(".aw-door")).toHaveCount(3);
+    // Four rows: one to start an agent, three to add a workspace. "New
+    // session…" leads, because it is the most common reason the + is pressed
+    // and it is an add — it sat in the Sessions menu only because that menu
+    // existed first, which put the daily action behind the button for
+    // reviewing finished work.
+    await expect(doors.locator(".aw-door")).toHaveCount(4);
+    await expect(doors.locator(".aw-door").first()).toHaveAttribute(
+      "data-testid",
+      "new-session-btn",
+    );
+    for (const door of ["have", "template", "idea"]) {
+      await expect(doors.getByTestId(`aw-door-${door}`)).toBeVisible();
+    }
+    // It is not left behind in the Sessions menu as well — one action, one home.
+    await page.keyboard.press("Escape");
+    await page.getByTestId("history-trigger").click();
+    await expect(page.getByTestId("history-menu")).toBeVisible();
+    await expect(page.getByTestId("new-session-btn")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("add-workspace").click();
 
     // The point of the redesign: nothing is asked for until an intent is picked.
     await expect(page.locator(".dir-picker")).toBeHidden();

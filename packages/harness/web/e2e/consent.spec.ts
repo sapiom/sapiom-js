@@ -197,7 +197,7 @@ test.describe("UI event tracking (track() calls)", () => {
 
   test("new session creation emits track('session.created')", async ({ page }) => {
     // Open new session modal.
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("add-workspace").click();
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
 

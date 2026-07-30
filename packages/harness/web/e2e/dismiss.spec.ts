@@ -71,7 +71,7 @@ test.describe("settings popover", () => {
 
 test.describe("new-session modal", () => {
   test("closes on Escape and returns focus to the history trigger that spawned it", async ({ page }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("add-workspace").click();
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
 
@@ -81,7 +81,7 @@ test.describe("new-session modal", () => {
   });
 
   test("still closes on a backdrop click, but not on clicks inside the panel", async ({ page }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("add-workspace").click();
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
 

@@ -16,7 +16,7 @@ import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
-import { AddWorkspaceDialog, DoorList } from "./AddWorkspaceDialog";
+import { AddWorkspaceDialog, DoorList, DoorRow } from "./AddWorkspaceDialog";
 import type { Door } from "./AddWorkspaceDialog";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
@@ -527,6 +527,23 @@ export function WorkflowsRail({
           </div>
           <div className="connect-card-body">
             <DoorList
+              // "New session…" leads the menu: it is the most common thing the
+              // + is pressed for, and it is an ADD — it was only ever in the
+              // Sessions menu because that menu existed first. That put the
+              // one action you take daily behind the button for reviewing
+              // finished work, and split "start something" across two popovers.
+              leading={
+                <DoorRow
+                  icon="Plus"
+                  title="New session…"
+                  sub="Start an agent in a folder"
+                  testid="new-session-btn"
+                  onClick={() => {
+                    setAddMenuOpen(false);
+                    setAddDialogMode("session");
+                  }}
+                />
+              }
               onPick={(door) => {
                 setAddMenuOpen(false);
                 if (door === "template") {
@@ -560,22 +577,9 @@ export function WorkflowsRail({
             </button>
           </div>
           <div className="connect-card-body history-card-body">
-            <button
-              className="session-dropdown-item session-dropdown-new"
-              data-testid="new-session-btn"
-              onClick={() => {
-                setHistoryOpen(false);
-                setAddDialogMode("session");
-              }}
-            >
-              <span className="session-item-icon">
-                <Icon name="Plus" size={13} />
-              </span>
-              <span className="session-item-copy">
-                <span className="session-item-title">New session…</span>
-              </span>
-            </button>
-
+            {/* "New session…" used to lead this menu; it lives in the Add menu
+                now. This popover reviews work that already happened — the one
+                thing you do here is reopen a past session. */}
             <div className="session-dropdown-section">Past sessions</div>
             {pastRows.map((row) => {
               if (row.kind === "exited") {
