@@ -54,6 +54,11 @@ export {
 // Errors that are part of the public contract surface
 export { AgentError, UnknownStepError, StepInputValidationError, DisallowedTransitionError } from './errors.js';
 
+// Injected run configuration — the seam a step reads a chosen resource handle
+// from (the entry input the setup panel's settings / resource picker drive).
+export { resolveResourceHandle } from './config.js';
+export type { ResolveResourceHandleOptions } from './config.js';
+
 // Introspection — zod→JSON-Schema conversion + step/workflow input contracts.
 // Shared by engine tooling and the build phase (runs outside the engine).
 export { zodToJsonSchema, exampleFromJsonSchema, stepInputContract, workflowInputContract } from './introspection.js';
