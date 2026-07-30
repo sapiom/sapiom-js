@@ -1,5 +1,16 @@
 # @sapiom/cli
 
+## 1.0.1
+
+### Patch Changes
+
+- Updated dependencies [a1e0e4f]
+- Updated dependencies [a1e0e4f]
+  - @sapiom/agent@0.8.0
+  - @sapiom/agent-core@0.9.12
+  - @sapiom/sandbox-preview@0.1.10
+  - @sapiom/harness@0.2.4
+
 ## 1.0.0
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @sapiom/orchestration-runtime
 
+## 0.4.2
+
+### Patch Changes
+
+- Updated dependencies [a1e0e4f]
+  - @sapiom/agent@0.8.0
+
 ## 0.4.1
 
 ### Patch Changes

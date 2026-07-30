@@ -1,5 +1,14 @@
 # @sapiom/harness
 
+## 0.2.4
+
+### Patch Changes
+
+- Updated dependencies [a1e0e4f]
+- Updated dependencies [a1e0e4f]
+  - @sapiom/agent@0.8.0
+  - @sapiom/agent-core@0.9.12
+
 ## 0.2.3
 
 ### Patch Changes
