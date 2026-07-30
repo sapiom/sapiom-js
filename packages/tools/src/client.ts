@@ -287,6 +287,8 @@ export interface Sapiom {
     create(input: CreateDatabaseInput): Promise<Database>;
     /** Retrieve a database by its id or handle. */
     get(idOrHandle: string): Promise<Database>;
+    /** List every database you own, each with connection credentials (read-only). */
+    list(): Promise<Database[]>;
     /** Delete a database by its id or handle. */
     delete(idOrHandle: string): Promise<void>;
   };
@@ -558,6 +560,7 @@ function bind(transport: Transport): Sapiom {
     database: {
       create: (input) => database.create(input, transport),
       get: (idOrHandle) => database.get(idOrHandle, transport),
+      list: () => database.list(transport),
       delete: (idOrHandle) => database.delete(idOrHandle, transport),
     },
     email: {

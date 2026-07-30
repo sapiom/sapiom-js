@@ -313,6 +313,52 @@ describe("database.get()", () => {
 });
 
 // ---------------------------------------------------------------------------
+// list()
+// ---------------------------------------------------------------------------
+
+describe("database.list()", () => {
+  it("GETs /v1/databases and maps each row", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse([
+          rawDatabase(),
+          rawDatabase({ id: "db_def456", handle: "reporting" }),
+        ]),
+    ]);
+
+    const dbs = await database.list(transport, BASE);
+
+    expect(calls[0]!.url).toBe(`${BASE}/v1/databases`);
+    expect(calls[0]!.init.method).toBeUndefined(); // default GET
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
+    expect(dbs).toHaveLength(2);
+    expect(dbs[0]!.id).toBe("db_abc123");
+    expect(dbs[0]!.connection?.host).toBe("db.example.com");
+    expect(dbs[1]!.handle).toBe("reporting");
+  });
+
+  it("returns [] for an empty list", async () => {
+    const { transport } = makeTransport([() => jsonResponse([])]);
+    await expect(database.list(transport, BASE)).resolves.toEqual([]);
+  });
+
+  it("tolerates a non-array body by returning []", async () => {
+    const { transport } = makeTransport([() => jsonResponse({})]);
+    await expect(database.list(transport, BASE)).resolves.toEqual([]);
+  });
+
+  it("throws DatabaseHttpError on a non-2xx", async () => {
+    const { transport } = makeTransport([
+      () => new Response("boom", { status: 500 }),
+    ]);
+
+    await expect(database.list(transport, BASE)).rejects.toBeInstanceOf(
+      DatabaseHttpError,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // delete()
 // ---------------------------------------------------------------------------
 
@@ -374,13 +420,15 @@ describe("database — client wiring + credential", () => {
     const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
     await sapiom.database.create({ duration: "1h" });
     await sapiom.database.get("db_abc123");
+    await sapiom.database.list();
     await sapiom.database.delete("db_abc123");
 
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     for (const c of calls) {
       expect(headerOf(c, "x-sapiom-api-key")).toBe("my-key");
     }
     expect(calls[0]!.url).toBe("https://neon.services.sapiom.ai/v1/databases");
+    expect(calls[2]!.url).toBe("https://neon.services.sapiom.ai/v1/databases");
   });
 
   it("throws a clear error when no tenant credential is configured", async () => {

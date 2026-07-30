@@ -1236,6 +1236,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             createdAt: "2099-01-01T00:00:00Z",
           })) as Database,
         ),
+      list: () =>
+        Promise.resolve(r("database.list", [], () => []) as Database[]),
       delete: (idOrHandle) =>
         Promise.resolve(
           r("database.delete", [idOrHandle], () => undefined) as void,

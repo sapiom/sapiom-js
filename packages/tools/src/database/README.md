@@ -22,10 +22,17 @@ db.connection?.username;
 db.connection?.password;
 db.connection?.databaseName;
 
-// 3. Retrieve it later by id or handle, then delete it.
+// 3. Retrieve it later by id or handle, or list everything you own.
 const again = await sapiom.database.get(db.id); // or get("analytics")
+const all = await sapiom.database.list(); // read-only; every database you own
+
+// 4. Delete it by id or handle.
 await sapiom.database.delete(db.id); // or delete("analytics")
 ```
+
+`list()` is **read-only** — it never creates, mutates, or removes anything. Use it
+to discover a handle you (or another of your workflows) already provisioned before
+deciding whether to reuse it.
 
 Ambient import works too: `import { database } from "@sapiom/tools"`.
 

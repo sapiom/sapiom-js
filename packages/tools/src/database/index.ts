@@ -8,6 +8,7 @@
  *   db.connection?.connectionString;                      // a ready-to-use Postgres URI
  *
  *   const again = await database.get(db.id);              // or get("analytics") by handle
+ *   const all = await database.list();                    // every database you own (read-only)
  *   await database.delete(db.id);                         // or delete("analytics")
  *
  * Or via an explicit client: `createClient({ apiKey }).database.create(...)`.
@@ -222,6 +223,25 @@ export async function get(
     `Failed to get database '${idOrHandle}'`,
   );
   return mapDatabase((await res.json()) as RawDatabaseResponse);
+}
+
+/**
+ * List your active and provisioning databases, each with connection credentials.
+ * Read-only — it never creates, mutates, or removes anything. Useful for
+ * discovering a handle you (or another of your workflows) already provisioned
+ * before deciding whether to reuse it. Failed requests throw
+ * {@link DatabaseHttpError}.
+ */
+export async function list(
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<Database[]> {
+  const res = await ensureOk(
+    await transport.fetch(`${baseUrl}/v1/databases`),
+    "Failed to list databases",
+  );
+  const raw = (await res.json()) as RawDatabaseResponse[];
+  return Array.isArray(raw) ? raw.map(mapDatabase) : [];
 }
 
 /**
