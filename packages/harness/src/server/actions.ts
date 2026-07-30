@@ -26,7 +26,7 @@
 
 import { spawn as spawnChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Router } from "express";
@@ -34,9 +34,12 @@ import {
   AgentOperationError,
   createClient,
   deploy as coreDeploy,
+  link as coreLink,
   run as coreRun,
   readConfig as coreReadConfig,
+  writeConfig as coreWriteConfig,
   type DeployResult,
+  type LinkResult,
   type RunResult,
   type SapiomConfig,
 } from "@sapiom/agent-core";
@@ -57,14 +60,23 @@ import {
 export interface ActionWorkflow {
   /** Absolute path to the agent project directory (deploy's `projectDir`). */
   path: string;
+  /**
+   * Registry display name (`package.json`'s `name`, else the folder basename).
+   * Optional so a host that only knows the path still works; used as a
+   * mid-priority fallback when naming an agent this route has to create.
+   */
+  name?: string;
 }
 
 /**
- * One line of the deploy NDJSON stream. `building` is emitted once the build is
- * triggered; exactly one terminal line (`ready` | `error`) closes the stream.
- * `capability`-agnostic and credential-free by construction.
+ * One line of the deploy NDJSON stream. `linking` is emitted only when the
+ * project had no `definitionId` and the route is resolving-or-creating its
+ * remote agent; `building` is emitted once the build is triggered; exactly one
+ * terminal line (`ready` | `error`) closes the stream. `capability`-agnostic
+ * and credential-free by construction.
  */
 export type DeployStreamEvent =
+  | { phase: "linking"; name: string }
   | { phase: "building"; definitionId: string }
   | { phase: "ready"; definitionId: string; buildRunId: string; status: string }
   | { phase: "error"; code: string; message: string; hint?: string };
@@ -79,6 +91,10 @@ export interface ActionsCoreDeps {
   deploy: typeof coreDeploy;
   run: typeof coreRun;
   readConfig: typeof coreReadConfig;
+  /** Resolve-or-create the server-side agent for an unlinked project. */
+  link: typeof coreLink;
+  /** Cache the linked id back into `sapiom.json` (merges; never clobbers). */
+  writeConfig: typeof coreWriteConfig;
 }
 
 const DEFAULT_CORE_DEPS: ActionsCoreDeps = {
@@ -86,6 +102,8 @@ const DEFAULT_CORE_DEPS: ActionsCoreDeps = {
   deploy: coreDeploy,
   run: coreRun,
   readConfig: coreReadConfig,
+  link: coreLink,
+  writeConfig: coreWriteConfig,
 };
 
 /**
@@ -185,6 +203,18 @@ export interface ActionsRouterOpts {
    * registry — the router does not read the registry directly.
    */
   resolveWorkflow: (id: string) => ActionWorkflow | null;
+  /**
+   * The agent's DECLARED name (`defineAgent({ name })`) for a project the route
+   * has to link on the fly, or null when it cannot be determined. Optional: the
+   * route falls back to `sapiom.json`'s cached name, then
+   * {@link ActionWorkflow.name}, then the project folder's basename.
+   *
+   * A seam rather than a direct call so this router keeps knowing nothing about
+   * the canvas extraction cache (see core/definition-name.ts, which
+   * `server/index.ts` wires in here). Never expected to throw — a rejection is
+   * treated as "could not determine".
+   */
+  resolveDefinitionName?: (workflow: ActionWorkflow) => Promise<string | null>;
   /** Injectable core operations. Test seam; defaults to the real exports. */
   coreDeps?: Partial<ActionsCoreDeps>;
   /**
@@ -329,12 +359,14 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
    * pushes the synthesized tree, triggers a build, and polls to a terminal
    * status — all inside @sapiom/agent-core's {@link deploy}. Streams NDJSON: a
    * `building` line up front, then exactly one terminal `ready`/`error` line.
+   * A project with no `definitionId` yet is linked on the fly first (a
+   * `linking` line precedes `building`) rather than rejected.
    *
    * 200  NDJSON stream (even a build failure is a 200 with a terminal `error`
    *      line — the request itself succeeded; the build outcome is in-band).
    * 400  id missing/empty
    * 404  workflow id not registered
-   * 409  workflow is not linked to a Sapiom agent (no definitionId)
+   * 409  sapiom.json is unparseable
    * 503  harness is not signed in to Sapiom
    */
   router.post("/api/workflows/:id/deploy", async (req, res) => {
@@ -359,13 +391,6 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       res.status(409).json({ error: "sapiom.json is not valid JSON" });
       return;
     }
-    if (configState.kind === "unlinked") {
-      res
-        .status(409)
-        .json({ error: "workflow is not linked to a Sapiom agent" });
-      return;
-    }
-    const definitionId = configState.definitionId;
 
     // From here the outcome is streamed in-band as NDJSON — status is 200 and
     // headers are committed before the (potentially long) build runs.
@@ -376,9 +401,53 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       res.write(JSON.stringify(event) + "\n");
     };
 
-    write({ phase: "building", definitionId });
+    /**
+     * The definition id to build against: the linked one, or a freshly
+     * resolved-or-created one for a project that has never been linked (a
+     * gallery-template clone lands exactly this way — `clone` writes the fork
+     * provenance and leaves `definitionId` for deploy to fill in).
+     *
+     * `link({ create: true })` matches an existing remote agent by name/slug
+     * BEFORE creating one, so this is resync-or-create: re-deploying never
+     * duplicates an agent, and a template already deployed from another machine
+     * re-attaches to the same definition.
+     */
+    const ensureDefinitionId = async (): Promise<string> => {
+      if (configState.kind === "linked") return configState.definitionId;
+
+      const fromSeam = opts.resolveDefinitionName
+        ? await opts.resolveDefinitionName(workflow).catch(() => null)
+        : null;
+      const name =
+        fromSeam?.trim() ||
+        configState.name?.trim() ||
+        workflow.name?.trim() ||
+        basename(workflow.path);
+
+      write({ phase: "linking", name });
+      // Same refresh-on-rejected-key recovery the build gets; the retry is
+      // transparent to the stream (no second linking line).
+      const linked: LinkResult = await withKeyRefreshRetry(
+        provider,
+        clientFor,
+        (client) => deps.link({ name, create: true }, client),
+      );
+      // Cache under the name the SERVER settled on, matching what
+      // `sapiom agents link` writes. writeConfig merges, so the clone's
+      // forkId/templateId/repoFullName survive.
+      deps.writeConfig(workflow.path, {
+        definitionId: linked.definitionId,
+        name: linked.name,
+      });
+      return linked.definitionId;
+    };
 
     try {
+      // A link failure throws out of here and is mapped by the same
+      // toDeployErrorEvent below — reported as itself, never as a build
+      // failure, and `deploy` is never reached.
+      const definitionId = await ensureDefinitionId();
+      write({ phase: "building", definitionId });
       // Auth against the live key, refreshing + retrying once on a rejected key
       // (same recovery the runs router gets). The building/terminal streaming
       // shape is unchanged — the retry is transparent to the NDJSON stream.
