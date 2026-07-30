@@ -1712,7 +1712,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       ) => {
         const stubSession = r(
           "browserAutomation.withSession",
-          [fn, sessionOpts],
+          // Only the serializable opts are recorded; `fn` (a closure) has no
+          // useful JSON form and would show as null in the calls-sink trace.
+          [sessionOpts],
           () => ({
             sessionId: "stub-session",
             cdpUrl: "ws://stub.local/session/stub-session",
