@@ -552,30 +552,58 @@ jobs:
           # they are not optional decoration, they ARE the update mechanism.
           files: dist-artifacts/**/*
           body: |
-            Desktop installers built by CI. Each one was **launched by CI before
-            being attached** (`--smoke`: the app boots, serves the SPA from inside
-            the asar, spawns a PTY, its preload bridge loads, and its auto-update
-            config is present).
+            ${{ needs.prepare.outputs.channel == 'beta' && '> **Pre-release, for testers.** Only installs already following the beta channel are offered this build.' || '' }}
 
-            Channel: **${{ needs.prepare.outputs.channel }}** (v${{ needs.prepare.outputs.version }}).
+            Sapiom runs your coding agent in a workspace that's already set up: Sapiom tools
+            connected, workflows tracked, one-click deploy and run, and a live canvas for previews.
+            Download it, sign in, pick a folder, and start working — there's nothing to install first.
 
-            | Platform | Status |
+            ## Download
+
+            | Your computer | File |
             | --- | --- |
-            | macOS (Apple Silicon) | `.dmg` — signed + notarized when Apple credentials are configured; otherwise unsigned (Gatekeeper will ask for right-click → Open) |
-            | Linux | `.AppImage` / `.deb` |
-            | Windows | `.exe` — **unsigned**; SmartScreen will warn |
+            | **Mac** (M1 or newer) | **`Sapiom-macOS-arm64.dmg`** |
+            | **Windows** (64-bit) | **`Sapiom-Windows-x64.exe`** |
+            | **Linux** (any distro) | **`Sapiom-Linux-x86_64.AppImage`** |
+            | **Linux** (Debian / Ubuntu) | **`Sapiom-Linux-amd64.deb`** |
 
-            **Updating:** an installed app checks for new releases on its own
-            channel and offers a restart when one has downloaded — you should not
-            need to reinstall again. Restarting ends any running agent sessions, so
-            it always asks first.
+            The other files are used by the app to update itself. You don't need to download them.
 
-            - `.zip` (macOS) and `.blockmap` (Windows) are update artifacts, not
-              downloads — take the `.dmg` / `.exe`.
-            - Windows updates run an unsigned installer until code signing lands,
-              so SmartScreen warns on each update.
-            - An `.AppImage` can only self-update while running as the AppImage;
-              `.deb` updates go through the system package manager and will ask for
-              your password.
+            ## Opening it the first time
 
-            Intel Macs are not covered yet: CI builds arm64 only.
+            **Mac** — open the `.dmg` and drag Sapiom to Applications. It's signed and notarised by
+            Apple, so it should open normally. If macOS does warn you, right-click the app and
+            choose **Open**.
+
+            **Windows** — Windows will show a blue "Windows protected your PC" screen, because we
+            don't have a Windows signing certificate yet. Click **More info**, then **Run anyway**.
+            We're working on removing this.
+
+            **Linux** — make the AppImage executable (`chmod +x Sapiom-Linux-x86_64.AppImage`) and
+            run it, or install the `.deb` with `sudo apt install ./Sapiom-Linux-amd64.deb`.
+
+            On first launch Sapiom sets itself up: it installs the coding agent if you don't have
+            one, opens your browser once to sign in, and asks which folder to work in.
+
+            ## Updates are automatic
+
+            Sapiom checks for new versions on its own and downloads them in the background. When one
+            is ready it asks whether you'd like to restart — **restarting ends any agent sessions
+            you have running**, so it never does it without asking. You can also check whenever you
+            like: click your account name at the bottom of the left sidebar and choose
+            **Check for updates**.
+
+            > Automatic updates began in **0.1.2**. If you're on an older build, install this one by
+            > hand once — after that it keeps itself current.
+
+            ## Good to know
+
+            - **Intel Macs aren't supported yet** — these builds are for Apple Silicon (M1 and
+              newer) only.
+            - Windows updates show the same "protected your PC" screen until we have a signing
+              certificate.
+            - The AppImage can only update itself while you're running it as an AppImage. The `.deb`
+              updates through your package manager and will ask for your password.
+
+            Something not working? [Open an issue](https://github.com/sapiom/sapiom-js/issues) and
+            tell us which platform you're on — it helps a lot.
