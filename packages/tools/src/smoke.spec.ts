@@ -16,11 +16,13 @@ import {
   search,
   memory,
   speech,
+  browserAutomation,
   Sandbox,
   Repository,
   SearchHttpError,
   MemoryHttpError,
   SpeechHttpError,
+  BrowserAutomationHttpError,
 } from "./index.js";
 
 describe("@sapiom/tools public surface", () => {
@@ -62,6 +64,14 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.speech.soundEffects.create).toBe("function");
     expect(typeof sapiom.speech.voices.list).toBe("function");
 
+    expect(typeof sapiom.browserAutomation).toBe("object");
+    expect(typeof sapiom.browserAutomation.sessions.create).toBe("function");
+    expect(typeof sapiom.browserAutomation.sessions.createWithIdentity).toBe("function");
+    expect(typeof sapiom.browserAutomation.sessions.close).toBe("function");
+    expect(typeof sapiom.browserAutomation.screenshot).toBe("function");
+    expect(typeof sapiom.browserAutomation.withSession).toBe("function");
+    expect(typeof sapiom.browserAutomation.identities.create).toBe("function");
+
     expect(typeof sapiom.withAttribution).toBe("function");
   });
 
@@ -79,9 +89,11 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof search).toBe("object");
     expect(typeof memory).toBe("object");
     expect(typeof speech).toBe("object");
+    expect(typeof browserAutomation).toBe("object");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor
     expect(typeof MemoryHttpError).toBe("function");
     expect(typeof SpeechHttpError).toBe("function");
+    expect(typeof BrowserAutomationHttpError).toBe("function");
     expect(typeof Sandbox).toBe("function"); // class constructor
     expect(typeof Repository).toBe("function");
   });

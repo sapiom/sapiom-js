@@ -148,6 +148,17 @@ import type {
   SoundEffectInput,
   VoicesResult,
 } from "./speech/index.js";
+import * as browserAutomation from "./browser-automation/index.js";
+import type {
+  BrowserSession,
+  SessionSettlement,
+  ScreenshotInput,
+  Screenshot,
+  IdentityCreateInput,
+  Identity,
+  WithSessionOptions,
+  ActiveSession,
+} from "./browser-automation/index.js";
 import * as vault from "./vault/index.js";
 
 export interface Sapiom {
@@ -426,6 +437,40 @@ export interface Sapiom {
     };
   };
   /**
+   * Browser automation — sessions, screenshots, and identity management.
+   * Use `withSession` for the safe auto-close pattern; use `sessions` +
+   * `screenshot` + `identities` for direct control.
+   */
+  readonly browserAutomation: {
+    /** Open and close browser sessions. */
+    sessions: {
+      /** Open a new browser session. */
+      create(): Promise<BrowserSession>;
+      /** Open a new browser session pre-authenticated with an identity. */
+      createWithIdentity(input: { identityId: string }): Promise<BrowserSession>;
+      /** Close a session and settle its billing. */
+      close(sessionId: string): Promise<SessionSettlement>;
+    };
+    /**
+     * Capture a screenshot. Pass `url` only for a one-shot capture ($0.01);
+     * pass `sessionId` to capture inside an existing session (no per-call charge).
+     */
+    screenshot(input: ScreenshotInput): Promise<Screenshot>;
+    /**
+     * Open a session, run `fn` with an `ActiveSession`, and always close in a
+     * `finally` block — the recommended way to avoid leaked-session charges.
+     */
+    withSession<T>(
+      fn: (session: ActiveSession) => Promise<T>,
+      opts?: WithSessionOptions,
+    ): Promise<T>;
+    /** Create and manage browser identities for authenticated sessions. */
+    identities: {
+      /** Store credentials for automatic login during sessions. */
+      create(input: IdentityCreateInput): Promise<Identity>;
+    };
+  };
+  /**
    * Derive a client that attributes its calls to a different agent/trace. For the
    * router case (one process acting for many agents); step-authoring code doesn't
    * need this — attribution is set once when the client is constructed.
@@ -587,6 +632,20 @@ function bind(transport: Transport): Sapiom {
       },
       voices: {
         list: () => speech.listVoices(transport),
+      },
+    },
+    browserAutomation: {
+      sessions: {
+        create: () => browserAutomation.createSession(transport),
+        createWithIdentity: (input) =>
+          browserAutomation.createSessionWithIdentity(input, transport),
+        close: (sessionId) => browserAutomation.closeSession(sessionId, transport),
+      },
+      screenshot: (input) => browserAutomation.screenshot(input, transport),
+      withSession: (fn, opts) =>
+        browserAutomation.withSession(fn, opts, transport),
+      identities: {
+        create: (input) => browserAutomation.createIdentity(input, transport),
       },
     },
     withAttribution: (attribution) =>

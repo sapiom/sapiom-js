@@ -102,6 +102,13 @@ import type {
   MemoryMetadataValue,
 } from "../memory/index.js";
 import type { SpeechResult, VoicesResult } from "../speech/index.js";
+import type {
+  BrowserSession,
+  SessionSettlement,
+  Screenshot,
+  Identity,
+  ActiveSession,
+} from "../browser-automation/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -1659,6 +1666,97 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             r("speech.voices.list", [], () => ({
               voices: [{ voiceId: "stub-voice", name: "Stub Voice" }],
             })) as VoicesResult,
+          ),
+      },
+    },
+    browserAutomation: {
+      sessions: {
+        create: () =>
+          Promise.resolve(
+            r("browserAutomation.sessions.create", [], () => ({
+              sessionId: "stub-session",
+              cdpUrl: "ws://stub.local/session/stub-session",
+              expiresAt: "2099-01-01T00:00:00Z",
+              maxDurationSec: 1200,
+            })) as BrowserSession,
+          ),
+        createWithIdentity: (input) =>
+          Promise.resolve(
+            r("browserAutomation.sessions.createWithIdentity", [input], () => ({
+              sessionId: "stub-session",
+              cdpUrl: "ws://stub.local/session/stub-session",
+              expiresAt: "2099-01-01T00:00:00Z",
+              maxDurationSec: 1200,
+            })) as BrowserSession,
+          ),
+        close: (sessionId) =>
+          Promise.resolve(
+            r("browserAutomation.sessions.close", [sessionId], () => ({
+              sessionId,
+              settled: true,
+              capturedAmountUsd: "0.00",
+              creditsUsed: 0,
+            })) as SessionSettlement,
+          ),
+      },
+      screenshot: (input) =>
+        Promise.resolve(
+          r("browserAutomation.screenshot", [input], () => ({
+            url: "https://cdn.example.com/stub-screenshot.png",
+            expiresAt: "2099-01-01T00:00:00Z",
+          })) as Screenshot,
+        ),
+      withSession: async <T>(
+        fn: (session: ActiveSession) => Promise<T>,
+        sessionOpts?: { identityId?: string },
+      ) => {
+        const stubSession = r(
+          "browserAutomation.withSession",
+          [fn, sessionOpts],
+          () => ({
+            sessionId: "stub-session",
+            cdpUrl: "ws://stub.local/session/stub-session",
+            expiresAt: "2099-01-01T00:00:00Z",
+            maxDurationSec: 1200,
+          }),
+        ) as BrowserSession;
+        const activeSession: ActiveSession = {
+          ...stubSession,
+          screenshot: (screenshotInput?) =>
+            Promise.resolve(
+              r(
+                "browserAutomation.screenshot",
+                [{ ...screenshotInput, sessionId: stubSession.sessionId }],
+                () => ({
+                  url: "https://cdn.example.com/stub-screenshot.png",
+                  expiresAt: "2099-01-01T00:00:00Z",
+                }),
+              ) as Screenshot,
+            ),
+        };
+        try {
+          return await fn(activeSession);
+        } finally {
+          // Stub close — swallow (mirrors the real withSession finally).
+          r(
+            "browserAutomation.sessions.close",
+            [stubSession.sessionId],
+            () => ({
+              sessionId: stubSession.sessionId,
+              settled: true,
+              capturedAmountUsd: "0.00",
+              creditsUsed: 0,
+            }),
+          );
+        }
+      },
+      identities: {
+        create: (input) =>
+          Promise.resolve(
+            r("browserAutomation.identities.create", [input], () => ({
+              id: "stub-identity",
+              status: "active",
+            })) as Identity,
           ),
       },
     },

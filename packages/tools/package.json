@@ -78,6 +78,11 @@
       "import": "./dist/esm/speech/index.js",
       "require": "./dist/cjs/speech/index.js"
     },
+    "./browser-automation": {
+      "types": "./dist/cjs/browser-automation/index.d.ts",
+      "import": "./dist/esm/browser-automation/index.js",
+      "require": "./dist/cjs/browser-automation/index.js"
+    },
     "./stub": {
       "types": "./dist/cjs/stub/index.d.ts",
       "import": "./dist/esm/stub/index.js",
