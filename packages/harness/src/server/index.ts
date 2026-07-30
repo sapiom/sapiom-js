@@ -1181,6 +1181,12 @@ export const startServer = async (
       // Prefer the agent's DECLARED name when deploy has to create it, read
       // from the same warm extraction cache the canvas renders from.
       resolveDefinitionName: (workflow) => resolveManifestName(workflow.path),
+      // A first-time deploy writes definitionId into an existing sapiom.json,
+      // which the watcher's directory-set diff cannot see — rescan that project
+      // so the Draft→Deployed chip and the deploy-gated actions update.
+      onLinked: async (workflow) => {
+        await scanWorkflowsAndBroadcast(workflow.path);
+      },
     }),
   );
   app.use(

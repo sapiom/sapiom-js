@@ -329,6 +329,129 @@ describe("createActionsRouter", () => {
       );
     });
 
+    it("calls onLinked exactly once with the workflow, after writeConfig, on a first-time link", async () => {
+      // The registry's list() never re-reads sapiom.json and the workspace
+      // watcher ignores a content-only edit, so the host needs telling that a
+      // project just went from unlinked to linked in order to rescan it.
+      const order: string[] = [];
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({}),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "order-triage" }),
+        writeConfig: vi.fn().mockImplementation(() => {
+          order.push("writeConfig");
+        }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
+        }),
+      });
+      const onLinked = vi.fn().mockImplementation(async () => {
+        order.push("onLinked");
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", name: "order-triage" }),
+        coreDeps,
+        onLinked,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      await res.text();
+
+      expect(onLinked).toHaveBeenCalledTimes(1);
+      expect(onLinked).toHaveBeenCalledWith({ path: "/proj/agent", name: "order-triage" });
+      expect(order).toEqual(["writeConfig", "onLinked"]);
+    });
+
+    it("does not call onLinked when the project is already linked", async () => {
+      const coreDeps = makeCoreDeps({
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_123",
+          buildRunId: "build_9",
+          status: "ready",
+        }),
+      });
+      const onLinked = vi.fn().mockResolvedValue(undefined);
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent" }),
+        coreDeps,
+        onLinked,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      await res.text();
+
+      expect(onLinked).not.toHaveBeenCalled();
+    });
+
+    it("still calls onLinked when writeConfig failed (the warning path)", async () => {
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({}),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "order-triage" }),
+        writeConfig: vi.fn().mockImplementation(() => {
+          throw new Error("EACCES: permission denied, open '/proj/agent/sapiom.json'");
+        }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
+        }),
+      });
+      const onLinked = vi.fn().mockResolvedValue(undefined);
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", name: "order-triage" }),
+        coreDeps,
+        onLinked,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      await res.text();
+
+      // A rescan is harmless whether or not the cache write succeeded, and
+      // there's nothing new to re-read when it failed either way.
+      expect(onLinked).toHaveBeenCalledTimes(1);
+      expect(onLinked).toHaveBeenCalledWith({ path: "/proj/agent", name: "order-triage" });
+    });
+
+    it("still produces a normal ready terminal and still deploys when onLinked rejects", async () => {
+      // onLinked is never expected to throw, but a rejection must not cost the
+      // user their build — it is awaited only for ordering, then swallowed.
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({}),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "order-triage" }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
+        }),
+      });
+      const onLinked = vi.fn().mockRejectedValue(new Error("rescan blew up"));
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", name: "order-triage" }),
+        coreDeps,
+        onLinked,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const events = parseNdjson(await res.text());
+
+      expect(events).toEqual([
+        { phase: "linking", name: "order-triage" },
+        { phase: "building", definitionId: "def_new" },
+        { phase: "ready", definitionId: "def_new", buildRunId: "build_1", status: "ready" },
+      ]);
+      expect(coreDeps.deploy).toHaveBeenCalledWith(
+        { projectDir: "/proj/agent", definitionId: "def_new" },
+        expect.anything(),
+      );
+      expect(onLinked).toHaveBeenCalledTimes(1);
+    });
+
     it("warns (but still builds) when linking succeeds but caching it to sapiom.json fails", async () => {
       // sapiom.json is a re-resolvable cache (agent-core/src/config.ts) and link()
       // re-resolves the same agent by name — so a failed cache write (read-only

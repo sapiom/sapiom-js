@@ -218,6 +218,18 @@ export interface ActionsRouterOpts {
    * treated as "could not determine".
    */
   resolveDefinitionName?: (workflow: ActionWorkflow) => Promise<string | null>;
+  /**
+   * Called after the route has linked a previously-unlinked project and cached
+   * its new `definitionId`, so the host can refresh whatever it derives from
+   * `sapiom.json`. The registry's `list()` never re-reads the file and the
+   * workspace watcher ignores a content-only edit, so without this a
+   * first-time deploy leaves the SPA showing "Draft" with Prod Run gated.
+   *
+   * A seam rather than a direct call so this router keeps knowing nothing about
+   * the workflow registry (`server/index.ts` wires it). Never expected to
+   * throw — a rejection must not cost the user their build.
+   */
+  onLinked?: (workflow: ActionWorkflow) => Promise<void>;
   /** Injectable core operations. Test seam; defaults to the real exports. */
   coreDeps?: Partial<ActionsCoreDeps>;
   /**
@@ -458,6 +470,13 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
             `The agent "${linked.name}" was created on Sapiom (${linked.definitionId}) but not recorded locally: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves the same agent, so nothing is duplicated.`,
         });
       }
+      // Best-effort, same as the cache write above, and run whether or not it
+      // succeeded: a rescan is harmless either way, and there is nothing new to
+      // re-read when the write failed. Without this, the registry's list()
+      // never re-reads sapiom.json and the workspace watcher ignores a
+      // content-only edit, so the SPA would keep showing "Draft" after the
+      // very first successful deploy of a project.
+      if (opts.onLinked) await opts.onLinked(workflow).catch(() => undefined);
       return linked.definitionId;
     };
 
