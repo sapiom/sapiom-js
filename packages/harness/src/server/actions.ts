@@ -71,12 +71,15 @@ export interface ActionWorkflow {
 /**
  * One line of the deploy NDJSON stream. `linking` is emitted only when the
  * project had no `definitionId` and the route is resolving-or-creating its
- * remote agent; `building` is emitted once the build is triggered; exactly one
- * terminal line (`ready` | `error`) closes the stream. `capability`-agnostic
- * and credential-free by construction.
+ * remote agent; `warning` is non-terminal and advisory — it never replaces a
+ * terminal line and may appear alongside either outcome (e.g. linking
+ * succeeded but caching the id in `sapiom.json` failed); `building` is emitted
+ * once the build is triggered; exactly one terminal line (`ready` | `error`)
+ * closes the stream. `capability`-agnostic and credential-free by construction.
  */
 export type DeployStreamEvent =
   | { phase: "linking"; name: string }
+  | { phase: "warning"; message: string }
   | { phase: "building"; definitionId: string }
   | { phase: "ready"; definitionId: string; buildRunId: string; status: string }
   | { phase: "error"; code: string; message: string; hint?: string };
@@ -435,10 +438,24 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       // Cache under the name the SERVER settled on, matching what
       // `sapiom agents link` writes. writeConfig merges, so the clone's
       // forkId/templateId/repoFullName survive.
-      deps.writeConfig(workflow.path, {
-        definitionId: linked.definitionId,
-        name: linked.name,
-      });
+      //
+      // Best-effort: sapiom.json is a re-resolvable cache (agent-core's
+      // config.ts) and `link` re-resolves the same agent by name, so a failed
+      // write here (read-only checkout, EACCES, a config that turned invalid
+      // between the 409 check above and this write) must not cost the user
+      // their deploy — warn and carry on with the id already in hand.
+      try {
+        deps.writeConfig(workflow.path, {
+          definitionId: linked.definitionId,
+          name: linked.name,
+        });
+      } catch (cacheErr) {
+        write({
+          phase: "warning",
+          message:
+            `The agent "${linked.name}" is linked (${linked.definitionId}) but could not be recorded in sapiom.json: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves the same agent, so nothing is duplicated.`,
+        });
+      }
       return linked.definitionId;
     };
 

@@ -285,7 +285,7 @@ describe("createActionsRouter", () => {
       // provenance and no definitionId. This is the case that used to 409.
       const coreDeps = makeCoreDeps({
         readConfig: vi.fn().mockReturnValue({ forkId: "fork_7", templateId: "order-triage" }),
-        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "order-triage" }),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "order-triage-canonical" }),
         deploy: vi.fn().mockResolvedValue({
           definitionId: "def_new",
           buildRunId: "build_1",
@@ -315,13 +315,67 @@ describe("createActionsRouter", () => {
         { name: "order-triage", create: true },
         expect.anything(),
       );
-      // The id is cached under the name the SERVER returned, and writeConfig
-      // merges, so the clone's forkId/templateId survive.
+      // The id is cached under the name the SERVER returned (not the requested
+      // name — they differ here on purpose, to prove which one wins), and
+      // writeConfig merges, so the clone's forkId/templateId survive.
       expect(coreDeps.writeConfig).toHaveBeenCalledWith("/proj/agent", {
         definitionId: "def_new",
-        name: "order-triage",
+        name: "order-triage-canonical",
       });
       // The build then runs against the freshly linked id.
+      expect(coreDeps.deploy).toHaveBeenCalledWith(
+        { projectDir: "/proj/agent", definitionId: "def_new" },
+        expect.anything(),
+      );
+    });
+
+    it("warns (but still builds) when linking succeeds but caching it to sapiom.json fails", async () => {
+      // sapiom.json is a re-resolvable cache (agent-core/src/config.ts) and link()
+      // re-resolves the same agent by name — so a failed cache write (read-only
+      // checkout, EACCES, config gone invalid between the 409 check and the
+      // write) must not cost the user their deploy. It's best-effort: warn, and
+      // carry on with the id already in hand.
+      const coreDeps = makeCoreDeps({
+        readConfig: vi.fn().mockReturnValue({}),
+        link: vi.fn().mockResolvedValue({ definitionId: "def_new", name: "order-triage" }),
+        writeConfig: vi.fn().mockImplementation(() => {
+          throw new Error("EACCES: permission denied, open '/proj/agent/sapiom.json'");
+        }),
+        deploy: vi.fn().mockResolvedValue({
+          definitionId: "def_new",
+          buildRunId: "build_1",
+          status: "ready",
+        }),
+      });
+      start({
+        apiKey: "sk-test-key",
+        resolveWorkflow: () => ({ path: "/proj/agent", name: "order-triage" }),
+        coreDeps,
+      });
+
+      const res = await fetch(`${baseUrl}/api/workflows/wf-1/deploy`, { method: "POST" });
+      expect(res.status).toBe(200);
+
+      const events = parseNdjson(await res.text());
+      expect(events).toHaveLength(4);
+      expect(events[0]).toEqual({ phase: "linking", name: "order-triage" });
+      expect(events[1].phase).toBe("warning");
+      expect(events[1].message).toEqual(
+        expect.stringContaining("def_new"),
+      );
+      expect(events[1].message).toEqual(
+        expect.stringContaining("nothing is duplicated"),
+      );
+      expect(events[2]).toEqual({ phase: "building", definitionId: "def_new" });
+      expect(events[3]).toEqual({
+        phase: "ready",
+        definitionId: "def_new",
+        buildRunId: "build_1",
+        status: "ready",
+      });
+
+      // The whole point of the override: the build still runs against the
+      // linked id even though the cache write failed.
       expect(coreDeps.deploy).toHaveBeenCalledWith(
         { projectDir: "/proj/agent", definitionId: "def_new" },
         expect.anything(),
@@ -349,7 +403,10 @@ describe("createActionsRouter", () => {
 
       expect(coreDeps.link).not.toHaveBeenCalled();
       expect(coreDeps.writeConfig).not.toHaveBeenCalled();
-      expect(events[0]).toEqual({ phase: "building", definitionId: "def_123" });
+      expect(events).toEqual([
+        { phase: "building", definitionId: "def_123" },
+        { phase: "ready", definitionId: "def_123", buildRunId: "build_9", status: "ready" },
+      ]);
     });
 
     it("ends the stream with one terminal error when linking fails, without building", async () => {
@@ -525,6 +582,10 @@ describe("createActionsRouter", () => {
       const body = (await res.json()) as Record<string, unknown>;
       expect(body.error).toBe("sapiom.json is not valid JSON");
       expect(coreDeps.deploy).not.toHaveBeenCalled();
+      // An unparseable config must never reach link() — the entire reason
+      // "bad-config" is a distinct state from "unlinked".
+      expect(coreDeps.link).not.toHaveBeenCalled();
+      expect(coreDeps.writeConfig).not.toHaveBeenCalled();
     });
 
     it("returns 503 (no network) when the harness has no API key", async () => {
