@@ -255,6 +255,27 @@ export const App = (): JSX.Element => {
     if (deadCwdNeedingHistory) void loadHistory([deadCwdNeedingHistory]);
   }, [deadCwdNeedingHistory, loadHistory]);
 
+  // Describe-with-AI outcome feedback. The run is a hidden background task that
+  // never takes over the board — but it must never finish SILENTLY either.
+  // Toast when a describe task leaves "running" (the exact "spins then stops
+  // with no result and no message" report). On success the canvas also
+  // re-renders on its own from the edited source.
+  const describeTaskStatus = useRef(new Map<string, string>());
+  useEffect(() => {
+    for (const task of harness.tasks) {
+      if (task.macroId !== "describe") continue;
+      const prev = describeTaskStatus.current.get(task.id);
+      if (prev === "running" && task.status !== "running") {
+        harness.showToast(
+          task.status === "failed"
+            ? "Couldn't generate descriptions — check the agent terminal for details."
+            : "Describe run finished — the canvas updates if the agent changed the source.",
+        );
+      }
+      describeTaskStatus.current.set(task.id, task.status);
+    }
+  }, [harness.tasks, harness.showToast]);
+
   if (harness.loading) {
     return <div className="app-status">Loading Sapiom Studio…</div>;
   }
