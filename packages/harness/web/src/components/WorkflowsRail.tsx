@@ -507,7 +507,10 @@ export function WorkflowsRail({
           open={addMenuOpen}
           anchorRef={connectTriggerRef}
           onDismiss={closeAddMenu}
-          placement="down-end"
+          // Beside the rail, not over it. The + is pinned to the rail's right
+          // edge, so a downward panel grows back across the workspace tree it
+          // is about to add to — covering the list you are checking against.
+          placement="right-start"
           className="connect-card add-card"
           testid="add-menu"
         >

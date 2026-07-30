@@ -16,9 +16,22 @@ import type { CSSProperties, JSX, ReactNode, RefObject } from "react";
 
 import { useDismissable } from "../lib/use-dismissable";
 
-/** Which trigger edge the panel grows from: down = below, up = above;
- *  start = left edges aligned, end = right edges aligned. */
-export type PopoverPlacement = "down-start" | "down-end" | "up-start" | "up-end";
+/** Which trigger edge the panel grows from.
+ *
+ *  down/up = below or above the trigger, with start = left edges aligned and
+ *  end = right edges aligned.
+ *
+ *  right = BESIDE the trigger, off its right edge — for triggers pinned to a
+ *  left-hand edge (the rail), where a panel dropped downward has to grow back
+ *  across the thing it belongs to. Here start/end align the panel's top edge
+ *  to the trigger's top, or its bottom to the trigger's bottom. */
+export type PopoverPlacement =
+  | "down-start"
+  | "down-end"
+  | "up-start"
+  | "up-end"
+  | "right-start"
+  | "right-end";
 
 const GAP_PX = 4;
 /** Keep the panel off the viewport edge so shadows never clip. */
@@ -42,6 +55,22 @@ function positionFor(anchor: HTMLElement, placement: PopoverPlacement, matchWidt
   // A panel can never be wider than the viewport minus both insets; the
   // measured clamp pass below then only ever needs to SHIFT it into view.
   style.maxWidth = window.innerWidth - 2 * VIEWPORT_INSET_PX;
+  // Side placement: the panel sits off the trigger's right edge and aligns
+  // horizontally to it, so the vertical/horizontal roles below are swapped.
+  // Width is deliberately NOT clamped to the space remaining on the right —
+  // the measured pass below already shifts an overhanging panel back inside,
+  // and clamping here would instead squeeze the card narrow on a small window.
+  if (placement.startsWith("right")) {
+    style.left = rect.right + GAP_PX;
+    if (placement.endsWith("start")) {
+      style.top = rect.top;
+      style.maxHeight = window.innerHeight - rect.top - VIEWPORT_INSET_PX;
+    } else {
+      style.bottom = window.innerHeight - rect.bottom;
+      style.maxHeight = rect.bottom - VIEWPORT_INSET_PX;
+    }
+    return style;
+  }
   if (placement.startsWith("down")) {
     style.top = rect.bottom + GAP_PX;
     style.maxHeight = window.innerHeight - rect.bottom - GAP_PX - VIEWPORT_INSET_PX;

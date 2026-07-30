@@ -29,6 +29,22 @@ test.describe("the resting state", () => {
     await expect(page.locator(".modal-add-workspace")).toHaveCount(0);
   });
 
+  test("the menu opens beside the rail, not over it", async ({ page }) => {
+    const menu = page.getByTestId("add-menu");
+    await expect(menu).toBeVisible();
+
+    const trigger = await page.getByTestId("add-workspace").boundingBox();
+    const panel = await menu.boundingBox();
+    if (!trigger || !panel) throw new Error("trigger and menu must both be laid out");
+
+    // Off the trigger's RIGHT edge. The + is pinned to the rail's right side,
+    // so a panel dropped downward grows back across the workspace tree it is
+    // about to add to — covering the list you are checking against.
+    expect(panel.x).toBeGreaterThanOrEqual(trigger.x + trigger.width);
+    // And top-aligned to the trigger, not dropped below it.
+    expect(Math.abs(panel.y - trigger.y)).toBeLessThan(2);
+  });
+
   test("offers exactly three doors and no path field", async ({ page }) => {
     const doors = page.getByTestId("aw-doors");
     await expect(doors).toBeVisible();
