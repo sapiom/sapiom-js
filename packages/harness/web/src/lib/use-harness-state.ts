@@ -939,7 +939,13 @@ export function useHarnessState(): HarnessStateHook {
       setToast("Deploying — building on Sapiom…");
       try {
         const terminal = await api.deploy(workflowPath, (event) => {
-          if (event.phase === "building") setToast("Deploying — building on Sapiom…");
+          // A never-linked project (a fresh template clone) gets its agent
+          // created first — say so, rather than claiming we're building.
+          if (event.phase === "linking") {
+            setToast(`Deploying — creating the agent "${event.name}" on Sapiom…`);
+          } else if (event.phase === "building") {
+            setToast("Deploying — building on Sapiom…");
+          }
         });
         if (terminal.phase === "ready") {
           setToast("Deployed to Sapiom.");

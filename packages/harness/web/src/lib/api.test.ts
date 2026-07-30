@@ -47,6 +47,25 @@ describe("terminalDeployEvent", () => {
   it("synthesizes an error for an empty stream", () => {
     expect(terminalDeployEvent([])).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
   });
+
+  it("treats a linking line as non-terminal", async () => {
+    // The server emits `linking` before `building` when it has to create the
+    // agent; only ready/error may end the stream.
+    const events: DeployStreamEvent[] = [
+      { phase: "linking", name: "order-triage" },
+      { phase: "building", definitionId: "42" },
+    ];
+    expect(terminalDeployEvent(events)).toMatchObject({ phase: "error", code: "NO_OUTPUT" });
+  });
+});
+
+describe("parseNdjsonLine of a linking event", () => {
+  it("parses the linking phase and its name", () => {
+    expect(parseNdjsonLine<DeployStreamEvent>('{"phase":"linking","name":"order-triage"}')).toEqual({
+      phase: "linking",
+      name: "order-triage",
+    });
+  });
 });
 
 describe("parseNdjsonLine (deploy stream)", () => {
