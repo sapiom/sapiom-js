@@ -495,7 +495,7 @@ describe("createActionsRouter", () => {
         expect.stringContaining("not recorded locally"),
       );
       expect(events[1].message).toEqual(
-        expect.stringContaining("nothing is duplicated"),
+        expect.stringContaining("re-deploying re-resolves it by name"),
       );
       expect(events[2]).toEqual({ phase: "building", definitionId: "def_new" });
       expect(events[3]).toEqual({

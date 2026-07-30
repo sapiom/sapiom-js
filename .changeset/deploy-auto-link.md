@@ -31,3 +31,9 @@ chip will not flip and the next deploy re-links, but nothing is duplicated
 because `link` resolves the same agent again. The SPA renders both the
 `linking` and `warning` lines, and a double-click on Deploy can no longer
 create two remote agents for the same project.
+
+Because linking matches by name, two gallery clones of the same template —
+which share the same declared `defineAgent({ name })` — resolve to the same
+remote agent, so deploying the second one replaces the first's build; this is
+inherent to link-by-name (unchanged from `sapiom agents link --create`), not
+a new bug, but it's now reachable from a single button click.

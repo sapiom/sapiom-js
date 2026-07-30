@@ -467,7 +467,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
         write({
           phase: "warning",
           message:
-            `The agent "${linked.name}" was created on Sapiom (${linked.definitionId}) but not recorded locally: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves the same agent, so nothing is duplicated.`,
+            `The agent "${linked.name}" was created on Sapiom (${linked.definitionId}) but not recorded locally: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves it by name.`,
         });
       }
       // Best-effort, same as the cache write above, and run whether or not it

@@ -948,11 +948,18 @@ export function useHarnessState(): HarnessStateHook {
       if (existing) return existing;
 
       const run = (async (): Promise<void> => {
-        setToast("Deploying — building on Sapiom…");
+        setToast("Deploying…");
         // Which non-terminal phase was last seen, so a terminal `error` can
         // say whether linking or building failed — both are the same wire
         // shape, told apart only by what preceded them.
         let lastNonTerminalPhase: "linking" | "building" | null = null;
+        // The warning line (if any), remembered the same way — NOT a ref, NOT
+        // shared state, just a per-call local — so it survives the `building`
+        // toast that follows it in the same chunk (the server writes `warning`
+        // then `building` back to back; without this the warning is
+        // overwritten before it's ever seen) and gets folded into the success
+        // toast instead.
+        let pendingWarning: string | null = null;
         try {
           const terminal = await api.deploy(workflowPath, (event) => {
             // A never-linked project (a fresh template clone) gets its agent
@@ -965,7 +972,9 @@ export function useHarnessState(): HarnessStateHook {
               // couldn't be written back to sapiom.json. The message is
               // already a complete, user-facing sentence composed
               // server-side — pass it through verbatim. A later `building`
-              // legitimately replaces this toast.
+              // legitimately replaces this toast, so it's also remembered
+              // above to resurface on success.
+              pendingWarning = event.message;
               setToast(event.message);
             } else if (event.phase === "building") {
               lastNonTerminalPhase = "building";
@@ -973,7 +982,7 @@ export function useHarnessState(): HarnessStateHook {
             }
           });
           if (terminal.phase === "ready") {
-            setToast("Deployed to Sapiom.");
+            setToast(pendingWarning ? `Deployed to Sapiom. ${pendingWarning}` : "Deployed to Sapiom.");
             // Clear any prior deploy error for this workflow — it succeeded.
             setLastDeployErrorByPath((prev) => {
               if (!prev.has(workflowPath)) return prev;
