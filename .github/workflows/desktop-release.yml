@@ -79,10 +79,16 @@ jobs:
           #
           # Strip build metadata before looking for a pre-release tag: `0.1.2+pr-44`
           # is a FINAL release whose metadata happens to contain a hyphen.
+          #
+          # `*-?*`, not `*-*`: the hyphen must be FOLLOWED by something. A trailing
+          # hyphen (`0.1.2-`) is not a pre-release, and update-policy.ts's
+          # `/^\d+\.\d+\.\d+-\S/` agrees — matching on a bare `*-*` here made the
+          # two derivations disagree on that one input, which the metadata check
+          # below would catch as a confusing red build rather than a bad release.
           core="${version%%+*}"
           case "$core" in
-            *-*) channel=beta;    prerelease=true  ;;
-            *)   channel=latest;  prerelease=false ;;
+            *-?*) channel=beta;    prerelease=true  ;;
+            *)    channel=latest;  prerelease=false ;;
           esac
 
           # A tag that disagrees with package.json is the one mistake that breaks
@@ -468,6 +474,37 @@ jobs:
           for f in **/*.deb;      do cp "$f" "Sapiom-Linux-amd64.deb";      break; done
           for f in **/*.exe;      do cp "$f" "Sapiom-Windows-x64.exe";      break; done
           ls -la
+
+      # Refuse to publish a release that cannot update the apps already out there.
+      #
+      # The per-OS `Verify update metadata` step already fails a build with no
+      # manifest — but the Windows leg is `continue-on-error` while Phase 6 is open,
+      # and `fail_on_unmatched_files: false` below tolerates anything missing. Those
+      # two together route around that check: a final release could publish with no
+      # `latest.yml`, and every INSTALLED Windows app would then 404 on every check
+      # until the next release. Silent, and unfixable for anyone who already has it.
+      #
+      # So assert it once more here, where all three OSes' artifacts are together.
+      # Windows may still FAIL to build (that stays non-blocking) — this only says
+      # that whatever we attach must be internally consistent.
+      - name: Verify every platform's update manifest is present
+        run: |
+          set -euo pipefail
+          cd dist-artifacts
+          channel="${{ needs.prepare.outputs.channel }}"
+          missing=()
+          for suffix in ".yml" "-mac.yml" "-linux.yml"; do
+            # `find`, not a glob: download-artifact nests each OS in its own dir.
+            if [ -z "$(find . -name "${channel}${suffix}" -print -quit)" ]; then
+              missing+=("${channel}${suffix}")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing update manifest(s): ${missing[*]}. Publishing would leave already-installed apps unable to find any future update. Fix the failing platform, or cut the release without it deliberately."
+            find . -name "*.yml" -print
+            exit 1
+          fi
+          echo "All three channel manifests present for \"$channel\"."
 
       # Make the channels a hierarchy rather than two dead ends.
       #
