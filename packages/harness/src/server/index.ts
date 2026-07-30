@@ -98,6 +98,7 @@ import {
   createDefinitionSlugResolver,
   resolveAgentsBaseUrl,
 } from "../core/definition-slug-resolver.js";
+import { resolveManifestName } from "../core/definition-name.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createApiKeyProvider } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
@@ -1171,8 +1172,15 @@ export const startServer = async (
       apiKey: apiKeyProvider,
       // coreBaseUrl omitted: the router self-defaults via resolveCoreBaseUrl()
       // (see actions.ts), which derives the core host from the agents env.
-      resolveWorkflow: (id) =>
-        workflowsCache.find((w) => w.path === id) ?? null,
+      resolveWorkflow: (id) => {
+        const workflow = workflowsCache.find((w) => w.path === id);
+        // `name` is the registry's display name — a fallback for naming an
+        // agent the deploy route has to create.
+        return workflow ? { path: workflow.path, name: workflow.name } : null;
+      },
+      // Prefer the agent's DECLARED name when deploy has to create it, read
+      // from the same warm extraction cache the canvas renders from.
+      resolveDefinitionName: (workflow) => resolveManifestName(workflow.path),
     }),
   );
   app.use(
