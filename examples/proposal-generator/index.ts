@@ -315,6 +315,41 @@ const draft = defineStep({
   },
 });
 
+/**
+ * Build the shell command that installs the PDF library and renders the
+ * proposal, run from `renderDir`.
+ *
+ * The `cd ${renderDir}` is load-bearing, not cosmetic. Blaxel's sandbox process
+ * API runs every command from the workspace root and only honours a `workingDir`
+ * field — the SDK's `cwd` exec option serialises to `cwd`, which the runtime
+ * silently ignores. So `node render.mjs` would resolve against `/blaxel` and
+ * miss the script we wrote under `renderDir`, failing with
+ * `Cannot find module '/blaxel/render.mjs'`. Changing directory inside the
+ * command itself is portable: it works no matter how the runtime treats `cwd`.
+ */
+export function buildRenderCommand(
+  renderDir: string,
+  pdfPackage: string = PDF_PACKAGE,
+): string {
+  return [
+    `cd ${renderDir}`,
+    `npm install --no-save --no-audit --no-fund --loglevel=error ${pdfPackage}`,
+    "node render.mjs",
+  ].join(" && ");
+}
+
+/**
+ * Read the rendered PDF back as base64 from `renderDir` (same `cd` reason as
+ * {@link buildRenderCommand}). base64 keeps binary bytes intact across the
+ * text-only exec channel; `-w0` disables line wrapping where supported.
+ */
+export function buildReadPdfCommand(
+  renderDir: string,
+  fileName: string,
+): string {
+  return `cd ${renderDir} && (base64 -w0 ${fileName} || base64 ${fileName})`;
+}
+
 const render = defineStep({
   name: "render",
   next: ["review"],
@@ -346,18 +381,16 @@ const render = defineStep({
     const box = await ctx.sapiom.sandboxes.create({ name: boxName });
     try {
       // Keep file writes and process execution in one explicit directory under
-      // the sandbox workspace. This avoids both the old cwd mismatch and putting
-      // the generated proposal on a shell command line.
+      // the sandbox workspace, and `cd` into it inside every command: the
+      // runtime ignores the SDK `cwd` option (see `buildRenderCommand`), so the
+      // directory change has to live in the command string itself. This also
+      // keeps the generated proposal off the shell command line.
       await box.exec(`mkdir -p ${renderDir}`);
       await box.writeFile(`${renderDir}/proposal.json`, proposalJson);
       await box.writeFile(`${renderDir}/render.mjs`, RENDER_SCRIPT);
-      const built = await box.exec(
-        [
-          `npm install --no-save --no-audit --no-fund --loglevel=error ${PDF_PACKAGE}`,
-          "node render.mjs",
-        ].join(" && "),
-        { cwd: renderDir, timeout: 180_000 },
-      );
+      const built = await box.exec(buildRenderCommand(renderDir), {
+        timeout: 180_000,
+      });
       if (built.exitCode !== 0) {
         ctx.logger.error("pdf render failed", {
           exitCode: built.exitCode,
@@ -370,12 +403,7 @@ const render = defineStep({
         );
       }
       // Read the PDF as base64 so binary bytes survive the text-only exec channel.
-      const read = await box.exec(
-        `base64 -w0 ${fileName} || base64 ${fileName}`,
-        {
-          cwd: renderDir,
-        },
-      );
+      const read = await box.exec(buildReadPdfCommand(renderDir, fileName));
       pdfBase64 = read.stdout.replace(/\s+/g, "");
     } finally {
       await box.destroy().catch((err) => {
