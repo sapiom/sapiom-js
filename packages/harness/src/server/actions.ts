@@ -42,7 +42,7 @@ import {
 } from "@sapiom/agent-core";
 
 import { resolveCoreBaseUrl } from "../core/definition-slug-resolver.js";
-import { unpackedPath } from "../core/asar-path.js";
+import { HOST_ESBUILD_PIN, unpackedPath } from "../core/asar-path.js";
 import type { RunLocalRequest } from "../core/run-local-bootstrap.js";
 import {
   type ApiKeyProvider,
@@ -168,7 +168,14 @@ export function resolveRunLocalChildSpec(
   const args = bootstrap.endsWith(".ts")
     ? ["--import", "tsx", bootstrap]
     : [bootstrap];
-  const { ESBUILD_BINARY_PATH: _pin, ...inherited } = runtime.env;
+  // Via the constant, not the literal name. `HOST_ESBUILD_PIN`'s whole purpose is
+  // to be the ONE place that key is written, and its doc names this spec as one of
+  // the three strippers — but a rest-destructure needs a literal, so renaming the
+  // constant would have silently left this child inheriting the pin and hitting
+  // `Host version "X" does not match binary version "Y"`.
+  const inherited = Object.fromEntries(
+    Object.entries(runtime.env).filter(([key]) => key !== HOST_ESBUILD_PIN),
+  );
   return {
     command: runtime.execPath,
     args,
