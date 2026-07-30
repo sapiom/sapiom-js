@@ -363,6 +363,14 @@ describe("createActionsRouter", () => {
       expect(events[1].message).toEqual(
         expect.stringContaining("def_new"),
       );
+      // The project itself is still unlinked locally — only the remote agent
+      // exists — so the message must not read as "your project is linked".
+      expect(events[1].message).toEqual(
+        expect.stringContaining("was created on Sapiom"),
+      );
+      expect(events[1].message).toEqual(
+        expect.stringContaining("not recorded locally"),
+      );
       expect(events[1].message).toEqual(
         expect.stringContaining("nothing is duplicated"),
       );

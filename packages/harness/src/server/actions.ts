@@ -363,7 +363,9 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
    * status — all inside @sapiom/agent-core's {@link deploy}. Streams NDJSON: a
    * `building` line up front, then exactly one terminal `ready`/`error` line.
    * A project with no `definitionId` yet is linked on the fly first (a
-   * `linking` line precedes `building`) rather than rejected.
+   * `linking` line precedes `building`) rather than rejected; if the resolved
+   * agent's id could not be cached in `sapiom.json`, a non-terminal `warning`
+   * line follows before `building` continues.
    *
    * 200  NDJSON stream (even a build failure is a 200 with a terminal `error`
    *      line — the request itself succeeded; the build outcome is in-band).
@@ -453,7 +455,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
         write({
           phase: "warning",
           message:
-            `The agent "${linked.name}" is linked (${linked.definitionId}) but could not be recorded in sapiom.json: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves the same agent, so nothing is duplicated.`,
+            `The agent "${linked.name}" was created on Sapiom (${linked.definitionId}) but not recorded locally: ${cacheErr instanceof Error ? cacheErr.message : String(cacheErr)}. The build continues; re-deploying re-resolves the same agent, so nothing is duplicated.`,
         });
       }
       return linked.definitionId;
