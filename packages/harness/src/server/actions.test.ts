@@ -318,6 +318,8 @@ describe("createActionsRouter", () => {
         method: "POST",
       });
       expect(res.status).toBe(409);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.error).toBe("sapiom.json is not valid JSON");
       expect(coreDeps.deploy).not.toHaveBeenCalled();
     });
 

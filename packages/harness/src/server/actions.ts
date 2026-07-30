@@ -197,24 +197,34 @@ export interface ActionsRouterOpts {
 }
 
 /**
- * Extract the linked `definitionId` from a project's `sapiom.json`. The config
- * file — not the registry — is the source of truth for a project's server-side
- * definition id, so both deploy and (a future) resolve path read it here. Never
- * throws: an unlinked/unreadable project returns null and the route maps that to
- * a 409.
+ * What a project's `sapiom.json` says about its server-side identity. Three
+ * states, not two: an unlinked project is fixable by linking on the spot (the
+ * deploy route does exactly that), while an unparseable file is not — and
+ * telling them apart matters, because `writeConfig` re-reads the file and
+ * throws BAD_CONFIG on invalid JSON. Auto-linking on a broken config would
+ * create a remote agent and then fail to record it, orphaning it.
+ *
+ * `name` on the unlinked state is the cached agent name a previous `link`
+ * wrote, if any — the deploy route uses it to name the agent it creates.
  */
-function readDefinitionId(
+type ProjectConfigState =
+  | { kind: "linked"; definitionId: string }
+  | { kind: "unlinked"; name?: string }
+  | { kind: "bad-config" };
+
+function readProjectConfigState(
   readConfig: typeof coreReadConfig,
   projectDir: string,
-): string | null {
+): ProjectConfigState {
   let config: SapiomConfig | null;
   try {
     config = readConfig(projectDir);
   } catch {
-    // BAD_CONFIG (unparseable sapiom.json) — treat as "not linked" for the route.
-    return null;
+    return { kind: "bad-config" };
   }
-  return config?.definitionId ?? null;
+  const definitionId = config?.definitionId;
+  if (definitionId) return { kind: "linked", definitionId };
+  return config?.name ? { kind: "unlinked", name: config.name } : { kind: "unlinked" };
 }
 
 /**
@@ -344,13 +354,18 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
       return;
     }
 
-    const definitionId = readDefinitionId(deps.readConfig, workflow.path);
-    if (!definitionId) {
+    const configState = readProjectConfigState(deps.readConfig, workflow.path);
+    if (configState.kind === "bad-config") {
+      res.status(409).json({ error: "sapiom.json is not valid JSON" });
+      return;
+    }
+    if (configState.kind === "unlinked") {
       res
         .status(409)
         .json({ error: "workflow is not linked to a Sapiom agent" });
       return;
     }
+    const definitionId = configState.definitionId;
 
     // From here the outcome is streamed in-band as NDJSON — status is 200 and
     // headers are committed before the (potentially long) build runs.
