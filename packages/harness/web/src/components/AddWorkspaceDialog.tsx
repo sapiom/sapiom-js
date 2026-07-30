@@ -26,7 +26,7 @@ import type { HarnessEntry, HarnessKind } from "@shared/types";
  *
  * The fix is to branch on INTENT before asking for a path:
  *
- *   I have a project      → which folder? → detection → the ONE right action
+ *   Open a folder         → which folder? → detection → the ONE right action
  *   Start from a template → hands off to the templates destination (which asks
  *                           "which template?" and owns the live catalog)
  *   Start from an idea    → what should it do? → derived name → scaffold
@@ -42,7 +42,7 @@ import type { HarnessEntry, HarnessKind } from "@shared/types";
  * plans/harness-idea-door/design.md in the Sapiom repo.
  */
 
-type Door = "have" | "template" | "idea";
+export type Door = "have" | "template" | "idea";
 
 /** What detection found at the resolved path. */
 type Outcome =
@@ -73,10 +73,25 @@ interface AddWorkspaceDialogProps {
   onSaveProjectRoot: (root: string) => Promise<void>;
   /** The button that opened the dialog — Escape returns focus to it. */
   triggerRef?: RefObject<HTMLElement | null>;
+  /**
+   * Open straight into one door, skipping the door list.
+   *
+   * For callers that have ALREADY asked the intent question — the rail's Add
+   * popover (which renders the doors itself) and Overview's "Open a folder"
+   * row. Without it both asked twice: you clicked a button naming an intent and
+   * the dialog answered with the same three intents, the one you picked among
+   * them. When set there is no list behind this door, so the back button is
+   * suppressed rather than left pointing at a state you were never in.
+   */
+  initialDoor?: Door;
 }
 
-const DOORS: { id: Door; title: string; sub: string; icon: "Folder" | "LayoutTemplate" | "Sparkles" }[] = [
-  { id: "have", title: "I have a project", sub: "Add a folder that already holds an agent", icon: "Folder" },
+/** The three intents, and the single source of the row copy. Exported because
+ *  the rail's Add popover renders this same list — two hand-maintained copies
+ *  of three labels is exactly how "Open a folder" and "I have a project" came
+ *  to name the same action on two surfaces. */
+export const DOORS: { id: Door; title: string; sub: string; icon: "Folder" | "LayoutTemplate" | "Sparkles" }[] = [
+  { id: "have", title: "Open a folder", sub: "Add a folder that already holds an agent", icon: "Folder" },
   { id: "template", title: "Start from a template", sub: "Ready-made workflows you can edit", icon: "LayoutTemplate" },
   { id: "idea", title: "Start from an idea", sub: "Describe it; the agent scaffolds it", icon: "Sparkles" },
 ];
@@ -93,8 +108,9 @@ export function AddWorkspaceDialog({
   onSaveProjectRoot,
   listHarnesses,
   triggerRef,
+  initialDoor,
 }: AddWorkspaceDialogProps): JSX.Element {
-  const [door, setDoor] = useState<Door | null>(null);
+  const [door, setDoor] = useState<Door | null>(initialDoor ?? null);
   // The adapter registry, for the MCP setup prompts the "no agent project"
   // outcome offers. Fetched once per open; a failure just means that block
   // renders nothing, which is strictly better than a broken affordance.
@@ -133,7 +149,11 @@ export function AddWorkspaceDialog({
         ref={panelRef}
       >
         <div className="modal-header">
-          {door && (
+          {/* Back exists only when there is a list to go back TO. Entered
+              directly at a door, the intent was picked on the surface that
+              opened us, and "back" would land on a state this dialog was never
+              in. Closing is the way out. */}
+          {door && !initialDoor && (
             <button
               type="button"
               className="theme-toggle aw-back"
@@ -179,8 +199,14 @@ export function AddWorkspaceDialog({
   );
 }
 
-/** The resting state: three mutually exclusive intents, no path field in sight. */
-function DoorList({ onPick }: { onPick: (door: Door) => void }): JSX.Element {
+/**
+ * The resting state: three mutually exclusive intents, no path field in sight.
+ *
+ * Exported so the rail's Add popover can BE this list rather than restate it.
+ * The row anatomy (icon · title · sub · chevron) is the same on both surfaces,
+ * so it is one component and one stylesheet rule, not two that drift.
+ */
+export function DoorList({ onPick }: { onPick: (door: Door) => void }): JSX.Element {
   return (
     <div className="aw-doors" data-testid="aw-doors">
       {DOORS.map((entry) => (
@@ -208,7 +234,7 @@ function DoorList({ onPick }: { onPick: (door: Door) => void }): JSX.Element {
 }
 
 // ---------------------------------------------------------------------------
-// Door 1 — I have a project
+// Door 1 — Open a folder
 // ---------------------------------------------------------------------------
 
 function HaveProjectDoor({

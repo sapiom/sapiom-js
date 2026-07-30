@@ -809,6 +809,27 @@ input {
   overflow-y: auto;
 }
 
+/* Add-menu variant: the same door rows the dialog shows, on the menu inset.
+   Matched to .history-card so the two popovers hanging off adjacent buttons
+   are visibly one control, not two designs. */
+.add-card {
+  width: min(320px, calc(100vw - var(--sp4)));
+}
+
+.add-card .connect-card-body {
+  padding: 6px;
+}
+
+/* In the modal a door is a full-bleed row on modal padding, separated from its
+   neighbours by a rule. In the menu it is an inset, rounded item like every
+   other popover row — and the rule above the first door would otherwise sit
+   directly under the header's own border, reading as a double line. */
+.add-card .aw-door {
+  padding: 6px 8px;
+  border-top: none;
+  border-radius: var(--radius-sm);
+}
+
 .rail-list {
   flex: 1;
   min-height: 0;

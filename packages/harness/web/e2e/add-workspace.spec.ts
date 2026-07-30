@@ -21,6 +21,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("the resting state", () => {
+  test("the + opens a menu, not a modal", async ({ page }) => {
+    // Picking one of three words never warranted a centred, scrimmed dialog —
+    // and as a modal it read as a different surface from the History menu one
+    // button to its left. Same primitive, same card.
+    await expect(page.getByTestId("add-menu")).toBeVisible();
+    await expect(page.locator(".modal-add-workspace")).toHaveCount(0);
+  });
+
   test("offers exactly three doors and no path field", async ({ page }) => {
     const doors = page.getByTestId("aw-doors");
     await expect(doors).toBeVisible();
@@ -34,13 +42,16 @@ test.describe("the resting state", () => {
     await expect(page.getByTestId("modal-browse-templates")).toHaveCount(0);
   });
 
-  test("a door can be entered and backed out of", async ({ page }) => {
+  test("picking a door opens the dialog already at that door", async ({ page }) => {
     await page.getByTestId("aw-door-have").click();
-    await expect(page.locator(".dir-picker")).toBeVisible();
-    await expect(page.getByTestId("aw-doors")).toHaveCount(0);
 
-    await page.getByTestId("aw-back").click();
-    await expect(page.getByTestId("aw-doors")).toBeVisible();
+    await expect(page.locator(".modal-add-workspace")).toBeVisible();
+    await expect(page.locator(".dir-picker")).toBeVisible();
+    // The menu IS the list, so the dialog must not restate it — and must not
+    // offer a back button pointing at a state this dialog was never in. The
+    // way back is closing it and pressing + again.
+    await expect(page.getByTestId("aw-doors")).toHaveCount(0);
+    await expect(page.getByTestId("aw-back")).toHaveCount(0);
   });
 
   test("the template door hands straight off to the templates browser", async ({ page }) => {
@@ -58,7 +69,7 @@ test.describe("entry points", () => {
   // modal instead, which is the most prominent button on a first-run screen
   // delivering the wrong thing. The label is allowed to change; what it opens
   // is not.
-  test("the welcome panel's primary CTA opens the three doors, not the session modal", async ({
+  test("the welcome panel's primary CTA opens the folder door, not the session modal", async ({
     page,
   }) => {
     await page.goto("/?mockState=fresh");
@@ -68,12 +79,16 @@ test.describe("entry points", () => {
     await welcome.getByTestId("welcome-start-project").click();
 
     await expect(page.locator(".modal-add-workspace")).toBeVisible();
-    await expect(page.getByTestId("aw-doors")).toBeVisible();
     await expect(page.locator(".modal-new-session")).toHaveCount(0);
+    // It lands ON the folder question. The row is called "Open a folder"; it
+    // used to answer that click with three intents, one of which was opening a
+    // folder — the same question asked twice, in two vocabularies.
+    await expect(page.locator(".dir-picker")).toBeVisible();
+    await expect(page.getByTestId("aw-doors")).toHaveCount(0);
   });
 });
 
-test.describe("door 1 — I have a project", () => {
+test.describe("door 1 — Open a folder", () => {
   test("states that the picked folder is an agent project, then offers one action", async ({ page }) => {
     await page.getByTestId("aw-door-have").click();
 

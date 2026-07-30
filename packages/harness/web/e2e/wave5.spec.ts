@@ -68,10 +68,10 @@ test.describe("add workspace (three doors)", () => {
     page,
   }) => {
     await page.getByTestId("add-workspace").click();
+    await page.getByTestId("aw-door-have").click();
     const modal = page.locator(".modal-add-workspace");
     await expect(modal).toBeVisible();
 
-    await modal.getByTestId("aw-door-have").click();
     await modal.getByTestId("dir-picker-input").fill("/Users/demo/brand-new-agent");
     await modal.getByTestId("aw-have-continue").click();
 
@@ -94,8 +94,8 @@ test.describe("add workspace (three doors)", () => {
 
   test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {
     await page.getByTestId("add-workspace").click();
+    await page.getByTestId("aw-door-have").click();
     const modal = page.locator(".modal-add-workspace");
-    await modal.getByTestId("aw-door-have").click();
     await modal.getByTestId("dir-picker-input").fill("/Users/demo");
     await modal.getByTestId("aw-have-continue").click();
 
@@ -113,11 +113,10 @@ test.describe("add workspace (three doors)", () => {
   test("the MCP setup prompt is copyable and fires mcp.install", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.getByTestId("add-workspace").click();
-    const modal = page.locator(".modal-add-workspace");
-
     // Contextual now, not permanent: the offer exists only where it applies —
     // a folder that exists and has no Sapiom wiring.
-    await modal.getByTestId("aw-door-have").click();
+    await page.getByTestId("aw-door-have").click();
+    const modal = page.locator(".modal-add-workspace");
     await modal.getByTestId("dir-picker-input").fill("/Users/demo/scratch");
     await modal.getByTestId("aw-have-continue").click();
 

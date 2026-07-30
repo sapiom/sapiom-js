@@ -212,22 +212,22 @@ test("Overview is dismissable — scrim, close button, and Escape all put it awa
 test("creation IA: the rail + adds projects; the tab strip + adds a session to the focused agent", async ({
   page,
 }) => {
-  // The rail's + is the PROJECT entry: it opens the three-door add-workspace
-  // dialog. No mode tabs (the entry point fixed the intent, docs/IA.md) and no
-  // agent picker — each door asks exactly one question.
+  // The rail's + is the PROJECT entry: it opens the three-door add menu. No
+  // mode tabs (the entry point fixed the intent, docs/IA.md) and no agent
+  // picker — each door asks exactly one question.
   await page.getByTestId("add-workspace").click();
-  const modal = page.locator(".modal-add-workspace");
-  await expect(modal).toBeVisible();
-  await expect(modal.locator(".modal-header")).toContainText("Add to Sapiom");
-  await expect(modal.getByTestId("aw-doors")).toBeVisible();
-  await expect(modal.getByTestId("add-mode-session")).toHaveCount(0);
-  await expect(modal.getByTestId("add-mode-project")).toHaveCount(0);
-  await expect(modal.getByTestId("harness-select")).toHaveCount(0);
+  const menu = page.getByTestId("add-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.locator(".connect-card-header")).toContainText("Add");
+  await expect(menu.getByTestId("aw-doors")).toBeVisible();
+  await expect(menu.getByTestId("add-mode-session")).toHaveCount(0);
+  await expect(menu.getByTestId("add-mode-project")).toHaveCount(0);
+  await expect(menu.getByTestId("harness-select")).toHaveCount(0);
   // "Add workspace" is now the OUTCOME of picking a folder that holds a
   // project, not a button offered before anything is known.
-  await expect(modal.getByRole("button", { name: "Add workspace" })).toHaveCount(0);
+  await expect(menu.getByRole("button", { name: "Add workspace" })).toHaveCount(0);
   await page.keyboard.press("Escape");
-  await expect(modal).toHaveCount(0);
+  await expect(menu).toHaveCount(0);
 
   // Session creation lives in the tab strip: the trailing + opens a NEW
   // session on the focused agent (leasing), no dialog. Leasing has two tabs
@@ -469,14 +469,14 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 });
 
-test("add project: the rail's + registers a bare folder through the 'I have a project' door", async ({ page }) => {
+test("add project: the rail's + registers a bare folder through the 'Open a folder' door", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
+  await page.getByTestId("aw-door-have").click();
 
   const modal = page.locator(".modal-add-workspace");
   await expect(modal).toBeVisible();
   await expect(modal.getByTestId("harness-select")).toHaveCount(0);
 
-  await modal.getByTestId("aw-door-have").click();
   const input = modal.getByTestId("dir-picker-input");
   await input.fill("/Users/demo/scratch");
   await modal.getByTestId("aw-have-continue").click();

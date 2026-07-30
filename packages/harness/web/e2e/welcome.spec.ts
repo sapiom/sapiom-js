@@ -68,19 +68,19 @@ test.describe("first run", () => {
     await page.screenshot({ path: "web/e2e/screenshots/welcome-panel.png", fullPage: true });
   });
 
-  test("'New workspace' opens the three-door add flow, and adding one dismisses the panel", async ({
+  test("'Open folder' opens the folder door, and adding one dismisses the panel", async ({
     page,
   }) => {
     // This CTA used to open the SESSION modal — the most prominent button on
     // the first-run screen said "workspace" and delivered "new session". It now
-    // reaches the same three doors the rail's + does.
+    // reaches the same add flow the rail's + does, and lands directly on the
+    // folder question rather than re-asking which of three intents this was.
     await page.getByTestId("welcome-start-project").click();
     await expect(page.locator(".modal-add-workspace")).toBeVisible();
-    await expect(page.getByTestId("aw-doors")).toBeVisible();
     await expect(page.locator(".modal-new-session")).toHaveCount(0);
+    await expect(page.getByTestId("aw-doors")).toHaveCount(0);
 
-    // Through door 1: pick a fixture folder that holds an agent project.
-    await page.getByTestId("aw-door-have").click();
+    // Already at door 1: pick a fixture folder that holds an agent project.
     await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-workflows");
     await page.getByTestId("aw-have-continue").click();
     await expect(page.getByTestId("aw-result")).toContainText("This is an agent project");

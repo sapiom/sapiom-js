@@ -209,10 +209,12 @@ export function WelcomePanel({
             </p>
             {error && <div className="welcome-error">{error}</div>}
 
-            {/* Primary path: point Studio at a folder. Opens the three-door add
-                dialog, whose first door is exactly this question — and which is
-                the only surface that can tell an agent project from any folder
-                (GET /api/fs/list carries the marker flag). */}
+            {/* Primary path: point Studio at a folder. Opens the add dialog
+                straight at its folder door — the only surface that can tell an
+                agent project from any folder (GET /api/fs/list carries the
+                marker flag). It used to open the door LIST, so clicking a
+                button called "Open folder" was answered with three intents, one
+                of which was opening a folder. */}
             <div className="welcome-open" data-testid="welcome-open-card">
               <span className="welcome-open-icon" aria-hidden="true">
                 <Icon name="Folder" size={20} />
@@ -353,6 +355,9 @@ export function WelcomePanel({
             onBrowseTemplates();
           }}
           triggerRef={startProjectRef}
+          // The row above already said "Open a folder"; deep-link to that door
+          // instead of asking the same question a second time.
+          initialDoor="have"
         />
       )}
     </>

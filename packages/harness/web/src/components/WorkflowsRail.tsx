@@ -16,7 +16,8 @@ import { BrandHeader } from "./BrandHeader";
 import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
-import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
+import { AddWorkspaceDialog, DoorList } from "./AddWorkspaceDialog";
+import type { Door } from "./AddWorkspaceDialog";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
 import { WorkflowRow } from "./WorkflowRow";
@@ -342,6 +343,22 @@ export function WorkflowsRail({
   const [addDialogMode, setAddDialogMode] = useState<"session" | "workspace" | null>(null);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
 
+  /**
+   * The Add menu — the intent question, asked in a popover hanging off the +
+   * rather than in a full modal.
+   *
+   * A centred, scrimmed dialog to pick one of three words was the heaviest
+   * possible container for the lightest possible choice, and it read as a
+   * different surface from the History menu one button to its left. Same
+   * primitive, same card, same rows now.
+   *
+   * `addDoor` is which door the modal that follows opens at. Only ever set from
+   * here, so the modal is never re-asked the question this menu just answered.
+   */
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [addDoor, setAddDoor] = useState<Door>("have");
+  const closeAddMenu = useCallback(() => setAddMenuOpen(false), []);
+
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
@@ -366,6 +383,9 @@ export function WorkflowsRail({
 
   const toggleHistory = (): void => {
     const next = !historyOpen;
+    // Two popovers hanging off adjacent buttons: opening one closes the other,
+    // or they overlap and the top one looks like a child of the wrong trigger.
+    if (next) setAddMenuOpen(false);
     setHistoryOpen(next);
     if (next) {
       const dirs = historyDirs(sessions, recentDirs, activeSessionId);
@@ -465,10 +485,11 @@ export function WorkflowsRail({
             className="theme-toggle rail-header-btn"
             data-testid="add-workspace"
             aria-label="Add workspace"
+            aria-expanded={addMenuOpen}
             title="Add a workspace: a folder containing an agent project (sapiom.json). Its agent appears in the rail."
             onClick={() => {
               setHistoryOpen(false);
-              setAddDialogMode("workspace");
+              setAddMenuOpen((open) => !open);
             }}
           >
             <Icon name="Plus" size={14} />
@@ -476,6 +497,46 @@ export function WorkflowsRail({
         </div>
       </div>
       <div className="rail-tree">
+        {/* The intent question. Same primitive and same card as the History
+            menu beside it — and the SAME rows the dialog used to show, so the
+            list moved out of the modal rather than being reworded into a
+            second copy of itself. Picking a door opens the dialog already at
+            that door; picking templates leaves for the destination that owns
+            the catalog. */}
+        <AnchoredPopover
+          open={addMenuOpen}
+          anchorRef={connectTriggerRef}
+          onDismiss={closeAddMenu}
+          placement="down-end"
+          className="connect-card add-card"
+          testid="add-menu"
+        >
+          <div className="connect-card-header">
+            <span>Add</span>
+            <button
+              className="theme-toggle connect-card-close"
+              onClick={closeAddMenu}
+              aria-label="Close"
+              title="Close"
+            >
+              <Icon name="X" size={13} />
+            </button>
+          </div>
+          <div className="connect-card-body">
+            <DoorList
+              onPick={(door) => {
+                setAddMenuOpen(false);
+                if (door === "template") {
+                  onBrowseTemplates();
+                  return;
+                }
+                setAddDoor(door);
+                setAddDialogMode("workspace");
+              }}
+            />
+          </div>
+        </AnchoredPopover>
+
         <AnchoredPopover
           open={historyOpen}
           anchorRef={historyTriggerRef}
@@ -682,7 +743,10 @@ export function WorkflowsRail({
           `mode`. The workspace intent is three doors (AddWorkspaceDialog); a
           session is one question (which folder) plus which agent. They shared
           375 lines and almost no UI, which is how the workspace side ended up
-          showing five jobs at once. */}
+          showing five jobs at once.
+
+          The workspace dialog now always opens AT a door: the Add popover above
+          is the door list, so reaching here means the intent is already known. */}
       {addDialogMode === "workspace" && (
         <AddWorkspaceDialog
           recentDirs={recentDirs}
@@ -701,6 +765,7 @@ export function WorkflowsRail({
             onBrowseTemplates();
           }}
           triggerRef={connectTriggerRef}
+          initialDoor={addDoor}
         />
       )}
       {addDialogMode === "session" && (
