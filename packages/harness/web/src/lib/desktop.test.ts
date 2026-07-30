@@ -75,6 +75,14 @@ describe("describeUpdateOutcome", () => {
     expect(view.tone).toBe("info");
   });
 
+  it("reports an empty channel as a state, not a failure", () => {
+    // This is the normal answer before the first final release ships, and calling
+    // it an error teaches users to distrust the feature.
+    const view = describeUpdateOutcome({ kind: "no-release", channel: "latest" });
+    expect(view.tone).toBe("info");
+    expect(view.text).toContain("latest");
+  });
+
   it("surfaces why updates are off, and the failure reason", () => {
     expect(describeUpdateOutcome({ kind: "disabled", reason: "not a packaged build" })).toEqual({
       text: "Updates are off: not a packaged build.",
@@ -91,6 +99,7 @@ describe("describeUpdateOutcome", () => {
       { kind: "available", version: "1.0.0" },
       { kind: "downloaded", version: "1.0.0" },
       { kind: "up-to-date", version: "1.0.0", channel: "latest" },
+      { kind: "no-release", channel: "latest" },
       { kind: "disabled", reason: "x" },
       { kind: "failed", message: "x" },
     ];
@@ -103,6 +112,7 @@ describe("describeUpdateOutcome", () => {
       { kind: "available" as const, version: "1.0.0" },
       { kind: "downloaded" as const, version: "1.0.0" },
       { kind: "up-to-date" as const, version: "1.0.0", channel: "latest" },
+      { kind: "no-release" as const, channel: "latest" },
       { kind: "disabled" as const, reason: "x" },
       { kind: "failed" as const, message: "x" },
     ]) {

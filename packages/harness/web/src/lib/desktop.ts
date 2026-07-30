@@ -22,6 +22,7 @@ export type UpdateCheckOutcome =
   | { kind: "available"; version: string }
   | { kind: "downloaded"; version: string }
   | { kind: "up-to-date"; version: string; channel: string }
+  | { kind: "no-release"; channel: string }
   | { kind: "disabled"; reason: string }
   | { kind: "failed"; message: string };
 
@@ -95,6 +96,11 @@ export function describeUpdateOutcome(outcome: UpdateCheckOutcome): UpdateStatus
       return { text: `${outcome.version} is ready to install.`, tone: "action" };
     case "up-to-date":
       return { text: `Up to date (${outcome.version}, ${outcome.channel}).`, tone: "info" };
+    case "no-release":
+      // Not an error, and must not read like one: a stable install correctly
+      // ignores pre-releases, so before the first final release this is simply the
+      // truth.
+      return { text: `No ${outcome.channel} release published yet.`, tone: "info" };
     case "disabled":
       return { text: `Updates are off: ${outcome.reason}.`, tone: "error" };
     case "failed":

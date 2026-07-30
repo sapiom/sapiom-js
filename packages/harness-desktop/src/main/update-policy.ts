@@ -164,3 +164,44 @@ export function shouldEnableUpdater(input: UpdaterGateInput): UpdaterGate {
   if (input.devMode) return { enabled: false, reason: "--dev" };
   return { enabled: true };
 }
+
+/** What went wrong with a check, in terms a user can act on. */
+export type UpdateErrorKind =
+  /** The channel has no release to offer — not a fault, just nothing published. */
+  | "no-release"
+  /** We could not reach GitHub. */
+  | "offline"
+  | "other";
+
+/**
+ * Turn electron-updater's error into one short, human line.
+ *
+ * This exists because the raw message is unusable in a UI: for a channel with no
+ * published release, GitHubProvider appends the **entire releases Atom feed** plus
+ * a full stack trace, so `error.message` is kilobytes of XML. Rendering that in a
+ * toast is what happens if you trust it (it did).
+ *
+ * Also separates "nothing is published yet" from "something broke". The first is a
+ * normal state — a stable install correctly ignores pre-releases, so before the
+ * first final release there is genuinely nothing to find — and calling it an error
+ * teaches users to distrust the feature.
+ */
+export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; summary: string } {
+  // Cut the appended feed first: everything from `, XML:` on is the Atom document.
+  const withoutXml = raw.split(/,\s*XML:/)[0] ?? raw;
+  // Then the first line, because the rest is a stack trace.
+  const firstLine = (withoutXml.split(/\r?\n/)[0] ?? "").trim();
+  const collapsed = firstLine.replace(/\s+/g, " ");
+
+  if (/unable to find latest version|ensure a production release exists|no published versions/i.test(collapsed)) {
+    return { kind: "no-release", summary: "no release has been published on this channel yet" };
+  }
+  if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|net::ERR/i.test(collapsed)) {
+    return { kind: "offline", summary: "could not reach GitHub" };
+  }
+  // Unknown: keep it, but bounded. A truncated real message still beats a generic
+  // one when someone has to diagnose it from a screenshot.
+  const MAX = 160;
+  const summary = collapsed.length > MAX ? `${collapsed.slice(0, MAX - 1).trimEnd()}…` : collapsed;
+  return { kind: "other", summary: summary || "the update check failed" };
+}

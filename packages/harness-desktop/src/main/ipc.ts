@@ -82,6 +82,13 @@ export type UpdateCheckOutcome =
    */
   | { kind: "downloaded"; version: string }
   | { kind: "up-to-date"; version: string; channel: string }
+  /**
+   * The channel has nothing to offer yet. Distinct from `failed` on purpose: a
+   * stable install correctly ignores pre-releases, so before the first final
+   * release this is the CORRECT answer, and dressing it up as an error teaches
+   * users to distrust the feature.
+   */
+  | { kind: "no-release"; channel: string }
   /** Updates are off for this build (unpackaged, or an env opt-out). */
   | { kind: "disabled"; reason: string }
   | { kind: "failed"; message: string };

@@ -36,6 +36,7 @@ import type { UpdateInfo } from "electron-updater";
 import { UPDATE_CHECK, type UpdateCheckOutcome } from "./ipc.js";
 import {
   CHANNEL_ENV_VAR,
+  classifyUpdateError,
   resolveUpdateChannel,
   shouldEnableUpdater,
 } from "./update-policy.js";
@@ -296,9 +297,13 @@ async function runCheck(current: NonNullable<typeof active>): Promise<UpdateChec
     }
     return { kind: "up-to-date", version: app.getVersion(), channel: current.channel };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log(`on-demand check failed: ${message}`);
-    return { kind: "failed", message };
+    // NEVER forward the raw message: for a channel with no published release,
+    // electron-updater appends the whole releases Atom feed and a stack trace, so
+    // it is kilobytes of XML — which went straight into a toast once.
+    const { kind, summary } = classifyUpdateError(err instanceof Error ? err.message : String(err));
+    log(`on-demand check failed (${kind}): ${summary}`);
+    if (kind === "no-release") return { kind: "no-release", channel: current.channel };
+    return { kind: "failed", message: summary };
   }
 }
 
@@ -439,14 +444,14 @@ function startUpdater(deps: UpdaterDeps): void {
     // Expected in the field, and never fatal: no network, a release without
     // metadata, an AppImage the user extracted, a .deb with no working package
     // manager. The app keeps working on the version it has.
-    log(`check failed: ${err.message}`);
+    log(`check failed: ${classifyUpdateError(err.message).summary}`);
   });
 
   const check = (): void => {
     autoUpdater.checkForUpdates().catch((err: unknown) => {
       // checkForUpdates rejects AND emits "error"; swallow here so the
       // rejection can't surface as an unhandled promise.
-      log(`check rejected: ${err instanceof Error ? err.message : String(err)}`);
+      log(`check rejected: ${classifyUpdateError(err instanceof Error ? err.message : String(err)).summary}`);
     });
   };
 

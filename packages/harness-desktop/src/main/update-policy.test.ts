@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHANNEL_ENV_VAR,
+  classifyUpdateError,
   DISABLE_ENV_VAR,
   FORCE_ENV_VAR,
   STABLE_ACCEPTS_PRERELEASE,
@@ -159,6 +160,55 @@ describe("shouldEnableUpdater", () => {
       const gate = shouldEnableUpdater(input);
       expect(gate.enabled).toBe(false);
       expect(gate.reason).toBeTruthy();
+    }
+  });
+});
+
+describe("classifyUpdateError", () => {
+  // The real thing, abbreviated: electron-updater appends the ENTIRE releases Atom
+  // feed after ", XML:", plus a full stack trace. Forwarding this to the UI put
+  // kilobytes of XML into a toast.
+  const REAL_NO_RELEASE = [
+    "Unable to find latest version on GitHub (https://github.com/sapiom/sapiom-js/releases.atom),",
+    " please ensure a production release exists: HttpError: 404",
+    '\n    at GitHubProvider.getLatestTagName (/Applications/Sapiom.app/Contents/Resources/app.asar/node_modules/electron-updater/out/providers/GitHubProvider.js:173:55)',
+    "\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+    ', XML: <?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom">',
+    "<title>Release notes from sapiom-js</title><entry><id>tag:github.com,2008:Repository/1094593670/harness-desktop-v0.1.0</id></entry></feed>",
+  ].join("");
+
+  it("recognises an empty channel, and drops the feed and the stack", () => {
+    const { kind, summary } = classifyUpdateError(REAL_NO_RELEASE);
+    expect(kind).toBe("no-release");
+    expect(summary).not.toMatch(/<\?xml|<feed|GitHubProvider|app\.asar/);
+    expect(summary.length).toBeLessThan(120);
+  });
+
+  it("never lets a message through long enough to wreck a toast", () => {
+    // The property that actually matters, independent of classification.
+    for (const raw of [REAL_NO_RELEASE, `Boom${"x".repeat(5000)}`, `a\n${"y".repeat(5000)}`]) {
+      expect(classifyUpdateError(raw).summary.length).toBeLessThanOrEqual(160);
+    }
+  });
+
+  it("names an offline machine as such", () => {
+    expect(classifyUpdateError("request to https://github.com failed, reason: getaddrinfo ENOTFOUND github.com").kind).toBe(
+      "offline",
+    );
+    expect(classifyUpdateError("connect ECONNREFUSED 140.82.121.3:443").kind).toBe("offline");
+  });
+
+  it("keeps an unrecognised message, bounded, rather than replacing it", () => {
+    // A truncated real message still beats a generic one when diagnosing from a
+    // screenshot.
+    const { kind, summary } = classifyUpdateError("ENOSPC: no space left on device, write");
+    expect(kind).toBe("other");
+    expect(summary).toContain("ENOSPC");
+  });
+
+  it("always produces something to show", () => {
+    for (const raw of ["", "   ", "\n\n"]) {
+      expect(classifyUpdateError(raw).summary.length).toBeGreaterThan(0);
     }
   });
 });
