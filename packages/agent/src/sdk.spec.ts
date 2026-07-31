@@ -229,7 +229,45 @@ describe('defineAgent agent-level inputSchema', () => {
         inputSchema: contract,
         steps: { start: entryWithSchema('start', entrySchema) },
       }),
-    ).toThrow(/declares an inputSchema at both the agent level and on its entry step 'start'/);
+    ).toThrow(/declares a different inputSchema at the agent level and on its entry step 'start'/);
+  });
+
+  it('does not mutate a steps object shared across two defineAgent calls', () => {
+    // Both agents are built from the SAME steps object literal. Folding the
+    // agent-level schema onto the first must NOT rewrite the entry step the
+    // second reads (copy-on-write, not in-place mutation).
+    const start = entryWithoutSchema('start');
+    const shared = { start };
+    const withSchema = defineAgent({
+      name: 'with',
+      entry: 'start',
+      inputSchema: contract,
+      steps: shared,
+    });
+    const without = defineAgent({
+      name: 'without',
+      entry: 'start',
+      steps: shared,
+    });
+    // The first agent folded the contract onto its own (fresh) entry step...
+    expect(withSchema.steps.start.inputSchema).toBe(contract);
+    // ...but the shared object and the second agent are untouched.
+    expect(shared.start).toBe(start);
+    expect(shared.start.inputSchema).toBeUndefined();
+    expect(without.steps.start.inputSchema).toBeUndefined();
+  });
+
+  it('does not mutate a frozen steps map (folds via copy, no TypeError)', () => {
+    const frozen = Object.freeze({ start: entryWithoutSchema('start') });
+    const def = defineAgent({
+      name: 'wf',
+      entry: 'start',
+      inputSchema: contract,
+      steps: frozen,
+    });
+    expect(def.steps.start.inputSchema).toBe(contract);
+    // The original frozen map is left as-is.
+    expect(frozen.start.inputSchema).toBeUndefined();
   });
 
   it('does not touch non-entry steps', () => {

@@ -172,18 +172,22 @@ export function defineAgent<TInput = unknown, TShared extends Record<string, unk
     const entryStep = def.steps[def.entry];
     if (entryStep.inputSchema && entryStep.inputSchema !== def.inputSchema) {
       throw new Error(
-        `Agent '${def.name}' declares an inputSchema at both the agent level and on its entry step '${def.entry}'. ` +
-          `Declare the input contract in one place — remove it from whichever is not the source of truth.`,
+        `Agent '${def.name}' declares a different inputSchema at the agent level and on its entry step '${def.entry}'. ` +
+          `Declare the input contract once and reference that single schema object in both places (or remove one).`,
       );
     }
     if (!entryStep.inputSchema) {
       // The entry step declared no schema: the agent-level contract becomes it.
-      // Replace the step in the map (not a deep clone — the step's `run` and
-      // routing declarations are carried over by the spread) so downstream
-      // readers of `steps[entry].inputSchema` pick it up without special-casing.
-      (def.steps as Record<string, StepDefinition<TShared>>)[def.entry] = {
-        ...entryStep,
-        inputSchema: def.inputSchema as ZodType<unknown>,
+      // Copy-on-write — build a FRESH steps map with a fresh entry step rather
+      // than mutating the caller's (Readonly) `steps` object in place. Mutating
+      // it would corrupt a `steps` literal shared across two `defineAgent` calls
+      // (the first fold would rewrite the second's entry step) and would throw on
+      // an `Object.freeze()`d map. The step's `run` and routing declarations are
+      // carried over by the spread, so downstream readers of
+      // `steps[entry].inputSchema` pick up the contract without special-casing.
+      (def as { steps: Record<string, StepDefinition<TShared>> }).steps = {
+        ...def.steps,
+        [def.entry]: { ...entryStep, inputSchema: def.inputSchema as ZodType<unknown> },
       };
     }
   }
