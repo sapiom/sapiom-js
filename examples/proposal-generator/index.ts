@@ -315,33 +315,52 @@ const draft = defineStep({
   },
 });
 
+/** base64-encode UTF-8 text so it survives a shell command line intact. */
+function toBase64(text: string): string {
+  return Buffer.from(text, "utf8").toString("base64");
+}
+
 /**
- * Build the shell command that installs the PDF library and renders the
- * proposal, run from `renderDir`.
+ * Build the single shell command that materializes the render inputs, installs
+ * the PDF library, and renders — all inside ONE `exec`.
  *
- * The `cd ${renderDir}` is load-bearing, not cosmetic. Blaxel's sandbox process
- * API runs every command from the workspace root and only honours a `workingDir`
- * field — the SDK's `cwd` exec option serialises to `cwd`, which the runtime
- * silently ignores. So `node render.mjs` would resolve against `/blaxel` and
- * miss the script we wrote under `renderDir`, failing with
- * `Cannot find module '/blaxel/render.mjs'`. Changing directory inside the
- * command itself is portable: it works no matter how the runtime treats `cwd`.
+ * Why one command, and why write the files via base64 instead of `writeFile`:
+ * `writeFile` and `exec` hit the SAME sandbox container, but they root paths
+ * differently. The sandbox filesystem API is rooted at `/blaxel`, and the SDK's
+ * `writeFile` ALSO prepends the reported `workspaceRoot` (also `/blaxel`) — so a
+ * relative `writeFile("render-a0/render.mjs")` silently lands at
+ * `/blaxel/blaxel/render-a0/render.mjs` (double-nest), while `exec` runs with its
+ * working dir at `/blaxel` and `node render.mjs` looks under `/blaxel/render-a0`.
+ * Same filesystem, two different absolute paths — so the write is never where the
+ * process reads, and the render dies with `Cannot find module`. (Known bug class:
+ * Linear AGENT-231 fixed it for the MCP file tools; the SDK/workflow path still
+ * double-nests — run 263 is the runtime repro that ticket said it lacked.) Doing
+ * everything in ONE `exec` sidesteps the whole root mismatch: `mkdir` + `cd` into
+ * a per-attempt dir, decode the script and proposal from base64 into files right
+ * there, then run node against them — one shell, one cwd, no filesystem-API paths
+ * involved. base64 also keeps the (potentially large, metachar-laden) proposal
+ * JSON off the raw command line safely — the shell only sees an opaque blob.
  */
 export function buildRenderCommand(
   renderDir: string,
+  files: { renderScript: string; proposalJson: string },
   pdfPackage: string = PDF_PACKAGE,
 ): string {
   return [
+    `mkdir -p ${renderDir}`,
     `cd ${renderDir}`,
+    `printf %s '${toBase64(files.renderScript)}' | base64 -d > render.mjs`,
+    `printf %s '${toBase64(files.proposalJson)}' | base64 -d > proposal.json`,
     `npm install --no-save --no-audit --no-fund --loglevel=error ${pdfPackage}`,
     "node render.mjs",
   ].join(" && ");
 }
 
 /**
- * Read the rendered PDF back as base64 from `renderDir` (same `cd` reason as
- * {@link buildRenderCommand}). base64 keeps binary bytes intact across the
- * text-only exec channel; `-w0` disables line wrapping where supported.
+ * Read the rendered PDF back as base64 from `renderDir` (same one-`exec`,
+ * single-filesystem reasoning as {@link buildRenderCommand}). base64 keeps binary
+ * bytes intact across the text-only exec channel; `-w0` disables line wrapping
+ * where supported, with a plain `base64` fallback for busybox/macOS coreutils.
  */
 export function buildReadPdfCommand(
   renderDir: string,
@@ -380,17 +399,19 @@ const render = defineStep({
     let pdfBase64 = "";
     const box = await ctx.sapiom.sandboxes.create({ name: boxName });
     try {
-      // Keep file writes and process execution in one explicit directory under
-      // the sandbox workspace, and `cd` into it inside every command: the
-      // runtime ignores the SDK `cwd` option (see `buildRenderCommand`), so the
-      // directory change has to live in the command string itself. This also
-      // keeps the generated proposal off the shell command line.
-      await box.exec(`mkdir -p ${renderDir}`);
-      await box.writeFile(`${renderDir}/proposal.json`, proposalJson);
-      await box.writeFile(`${renderDir}/render.mjs`, RENDER_SCRIPT);
-      const built = await box.exec(buildRenderCommand(renderDir), {
-        timeout: 180_000,
-      });
+      // Materialize the inputs and render in ONE exec: `writeFile` and `exec`
+      // share the container but root paths differently, so a `writeFile`d file
+      // lands at a different absolute path than where the exec's node reads it
+      // (see `buildRenderCommand`). We decode the script and proposal from base64
+      // into files inside the same command that runs node — one shell, one cwd,
+      // so the files node loads are the files we just wrote.
+      const built = await box.exec(
+        buildRenderCommand(renderDir, {
+          renderScript: RENDER_SCRIPT,
+          proposalJson,
+        }),
+        { timeout: 180_000 },
+      );
       if (built.exitCode !== 0) {
         ctx.logger.error("pdf render failed", {
           exitCode: built.exitCode,
