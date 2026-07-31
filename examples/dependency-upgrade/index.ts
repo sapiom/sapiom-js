@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
+import { z } from "zod/v4";
 
 /**
  * dependency-upgrade — a scheduled "Dependabot triage" that only opens a PR when
@@ -103,8 +104,61 @@ interface Assessment {
 // ──────────────────────────────────────────────────────────────── steps ──
 
 /** Resolve the repo + commands into shared and validate the input. */
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. The instruction and command
+ * knobs carry their runtime fallbacks as `.default(...)`; `repoSlug` has no
+ * default on purpose — a repository must exist, so an empty slug is a clean
+ * rejection rather than a plausible-but-missing one.
+ */
+const entryInput = z.object({
+  repoSlug: z
+    .string()
+    .optional()
+    .describe(
+      "In-network repo slug the coding agent clones and upgrades. Required for a real run.",
+    ),
+  task: z
+    .string()
+    .default(DEFAULT_TASK)
+    .describe("Plain-words upgrade instruction for the coding agent."),
+  installCommand: z
+    .string()
+    .default("npm install")
+    .describe("Command that installs dependencies in the checkout."),
+  testCommand: z
+    .string()
+    .default("npm test")
+    .describe("Command that runs the test suite in the checkout."),
+  workingDirectory: z
+    .string()
+    .optional()
+    .describe("Checkout subdirectory to run tests in. Defaults to the slug."),
+  maxAutoRisk: z
+    .enum(["low", "medium", "high"])
+    .default("medium")
+    .describe(
+      "Risk at/below which a green build auto-pushes; anything above is held.",
+    ),
+  allowRisky: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Push even when risk is above maxAutoRisk (skip the human hold).",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Assemble everything but skip the push + report upload."),
+  schedule: z
+    .string()
+    .optional()
+    .describe("Cron cadence when deployed as a schedule (documentation only)."),
+});
+
 const plan = defineStep({
   name: "plan",
+  inputSchema: entryInput,
   next: ["bump", "rejected"],
   async run(input: DependencyUpgradeInput, ctx: Ctx) {
     const repoSlug = (input?.repoSlug ?? "").trim();

@@ -6,6 +6,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import { createFetch } from "@sapiom/fetch";
+import { z } from "zod/v4";
 
 /**
  * Slack Notifier — the "bring your own API" teaching template.
@@ -165,8 +166,40 @@ export async function postViaWebhook(
 // ──────────────────────────────────────────────────────────────── steps ──
 
 /** Validate inputs and resolve config before any network call. */
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `message` and `via` carry their
+ * runtime fallbacks as `.default(...)`, so a zero-input run posts the sample
+ * message via the `bot` credential.
+ */
+const entryInput = z.object({
+  message: z
+    .string()
+    .default(DEFAULT_MESSAGE)
+    .describe("The message text to post."),
+  channel: z
+    .string()
+    .optional()
+    .describe(
+      "Target channel for `bot` mode — a name (#general) or id (C0123). Ignored by `webhook` mode.",
+    ),
+  via: z
+    .enum(["bot", "webhook"])
+    .default("bot")
+    .describe("Which credential to use."),
+  username: z
+    .string()
+    .optional()
+    .describe("Override the bot's display name for this post."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Skip the real Slack call (network I/O)."),
+});
+
 const validate = defineStep({
   name: "validate",
+  inputSchema: entryInput,
   next: ["post", "rejected"],
   async run(input: EntryInput, ctx: Ctx) {
     const dryRun = input?.dryRun === true;

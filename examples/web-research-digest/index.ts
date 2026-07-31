@@ -6,6 +6,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import type { Sapiom } from "@sapiom/tools";
+import { z } from "zod/v4";
 
 /** The web-search response shape, derived from the capability client. */
 type WebSearchResponse = Awaited<ReturnType<Sapiom["search"]["webSearch"]>>;
@@ -31,15 +32,29 @@ interface Shared extends Record<string, unknown> {
  */
 const DEFAULT_TOPIC = "what is an LLM agent?";
 
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its fields from. `topic` carries the sample as its
+ * `.default(...)` so the declared default and the runtime default are the same
+ * value: a zero-input run performs a real search instead of being rejected for
+ * a missing field.
+ */
+const entryInput = z.object({
+  topic: z
+    .string()
+    .default(DEFAULT_TOPIC)
+    .describe("The subject to research and summarize into a sourced digest."),
+});
+
 const search = defineStep({
   name: "search",
   next: ["summarize"],
-  async run(
-    input: { topic: string },
-    ctx: AgentExecutionContext<Shared>,
-  ) {
+  inputSchema: entryInput,
+  async run(input: { topic: string }, ctx: AgentExecutionContext<Shared>) {
     const topic = input.topic?.trim() || DEFAULT_TOPIC;
-    if (topic === DEFAULT_TOPIC && input.topic?.trim() !== DEFAULT_TOPIC) {
+    // The schema fills `topic` with DEFAULT_TOPIC on a zero-input run, so the
+    // value — not its absence — is what tells us the sample was used.
+    if (topic === DEFAULT_TOPIC) {
       ctx.shared.set(
         "note",
         `Researched the default topic ("${DEFAULT_TOPIC}"). Pass a \`topic\` to research yours.`,
@@ -61,10 +76,7 @@ const summarize = defineStep({
   name: "summarize",
   next: [],
   terminal: true,
-  async run(
-    response: WebSearchResponse,
-    ctx: AgentExecutionContext<Shared>,
-  ) {
+  async run(response: WebSearchResponse, ctx: AgentExecutionContext<Shared>) {
     const topic = ctx.shared.get("topic") ?? response.query;
     const sources = response.results.map((r) => ({
       title: r.title,

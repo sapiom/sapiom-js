@@ -5,6 +5,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Logged-In Page Screenshots — open a real browser, optionally log in, visit the
@@ -120,8 +121,40 @@ function missedShot(url: string, error: string): Shot {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `urls` defaults to two stable
+ * public pages so a zero-input run captures something real; the login fields
+ * stay optional (public capture when omitted).
+ */
+const entryInput = z.object({
+  urls: z
+    .array(z.string())
+    .default(DEFAULT_URLS)
+    .describe("The pages to capture."),
+  loginUrl: z
+    .string()
+    .optional()
+    .describe(
+      "Login page URL — set it with loginUsername and the BROWSER_LOGIN_PASSWORD secret to capture behind a login.",
+    ),
+  loginUsername: z
+    .string()
+    .optional()
+    .describe(
+      "Username to log in with, paired with the BROWSER_LOGIN_PASSWORD secret.",
+    ),
+  fullPage: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Capture the full scrollable page height instead of just the viewport.",
+    ),
+});
+
 const start = defineStep({
   name: "start",
+  inputSchema: entryInput,
   next: ["login", "capture"],
   async run(input: EntryInput, ctx: Ctx) {
     const urls = normalizeUrls(input.urls, DEFAULT_URLS);

@@ -9,6 +9,7 @@ import {
 } from "@sapiom/agent";
 import { VIDEO_RESULT_SIGNAL, type VideoResultPayload } from "@sapiom/tools";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * Personalized Media at Scale — one custom image or short clip per row, stored
@@ -261,8 +262,56 @@ async function resolveSenderInbox(ctx: Ctx): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. The rendering knobs carry their
+ * runtime fallbacks as `.default(...)`; the database handle and creative
+ * overrides stay optional.
+ */
+const entryInput = z.object({
+  dbHandle: z
+    .string()
+    .optional()
+    .describe("Database handle holding the recipient table."),
+  medium: z
+    .enum(["image", "video"])
+    .default("image")
+    .describe('"image" (sync, cheaper) or "video" (async, pricier).'),
+  schedule: z
+    .string()
+    .optional()
+    .describe('Cron cadence this batch runs on (e.g. "0 9 * * *").'),
+  limit: z
+    .number()
+    .default(3)
+    .describe("How many rows to render this run (clamped 1–25)."),
+  style: z
+    .string()
+    .optional()
+    .describe(
+      'A creative direction folded into every prompt (e.g. "warm, editorial").',
+    ),
+  aspectRatio: z
+    .string()
+    .default("16:9")
+    .describe(
+      "Aspect ratio for generated video; images use the model default.",
+    ),
+  videoModel: z
+    .string()
+    .optional()
+    .describe("Video model alias or raw id, passed through to video.launch."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "Plan only — read the rows and prompts, generate and send nothing.",
+    ),
+});
+
 const fetch = defineStep({
   name: "fetch",
+  inputSchema: entryInput,
   next: ["renderImages", "renderClip"],
   terminal: true,
   async run(input: EntryInput, ctx: Ctx) {

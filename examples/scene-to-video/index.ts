@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import { VIDEO_RESULT_SIGNAL, type VideoResultPayload } from "@sapiom/tools";
+import { z } from "zod/v4";
 
 /**
  * Scene → Images → Video — a real multi-step generative pipeline.
@@ -75,8 +76,8 @@ export interface Clip {
 
 /** Trigger input. Only `scene` is required. */
 interface SceneInput {
-  /** The scene / story to turn into a short video. */
-  scene: string;
+  /** The scene / story to turn into a short video. Omit ⇒ the sample scene. */
+  scene?: string;
   /** How many shots to plan (default 3, clamped 1–6). */
   numShots?: number;
   /** Aspect ratio passed to image + video generation (default "16:9"). */
@@ -222,8 +223,42 @@ function parsePlan(
   }
 }
 
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `scene` stays optional so the
+ * tri-state holds: omitted ⇒ shoot the built-in sample scene, explicitly empty
+ * ⇒ a reported mistake, present ⇒ shoot it.
+ */
+const entryInput = z.object({
+  scene: z
+    .string()
+    .optional()
+    .describe(
+      "The scene / story to turn into a short video. Omit to use the built-in sample.",
+    ),
+  numShots: z
+    .number()
+    .default(3)
+    .describe("How many shots to plan (clamped 1–6)."),
+  aspectRatio: z
+    .string()
+    .default("16:9")
+    .describe("Aspect ratio passed to image + video generation."),
+  model: z
+    .string()
+    .optional()
+    .describe("Optional video model id, passed through to video.launch."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "Plan only — skip all image/video generation and return the plan.",
+    ),
+});
+
 const decompose = defineStep({
   name: "decompose",
+  inputSchema: entryInput,
   next: ["keyframes"],
   terminal: true,
   async run(input: SceneInput, ctx: AgentExecutionContext<Shared>) {
@@ -236,7 +271,7 @@ const decompose = defineStep({
       });
     }
     const usedSampleScene = input.scene === undefined;
-    const scene = usedSampleScene ? SAMPLE_SCENE : input.scene.trim();
+    const scene = input.scene === undefined ? SAMPLE_SCENE : input.scene.trim();
     if (usedSampleScene) {
       ctx.shared.set(
         "note",

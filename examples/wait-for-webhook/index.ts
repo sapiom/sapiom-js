@@ -6,6 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Wait-for-Webhook — durable pause/resume around any slow external callback.
@@ -155,8 +156,27 @@ async function registerJob(
 }
 
 // ---- steps -----------------------------------------------------------------
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. Both fields are optional: absent
+ * `config` (or `DRY_RUN`) runs offline; a `CALLBACK_TIMEOUT_MS` caps the wait.
+ */
+const entryInput = z.object({
+  job: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe("Arbitrary parameters handed to the external async job."),
+  config: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Config bag. CALLBACK_REGISTER_URL points at the external job; CALLBACK_TIMEOUT_MS caps the wait.",
+    ),
+});
+
 const kickoff = defineStep({
   name: "kickoff",
+  inputSchema: entryInput,
   next: ["decide"],
   // Static graph edge: on `SIGNAL`, resume at `decide`. Must match the directive.
   pause: { signal: SIGNAL, resumeStep: "decide" },

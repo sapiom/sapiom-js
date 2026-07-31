@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@sapiom/agent": "^0.7.1",
-    "@sapiom/tools": "^0.23.0"
+    "@sapiom/tools": "^0.23.0",
+    "zod": "^3.25.76 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",

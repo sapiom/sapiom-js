@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * Scheduled DB Snapshot to Insight Report — on a cron cadence, take a snapshot of
@@ -308,8 +309,44 @@ async function resolveSenderInbox(ctx: Ctx): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. Every field is optional: a
+ * zero-input run reports on sample metrics (see `dryRun`) and the template
+ * handle backs `dbHandle`.
+ */
+const entryInput = z.object({
+  queries: z
+    .array(z.object({ name: z.string(), sql: z.string() }))
+    .optional()
+    .describe(
+      "Queries to snapshot; defaults to catalog introspection when omitted.",
+    ),
+  schedule: z
+    .string()
+    .optional()
+    .describe("Cron cadence this report runs on (documentation only)."),
+  dbHandle: z
+    .string()
+    .optional()
+    .describe("Postgres handle to snapshot; defaults to the template handle."),
+  deliverTo: z
+    .string()
+    .optional()
+    .describe(
+      "Recipient email. Omit it and the report is returned inline instead of emailed.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "Report on sample metrics and skip the DB query and the real send.",
+    ),
+});
+
 const snapshot = defineStep({
   name: "snapshot",
+  inputSchema: entryInput,
   next: ["narrate"],
   async run(input: EntryInput, ctx: Ctx) {
     const dryRun = truthy(input.dryRun);

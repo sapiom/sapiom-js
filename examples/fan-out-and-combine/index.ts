@@ -5,6 +5,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Fan Out and Combine — split a goal into parts, run each part as its own child
@@ -158,13 +159,58 @@ function readAnalysis(output: unknown): string | null {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `goal` and `items` carry the
+ * sample set as their `.default(...)` so a zero-input run really fans out;
+ * `mode`/`item` are what the coordinator sets on each child.
+ */
+const entryInput = z.object({
+  goal: z
+    .string()
+    .default(DEFAULT_GOAL)
+    .describe(
+      "What to accomplish. Split across the items on the coordinate path.",
+    ),
+  items: z
+    .array(z.string())
+    .default(DEFAULT_ITEMS)
+    .describe("The sub-parts to fan out — one child run per item."),
+  childDefinition: z
+    .string()
+    .optional()
+    .describe(
+      "Slug of the deployed orchestration to run per item. Defaults to this agent's own slug.",
+    ),
+  mode: z
+    .enum(["coordinate", "leaf"])
+    .default("coordinate")
+    .describe(
+      'Which role this execution plays; a "leaf" does one item and never fans out.',
+    ),
+  item: z
+    .string()
+    .optional()
+    .describe(
+      "The single item a leaf works on. Set by the coordinator on each child.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "Resolve and return the fan-out plan without dispatching any child runs.",
+    ),
+});
+
 const plan = defineStep({
   name: "plan",
+  inputSchema: entryInput,
   next: ["solve", "fanOut", "planned"],
   async run(input: EntryInput, ctx: Ctx) {
     const mode: Mode = input.mode === "leaf" ? "leaf" : "coordinate";
-    const suppliedGoal = input.goal?.trim() ?? "";
-    const goal = suppliedGoal || DEFAULT_GOAL;
+    // The schema fills `goal` with DEFAULT_GOAL on a zero-input run, so the
+    // value — not its absence — is what tells us the default goal was used.
+    const goal = input.goal?.trim() || DEFAULT_GOAL;
     // Default to composing THIS deployment. `ctx.agentName` is the run's own slug,
     // so a forked+deployed copy dispatches leaf runs of itself with no other setup.
     const childDefinition = input.childDefinition?.trim() || ctx.agentName;
@@ -183,7 +229,7 @@ const plan = defineStep({
     // Coordinate path.
     const items = normalizeItems(input.items, DEFAULT_ITEMS);
     ctx.shared.set("itemCount", items.length);
-    if (!suppliedGoal) {
+    if (goal === DEFAULT_GOAL) {
       ctx.shared.set(
         "note",
         `Coordinated the default goal. Pass a \`goal\` and \`items\` to fan out your own.`,

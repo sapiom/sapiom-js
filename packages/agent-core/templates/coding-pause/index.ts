@@ -7,6 +7,24 @@ import {
   pauseUntilSignal,
 } from "@sapiom/agent";
 import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
+import { z } from "zod/v4";
+
+/**
+ * The entry contract — your agent's PUBLIC API. This schema is what the Sapiom
+ * dashboard's "Run once" form renders its fields from (one labelled field per
+ * property, using its `.describe(...)`), and every run's input is validated
+ * against it before `prepare` runs. The `.default(...)` is the same value the
+ * code sees on a zero-input run, so the template runs as-is and stays editable.
+ */
+const entryInput = z.object({
+  task: z
+    .string()
+    .default(
+      "Make a small, self-contained change to this repository and commit it.",
+    )
+    .describe("What the coding agent should do in the cloned repository."),
+});
+type EntryInput = z.infer<typeof entryInput>;
 
 /**
  * __PROJECT_NAME__ — a non-blocking coding-agent workflow.
@@ -30,13 +48,17 @@ const REPO_SLUG = "__PROJECT_NAME__-notes";
 interface Shared extends Record<string, unknown> {
   slug: string;
   cloneUrl: string;
+  /** The coding instruction, stashed by `prepare` so `kickoff` can launch it. */
+  task: string;
 }
 
 /** Find the repo, or create it on the first run. */
 const prepare = defineStep({
   name: "prepare",
   next: ["kickoff"],
-  async run(_input, ctx) {
+  inputSchema: entryInput,
+  async run(input: EntryInput, ctx) {
+    ctx.shared.set("task", input.task);
     const existing = await ctx.sapiom.repositories.list();
     const repo =
       existing.find((r) => r.slug === REPO_SLUG) ??
@@ -58,7 +80,7 @@ const kickoff = defineStep({
       ctx.shared.get("cloneUrl") as string,
     );
     const run = await ctx.sapiom.models.coding.launch({
-      task: "Make a small, self-contained change to this repository and commit it.",
+      task: ctx.shared.get("task") as string,
       gitRepository: repo, // auto-cloned into the sandbox at /workspace/<slug>
     });
     ctx.logger.info("agent launched; suspending until it finishes", {
@@ -102,7 +124,7 @@ const finalize = defineStep({
   },
 });
 
-export const agent = defineAgent<unknown, Shared>({
+export const agent = defineAgent<EntryInput, Shared>({
   name: "__PROJECT_NAME__",
   entry: "prepare",
   steps: { prepare, kickoff, finalize },

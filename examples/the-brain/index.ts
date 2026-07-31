@@ -6,6 +6,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * the-brain — a fleet orchestrator ("central nervous system") over a set of
@@ -741,8 +742,54 @@ function parsePlan(
 
 // ───────────────────────────────────────────────────────────────────── steps ──
 
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. Every field is optional: a
+ * zero-input run reads the bus for the DEFAULT_FLEET and briefs on it.
+ */
+const entryInput = z.object({
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Skip all external I/O (Slack + Postgres + child launch)."),
+  observeOnly: z
+    .boolean()
+    .optional()
+    .describe(
+      "Do everything real but launch no child — the briefing shows what it WOULD launch.",
+    ),
+  briefingChannelId: z
+    .string()
+    .optional()
+    .describe(
+      "Low-noise channel the brain posts its briefing into. Empty ⇒ log only.",
+    ),
+  fleet: z
+    .array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        slug: z.string(),
+        definitionId: z.string().optional(),
+        cadenceHours: z.number(),
+        dueHourUtc: z.number().optional(),
+        staleHours: z.number().optional(),
+        input: z.record(z.string(), z.unknown()).optional(),
+      }),
+    )
+    .optional()
+    .describe(
+      "Override the fleet the brain orchestrates (defaults to DEFAULT_FLEET).",
+    ),
+  now: z
+    .string()
+    .optional()
+    .describe("Pin the clock for deterministic testing (ISO string)."),
+});
+
 const scan = defineStep({
   name: "scan",
+  inputSchema: entryInput,
   next: ["assess"],
   async run(input: EntryInput, ctx: Ctx) {
     const dryRun = input.dryRun ?? false;

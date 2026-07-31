@@ -8,6 +8,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * Meeting-Notes → CRM Updater — turn a raw meeting transcript into a clean CRM
@@ -238,8 +239,49 @@ async function initSchema(sql: Sql): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. Every field is optional: pass a
+ * `transcript` directly, or set `webhook` to wait for a note-taker to push one.
+ */
+const entryInput = z.object({
+  transcript: z
+    .string()
+    .optional()
+    .describe("The meeting transcript / notes to process (the direct path)."),
+  webhook: z
+    .boolean()
+    .optional()
+    .describe(
+      "Wait for a note-taker to push the transcript instead of passing one.",
+    ),
+  deliverTo: z
+    .string()
+    .optional()
+    .describe(
+      "Recipient email. Omit it and the recap is returned inline instead of emailed.",
+    ),
+  dbHandle: z
+    .string()
+    .optional()
+    .describe(
+      "Postgres handle for the CRM store; defaults to the template handle.",
+    ),
+  meetingDate: z
+    .string()
+    .optional()
+    .describe(
+      "When the meeting happened (ISO); defaults to now on the DB side.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Compute the update but skip the DB writes and the real send."),
+});
+
 const intake = defineStep({
   name: "intake",
+  inputSchema: entryInput,
   next: ["extract"],
   // Static graph edge: on SIGNAL, resume at `extract`. Must match the directive.
   pause: { signal: SIGNAL, resumeStep: "extract" },

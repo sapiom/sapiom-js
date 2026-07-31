@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
+import { z } from "zod/v4";
 
 /**
  * Research → Micro-Site Publisher — deep multi-source research that ends in a
@@ -235,12 +236,49 @@ function hostOf(url: string): string | null {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `topic` carries the sample as
+ * its `.default(...)` so a zero-input run builds a real site instead of being
+ * rejected for a missing field.
+ */
+const entryInput = z.object({
+  topic: z
+    .string()
+    .default(DEFAULT_TOPIC)
+    .describe("What to research and publish a site about."),
+  audience: z
+    .string()
+    .optional()
+    .describe(
+      'Who the site is for — tunes the report tone (e.g. "investors", "developers").',
+    ),
+  customDomain: z
+    .string()
+    .optional()
+    .describe(
+      "A domain you already own in Sapiom to map the site onto. Omit to publish at the preview URL only.",
+    ),
+  subdomain: z
+    .string()
+    .default(DEFAULT_SUBDOMAIN)
+    .describe('Host on the custom domain, e.g. "report" → report.your.dev.'),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "Compute the report and return it as a preview, skipping the build, deploy, and DNS.",
+    ),
+});
+
 const search = defineStep({
   name: "search",
+  inputSchema: entryInput,
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
-    const suppliedTopic = input.topic?.trim() ?? "";
-    const topic = suppliedTopic || DEFAULT_TOPIC;
+    // The schema fills `topic` with DEFAULT_TOPIC on a zero-input run, so the
+    // value — not its absence — is what tells us the sample topic was used.
+    const topic = input.topic?.trim() || DEFAULT_TOPIC;
     ctx.shared.set("topic", topic);
     ctx.shared.set("audience", input.audience?.trim() || "a general audience");
     ctx.shared.set("customDomain", input.customDomain?.trim() || null);
@@ -248,7 +286,7 @@ const search = defineStep({
     ctx.shared.set("dryRun", input.dryRun === true);
     ctx.shared.set("sandboxName", null);
     ctx.shared.set("liveUrl", null);
-    if (!suppliedTopic) {
+    if (topic === DEFAULT_TOPIC) {
       ctx.shared.set(
         "note",
         `Researched the default topic ("${DEFAULT_TOPIC}"). Pass a \`topic\` to build a site about yours.`,

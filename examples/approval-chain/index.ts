@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * Multi-Party Approval Chain (Saga) — a durable, sequential sign-off flow.
@@ -339,8 +340,64 @@ async function persistTransition(
 const DEFAULT_SUBJECT = "Sample: renew the annual analytics contract ($18,000)";
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `subject` carries the sample as
+ * its `.default(...)`; an empty `approvers` chain escalates rather than pausing
+ * on a gate that does not exist.
+ */
+const entryInput = z.object({
+  subject: z
+    .string()
+    .default(DEFAULT_SUBJECT)
+    .describe("What is being signed off (contract, budget, policy…)."),
+  approvers: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        email: z.string().optional(),
+      }),
+    )
+    .optional()
+    .describe(
+      "The ordered chain of approvers — each must approve before the next is asked.",
+    ),
+  escalateTo: z
+    .string()
+    .optional()
+    .describe(
+      "Human channel to escalate to on timeout. Falls back to config.ESCALATION_EMAIL.",
+    ),
+  ledgerHandle: z
+    .string()
+    .optional()
+    .describe(
+      "Handle of a durable Postgres to append the audit trail to. Falls back to config.LEDGER_HANDLE.",
+    ),
+  reminderMs: z
+    .number()
+    .optional()
+    .describe(
+      "Pause timeout per gate in ms (best-effort auto-reminder). Default 24h.",
+    ),
+  maxReminders: z
+    .number()
+    .default(DEFAULT_MAX_REMINDERS)
+    .describe("Reminders before a silent gate escalates."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Skip the irreversible finalize action and live DB writes."),
+  config: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe("String-only config bag (escalation / ledger fallbacks)."),
+});
+
 const start = defineStep({
   name: "start",
+  inputSchema: entryInput,
   next: ["present", "escalate"],
   async run(input: EntryInput, ctx: Ctx) {
     const config = input.config ?? {};

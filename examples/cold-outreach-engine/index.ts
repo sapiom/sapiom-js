@@ -8,6 +8,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * Cold Outreach Personalization Engine — turn a raw lead list into a
@@ -277,8 +278,61 @@ async function resolveSenderInbox(
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. Every field is optional: a
+ * zero-input run works a sample batch through a default three-touch sequence.
+ */
+const entryInput = z.object({
+  leads: z
+    .array(
+      z.object({
+        domain: z.string().optional(),
+        company: z.string().optional(),
+        fullName: z.string().optional(),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+      }),
+    )
+    .optional()
+    .describe("The leads to work through on this run."),
+  campaign: z
+    .string()
+    .optional()
+    .describe("Campaign name — also the key for the dedup/log store."),
+  sequence: z
+    .array(z.object({ subject: z.string(), body: z.string() }))
+    .optional()
+    .describe("The drip sequence; defaults to a three-touch sequence."),
+  dripIntervalDays: z
+    .number()
+    .optional()
+    .describe("Days to wait between touches (default 3)."),
+  senderName: z
+    .string()
+    .optional()
+    .describe("Display name signed on the outgoing mail."),
+  schedule: z
+    .string()
+    .optional()
+    .describe("Cron cadence this engine runs on (documentation only)."),
+  dbHandle: z
+    .string()
+    .optional()
+    .describe(
+      "Postgres handle for the campaign store; defaults to the template handle.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "Compute the plan and openers but skip the send, the DB, and the drip.",
+    ),
+});
+
 const enrich = defineStep({
   name: "enrich",
+  inputSchema: entryInput,
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
     const leads = normalizeLeads(input.leads);

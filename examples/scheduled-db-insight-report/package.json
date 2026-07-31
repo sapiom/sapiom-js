@@ -12,7 +12,8 @@
   "dependencies": {
     "@sapiom/agent": "^0.8.0",
     "@sapiom/tools": "^0.24.0",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "zod": "^3.25.76 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
