@@ -237,15 +237,19 @@ export const App = (): JSX.Element => {
   // pathname-derived journey — it has no router).
   useEffect(() => {
     if (!st) return;
+    const active = st.sessions.find((session) => session.id === harness.activeSessionId);
     const view: HarnessView = {
       firstRun: st.firstRun === true,
       settingsOpen,
       templatesOpen,
       hasLiveSession: st.sessions.some((session) => session.status !== "exited"),
+      // Reviewing a finished session (active session has exited) is the observe
+      // arc — without this the dead-session view falls through to `unknown`.
+      inspectingDeadSession: active?.status === "exited",
       rightTab,
     };
     registerViewContext(view);
-  }, [st, settingsOpen, templatesOpen, rightTab]);
+  }, [st, harness.activeSessionId, settingsOpen, templatesOpen, rightTab]);
 
   // Crossing the breakpoint resets both panes to that mode's default.
   const prevMobile = useRef(isMobile);

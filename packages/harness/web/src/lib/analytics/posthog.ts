@@ -67,14 +67,23 @@ export function initAnalytics(state: AppState): void {
   }
   const cfg = injectedConfig();
   if (!cfg) return; // analytics disabled (no key, or mock mode)
+
+  // Do NOT init while consent is off (env-forced-off, or the light-analytics
+  // opt-out). Relying on `opt_out_capturing_by_default` is not enough: with
+  // `persistence: "localStorage"` posthog restores a prior opt-IN preference,
+  // which takes precedence over that flag and would fire the load-time
+  // $pageview before syncConsent could opt out. Not calling init() at all is
+  // the only way to honor the hard kill-switch's "never fires" guarantee. When
+  // consent later flips on (a Settings toggle re-runs this effect with
+  // `initialized` still false), we init then.
+  if (!shouldCapture(state)) return;
+
   if (posthog.__loaded) {
     initialized = true;
     syncConsent(state);
     syncIdentity(state);
     return;
   }
-
-  const optOutToStart = !shouldCapture(state);
 
   posthog.init(cfg.key, {
     api_host: cfg.apiHost,
@@ -105,13 +114,11 @@ export function initAnalytics(state: AppState): void {
     // capture the screen, and disabling it explicitly guards against a remote
     // config flip turning it on.
     disable_session_recording: true,
-
-    // Respect our own hard kill-switch from the first event: when consent is
-    // off we start opted-out so the load-time $pageview never fires either.
-    opt_out_capturing_by_default: optOutToStart,
   });
 
   initialized = true;
+  // syncConsent flips a stale localStorage opt-out back on (we only reach here
+  // when consent is on); syncIdentity binds the person + org group.
   syncConsent(state);
   syncIdentity(state);
 }
