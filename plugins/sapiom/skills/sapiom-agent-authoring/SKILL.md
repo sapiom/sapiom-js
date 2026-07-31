@@ -111,7 +111,7 @@ Export exactly one `defineAgent(...)` from `index.ts`.
 | `terminal` | `boolean` | no | `true` if this step ends the agent's execution |
 | `canFail` | `boolean` | no | Must be `true` to return `fail()` |
 | `pause` | `{ signal, resumeStep }` | no | Required when returning `pauseUntilSignal(...)` |
-| `inputSchema` | `ZodType` | no | Zod schema validating this step's input |
+| `inputSchema` | `ZodType` | no | Zod schema validating this step's input. On the **entry** step it is the agent's public API (see [The Entry Input Contract](#the-entry-input-contract--your-agents-public-api)) |
 | `timeoutMs` | `number` | no | Per-step timeout; no automatic retry cap |
 | `run(input, ctx)` | `async function` | yes | Returns a directive |
 
@@ -160,6 +160,55 @@ export const agent = defineAgent({
   steps: { start, finish },
 });
 ```
+
+## The Entry Input Contract — your agent's public API
+
+The **entry step's `inputSchema` is the agent's public API** — the one schema the platform
+reads to describe what the agent accepts. It drives every input surface:
+
+- the **dashboard Run form** (fields, types, and defaults are generated from it) and the
+  copy-paste **trigger snippet**;
+- **engine-side validation** — the engine parses each run's input against it before the
+  entry step dispatches, so a malformed payload is rejected up front, not mid-run.
+
+Declare it on the entry step even when the agent looks input-free: an entry step with **no**
+`inputSchema` tells the platform the agent takes *no* input, so the dashboard renders an
+empty Run form and callers have nothing to fill in (and `check` warns). Give every field a
+`.default()` so a zero-input run — the dashboard "Run" button with an empty form — still
+validates:
+
+```typescript
+import { defineAgent, defineStep, terminate } from "@sapiom/agent";
+import { z } from "zod/v4";
+
+const start = defineStep({
+  name: "start",
+  next: [],
+  terminal: true,
+  // This schema IS the agent's public input contract. A `.default()` on every field
+  // means a run with `{}` (the empty Run form) still validates.
+  inputSchema: z.object({
+    repo: z.string().default("sapiom/sapiom"),
+    window: z.enum(["day", "week", "month"]).default("week"),
+  }),
+  // `input` is inferred + validated from inputSchema — no annotation needed:
+  //   { repo: string; window: "day" | "week" | "month" }
+  async run(input, ctx) {
+    ctx.logger.info("scanning", { repo: input.repo, window: input.window });
+    return terminate({ scanned: input.repo });
+  },
+});
+
+export const agent = defineAgent({
+  name: "repo-scan",
+  entry: "start",
+  steps: { start },
+});
+```
+
+`inputSchema` on a **non-entry** step still validates that step's inbound `goto` payload (or
+a resumed signal payload) — but only the **entry** step's schema is read as the agent's
+public contract by the dashboard, trigger, and engine.
 
 ## Cross-Step State with `ctx.shared`
 
