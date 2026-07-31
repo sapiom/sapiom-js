@@ -81,12 +81,14 @@ interface WorkflowsRailProps {
   /** Push a message onto the app's toast rail (copy confirmations etc.). */
   onToast: (message: string) => void;
   telemetryOptIn: boolean;
+  productAnalyticsOptIn: boolean;
   rollingSummary: boolean;
   consentSource?: AppState["consentSource"];
   consentEnvReason?: string | null;
   authenticated: boolean;
   organizationName: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  onToggleProductAnalytics: (next: boolean) => Promise<void>;
   onToggleRollingSummary: (next: boolean) => Promise<void>;
   /** Kick off the browser OAuth flow for the in-app Connect button. */
   onStartAuth: () => Promise<AuthStartResponse>;
@@ -304,12 +306,14 @@ export function WorkflowsRail({
   onScanWorkflows,
   onToast,
   telemetryOptIn,
+  productAnalyticsOptIn,
   rollingSummary,
   consentSource,
   consentEnvReason,
   authenticated,
   organizationName,
   onToggleTelemetry,
+  onToggleProductAnalytics,
   onToggleRollingSummary,
   onStartAuth,
   onDisconnect,
@@ -707,10 +711,12 @@ export function WorkflowsRail({
           authenticated={authenticated}
           organizationName={organizationName}
           telemetryOptIn={telemetryOptIn}
+          productAnalyticsOptIn={productAnalyticsOptIn}
           rollingSummary={rollingSummary}
           consentSource={consentSource}
           consentEnvReason={consentEnvReason}
           onToggleTelemetry={onToggleTelemetry}
+          onToggleProductAnalytics={onToggleProductAnalytics}
           onToggleRollingSummary={onToggleRollingSummary}
           onStartAuth={onStartAuth}
           onDisconnect={onDisconnect}
@@ -781,10 +787,12 @@ function ProfileRow({
   authenticated,
   organizationName,
   telemetryOptIn,
+  productAnalyticsOptIn,
   rollingSummary,
   consentSource,
   consentEnvReason,
   onToggleTelemetry,
+  onToggleProductAnalytics,
   onToggleRollingSummary,
   onStartAuth,
   onDisconnect,
@@ -797,10 +805,12 @@ function ProfileRow({
   authenticated: boolean;
   organizationName: string | null;
   telemetryOptIn: boolean;
+  productAnalyticsOptIn: boolean;
   rollingSummary: boolean;
   consentSource?: AppState["consentSource"];
   consentEnvReason?: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  onToggleProductAnalytics: (next: boolean) => Promise<void>;
   onToggleRollingSummary: (next: boolean) => Promise<void>;
   onStartAuth: () => Promise<AuthStartResponse>;
   onDisconnect: () => Promise<void>;
@@ -910,10 +920,12 @@ function ProfileRow({
           authenticated={authenticated}
           organizationName={organizationName}
           telemetryOptIn={telemetryOptIn}
+          productAnalyticsOptIn={productAnalyticsOptIn}
           rollingSummary={rollingSummary}
           consentSource={consentSource}
           consentEnvReason={consentEnvReason}
           onToggleTelemetry={onToggleTelemetry}
+          onToggleProductAnalytics={onToggleProductAnalytics}
           onToggleRollingSummary={onToggleRollingSummary}
           onStartAuth={onStartAuth}
           onDisconnect={onDisconnect}

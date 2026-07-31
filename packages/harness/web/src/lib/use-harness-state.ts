@@ -922,6 +922,14 @@ export function useHarnessState(): HarnessStateHook {
     if (patch.telemetryOptIn !== undefined) {
       setState((prev) => (prev ? { ...prev, telemetryOptIn: updated.telemetryOptIn } : prev));
     }
+    // Mirror the light-analytics opt-in into AppState so the PostHog consent
+    // gate (App's initAnalytics effect) re-syncs immediately on toggle. Absent
+    // === on, matching the server's resolution.
+    if (patch.productAnalyticsOptIn !== undefined) {
+      setState((prev) =>
+        prev ? { ...prev, productAnalyticsOptIn: updated.productAnalyticsOptIn !== false } : prev,
+      );
+    }
     return updated;
   }, []);
 

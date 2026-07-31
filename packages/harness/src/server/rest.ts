@@ -95,6 +95,7 @@ const bindWorkflowSchema = z.object({
 
 const settingsPatchSchema = z.object({
   telemetryOptIn: z.boolean().optional(),
+  productAnalyticsOptIn: z.boolean().optional(),
   recentDirs: z.array(z.string()).optional(),
   projectRoot: z.string().optional(),
   rollingSummary: z.boolean().optional(),

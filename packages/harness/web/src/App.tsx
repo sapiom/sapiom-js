@@ -708,6 +708,10 @@ export const App = (): JSX.Element => {
           onToggleTelemetry={async (next) => {
             await harness.updateSettings({ telemetryOptIn: next });
           }}
+          productAnalyticsOptIn={state.productAnalyticsOptIn}
+          onToggleProductAnalytics={async (next) => {
+            await harness.updateSettings({ productAnalyticsOptIn: next });
+          }}
           rollingSummary={harness.settings?.rollingSummary === true}
           onToggleRollingSummary={async (next) => {
             await harness.updateSettings({ rollingSummary: next });
@@ -1085,6 +1089,10 @@ export const App = (): JSX.Element => {
           }}
           onDismiss={dismissWelcome}
           firstRun={state.firstRun === true}
+          telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+          onToggleTelemetry={async (next) => {
+            await harness.updateSettings({ telemetryOptIn: next });
+          }}
         />
       )}
 
