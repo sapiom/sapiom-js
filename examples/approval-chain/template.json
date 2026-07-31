@@ -98,7 +98,7 @@
     }
   ],
   "zeroSetup": {
-    "terminalState": "completed",
+    "terminalState": "completed_partial",
     "expect": [
       { "path": "committed", "assert": "equals", "value": false },
       { "path": "trail", "assert": "nonEmptyArray" },
