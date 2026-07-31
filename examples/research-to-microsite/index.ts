@@ -549,6 +549,13 @@ const live = defineStep({
       customUrl: input.customUrl ?? null,
       sandboxName: ctx.shared.get("sandboxName") ?? null,
       sources: ctx.shared.get("sources") ?? [],
+      // Honesty: the preview is a sandbox process, not a durable host — the
+      // platform recycles it and returns 502 shortly after (measured: ~2 min),
+      // and nothing relaunches it today. Open the link promptly. A stable,
+      // non-expiring public URL for the built page is tracked in SAP-2211;
+      // until it lands this is a live *preview*, not a durable shareable site.
+      previewIsEphemeral: true,
+      note: "Open this preview promptly — it is served by the sandbox process, which the platform recycles after a short while (durable hosting: SAP-2211).",
     });
   },
 });
@@ -618,7 +625,7 @@ const builtNotPublished = defineStep({
       sources: ctx.shared.get("sources") ?? [],
       sandboxName: ctx.shared.get("sandboxName") ?? null,
       note: [
-        `The coding agent built the site, but its run executed in a "${environmentType}" environment, which can't be preview-deployed — only Blaxel cloud sandboxes can. In production this step publishes a live preview URL; run it on the deployed Sapiom stack to get a shareable link.`,
+        `The coding agent built the site, but its run executed in a "${environmentType}" environment, which can't be preview-deployed — only Blaxel cloud sandboxes can. On the deployed Sapiom stack this step publishes a live *preview* URL (short-lived — the platform recycles the sandbox process; durable hosting is tracked in SAP-2211).`,
         ctx.shared.get("note"),
       ]
         .filter(Boolean)
