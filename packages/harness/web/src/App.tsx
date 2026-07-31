@@ -664,7 +664,6 @@ export const App = (): JSX.Element => {
           onBrowseTemplates={() => setTemplatesOpen(true)}
           templatesActive={templatesOpen}
           onScanWorkflows={handleScanWorkflows}
-          onOpenInEditor={openInEditor}
           onToast={harness.showToast}
           telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
           consentSource={state.consentSource}
