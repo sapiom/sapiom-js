@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sapiom agent template: research a topic across the web, synthesize a cited report with an LLM, then have a coding agent build and deploy a shareable live micro-site — with an optional custom domain.",
   "scripts": {
+    "test": "tsx --test index.test.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",
     "format:check": "prettier --check \"**/*.ts\""

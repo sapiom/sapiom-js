@@ -6,7 +6,11 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
-import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
+import {
+  CODING_RESULT_SIGNAL,
+  EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX,
+  type CodingResultPayload,
+} from "@sapiom/tools";
 
 /**
  * Research → Micro-Site Publisher — deep multi-source research that ends in a
@@ -22,6 +26,13 @@ import { CODING_RESULT_SIGNAL, type CodingResultPayload } from "@sapiom/tools";
  *   search (web.search) ─▶ scrape (web.scrape) ─▶ synthesize (models.run)
  *     ─▶ build (models.coding) ─▶ publish (sandboxes.deployPreview)
  *     ─▶ mapDomain (domains.dns) ─▶ live
+ *
+ * `deployPreview` only serves from a Blaxel cloud sandbox. In production the
+ * coding run lands in one and `publish` deploys it. On the LOCAL stack the run
+ * executes in host mode (`local_host`) — its files aren't in a deployable
+ * sandbox, so `publish` detects that up front and degrades honestly via the
+ * `builtNotPublished` terminal (site built, just not servable here) rather than
+ * hard-failing on a "Sandbox not found" 404.
  *
  * Async pause/resume: `build` LAUNCHES the coding agent and suspends on its result
  * signal (a coding run takes minutes), so the run costs nothing while the agent
@@ -414,7 +425,7 @@ const build = defineStep({
 
 const publish = defineStep({
   name: "publish",
-  next: ["mapDomain", "live", "failed"],
+  next: ["mapDomain", "live", "failed", "builtNotPublished"],
   async run(result: CodingResultPayload, ctx: Ctx) {
     // The coding run must have finished cleanly and left a sandbox to deploy from.
     if (result.status !== "completed" || !result.executionEnvironment) {
@@ -430,8 +441,26 @@ const publish = defineStep({
       });
     }
 
-    const sandboxName = result.executionEnvironment.id;
+    const env = result.executionEnvironment;
+    const sandboxName = env.id;
     ctx.shared.set("sandboxName", sandboxName);
+
+    // `deployPreview` only works against a Blaxel cloud sandbox. When the coding
+    // run executes in local host mode (`local_host`), its files live on the
+    // runner host, not in a deployable sandbox — attaching that id and deploying
+    // 404s with "Sandbox not found" (SAP-2203). Rather than hard-fail on a deploy
+    // that can't succeed, detect the non-deployable environment up front and
+    // degrade honestly: the site WAS built, it just can't be served from a
+    // local-host run. In production the run lands in a Blaxel sandbox, so this
+    // branch is never taken and the deploy below runs as normal.
+    if (env.type !== EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX) {
+      ctx.logger.warn(
+        "coding run used a non-deployable environment; skipping deploy",
+        { environmentType: env.type, id: sandboxName },
+      );
+      return goto("builtNotPublished", { environmentType: env.type });
+    }
+
     ctx.logger.info("deploying the built site", { sandbox: sandboxName });
 
     let deploy: { url: string | null; status: string; logs: string };
@@ -566,6 +595,38 @@ const drafted = defineStep({
   },
 });
 
+const builtNotPublished = defineStep({
+  name: "builtNotPublished",
+  next: [],
+  terminal: true,
+  async run(input: { environmentType: string }, ctx: Ctx) {
+    // Honest degrade: the coding agent built the site, but its run executed in an
+    // environment `deployPreview` can't serve from (local host mode). This is the
+    // expected local-stack outcome — the same flow publishes a live preview URL in
+    // production, where the coding run lands in a Blaxel sandbox. We report the
+    // built report metadata so the run isn't a dead end, and name the limitation
+    // instead of surfacing a raw "Sandbox not found" 404.
+    const environmentType = input?.environmentType ?? "unknown";
+    return terminate({
+      published: false,
+      built: true,
+      reason: "non-deployable-environment",
+      environmentType,
+      topic: ctx.shared.get("topic") || "",
+      title: ctx.shared.get("reportTitle") ?? null,
+      tagline: ctx.shared.get("reportTagline") ?? "",
+      sources: ctx.shared.get("sources") ?? [],
+      sandboxName: ctx.shared.get("sandboxName") ?? null,
+      note: [
+        `The coding agent built the site, but its run executed in a "${environmentType}" environment, which can't be preview-deployed — only Blaxel cloud sandboxes can. In production this step publishes a live preview URL; run it on the deployed Sapiom stack to get a shareable link.`,
+        ctx.shared.get("note"),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
+  },
+});
+
 export const agent = defineAgent<EntryInput, Shared>({
   name: "research-to-microsite",
   entry: "search",
@@ -579,5 +640,6 @@ export const agent = defineAgent<EntryInput, Shared>({
     live,
     failed,
     drafted,
+    builtNotPublished,
   },
 });

@@ -22,7 +22,13 @@ search  ─▶  scrape  ─▶  synthesize  ─▶  build  ─▶  publish  ─�
    report into a self-contained static site (`index.html` + a zero-dependency
    `server.js`), then pauses until it finishes — costing nothing while it works.
 5. **publish** — re-attaches the coding agent's sandbox and deploys the site
-   (`box.deployPreview`), exposing it at a stable public URL.
+   (`box.deployPreview`), exposing it at a stable public URL. `deployPreview` only
+   serves from a Blaxel cloud sandbox, so this needs the coding run to have landed
+   in one — which it does on the deployed Sapiom stack. On the **local** stack the
+   coding run executes in host mode, whose files aren't in a deployable sandbox, so
+   `publish` degrades honestly to the `builtNotPublished` terminal (the site is
+   built, it just can't be served locally) instead of failing on a
+   `404 Sandbox not found`. Run it deployed to get a live URL.
 6. **mapDomain** — if you set a `customDomain` you own in Sapiom, points
    `<subdomain>.<domain>` at the preview host with a free CNAME
    (`ctx.sapiom.domains.dns`). Skipped when no domain is set.
