@@ -50,25 +50,6 @@ export function deriveProvisions(manifest) {
   return [...new Set(resources.map((r) => r?.kind))].filter(Boolean).sort();
 }
 
-/**
- * `setup.provisions[]` is denormalised into the thin registry index so the shelf
- * can render it without fetching a manifest. Denormalised data with no source of
- * truth is what let `capabilities[]` fill up with SDK method paths instead of
- * catalog ids, so this verifies rather than trusts.
- *
- * @returns string[] — empty when `provisions` is absent (it is optional)
- */
-export function checkSetupProvisions(template, manifest) {
-  const declared = template?.setup?.provisions;
-  if (!Array.isArray(declared)) return [];
-  const derived = deriveProvisions(manifest);
-  const actual = [...declared].sort();
-  if (JSON.stringify(actual) === JSON.stringify(derived)) return [];
-  return [
-    `setup-provisions: "${template?.id ?? "(unknown)"}" registry setup.provisions is [${actual.join(", ")}] but the manifest's resources[] derive [${derived.join(", ")}] — provisions is generated from the manifest, never hand-maintained.`,
-  ];
-}
-
 /** zeroSetup.terminalState values that count as "reaches a meaningful terminal
  * with no setup". A suspend (`paused_for_approval`) or an absent zeroSetup does
  * not — the shelf's "pauses for approval" state is derived from steps[].checkpoint. */

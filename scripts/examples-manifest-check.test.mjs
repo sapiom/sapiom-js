@@ -17,7 +17,6 @@ import test from "node:test";
 import Ajv from "ajv";
 import {
   checkResourceSeeds,
-  checkSetupProvisions,
   checkSetupSync,
   createManifestChecker,
   deriveProvisions,
@@ -357,66 +356,6 @@ test("provisions derive as distinct kinds, sorted", () => {
   );
 });
 
-test("setup.provisions disagreeing with the manifest fails", () => {
-  const manifest = { resources: [{ kind: "postgres", handle: "db" }] };
-  const errors = checkSetupProvisions(
-    {
-      id: "fixture",
-      setup: { runsWithNoSetup: false, provisions: ["postgres", "sandbox"] },
-    },
-    manifest,
-  );
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /^setup-provisions: "fixture" /);
-  assert.match(
-    errors[0],
-    /is \[postgres, sandbox\] but the manifest's resources\[\] derive \[postgres\]/,
-  );
-});
-
-test("setup.provisions matching the manifest passes, order-insensitively", () => {
-  const manifest = {
-    resources: [
-      { kind: "sandbox", handle: "s" },
-      { kind: "postgres", handle: "p" },
-    ],
-  };
-  const setup = { runsWithNoSetup: false, provisions: ["sandbox", "postgres"] };
-  assert.deepEqual(
-    checkSetupProvisions({ id: "fixture", setup }, manifest),
-    [],
-  );
-});
-
-test("an absent setup.provisions is not a mismatch", () => {
-  // Both fields are optional; only a declared mirror gets verified.
-  assert.deepEqual(
-    checkSetupProvisions({ id: "fixture" }, { resources: [] }),
-    [],
-  );
-  assert.deepEqual(
-    checkSetupProvisions(
-      { id: "fixture", setup: { runsWithNoSetup: true } },
-      null,
-    ),
-    [],
-  );
-});
-
-test("declaring provisions with no resources at all fails", () => {
-  // The case that motivated the check: a hand-written mirror with nothing
-  // behind it. Silent before, because provisions had no source of truth.
-  const errors = checkSetupProvisions(
-    {
-      id: "fixture",
-      setup: { runsWithNoSetup: false, provisions: ["postgres"] },
-    },
-    { manifestVersion: 1 },
-  );
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /derive \[\]/);
-});
-
 test("a seed file that does not exist fails", () => {
   const errors = checkResourceSeeds(
     "fixture",
@@ -480,6 +419,16 @@ test("deriveSetup: a meaningful zeroSetup terminal ⇒ runsWithNoSetup true, nar
   assert.equal(setup.connectionCount, 1);
   assert.equal(setup.settingCount, 2);
   assert.equal(setup.degradedWithoutSetup, "did the honest thing");
+});
+
+test("deriveSetup: terminalState 'completed' ⇒ runsWithNoSetup true", () => {
+  // Symmetry with the completed_partial case above: both non-suspend terminals
+  // in the enum are meaningful, so the other literal gets its own assertion.
+  const setup = deriveSetup({
+    zeroSetup: { terminalState: "completed", narrative: "ran clean" },
+  });
+  assert.equal(setup.runsWithNoSetup, true);
+  assert.equal(setup.degradedWithoutSetup, "ran clean");
 });
 
 test("deriveSetup: no zeroSetup ⇒ runsWithNoSetup false and no degradedWithoutSetup", () => {
