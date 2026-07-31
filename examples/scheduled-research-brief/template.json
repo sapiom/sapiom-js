@@ -55,5 +55,14 @@
         ]
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "brief", "assert": "nonEmptyString" },
+      { "path": "sources", "assert": "nonEmptyArray" },
+      { "path": "delivered", "assert": "equals", "value": false }
+    ],
+    "narrative": "Researches the topic and writes a brief with sources; emails nothing (no recipient)."
+  }
 }

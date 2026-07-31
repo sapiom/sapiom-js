@@ -50,5 +50,13 @@
         "rationale": "Does not mention privacy and reads as generic hype."
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "decision", "assert": "nonEmptyString" },
+      { "path": "rationale", "assert": "nonEmptyString" }
+    ],
+    "narrative": "Grades the built-in sample against a rubric and returns a decision with rationale."
+  }
 }

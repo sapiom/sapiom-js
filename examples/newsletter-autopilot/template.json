@@ -57,5 +57,14 @@
         ]
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "body", "assert": "nonEmptyString" },
+      { "path": "sources", "assert": "nonEmptyArray" },
+      { "path": "delivered", "assert": "equals", "value": false }
+    ],
+    "narrative": "Writes a newsletter from researched sources; sends to nobody (empty subscriber list)."
+  }
 }

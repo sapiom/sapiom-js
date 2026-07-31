@@ -54,5 +54,14 @@
         "summary": "Patch and minor bumps across dev dependencies; no major versions, narrow blast radius."
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "pushed", "assert": "equals", "value": false },
+      { "path": "reportFileId", "assert": "nonEmptyString" },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Runs a coding agent to triage upgrades and writes a report; pushes nothing (no repo)."
+  }
 }

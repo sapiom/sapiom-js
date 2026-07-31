@@ -67,5 +67,13 @@
         "verdict": "request_changes"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "verdict", "assert": "nonEmptyString" },
+      { "path": "posted", "assert": "equals", "value": false }
+    ],
+    "narrative": "Runs a coding agent to review the sample PR and returns a verdict; posts nothing (no webhook)."
+  }
 }

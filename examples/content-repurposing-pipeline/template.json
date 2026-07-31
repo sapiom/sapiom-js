@@ -82,5 +82,13 @@
         "messageId": "msg_789"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "pack.newsletter", "assert": "nonEmptyString" },
+      { "path": "pack.tweetThread", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Repurposes a built-in sample post into a newsletter, tweet thread, video script, and LinkedIn post."
+  }
 }

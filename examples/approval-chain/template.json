@@ -96,5 +96,14 @@
         "compensated": 1
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "committed", "assert": "equals", "value": false },
+      { "path": "trail", "assert": "nonEmptyArray" },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Runs the saga with no approvers supplied, so nothing is committed and it escalates."
+  }
 }

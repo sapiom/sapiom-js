@@ -74,5 +74,14 @@
         "ts": "1717171717.000100"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "posted", "assert": "equals", "value": false },
+      { "path": "skipped", "assert": "equals", "value": "no-credential" },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Composes the message and prints it; posts nothing to Slack (no bot token)."
+  }
 }

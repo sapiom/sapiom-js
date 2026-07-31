@@ -63,5 +63,14 @@
         ]
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "sent", "assert": "equals", "value": 0 },
+      { "path": "reason", "assert": "equals", "value": "no-deliverable-contacts" },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Runs the outreach engine with no leads, so there is nobody to write to and nothing is sent."
+  }
 }

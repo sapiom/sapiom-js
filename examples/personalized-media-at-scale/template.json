@@ -69,5 +69,14 @@
         ]
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "assets", "assert": "nonEmptyArray" },
+      { "path": "delivered", "assert": "equals", "value": 0 },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Renders personalized images; delivers nothing because no recipients are set."
+  }
 }

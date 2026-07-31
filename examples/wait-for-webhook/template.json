@@ -44,5 +44,13 @@
         "reasons": ["status=\"failed\""]
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "decision", "assert": "nonEmptyString" },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Evaluates the sample job and returns a decision; registers no external callback."
+  }
 }

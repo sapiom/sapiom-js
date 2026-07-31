@@ -58,5 +58,14 @@
         "companyName": "Polsia"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "status", "assert": "equals", "value": "published" },
+      { "path": "articles", "assert": "nonEmptyArray" },
+      { "path": "pageUrl", "assert": "nonEmptyString" }
+    ],
+    "narrative": "Builds a news-roundup microsite from sample articles and publishes a live preview."
+  }
 }

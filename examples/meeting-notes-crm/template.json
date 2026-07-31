@@ -64,5 +64,14 @@
         "summary": "# Meeting notes → CRM\n\n**Contact:** Dana Ruiz — VP Eng, Northwind\n**Deal stage:** contract\n**Next step:** Send SOC 2 report, then security review before signing\n\nDana confirmed Q3 rollout budget and wants a security review before signing.\n\n## Action items (2 new, 0 already tracked)\n### New (2)\n- Send the SOC 2 report _(me, due Friday)_\n- Loop in the CISO _(Dana, due next week)_\n\n### Already tracked (0)\n_None._"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "summary", "assert": "nonEmptyString" },
+      { "path": "delivered", "assert": "equals", "value": false },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Turns sample meeting notes into a CRM update summary; emails nothing (no recipient)."
+  }
 }

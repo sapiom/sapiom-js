@@ -58,5 +58,13 @@
         ]
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "shots", "assert": "nonEmptyArray" },
+      { "path": "bible", "assert": "nonEmptyString" }
+    ],
+    "narrative": "Shoots the built-in sample scene into a shot list with a style bible (dry run)."
+  }
 }

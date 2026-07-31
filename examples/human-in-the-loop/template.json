@@ -93,5 +93,14 @@
         "considered": 1
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "shortlist", "assert": "nonEmptyArray" },
+      { "path": "outcome", "assert": "equals", "value": "pending-approval" },
+      { "path": "committed", "assert": "equals", "value": false }
+    ],
+    "narrative": "Ranks the sample shortlist and stops at pending-approval; commits nothing (no approver)."
+  }
 }

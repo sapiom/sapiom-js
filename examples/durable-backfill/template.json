@@ -73,5 +73,14 @@
         "resultFileIds": ["file_chunk0", "file_chunk1"]
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "complete", "assert": "equals", "value": true },
+      { "path": "jobId", "assert": "nonEmptyString" },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Runs the backfill offline over 3 chunks (25 records); persists nothing (no dbHandle)."
+  }
 }

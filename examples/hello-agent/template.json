@@ -30,5 +30,12 @@
         "greeting": "Hello, world!"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "greeting", "assert": "equals", "value": "Hello, world!" }
+    ],
+    "narrative": "Runs immediately with no setup and returns a greeting."
+  }
 }

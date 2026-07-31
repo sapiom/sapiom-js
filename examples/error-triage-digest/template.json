@@ -73,5 +73,14 @@
         "digest": "# Error triage digest\n\nTriaged **3** entries into **2** new and **0** recurring issue(s).\n\n## 🔴 New issues (2)\n- **[high] Undefined read in checkout** — Reading `id` off an undefined object in checkout.js. (2 this batch)\n  `TypeError: Cannot read properties of undefined (reading 'id') at checkout.js:42`\n- **[medium] Payment charge timeout** — payments.charge exceeds its 30s timeout. (1 this batch)\n  `Timeout after 30000ms calling payments.charge`\n\n## 🔁 Recurring issues (0)\n_None._"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "digest", "assert": "nonEmptyString" },
+      { "path": "delivered", "assert": "equals", "value": false },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Triages sample errors into a digest; emails nothing because no recipient is set."
+  }
 }

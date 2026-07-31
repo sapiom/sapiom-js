@@ -53,5 +53,14 @@
         "downloadUrl": null
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "attestation", "assert": "nonEmptyString" },
+      { "path": "filed", "assert": "equals", "value": false },
+      { "path": "checks", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Runs the audit checks and drafts an attestation; files nothing (nobody signed off)."
+  }
 }

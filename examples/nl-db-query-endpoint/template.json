@@ -62,5 +62,14 @@
         "sql": "DELETE FROM users"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed_partial",
+    "expect": [
+      { "path": "sampleSql", "assert": "nonEmptyString" },
+      { "path": "deployed", "assert": "equals", "value": false },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Translates a sample question to SQL and validates it; deploys no endpoint (needs a scoped key)."
+  }
 }
