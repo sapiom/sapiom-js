@@ -1,3 +1,7 @@
+// `zod/v4` subpath (present in zod 3.25.x AND zod 4.x): the v4 `ZodType` surface
+// while the `zod` peer can resolve to v3 or v4. See step.ts / introspection.ts.
+import type { ZodType } from 'zod/v4';
+
 import { UnknownStepError } from './errors.js';
 import type { StepDefinition } from './step.js';
 
@@ -33,6 +37,17 @@ export const AGENT_DEFINITION_BRAND = Symbol.for('sapiom.models.definition');
  *     steps: { gather, summarize, ... },
  *   });
  *
+ * The input contract can instead be declared once, at the agent level, via
+ * `inputSchema` — `TInput` is then inferred from it (no explicit generic
+ * needed) and `defineAgent` folds it onto the entry step:
+ *
+ *   export const cycleAgent = defineAgent({
+ *     name: 'cycle',
+ *     entry: 'gather',
+ *     inputSchema: z.object({ companyId: z.number() }),
+ *     steps: { gather, summarize, ... },
+ *   });
+ *
  * Steps inside `steps` are typed Step<unknown, unknown, TShared>. The
  * primitive doesn't (and can't) statically enforce that each step's TIn
  * matches its predecessor's TOut — that's a design tradeoff for the
@@ -49,6 +64,20 @@ export interface AgentDefinition<
    *  deterministic, no LLM). */
   readonly description?: string;
   readonly entry: string;
+  /**
+   * Optional agent-level input contract — the one obvious place to declare
+   * "what this agent takes". When the entry step declares no `inputSchema`,
+   * `defineAgent` folds this schema onto it, so the manifest's entry step
+   * carries the JSON Schema and the dashboard renders its fields. Declaring it
+   * here AND on the entry step (as a *different* schema) is a build error —
+   * declare the contract once.
+   *
+   * Typed `ZodType<TInput>` so the `defineAgent<TInput>` generic (hence the
+   * `run(def, input)` call site) is inferred from the same runtime schema that
+   * becomes the contract — the TS annotation and the runtime validation cannot
+   * drift apart (SAP-2226).
+   */
+  readonly inputSchema?: ZodType<TInput>;
   readonly steps: Readonly<Record<string, StepDefinition<TShared>>>;
   /**
    * Phantom marker that carries the entry-step input type so `runner.run(def, input)`
@@ -99,6 +128,16 @@ export function isLegacyOrchestrationDefinition(val: unknown): val is AgentDefin
  *   1. `name` is non-empty
  *   2. `entry` exists in `steps`
  *   3. Every step in `steps` is non-null and the map key matches `step.name`
+ *   4. If an agent-level `inputSchema` is declared, fold it onto the entry step
+ *      (build error if the entry step declares a *different* one) — see below.
+ *
+ * When `inputSchema` is declared at the agent level and the entry step declares
+ * none, the agent-level schema BECOMES the entry step's `inputSchema`. This
+ * keeps a single source of truth for the input contract while leaving every
+ * downstream consumer (`buildManifest`, `workflowInputContract`,
+ * `stepInputContract`) unchanged — they still read `steps[entry].inputSchema`,
+ * which now carries it. Declaring a *different* schema in both places is a
+ * conflict and throws; declaring the identical schema object in both is allowed.
  *
  * Attaches a non-enumerable brand symbol (`AGENT_DEFINITION_BRAND`) so
  * the object can be detected by `isAgentDefinition` after bundling +
@@ -126,6 +165,26 @@ export function defineAgent<TInput = unknown, TShared extends Record<string, unk
     }
     if (step.name !== key) {
       throw new Error(`Agent '${def.name}' step name mismatch at key '${key}': step.name='${step.name}'`);
+    }
+  }
+  // Fold the agent-level input contract onto the entry step (see the doc above).
+  if (def.inputSchema) {
+    const entryStep = def.steps[def.entry];
+    if (entryStep.inputSchema && entryStep.inputSchema !== def.inputSchema) {
+      throw new Error(
+        `Agent '${def.name}' declares an inputSchema at both the agent level and on its entry step '${def.entry}'. ` +
+          `Declare the input contract in one place — remove it from whichever is not the source of truth.`,
+      );
+    }
+    if (!entryStep.inputSchema) {
+      // The entry step declared no schema: the agent-level contract becomes it.
+      // Replace the step in the map (not a deep clone — the step's `run` and
+      // routing declarations are carried over by the spread) so downstream
+      // readers of `steps[entry].inputSchema` pick it up without special-casing.
+      (def.steps as Record<string, StepDefinition<TShared>>)[def.entry] = {
+        ...entryStep,
+        inputSchema: def.inputSchema as ZodType<unknown>,
+      };
     }
   }
   // Attach the brand as a non-enumerable property so it:
