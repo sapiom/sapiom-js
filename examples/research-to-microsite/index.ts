@@ -9,6 +9,7 @@ import {
 import {
   CODING_RESULT_SIGNAL,
   EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX,
+  schedules,
   type CodingResultPayload,
 } from "@sapiom/tools";
 
@@ -75,6 +76,12 @@ const DEFAULT_TOPIC = "how durable workflow engines handle retries";
 /** Build/start config for the static site the coding agent produces. */
 const SITE_PORT = 3000;
 const SITE_START = "node server.js";
+/** Health path the uptime keeper probes; the built server.js must answer 200 here. */
+const SITE_HEALTH_PATH = "/health";
+/** TTL for the durable hosting sandbox — long enough for a keeper to hold it up. */
+const SITE_SANDBOX_TTL = "7d";
+/** Keeper cron: probe + relaunch every 5 minutes (matches Sapiom's dashboard keeper). */
+const KEEPER_CRON = "*/5 * * * *";
 
 // ─────────────────────────────────────────────────────────────── shapes ──
 interface EntryInput {
@@ -95,6 +102,14 @@ interface EntryInput {
    * free. A report too empty to build a site from also stops before the build.
    */
   dryRun?: boolean;
+  /**
+   * Slug of a deployed uptime-keeper agent (e.g. the `preview-keep-alive` template)
+   * to register a heal schedule against, so the published site stays up 24/7 past
+   * the sandbox's process recycling. Omit to publish a live *preview* only (which is
+   * short-lived — see the README). Registration is best-effort: a failure logs and
+   * the run still returns the URL + the keeper `target` to register by hand.
+   */
+  keeperDefinition?: string;
 }
 
 /** Slim search hit carried across the search → scrape boundary. */
@@ -146,6 +161,8 @@ interface Shared extends Record<string, unknown> {
   sandboxName: string | null;
   /** The live preview URL, once deployed. */
   liveUrl: string | null;
+  /** Slug of a deployed keeper to register an uptime schedule against (or null). */
+  keeperDefinition: string | null;
   /** Set when the run researched the default topic rather than the caller's. */
   note?: string;
 }
@@ -225,7 +242,7 @@ function buildSiteTask(report: Report): string {
     "",
     "Create exactly these two files at the workspace root:",
     "- `index.html`: a self-contained page (all CSS inline in a <style> tag, NO external stylesheets, fonts, scripts, or CDNs). Render a hero with the report title and tagline, then the summary, then each section as its own block, then a 'Sources' list whose entries are clickable links. Make it clean, readable, and responsive; use a system-font stack and generous spacing.",
-    "- `server.js`: a zero-dependency Node HTTP server (only the built-in `http`/`fs`/`path` modules) that serves files from its own directory, defaults to `index.html`, sets a sensible Content-Type, and listens on `process.env.PORT || 3000` bound to host `0.0.0.0`.",
+    "- `server.js`: a zero-dependency Node HTTP server (only the built-in `http`/`fs`/`path` modules) that serves files from its own directory, defaults to `index.html`, sets a sensible Content-Type, and listens on `process.env.PORT || 3000` bound to host `0.0.0.0`. It MUST answer `GET /health` with HTTP 200 and body `ok` (a liveness probe an uptime keeper hits — do not serve a file for that path).",
     "",
     "Do NOT create a package.json, add dependencies, or introduce a build step — `node server.js` must start the finished site directly.",
     "",
@@ -259,6 +276,7 @@ const search = defineStep({
     ctx.shared.set("dryRun", input.dryRun === true);
     ctx.shared.set("sandboxName", null);
     ctx.shared.set("liveUrl", null);
+    ctx.shared.set("keeperDefinition", input.keeperDefinition?.trim() || null);
     if (!suppliedTopic) {
       ctx.shared.set(
         "note",
@@ -410,18 +428,82 @@ const build = defineStep({
   pause: { signal: CODING_RESULT_SIGNAL, resumeStep: "publish" },
   async run(input: { report: Report }, ctx: Ctx) {
     const report = input.report;
+
+    // Durability: the coding run's sandbox is normally a throwaway (~1h TTL), and a
+    // deployPreview process is recycled with nothing to relaunch it — so a site
+    // hosted there 502s within minutes. We launch the run with a LONG sandbox `ttl`
+    // so the agent builds into a durable host it also serves from; `publish` then
+    // deploys it and registers an uptime keeper against it. That is the exact recipe
+    // that keeps Sapiom's own dashboards alive 24/7: long-TTL sandbox + a /health
+    // route + a scheduled keeper. (The coding run must own its sandbox — a
+    // pre-provisioned one is rejected as a non-runner image — so we pass `ttl`
+    // rather than a sandbox we made. Server-side `ttl` wiring: SAP-2219.)
     ctx.logger.info("launching coding agent to build the site", {
       title: report.title,
       sections: report.sections.length,
+      sandboxTtl: SITE_SANDBOX_TTL,
     });
-    // Launch without a repo or sandbox: the run provisions a fresh sandbox and
-    // writes the site into it. `publish` re-attaches that sandbox on resume.
     const handle = await ctx.sapiom.models.coding.launch({
       task: buildSiteTask(report),
+      ttl: SITE_SANDBOX_TTL,
     });
     return await pauseUntilSignal(handle, { resumeStep: "publish" });
   },
 });
+
+/** The uptime-keeper target for the published site (shape the keeper agents accept). */
+interface KeeperTarget {
+  sandboxName: string;
+  url: string;
+  healthPath: string;
+  start: string;
+  port: number;
+}
+
+function buildKeeperTarget(sandboxName: string, url: string): KeeperTarget {
+  return {
+    sandboxName,
+    url,
+    healthPath: SITE_HEALTH_PATH,
+    start: SITE_START,
+    port: SITE_PORT,
+  };
+}
+
+/**
+ * Best-effort: register a recurring heal schedule on a deployed keeper agent so the
+ * site stays up past the sandbox's process recycling (the durable half of the
+ * pattern). Non-fatal: if no keeper is configured, or the schedule API isn't
+ * reachable from this context, the site is still deployed and the caller returns
+ * the `target` for the operator to register by hand.
+ */
+async function registerKeeper(
+  ctx: Ctx,
+  target: KeeperTarget,
+): Promise<boolean> {
+  const keeperDefinition = ctx.shared.get("keeperDefinition") as string | null;
+  if (!keeperDefinition) return false;
+  try {
+    await schedules.create({
+      definition: keeperDefinition,
+      kind: "schedule_cron",
+      cron: KEEPER_CRON,
+      input: target,
+    });
+    ctx.logger.info("registered uptime keeper", {
+      keeper: keeperDefinition,
+      sandbox: target.sandboxName,
+      cron: KEEPER_CRON,
+    });
+    return true;
+  } catch (err) {
+    ctx.logger.warn("could not register keeper — publishing a preview only", {
+      keeper: keeperDefinition,
+      err: String(err),
+    });
+    return false;
+  }
+}
 
 const publish = defineStep({
   name: "publish",
@@ -485,6 +567,13 @@ const publish = defineStep({
     ctx.shared.set("liveUrl", deploy.url);
     ctx.logger.info("site is live", { url: deploy.url, status: deploy.status });
 
+    // Keep it alive: register a heal schedule on a deployed keeper so the site
+    // survives the sandbox's process recycling (the durable half of the pattern).
+    const keeperTarget = buildKeeperTarget(sandboxName, deploy.url);
+    const keptAlive = await registerKeeper(ctx, keeperTarget);
+    ctx.shared.set("keeperTarget", keeperTarget);
+    ctx.shared.set("keptAlive", keptAlive);
+
     // Map a custom domain onto it when one is configured; otherwise the preview
     // URL is the deliverable.
     const customDomain = ctx.shared.get("customDomain");
@@ -540,22 +629,27 @@ const live = defineStep({
   terminal: true,
   async run(input: { liveUrl: string; customUrl: string | null }, ctx: Ctx) {
     const topic = ctx.shared.get("topic") || "";
+    const keptAlive = ctx.shared.get("keptAlive") === true;
+    const keeperTarget = ctx.shared.get("keeperTarget") ?? null;
+    // Durability depends on a keeper: with one registered, the site is held up
+    // 24/7 (long-TTL sandbox + scheduled /health probe → relaunch). Without one,
+    // the sandbox process is recycled and the URL 502s within minutes — so we say
+    // so, and hand back the `keeperTarget` so an operator can register a keeper.
+    const note = keptAlive
+      ? "Live and kept alive: an uptime keeper probes /health and relaunches the site on the 7-day hosting sandbox, so the URL stays up."
+      : "Live PREVIEW — no keeper was registered, so the sandbox process is recycled and this URL 502s within minutes. Pass `keeperDefinition` (a deployed keeper agent's slug), or register a keeper against `keeperTarget`, to keep it up 24/7.";
     return terminate({
       published: true,
+      keptAlive,
       topic,
       title: ctx.shared.get("reportTitle") ?? topic,
       tagline: ctx.shared.get("reportTagline") ?? "",
       liveUrl: input.liveUrl,
       customUrl: input.customUrl ?? null,
       sandboxName: ctx.shared.get("sandboxName") ?? null,
+      keeperTarget,
       sources: ctx.shared.get("sources") ?? [],
-      // Honesty: the preview is a sandbox process, not a durable host — the
-      // platform recycles it and returns 502 shortly after (measured: ~2 min),
-      // and nothing relaunches it today. Open the link promptly. A stable,
-      // non-expiring public URL for the built page is tracked in SAP-2211;
-      // until it lands this is a live *preview*, not a durable shareable site.
-      previewIsEphemeral: true,
-      note: "Open this preview promptly — it is served by the sandbox process, which the platform recycles after a short while (durable hosting: SAP-2211).",
+      note,
     });
   },
 });

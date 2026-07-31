@@ -58,6 +58,13 @@ export interface CodingRunSpec {
   workingDirectory?: string;
   /** Keep the sandbox alive after the run finishes. SDK default: true (the mesh needs it). */
   keepSandbox?: boolean;
+  /**
+   * TTL for the run's sandbox, e.g. `"7d"`. Omit for the platform default (~1h).
+   * Set a long value to host a durable app in the sandbox the agent builds — pair
+   * with `keepSandbox: true` (the default) and an uptime keeper. Server-side wiring
+   * is tracked in SAP-2219; until it lands the platform clamps to its default.
+   */
+  ttl?: string;
   /** Override the model the agent runs on. */
   model?: string;
 }
@@ -313,6 +320,7 @@ function buildBody(spec: CodingRunSpec): Record<string, unknown> {
     execution_environment_id: spec.sandbox?.name,
     working_directory: spec.workingDirectory,
     keep_sandbox: spec.keepSandbox ?? true,
+    sandbox_ttl: spec.ttl,
     model: spec.model,
   };
 }
@@ -323,11 +331,14 @@ export async function codingLaunch(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<RunHandle> {
   // 202 + a launch document; the execution_environment relationship is always present.
-  const doc = await transport.request<RunDoc>(`${baseUrl}/models/v1/coding/runs`, {
-    method: "POST",
-    body: JSON.stringify(buildBody(spec)),
-    headers: workflowResumeHeaders(transport.resumeToken),
-  });
+  const doc = await transport.request<RunDoc>(
+    `${baseUrl}/models/v1/coding/runs`,
+    {
+      method: "POST",
+      body: JSON.stringify(buildBody(spec)),
+      headers: workflowResumeHeaders(transport.resumeToken),
+    },
+  );
   const runId = doc.data.id;
   const envId = doc.data.relationships?.execution_environment?.data?.id;
   // Reuse the caller's sandbox handle when they supplied one; otherwise adopt the
@@ -476,16 +487,25 @@ export class ModelRunResultSchemaError extends Error {}
 export const modelRunResultSchema = {
   parse(value: unknown): ModelRunResultPayload {
     const fail = (msg: string): never => {
-      throw new ModelRunResultSchemaError(`invalid agent run result payload: ${msg}`);
+      throw new ModelRunResultSchemaError(
+        `invalid agent run result payload: ${msg}`,
+      );
     };
     if (!value || typeof value !== "object") fail("not an object");
     const v = value as Record<string, unknown>;
     if (typeof v.runId !== "string") fail("runId must be a string");
-    if (!(["pending", "running", "completed", "failed"] as ModelRunStatus[]).includes(v.status as ModelRunStatus))
+    if (
+      !(
+        ["pending", "running", "completed", "failed"] as ModelRunStatus[]
+      ).includes(v.status as ModelRunStatus)
+    )
       fail("status must be a valid ModelRunStatus");
-    if (v.output !== null && typeof v.output !== "string") fail("output must be a string or null");
-    if (v.result !== null && (typeof v.result !== "object" || !v.result)) fail("result must be an object or null");
-    if (v.error !== null && (typeof v.error !== "object" || !v.error)) fail("error must be an object or null");
+    if (v.output !== null && typeof v.output !== "string")
+      fail("output must be a string or null");
+    if (v.result !== null && (typeof v.result !== "object" || !v.result))
+      fail("result must be an object or null");
+    if (v.error !== null && (typeof v.error !== "object" || !v.error))
+      fail("error must be an object or null");
     return value as ModelRunResultPayload;
   },
 };
@@ -520,7 +540,9 @@ interface ModelRunDoc {
   };
 }
 
-function mapModelResult(r: ModelWireResult | null | undefined): ModelRunOutcome | null {
+function mapModelResult(
+  r: ModelWireResult | null | undefined,
+): ModelRunOutcome | null {
   if (!r) return null;
   return {
     success: r.success,
@@ -554,15 +576,20 @@ export async function launch(
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<ModelRunHandle> {
-  const doc = await transport.request<ModelRunDoc>(`${baseUrl}/models/v1/runs`, {
-    method: "POST",
-    body: JSON.stringify(buildModelBody(spec)),
-    headers: workflowResumeHeaders(transport.resumeToken),
-  });
+  const doc = await transport.request<ModelRunDoc>(
+    `${baseUrl}/models/v1/runs`,
+    {
+      method: "POST",
+      body: JSON.stringify(buildModelBody(spec)),
+      headers: workflowResumeHeaders(transport.resumeToken),
+    },
+  );
   const runId = doc.data.id;
 
   const fetchDoc = () =>
-    transport.request<ModelRunDoc>(`${baseUrl}/models/v1/runs/${encodeURIComponent(runId)}`);
+    transport.request<ModelRunDoc>(
+      `${baseUrl}/models/v1/runs/${encodeURIComponent(runId)}`,
+    );
   const toResult = (d: ModelRunDoc): ModelRunResult => ({
     runId,
     status: d.data.attributes.status,
