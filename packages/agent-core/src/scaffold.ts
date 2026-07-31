@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AgentOperationError } from "./errors.js";
+import { VERSION_FALLBACK } from "./version-fallback.generated.js";
 
 /**
  * Directory of this compiled module, resolved for BOTH build formats so the
@@ -74,18 +75,12 @@ const DOTFILE_NAMES = new Set(["_gitignore", "_npmrc"]);
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
-/**
- * Offline fallbacks, used only when the live npm lookup below fails or times
- * out. MUST be a version that's actually published — a stale value here fails
- * every offline/registry-hiccup scaffold with a silent ETARGET, and nothing
- * else catches that (see the "fallback matches the workspace version" test
- * in scaffold.test.ts, which fails a PR that bumps @sapiom/agent or
- * @sapiom/tools without updating this). Bump alongside notable releases.
- */
-const VERSION_FALLBACK = {
-  agent: "0.8.0",
-  tools: "0.24.0",
-};
+// `VERSION_FALLBACK` (the offline fallback stamped into a scaffolded project when
+// the live npm lookup below fails) is imported from `version-fallback.generated.ts`,
+// which is generated from the workspace's own @sapiom/agent + @sapiom/tools
+// package.json on every build and in the release `version-packages` step. It used
+// to be a hand-maintained constant here and drifted on every SDK bump; deriving it
+// from the published packages means it can never go stale again.
 
 /** The zod major the authoring SDK is built against. */
 const ZOD_VERSION = "4.1.12";

@@ -36,6 +36,7 @@
   ],
   "sideEffects": false,
   "scripts": {
+    "prebuild": "node scripts/gen-version-fallback.mjs",
     "build": "pnpm run build:cjs && pnpm run build:esm && pnpm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:esm": "tsc --project tsconfig.esm.json",

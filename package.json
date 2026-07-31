@@ -21,7 +21,7 @@
     "format": "pnpm -r --filter='./packages/*' format",
     "typecheck": "pnpm -r --filter='./packages/*' typecheck",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && node packages/agent-core/scripts/gen-version-fallback.mjs && pnpm install --lockfile-only",
     "release": "pnpm build && changeset publish",
     "dev:watch": "pnpm -r --filter='./packages/*' --parallel run dev",
     "registry:local": "npx -y verdaccio@6 --config .verdaccio/config.yaml",

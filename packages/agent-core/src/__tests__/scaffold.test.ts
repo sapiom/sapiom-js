@@ -233,13 +233,14 @@ describe("resolveVersions offline fallback", () => {
   });
 
   it("falls back to a version that is actually published (matches the workspace's own package.json)", async () => {
-    // Regression test: VERSION_FALLBACK in scaffold.ts is a hand-maintained
-    // snapshot with no other guardrail — it previously drifted to versions
-    // that no longer exist on npm at all (0.1.1 for both packages, while
-    // published was agent@0.5.0 / tools@0.16.0), so every offline/registry-
-    // hiccup scaffold failed with ETARGET. This doesn't hit npm; it checks
-    // the fallback against this workspace's own @sapiom/agent and
-    // @sapiom/tools package.json, which is what actually gets published.
+    // Regression test: VERSION_FALLBACK is now GENERATED from the workspace's
+    // @sapiom/agent + @sapiom/tools package.json (version-fallback.generated.ts,
+    // rebuilt on every build and in the release version step), so it can no longer
+    // drift. It previously was a hand-maintained constant that drifted to versions
+    // that no longer existed on npm (0.1.1 while published was agent@0.5.0 /
+    // tools@0.16.0), failing every offline scaffold with ETARGET. This doesn't hit
+    // npm; it re-asserts the generated fallback still matches the workspace's own
+    // package.json — a belt-and-suspenders guard if codegen is ever skipped.
     global.fetch = (async () => {
       throw new Error("simulated offline — network unreachable");
     }) as unknown as typeof fetch;
