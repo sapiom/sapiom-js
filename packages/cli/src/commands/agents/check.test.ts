@@ -1,9 +1,10 @@
 /**
- * Unit tests for the entry-input-contract warning (SAP-2227). The entry step's
- * `inputSchema` is the agent's public API (dashboard Run form, trigger snippet,
- * engine validation) — `check` warns, but does not fail, when it is undeclared.
+ * Tests for the entry-input-contract warning surfaced by `sapiom agents check`
+ * (SAP-2227). The entry step's `inputSchema` is the agent's public API (dashboard
+ * Run form, trigger snippet, engine validation) — `check` warns, but does not fail,
+ * when it is undeclared, so an opaque agent stays legal and the command exits 0.
  */
-import { entryInputSchemaWarning, type EntryContractManifest } from './check';
+import { entryInputSchemaWarning, type EntryContractManifest } from './check.js';
 
 describe('entryInputSchemaWarning', () => {
   it('warns and names the entry step when it declares no inputSchema', () => {
