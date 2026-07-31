@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
   checkResourceSeeds,
-  checkSetupProvisions,
+  checkSetupSync,
   createManifestChecker,
 } from "./examples-manifest-check.mjs";
 import { checkCopy } from "./examples-copy-check.mjs";
@@ -165,13 +165,14 @@ for (const t of templates) {
   errors.push(...checkCopy(t, manifests.get(t.id) ?? null));
 }
 
-// 6b. `setup.provisions[]` is DERIVED from the manifest's `resources[]`, so it
-// gets verified rather than trusted. An author-declared mirror with no source of
-// truth is the drift that let `capabilities[]` fill up with SDK method paths
-// instead of catalog ids; this is the same field shape, so it gets a check
-// before it can acquire the same problem.
+// 6b. The whole `registry.setup` block is DERIVED from the manifest (secrets,
+// settings, resources, zeroSetup) by `pnpm examples:sync-setup`, so it gets
+// verified rather than trusted — the drift that let `capabilities[]` fill up
+// with SDK method paths, applied to the entire denormalised block. Only checked
+// for templates that have a manifest (others are already flagged above).
 for (const t of templates) {
-  errors.push(...checkSetupProvisions(t, manifests.get(t.id) ?? null));
+  const manifest = manifests.get(t.id);
+  if (manifest) errors.push(...checkSetupSync(t, manifest));
 }
 
 if (errors.length > 0) {

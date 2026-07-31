@@ -18,8 +18,10 @@ import Ajv from "ajv";
 import {
   checkResourceSeeds,
   checkSetupProvisions,
+  checkSetupSync,
   createManifestChecker,
   deriveProvisions,
+  deriveSetup,
 } from "./examples-manifest-check.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,8 +61,14 @@ test("every existing manifest in the repo validates unchanged", () => {
 
 test("the copy length caps are enforced by the schema, with a pointer", () => {
   const cases = [
-    [{ whatItDoes: "Create ".repeat(60) }, /\/whatItDoes must NOT have more than 320 characters/],
-    [{ useCases: ["x".repeat(41)] }, /\/useCases\/0 must NOT have more than 40 characters/],
+    [
+      { whatItDoes: "Create ".repeat(60) },
+      /\/whatItDoes must NOT have more than 320 characters/,
+    ],
+    [
+      { useCases: ["x".repeat(41)] },
+      /\/useCases\/0 must NOT have more than 40 characters/,
+    ],
   ];
   for (const [extra, expected] of cases) {
     const errors = check(extra);
@@ -170,7 +178,12 @@ test("a fully declared resource is valid", () => {
   assert.deepEqual(
     check({
       resources: [
-        { kind: "postgres", handle: "reports-db", duration: "7d", seed: "seed.sql" },
+        {
+          kind: "postgres",
+          handle: "reports-db",
+          duration: "7d",
+          seed: "seed.sql",
+        },
         { kind: "sandbox", handle: "renderer", ephemeral: true },
       ],
     }),
@@ -347,12 +360,18 @@ test("provisions derive as distinct kinds, sorted", () => {
 test("setup.provisions disagreeing with the manifest fails", () => {
   const manifest = { resources: [{ kind: "postgres", handle: "db" }] };
   const errors = checkSetupProvisions(
-    { id: "fixture", setup: { runsWithNoSetup: false, provisions: ["postgres", "sandbox"] } },
+    {
+      id: "fixture",
+      setup: { runsWithNoSetup: false, provisions: ["postgres", "sandbox"] },
+    },
     manifest,
   );
   assert.equal(errors.length, 1);
   assert.match(errors[0], /^setup-provisions: "fixture" /);
-  assert.match(errors[0], /is \[postgres, sandbox\] but the manifest's resources\[\] derive \[postgres\]/);
+  assert.match(
+    errors[0],
+    /is \[postgres, sandbox\] but the manifest's resources\[\] derive \[postgres\]/,
+  );
 });
 
 test("setup.provisions matching the manifest passes, order-insensitively", () => {
@@ -363,14 +382,23 @@ test("setup.provisions matching the manifest passes, order-insensitively", () =>
     ],
   };
   const setup = { runsWithNoSetup: false, provisions: ["sandbox", "postgres"] };
-  assert.deepEqual(checkSetupProvisions({ id: "fixture", setup }, manifest), []);
+  assert.deepEqual(
+    checkSetupProvisions({ id: "fixture", setup }, manifest),
+    [],
+  );
 });
 
 test("an absent setup.provisions is not a mismatch", () => {
   // Both fields are optional; only a declared mirror gets verified.
-  assert.deepEqual(checkSetupProvisions({ id: "fixture" }, { resources: [] }), []);
   assert.deepEqual(
-    checkSetupProvisions({ id: "fixture", setup: { runsWithNoSetup: true } }, null),
+    checkSetupProvisions({ id: "fixture" }, { resources: [] }),
+    [],
+  );
+  assert.deepEqual(
+    checkSetupProvisions(
+      { id: "fixture", setup: { runsWithNoSetup: true } },
+      null,
+    ),
     [],
   );
 });
@@ -379,7 +407,10 @@ test("declaring provisions with no resources at all fails", () => {
   // The case that motivated the check: a hand-written mirror with nothing
   // behind it. Silent before, because provisions had no source of truth.
   const errors = checkSetupProvisions(
-    { id: "fixture", setup: { runsWithNoSetup: false, provisions: ["postgres"] } },
+    {
+      id: "fixture",
+      setup: { runsWithNoSetup: false, provisions: ["postgres"] },
+    },
     { manifestVersion: 1 },
   );
   assert.equal(errors.length, 1);
@@ -393,20 +424,35 @@ test("a seed file that does not exist fails", () => {
     () => false,
   );
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /^manifest-resource-seed: "fixture" \/resources\/0\/seed points at "seed\.sql"/);
+  assert.match(
+    errors[0],
+    /^manifest-resource-seed: "fixture" \/resources\/0\/seed points at "seed\.sql"/,
+  );
 });
 
 test("a seed file that exists passes, and no seed is not a problem", () => {
   const resources = [{ kind: "postgres", handle: "db", seed: "seed.sql" }];
-  assert.deepEqual(checkResourceSeeds("fixture", { resources }, () => true), []);
   assert.deepEqual(
-    checkResourceSeeds("fixture", { resources: [{ kind: "sandbox", handle: "s" }] }, () => false),
+    checkResourceSeeds("fixture", { resources }, () => true),
+    [],
+  );
+  assert.deepEqual(
+    checkResourceSeeds(
+      "fixture",
+      { resources: [{ kind: "sandbox", handle: "s" }] },
+      () => false,
+    ),
     [],
   );
 });
 
 test("no declaration field names a storage location", () => {
-  const declarations = ["requiredSecrets", "settings", "resources", "zeroSetup"];
+  const declarations = [
+    "requiredSecrets",
+    "settings",
+    "resources",
+    "zeroSetup",
+  ];
   const forbidden = ["vaultRef", "connectorId", "store"];
   const names = JSON.stringify(
     declarations.map((d) => manifestSchema.properties[d]),
@@ -415,6 +461,90 @@ test("no declaration field names a storage location", () => {
     assert.ok(
       !names.includes(`"${field}"`),
       `${field} must never appear in a declaration — a declaration says what the credential is, never where it is stored.`,
+    );
+  }
+});
+
+// --- setup derivation + drift (examples:sync-setup) ------------------------
+
+test("deriveSetup: a meaningful zeroSetup terminal ⇒ runsWithNoSetup true, narrative mirrored", () => {
+  const setup = deriveSetup({
+    requiredSecrets: [{ key: "A" }],
+    settings: [{ path: "x" }, { path: "y" }],
+    zeroSetup: {
+      terminalState: "completed_partial",
+      narrative: "did the honest thing",
+    },
+  });
+  assert.equal(setup.runsWithNoSetup, true);
+  assert.equal(setup.connectionCount, 1);
+  assert.equal(setup.settingCount, 2);
+  assert.equal(setup.degradedWithoutSetup, "did the honest thing");
+});
+
+test("deriveSetup: no zeroSetup ⇒ runsWithNoSetup false and no degradedWithoutSetup", () => {
+  const setup = deriveSetup({ requiredSecrets: [{ key: "A" }] });
+  assert.equal(setup.runsWithNoSetup, false);
+  assert.equal(setup.connectionCount, 1);
+  assert.equal(setup.settingCount, 0);
+  assert.ok(!("degradedWithoutSetup" in setup));
+  assert.ok(!("provisions" in setup));
+});
+
+test("deriveSetup: a suspend (paused_for_approval) is not runsWithNoSetup", () => {
+  const setup = deriveSetup({
+    zeroSetup: { terminalState: "paused_for_approval", narrative: "waits" },
+  });
+  assert.equal(setup.runsWithNoSetup, false);
+});
+
+test("deriveSetup: provisions are the distinct sorted resource kinds, only when present", () => {
+  const setup = deriveSetup({
+    resources: [
+      { kind: "sandbox" },
+      { kind: "postgres" },
+      { kind: "postgres" },
+    ],
+    zeroSetup: { terminalState: "completed" },
+  });
+  assert.deepEqual(setup.provisions, ["postgres", "sandbox"]);
+});
+
+test("checkSetupSync: a block matching the manifest passes; drift and absence fail", () => {
+  const manifest = {
+    requiredSecrets: [{ key: "A" }],
+    zeroSetup: { terminalState: "completed", narrative: "n" },
+  };
+  const inSync = { id: "t", setup: deriveSetup(manifest) };
+  assert.deepEqual(checkSetupSync(inSync, manifest), []);
+
+  const drift = {
+    id: "t",
+    setup: { ...deriveSetup(manifest), connectionCount: 99 },
+  };
+  assert.equal(checkSetupSync(drift, manifest).length, 1);
+  assert.match(checkSetupSync(drift, manifest)[0], /setup-sync/);
+
+  assert.equal(checkSetupSync({ id: "t" }, manifest).length, 1);
+});
+
+test("checkSetupSync passes for every real manifest against the committed registry", () => {
+  const registry = JSON.parse(
+    readFileSync(path.join(ROOT, "examples", "registry.json"), "utf8"),
+  );
+  for (const t of registry.templates) {
+    const dir = path.join(ROOT, t.sourcePath ?? path.join("examples", t.id));
+    const manifestPath = path.join(dir, "template.json");
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch {
+      continue; // no manifest ⇒ flagged by a different gate
+    }
+    assert.deepEqual(
+      checkSetupSync(t, manifest),
+      [],
+      `${t.id} registry setup is out of sync — run pnpm examples:sync-setup`,
     );
   }
 });
