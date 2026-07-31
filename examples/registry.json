@@ -827,62 +827,6 @@
       ]
     },
     {
-      "id": "preview-keep-alive",
-      "name": "Preview Uptime Monitor",
-      "description": "A cron heartbeat that checks a sandbox preview and, when it has gone down, redeploys it for you — no human needed.",
-      "tags": ["sandbox", "self-healing", "cron", "keep-alive"],
-      "category": "reliability-governance",
-      "discipline": "Reliability",
-      "cadence": "scheduled",
-      "complexity": "simple",
-      "sourcePath": "examples/preview-keep-alive",
-      "capabilities": [
-        "sandboxes.deployPreview",
-        "sandboxes.attach",
-        "database.get"
-      ],
-      "steps": [
-        {
-          "name": "check",
-          "description": "Fetch the preview's health path and send it on to heal only when the app is actually down. With no target given, provision one first.",
-          "kind": "compute",
-          "next": ["healthy", "heal", "provision"]
-        },
-        {
-          "name": "provision",
-          "description": "With no target given, create a small sandbox with a trivial health server in it, so the heal step has a real app to relaunch.",
-          "kind": "capability",
-          "capability": "sandboxes.create",
-          "next": ["heal", "heal_failed"]
-        },
-        {
-          "name": "healthy",
-          "description": "The app is already serving, so there's nothing to do. The run ends here.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "heal",
-          "description": "Re-attach the sandbox and redeploy the code already uploaded there, restarting it at the same URL. First assembles the startup env, adding a DATABASE_URL from a Postgres handle and any declared secrets the platform injected.",
-          "kind": "capability",
-          "capability": "sandboxes.deployPreview",
-          "next": ["healed", "heal_failed"]
-        },
-        {
-          "name": "healed",
-          "description": "The relaunch worked. Reports the URL and status.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "heal_failed",
-          "description": "The relaunch didn't work. Reports the deploy logs so you can see why.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ]
-    },
-    {
       "id": "proposal-generator",
       "name": "Client Proposal Generator",
       "description": "Draft a client proposal from a request, render it to a PDF, then wait for a person to approve it before it emails the client.",
