@@ -32,6 +32,14 @@ import {
  * external job is registered — so nothing would ever fire the callback, and the
  * run does NOT pause. It goes straight to `decide` on an empty payload and says
  * so in its output. The durable pause is what a configured run does.
+ *
+ * Deadline: the pause waits **indefinitely** by default — the $0-forever
+ * guarantee. A callback that never arrives would otherwise park the run for
+ * good, so set `config.CALLBACK_TIMEOUT_MS` to a positive number of
+ * milliseconds to cap the wait. If no callback fires within that window, the
+ * engine's deadline sweep ends the run with a pause-timeout failure — an honest
+ * terminal state ("no callback within N") instead of a permanently parked run.
+ * Unset/blank keeps the indefinite wait.
  */
 
 /** String-only config bag (matches how templates receive their `config`). */
@@ -41,7 +49,12 @@ type Config = Record<string, string>;
 interface WaitForWebhookInput {
   /** Arbitrary parameters handed to the external async job. */
   job?: Record<string, unknown>;
-  /** Where to register the resume contract. Absent (or `DRY_RUN`) ⇒ offline. */
+  /**
+   * Config bag. `CALLBACK_REGISTER_URL` (+ optional `CALLBACK_REGISTER_KEY`)
+   * points at the external job — absent (or `DRY_RUN`) ⇒ offline. Optional
+   * `CALLBACK_TIMEOUT_MS` caps the wait (see `parseTimeoutMs`); absent ⇒ waits
+   * indefinitely at $0.
+   */
   config?: Config;
 }
 
@@ -93,6 +106,27 @@ function isDryRun(config: Config): boolean {
 }
 
 /**
+ * Optional deadline for the pause, in milliseconds, from
+ * `config.CALLBACK_TIMEOUT_MS`. Absent/blank ⇒ `undefined` (wait indefinitely at
+ * $0, the default). A positive integer caps the wait: with no callback inside it,
+ * the engine's deadline sweep terminates the run with a pause-timeout failure
+ * rather than parking it forever. A non-positive or unparseable value is
+ * rejected — silently ignoring a cap would reintroduce the forever-park bug it's
+ * meant to prevent, so a misconfigured deadline fails loudly at `kickoff`.
+ */
+function parseTimeoutMs(config: Config): number | undefined {
+  const raw = (config.CALLBACK_TIMEOUT_MS ?? "").trim();
+  if (!raw) return undefined;
+  const ms = Number(raw);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    throw new Error(
+      `invalid CALLBACK_TIMEOUT_MS "${raw}": expected a positive number of milliseconds`,
+    );
+  }
+  return Math.floor(ms);
+}
+
+/**
  * Register the resume contract with the external job and kick it off. The job is
  * expected to fire `SIGNAL` (with our `correlationId`) once its result is ready.
  */
@@ -129,6 +163,9 @@ const kickoff = defineStep({
   async run(input: WaitForWebhookInput, ctx: AgentExecutionContext<Shared>) {
     const config = input.config ?? {};
     const job = input.job ?? {};
+    // Validate the optional deadline up front — before we register any external
+    // job — so a bad `CALLBACK_TIMEOUT_MS` fails fast instead of after kickoff.
+    const timeoutMs = parseTimeoutMs(config);
     // Everything set before the pause survives in ctx.shared and is read back
     // in `decide`; the resumed step's *input* is the callback payload itself.
     ctx.shared.set("config", config);
@@ -163,14 +200,19 @@ const kickoff = defineStep({
       ctx.logger.info("external job started; pausing for callback", {
         jobId,
         correlationId: ctx.executionId,
+        timeoutMs: timeoutMs ?? null,
       });
     }
 
     // Suspend at $0 until the external world fires SIGNAL for this correlationId.
+    // With `timeoutMs` set, the engine's deadline sweep instead fails the run if
+    // no callback arrives in time — an honest terminal state, not a forever park.
+    // Omitted ⇒ the default indefinite wait.
     return pauseUntilSignal({
       signal: SIGNAL,
       resumeStep: "decide",
       correlationId: ctx.executionId,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
   },
 });
