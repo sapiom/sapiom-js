@@ -94,6 +94,11 @@ const workflowStepManifestSchema = z.object({
   timeoutMs: z.union([z.number().int().positive(), z.null()]),
   inputSchema: z.union([z.record(z.string(), z.unknown()), z.null()]),
   transitions: z.array(manifestTransitionSchema),
+  // Optional authoring fields — must be in the SCHEMA, not just the TS type and
+  // buildManifest output, or z.object() strips them on parse and the canvas
+  // (which reads the validated manifest) never sees an authored description.
+  description: z.union([z.string(), z.null()]).optional(),
+  capabilities: z.array(z.string()).optional(),
 });
 
 /**
@@ -110,4 +115,7 @@ export const agentManifestSchema = z.object({
     entryFile: z.string().min(1),
   }),
   steps: z.record(z.string(), workflowStepManifestSchema),
+  // Optional workflow-level description (Option A) — same reason as the step
+  // field above: absent from the schema means stripped on parse.
+  description: z.union([z.string(), z.null()]).optional(),
 });

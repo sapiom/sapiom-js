@@ -359,6 +359,43 @@ describe("buildManifest", () => {
     expect(parsed.steps.entry.inputSchema).not.toBeNull();
     expect(parsed.steps.exit.timeoutMs).toBe(5000);
   });
+
+  it("preserves authored description + capabilities through schema validation (regression: they were stripped)", () => {
+    const def = defineAgent({
+      name: "described-wf",
+      description: "Triages incoming tickets end to end.",
+      entry: "classify",
+      steps: {
+        classify: defineStep({
+          name: "classify",
+          next: [],
+          terminal: true,
+          description: "Tags the ticket with a category for routing.",
+          capabilities: ["rules.classify"],
+          async run() {
+            return terminate(null);
+          },
+        }),
+      },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    // buildManifest emits the authored fields...
+    expect(manifest.description).toBe("Triages incoming tickets end to end.");
+    expect(manifest.steps.classify.description).toBe("Tags the ticket with a category for routing.");
+    expect(manifest.steps.classify.capabilities).toEqual(["rules.classify"]);
+
+    // ...and the schema must NOT strip them on parse. This is the exact bug the
+    // canvas hit: z.object() drops keys absent from the schema, so an authored
+    // description silently vanished on `agentManifestSchema.parse` and never
+    // reached the renderer — even though the TS type and buildManifest had it.
+    const parsed = agentManifestSchema.parse(manifest);
+    expect(parsed.description).toBe("Triages incoming tickets end to end.");
+    expect(parsed.steps.classify.description).toBe("Tags the ticket with a category for routing.");
+    expect(parsed.steps.classify.capabilities).toEqual(["rules.classify"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
