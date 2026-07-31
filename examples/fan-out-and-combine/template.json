@@ -36,6 +36,16 @@
               "mode": "leaf",
               "goal": "Draft a launch plan for a new API product",
               "item": "pricing"
+            },
+            {
+              "mode": "leaf",
+              "goal": "Draft a launch plan for a new API product",
+              "item": "docs and developer experience"
+            },
+            {
+              "mode": "leaf",
+              "goal": "Draft a launch plan for a new API product",
+              "item": "go-to-market"
             }
           ]
         }

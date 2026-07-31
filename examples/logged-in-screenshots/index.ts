@@ -155,7 +155,9 @@ const start = defineStep({
       return goto("capture", { urls, identityId: null, fullPage });
     }
 
-    return goto("login", { urls, loginUrl, username, password, fullPage });
+    // Route with a flag, not the secret: the password is re-read from env in the
+    // `login` step so it never rides in a persisted step transition.
+    return goto("login", { urls, loginUrl, username, fullPage });
   },
 });
 
@@ -167,11 +169,31 @@ const login = defineStep({
       urls: string[];
       loginUrl: string;
       username: string;
-      password: string;
       fullPage: boolean;
     },
     ctx: Ctx,
   ) {
+    // Re-read the password from the injected env at the point of use rather than
+    // carrying it in the step transition: a step's input is persisted in the durable
+    // execution record, and a login secret must never land there. The secret is
+    // injected into every step's env, so reading it here keeps it out of the trace.
+    const password = (process.env[PASSWORD_ENV] ?? "").trim();
+    if (!password) {
+      // Shouldn't happen — `start` only routes here when the secret was present —
+      // but if the env changed under us, degrade to a public capture rather than
+      // sending an empty credential.
+      ctx.shared.set(
+        "note",
+        `Captured the public view — the ${PASSWORD_ENV} secret was not set.`,
+      );
+      ctx.logger.info("password secret absent at login; capturing public view");
+      return goto("capture", {
+        urls: input.urls,
+        identityId: null,
+        fullPage: input.fullPage,
+      });
+    }
+
     // Store the credentials as a browser identity; the session opens pre-logged-in.
     // Creating an identity is free. If it fails, degrade to a public capture rather
     // than failing the run — a public shot beats no shot.
@@ -183,7 +205,7 @@ const login = defineStep({
           {
             type: "username_password",
             username: input.username,
-            password: input.password,
+            password,
           },
         ],
       });
