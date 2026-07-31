@@ -169,7 +169,7 @@ export interface RestRouterOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
   /** Sapiom identity from CLI auth; null when unauthenticated / --no-auth. */
-  identity: { userId: string; organizationName: string } | null;
+  identity: { userId: string; tenantId: string; organizationName: string } | null;
   listWorkflows: () => Promise<WorkflowInfo[]>;
   listMacros: () => MacroDef[];
   /** Look up a registered workflow by its path; null when not found. Backs
@@ -287,8 +287,11 @@ export function createRestRouter(options: RestRouterOptions): Router {
         version,
         authenticated: identity !== null,
         userId: identity?.userId ?? null,
+        tenantId: identity?.tenantId ?? null,
         organizationName: identity?.organizationName ?? null,
         telemetryOptIn: settings.telemetryOptIn,
+        // Absent === opted-in: light product analytics is on by default.
+        productAnalyticsOptIn: settings.productAnalyticsOptIn !== false,
         sessions: sessionManager.list(),
         workflows: await listWorkflows(),
         macros: listMacros(),

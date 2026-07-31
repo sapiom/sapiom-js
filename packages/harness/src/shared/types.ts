@@ -1025,8 +1025,24 @@ export interface AppState {
   version: string;
   authenticated: boolean;
   userId: string | null;
+  /**
+   * The Sapiom org/tenant id (SAP-1988). Exposed to the SPA so client PostHog
+   * can `group('organization', tenantId)` — segmenting studio usage by customer
+   * the same way the web app does. Null when unauthenticated. Today this equals
+   * `userId` (identity is org-scoped); kept as a distinct field so a real
+   * per-seat id can diverge later without touching the group binding.
+   */
+  tenantId: string | null;
   organizationName: string | null;
   telemetryOptIn: boolean;
+  /**
+   * Resolved light-product-analytics (PostHog) opt-in (SAP-1988). Defaults to
+   * true (on) when the user hasn't opted out. The SPA gates `posthog` capture
+   * on this AND on `consentSource !== "env-forced-off"` (the hard kill-switch,
+   * which always wins). Always present so the client never has to distinguish
+   * "absent" from "false".
+   */
+  productAnalyticsOptIn: boolean;
   /**
    * How telemetry consent was determined at CLI boot. The UI uses this to
    * decide whether to show the first-run notice: "default-silent" means the
@@ -1241,7 +1257,23 @@ export interface TemplateListResponse {
 }
 
 export interface HarnessSettings {
+  /**
+   * Opt-in to sending the *invasive* usage telemetry to Sapiom → BigQuery
+   * (prompts, tool calls, session detail). OFF by default (SAP-1988): a desktop
+   * tool that silently ships session content is a reputation risk, so this is
+   * opt-in via the setup screen with benefit-framed copy. Distinct from
+   * `productAnalyticsOptIn` (light PostHog clicks/journeys, on by default).
+   */
   telemetryOptIn: boolean;
+  /**
+   * Opt-OUT of light product analytics — PostHog autocapture clicks, journeys,
+   * and usage metrics with NO recording and NO prompt/user content (SAP-1988).
+   * ON by default (absent === true): this is non-invasive and mirrors the web
+   * app. Hard kill-switches (`SAPIOM_TELEMETRY_DISABLED` / `DO_NOT_TRACK` /
+   * `--no-telemetry`, surfaced as `AppState.consentSource === "env-forced-off"`)
+   * always win regardless of this flag.
+   */
+  productAnalyticsOptIn?: boolean;
   /** Most-recently-used project directories, newest first. */
   recentDirs: string[];
   /**

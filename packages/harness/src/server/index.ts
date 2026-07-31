@@ -1081,6 +1081,7 @@ export const startServer = async (
       identity: identity
         ? {
             userId: identity.userId,
+            tenantId: identity.tenantId,
             organizationName: identity.organizationName,
           }
         : null,

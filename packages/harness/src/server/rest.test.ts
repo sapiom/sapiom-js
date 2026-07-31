@@ -143,8 +143,10 @@ describe("createRestRouter", () => {
         version: "9.9.9-test",
         authenticated: false,
         userId: null,
+        tenantId: null,
         organizationName: null,
         telemetryOptIn: false,
+        productAnalyticsOptIn: true,
         sessions: [],
         workflows: [],
         macros: [],
@@ -231,7 +233,7 @@ describe("createRestRouter", () => {
 
       start({
         sessionManager: fakeSessionManager([session]),
-        identity: { userId: "user-1", organizationName: "Acme" },
+        identity: { userId: "user-1", tenantId: "user-1", organizationName: "Acme" },
         listWorkflows: async () => [workflow],
         listMacros: () => [macro],
       });

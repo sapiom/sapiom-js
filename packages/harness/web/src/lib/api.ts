@@ -759,8 +759,16 @@ class MockApi implements HarnessApi {
       version: "0.0.1-mock",
       authenticated: true,
       userId: "user_mock",
+      tenantId: "tenant_mock",
       organizationName: "Acme (mock)",
       telemetryOptIn,
+      // Light product analytics defaults on; e2e can force off with
+      // ?mockProductAnalytics=off to assert the PostHog opt-out gate.
+      productAnalyticsOptIn:
+        typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).get("mockProductAnalytics") === "off"
+          ? false
+          : true,
       sessions: this.sessions,
       workflows: this.workflows,
       macros: MOCK_MACROS,
