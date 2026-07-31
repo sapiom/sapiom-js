@@ -502,6 +502,11 @@ writeFileSync(outPath, svg);
 process.stdout.write(String(svg.length));
 `;
 
+/** base64-encode UTF-8 text so it survives a shell command line intact. */
+function toBase64(text: string): string {
+  return Buffer.from(text, "utf8").toString("base64");
+}
+
 const chart = defineStep({
   name: "chart",
   next: ["deliver"],
@@ -529,15 +534,35 @@ const chart = defineStep({
         name: sandboxName,
         ttl: "15m",
       });
-      await box.writeFile("render.mjs", CHART_SCRIPT);
-      await box.writeFile("data.json", JSON.stringify({ charts }));
-
-      const res = await box.exec("node render.mjs data.json chart.svg");
+      // Materialize the renderer + data and run it in ONE exec. `writeFile` and
+      // `exec` root paths differently on the Blaxel sandbox (SAP-2209: the
+      // filesystem API and the SDK both prepend the workspace root, so a
+      // `writeFile`d file double-nests to `/blaxel/blaxel/...` while `exec` runs
+      // at `/blaxel`) — a written file is never where `node` reads it. Decoding
+      // from base64 inside the same command keeps one shell and one cwd, so the
+      // renderer sees the files we just wrote; base64 also keeps the chart data
+      // off the raw command line safely.
+      const res = await box.exec(
+        [
+          `printf %s '${toBase64(CHART_SCRIPT)}' | base64 -d > render.mjs`,
+          `printf %s '${toBase64(JSON.stringify({ charts }))}' | base64 -d > data.json`,
+          "node render.mjs data.json chart.svg",
+        ].join(" && "),
+      );
       if (res.exitCode !== 0) {
         throw new Error(`renderer exited ${res.exitCode}: ${res.stderr}`);
       }
 
-      const svg = await box.readFile("chart.svg");
+      // Read the SVG back over the exec channel too — `readFile` would double-nest
+      // exactly like the writes did. base64 keeps bytes intact across the text-only
+      // channel (`-w0` disables wrapping where supported, plain `base64` fallback).
+      const read = await box.exec("(base64 -w0 chart.svg || base64 chart.svg)");
+      const svg =
+        read.exitCode === 0
+          ? Buffer.from(read.stdout.replace(/\s+/g, ""), "base64").toString(
+              "utf8",
+            )
+          : "";
       // An empty read is the stubbed (`run_local`) path — no bytes to host.
       if (svg.trim().length > 0) {
         const bytes = new TextEncoder().encode(svg);
