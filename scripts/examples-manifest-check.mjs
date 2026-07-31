@@ -44,26 +44,96 @@ export function isReservedSecretKey(key) {
  * `registry.setup.provisions[]` must equal.
  */
 export function deriveProvisions(manifest) {
-  const resources = Array.isArray(manifest?.resources) ? manifest.resources : [];
+  const resources = Array.isArray(manifest?.resources)
+    ? manifest.resources
+    : [];
   return [...new Set(resources.map((r) => r?.kind))].filter(Boolean).sort();
 }
 
+/** zeroSetup.terminalState values that count as "reaches a meaningful terminal
+ * with no setup". A suspend (`paused_for_approval`) or an absent zeroSetup does
+ * not — the shelf's "pauses for approval" state is derived from steps[].checkpoint. */
+const MEANINGFUL_ZEROSETUP_TERMINALS = new Set([
+  "completed",
+  "completed_partial",
+]);
+
 /**
- * `setup.provisions[]` is denormalised into the thin registry index so the shelf
- * can render it without fetching a manifest. Denormalised data with no source of
- * truth is what let `capabilities[]` fill up with SDK method paths instead of
- * catalog ids, so this verifies rather than trusts.
+ * The full `registry.setup` block a template's manifest implies — the single
+ * source of truth for `pnpm examples:sync-setup` and the drift check below.
+ * Denormalised into the thin registry index so the gallery shelf renders it
+ * without fetching a manifest (an N+1 the shelf can't afford).
  *
- * @returns string[] — empty when `provisions` is absent (it is optional)
+ *   runsWithNoSetup      — true ONLY when the manifest carries a zeroSetup whose
+ *                          terminalState is a meaningful terminal; absent
+ *                          zeroSetup (unmeasured / hard-failed / the-brain) ⇒ false.
+ *   connectionCount      — number of requiredSecrets ("needs 1 credential").
+ *   settingCount         — number of declared settings.
+ *   provisions           — deriveProvisions(manifest); included only when non-empty.
+ *   degradedWithoutSetup — zeroSetup.narrative verbatim, when present (rendered
+ *                          on the card — never implies a send that won't happen).
  */
-export function checkSetupProvisions(template, manifest) {
-  const declared = template?.setup?.provisions;
-  if (!Array.isArray(declared)) return [];
-  const derived = deriveProvisions(manifest);
-  const actual = [...declared].sort();
-  if (JSON.stringify(actual) === JSON.stringify(derived)) return [];
+export function deriveSetup(manifest) {
+  const requiredSecrets = Array.isArray(manifest?.requiredSecrets)
+    ? manifest.requiredSecrets
+    : [];
+  const settings = Array.isArray(manifest?.settings) ? manifest.settings : [];
+  const zeroSetup = manifest?.zeroSetup;
+  const provisions = deriveProvisions(manifest);
+
+  const setup = {
+    runsWithNoSetup:
+      !!zeroSetup &&
+      MEANINGFUL_ZEROSETUP_TERMINALS.has(zeroSetup.terminalState),
+    connectionCount: requiredSecrets.length,
+    settingCount: settings.length,
+  };
+  if (provisions.length > 0) setup.provisions = provisions;
+  if (
+    typeof zeroSetup?.narrative === "string" &&
+    zeroSetup.narrative.length > 0
+  ) {
+    setup.degradedWithoutSetup = zeroSetup.narrative;
+  }
+  return setup;
+}
+
+/** Stable key-sorted serialisation, so two setup blocks compare equal regardless
+ * of key order or which optional fields are present. */
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((acc, k) => {
+        acc[k] = canonical(value[k]);
+        return acc;
+      }, {});
+  }
+  return value;
+}
+
+/**
+ * The registry `setup` block is GENERATED from the manifest by
+ * `pnpm examples:sync-setup`. This fails CI when the committed block drifts from
+ * what the manifest implies — the same verify-don't-trust rule as provisions,
+ * applied to the whole block so it can never be hand-edited out of sync.
+ */
+export function checkSetupSync(template, manifest) {
+  const derived = deriveSetup(manifest);
+  const actual = template?.setup;
+  if (actual === undefined) {
+    return [
+      `setup-sync: "${template?.id ?? "(unknown)"}" has no registry setup block — run \`pnpm examples:sync-setup\` (setup is generated from the manifest, never hand-maintained).`,
+    ];
+  }
+  if (
+    JSON.stringify(canonical(actual)) === JSON.stringify(canonical(derived))
+  ) {
+    return [];
+  }
   return [
-    `setup-provisions: "${template?.id ?? "(unknown)"}" registry setup.provisions is [${actual.join(", ")}] but the manifest's resources[] derive [${derived.join(", ")}] — provisions is generated from the manifest, never hand-maintained.`,
+    `setup-sync: "${template?.id ?? "(unknown)"}" registry setup is ${JSON.stringify(actual)} but the manifest derives ${JSON.stringify(derived)} — run \`pnpm examples:sync-setup\`.`,
   ];
 }
 
@@ -74,7 +144,9 @@ export function checkSetupProvisions(template, manifest) {
  * @param fileExists  (relativePath) => boolean, resolved against the example dir
  */
 export function checkResourceSeeds(templateId, manifest, fileExists) {
-  const resources = Array.isArray(manifest?.resources) ? manifest.resources : [];
+  const resources = Array.isArray(manifest?.resources)
+    ? manifest.resources
+    : [];
   const errors = [];
   resources.forEach((resource, i) => {
     if (typeof resource?.seed !== "string") return;
@@ -131,7 +203,9 @@ export function createManifestChecker(ajv, schema) {
     // (`ctx.sapiom.database.get(handle)`), so a duplicate is a silent collision
     // at lookup — the schema can constrain one handle's shape but not their
     // uniqueness as a set.
-    const resources = Array.isArray(manifest?.resources) ? manifest.resources : [];
+    const resources = Array.isArray(manifest?.resources)
+      ? manifest.resources
+      : [];
     const seenHandles = new Map();
     resources.forEach((resource, i) => {
       const handle = resource?.handle;

@@ -28,7 +28,8 @@
     "publish:local": "node scripts/publish-local.mjs",
     "examples:check": "node scripts/examples-check.mjs",
     "examples:check:test": "node --test scripts/*.test.mjs",
-    "examples:sort": "node scripts/examples-sort.mjs"
+    "examples:sort": "node scripts/examples-sort.mjs",
+    "examples:sync-setup": "node scripts/examples-sync-setup.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.1",
