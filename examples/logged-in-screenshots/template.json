@@ -1,0 +1,81 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "whatItDoes": "Open a real hosted browser, optionally log in with credentials you supply, visit the pages you list, and capture each one as a hosted image. It captures every page in a single session — the rendered view a logged-in user sees, which a scraper can't reach. With no login it captures public pages.",
+  "longDescription": "You give it a list of pages. It opens one real browser session, visits each page, and captures it as a hosted image you get a URL back for. Because it drives an actual browser rather than fetching HTML, it captures what the page really looks like — and, if you hand it a login, what it looks like to a signed-in user.\n\nEverything happens in a single session. In-session screenshots carry no per-shot charge — billing settles once when the session closes — so capturing five pages costs one session, not five one-shots. The session is always closed for you, even if a capture fails, so it can never leak at the ceiling charge.\n\nThe login is optional and honest. Set `loginUrl`, `loginUsername`, and the `BROWSER_LOGIN_PASSWORD` secret and it stores them as a browser identity and opens the session already signed in. Leave any of them out — or let the login fail — and it captures the public view instead and tells you `authenticated: false`, rather than claiming a logged-in capture it didn't make. Every requested URL comes back as a row whether its shot worked or not.\n\nYou pay for the browser session; creating the login identity is free.",
+  "useCases": [
+    "Archive a dashboard behind a login",
+    "Verify a deploy renders correctly",
+    "Record a page behind authentication"
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nRun it with nothing and it captures two stable public pages. Pass `urls` (the pages to capture) and `fullPage: true` for full-height captures. To capture behind a login, pass `loginUrl` and `loginUsername` and set the `BROWSER_LOGIN_PASSWORD` secret — the session opens signed in. Miss any of the three and it captures the public view and says so.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the flow for free (the browser capability is stubbed), or edit and deploy it with the Sapiom MCP.",
+  "requiredSecrets": [
+    {
+      "key": "BROWSER_LOGIN_PASSWORD",
+      "label": "Login password",
+      "provider": "custom",
+      "credentialKind": "basic",
+      "description": "The password for the login you want to capture behind, paired with `loginUsername`. Only needed for authenticated capture — without it the run captures the public view.",
+      "optional": true
+    }
+  ],
+  "defaultInput": {
+    "urls": ["https://example.com", "https://example.org"]
+  },
+  "examples": [
+    {
+      "title": "Capture public pages",
+      "input": {
+        "urls": ["https://example.com"]
+      },
+      "output": {
+        "authenticated": false,
+        "requested": 1,
+        "captured": 1,
+        "screenshots": [
+          {
+            "url": "https://example.com",
+            "imageUrl": "https://cdn.sapiom.ai/screenshots/abc123.png",
+            "expiresAt": "2026-08-01T00:00:00Z",
+            "ok": true,
+            "error": null
+          }
+        ]
+      }
+    },
+    {
+      "title": "Capture a page behind a login",
+      "input": {
+        "urls": ["https://app.example.com/dashboard"],
+        "loginUrl": "https://app.example.com/login",
+        "loginUsername": "you@example.com"
+      },
+      "output": {
+        "authenticated": true,
+        "requested": 1,
+        "captured": 1,
+        "screenshots": [
+          {
+            "url": "https://app.example.com/dashboard",
+            "imageUrl": "https://cdn.sapiom.ai/screenshots/def456.png",
+            "expiresAt": "2026-08-01T00:00:00Z",
+            "ok": true,
+            "error": null
+          }
+        ]
+      }
+    }
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "screenshots", "assert": "nonEmptyArray" },
+      { "path": "authenticated", "assert": "equals", "value": false }
+    ],
+    "narrative": "Opens a browser session and captures two stable public pages as hosted images; no login, so authenticated is false."
+  }
+}
