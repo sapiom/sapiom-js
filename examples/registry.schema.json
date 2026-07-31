@@ -22,6 +22,7 @@
         "id": { "type": "string", "minLength": 1, "description": "Stable gallery id + the example directory name. Never changes — it is the directory name, the sourcePath, and the gallery's stable key. Renaming a template changes `name`, never this." },
         "name": { "type": "string", "minLength": 1, "maxLength": 32, "description": "Display name shown on the card. Names the OUTCOME, not the machinery — the same axis `category` uses. No arrows, no slashes, no parentheticals, and no mechanism word (saga, engine, pipeline, runner, endpoint, gate, durable, keep-alive): those belong in `tags`, which is what drives search. Enforced by the `copy-name` check." },
         "description": { "type": "string", "maxLength": 160, "description": "One-line card description — one plain sentence." },
+        "rank": { "type": "integer", "minimum": 1, "description": "Optional gallery ordering weight — lower = higher priority. Ranked templates lead the browse gallery in ascending rank; unranked templates keep registry (id) order behind them. Used to feature the strongest templates up front; most templates carry none. The backend owns the sort (single source of truth), so the frontend adds no sort of its own. Independent of `category` grouping and of runnability — a rank is an editorial choice, not a derived signal." },
         "tags": { "type": "array", "items": { "type": "string" }, "description": "Freeform browse tags." },
         "category": {
           "type": "string",
