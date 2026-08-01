@@ -84,11 +84,12 @@
     }
   ],
   "zeroSetup": {
-    "terminalState": "completed",
+    "terminalState": "completed_partial",
     "expect": [
-      { "path": "pack.newsletter", "assert": "nonEmptyString" },
-      { "path": "pack.tweetThread", "assert": "nonEmptyArray" }
+      { "path": "graphics", "assert": "nonEmptyArray" },
+      { "path": "delivered", "assert": "equals", "value": false },
+      { "path": "unmet", "assert": "nonEmptyArray" }
     ],
-    "narrative": "Repurposes a built-in sample post into a newsletter, tweet thread, video script, and LinkedIn post."
+    "narrative": "Repurposes the built-in sample post into copy plus real rendered quote graphics; skips the pricey teaser clip and emails nothing because no recipient is set."
   }
 }
