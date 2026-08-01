@@ -25,7 +25,9 @@ test.describe("session history dropdown", () => {
     await expect(menu).toBeHidden();
   });
 
-  test("closes on Escape and returns focus to the trigger", async ({ page }) => {
+  test("closes on Escape and returns focus to the trigger", async ({
+    page,
+  }) => {
     await page.getByTestId("history-trigger").click();
     await expect(page.getByTestId("history-menu")).toBeVisible();
 
@@ -54,11 +56,20 @@ test.describe("settings popover", () => {
     await page.getByTestId("telemetry-toggle").click();
     await expect(popover).toBeVisible();
 
-    await page.locator(".brand-name").click();
+    // Click well outside the popover to light-dismiss it. The popover anchors at
+    // the top-left brand/settings area and its identity row now overlaps
+    // `.brand-name`, so that (top-left) target is no longer "outside" — it's
+    // occluded by the popover and the click lands on the popover itself. Click the
+    // lower-right of the viewport, which is unambiguously outside a top-anchored popover.
+    const viewport = page.viewportSize();
+    if (!viewport) throw new Error("viewport size unavailable");
+    await page.mouse.click(viewport.width - 40, viewport.height - 40);
     await expect(popover).toBeHidden();
   });
 
-  test("closes on Escape and returns focus to the trigger", async ({ page }) => {
+  test("closes on Escape and returns focus to the trigger", async ({
+    page,
+  }) => {
     await page.getByTestId("brand-identity").click();
     await page.getByTestId("settings-trigger").click();
     await expect(page.getByTestId("settings-popover")).toBeVisible();
@@ -70,7 +81,9 @@ test.describe("settings popover", () => {
 });
 
 test.describe("new-session modal", () => {
-  test("closes on Escape and returns focus to the history trigger that spawned it", async ({ page }) => {
+  test("closes on Escape and returns focus to the history trigger that spawned it", async ({
+    page,
+  }) => {
     await page.getByTestId("add-workspace").click();
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
@@ -80,7 +93,9 @@ test.describe("new-session modal", () => {
     await expect(page.getByTestId("history-trigger")).toBeFocused();
   });
 
-  test("still closes on a backdrop click, but not on clicks inside the panel", async ({ page }) => {
+  test("still closes on a backdrop click, but not on clicks inside the panel", async ({
+    page,
+  }) => {
     await page.getByTestId("add-workspace").click();
     await page.getByTestId("new-session-btn").click();
     await expect(page.locator(".modal-new-session")).toBeVisible();
@@ -95,16 +110,22 @@ test.describe("new-session modal", () => {
 });
 
 test.describe("end-session confirm dialog", () => {
-  const openConfirm = async (page: import("@playwright/test").Page): Promise<void> => {
+  const openConfirm = async (
+    page: import("@playwright/test").Page,
+  ): Promise<void> => {
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-end-btn").click();
     await expect(page.getByTestId("end-session-confirm")).toBeVisible();
   };
 
-  test("opens with focus on the SAFE action (Keep session)", async ({ page }) => {
+  test("opens with focus on the SAFE action (Keep session)", async ({
+    page,
+  }) => {
     await openConfirm(page);
     // Enter must keep the session; ending it takes a deliberate move.
-    await expect(page.getByRole("button", { name: "Keep session" })).toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Keep session" }),
+    ).toBeFocused();
   });
 
   test("Escape keeps the session and closes the dialog", async ({ page }) => {
@@ -112,13 +133,19 @@ test.describe("end-session confirm dialog", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("end-session-confirm")).toHaveCount(0);
     // Nothing died: the active session is still shown.
-    await expect(page.getByTestId("session-context")).not.toContainText("No active session");
+    await expect(page.getByTestId("session-context")).not.toContainText(
+      "No active session",
+    );
   });
 
-  test("a backdrop click keeps the session and closes the dialog", async ({ page }) => {
+  test("a backdrop click keeps the session and closes the dialog", async ({
+    page,
+  }) => {
     await openConfirm(page);
     await page.locator(".modal-backdrop").click({ position: { x: 5, y: 5 } });
     await expect(page.getByTestId("end-session-confirm")).toHaveCount(0);
-    await expect(page.getByTestId("session-context")).not.toContainText("No active session");
+    await expect(page.getByTestId("session-context")).not.toContainText(
+      "No active session",
+    );
   });
 });
