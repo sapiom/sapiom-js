@@ -24,8 +24,10 @@ validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ deploy ─┬─�
    deployed once the safe path is proven.
 5. **deploy** — writes a small server into a sandbox and exposes it at a stable URL
    (`sandboxes.deployPreview`). `DATABASE_URL` and the server's own
-   `SAPIOM_API_KEY` (from the injected `ENDPOINT_SAPIOM_API_KEY`) are passed
-   as env — never baked into source.
+   `SAPIOM_API_KEY` are passed as env — never baked into source. The key is minted
+   for the endpoint (`ctx.sapiom.keys.mintScoped`): a durable, narrowly-scoped
+   credential, since the engine's per-run token expires with the step. (Set
+   `ENDPOINT_SAPIOM_API_KEY` to override with a key you control.)
 6. **deployed** / **deploy_failed** / **rejected** — terminal; report the endpoint
    URL, surface the deploy logs, or explain the rejection.
 

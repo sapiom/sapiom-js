@@ -109,6 +109,7 @@ import type {
   Identity,
   ActiveSession,
 } from "../browser-automation/index.js";
+import type { ScopedKey } from "../keys/index.js";
 
 /** Per-capability overrides, keyed by capability path (see module docs). */
 export type StubOverrides = Record<
@@ -679,7 +680,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     args: unknown[],
     fallback: () => unknown,
     capabilityOverride?: string,
-  ) => resolve(overrides, paths, args, fallback, opts.calls, capabilityOverride);
+  ) =>
+    resolve(overrides, paths, args, fallback, opts.calls, capabilityOverride);
 
   // Per-client memory state: namespace → (id → record). See the `memory`
   // capability below for what is and isn't simulated.
@@ -978,7 +980,8 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       releaseSession: (session) =>
         Promise.resolve(
           r("llm.releaseSession", [session], () => ({
-            sessionId: typeof session === "string" ? session : session.sessionId,
+            sessionId:
+              typeof session === "string" ? session : session.sessionId,
             state: "expired" as const,
           })) as LlmSession,
         ),
@@ -1633,7 +1636,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       list: (ref: string) =>
         Promise.resolve(r("vault.list", [ref], () => []) as string[]),
       get: (ref: string, key: string) =>
-        Promise.resolve(r("vault.get", [ref, key], () => null) as string | null),
+        Promise.resolve(
+          r("vault.get", [ref, key], () => null) as string | null,
+        ),
       getMany: (ref: string, keys: string[]) =>
         Promise.resolve(
           r("vault.getMany", [ref, keys], () => ({})) as Record<string, string>,
@@ -1641,6 +1646,24 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       getAll: (ref: string) =>
         Promise.resolve(
           r("vault.getAll", [ref], () => ({})) as Record<string, string>,
+        ),
+    },
+    // Scoped-key mint (SAP-2300). A local run mints no real credential — it returns a
+    // clearly-fake, shape-faithful key so a deploy step can trace the full graph
+    // offline. The `key` is an obvious placeholder, never a usable secret.
+    keys: {
+      mintScoped: (input) =>
+        Promise.resolve(
+          r("keys.mintScoped", [input], () => ({
+            key: "sk_live_stub-scoped-key",
+            id: "stub-scoped-key",
+            expiresAt: null,
+            permissions: Array.isArray(input.scope)
+              ? input.scope
+              : input.scope
+                ? [input.scope]
+                : ["org.transactions.write"],
+          })) as ScopedKey,
         ),
     },
     speech: {

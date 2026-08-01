@@ -910,7 +910,7 @@
         "connectionCount": 1,
         "settingCount": 0,
         "provisions": ["postgres"],
-        "degradedWithoutSetup": "Translates a sample question to SQL and validates it; deploys no endpoint (needs a scoped key)."
+        "degradedWithoutSetup": "Translates a sample question to SQL, mints the endpoint its own scoped key, and deploys a working /query endpoint."
       }
     },
     {
