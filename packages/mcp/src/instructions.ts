@@ -59,6 +59,9 @@ and returns a live URL; a \`failed\` status carries the build/start logs — fix
 - \`terminate()\` requires \`terminal: true\`; \`fail()\` requires \`canFail: true\`;
   \`pauseUntilSignal(handle, …)\` requires \`pause: { signal, resumeStep }\`; every \`goto\`
   target must be listed in \`next[]\`. TypeScript enforces all of these.
+- The entry step's \`inputSchema\` is the agent's public API — the dashboard Run form,
+  the trigger snippet, and engine-side validation all read it. Declare it with zod
+  (\`zod/v4\`); give fields \`.default()\` so a zero-input run still validates.
 - Cross-step state: \`ctx.shared\` — the entry input reaches only the entry step.
 - Capabilities run via the typed \`ctx.sapiom.*\` client (sandboxes, repositories,
   models.coding, fileStorage, search, database, email, domains, memory, and more) —

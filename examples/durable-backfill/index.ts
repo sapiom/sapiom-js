@@ -6,6 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Durable Backfill / Long-Job Runner — process a huge dataset in resumable
@@ -312,8 +313,50 @@ async function processChunk(
 }
 
 // ---- steps -----------------------------------------------------------------
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. The sizing + command knobs carry
+ * their runtime fallbacks as `.default(...)`; `dbHandle` stays optional (absent
+ * ⇒ the loop runs offline).
+ */
+const entryInput = z.object({
+  total: z
+    .number()
+    .default(DEFAULT_TOTAL)
+    .describe("Total items in the dataset to back-fill."),
+  chunkSize: z
+    .number()
+    .default(DEFAULT_CHUNK_SIZE)
+    .describe("Items per chunk — the unit of work between heartbeats."),
+  jobId: z
+    .string()
+    .optional()
+    .describe(
+      "Stable id / checkpoint key. Pass the same jobId to resume an interrupted job. Defaults to the execution id.",
+    ),
+  dbHandle: z
+    .string()
+    .optional()
+    .describe(
+      "Postgres handle whose connection string is injected as DATABASE_URL. Absent ⇒ offline.",
+    ),
+  command: z
+    .string()
+    .default(DEFAULT_COMMAND)
+    .describe("Shell command run once per chunk inside the sandbox."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Process chunks in-process and skip all external calls."),
+  config: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe("Reserved for extra string config."),
+});
+
 const plan = defineStep({
   name: "plan",
+  inputSchema: entryInput,
   next: ["process"],
   async run(input: BackfillInput, ctx: Ctx) {
     const total = Math.max(0, Math.floor(input.total ?? DEFAULT_TOTAL));
@@ -434,7 +477,8 @@ const processStep = defineStep({
     // Rewrite the durable checkpoint, rotating out the previous file.
     if (!dryRun) {
       const prevCheckpoint = ctx.shared.get("checkpointFileId") as
-        string | null;
+        | string
+        | null;
       const cpId = await uploadJson(ctx, checkpointFileName(jobId), {
         jobId,
         cursor: nextCursor,

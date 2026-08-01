@@ -9,6 +9,30 @@ The full authoring guide ships inside this project at `.claude/skills/sapiom-age
 - An orchestration is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export.
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck.
 
+## The entry input contract
+
+The **entry step's `inputSchema` is this agent's public API** — the dashboard Run form, the trigger snippet, and engine-side validation are all generated from it. Declare it (with `zod` from `zod/v4`) even when the agent looks input-free, and give every field a `.default()` so a zero-input run (the empty Run form) still validates. An entry step with no `inputSchema` tells the platform the agent takes no input — the Run form renders empty and `check` warns.
+
+```ts
+import { defineStep, terminate } from "@sapiom/agent";
+import { z } from "zod/v4";
+
+const start = defineStep({
+  name: "start",
+  next: [],
+  terminal: true,
+  inputSchema: z.object({
+    repo: z.string().default("sapiom/sapiom"),
+    window: z.enum(["day", "week", "month"]).default("week"),
+  }),
+  async run(input, ctx) {           // input: { repo: string; window: "day" | "week" | "month" }
+    return terminate({ scanned: input.repo });
+  },
+});
+```
+
+`inputSchema` on a non-entry step validates that step's inbound payload — but only the entry step's schema is read as the agent's public contract.
+
 ## Validating
 
 When you've made a coherent change and want to validate it — the same point you'd run tests in any project — this project ships a near-complete local suite. Reach for it then; you don't need to run it after every small edit.

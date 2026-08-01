@@ -13,7 +13,8 @@
   "dependencies": {
     "@sapiom/agent": "^0.6.5",
     "@sapiom/fetch": "^0.5.0",
-    "@sapiom/tools": "^0.20.0"
+    "@sapiom/tools": "^0.20.0",
+    "zod": "^3.25.76 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",

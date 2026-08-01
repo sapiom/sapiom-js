@@ -145,8 +145,15 @@ describe("deriveEnrichment over a real extracted graph (order-triage)", () => {
   it("summarizes the real fixture deterministically, end to end", async () => {
     const result = await extractWorkflowGraph(ORDER_TRIAGE_DIR);
     if (!result.ok) throw new Error("expected extraction to succeed");
-    expect(deriveEnrichment(result.graph)).toEqual({
-      summary: "5 steps · 1 branch point · 2 success outcomes",
-    });
+    const enrichment = deriveEnrichment(result.graph);
+    // Summary is fully deterministic from the graph shape.
+    expect(enrichment.summary).toBe("5 steps · 1 branch point · 2 success outcomes");
+    // This fixture ships no entry `inputSchema` on purpose (a monorepo zod-duplication
+    // hazard — see its index.ts header), so `check()` emits the SAP-2227 entry-contract
+    // warning, which the canvas surfaces as a note. Assert by substring: the note is
+    // clamped to ENRICHMENT_LIMITS.note, so an exact-string match would be brittle.
+    expect(enrichment.notes).toHaveLength(1);
+    expect(enrichment.notes?.[0]).toContain("entry step 'intake' declares no inputSchema");
+    expect(enrichment.crossWorkflow).toBeUndefined();
   });
 });

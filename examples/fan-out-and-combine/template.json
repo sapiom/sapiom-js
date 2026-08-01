@@ -1,0 +1,103 @@
+{
+  "$schema": "../template.schema.json",
+  "manifestVersion": 1,
+  "author": {
+    "name": "Sapiom",
+    "url": "https://sapiom.ai/"
+  },
+  "whatItDoes": "Split a goal into parts, run each part as its own child workflow in parallel, then merge the results into one answer. Each child is a real, separately-metered run reached through `ctx.sapiom.agents.run` — fan out, join, reduce. It composes itself by default, or fans out any workflow whose slug you pass.",
+  "longDescription": "You give it a goal and the parts to break it into. It launches one child run per part, all at once, waits for every one to finish, and combines their outputs into a single answer. It is the durable version of running sub-agents with `Promise.all` — except each child is its own metered, independently-retryable run, not a function call.\n\nThe same template plays both roles. By default it fans out to its OWN slug (`ctx.sapiom.agents.run` with `ctx.agentName`), so a deployed copy dispatches child runs of itself with nothing else to set up. Each child runs in leaf mode — one part, one model analysis, then it terminates — and a leaf never fans out, so the recursion is exactly one level deep. Point `childDefinition` at another deployed workflow and it fans that out instead, one child per item.\n\nA child that throws or ends without completing becomes a failed row and the merge runs over the survivors, so a single bad child never sinks the batch — and if every child fails it still terminates with an honest account rather than a combined answer it doesn't have. Set `dryRun` to get the fan-out plan back without dispatching anything.\n\nYou pay for the child runs and the model call that merges them — the plan path and the joining are free.",
+  "useCases": [
+    "Fan a job across parallel child runs",
+    "Map-reduce over sub-agents",
+    "Compose many workflows into one"
+  ],
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nRun it with nothing and it fans a sample goal into three parallel child runs of itself and merges them. Pass your own `goal` and `items` (one child run per item) to fan out your own work, or set `childDefinition` to another deployed workflow's slug to fan THAT out — each child receives `{ goal, item }`. Pass `dryRun: true` to see exactly what it would dispatch without spending on child runs.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the fan-out plan for free (the child capability is stubbed offline), or edit and deploy it with the Sapiom MCP.",
+  "defaultInput": {},
+  "examples": [
+    {
+      "title": "Preview the fan-out plan without dispatching",
+      "input": {
+        "goal": "Draft a launch plan for a new API product",
+        "items": ["pricing", "docs and developer experience", "go-to-market"],
+        "dryRun": true
+      },
+      "output": {
+        "coordinated": false,
+        "dispatched": false,
+        "dryRun": true,
+        "goal": "Draft a launch plan for a new API product",
+        "childDefinition": "fan-out-and-combine",
+        "plan": {
+          "childRuns": 3,
+          "items": ["pricing", "docs and developer experience", "go-to-market"],
+          "inputs": [
+            {
+              "mode": "leaf",
+              "goal": "Draft a launch plan for a new API product",
+              "item": "pricing"
+            },
+            {
+              "mode": "leaf",
+              "goal": "Draft a launch plan for a new API product",
+              "item": "docs and developer experience"
+            },
+            {
+              "mode": "leaf",
+              "goal": "Draft a launch plan for a new API product",
+              "item": "go-to-market"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Fan out and combine",
+      "input": {
+        "goal": "What are the main trade-offs of running background jobs on a serverless platform?",
+        "items": [
+          "cost and the billing model",
+          "cold starts and latency",
+          "concurrency and scaling limits"
+        ]
+      },
+      "output": {
+        "coordinated": true,
+        "dispatched": true,
+        "goal": "What are the main trade-offs of running background jobs on a serverless platform?",
+        "childDefinition": "fan-out-and-combine",
+        "combined": "Serverless background jobs trade operational simplicity for three coupled costs...",
+        "children": [
+          {
+            "item": "cost and the billing model",
+            "ok": true,
+            "status": "completed",
+            "error": null
+          },
+          {
+            "item": "cold starts and latency",
+            "ok": true,
+            "status": "completed",
+            "error": null
+          },
+          {
+            "item": "concurrency and scaling limits",
+            "ok": true,
+            "status": "completed",
+            "error": null
+          }
+        ],
+        "succeeded": 3,
+        "total": 3
+      }
+    }
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "coordinated", "assert": "equals", "value": true },
+      { "path": "children", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Fans a sample goal into three parallel child runs of itself and returns one combined answer."
+  }
+}

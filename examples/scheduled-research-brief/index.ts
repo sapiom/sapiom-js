@@ -6,6 +6,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import type { Sapiom } from "@sapiom/tools";
+import { z } from "zod/v4";
 
 /**
  * Scheduled Research Brief — the scheduled, LLM-curated, delivered sibling of
@@ -116,17 +117,47 @@ async function resolveSenderInbox(ctx: Ctx): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `topic` carries the sample as
+ * its `.default(...)` so the declared default and the runtime default are the
+ * same value: a zero-input tick researches the sample topic instead of being
+ * rejected for a missing field.
+ */
+const entryInput = z.object({
+  topic: z
+    .string()
+    .default(DEFAULT_TOPIC)
+    .describe("What to research on each tick."),
+  schedule: z
+    .string()
+    .optional()
+    .describe('Cron cadence this brief runs on (e.g. "0 8 * * *").'),
+  deliverTo: z
+    .string()
+    .optional()
+    .describe(
+      "Recipient email. Omit it and the brief is returned inline instead of emailed.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Compute the brief but skip the real send."),
+});
+
 const search = defineStep({
   name: "search",
+  inputSchema: entryInput,
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
-    const supplied = input.topic?.trim() ?? "";
-    const topic = supplied || DEFAULT_TOPIC;
+    // The schema fills `topic` with DEFAULT_TOPIC on a zero-input tick, so the
+    // value — not its absence — is what tells us the sample topic was used.
+    const topic = input.topic?.trim() || DEFAULT_TOPIC;
     ctx.shared.set("topic", topic);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
     ctx.shared.set("deliverTo", input.deliverTo?.trim() || null);
     ctx.shared.set("dryRun", input.dryRun === true);
-    if (!supplied) {
+    if (topic === DEFAULT_TOPIC) {
       ctx.shared.set(
         "note",
         `Researched the default topic ("${DEFAULT_TOPIC}"). Pass a \`topic\` to research yours.`,

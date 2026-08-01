@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * Multi-Party Approval Chain (Saga) — a durable, sequential sign-off flow.
@@ -42,13 +43,23 @@ import postgres from "postgres";
  *
  * ── Reminders & timeout ────────────────────────────────────────────────────────
  * A resume with an explicit `{ decision: "approve" | "reject" }` drives the saga.
- * A resume with NO decision — the engine firing the pause `timeoutMs`, a
- * `run_local` auto-resume, or an explicit `{ decision: "remind" }` — counts as a
- * reminder tick: re-notify the current approver and re-pause, up to
- * `maxReminders`, after which the gate escalates. An explicit
- * `{ decision: "timeout" }` escalates immediately. This mirrors the "a timeout
- * fires the signal" convention — wire a cron to fire `remind`/`timeout` on a
- * schedule, or rely on the pause `timeoutMs` where the engine supports it.
+ * A resume with NO decision — an explicit `{ decision: "remind" }` or a
+ * `run_local` auto-resume — counts as a reminder tick: re-notify the current
+ * approver and re-pause, up to `maxReminders`, after which the gate escalates. An
+ * explicit `{ decision: "timeout" }` escalates immediately.
+ *
+ * The gates pause **indefinitely** (no `timeoutMs`) on purpose. The engine has a
+ * paused-run reaper: a `timeoutMs` sets `pausedUntil`, and a background sweep
+ * *terminates* the run with a `PauseTimeoutError` once it lapses — it does NOT
+ * resume the step, so it would never reach `decide`/`remind`/`escalate`. Handing a
+ * signal pause a `reminderMs`-sized `timeoutMs` (as an earlier version did) would
+ * therefore hard-fail any approval slower than the reminder interval, bypassing
+ * the graceful `escalate` step entirely. So reminders/escalation are driven purely
+ * by the signal convention: the run-detail one-click Approve/Reject, a cron that
+ * fires `remind`/`timeout` on a schedule, or a `run_local` auto-resume — never the
+ * engine's pause deadline. (`wait-for-webhook` is the mirror image: it *wants* that
+ * terminal timeout, so it opts into `timeoutMs`; this chain wants a reminder, so it
+ * must not.) Do not add `timeoutMs` here without moving to that terminal model.
  *
  * ── Chain state ────────────────────────────────────────────────────────────────
  * The canonical chain state — which gate we're on, who has approved, the full
@@ -75,9 +86,6 @@ const SENDER_USERNAME = "approvals";
 
 /** Reminders sent before a silent gate escalates. */
 const DEFAULT_MAX_REMINDERS = 2;
-
-/** Default pause timeout per gate (best-effort auto-reminder): 24 hours. */
-const DEFAULT_REMINDER_MS = 24 * 60 * 60 * 1000;
 
 /** Postgres table the durable ledger appends to. */
 const LEDGER_TABLE = "approval_chain_ledger";
@@ -142,8 +150,6 @@ interface EntryInput {
    * `ctx.shared` only.
    */
   ledgerHandle?: string;
-  /** Pause timeout per gate in ms (best-effort auto-reminder). Default 24h. */
-  reminderMs?: number;
   /** Reminders before a silent gate escalates. Default 2. */
   maxReminders?: number;
   /**
@@ -165,7 +171,6 @@ interface Shared extends Record<string, unknown> {
   trail: Transition[];
   escalateTo: string | null;
   ledgerHandle: string | null;
-  reminderMs: number;
   maxReminders: number;
   dryRun: boolean;
 }
@@ -185,14 +190,6 @@ function normalizeApprovers(raw: Approver[]): Approver[] {
     name: a.name?.trim() || a.id?.trim() || `Approver ${i + 1}`,
     email: a.email?.trim() || undefined,
   }));
-}
-
-/** Clamp a caller-supplied reminder interval to a sane positive value. */
-function clampReminderMs(ms: number | undefined): number {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) {
-    return DEFAULT_REMINDER_MS;
-  }
-  return Math.floor(ms);
 }
 
 /** Reuse an existing inbox to send from, else provision one. */
@@ -339,8 +336,64 @@ async function persistTransition(
 const DEFAULT_SUBJECT = "Sample: renew the annual analytics contract ($18,000)";
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `subject` carries the sample as
+ * its `.default(...)`; an empty `approvers` chain escalates rather than pausing
+ * on a gate that does not exist.
+ */
+const entryInput = z.object({
+  subject: z
+    .string()
+    .default(DEFAULT_SUBJECT)
+    .describe("What is being signed off (contract, budget, policy…)."),
+  approvers: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        email: z.string().optional(),
+      }),
+    )
+    .optional()
+    .describe(
+      "The ordered chain of approvers — each must approve before the next is asked.",
+    ),
+  escalateTo: z
+    .string()
+    .optional()
+    .describe(
+      "Human channel to escalate to on timeout. Falls back to config.ESCALATION_EMAIL.",
+    ),
+  ledgerHandle: z
+    .string()
+    .optional()
+    .describe(
+      "Handle of a durable Postgres to append the audit trail to. Falls back to config.LEDGER_HANDLE.",
+    ),
+  reminderMs: z
+    .number()
+    .optional()
+    .describe(
+      "Pause timeout per gate in ms (best-effort auto-reminder). Default 24h.",
+    ),
+  maxReminders: z
+    .number()
+    .default(DEFAULT_MAX_REMINDERS)
+    .describe("Reminders before a silent gate escalates."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Skip the irreversible finalize action and live DB writes."),
+  config: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe("String-only config bag (escalation / ledger fallbacks)."),
+});
+
 const start = defineStep({
   name: "start",
+  inputSchema: entryInput,
   next: ["present", "escalate"],
   async run(input: EntryInput, ctx: Ctx) {
     const config = input.config ?? {};
@@ -360,7 +413,6 @@ const start = defineStep({
       "ledgerHandle",
       input.ledgerHandle?.trim() || config.LEDGER_HANDLE || null,
     );
-    ctx.shared.set("reminderMs", clampReminderMs(input.reminderMs));
     ctx.shared.set("maxReminders", input.maxReminders ?? DEFAULT_MAX_REMINDERS);
     ctx.shared.set("dryRun", input.dryRun === true);
 
@@ -389,7 +441,6 @@ const present = defineStep({
     const subject = must(ctx.shared.get("subject"), "subject");
     const approvers = must(ctx.shared.get("approvers"), "approvers");
     const gateIndex = must(ctx.shared.get("gateIndex"), "gateIndex");
-    const reminderMs = must(ctx.shared.get("reminderMs"), "reminderMs");
     const current = approvers[gateIndex];
     if (!current) {
       // Invariant guard — callers only route here with a valid gate.
@@ -423,14 +474,17 @@ const present = defineStep({
     // pause is kept on purpose: an approver IS assigned, so somebody can resume
     // it, and the run detail ships one-click Approve/Reject.
     //
-    // `timeoutMs` is a hint for the auto-reminder and is NOT a guarantee — no
-    // paused-run reaper exists today, so do not treat it as an escape hatch. The
-    // reminder loop is what actually chases a silent approver.
+    // NO `timeoutMs`: the engine's paused-run reaper *terminates* a lapsed pause
+    // (PauseTimeoutError) rather than resuming it, so a deadline here would
+    // silently fail any approval slower than the deadline and skip `escalate`
+    // entirely. The reminder/escalation loop is driven by the `approval.decision`
+    // signal (one-click UI, a cron firing `remind`/`timeout`, or a `run_local`
+    // auto-resume) — never the engine deadline. See the header note before adding
+    // one back.
     return pauseUntilSignal({
       signal: APPROVAL_SIGNAL,
       resumeStep: "decide",
       correlationId: ctx.executionId,
-      timeoutMs: reminderMs,
     });
   },
 });
@@ -438,7 +492,9 @@ const present = defineStep({
 const decide = defineStep({
   name: "decide",
   next: ["present", "remind", "finalize", "compensate", "escalate"],
-  // `payload` IS the approval signal body (or empty on a pause timeout / auto-resume).
+  // `payload` IS the approval signal body (or empty on a `remind` / `run_local`
+  // auto-resume — the gates never carry a pause `timeoutMs`, so the engine reaper
+  // never lands here; see `present`).
   async run(payload: ApprovalDecision, ctx: Ctx) {
     const approvers = must(ctx.shared.get("approvers"), "approvers");
     const gateIndex = must(ctx.shared.get("gateIndex"), "gateIndex");
@@ -484,7 +540,7 @@ const decide = defineStep({
       return goto("escalate", { reason: "timeout" });
     }
 
-    // No explicit decision → a reminder tick (pause timeout / auto-resume / "remind").
+    // No explicit decision → a reminder tick ("remind" / `run_local` auto-resume).
     const reminders = (ctx.shared.get("reminders") ?? 0) + 1;
     ctx.shared.set("reminders", reminders);
     const maxReminders =
@@ -511,7 +567,6 @@ const remind = defineStep({
     const subject = must(ctx.shared.get("subject"), "subject");
     const approvers = must(ctx.shared.get("approvers"), "approvers");
     const gateIndex = must(ctx.shared.get("gateIndex"), "gateIndex");
-    const reminderMs = must(ctx.shared.get("reminderMs"), "reminderMs");
     const reminders = ctx.shared.get("reminders") ?? 1;
     const current = approvers[gateIndex];
     if (!current) {
@@ -535,11 +590,12 @@ const remind = defineStep({
     });
 
     // Re-suspend on the same gate until a decision (or the next reminder tick).
+    // As in `present`, no `timeoutMs` — the reminder cadence comes from the signal
+    // convention, not the engine's (terminal) pause deadline.
     return pauseUntilSignal({
       signal: APPROVAL_SIGNAL,
       resumeStep: "decide",
       correlationId: ctx.executionId,
-      timeoutMs: reminderMs,
     });
   },
 });

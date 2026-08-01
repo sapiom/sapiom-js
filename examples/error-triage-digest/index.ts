@@ -8,6 +8,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import postgres from "postgres";
+import { z } from "zod/v4";
 
 /**
  * Error / Log Triage Digest — turn a noisy stream of errors into one daily
@@ -235,8 +236,62 @@ function toIso(v: unknown): string {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. Every field is optional: pass an
+ * `errors` batch directly, a `pullUrl` to fetch one, or set `webhook` to wait
+ * for a batch to be pushed.
+ */
+const entryInput = z.object({
+  errors: z
+    .array(
+      z
+        .object({
+          message: z.string(),
+          level: z.string().optional(),
+          service: z.string().optional(),
+          stack: z.string().optional(),
+          timestamp: z.string().optional(),
+        })
+        .catchall(z.unknown()),
+    )
+    .optional()
+    .describe("The error batch to triage (the scheduled-pull / direct path)."),
+  pullUrl: z
+    .string()
+    .optional()
+    .describe(
+      "Optional URL to GET the batch from (a JSON array, or { errors: [] }).",
+    ),
+  webhook: z
+    .boolean()
+    .optional()
+    .describe("Wait for a webhook to push the batch instead of pulling one."),
+  schedule: z
+    .string()
+    .optional()
+    .describe("Cron cadence this digest runs on (documentation only)."),
+  dbHandle: z
+    .string()
+    .optional()
+    .describe(
+      "Postgres handle for the dedup store; defaults to the template handle.",
+    ),
+  deliverTo: z
+    .string()
+    .optional()
+    .describe(
+      "Recipient email. Omit it and the digest is returned inline instead of emailed.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Compute the digest but skip the DB writes and the real send."),
+});
+
 const collect = defineStep({
   name: "collect",
+  inputSchema: entryInput,
   next: ["triage"],
   // Static graph edge: on SIGNAL, resume at `triage`. Must match the directive.
   pause: { signal: SIGNAL, resumeStep: "triage" },

@@ -70,6 +70,31 @@ export interface CheckResult {
   manifest: unknown;
 }
 
+/** The minimal manifest shape {@link entryInputSchemaWarning} reads. */
+export interface EntryContractManifest {
+  entry: string;
+  steps: Record<string, { inputSchema: Record<string, unknown> | null } | undefined>;
+}
+
+/**
+ * The entry step's `inputSchema` is the agent's public input contract — the dashboard Run
+ * form, the trigger snippet, and engine-side validation all read it. An entry step with no
+ * schema publishes no contract: the dashboard then claims the agent takes no input. This is
+ * a warning, not an error — an opaque agent stays legal — so `check` still exits 0.
+ *
+ * Lives in `check()` (not the CLI wrapper) so it lands in the shared `warnings` array: the
+ * `sapiom_dev_agents_check` MCP tool and the dashboard canvas both consume `check()` directly,
+ * and that MCP tool is the surface the primer points coding agents at — the whole reason the
+ * contract goes undeclared. Returns the warning (naming the entry step), or null when declared.
+ */
+export function entryInputSchemaWarning(manifest: EntryContractManifest): string | null {
+  const entryStep = manifest.steps[manifest.entry];
+  if (entryStep && entryStep.inputSchema === null) {
+    return `entry step '${manifest.entry}' declares no inputSchema — the dashboard Run form, the trigger snippet, and engine validation all read it as the agent's public input contract. Declare one with zod (from 'zod/v4') so callers know what the agent takes.`;
+  }
+  return null;
+}
+
 /**
  * Validate an agent locally: bundle index.ts with esbuild, load it,
  * derive and Zod-parse the manifest, and check the step graph.
@@ -173,6 +198,12 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
         hint: err instanceof Error ? err.message : String(err),
       });
     }
+
+    // Nudge (not block) authors who never declared the entry input contract — the schema
+    // the dashboard Run form, trigger snippet, and engine validation all read. Shared here
+    // so CLI, the sapiom_dev_agents_check MCP tool, and the dashboard canvas all inherit it.
+    const entryWarning = entryInputSchemaWarning(manifest as EntryContractManifest);
+    if (entryWarning) warnings.push(entryWarning);
 
     const steps = (manifest as { steps?: unknown }).steps;
     const stepCount = Array.isArray(steps) ? steps.length : Object.keys(steps ?? {}).length;

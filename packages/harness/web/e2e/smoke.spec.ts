@@ -764,15 +764,7 @@ test("rail tooltips fly to the right of the rail instead of covering sibling row
   expect(tipBox!.x).toBeGreaterThanOrEqual(railBox!.x + railBox!.width);
 });
 
-test("Open in editor lives on workspace rows and the session menu", async ({ page }) => {
-  // Workspace folder header hover action.
-  await page.getByTestId("workspace-group-acme-app").locator(".workspace-row-main").hover();
-  await expect(page.getByTestId("workspace-open-editor-acme-app")).toBeVisible();
-  await expect(page.getByTestId("workspace-open-editor-acme-app")).toHaveAttribute(
-    "aria-label",
-    "Open acme-app in editor",
-  );
-
+test("Open in editor lives on the session menu", async ({ page }) => {
   // Session ⋯ menu item.
   await page.getByTestId("session-menu").click();
   await expect(page.getByTestId("session-open-editor")).toBeVisible();

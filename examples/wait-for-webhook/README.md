@@ -29,6 +29,23 @@ Input: `{ "job": { ... }, "config": { "CALLBACK_REGISTER_URL": "...", "CALLBACK_
 With no `CALLBACK_REGISTER_URL` (or `DRY_RUN` set), `kickoff` runs offline via its
 `dryRun` guard.
 
+## Capping the wait (optional deadline)
+
+By default the pause waits **indefinitely** at $0 — that's the whole point. But a
+callback that never arrives would park the run forever. To bound it, set
+`config.CALLBACK_TIMEOUT_MS` to a positive number of milliseconds:
+
+```json
+{ "job": { ... }, "config": { "CALLBACK_REGISTER_URL": "...", "CALLBACK_TIMEOUT_MS": "86400000" } }
+```
+
+If no callback fires within that window, the engine's deadline sweep ends the run
+with a pause-timeout failure — an honest terminal state ("no callback within N")
+instead of a run parked forever. Leave `CALLBACK_TIMEOUT_MS` unset to keep the
+default indefinite wait. A non-numeric or non-positive value is rejected at
+`kickoff` (a silently-ignored cap would just reintroduce the forever-park it's
+meant to prevent).
+
 ## Run it with Claude + the Sapiom MCP
 
 1. Add the MCP:

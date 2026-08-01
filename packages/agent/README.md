@@ -56,6 +56,35 @@ A step declares the transitions it may take (`next` / `terminal` / `canFail` /
 undeclared transition is a compile error. The build reads those same declarations
 to render the orchestration graph without executing anything.
 
+## The entry input contract
+
+A step's `inputSchema` (a zod schema, imported from `zod/v4`) types and validates that
+step's input. The **entry step's `inputSchema` is special — it is the agent's public API**:
+the dashboard Run form, the trigger snippet, and the engine's pre-dispatch validation are
+all derived from it. Declare it on the entry step, with a `.default()` on each field so a
+zero-input run still validates:
+
+```ts
+import { defineStep, terminate } from "@sapiom/agent";
+import { z } from "zod/v4";
+
+const start = defineStep({
+  name: "start",
+  next: [],
+  terminal: true,
+  inputSchema: z.object({
+    repo: z.string().default("sapiom/sapiom"),
+  }),
+  // `input` is inferred + validated from inputSchema: { repo: string }
+  async run(input) {
+    return terminate({ scanned: input.repo });
+  },
+});
+```
+
+`inputSchema` on a non-entry step types that step's inbound payload the same way — including
+a **resumed** step's signal payload, shown next.
+
 ## Pausing on a long-running capability
 
 Some `ctx.sapiom` capabilities are **dispatched**: you launch them, they run far

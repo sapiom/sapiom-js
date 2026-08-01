@@ -1,0 +1,69 @@
+import type { Journey } from "./journeys";
+
+/**
+ * Declarative click attribution via autocapture data attributes (SAP-1988;
+ * ported from the web app's `frontend/src/lib/analytics/tracking-attrs.ts`).
+ *
+ * posthog-js collects any attribute named `data-ph-capture-attribute-<key>`
+ * into the `$autocapture` event as the property `<key>`, and it does so **while
+ * walking the clicked element's ancestor chain**, merging what it finds at every
+ * level. That ancestor merge is the whole design: context set once on a
+ * container is inherited by every click beneath it, so a surface gets full
+ * attribution with zero per-callsite tracking code.
+ *
+ * Two consequences worth knowing:
+ *
+ * - **Values must be strings.** The SDK skips non-string attribute values, so
+ *   everything here is coerced.
+ * - **The OUTERMOST element wins a key conflict** — not the nearest. Give each
+ *   level its own key: broad context (`journey`, `surface`) on containers,
+ *   specific context (`intent`, `object`) on the control. Never set the same key
+ *   at two depths.
+ */
+
+const ATTRIBUTE_PREFIX = "data-ph-capture-attribute-";
+
+export interface TrackingContext {
+  /**
+   * The arc of intent. Usually omitted — the current journey rides as a
+   * super-property (see events.ts `registerViewContext`). Set it explicitly only
+   * for UI that outlives its view (a global modal, a command palette) where the
+   * ambient view would misattribute the click.
+   */
+  readonly journey?: Journey;
+  /**
+   * The specific UI region, in snake_case: `agent_rail`, `run_canvas`,
+   * `secrets_panel`. The main dimension for "where did they click?"
+   */
+  readonly surface?: string;
+  /** The kind of entity being acted on: `session`, `template`, `secret`, `run`. */
+  readonly object?: string;
+  /**
+   * What the control is trying to do: `deploy`, `run`, `open_detail`,
+   * `set_secret`. Belongs on the control itself rather than a container.
+   */
+  readonly intent?: string;
+}
+
+/**
+ * Build the `data-ph-capture-attribute-*` props for a tracking context.
+ *
+ * Spread onto any element to attribute it and everything inside it:
+ *
+ * ```tsx
+ * <button {...trackingAttrs({ surface: "agent_rail", intent: "deploy" })}>Deploy</button>
+ * ```
+ *
+ * Undefined and empty values are omitted so they never land as the string
+ * `"undefined"` in analysis.
+ */
+export function trackingAttrs(context: TrackingContext): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  for (const [key, value] of Object.entries(context)) {
+    if (value === undefined || value === null) continue;
+    const stringValue = String(value);
+    if (stringValue.length === 0) continue;
+    attrs[`${ATTRIBUTE_PREFIX}${key}`] = stringValue;
+  }
+  return attrs;
+}

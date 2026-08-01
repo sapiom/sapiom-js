@@ -7,6 +7,7 @@ This project defines exactly one Sapiom agent in `index.ts` — **Wait-for-Webho
 - **`kickoff`** registers `{ executionId, signal, correlationId: ctx.executionId }` with the external job, then returns `pauseUntilSignal({ signal, resumeStep: "decide", correlationId: ctx.executionId })`. It also carries a static `pause: { signal, resumeStep: "decide" }` annotation — the build-time graph edge that must match the directive.
 - **`decide`** reads the callback payload **directly as its `run` input** — that's the signal payload the external world delivered. Everything else (config, job params, ids) is read back from `ctx.shared`, which survives the pause.
 - `pauseUntilSignal` is a **runtime primitive, not a metered capability**. The only billed call is the model summary in `decide` (`ctx.sapiom.models.run`, the live x402 path). Note: `ctx.sapiom.llm` does **not** exist — use `models.run`.
+- **Optional deadline.** The pause waits indefinitely by default. Passing `timeoutMs` caps it: with no callback in that window, the engine's deadline sweep fails the run (a pause-timeout terminal state) instead of parking it forever. `kickoff` reads it from `config.CALLBACK_TIMEOUT_MS` via `parseTimeoutMs` — absent ⇒ indefinite wait; invalid ⇒ a loud throw at `kickoff` (a silently-dropped cap would defeat the point).
 
 ## Authoring
 

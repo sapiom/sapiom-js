@@ -6,6 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * PR Review Bot — a coding agent reviews a pull request, then posts feedback.
@@ -268,8 +269,55 @@ function renderReview(pr: PrEvent, review: Review): string {
 }
 
 // ───────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `via` carries its default; the
+ * rest are optional (the resume payload — a PR webhook — supplies the PR).
+ */
+const repoRefSchema = z.object({
+  owner: z.string(),
+  name: z.string(),
+  cloneUrl: z.string().optional(),
+});
+const entryInput = z.object({
+  repo: repoRefSchema
+    .optional()
+    .describe("Repo the webhook watches and the agent reviews."),
+  via: z
+    .enum(["email", "slack"])
+    .default("email")
+    .describe("Where to deliver the review."),
+  to: z
+    .string()
+    .optional()
+    .describe("email: recipient address. slack: channel (#reviews or C0123)."),
+  samplePr: z
+    .object({
+      repo: repoRefSchema.optional(),
+      number: z.number().optional(),
+      title: z.string().optional(),
+      branch: z.string().optional(),
+      baseBranch: z.string().optional(),
+      author: z.string().optional(),
+      diff: z.string().optional(),
+      diffUrl: z.string().optional(),
+    })
+    .catchall(z.unknown())
+    .optional()
+    .describe(
+      "Optional sample PR used when the resume payload is empty (local runs).",
+    ),
+  config: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Absent (or DRY_RUN) ⇒ offline: skip registration and the real send.",
+    ),
+});
+
 const watch = defineStep({
   name: "watch",
+  inputSchema: entryInput,
   next: ["review"],
   // Static graph edge: on `SIGNAL`, resume at `review`. Must match the directive.
   pause: { signal: SIGNAL, resumeStep: "review" },

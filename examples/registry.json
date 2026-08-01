@@ -398,6 +398,62 @@
       ]
     },
     {
+      "id": "fan-out-and-combine",
+      "name": "Fan Out and Combine",
+      "description": "Split a goal into parts, run each part as its own child workflow in parallel, then merge the results into one answer.",
+      "tags": ["orchestration", "fan-out", "map-reduce", "agents"],
+      "category": "reliability-governance",
+      "discipline": "Reliability",
+      "cadence": "on-demand",
+      "complexity": "involved",
+      "sourcePath": "examples/fan-out-and-combine",
+      "capabilities": ["agents.run", "models.run"],
+      "steps": [
+        {
+          "name": "plan",
+          "description": "Resolve the goal, the parts to fan out, and the child workflow to run for each — this agent itself by default. A leaf handles one part; a dry run returns the plan.",
+          "kind": "compute",
+          "next": ["solve", "fanOut", "planned"]
+        },
+        {
+          "name": "solve",
+          "description": "Leaf role: analyse one part toward the goal with a model, then finish. A leaf never fans out, which bounds the recursion to one level.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": [],
+          "terminal": true
+        },
+        {
+          "name": "fanOut",
+          "description": "Launch one child run per part in parallel and wait for all of them; a child that fails becomes a row, not a crash.",
+          "kind": "capability",
+          "capability": "agents.run",
+          "next": ["reduce"]
+        },
+        {
+          "name": "reduce",
+          "description": "Merge the children's analyses into one answer. If nothing came back with content, say so rather than invent it.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": ["done"]
+        },
+        {
+          "name": "done",
+          "description": "Return the combined answer and each child's status.",
+          "kind": "compute",
+          "next": [],
+          "terminal": true
+        },
+        {
+          "name": "planned",
+          "description": "Off-ramp for a dry run: return the fan-out plan with nothing dispatched.",
+          "kind": "compute",
+          "next": [],
+          "terminal": true
+        }
+      ]
+    },
+    {
       "id": "hello-agent",
       "name": "Hello Agent",
       "description": "The smallest working Sapiom agent — one step that returns a greeting, so you can confirm build, deploy, and run before adding a real capability.",
@@ -494,6 +550,51 @@
           "description": "The ranked list ran out, or nobody could be contacted — hand off to a person.",
           "kind": "capability",
           "capability": "email.send",
+          "terminal": true
+        }
+      ]
+    },
+    {
+      "id": "logged-in-screenshots",
+      "name": "Logged-In Page Screenshots",
+      "description": "Open a real browser, optionally log in, and capture the pages you list as hosted images — the view a signed-in user sees.",
+      "tags": ["browser", "screenshot", "authenticated", "visual"],
+      "category": "reliability-governance",
+      "discipline": "Reliability",
+      "cadence": "on-demand",
+      "complexity": "simple",
+      "sourcePath": "examples/logged-in-screenshots",
+      "capabilities": [
+        "browser.identity",
+        "browser.session",
+        "browser.screenshot"
+      ],
+      "steps": [
+        {
+          "name": "start",
+          "description": "Resolve the pages to capture and decide whether to log in — a login needs a URL, a username, and the password secret; miss any and it captures the public view.",
+          "kind": "compute",
+          "next": ["login", "capture"]
+        },
+        {
+          "name": "login",
+          "description": "Store the supplied credentials as a browser identity so the session opens signed in. If it fails, fall back to a public capture.",
+          "kind": "capability",
+          "capability": "browser.identity",
+          "next": ["capture"]
+        },
+        {
+          "name": "capture",
+          "description": "Open one browser session and screenshot every page in it; a page that fails becomes a row, the rest are still captured.",
+          "kind": "capability",
+          "capability": "browser.session",
+          "next": ["done"]
+        },
+        {
+          "name": "done",
+          "description": "Return one row per requested page — its image URL or its failure — with the captured count and whether it was authenticated.",
+          "kind": "compute",
+          "next": [],
           "terminal": true
         }
       ]
@@ -821,62 +922,6 @@
         {
           "name": "failed",
           "description": "The send errored; return the error.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ]
-    },
-    {
-      "id": "preview-keep-alive",
-      "name": "Preview Uptime Monitor",
-      "description": "A cron heartbeat that checks a sandbox preview and, when it has gone down, redeploys it for you — no human needed.",
-      "tags": ["sandbox", "self-healing", "cron", "keep-alive"],
-      "category": "reliability-governance",
-      "discipline": "Reliability",
-      "cadence": "scheduled",
-      "complexity": "simple",
-      "sourcePath": "examples/preview-keep-alive",
-      "capabilities": [
-        "sandboxes.deployPreview",
-        "sandboxes.attach",
-        "database.get"
-      ],
-      "steps": [
-        {
-          "name": "check",
-          "description": "Fetch the preview's health path and send it on to heal only when the app is actually down. With no target given, provision one first.",
-          "kind": "compute",
-          "next": ["healthy", "heal", "provision"]
-        },
-        {
-          "name": "provision",
-          "description": "With no target given, create a small sandbox with a trivial health server in it, so the heal step has a real app to relaunch.",
-          "kind": "capability",
-          "capability": "sandboxes.create",
-          "next": ["heal", "heal_failed"]
-        },
-        {
-          "name": "healthy",
-          "description": "The app is already serving, so there's nothing to do. The run ends here.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "heal",
-          "description": "Re-attach the sandbox and redeploy the code already uploaded there, restarting it at the same URL. First assembles the startup env, adding a DATABASE_URL from a Postgres handle and any declared secrets the platform injected.",
-          "kind": "capability",
-          "capability": "sandboxes.deployPreview",
-          "next": ["healed", "heal_failed"]
-        },
-        {
-          "name": "healed",
-          "description": "The relaunch worked. Reports the URL and status.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "heal_failed",
-          "description": "The relaunch didn't work. Reports the deploy logs so you can see why.",
           "kind": "compute",
           "terminal": true
         }

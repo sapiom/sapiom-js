@@ -5651,6 +5651,19 @@ input {
   padding: var(--sp3) var(--modal-pad-x);
 }
 
+/* Keep each action button's label on one line and let the row wrap to stack
+   whole buttons when the dialog is narrow — otherwise flexbox shrinks them
+   below their content width and labels like "Start from a template" and
+   "Scaffold an agent here" break mid-word (the "no agent project" state). */
+.modal-add-workspace .modal-actions {
+  flex-wrap: wrap;
+}
+
+.modal-add-workspace .modal-actions > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* Harness dropdown: compact trigger in the footer — [brand icon][label]
    [caret], same anatomy as the composer's provider control. The menu itself
    is the shared popover recipe (see .harness-select-menu). */
@@ -6376,6 +6389,16 @@ input {
   font-size: var(--type-meta);
   color: var(--text-dim);
   line-height: 1.5;
+}
+
+/* The copy/setup-prompt buttons hold their size and keep their label on one
+   line; the descriptive text (flex 1, min-width 0) absorbs the row and wraps
+   instead, so "Copy setup prompt" never breaks onto three lines in the narrow
+   "no agent project" modal. Applies to the expandable per-agent list rows too. */
+.aw-mcp-row > .btn-ghost,
+.aw-mcp-list-row > .btn-ghost {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .aw-mcp-dim {

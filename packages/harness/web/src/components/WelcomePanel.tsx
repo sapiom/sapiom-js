@@ -13,6 +13,7 @@ import { recentWorkspaces, unlistedAgentCount } from "../lib/recent-workspaces";
 import { relativeTimeLabel } from "../lib/relative-time";
 import { loadUiPrefs } from "../lib/ui-prefs";
 import { useDismissable } from "../lib/use-dismissable";
+import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { Icon } from "./Icon";
 import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
 
@@ -61,6 +62,12 @@ interface WelcomePanelProps {
    * once. It used to select between two whole layouts.
    */
   firstRun: boolean;
+  /**
+   * Opt-in to sharing session detail with Sapiom (the invasive BQ tier). OFF by
+   * default — this is the first-run "setup screen" surface for it (SAP-1988).
+   */
+  telemetryOptIn: boolean;
+  onToggleTelemetry: (next: boolean) => Promise<void>;
 }
 
 /** How many workspace rows Overview shows before deferring to the rail.
@@ -105,6 +112,8 @@ export function WelcomePanel({
   onBrowseTemplates,
   onDismiss,
   firstRun,
+  telemetryOptIn,
+  onToggleTelemetry,
 }: WelcomePanelProps): JSX.Element {
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,7 +192,7 @@ export function WelcomePanel({
             <Icon name="X" size={14} />
           </button>
 
-          <div className="welcome-body">
+          <div className="welcome-body" {...trackingAttrs({ surface: "welcome" })}>
             {/* One greeting, two readings: "Welcome to" is a thing you say once.
                 This card used to fork into two whole layouts — a product pitch for
                 a first run, an Overview list for a return — which meant the
@@ -232,6 +241,7 @@ export function WelcomePanel({
                 className="btn-primary welcome-open-cta"
                 data-testid="welcome-start-project"
                 onClick={() => setModalOpen(true)}
+                {...trackingAttrs({ object: "workspace", intent: "open_folder" })}
               >
                 Open folder
               </button>
@@ -256,6 +266,7 @@ export function WelcomePanel({
                 className="btn-line welcome-open-cta"
                 data-testid="welcome-browse-templates"
                 onClick={onBrowseTemplates}
+                {...trackingAttrs({ object: "template", intent: "browse_templates" })}
               >
                 Browse templates
               </button>
@@ -270,6 +281,29 @@ export function WelcomePanel({
             >
               Read documentation <Icon name="ArrowUpRight" size={12} />
             </a>
+
+            {/* Setup-screen opt-in for the invasive Sapiom→BQ tier (SAP-1988):
+                off by default, framed by the benefit. The light product
+                analytics (clicks/journeys) is a separate on-by-default tier
+                managed in Settings; this toggle is only about sharing session
+                detail with Sapiom. */}
+            <label className="welcome-consent" data-testid="welcome-consent">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={telemetryOptIn}
+                data-testid="welcome-telemetry-toggle"
+                className={"toggle-switch" + (telemetryOptIn ? " is-on" : "")}
+                onClick={() => void onToggleTelemetry(!telemetryOptIn)}
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="welcome-consent-copy">
+                Help us optimize your experience — share your session details with
+                Sapiom so we can improve how the Studio works for you. Off by
+                default; change it anytime in Settings.
+              </span>
+            </label>
 
             {/* Where you have already been. Absent on a first run because there is
                 genuinely nothing to list — see lib/recent-workspaces.ts for why

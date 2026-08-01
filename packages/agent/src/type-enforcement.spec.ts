@@ -12,7 +12,9 @@
  *     through to the `run` return constraint end-to-end.
  */
 
-import { defineStep, fail, goto, pauseUntilSignal, retry, terminate } from './index.js';
+import { z } from 'zod/v4';
+
+import { defineAgent, defineStep, fail, goto, pauseUntilSignal, retry, terminate } from './index.js';
 import type { Allowed, Goto, Pause, Retry, Terminate } from './index.js';
 
 type Extends<A, B> = A extends B ? true : false;
@@ -102,9 +104,32 @@ function _smoke() {
   });
 }
 
+// ---- 3. defineAgent inputSchema → TInput inference -----------------------
+// Declaring the input contract at the agent level infers TInput from the zod
+// schema (no explicit generic), so the run(def, input) type is tied to the same
+// runtime schema that becomes the contract (SAP-2228). Checked by tsc via the
+// __inputType phantom that carries TInput.
+
+function _agentInputInference() {
+  const def = defineAgent({
+    name: 'wf',
+    entry: 'start',
+    inputSchema: z.object({ companyId: z.number() }),
+    steps: {
+      start: defineStep({ name: 'start', next: [], terminal: true, run: async () => terminate(null) }),
+    },
+  });
+  type Inferred = NonNullable<typeof def.__inputType>;
+  // TInput is inferred as exactly the schema's output type (both directions).
+  const _forward: Extends<Inferred, { companyId: number }> = true;
+  const _backward: Extends<{ companyId: number }, Inferred> = true;
+  return [_forward, _backward];
+}
+
 describe('type enforcement', () => {
   it('assignability table + defineStep smoke checks are validated by tsc --noEmit', () => {
     expect(TABLE).toHaveLength(9);
     expect(typeof _smoke).toBe('function');
+    expect(typeof _agentInputInference).toBe('function');
   });
 });

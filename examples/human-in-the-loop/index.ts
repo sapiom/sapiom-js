@@ -6,6 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Human-in-the-Loop Approval — the "ask before you commit/spend" pattern.
@@ -88,10 +89,10 @@ interface ParsedRequest {
 }
 
 interface EntryInput {
-  /** The natural-language request to fulfil (parsed by the model). */
-  request: string;
-  /** The pool of candidates to rank and offer to, in any order. */
-  candidates: Candidate[];
+  /** The natural-language request to fulfil (parsed by the model). Omit ⇒ the sample. */
+  request?: string;
+  /** The pool of candidates to rank and offer to, in any order. Omit ⇒ the sample. */
+  candidates?: Candidate[];
   /** Who approves before anything commits. Falls back to `config.APPROVER_EMAIL`. */
   approver?: string;
   /** Human channel to escalate to when the ranked list is exhausted. Falls back to `config.ESCALATION_EMAIL`. */
@@ -244,8 +245,55 @@ const SAMPLE_CANDIDATES: Candidate[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `request` and `candidates` stay
+ * optional so a zero-input run falls back to the built-in sample (and says so),
+ * rather than being rejected for missing fields.
+ */
+const entryInput = z.object({
+  request: z
+    .string()
+    .optional()
+    .describe(
+      "The natural-language request to fulfil (parsed by the model). Omit to use the built-in sample.",
+    ),
+  candidates: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        email: z.string().optional(),
+        attributes: z.record(z.string(), z.unknown()).optional(),
+      }),
+    )
+    .optional()
+    .describe("The pool of candidates to rank and offer to, in any order."),
+  approver: z
+    .string()
+    .optional()
+    .describe(
+      "Who approves before anything commits. Falls back to config.APPROVER_EMAIL.",
+    ),
+  escalateTo: z
+    .string()
+    .optional()
+    .describe(
+      "Human channel to escalate to when the ranked list is exhausted. Falls back to config.ESCALATION_EMAIL.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Compute + notify but never perform the irreversible commit."),
+  config: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe("String-only config bag (approver / escalation fallbacks)."),
+});
+
 const parse = defineStep({
   name: "parse",
+  inputSchema: entryInput,
   next: ["rank"],
   async run(input: EntryInput, ctx: Ctx) {
     const suppliedRequest = input.request?.trim() ?? "";

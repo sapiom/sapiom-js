@@ -17,6 +17,10 @@
 //   5. every template.json validates against examples/template.schema.json,
 //      including the declaration surface (requiredSecrets, settings,
 //      defaultInput, zeroSetup) — see scripts/examples-manifest-check.mjs.
+//   5b. the manifest's renderable projection (defaultInput / settings) only
+//      names paths the code's entry `inputSchema` declares — a projection onto
+//      a field the schema never declares is the drift SAP-2226 exists to catch.
+//      See scripts/examples-entry-schema-check.mjs.
 //   6. house-style copy rules the schemas cannot express — see
 //      scripts/examples-copy-check.mjs. (The length caps ARE in the schemas,
 //      as `maxLength`, so they surface through checks 1 and 5.)
@@ -42,6 +46,7 @@ import {
 } from "./examples-manifest-check.mjs";
 import { checkCopy } from "./examples-copy-check.mjs";
 import { checkDiscipline } from "./examples-discipline-check.mjs";
+import { checkEntrySchemaCoverage } from "./examples-entry-schema-check.mjs";
 import {
   complexityBandScore,
   scoreTemplateComplexity,
@@ -122,6 +127,16 @@ for (const t of templates) {
       existsSync(path.join(dir, seed)),
     ),
   );
+
+  // 5b. The manifest's renderable projection (defaultInput / settings) may only
+  // name paths the code's entry `inputSchema` declares — otherwise the shelf
+  // paints a field the run drops. The entry schema is read statically from
+  // index.ts; a template without one is read as `null` (source absent) below.
+  const indexPath = path.join(dir, "index.ts");
+  const indexSource = existsSync(indexPath)
+    ? readFileSync(indexPath, "utf8")
+    : null;
+  errors.push(...checkEntrySchemaCoverage(t.id, manifest, indexSource));
 
   manifests.set(t.id, manifest);
   manifestsChecked++;

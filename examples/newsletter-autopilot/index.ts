@@ -5,6 +5,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Newsletter Autopilot — a standing, self-writing newsletter.
@@ -218,12 +219,47 @@ function renderHtml(issue: Issue, headerImageUrl: string | null): string {
 }
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `niche` carries the sample as
+ * its `.default(...)` so a zero-input tick writes a real issue instead of being
+ * rejected for a missing field.
+ */
+const entryInput = z.object({
+  niche: z
+    .string()
+    .default(DEFAULT_NICHE)
+    .describe("The niche / topic to research and write about on each tick."),
+  newsletterName: z
+    .string()
+    .default(DEFAULT_NEWSLETTER_NAME)
+    .describe("Masthead shown in the subject and header."),
+  schedule: z
+    .string()
+    .optional()
+    .describe(
+      "Cron cadence this newsletter runs on (default weekly Monday 08:00).",
+    ),
+  subscribers: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Subscriber emails. Omit them and the issue is returned inline instead of sent.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Write + render the issue but skip the real send."),
+});
+
 const search = defineStep({
   name: "search",
+  inputSchema: entryInput,
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
-    const suppliedNiche = input.niche?.trim() ?? "";
-    const niche = suppliedNiche || DEFAULT_NICHE;
+    // The schema fills `niche` with DEFAULT_NICHE on a zero-input tick, so the
+    // value — not its absence — is what tells us the default niche was used.
+    const niche = input.niche?.trim() || DEFAULT_NICHE;
     ctx.shared.set("niche", niche);
     ctx.shared.set(
       "newsletterName",
@@ -237,7 +273,7 @@ const search = defineStep({
         : [],
     );
     ctx.shared.set("dryRun", input.dryRun === true);
-    if (!suppliedNiche) {
+    if (niche === DEFAULT_NICHE) {
       ctx.shared.set(
         "note",
         `Wrote about the default niche ("${DEFAULT_NICHE}"). Pass a \`niche\` to write about yours.`,

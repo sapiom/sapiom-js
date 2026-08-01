@@ -6,6 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Scheduled Compliance Audit + Attestation — the recurring "prove we're still
@@ -219,8 +220,54 @@ const SAMPLE_RESOURCES: ResourceRef[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────── steps ──
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `policy` carries the sample as
+ * its `.default(...)` and `resources` defaults to an empty set, so a zero-input
+ * run audits the built-in sample policy and evidence.
+ */
+const entryInput = z.object({
+  resources: z
+    .array(
+      z.object({
+        id: z.string(),
+        url: z.string(),
+        label: z.string().optional(),
+      }),
+    )
+    .default([])
+    .describe("The resources/config to collect and audit on each tick."),
+  policy: z
+    .string()
+    .default(SAMPLE_POLICY)
+    .describe(
+      "The policy the collected state is checked against (free text or rules).",
+    ),
+  schedule: z
+    .string()
+    .optional()
+    .describe('Cron cadence this audit runs on (e.g. "0 6 * * 1").'),
+  framework: z
+    .string()
+    .optional()
+    .describe(
+      'Compliance framework label for the attestation title (e.g. "SOC 2 CC6").',
+    ),
+  signOffBy: z
+    .string()
+    .optional()
+    .describe(
+      "Who is expected to sign off; recorded in the attestation. Informational.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Compute + pause but never perform the real archive upload."),
+});
+
 const collect = defineStep({
   name: "collect",
+  inputSchema: entryInput,
   next: ["audit"],
   async run(input: EntryInput, ctx: Ctx) {
     const suppliedPolicy = input.policy?.trim() ?? "";

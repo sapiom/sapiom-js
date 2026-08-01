@@ -5,6 +5,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { z } from "zod/v4";
 
 /**
  * Natural-Language DB Query Endpoint — deploy a live HTTP endpoint that turns a
@@ -349,8 +350,62 @@ const SERVER_PACKAGE_JSON = JSON.stringify(
 // ──────────────────────────────────────────────────────────────── steps ──
 
 /** Validate the input and resolve config. Missing DB target → rejected. */
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. Every field is optional: with no
+ * `dbHandle`/`connectionString` the run uses the managed demo database and its
+ * seeded read-only dataset.
+ */
+const entryInput = z.object({
+  dbHandle: z
+    .string()
+    .optional()
+    .describe(
+      "Sapiom-managed Postgres handle; its connection string is injected as DATABASE_URL.",
+    ),
+  connectionString: z
+    .string()
+    .optional()
+    .describe("Explicit Postgres connection string (overrides dbHandle)."),
+  sandboxName: z
+    .string()
+    .optional()
+    .describe(
+      "Sandbox name to host the endpoint (default nl-db-query-endpoint).",
+    ),
+  sampleQuestion: z
+    .string()
+    .optional()
+    .describe(
+      "A question used to preview the translate → guard path before deploying.",
+    ),
+  model: z
+    .string()
+    .optional()
+    .describe("LLM model / routing alias override for the translation."),
+  maxRows: z
+    .number()
+    .optional()
+    .describe("Max rows the endpoint returns per query (default 100)."),
+  port: z
+    .number()
+    .optional()
+    .describe("Port the endpoint listens on (default 3000)."),
+  sapiomApiKey: z
+    .string()
+    .optional()
+    .describe(
+      "Dev-only fallback: inject the server's SAPIOM_API_KEY directly.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Assemble everything but skip the real deployPreview."),
+});
+
 const validate = defineStep({
   name: "validate",
+  inputSchema: entryInput,
   next: ["resolve", "rejected"],
   async run(input: EntryInput, ctx: Ctx) {
     const config = resolveConfig(input);

@@ -11,13 +11,17 @@ went silent). Inside a step's `run`, Sapiom capabilities are pre-auth'd on
 ## The sign-off spine
 
 - **`present`** records the current gate as `pending`, emails the approver, then
-  returns `pauseUntilSignal({ signal: "approval.decision", resumeStep: "decide", correlationId: ctx.executionId, timeoutMs })`.
+  returns `pauseUntilSignal({ signal: "approval.decision", resumeStep: "decide", correlationId: ctx.executionId })`.
   It carries a static `pause: { signal, resumeStep: "decide" }` annotation — the
-  build-time graph edge that must match the directive.
+  build-time graph edge that must match the directive. **No `timeoutMs`:** the
+  engine's paused-run reaper *terminates* a lapsed pause (`PauseTimeoutError`)
+  instead of resuming it, so a gate deadline would hard-fail a slow approval and
+  skip `escalate`. The gates wait indefinitely; the reminder/escalation cadence
+  comes from the signal (see below), never the engine deadline.
 - **`decide`** reads the approval payload **directly as its `run` input**. Safe
   default: only an explicit `{ decision: "approve" }` advances; `reject`
   compensates; `timeout` escalates; anything else (including a `run_local` resume
-  with no payload, or the engine firing the pause `timeoutMs`) is a **reminder
+  with no payload, or an explicit `{ decision: "remind" }`) is a **reminder
   tick**. The gate index, reminder count, recorded approvals, and audit trail all
   live in `ctx.shared` and survive every pause.
 - **`remind`** re-notifies the current approver and re-pauses on the same gate

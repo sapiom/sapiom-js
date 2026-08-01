@@ -45,6 +45,9 @@ import { historyDirs } from "./lib/history-meta";
 import { resolveProjectRoot } from "./lib/project-dir";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
+import { initAnalytics } from "./lib/analytics/posthog";
+import { registerViewContext, track as trackProduct } from "./lib/analytics/events";
+import type { HarnessView } from "./lib/analytics/journeys";
 import { resolveMacroUrl } from "./lib/macro-gating";
 import { directActionKind } from "./lib/macro-actions";
 import { sessionDisplayName } from "./lib/session-name";
@@ -213,6 +216,41 @@ export const App = (): JSX.Element => {
     setFocusedAgentPath(boundWorkflowPathOf(active) ?? harness.state.workflows[0]?.path ?? null);
   }, [harness.state, harness.activeSessionId]);
 
+  // Client PostHog (SAP-1988): init once state is known and re-sync identity +
+  // consent whenever they change. initAnalytics is idempotent and gates itself
+  // on the two consent tiers, so this is safe to call on every relevant change.
+  const st = harness.state;
+  useEffect(() => {
+    if (st) initAnalytics(st);
+  }, [
+    st,
+    st?.authenticated,
+    st?.userId,
+    st?.tenantId,
+    st?.consentSource,
+    st?.productAnalyticsOptIn,
+    st?.version,
+  ]);
+
+  // Stamp the current journey + view as PostHog super-properties so autocapture
+  // clicks group by arc of intent (the harness's replacement for the web app's
+  // pathname-derived journey — it has no router).
+  useEffect(() => {
+    if (!st) return;
+    const active = st.sessions.find((session) => session.id === harness.activeSessionId);
+    const view: HarnessView = {
+      firstRun: st.firstRun === true,
+      settingsOpen,
+      templatesOpen,
+      hasLiveSession: st.sessions.some((session) => session.status !== "exited"),
+      // Reviewing a finished session (active session has exited) is the observe
+      // arc — without this the dead-session view falls through to `unknown`.
+      inspectingDeadSession: active?.status === "exited",
+      rightTab,
+    };
+    registerViewContext(view);
+  }, [st, harness.activeSessionId, settingsOpen, templatesOpen, rightTab]);
+
   // Crossing the breakpoint resets both panes to that mode's default.
   const prevMobile = useRef(isMobile);
   useEffect(() => {
@@ -339,6 +377,7 @@ export const App = (): JSX.Element => {
     closeMobileDrawer();
     const session = await harness.createSession({ cwd, harness: agentHarness });
     track("session.created");
+    trackProduct("session.started", { harness_kind: agentHarness, origin: "user" });
     return session;
   };
 
@@ -664,7 +703,6 @@ export const App = (): JSX.Element => {
           onBrowseTemplates={() => setTemplatesOpen(true)}
           templatesActive={templatesOpen}
           onScanWorkflows={handleScanWorkflows}
-          onOpenInEditor={openInEditor}
           onToast={harness.showToast}
           telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
           consentSource={state.consentSource}
@@ -673,6 +711,10 @@ export const App = (): JSX.Element => {
           organizationName={state.organizationName}
           onToggleTelemetry={async (next) => {
             await harness.updateSettings({ telemetryOptIn: next });
+          }}
+          productAnalyticsOptIn={state.productAnalyticsOptIn}
+          onToggleProductAnalytics={async (next) => {
+            await harness.updateSettings({ productAnalyticsOptIn: next });
           }}
           rollingSummary={harness.settings?.rollingSummary === true}
           onToggleRollingSummary={async (next) => {
@@ -1051,6 +1093,10 @@ export const App = (): JSX.Element => {
           }}
           onDismiss={dismissWelcome}
           firstRun={state.firstRun === true}
+          telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+          onToggleTelemetry={async (next) => {
+            await harness.updateSettings({ telemetryOptIn: next });
+          }}
         />
       )}
 

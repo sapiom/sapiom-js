@@ -37,9 +37,8 @@ start → present ─(pause: approval.decision, $0 while idle)─▶ decide
      (`present`), or `finalize` on the last gate.
    - `{ "decision": "reject" }` → `compensate`.
    - `{ "decision": "timeout" }` → `escalate` immediately.
-   - anything else (no decision, `remind`, or a pause-timeout / `run_local`
-     auto-resume) → a reminder tick: `remind` while the reminder budget lasts,
-     else `escalate`.
+   - anything else (no decision, `remind`, or a `run_local` auto-resume) → a
+     reminder tick: `remind` while the reminder budget lasts, else `escalate`.
 4. **remind** — email a reminder to the current approver, then pause again on the
    same gate (`resumeStep: "decide"`).
 5. **finalize** — the single irreversible action, reached **only after every party
@@ -52,6 +51,28 @@ The canonical chain state lives in `ctx.shared` (it survives every pause). When 
 `ledgerHandle` is configured, each transition is also appended to a durable
 Postgres table (`approval_chain_ledger`) via `ctx.sapiom.database` — a best-effort
 external audit copy that never blocks the chain.
+
+## Reminders, escalation, and why the gates wait forever
+
+Each gate pauses **indefinitely** at $0 — it carries no pause `timeoutMs`. That is
+deliberate: the engine has a paused-run reaper that *terminates* a lapsed pause
+with a `PauseTimeoutError` (it does not resume the step), so a deadline here would
+silently fail any approval slower than the deadline and never run the graceful
+`escalate` step. A legitimately slow approver must not lose the run.
+
+Reminders and escalation are therefore driven entirely by the `approval.decision`
+signal, not by an engine deadline:
+
+- the run-detail **one-click Approve/Reject** (a human acting whenever they get to it),
+- a **cron** you wire to fire `{ "decision": "remind" }` on a cadence, escalating
+  to `{ "decision": "timeout" }` when you want to give up, or
+- a `run_local` **auto-resume** (offline), which fires an empty payload and so
+  walks `remind` → … → `escalate` for free.
+
+`maxReminders` (default 2) bounds how many reminder ticks a gate takes before it
+escalates. (The mirror template `wait-for-webhook` *wants* the terminal timeout and
+so opts into `timeoutMs`; this chain wants a reminder, so it must not — don't add a
+gate `timeoutMs` back without switching to that terminal model.)
 
 Input:
 

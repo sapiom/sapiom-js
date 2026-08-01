@@ -7,6 +7,7 @@ import {
   type AgentExecutionContext,
 } from "@sapiom/agent";
 import { VIDEO_RESULT_SIGNAL, type VideoResultPayload } from "@sapiom/tools";
+import { z } from "zod/v4";
 
 /**
  * Content Repurposing Pipeline — one long-form source into a multi-channel pack.
@@ -76,8 +77,8 @@ interface Clip {
 
 /** Trigger input. Only `source` is required. */
 interface RepurposeInput {
-  /** The blog post or transcript to repurpose (raw text). */
-  source: string;
+  /** The blog post or transcript to repurpose (raw text). Omit ⇒ the sample. */
+  source?: string;
   /** Optional title/topic for context in the generated copy. */
   title?: string;
   /** Who the content is for; steers tone (default a general professional audience). */
@@ -381,8 +382,60 @@ function renderPackMarkdown(
   ].join("\n");
 }
 
+/**
+ * The entry contract — this agent's public API, and what the dashboard "Run
+ * once" form renders its labelled fields from. `source` stays optional so the
+ * tri-state holds: omitted ⇒ repurpose the built-in sample, explicitly empty ⇒
+ * a reported mistake, present ⇒ repurpose it.
+ */
+const entryInput = z.object({
+  source: z
+    .string()
+    .optional()
+    .describe(
+      "The blog post or transcript to repurpose (raw text). Omit to use the built-in sample.",
+    ),
+  title: z
+    .string()
+    .optional()
+    .describe("Optional title/topic for context in the generated copy."),
+  audience: z
+    .string()
+    .optional()
+    .describe(
+      "Who the content is for; steers tone (default a general professional audience).",
+    ),
+  numQuotes: z
+    .number()
+    .default(2)
+    .describe("How many quote graphics to make (clamped 1–4)."),
+  deliverTo: z
+    .string()
+    .optional()
+    .describe(
+      "Recipient email. Omit it and the pack is returned inline instead of emailed.",
+    ),
+  schedule: z
+    .string()
+    .optional()
+    .describe("Cron cadence this pipeline runs on (carried + reported)."),
+  model: z
+    .string()
+    .optional()
+    .describe(
+      "Optional image-to-video model id, passed through to video.launch.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "Generate the copy only — skip graphics, clip, upload, and email.",
+    ),
+});
+
 const repurpose = defineStep({
   name: "repurpose",
+  inputSchema: entryInput,
   next: ["graphics"],
   terminal: true,
   async run(input: RepurposeInput, ctx: Ctx) {
@@ -397,7 +450,8 @@ const repurpose = defineStep({
       });
     }
     const usedSampleSource = input.source === undefined;
-    const source = usedSampleSource ? SAMPLE_SOURCE : input.source.trim();
+    const source =
+      input.source === undefined ? SAMPLE_SOURCE : input.source.trim();
     if (usedSampleSource) {
       ctx.shared.set(
         "note",

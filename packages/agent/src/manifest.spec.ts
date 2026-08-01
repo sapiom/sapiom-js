@@ -338,6 +338,34 @@ describe("buildManifest", () => {
     expect(stepSchema.required).toContain("runId");
   });
 
+  it("agent-level inputSchema is carried on the entry step's manifest schema", () => {
+    // An agent that declares only `defineAgent({ inputSchema })` — the entry
+    // step declares no schema of its own. The manifest's entry step must still
+    // carry the JSON Schema so the dashboard can render its fields (SAP-2228).
+    const schema = z.object({ companyId: z.number(), region: z.string() });
+    const def = defineAgent({
+      name: "wf",
+      entry: "gather",
+      inputSchema: schema,
+      steps: { gather: makeStep("gather") },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    const stepSchema = manifest.steps.gather.inputSchema;
+    expect(stepSchema).not.toBeNull();
+    expect(stepSchema?.type).toBe("object");
+    expect(
+      (stepSchema?.properties as Record<string, unknown>)?.companyId,
+    ).toBeDefined();
+    expect(
+      (stepSchema?.properties as Record<string, unknown>)?.region,
+    ).toBeDefined();
+    // Produces a manifest that still validates against the schema.
+    expect(() => agentManifestSchema.parse(manifest)).not.toThrow();
+  });
+
   it("manifest validates against agentManifestSchema", () => {
     const inputSchema = z.object({ input: z.string() });
     const def = defineAgent({

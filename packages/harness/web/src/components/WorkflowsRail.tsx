@@ -78,17 +78,17 @@ interface WorkflowsRailProps {
   /** True while that destination is the visible view, so the nav row can say so. */
   templatesActive: boolean;
   onScanWorkflows: (root: string) => Promise<number>;
-  /** Opens a project in the user's editor — URL scheme, cwd-scoped. */
-  onOpenInEditor: (path: string) => void;
   /** Push a message onto the app's toast rail (copy confirmations etc.). */
   onToast: (message: string) => void;
   telemetryOptIn: boolean;
+  productAnalyticsOptIn: boolean;
   rollingSummary: boolean;
   consentSource?: AppState["consentSource"];
   consentEnvReason?: string | null;
   authenticated: boolean;
   organizationName: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  onToggleProductAnalytics: (next: boolean) => Promise<void>;
   onToggleRollingSummary: (next: boolean) => Promise<void>;
   /** Kick off the browser OAuth flow for the in-app Connect button. */
   onStartAuth: () => Promise<AuthStartResponse>;
@@ -104,22 +104,20 @@ const SHORTCUT_HINT = IS_MAC ? "⌘K" : "Ctrl+K";
 /**
  * LEVEL 1 workspace folder header: a quiet, non-interactive-to-open label
  * that only groups the agents beneath it. The main button toggles collapse;
- * trailing hover actions (copy path, open in editor) act on the folder. It
- * never focuses an agent — that is the agent rows' job.
+ * a trailing hover action (copy path) acts on the folder. It never focuses an
+ * agent — that is the agent rows' job.
  */
 function FolderHeader({
   label,
   cwd,
   collapsed,
   onToggleCollapsed,
-  onOpenInEditor,
   onCopyPath,
 }: {
   label: string;
   cwd: string;
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  onOpenInEditor: (path: string) => void;
   onCopyPath: (path: string) => void;
 }): JSX.Element {
   return (
@@ -144,15 +142,6 @@ function FolderHeader({
       >
         <Icon name="Copy" size={13} />
       </button>
-      <button
-        className="workspace-row-action"
-        data-testid={`workspace-open-editor-${label}`}
-        aria-label={`Open ${label} in editor`}
-        data-tooltip="Open in editor"
-        onClick={() => onOpenInEditor(cwd)}
-      >
-        <Icon name="Code" size={13} />
-      </button>
     </div>
   );
 }
@@ -170,7 +159,6 @@ function BareFolderRow({
   isFocused,
   onFocus,
   onScaffold,
-  onOpenInEditor,
   onCopyPath,
 }: {
   label: string;
@@ -179,7 +167,6 @@ function BareFolderRow({
   isFocused: boolean;
   onFocus: (path: string) => void;
   onScaffold: (sessionId: string) => void;
-  onOpenInEditor: (path: string) => void;
   onCopyPath: (path: string) => void;
 }): JSX.Element {
   return (
@@ -206,15 +193,6 @@ function BareFolderRow({
         onClick={() => onScaffold(sessionId)}
       >
         <Icon name="Sparkles" size={13} />
-      </button>
-      <button
-        className="workspace-row-action"
-        data-testid={`workspace-open-editor-${label}`}
-        aria-label={`Open ${label} in editor`}
-        data-tooltip="Open in editor"
-        onClick={() => onOpenInEditor(cwd)}
-      >
-        <Icon name="Code" size={13} />
       </button>
       <button
         className="workspace-row-action"
@@ -326,15 +304,16 @@ export function WorkflowsRail({
   onBrowseTemplates,
   templatesActive,
   onScanWorkflows,
-  onOpenInEditor,
   onToast,
   telemetryOptIn,
+  productAnalyticsOptIn,
   rollingSummary,
   consentSource,
   consentEnvReason,
   authenticated,
   organizationName,
   onToggleTelemetry,
+  onToggleProductAnalytics,
   onToggleRollingSummary,
   onStartAuth,
   onDisconnect,
@@ -675,7 +654,6 @@ export function WorkflowsRail({
                     isFocused={workspace.cwd === focusedAgentPath}
                     onFocus={onFocusAgent}
                     onScaffold={onScaffoldInSession}
-                    onOpenInEditor={onOpenInEditor}
                     onCopyPath={copyPath}
                   />
                 </div>
@@ -688,7 +666,6 @@ export function WorkflowsRail({
                   cwd={workspace.cwd}
                   collapsed={collapsed}
                   onToggleCollapsed={() => toggleCollapsed(workspace.cwd)}
-                  onOpenInEditor={onOpenInEditor}
                   onCopyPath={copyPath}
                 />
                 {!collapsed &&
@@ -734,10 +711,12 @@ export function WorkflowsRail({
           authenticated={authenticated}
           organizationName={organizationName}
           telemetryOptIn={telemetryOptIn}
+          productAnalyticsOptIn={productAnalyticsOptIn}
           rollingSummary={rollingSummary}
           consentSource={consentSource}
           consentEnvReason={consentEnvReason}
           onToggleTelemetry={onToggleTelemetry}
+          onToggleProductAnalytics={onToggleProductAnalytics}
           onToggleRollingSummary={onToggleRollingSummary}
           onStartAuth={onStartAuth}
           onDisconnect={onDisconnect}
@@ -808,10 +787,12 @@ function ProfileRow({
   authenticated,
   organizationName,
   telemetryOptIn,
+  productAnalyticsOptIn,
   rollingSummary,
   consentSource,
   consentEnvReason,
   onToggleTelemetry,
+  onToggleProductAnalytics,
   onToggleRollingSummary,
   onStartAuth,
   onDisconnect,
@@ -824,10 +805,12 @@ function ProfileRow({
   authenticated: boolean;
   organizationName: string | null;
   telemetryOptIn: boolean;
+  productAnalyticsOptIn: boolean;
   rollingSummary: boolean;
   consentSource?: AppState["consentSource"];
   consentEnvReason?: string | null;
   onToggleTelemetry: (next: boolean) => Promise<void>;
+  onToggleProductAnalytics: (next: boolean) => Promise<void>;
   onToggleRollingSummary: (next: boolean) => Promise<void>;
   onStartAuth: () => Promise<AuthStartResponse>;
   onDisconnect: () => Promise<void>;
@@ -937,10 +920,12 @@ function ProfileRow({
           authenticated={authenticated}
           organizationName={organizationName}
           telemetryOptIn={telemetryOptIn}
+          productAnalyticsOptIn={productAnalyticsOptIn}
           rollingSummary={rollingSummary}
           consentSource={consentSource}
           consentEnvReason={consentEnvReason}
           onToggleTelemetry={onToggleTelemetry}
+          onToggleProductAnalytics={onToggleProductAnalytics}
           onToggleRollingSummary={onToggleRollingSummary}
           onStartAuth={onStartAuth}
           onDisconnect={onDisconnect}

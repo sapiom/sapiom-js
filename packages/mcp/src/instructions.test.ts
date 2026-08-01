@@ -45,4 +45,12 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("api.sapiom.ai/v1/mcp");
     expect(AUTHORING_INSTRUCTIONS).toContain("tool_discover");
   });
+
+  it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
+    // The primer is the only always-in-context surface, so authors learn the entry
+    // contract here. Kept byte-identical to the backend DEFAULT_MCP_INSTRUCTIONS copy.
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "entry step's `inputSchema` is the agent's public API",
+    );
+  });
 });

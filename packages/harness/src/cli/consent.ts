@@ -1,29 +1,27 @@
 import * as readline from "node:readline/promises";
 import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 
-// Early-access phase: default to opted in (matches the on-by-default prompt
-// below and the non-TTY fallback) — intentional for the early-access phase;
-// flip for a wider release.
-//
-// Pre-wider-release checklist: revisit the non-TTY silent opt-in below.
-// The current default (true) is intentional for the early-access phase;
-// for a wider/public release the conservative choice is false (opt-out by
-// default) so users who never see a TTY (CI, Docker, headless environments)
-// are not silently opted in.
-// See also the first-run UI notice wiring in web/src/components/TelemetryNotice.tsx,
-// which surfaces this path to interactive users who did get the default.
-const DEFAULT_TELEMETRY_OPT_IN = true;
+// Opt-OUT by default (SAP-1988): this gates the *invasive* Sapiom→BigQuery
+// telemetry (prompt text + tool calls + session detail). Silently shipping
+// that from a tool running on someone's desktop is a reputation risk, so the
+// conservative default is off — users who never see a TTY (CI, Docker,
+// headless) are never silently opted in, and interactive users are asked with
+// a benefit-framed prompt. (Light, non-content PostHog product analytics is a
+// separate, on-by-default tier — see HarnessSettings.productAnalyticsOptIn.)
+// The first-run UI opt-in lives in web/src/components/WelcomePanel.tsx.
+const DEFAULT_TELEMETRY_OPT_IN = false;
 
 const CONSENT_COPY = `
-Sapiom Studio collects usage analytics locally and, with telemetry on,
-sends them to Sapiom to improve the product:
-  - the prompts you send and the tool calls your agent makes
-  - session start/stop lifecycle events
-This is always written locally to ~/.sapiom/harness/events.ndjson for your
-own inspection.
+Help us optimize your Studio experience.
 
-Telemetry is ON to help us improve (opt out anytime in the app's settings
-gear, or run with --no-telemetry).
+With your permission, Sapiom Studio shares your session details — the prompts
+you send, the tool calls your agent makes, and session lifecycle events — so we
+can see where the product gets in your way and improve it for you.
+
+This is always written locally to ~/.sapiom/harness/events.ndjson for your own
+inspection, whether or not you opt in. Sharing with Sapiom is OFF by default;
+turn it on anytime in the app's settings gear (or keep it off with
+--no-telemetry / SAPIOM_TELEMETRY_DISABLED=1).
 `.trim();
 
 async function promptConsent(): Promise<boolean> {
@@ -42,7 +40,7 @@ async function promptConsent(): Promise<boolean> {
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = (await rl.question("Keep it on? [Y/n] ")).trim().toLowerCase();
+    const answer = (await rl.question("Share session details with Sapiom? [y/N] ")).trim().toLowerCase();
     if (answer === "") return DEFAULT_TELEMETRY_OPT_IN;
     return answer === "y" || answer === "yes";
   } finally {

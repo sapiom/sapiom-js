@@ -10,6 +10,8 @@
  *      StepLogger interface is accepted (validates the structural design)
  */
 
+import { z } from 'zod/v4';
+
 import {
   DIRECTIVE_KIND,
   InMemoryContextStore,
@@ -159,6 +161,138 @@ describe('defineAgent', () => {
     // A plain-JSON copy (simulating what JSON.stringify/parse produces) lacks the brand.
     const copy = JSON.parse(JSON.stringify({ name: def.name, entry: def.entry, steps: {} }));
     expect(isAgentDefinition(copy)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. defineAgent — agent-level inputSchema (the first-class input contract)
+// ---------------------------------------------------------------------------
+
+describe('defineAgent agent-level inputSchema', () => {
+  const contract = z.object({ companyId: z.number() });
+
+  /** An entry step that declares no inputSchema of its own. */
+  function entryWithoutSchema(name: string) {
+    return defineStep({
+      name,
+      next: [],
+      terminal: true,
+      async run() {
+        return terminate(null);
+      },
+    });
+  }
+
+  /** An entry step that declares its own inputSchema. */
+  function entryWithSchema(name: string, schema: z.ZodType) {
+    return defineStep({
+      name,
+      next: [],
+      terminal: true,
+      inputSchema: schema,
+      async run() {
+        return terminate(null);
+      },
+    });
+  }
+
+  it('folds the agent-level schema onto an entry step that declares none', () => {
+    const entry = entryWithoutSchema('start');
+    const def = defineAgent({
+      name: 'wf',
+      entry: 'start',
+      inputSchema: contract,
+      steps: { start: entry },
+    });
+    // The entry step now carries the agent-level schema.
+    expect(def.steps.start.inputSchema).toBe(contract);
+  });
+
+  it('leaves an entry step that declares the identical schema object untouched (no conflict)', () => {
+    const entry = entryWithSchema('start', contract);
+    const def = defineAgent({
+      name: 'wf',
+      entry: 'start',
+      inputSchema: contract,
+      steps: { start: entry },
+    });
+    expect(def.steps.start).toBe(entry);
+    expect(def.steps.start.inputSchema).toBe(contract);
+  });
+
+  it('throws a clear error when agent-level and entry-step schemas conflict', () => {
+    const entrySchema = z.object({ topic: z.string() });
+    expect(() =>
+      defineAgent({
+        name: 'wf',
+        entry: 'start',
+        inputSchema: contract,
+        steps: { start: entryWithSchema('start', entrySchema) },
+      }),
+    ).toThrow(/declares a different inputSchema at the agent level and on its entry step 'start'/);
+  });
+
+  it('does not mutate a steps object shared across two defineAgent calls', () => {
+    // Both agents are built from the SAME steps object literal. Folding the
+    // agent-level schema onto the first must NOT rewrite the entry step the
+    // second reads (copy-on-write, not in-place mutation).
+    const start = entryWithoutSchema('start');
+    const shared = { start };
+    const withSchema = defineAgent({
+      name: 'with',
+      entry: 'start',
+      inputSchema: contract,
+      steps: shared,
+    });
+    const without = defineAgent({
+      name: 'without',
+      entry: 'start',
+      steps: shared,
+    });
+    // The first agent folded the contract onto its own (fresh) entry step...
+    expect(withSchema.steps.start.inputSchema).toBe(contract);
+    // ...but the shared object and the second agent are untouched.
+    expect(shared.start).toBe(start);
+    expect(shared.start.inputSchema).toBeUndefined();
+    expect(without.steps.start.inputSchema).toBeUndefined();
+  });
+
+  it('does not mutate a frozen steps map (folds via copy, no TypeError)', () => {
+    const frozen = Object.freeze({ start: entryWithoutSchema('start') });
+    const def = defineAgent({
+      name: 'wf',
+      entry: 'start',
+      inputSchema: contract,
+      steps: frozen,
+    });
+    expect(def.steps.start.inputSchema).toBe(contract);
+    // The original frozen map is left as-is.
+    expect(frozen.start.inputSchema).toBeUndefined();
+  });
+
+  it('does not touch non-entry steps', () => {
+    const entry = entryWithoutSchema('start');
+    const second = entryWithoutSchema('second');
+    const def = defineAgent({
+      name: 'wf',
+      entry: 'start',
+      inputSchema: contract,
+      steps: { start: entry, second },
+    });
+    expect(def.steps.second.inputSchema).toBeUndefined();
+    expect(def.steps.second).toBe(second);
+  });
+
+  it('is a no-op when no agent-level schema is declared (back-compat)', () => {
+    const entry = entryWithSchema('start', contract);
+    const def = defineAgent({
+      name: 'wf',
+      entry: 'start',
+      steps: { start: entry },
+    });
+    // Entry step reference and its own schema are preserved unchanged.
+    expect(def.steps.start).toBe(entry);
+    expect(def.steps.start.inputSchema).toBe(contract);
   });
 });
 
