@@ -20,7 +20,7 @@
     }
   ],
   "defaultInput": {
-    "companyName": "Sapiom"
+    "companyName": "Nvidia"
   },
   "examples": [
     {
@@ -55,15 +55,20 @@
       },
       "output": {
         "status": "no-news",
-        "companyName": "Polsia"
+        "published": false,
+        "companyName": "Polsia",
+        "articles": [],
+        "note": "No recent news turned up for \"Polsia\", so nothing was published. Point it at a company with coverage in the last week."
       }
     }
   ],
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [
-      { "path": "status", "assert": "nonEmptyString" }
+      { "path": "status", "assert": "equals", "value": "published" },
+      { "path": "siteUrl", "assert": "nonEmptyString" },
+      { "path": "articles", "assert": "nonEmptyArray" }
     ],
-    "narrative": "Searches the web for the company's recent news and publishes an illustrated roundup page; with no recent news it honestly reports no-news."
+    "narrative": "Searches the web for a well-covered default company and publishes a dated, illustrated roundup page at a live sandbox URL; a company with no recent coverage ends in a distinct no-news terminal instead."
   }
 }

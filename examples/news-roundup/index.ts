@@ -26,17 +26,17 @@ import type {
 } from "./lib/types.js";
 import { slugify, todayIso } from "./lib/util.js";
 
-// The default makes a zero-input run real rather than a schema rejection: the
-// search is a live one, just about us until you point it at your own company.
+// The default makes a zero-input run real rather than a schema rejection: it
+// searches a reliably-covered brand, so a zero-input run finds selectable news and
+// publishes a real page — until you point it at your own company.
 const entryInput = z.object({
-  companyName: z.string().min(1).default("Sapiom"),
+  companyName: z.string().min(1).default("Nvidia"),
 });
 const SITE_PORT = 3000;
 
 const search = defineStep({
   name: "search",
-  next: ["select"],
-  terminal: true,
+  next: ["select", "noNews"],
   canFail: true,
   inputSchema: entryInput,
   async run(input: { companyName: string }, ctx: AgentExecutionContext<RoundupShared>) {
@@ -58,7 +58,7 @@ const search = defineStep({
       }));
       if (articles.length === 0) {
         ctx.logger.info("no news found", { companyName });
-        return terminate({ status: "no-news", companyName });
+        return goto("noNews", { reason: "no-news" });
       }
       ctx.logger.info("search done", { count: articles.length });
       return goto("select", { articles });
@@ -71,7 +71,7 @@ const search = defineStep({
 
 const select = defineStep({
   name: "select",
-  next: ["illustrate"],
+  next: ["illustrate", "noNews"],
   canFail: true,
   async run(input: { articles: RawArticle[] }, ctx: AgentExecutionContext<RoundupShared>) {
     const companyName = ctx.shared.get("companyName") ?? "";
@@ -85,6 +85,12 @@ const select = defineStep({
         throw new Error(res.error?.message ?? `model run ended as ${res.status}`);
       }
       const selected = parseSelection(res.output);
+      // An empty selection means the hits were all off-topic — degrade honestly to
+      // the no-news terminal rather than publishing an empty roundup page.
+      if (selected.length === 0) {
+        ctx.logger.info("no articles qualified", { companyName });
+        return goto("noNews", { reason: "no-selection" });
+      }
       ctx.logger.info("selection done", { count: selected.length });
       return goto("illustrate", { selected });
     } catch (err) {
@@ -204,8 +210,33 @@ const publish = defineStep({
   },
 });
 
+// A distinct degrade terminal for the two "nothing to publish" paths — no search
+// hits, or hits that all turn out to be off-topic. It reads as a degrade
+// (`published: false` + a surfaced note), never a green publish that shipped an
+// empty page.
+const noNews = defineStep({
+  name: "noNews",
+  next: [],
+  terminal: true,
+  async run(input: { reason: "no-news" | "no-selection" }, ctx: AgentExecutionContext<RoundupShared>) {
+    const companyName = ctx.shared.get("companyName") ?? "";
+    const reason = input.reason === "no-selection" ? "no-selection" : "no-news";
+    ctx.logger.info("nothing to publish — degrade terminal", { companyName, reason });
+    return terminate({
+      status: reason,
+      published: false,
+      companyName,
+      articles: [],
+      note:
+        reason === "no-news"
+          ? `No recent news turned up for "${companyName}", so nothing was published. Point it at a company with coverage in the last week.`
+          : `Search results for "${companyName}" turned up, but none qualified as recent company news — so nothing was published rather than shipping an empty page.`,
+    });
+  },
+});
+
 export const agent = defineAgent<{ companyName: string }, RoundupShared>({
   name: "news-roundup",
   entry: "search",
-  steps: { search, select, illustrate, publish },
+  steps: { search, select, illustrate, publish, noNews },
 });
