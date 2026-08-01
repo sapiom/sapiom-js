@@ -1,5 +1,13 @@
 # @sapiom/orchestration-core
 
+## 0.9.13
+
+### Patch Changes
+
+- Updated dependencies [c8072cd]
+  - @sapiom/agent@0.9.0
+  - @sapiom/agent-runtime@0.4.3
+
 ## 0.9.12
 
 ### Patch Changes

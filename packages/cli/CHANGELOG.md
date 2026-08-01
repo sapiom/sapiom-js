@@ -1,5 +1,14 @@
 # @sapiom/cli
 
+## 1.0.2
+
+### Patch Changes
+
+- Updated dependencies [c8072cd]
+  - @sapiom/agent@0.9.0
+  - @sapiom/agent-core@0.9.13
+  - @sapiom/harness@0.2.5
+
 ## 1.0.1
 
 ### Patch Changes
