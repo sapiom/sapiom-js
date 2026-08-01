@@ -6378,6 +6378,16 @@ input {
   line-height: 1.5;
 }
 
+/* The copy/setup-prompt buttons hold their size and keep their label on one
+   line; the descriptive text (flex 1, min-width 0) absorbs the row and wraps
+   instead, so "Copy setup prompt" never breaks onto three lines in the narrow
+   "no agent project" modal. Applies to the expandable per-agent list rows too. */
+.aw-mcp-row > .btn-ghost,
+.aw-mcp-list-row > .btn-ghost {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .aw-mcp-dim {
   color: var(--text-faint);
 }
