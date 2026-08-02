@@ -160,17 +160,64 @@ export function checkResourceSeeds(templateId, manifest, fileExists) {
 }
 
 /**
- * True when `source` reads the injected handle under `key` via
- * `resolveResourceHandle`. The default key (`dbHandle`) is read by any call with
- * no `key` option, so a bare call satisfies it; a non-default key must be named
- * explicitly in the options bag, which is exactly what keeps the declaration and
- * the runtime read from drifting.
+ * The set of injected-input keys the step code reads via `resolveResourceHandle`.
+ * A call's `key: "…"` option is the key it reads; a call that names no key reads
+ * the default `dbHandle`.
+ *
+ * Only each call's own ARGUMENT LIST is inspected — located by matching
+ * `resolveResourceHandle(` and scanning balanced parens — so a `key:` sitting in
+ * a comment, a JSDoc `@link`, or an unrelated object literal cannot forge a read.
+ * That closes the two loopholes a whole-source regex leaves open: (1) a declared
+ * `dbHandle` "satisfied" by any resolver call even when that call reads a
+ * different key, and (2) a non-default key "read" only because the string appears
+ * in a comment (e.g. the `reuse.key: "ledgerHandle"` note this file's own
+ * templates carry). The reuse check leans on this, and SAP-2320 leans on the
+ * reuse check, so a false positive here is a dishonest picker downstream.
+ *
+ * Value-side heuristics kept deliberately narrow: a `key` whose value is not a
+ * string literal (a variable) reads an unknown key and is intentionally NOT
+ * credited — the picker needs a statically declared key, so "compute the key at
+ * runtime" should fail the declaration, not pass it.
+ */
+function keysReadViaResolver(source) {
+  const keys = new Set();
+  const marker = "resolveResourceHandle";
+  for (
+    let at = source.indexOf(marker);
+    at !== -1;
+    at = source.indexOf(marker, at + marker.length)
+  ) {
+    // Skip a longer identifier that merely ends in the marker.
+    const before = source[at - 1];
+    if (before && /[A-Za-z0-9_$]/.test(before)) continue;
+    let i = at + marker.length;
+    while (i < source.length && /\s/.test(source[i])) i++;
+    if (source[i] !== "(") continue; // an import specifier or an @link, not a call.
+    let depth = 0;
+    let end = -1;
+    for (let j = i; j < source.length; j++) {
+      if (source[j] === "(") depth++;
+      else if (source[j] === ")" && --depth === 0) {
+        end = j;
+        break;
+      }
+    }
+    if (end === -1) continue;
+    const args = source.slice(i + 1, end);
+    const keyMatch = /\bkey\s*:\s*["']([^"']+)["']/.exec(args);
+    if (keyMatch) keys.add(keyMatch[1]);
+    else if (!/\bkey\s*:/.test(args)) keys.add("dbHandle"); // a bare call ⇒ the default key.
+  }
+  return keys;
+}
+
+/**
+ * True when `source` reads the injected handle under `key` via a real
+ * `resolveResourceHandle` call — see {@link keysReadViaResolver} for why this
+ * inspects call arguments rather than the whole source.
  */
 function readsInjectedHandle(source, key) {
-  if (!/resolveResourceHandle\s*\(/.test(source)) return false;
-  if (key === "dbHandle") return true;
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`key\\s*:\\s*["']${escaped}["']`).test(source);
+  return keysReadViaResolver(source).has(key);
 }
 
 /**

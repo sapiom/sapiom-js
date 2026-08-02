@@ -383,6 +383,44 @@ test("checkResourceReuse: a reusable resource with no index.ts fails", () => {
   assert.match(errors[0], /no index\.ts/);
 });
 
+// Loophole 1: a declared default key must be read by a call that actually reads
+// the default — not credited just because *some* resolveResourceHandle call
+// exists. Here the only call reads a different key.
+test("checkResourceReuse: a declared dbHandle is not satisfied by a call reading another key", () => {
+  const errors = checkResourceReuse(
+    "fixture",
+    {
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "dbHandle" } },
+      ],
+    },
+    `const h = resolveResourceHandle(input, { key: "somethingElse", fallback: "" });`,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /never read via resolveResourceHandle/);
+});
+
+// Loophole 2: the declared key appearing only in a comment (or any text outside
+// a real call's arguments) must NOT satisfy the check — the exact shape this
+// PR's own templates carry, e.g. `reuse.key: "ledgerHandle"` in a doc comment.
+test("checkResourceReuse: a key named only in a comment does not count as read", () => {
+  const commentOnly = [
+    `// declared as \`resources[].reuse.key: "ledgerHandle"\``,
+    `const h = resolveResourceHandle(input, { fallback: "" }); // reads dbHandle`,
+  ].join("\n");
+  const errors = checkResourceReuse(
+    "fixture",
+    {
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "ledgerHandle" } },
+      ],
+    },
+    commentOnly,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /never read via resolveResourceHandle/);
+});
+
 test("checkResourceReuse: an internal-state resource with no reuse marker is fine", () => {
   // the-brain: hardcoded handle, no reuse descriptor ⇒ no picker, no error.
   assert.deepEqual(
