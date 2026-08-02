@@ -18,7 +18,8 @@
       "kind": "postgres",
       "handle": "approval-chain-ledger",
       "duration": "7d",
-      "ephemeral": false
+      "ephemeral": false,
+      "reuse": { "key": "ledgerHandle" }
     }
   ],
   "settings": [

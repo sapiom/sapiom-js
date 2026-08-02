@@ -160,6 +160,66 @@ export function checkResourceSeeds(templateId, manifest, fileExists) {
 }
 
 /**
+ * True when `source` reads the injected handle under `key` via
+ * `resolveResourceHandle`. The default key (`dbHandle`) is read by any call with
+ * no `key` option, so a bare call satisfies it; a non-default key must be named
+ * explicitly in the options bag, which is exactly what keeps the declaration and
+ * the runtime read from drifting.
+ */
+function readsInjectedHandle(source, key) {
+  if (!/resolveResourceHandle\s*\(/.test(source)) return false;
+  if (key === "dbHandle") return true;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`key\\s*:\\s*["']${escaped}["']`).test(source);
+}
+
+/**
+ * A `reuse` descriptor is the deploy-time picker's permission to offer "use a
+ * database you already have" for a resource. It is honest ONLY when the step
+ * actually opens the injected handle — otherwise the user picks a database the
+ * next run ignores, the dishonest affordance design-v2 § Landmines forbids
+ * ("a picker turns a latent hazard into a likely one"). Two rules the schema
+ * cannot express:
+ *   - reuse is a postgres concept — the picker lists databases, so a marker on a
+ *     sandbox / repository / inbox would offer a control with nothing to show.
+ *   - the declared `key` must be read by a `resolveResourceHandle(...)` call in
+ *     the step code, so a `reuse` marker can never sit on a hardcoded handle.
+ *
+ * @param indexSource  contents of the template's index.ts, or null when absent.
+ */
+export function checkResourceReuse(templateId, manifest, indexSource) {
+  const resources = Array.isArray(manifest?.resources)
+    ? manifest.resources
+    : [];
+  const errors = [];
+  const where = `"${templateId}" template.json`;
+  resources.forEach((resource, i) => {
+    const reuse = resource?.reuse;
+    if (reuse === undefined || reuse === null) return;
+    if (resource?.kind !== "postgres") {
+      errors.push(
+        `manifest-resource-reuse: ${where} /resources/${i} declares \`reuse\` on a "${resource?.kind}" resource — reuse is the postgres "use a database you already have" picker; only postgres resources may carry it.`,
+      );
+      return;
+    }
+    const key = reuse?.key;
+    if (typeof key !== "string") return; // the descriptor's shape is the schema's job.
+    if (indexSource === null) {
+      errors.push(
+        `manifest-resource-reuse: ${where} /resources/${i} is marked reusable but the template has no index.ts to read the injected "${key}" — a picker would repoint a handle no step opens.`,
+      );
+      return;
+    }
+    if (!readsInjectedHandle(indexSource, key)) {
+      errors.push(
+        `manifest-resource-reuse: ${where} /resources/${i}/reuse/key "${key}" is never read via resolveResourceHandle in index.ts — a reuse descriptor promises the run opens the picked handle, so the step must read it (the SAP-2191 migration pattern). Either wire the read or drop \`reuse\`.`,
+      );
+    }
+  });
+  return errors;
+}
+
+/**
  * Compile the manifest schema once and return a checker.
  *
  * @param ajv       the Ajv instance already built for the registry check
