@@ -126,9 +126,9 @@ const ENDPOINT_API_KEY = "ENDPOINT_SAPIOM_API_KEY";
 /**
  * Lifetime of the scoped key minted for the deployed endpoint. The key is durable
  * relative to the run (the per-run `sat_` the engine injects expires with the step)
- * but still bounded and revocable — long enough for the preview to serve requests,
- * short enough that a leaked key is not forever. Revoke the definition's key to
- * cascade-revoke it sooner.
+ * but still bounded — long enough for the preview to serve requests, short enough
+ * that a leaked key is not forever. It carries transaction (payment) authority only,
+ * and can be revoked by its id before the TTL.
  */
 const ENDPOINT_KEY_TTL = "30d";
 
