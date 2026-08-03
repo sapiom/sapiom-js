@@ -1,6 +1,6 @@
-# @sapiom/harness
+# Agent Studio
 
-A local web app for building on Sapiom with your own coding agent.
+Agent Studio is a local web app for building on Sapiom with your own coding agent.
 
 ```bash
 npx @sapiom/harness [dir]
@@ -8,20 +8,20 @@ npx @sapiom/harness [dir]
 sapiom dev [dir]
 ```
 
-One command: checks your environment, signs you in, and opens a browser app
-with your coding agent (Claude Code today, Codex next) running in an embedded
-terminal — pre-wired with the Sapiom MCP servers and a workflow-authoring
+One command checks your environment, signs you in, and opens Agent Studio
+with your coding agent (Claude Code or Codex) running in an embedded
+terminal — pre-wired with the Sapiom MCP servers and an agent-authoring
 system prompt, in whatever project directory you choose.
 
 ## What you get
 
 - **Terminal sessions** — your agent, your subscription, your machine; the
-  harness only configures it. Multiple sessions, resumable chat history.
-- **Workflows rail** — orchestration projects (`sapiom.json`) discovered and
+  Agent Studio only configures it. Multiple sessions, resumable chat history.
+- **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
   open-in-Sapiom actions.
 - **Canvas** — a live pane that renders static HTML your agent writes to
-  `.sapiom/canvas/` (visualize your workflow, your docs, anything), plus a
+  `.sapiom/canvas/` (visualize your agent, your docs, anything), plus a
   preview mode for dev servers the agent starts.
 - **Zero config mutation** — everything is injected per-session via flags;
   your global agent settings are never touched.
@@ -30,7 +30,7 @@ Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
 ## Telemetry
 
-With explicit opt-in, the harness collects usage events (prompts, tool calls,
+With explicit opt-in, Agent Studio collects usage events (prompts, tool calls,
 session lifecycle) to improve Sapiom. Opt out any time; `--no-telemetry`
 disables collection entirely. Events are also written locally to
 `~/.sapiom/harness/events.ndjson` for your own inspection.

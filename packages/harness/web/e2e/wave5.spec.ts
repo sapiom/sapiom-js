@@ -28,11 +28,15 @@ test.describe("command palette sections and highlighting", () => {
     const list = page.getByTestId("command-palette-list");
     await expect(list).toBeVisible();
 
-    // Fixed section order: Sessions, then Past sessions, Workflows, Folders.
+    // Fixed section order: Sessions, then Past sessions, Agents, Folders.
     const sections = page.getByTestId("command-palette-section");
     await expect(sections.first()).toHaveText("Sessions");
     await expect(sections.filter({ hasText: "Past sessions" })).toHaveCount(1);
-    await expect(sections.filter({ hasText: "Workflows" })).toHaveCount(1);
+    await expect(sections.filter({ hasText: "Agents" })).toHaveCount(1);
+    await expect(page.getByTestId("command-palette-input")).toHaveAttribute(
+      "placeholder",
+      "Jump to a session, agent, or path…",
+    );
 
     // The exited fixture session is reachable from the palette now.
     await expect(list).toContainText("Build the leasing pipeline");
@@ -194,13 +198,21 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
 
   const detail = page.getByTestId("dead-session-detail");
   await expect(detail).toBeVisible();
-  await expect(detail).toContainText("Agent");
+  await expect(detail).toContainText("Coding agent");
   await expect(detail).toContainText("Claude Code");
   await expect(detail).toContainText("Ended");
 
   // The right pane stops inviting a Visualize that cannot run.
   await expect(page.getByTestId("canvas-empty-exited")).toContainText("Session ended");
+  await expect(page.getByTestId("canvas-empty-exited")).toContainText(
+    "Resume the session to see the agent's diagram here.",
+  );
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
+
+  await page.getByTestId("right-tab-steps").click();
+  await expect(page.getByTestId("canvas-empty-exited")).toContainText(
+    "Resume the session to see the agent's steps here.",
+  );
 });
 
 // ---------------------------------------------------------------------------

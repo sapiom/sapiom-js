@@ -197,7 +197,7 @@ export function mergeLaunchesIntoGraph(graph: CanvasGraph, launches: readonly De
     // happens to share its name.
     const nodeId = `launch:${launch.slug}`;
     if (!nodes.some((n) => n.id === nodeId)) {
-      nodes.push({ id: nodeId, kind: "launched-workflow", label: launch.slug, sublabel: "launched workflow" });
+      nodes.push({ id: nodeId, kind: "launched-workflow", label: launch.slug, sublabel: "launched agent" });
     }
     const from = launch.fromStepId && stepIds.has(launch.fromStepId) ? launch.fromStepId : graph.entry;
     const edgeKey = `${from}->${nodeId}`;

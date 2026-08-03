@@ -50,14 +50,14 @@ export function isHarnessSelectable(entry: HarnessEntry): boolean {
  *  the absence when it doesn't. */
 export function harnessUnavailableReason(entry: HarnessEntry): string | null {
   if (isHarnessSelectable(entry)) return null;
-  if (entry.mode === "external") return `${entry.label} runs in its own app. Studio can't launch it yet.`;
+  if (entry.mode === "external") return `${entry.label} runs in its own app. Agent Studio can't launch it yet.`;
   if (!entry.installed) {
     const prompt = entry.installMcpPrompt.trim();
     return prompt.length > 0
       ? prompt
-      : `${entry.label} isn't on this machine's PATH. Install its CLI, then restart the Studio server.`;
+      : `${entry.label} isn't on this machine's PATH. Install its CLI, then restart the Agent Studio server.`;
   }
-  return `This Studio build can't launch ${entry.label} yet.`;
+  return `This Agent Studio build can't launch ${entry.label} yet.`;
 }
 
 /** The label the registry ships for an id, falling back to the id itself. */

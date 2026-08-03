@@ -163,7 +163,7 @@ export function TemplatesPanel({
                       advertise templates that are not on screen. */}
                   {loading
                     ? "Loading the catalog…"
-                    : `${gallery.length} runnable agent workflows. Open one to read what it does, then use it. A session starts in a new folder and sets it up for you.`}
+                    : `${gallery.length} runnable agents. Open one to read what it does, then use it. A session starts in a new folder and sets it up for you.`}
                 </p>
               </header>
 

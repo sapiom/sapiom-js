@@ -31,8 +31,8 @@ function printBanner(opts: PrintBannerOpts): void {
     : "not authenticated";
 
   console.log("");
-  console.log("  Sapiom Studio");
-  console.log("  -------------");
+  console.log("  Agent Studio");
+  console.log("  ------------");
   console.log(`  directory   ${opts.dir}`);
   console.log(`  auth        ${authLine}`);
   console.log(`  telemetry   ${opts.telemetryOptIn ? "on" : "off"}`);
@@ -96,14 +96,14 @@ describe("parseArgs — --login flag", () => {
   });
 });
 
-describe("printBanner — 'Sapiom Studio' name", () => {
+describe("printBanner — 'Agent Studio' name", () => {
   const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
   afterEach(() => {
     logSpy.mockClear();
   });
 
-  it("banner line says 'Sapiom Studio' (not 'Sapiom Harness')", () => {
+  it("banner line says 'Agent Studio' (not the legacy Studio or Harness names)", () => {
     printBanner({
       dir: "/some/dir",
       port: 4000,
@@ -114,7 +114,8 @@ describe("printBanner — 'Sapiom Studio' name", () => {
     });
 
     const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(lines).toContain("  Sapiom Studio");
+    expect(lines).toContain("  Agent Studio");
+    expect(lines.some((l) => l.includes("Sapiom Studio"))).toBe(false);
     expect(lines.some((l) => l.includes("Sapiom Harness"))).toBe(false);
   });
 

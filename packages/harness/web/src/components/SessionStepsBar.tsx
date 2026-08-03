@@ -157,7 +157,7 @@ export function SessionStepsBar({
           target="_blank"
           rel="noreferrer"
           aria-label={`Preview :${preview.port}`}
-          data-tooltip={`The agent is serving an app on port ${preview.port}. Opens ${preview.url}`}
+          data-tooltip={`The coding agent is serving an app on port ${preview.port}. Opens ${preview.url}`}
         >
           <Icon name="ExternalLink" size={12} />
           {/* Below 380px only the word hides; the port stays as the chip's

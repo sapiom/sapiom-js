@@ -13,7 +13,7 @@ const ORDER_TRIAGE_BODY = `
   <header class="canvas-header">
     <div class="canvas-title-row">
       <h1 class="canvas-title">order-triage</h1>
-      <span class="canvas-badge">standalone workflow</span>
+      <span class="canvas-badge">standalone agent</span>
     </div>
     <p class="canvas-subtitle">Support-ticket triage: intake -&gt; classify -&gt; route, then auto-resolve or escalate.</p>
     <div class="canvas-stats">
@@ -89,15 +89,15 @@ const ORDER_TRIAGE_BODY = `
     <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--pause"></span>pause / waits for input</span>
     <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-success"></span>terminal &middot; success</span>
     <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-warn"></span>terminal &middot; escalation</span>
-    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-workflow signal/handoff</span>
+    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-agent signal/handoff</span>
   </div>
-  <p class="canvas-note">Static preview — regenerate after the workflow changes.</p>
+  <p class="canvas-note">Static preview — regenerate after the agent changes.</p>
 </footer>
 `.trim();
 
 const WORKSPACE_OVERVIEW_BODY = `
 <section class="canvas-panel">
-  <header class="canvas-header"><div class="canvas-title-row"><h1 class="canvas-title">workflow-a</h1></div></header>
+  <header class="canvas-header"><div class="canvas-title-row"><h1 class="canvas-title">agent-a</h1></div></header>
   <div class="canvas-diagram-panel">
     <svg class="canvas-graph-svg" viewBox="0 0 300 100" xmlns="http://www.w3.org/2000/svg">
       <g class="canvas-node node--entry" filter="url(#canvas-glow)" transform="translate(20,20)">
@@ -108,7 +108,7 @@ const WORKSPACE_OVERVIEW_BODY = `
   </div>
 </section>
 <section class="canvas-panel">
-  <header class="canvas-header"><div class="canvas-title-row"><h1 class="canvas-title">workflow-b</h1></div></header>
+  <header class="canvas-header"><div class="canvas-title-row"><h1 class="canvas-title">agent-b</h1></div></header>
   <div class="canvas-diagram-panel">
     <svg class="canvas-graph-svg" viewBox="0 0 300 100" xmlns="http://www.w3.org/2000/svg">
       <g class="canvas-node node--terminal-success" filter="url(#canvas-glow)" transform="translate(20,20)">

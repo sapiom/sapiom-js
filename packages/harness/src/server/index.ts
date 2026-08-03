@@ -340,6 +340,7 @@ function createDefaultBuildLaunchOpts(
           environment: process.env.SAPIOM_ENVIRONMENT,
           apiKey,
           generatedRoot,
+          harnessVersion: readVersion(),
         }),
         generateSystemPromptFile(harnessSessionId, {
           generatedRoot,
@@ -503,11 +504,11 @@ export const startServer = async (
     const prunedWorkflows = await workflowRegistry.prune();
     for (const workflow of prunedWorkflows) {
       console.error(
-        `[harness] pruned workflow registry entry with missing path: ${workflow.path}`,
+        `[harness] pruned agent registry entry with missing path: ${workflow.path}`,
       );
     }
   } catch (err) {
-    console.error("[harness] workflow registry prune failed:", err);
+    console.error("[harness] agent registry prune failed:", err);
   }
   // Same hygiene for settings.json's recentDirs — dead entries are already
   // filtered from every read, but pruning here persists their removal.
@@ -964,7 +965,7 @@ export const startServer = async (
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch(
     (err: unknown) => {
-      console.error("[harness] initial workflow scan failed:", err);
+      console.error("[harness] initial agent scan failed:", err);
       return [] as WorkflowInfo[];
     },
   );
@@ -1105,7 +1106,7 @@ export const startServer = async (
           })
           .catch((err: unknown) => {
             console.error(
-              "[harness] workflow scan on session create failed:",
+              "[harness] agent scan on session create failed:",
               err,
             );
           });

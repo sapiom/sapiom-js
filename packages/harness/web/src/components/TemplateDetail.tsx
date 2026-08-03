@@ -295,7 +295,7 @@ export function TemplateDetail({
       {/* What "Use template" really does — the two paths differ, say so. */}
       <p className="template-handoff" data-testid="template-handoff">
         {template.kind === "gallery"
-          ? "Using it forks the template into a repo you own, then clones it here. Needs a signed-in Sapiom account; the agent asks you to sign in if it is missing."
+          ? "Using it forks the template into a repo you own, then clones it here. Needs a signed-in Sapiom account; the coding agent asks you to sign in if it is missing."
           : "Scaffolds offline from the template bundled with the CLI. No account, no network."}
       </p>
     </div>

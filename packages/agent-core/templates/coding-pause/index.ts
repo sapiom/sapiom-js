@@ -27,14 +27,14 @@ const entryInput = z.object({
 type EntryInput = z.infer<typeof entryInput>;
 
 /**
- * __PROJECT_NAME__ — a non-blocking coding-agent workflow.
+ * __PROJECT_NAME__ — a non-blocking coding-agent integration.
  *
  *   prepare → kickoff ──pause(models.coding.result)──▶ finalize
  *
  * `kickoff` *launches* the coding agent (fire-and-forget) and returns
- * `pauseUntilSignal(handle, …)`, suspending the workflow on the run's result
- * signal — so a long run holds no worker. When the run reaches a terminal state
- * the engine resumes `finalize` with the run result as its input.
+ * `pauseUntilSignal(handle, …)`, suspending the agent run until the coding agent's
+ * result signal arrives — so a long run holds no worker. When the run reaches a
+ * terminal state, the engine resumes `finalize` with the run result as its input.
  *
  * Key idea: the resumed step's `input` IS the signal payload (typed here as
  * `CodingResultPayload`). It crossed a wire boundary, so there are no live

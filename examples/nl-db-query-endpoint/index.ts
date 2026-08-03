@@ -2,6 +2,7 @@ import {
   defineAgent,
   defineStep,
   goto,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -133,7 +134,13 @@ const ENDPOINT_API_KEY = "ENDPOINT_SAPIOM_API_KEY";
 const ENDPOINT_KEY_TTL = "30d";
 
 function resolveConfig(input: EntryInput | undefined): Config {
-  const dbHandle = input?.dbHandle?.trim() ?? "";
+  // Read the target handle through the canonical injection seam so a deploy-time
+  // reuse picker (declared as `resources[].reuse.key: "dbHandle"`) can repoint the
+  // endpoint at a database the caller already owns. The fallback is `""`, not
+  // DEFAULT_DB_HANDLE: "no handle named" is a real state here — it selects the
+  // seeded demo DB below only when no `connectionString` was given either, and a
+  // user-named handle that 404s is rejected rather than silently reprovisioned.
+  const dbHandle = resolveResourceHandle(input ?? {}, { fallback: "" });
   const connectionString = input?.connectionString?.trim() ?? "";
   const usingDemoDatabase = !dbHandle && !connectionString;
   return {

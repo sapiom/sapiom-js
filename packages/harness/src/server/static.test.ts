@@ -43,7 +43,7 @@ describe("createStaticRouter", () => {
     mkdirSync(join(dir, "assets"), { recursive: true });
     writeFileSync(
       join(dir, "index.html"),
-      '<!doctype html><html><head><title>Sapiom Studio</title>' +
+      '<!doctype html><html><head><title>Agent Studio</title>' +
         '<script type="module" src="/assets/index-abc123.js"></script>' +
         '</head><body><div id="root"></div></body></html>',
     );
@@ -68,7 +68,7 @@ describe("createStaticRouter", () => {
       const res = await fetch(`${baseUrl}/`);
       expect(res.status).toBe(200);
       const html = await res.text();
-      expect(html).toContain("<title>Sapiom Studio</title>");
+      expect(html).toContain("<title>Agent Studio</title>");
       expect(html).toContain('<div id="root">');
       expect(html).not.toContain("hasn't been built yet");
     });
@@ -88,7 +88,7 @@ describe("createStaticRouter", () => {
       const res = await fetch(`${baseUrl}/some/client/route`);
       expect(res.status).toBe(200);
       const html = await res.text();
-      expect(html).toContain("<title>Sapiom Studio</title>");
+      expect(html).toContain("<title>Agent Studio</title>");
     });
 
     // SAP-1898: boot-token injection
@@ -150,7 +150,8 @@ describe("createStaticRouter", () => {
       const res = await fetch(`${baseUrl}/`);
       expect(res.status).toBe(200);
       const html = await res.text();
-      expect(html).toContain("Sapiom Harness");
+      expect(html).toContain("Agent Studio");
+      expect(html).not.toContain("Sapiom Harness");
       expect(html).toContain("hasn't been built yet");
     });
   });

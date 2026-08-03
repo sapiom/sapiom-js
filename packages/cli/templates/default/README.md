@@ -1,6 +1,6 @@
 # __PROJECT_NAME__
 
-A Sapiom orchestration, authored as code against [`@sapiom/agent`](https://www.npmjs.com/package/@sapiom/agent).
+A Sapiom agent, authored as code against [`@sapiom/agent`](https://www.npmjs.com/package/@sapiom/agent).
 
 ## Getting started
 
@@ -8,14 +8,14 @@ A Sapiom orchestration, authored as code against [`@sapiom/agent`](https://www.n
 npm install
 ```
 
-Then open `index.ts`. The orchestration is defined with `defineAgent({ steps })`; each step is a `defineStep({ name, next, run })`. The `run` body is ordinary code — and inside it, the full Sapiom tool catalog is available, pre-auth'd and tenant-scoped, on `ctx.sapiom`:
+Then open `index.ts`. The agent is defined with `defineAgent({ steps })`; each step is a `defineStep({ name, next, run })`. The `run` body is ordinary code — and inside it, the full Sapiom tool catalog is available, pre-auth'd and tenant-scoped, on `ctx.sapiom`:
 
 ```ts
 const box = await ctx.sapiom.sandboxes.create({ name: 'demo' });
 const repo = await ctx.sapiom.repositories.create('my-repo');
 ```
 
-No credentials to wire — a per-execution tenant credential is injected when your orchestration runs.
+No credentials to wire — a per-execution tenant credential is injected for each agent run.
 
 ## The loop
 

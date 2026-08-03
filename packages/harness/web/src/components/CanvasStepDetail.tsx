@@ -327,7 +327,7 @@ function OpenLaunchedWorkflow({
       data-tooltip={`Switch to ${launched.name}`}
       onClick={() => onOpenWorkflow(launched.path)}
     >
-      Open workflow <Icon name="ArrowRight" size={12} />
+      Open agent <Icon name="ArrowRight" size={12} />
     </button>
   );
 }
@@ -381,7 +381,7 @@ export function RunStepsList({ run, target }: { run: RunView; target: RunTarget 
       })}
       <StubNoticeSection run={run} />
       <p className="canvas-empty-hint">
-        Run data only. Open the Canvas tab for the diagram — transitions and contracts come from the workflow.
+        Agent run data only. Open the Canvas tab for the diagram — transitions and contracts come from the agent.
       </p>
     </div>
   );
@@ -565,7 +565,7 @@ export function CanvasStepDetail({
 
         {runStep && (
           <section className="canvas-detail-section" data-testid="canvas-detail-run">
-            <h4>Last run</h4>
+            <h4>Agent run</h4>
             <div className="canvas-detail-contract">
               <span className="canvas-input-label">Status</span>
               <span className={"canvas-run-text is-" + runStep.status}>
@@ -697,7 +697,7 @@ export function CanvasStepDetail({
           </h4>
           {incoming.length === 0 ? (
             <p className="canvas-detail-empty">
-              {node.kind === "entry" ? "Entry point: the workflow starts here." : "No step routes here."}
+              {node.kind === "entry" ? "Entry point: the agent starts here." : "No step routes here."}
             </p>
           ) : (
             <ul className="canvas-detail-edges">
@@ -771,7 +771,7 @@ export function CanvasStepInspector({
       <OpenLaunchedWorkflow node={node} workflows={workflows} onOpenWorkflow={onOpenWorkflow} />
       {runStep && (
         <div className="canvas-inspector-run" data-testid="canvas-inspector-run">
-          <span className="canvas-input-label">Last run</span>
+          <span className="canvas-input-label">Agent run</span>
           <span className={"canvas-run-text is-" + runStep.status}>
             <StepStatusIcon status={runStep.status} />
             {runStep.status}
@@ -907,7 +907,7 @@ export function CanvasChatPanel({
           <textarea
             className="canvas-inspector-freeform-input"
             data-testid="canvas-freeform-input"
-            placeholder={node ? "Ask about this step…" : "Ask about this workflow…"}
+            placeholder={node ? "Ask about this step…" : "Ask about this agent…"}
             rows={2}
             value={freeformText}
             onChange={(e) => setFreeformText(e.target.value)}

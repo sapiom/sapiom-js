@@ -144,7 +144,7 @@ body {
 .canvas-group-band { fill: var(--canvas-accent); fill-opacity: 0.06; stroke: var(--canvas-border); stroke-dasharray: 3 5; }
 .canvas-group-label { fill: var(--canvas-text-dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; }
 
-/* --- edge kinds: sequential (base) | branching (--success/--warn) | cross-workflow signal/handoff (--cross) --- */
+/* --- edge kinds: sequential (base) | branching (--success/--warn) | cross-agent signal/handoff (--cross) --- */
 .canvas-edge { fill: none; stroke-width: 1.8; stroke: var(--canvas-border-strong); }
 .canvas-edge--success { stroke: var(--canvas-success); }
 .canvas-edge--warn { stroke: var(--canvas-escalation); }
@@ -261,7 +261,7 @@ const THEME_SCRIPT = `
 const PATTERNS_TEMPLATE = `
 <template id="canvas-patterns">
   <!-- copy the pattern you need; this whole block is never rendered -->
-  <span class="canvas-badge">standalone workflow</span>
+  <span class="canvas-badge">standalone agent</span>
   <div class="canvas-stat"><span class="canvas-stat-value">5</span><span class="canvas-stat-label">steps</span></div>
   <svg>
     <g class="canvas-node node--entry" filter="url(#canvas-glow)" transform="translate(392,40)">
@@ -293,7 +293,7 @@ const PATTERNS_TEMPLATE = `
     <!-- branching: a step with multiple successors -> curved, colored by the destination's outcome -->
     <path class="canvas-edge canvas-edge--success" d="M480,320 C480,365 288,365 288,410" marker-end="url(#canvas-arrow-success)" />
     <path class="canvas-edge canvas-edge--warn" d="M480,320 C480,365 688,365 688,410" marker-end="url(#canvas-arrow-warn)" />
-    <!-- cross-workflow signal/handoff: dashed, always neutral -->
+    <!-- cross-agent signal/handoff: dashed, always neutral -->
     <path class="canvas-edge canvas-edge--cross" d="M480,320 L480,410" marker-end="url(#canvas-arrow)" />
     <!-- edge label, positioned near the branch point, anchored toward its own destination -->
     <text class="canvas-edge-label" x="440" y="345" text-anchor="end">category == x</text>
@@ -309,7 +309,7 @@ const PATTERNS_TEMPLATE = `
   <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--pause"></span>pause / waits for input</span>
   <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-success"></span>terminal &middot; success</span>
   <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-warn"></span>terminal &middot; escalation</span>
-  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-workflow signal/handoff</span>
+  <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-agent signal/handoff</span>
 </template>
 `.trim();
 
@@ -376,7 +376,7 @@ export function renderCanvasDocument(bodyHtml: string): string {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sapiom workflow canvas</title>
+<title>Agent Studio canvas</title>
 <script>
 ${THEME_SCRIPT}
 </script>
@@ -400,27 +400,27 @@ ${bodyHtml}
 const TEMPLATE_BODY = `
 <!--
   ═══════════════════════════════════════════════════════════════════════
-  SAPIOM CANVAS TEMPLATE — fill in the sections below to visualize a
-  workflow. Keep the <style> block in <head> and the structural classes
+  AGENT STUDIO CANVAS TEMPLATE — fill in the sections below to visualize an
+  agent. Keep the <style> block in <head> and the structural classes
   you see here untouched; only add markup using the patterns in the
   <template id="canvas-patterns"> block near the end of <body> (it is
   never rendered — read it, copy from it, don't edit it). Delete the
   empty-state note below and the patterns template once you're done
-  authoring. For a single bound workflow, one canvas-panel is enough; for
-  a workspace overview, add one canvas-panel per workflow plus an
+  authoring. For a single bound agent, one canvas-panel is enough; for
+  a workspace overview, add one canvas-panel per agent plus an
   Interconnections panel (see the pattern for its row shape).
   ═══════════════════════════════════════════════════════════════════════
 -->
 <section class="canvas-panel">
   <header class="canvas-header">
     <div class="canvas-title-row">
-      <h1 class="canvas-title">Untitled workflow</h1>
+      <h1 class="canvas-title">Untitled agent</h1>
     </div>
-    <p class="canvas-subtitle">One-line description of what this workflow does.</p>
+    <p class="canvas-subtitle">One-line description of what this agent does.</p>
     <div class="canvas-stats"></div>
   </header>
   <div class="canvas-diagram-panel">
-    <p class="canvas-empty-note">Nothing visualized yet — run Visualize on a workflow.</p>
+    <p class="canvas-empty-note">Nothing visualized yet — run Visualize on an agent.</p>
   </div>
 </section>
 

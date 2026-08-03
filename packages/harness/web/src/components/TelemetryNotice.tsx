@@ -25,7 +25,7 @@ export function TelemetryNotice({ onDismiss, onOpenSettings }: TelemetryNoticePr
       <div className="telemetry-notice-body">
         <p className="telemetry-notice-text">
           Sharing session details with Sapiom is <strong>off by default</strong>. Your prompts and
-          tool calls stay local unless you opt in to help us improve the Studio. Turn it on any time in{" "}
+          tool calls stay local unless you opt in to help us improve Agent Studio. Turn it on any time in{" "}
           <button
             className="telemetry-notice-settings-link"
             onClick={() => {

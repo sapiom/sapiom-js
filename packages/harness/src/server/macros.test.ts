@@ -92,7 +92,7 @@ describe("macros router", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(deps.openUrl).toHaveBeenCalledWith("https://app.sapiom.ai/workflows/4821");
+    expect(deps.openUrl).toHaveBeenCalledWith("https://app.sapiom.ai/agents/4821");
     expect(deps.injectInput).not.toHaveBeenCalled();
   });
 
@@ -105,7 +105,7 @@ describe("macros router", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("requires a selected workflow");
+    expect(body.error).toContain("requires a selected agent");
   });
 
   it("404s an unknown macro id", async () => {

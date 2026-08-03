@@ -315,7 +315,7 @@ export const App = (): JSX.Element => {
   }, [harness.tasks, harness.showToast]);
 
   if (harness.loading) {
-    return <div className="app-status">Loading Sapiom Studio…</div>;
+    return <div className="app-status">Loading Agent Studio…</div>;
   }
   // Boot failed (no state to render): degrade gracefully to a recoverable
   // state instead of a dead "Failed to load" white screen. The classifier
@@ -449,7 +449,7 @@ export const App = (): JSX.Element => {
       trimmedIdea
         ? `${base} build this:\n\n${trimmedIdea}`
         : `${base} define the first workflow.`,
-      "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
+      "Couldn't send the scaffold prompt. Ask the coding agent to run sapiom agents init.",
     );
   };
 
@@ -477,7 +477,7 @@ export const App = (): JSX.Element => {
     injectPromptWithRetry(
       sessionId,
       "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to define the first workflow.",
-      "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
+      "Couldn't send the scaffold prompt. Ask the coding agent to run sapiom agents init.",
     );
   };
 
@@ -489,8 +489,8 @@ export const App = (): JSX.Element => {
       session.id,
       useTemplatePrompt(template, cwd),
       template.kind === "gallery"
-        ? "Couldn't send the clone prompt. Ask the agent to run sapiom_dev_agents_clone."
-        : "Couldn't send the starter prompt. Ask the agent to run sapiom agents init.",
+        ? "Couldn't send the clone prompt. Ask the coding agent to run sapiom_dev_agents_clone."
+        : "Couldn't send the starter prompt. Ask the coding agent to run sapiom agents init.",
     );
   };
 
@@ -639,7 +639,7 @@ export const App = (): JSX.Element => {
       if (direct !== null) {
         if (direct === "deploy") {
           if (!workflow) {
-            harness.showToast("Select a workflow first.");
+            harness.showToast("Select an agent first.");
           } else {
             void harness.deploy(workflow.path);
           }
@@ -662,7 +662,7 @@ export const App = (): JSX.Element => {
           }
         } else if (direct === "run-local") {
           if (!workflow) {
-            harness.showToast("Select a workflow first.");
+            harness.showToast("Select an agent first.");
           } else {
             void harness.runLocal(sessionId, workflow.path);
           }
@@ -1013,11 +1013,11 @@ export const App = (): JSX.Element => {
                   <a
                     className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
                     data-testid="workflow-dashboard-link"
-                    href={`https://app.sapiom.ai/workflows/${rightPaneWorkflow.definitionId}`}
+                    href={`https://app.sapiom.ai/agents/${rightPaneWorkflow.definitionId}`}
                     target="_blank"
                     rel="noreferrer"
                     aria-label="Deployed — open in the Sapiom dashboard"
-                    data-tooltip="Open this workflow in the Sapiom dashboard"
+                    data-tooltip="Open this agent in the Sapiom dashboard"
                   >
                     <Icon name="Cloud" size={12} />
                     deployed

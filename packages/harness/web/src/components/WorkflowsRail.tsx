@@ -27,7 +27,7 @@ import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "..
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 
-const SAPIOM_DASHBOARD_URL = "https://app.sapiom.ai/workflows";
+const SAPIOM_DASHBOARD_URL = "https://app.sapiom.ai/agents";
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
@@ -416,7 +416,7 @@ export function WorkflowsRail({
         <button
           className="palette-trigger"
           data-testid="palette-trigger"
-          aria-label="Jump to session, workflow, or path"
+          aria-label="Jump to session, agent, or path"
           onClick={onOpenPalette}
         >
           <Icon name="Search" size={13} />

@@ -10,7 +10,7 @@ to use when.
 | Server name | `sapiom` | `sapiom-dev` |
 | Package | — (hosted connector) | [`@sapiom/mcp`](../packages/mcp) (`npx -y @sapiom/mcp`) |
 | Transport | Remote / hosted | stdio (runs on your machine) |
-| Tools | ~30+ capability tools — `sapiom_sandbox_*`, scrape, web search, content generation, storage, … | `sapiom_authenticate`, `sapiom_status`, and `sapiom_dev_agents_{scaffold,check,run_local,link,deploy,run,inspect,signal}` |
+| Tools | ~30+ capability tools — `sapiom_sandbox_*`, scrape, web search, content generation, storage, … | `sapiom_{authenticate,status,logout,send_feedback}`, `sapiom_dev_agents_{scaffold,check,run_local,link,clone,deploy,run,inspect,signal,schedule,…}`, `sapiom_dev_sandbox_*` — full list in the [package README](../packages/mcp#tools) |
 | Cost | Paid — capability calls are gateway-routed and metered (x402) | Unmetered — the surface itself makes no paid capability calls. `run` / `deploy` trigger real cloud runs whose capability calls are metered |
 | Use it to… | **call** a capability directly from an agent or client | **build, test, and operate on** Sapiom (today: author & ship agents that orchestrate capabilities) |
 
@@ -37,6 +37,13 @@ run it locally against stubs (no cost), then link, deploy, run, and inspect it
 in the cloud. The `sapiom_dev_` prefix leaves room for other non-capability
 developer tooling later (e.g. governance, log inspection) without colliding with
 the capability namespace.
+
+A handful of its tools are deliberately *unprefixed* — `sapiom_authenticate`,
+`sapiom_status`, `sapiom_logout`, `sapiom_send_feedback`. Those act on the
+client's relationship with Sapiom (who am I, log me in, here's what I think of
+the product) rather than on anything being built, so the `_dev_` infix would
+misdescribe them. The prefix marks *developer operations*, not *server
+membership*.
 
 It deliberately does **not** expose capability tools. There is no
 `sapiom_dev_scrape` or `sapiom_dev_sandbox_create`. Instead you write a agent

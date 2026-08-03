@@ -1195,7 +1195,7 @@ class MockApi implements HarnessApi {
         phase: "error",
         code: "BUILD_FAILED",
         message: "mock build error",
-        hint: "check your workflow definition",
+        hint: "check your agent definition",
       };
       onEvent?.(failed);
       return failed;

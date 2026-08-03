@@ -47,6 +47,7 @@ const ALL_TOOL_NAMES = [
   "sapiom_dev_sandbox_configure",
   "sapiom_dev_sandbox_preview",
   "sapiom_logout",
+  "sapiom_send_feedback",
   "sapiom_status",
 ];
 

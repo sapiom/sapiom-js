@@ -1,14 +1,14 @@
 {
   "name": "@sapiom/harness",
   "version": "0.2.5",
-  "description": "Sapiom Harness — a CLI-launched local web app that runs your coding agent (Claude Code, Codex) in a Sapiom-configured environment: MCP pre-wired, workflows tracked, one-click deploy/run, and a live canvas for previews.",
+  "description": "Agent Studio — a CLI-launched local web app that runs your coding agent (Claude Code or Codex) in a Sapiom-configured environment: MCP pre-wired, agents tracked, one-click deploy/run, and a live canvas for previews.",
   "keywords": [
     "sapiom",
     "harness",
     "claude",
     "codex",
     "terminal",
-    "workflows"
+    "agents"
   ],
   "homepage": "https://github.com/sapiom/sapiom-js/tree/main/packages/harness#readme",
   "bugs": {

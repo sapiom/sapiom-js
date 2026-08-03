@@ -125,6 +125,10 @@ export type { WatchExecutionOptions } from "./watch.js";
 export { signal, parseSignalPayload } from "./signal.js";
 export type { SignalOptions, SignalResult } from "./signal.js";
 
+// feedback (networked) — relay a user's product feedback to the Sapiom team
+export { sendFeedback } from "./feedback.js";
+export type { SendFeedbackOptions, SendFeedbackResult } from "./feedback.js";
+
 // schedules / triggers (networked)
 export { createSchedule, listSchedules, getSchedule, cancelSchedule, previewCron } from "./schedule.js";
 export type {

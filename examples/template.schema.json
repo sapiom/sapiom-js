@@ -136,6 +136,19 @@
             "type": "boolean",
             "default": true,
             "description": "True when the resource is disposable per run. False signals the 7-day TTL problem applies and the template needs a durability story in `notes`."
+          },
+          "reuse": {
+            "type": "object",
+            "required": ["key"],
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+                "description": "The top-level entry-input key the run reads the chosen handle from — `resolveResourceHandle(input, { key })`, default `dbHandle`. This is the settings path the picker writes; a `settings[]` entry with the same `path` may render it as a plain field too. One key per resource is sufficient for the current gallery (one Postgres per template); the field is what makes a second Postgres forward-compatible without inventing a second naming convention. Not a dotted path — `resolveResourceHandle` reads a top-level key only."
+              }
+            },
+            "description": "Present ⇒ the resource is user-repointable: the deploy-time reuse picker may offer \"use a database you already have\", and the run opens the chosen handle instead of the declared default. Absent ⇒ the resource is internal state (not user data) and no picker is offered — the honest marker for a database whose contents a user should never be handed. Only ever offer the picker for a resource whose STEP CODE reads the injected handle via `resolveResourceHandle`; a `reuse` descriptor on a resource the code hardcodes advertises a control the next run silently ignores, which the `manifest-resource-reuse` check rejects."
           }
         }
       }

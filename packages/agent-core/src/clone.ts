@@ -1,9 +1,9 @@
 /**
- * clone — materialize a Sapiom workflow locally, either as a fresh template/fork
- * checkout (SAP-1357) or by pulling an already-deployed workflow's live source by
+ * clone — materialize a Sapiom agent locally, either as a fresh template/fork
+ * checkout (SAP-1357) or by pulling an already-deployed agent's live source by
  * `definitionId` (SAP-1839). The client half of two handoffs that share one flow:
  *   - templateId/forkId: browse → fork → clone → deploy → run.
- *   - definitionId: an existing deployed workflow → clone its current build-repo
+ *   - definitionId: an existing deployed agent → clone its current build-repo
  *     source → edit → redeploy, round-trip-consistently.
  *
  * Given exactly one of a registry template id, an existing fork id, or a deployed
@@ -68,13 +68,13 @@ export interface CloneOptions {
    * Registry template id to fork, then clone. Mutually exclusive with `forkId`
    * and `definitionId`: pass a template id to start from the gallery, a fork id
    * to re-clone an existing fork, or a definitionId to pull a deployed
-   * workflow's live source.
+   * agent's live source.
    */
   templateId?: string;
   /** Existing fork id (`github_user_repos.id`) to clone — skips the fork step. */
   forkId?: string;
   /**
-   * Deployed workflow's definition id (engine bigint, as a string — see the
+   * Deployed agent's definition id (engine bigint, as a string — see the
    * module docstring) to clone. Skips the fork step entirely and clones the
    * engine's live `ag-*` build-repo source directly, so the checkout always
    * matches what is actually deployed. Writes `definitionId` into `sapiom.json`,
@@ -129,7 +129,7 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
     throw new AgentOperationError({
       code: 'BAD_INPUT',
       message:
-        'Provide a templateId (to fork then clone), a forkId (to clone an existing fork), or a definitionId (to clone a deployed workflow).',
+        'Provide a templateId (to fork then clone), a forkId (to clone an existing fork), or a definitionId (to clone a deployed agent).',
     });
   }
   if (provided > 1) {
@@ -137,7 +137,7 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
       code: 'BAD_INPUT',
       message: 'Provide only one of templateId, forkId, or definitionId.',
       hint:
-        'Use templateId to start from a gallery template, forkId to re-clone an existing fork, or definitionId to pull a deployed workflow local.',
+        'Use templateId to start from a gallery template, forkId to re-clone an existing fork, or definitionId to pull a deployed agent locally.',
     });
   }
 
