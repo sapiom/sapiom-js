@@ -430,68 +430,23 @@ input {
    header — mirrors the design system's .sapiom-workspace-search anatomy
    (icon | text | kbd hint). The row itself is a standard header-height bar
    so the rail keeps the same 56px rhythm as every other bar. */
-.rail-search {
-  flex: 0 0 auto;
+/* Search + Templates: the persistent labelled destinations above the tree.
+   A quiet vertical stack of rows on the continuous rail surface — no boxed
+   field, no divider. */
+.rail-nav {
   display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--ui-line);
+  flex-direction: column;
+  padding: var(--sp2) 0 var(--sp1);
 }
 
-/* When a search row carries a trailing action, the field itself must yield
-   width instead of the row growing. */
-.rail-search .palette-trigger {
-  flex: 1;
-  min-width: 0;
-  width: auto;
-}
-
-.palette-trigger {
-  display: grid;
-  grid-template-columns: 1rem minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--sp2);
-  width: 100%;
-  height: var(--control-h-xs);
-  padding: 0 var(--sp2) 0 var(--sp3);
-  background: var(--surface-inset);
-  border: 1px solid var(--ui-line);
-  border-radius: var(--radius);
-  color: var(--text-dim);
-  font-size: var(--type-label);
-  text-align: left;
-  transition:
-    background-color var(--transition-fast),
-    border-color var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.palette-trigger:hover {
-  border-color: var(--ui-line-strong);
-  color: var(--text);
-}
-
-.palette-trigger:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.palette-trigger-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.palette-trigger-hint {
+/* The unboxed shortcut hint on the Search row — right-aligned, quiet mono, no
+   key-cap box (the row itself is the affordance). */
+.rail-nav-kbd {
+  margin-left: auto;
   color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: var(--type-micro);
-  padding: 1px 5px;
-  border: 1px solid var(--ui-line);
-  border-radius: var(--radius);
-  background: var(--bg-0);
+  font-size: var(--type-meta);
+  letter-spacing: 0.02em;
 }
 
 /* Icon-only "ghost" button: no border at rest — matches the product's

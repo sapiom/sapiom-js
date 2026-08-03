@@ -412,34 +412,36 @@ export function WorkflowsRail({
     <aside className="rail rail-workflows" style={{ width, minWidth }}>
       <BrandHeader onCollapse={onCollapse} />
 
-      <div className="rail-search">
+      {/* Search and Templates are the two persistent labelled destinations
+          above the workspace tree: Search opens the command palette (carrying
+          the unboxed ⌘K / Ctrl+K shortcut), Templates opens the catalog. They
+          read as rows, not a boxed field or a bare magnifier — a destination is
+          not chrome, and an unlabelled magnifier made the app's broadest way in
+          the one thing you had to already know about. */}
+      <nav className="rail-nav" aria-label="Primary">
         <button
-          className="palette-trigger"
+          type="button"
+          className="rail-nav-row"
           data-testid="palette-trigger"
-          aria-label="Jump to session, workflow, or path"
+          aria-label="Search sessions, workflows, and paths"
           onClick={onOpenPalette}
         >
-          <Icon name="Search" size={13} />
-          <span className="palette-trigger-text">Jump to…</span>
-          <span className="palette-trigger-hint">{SHORTCUT_HINT}</span>
+          <Icon name="Search" size={14} />
+          <span>Search</span>
+          <span className="rail-nav-kbd">{SHORTCUT_HINT}</span>
         </button>
-      </div>
 
-      {/* Templates is a destination the rail navigates to, so it gets a nav row
-          of its own above the tree rather than hiding behind the "+" — the
-          catalog is how someone with an empty rail gets their first workflow,
-          and a surface reachable only from inside a dialog was the reason it
-          went unfound. */}
-      <button
-        type="button"
-        className={"rail-nav-row" + (templatesActive ? " is-selected" : "")}
-        data-testid="rail-templates"
-        aria-current={templatesActive ? "page" : undefined}
-        onClick={onBrowseTemplates}
-      >
-        <Icon name="LayoutTemplate" size={14} />
-        <span>Templates</span>
-      </button>
+        <button
+          type="button"
+          className={"rail-nav-row" + (templatesActive ? " is-selected" : "")}
+          data-testid="rail-templates"
+          aria-current={templatesActive ? "page" : undefined}
+          onClick={onBrowseTemplates}
+        >
+          <Icon name="LayoutTemplate" size={14} />
+          <span>Templates</span>
+        </button>
+      </nav>
 
       <div className="rail-header">
         Workspaces
