@@ -24,13 +24,16 @@
     }
   ],
   "defaultInput": {
-    "urls": ["https://example.com", "https://example.org"]
+    "urls": [
+      "https://en.wikipedia.org/wiki/Main_Page",
+      "https://news.ycombinator.com"
+    ]
   },
   "examples": [
     {
       "title": "Capture public pages",
       "input": {
-        "urls": ["https://example.com"]
+        "urls": ["https://en.wikipedia.org/wiki/Main_Page"]
       },
       "output": {
         "authenticated": false,
@@ -38,7 +41,7 @@
         "captured": 1,
         "screenshots": [
           {
-            "url": "https://example.com",
+            "url": "https://en.wikipedia.org/wiki/Main_Page",
             "imageUrl": "https://cdn.sapiom.ai/screenshots/abc123.png",
             "expiresAt": "2026-08-01T00:00:00Z",
             "ok": true,

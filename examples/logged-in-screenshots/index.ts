@@ -43,11 +43,14 @@ import { z } from "zod/v4";
 /** Cap how many pages one session captures, to bound session time and cost. */
 const MAX_URLS = 8;
 /**
- * The pages a zero-input run captures. Both are IANA reserved example domains —
- * about the most stable public pages there are — so the default run always has
- * something real to shoot.
+ * The pages a zero-input run captures. Both are content-rich, ultra-stable,
+ * universally recognized public pages — so the default run always has something
+ * real to shoot and the screenshot obviously reads as a captured webpage.
  */
-const DEFAULT_URLS = ["https://example.com", "https://example.org"];
+const DEFAULT_URLS = [
+  "https://en.wikipedia.org/wiki/Main_Page",
+  "https://news.ycombinator.com",
+];
 
 /** The env var the login password is read from (never an input field). */
 const PASSWORD_ENV = "BROWSER_LOGIN_PASSWORD";
