@@ -6,7 +6,7 @@ The full authoring guide ships inside this project at `.claude/skills/sapiom-age
 
 ## Authoring
 
-- An orchestration is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export.
+- An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export.
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck.
 
 ## The entry input contract
@@ -39,7 +39,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code locally against **stub capabilities**: every `ctx.sapiom.*` call (namespace calls *and* handle methods like `repo.pushFromSandbox`) returns a built-in default, so a workflow runs end-to-end with zero setup. Returns a per-step trace.
+- **run_local** — runs your **real** step code locally against **stub capabilities**: every `ctx.sapiom.*` call (namespace calls *and* handle methods like `repo.pushFromSandbox`) returns a built-in default, so an agent run completes end-to-end with zero setup. Returns a per-step trace.
 - **deploy** — ship it.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.
@@ -58,7 +58,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 ## Dispatched runs: pause & resume
 
-A long-running capability (today the coding agent) is launched fire-and-forget and the workflow suspends until it finishes:
+A long-running capability (today the coding agent) is launched fire-and-forget and the agent run suspends until it finishes:
 
 ```ts
 const run = await ctx.sapiom.models.coding.launch({ task, gitRepository: repo }); // returns a handle, not a result
