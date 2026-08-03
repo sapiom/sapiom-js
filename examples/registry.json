@@ -1337,10 +1337,11 @@
         }
       ],
       "setup": {
-        "runsWithNoSetup": false,
+        "runsWithNoSetup": true,
         "connectionCount": 1,
         "settingCount": 1,
-        "provisions": ["postgres"]
+        "provisions": ["postgres"],
+        "degradedWithoutSetup": "Snapshots the seeded demo database's own catalog, writes a real narrative report with a rendered chart, and returns it inline — nothing is emailed, because no `deliverTo` recipient is set."
       }
     },
     {

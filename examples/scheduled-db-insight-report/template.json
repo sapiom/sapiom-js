@@ -83,5 +83,15 @@
         "deliverTo": "founders@example.com"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "report", "assert": "nonEmptyString" },
+      { "path": "chartUrl", "assert": "nonEmptyString" },
+      { "path": "delivered", "assert": "equals", "value": false },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Snapshots the seeded demo database's own catalog, writes a real narrative report with a rendered chart, and returns it inline — nothing is emailed, because no `deliverTo` recipient is set."
+  }
 }
