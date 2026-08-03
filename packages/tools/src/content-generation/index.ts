@@ -49,6 +49,15 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
  */
 export const VIDEO_RESULT_SIGNAL = "contentGeneration.video.result";
 
+/**
+ * Capability-stable signal an image launch fires when the image reaches a terminal
+ * state. The async completion→resume path is media-agnostic: the engine reads this
+ * name off the paused step row and matches the resume on `correlationId` (the launch
+ * `requestId`), so images resume through the exact same rail as video — this name is
+ * just the label carried in the handle's `dispatch.resultSignal`.
+ */
+export const IMAGE_RESULT_SIGNAL = "contentGeneration.images.result";
+
 // ----- Types -----
 
 export interface StorageOptions {
@@ -243,11 +252,196 @@ export async function createImage(
   return mapResult(raw);
 }
 
+// ----- Image async dispatch (SAP-1802) -----
+
+/** How often to poll for the async image result, and when to give up. Caller-overridable. */
+const DEFAULT_IMAGE_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_IMAGE_TIMEOUT_MS = 2 * 60_000;
+
 /**
- * The `images` sub-namespace, so `contentGeneration.images.create(...)` reads the
- * same whether imported from the barrel or used on a client.
+ * The routed async-submit handle the Core capability router returns for a
+ * `dispatch: 'async'` image request — camelCase (the router normalizes fal's
+ * snake_case away), with `servedBy` stripped at the public `/v1` boundary. Mirrors
+ * the video dispatch handle; the image is NOT here yet (completion is out-of-band).
  */
-export const images = { create: createImage };
+interface ImageDispatchResponse {
+  requestId: string;
+  statusUrl: string;
+  responseUrl?: string;
+}
+
+/**
+ * The result endpoint to poll. Prefer `responseUrl`; fall back to `statusUrl` with a
+ * trailing `/status` removed (the same convention as video's queue handle), so an
+ * async image launch stays usable when only `statusUrl` comes back.
+ */
+function imageResultUrl(handle: ImageDispatchResponse): string | undefined {
+  if (handle.responseUrl) return handle.responseUrl;
+  if (!handle.statusUrl) return undefined;
+  const url = new URL(handle.statusUrl);
+  if (!url.pathname.endsWith("/status")) return undefined;
+  url.pathname = url.pathname.slice(0, -"/status".length);
+  return url.toString();
+}
+
+/**
+ * A launched-but-not-awaited image generation job. Satisfies {@link DispatchHandle},
+ * so it can be handed straight to `pauseUntilSignal(handle, { resumeStep })` to
+ * suspend a workflow step until the image is ready — or `wait()`-ed inline for
+ * standalone use (same result as `images.create`, but with the dispatchable surface
+ * that doesn't hold the request open behind Core's 30s router cap).
+ */
+export interface ImageLaunchHandle extends DispatchHandle {
+  /** The queue request id for this job (also the correlation id a workflow resumes on). */
+  requestId: string;
+  /** Poll to completion and resolve the full result. */
+  wait(opts?: {
+    timeoutMs?: number;
+    pollMs?: number;
+  }): Promise<ImageGenerationResult>;
+}
+
+/**
+ * The image job's terminal result as it arrives at a step **resumed** from
+ * `pauseUntilSignal(launchHandle, { resumeStep })`. It crossed a wire boundary, so
+ * the shape is the engine's generic, media-agnostic dispatch payload (`outputs[]`) —
+ * the identical shape a resumed video step receives. Annotate a resumed step's input
+ * with this type instead of hand-rolling the shape.
+ */
+export interface ImageResultPayload {
+  outputs: Array<{
+    /** Present when the output was persisted to file storage — the durable reference. */
+    fileId?: string;
+    /**
+     * A ready-to-use, short-lived signed download URL for the persisted output, when
+     * available. Convenience only — it may have expired by the time a resumed step runs;
+     * re-fetch from `fileId` via `fileStorage.getDownloadUrl(fileId)` for a fresh one.
+     */
+    downloadUrl?: string;
+    /** ISO expiry of `downloadUrl`, when present — may already be past by the time a step resumes. */
+    downloadUrlExpiresAt?: string;
+    /** Present when storage was requested but persisting this output failed. */
+    storageError?: string;
+  }>;
+}
+
+/**
+ * Map a live, awaited {@link ImageGenerationResult} to the plain
+ * {@link ImageResultPayload} a resumed step receives across the wire boundary.
+ */
+export function toImageResumePayload(
+  result: ImageGenerationResult,
+): ImageResultPayload {
+  return {
+    outputs: (result.images ?? []).map((img) => ({
+      ...(img.fileId !== undefined && { fileId: img.fileId }),
+      ...(img.downloadUrl !== undefined && { downloadUrl: img.downloadUrl }),
+      ...(img.downloadUrlExpiresAt !== undefined && {
+        downloadUrlExpiresAt: img.downloadUrlExpiresAt,
+      }),
+      ...(img.storageError !== undefined && { storageError: img.storageError }),
+    })),
+  };
+}
+
+/**
+ * Submit an image generation job and return a dispatchable handle immediately, rather
+ * than holding the request open for the full generate+store the way the routed sync
+ * {@link createImage} does. The handle's `dispatch` member lets a workflow step pause
+ * until the image is ready; `handle.wait()` blocks inline instead.
+ *
+ * Routed (SAP-1116) + async (SAP-1802): POSTs `dispatch: 'async'` to
+ * `POST /v1/capabilities/content.generation.images`, forwarding the engine's workflow
+ * resume token so the service resumes the paused step on completion. The router returns
+ * a queue handle (not the image); the result arrives via signal resume or `wait()`.
+ * Because the submit returns as soon as the job is enqueued, it never meets Core's 30s
+ * router cap — the failure mode the blocking sync path hits under a fan-out.
+ *
+ * Pass `storage` to persist the output (the result then carries `fileId`). Throws
+ * {@link ContentGenerationHttpError} when the submit fails.
+ */
+export async function launchImage(
+  input: ImageCreateInput,
+  transport: Transport = defaultTransport(),
+  baseUrl: string = resolveCoreBaseUrl(),
+): Promise<ImageLaunchHandle> {
+  assertPrompt(input.prompt);
+
+  // Mirror createImage's body byte-for-byte, plus `dispatch: 'async'` to select the
+  // queue path. `params` rides nested; `storage` uses a truthy check (so `storage: null`
+  // is "no storage"); `!= null` keeps an explicit JS null off the wire.
+  const body: Record<string, unknown> = {
+    prompt: input.prompt,
+    dispatch: "async",
+  };
+  if (input.model != null) body.model = input.model;
+  if (input.numImages !== undefined) body.numImages = input.numImages;
+  if (input.storage) body.storage = input.storage;
+  if (input.params != null) body.params = input.params;
+
+  const handle = await capabilityCall<ImageDispatchResponse>(
+    "content.generation.images",
+    body,
+    {
+      transport,
+      baseUrl,
+      // Forward the resume token so the service resumes a paused workflow step when the
+      // job completes (no header, no behavior change outside a workflow context).
+      headers: workflowResumeHeaders(transport.resumeToken),
+      makeError: (message, status, errorBody) =>
+        new ContentGenerationHttpError(message, status, errorBody),
+      errorPrefix: "Failed to launch image generation",
+    },
+  );
+
+  const responseUrl = imageResultUrl(handle);
+  if (!responseUrl) {
+    throw new Error("Image submit did not return a result URL to poll");
+  }
+  const requestId = handle.requestId ?? "unknown";
+
+  const wait = async ({
+    timeoutMs = DEFAULT_IMAGE_TIMEOUT_MS,
+    pollMs = DEFAULT_IMAGE_POLL_INTERVAL_MS,
+  }: {
+    timeoutMs?: number;
+    pollMs?: number;
+  } = {}): Promise<ImageGenerationResult> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const res = await transport.fetch(responseUrl, { method: "GET" });
+      if (res.ok) {
+        const raw = (await res.json()) as RawImageResult;
+        if (Array.isArray(raw.images)) return mapResult(raw);
+      } else {
+        // Still generating, or a transient error. Drain the unread body so the
+        // connection can be reused, then keep polling — `timeoutMs` is the backstop.
+        try {
+          await res.body?.cancel();
+        } catch {
+          // best-effort drain
+        }
+      }
+      await sleep(pollMs);
+    }
+    throw new Error(
+      `Image generation did not complete within ${timeoutMs}ms (request id: ${requestId})`,
+    );
+  };
+
+  return {
+    requestId,
+    dispatch: { correlationId: requestId, resultSignal: IMAGE_RESULT_SIGNAL },
+    wait,
+  };
+}
+
+/**
+ * The `images` sub-namespace: `contentGeneration.images.create(...)` (routed sync) and
+ * `contentGeneration.images.launch(...)` (routed async-dispatch, for workflow pause or
+ * inline `wait()`), read the same whether imported from the barrel or used on a client.
+ */
+export const images = { create: createImage, launch: launchImage };
 
 // ----- Video (async) -----
 
@@ -355,7 +549,9 @@ function mapVideo(raw: RawMedia): GeneratedVideo {
     ...(raw.content_type !== undefined && { contentType: raw.content_type }),
     ...(raw.file_id !== undefined && { fileId: raw.file_id }),
     ...(raw.download_url !== undefined && { downloadUrl: raw.download_url }),
-    ...(raw.download_url_expires_at !== undefined && { downloadUrlExpiresAt: raw.download_url_expires_at }),
+    ...(raw.download_url_expires_at !== undefined && {
+      downloadUrlExpiresAt: raw.download_url_expires_at,
+    }),
     ...(raw.storage_error !== undefined && { storageError: raw.storage_error }),
   };
 }
