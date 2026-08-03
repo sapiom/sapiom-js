@@ -19,7 +19,8 @@
       "handle": "personalized-media",
       "duration": "7d",
       "seed": "seed.sql",
-      "ephemeral": false
+      "ephemeral": false,
+      "reuse": { "key": "dbHandle" }
     }
   ],
   "defaultInput": {

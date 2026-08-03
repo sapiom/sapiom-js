@@ -341,6 +341,7 @@ function createDefaultBuildLaunchOpts(
           environment: process.env.SAPIOM_ENVIRONMENT,
           apiKey,
           generatedRoot,
+          harnessVersion: readVersion(),
         }),
         generateSystemPromptFile(harnessSessionId, {
           generatedRoot,

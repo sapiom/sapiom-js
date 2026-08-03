@@ -54,6 +54,28 @@ describe("generateMcpConfig", () => {
     expect(config.mcpServers["sapiom-dev"].env).toEqual({ SAPIOM_ENVIRONMENT: "staging" });
   });
 
+  it("advertises the harness version so feedback records can name the build", async () => {
+    const filePath = await generateMcpConfig("session-457", { harnessVersion: "0.2.5" });
+    const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+    expect(config.mcpServers["sapiom-dev"].env).toEqual({
+      SAPIOM_HARNESS_VERSION: "0.2.5",
+    });
+  });
+
+  it("carries environment and harness version together", async () => {
+    const filePath = await generateMcpConfig("session-458", {
+      environment: "staging",
+      harnessVersion: "0.2.5",
+    });
+    const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
+
+    expect(config.mcpServers["sapiom-dev"].env).toEqual({
+      SAPIOM_ENVIRONMENT: "staging",
+      SAPIOM_HARNESS_VERSION: "0.2.5",
+    });
+  });
+
   it("isolates sessions into separate directories", async () => {
     const a = await generateMcpConfig("session-a");
     const b = await generateMcpConfig("session-b");

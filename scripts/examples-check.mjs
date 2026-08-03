@@ -21,6 +21,9 @@
 //      names paths the code's entry `inputSchema` declares — a projection onto
 //      a field the schema never declares is the drift SAP-2226 exists to catch.
 //      See scripts/examples-entry-schema-check.mjs.
+//   5c. a resource marked reusable (`resources[].reuse.key`) has that key read
+//      via `resolveResourceHandle` in index.ts — so the reuse picker (SAP-2320)
+//      can never offer a handle the run ignores. See examples-manifest-check.mjs.
 //   6. house-style copy rules the schemas cannot express, including registered
 //      clone-facing authoring/source assets — see scripts/examples-copy-check.mjs.
 //      (The length caps ARE in the schemas, as `maxLength`, so they surface
@@ -41,6 +44,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
+  checkResourceReuse,
   checkResourceSeeds,
   checkSetupSync,
   createManifestChecker,
@@ -165,6 +169,12 @@ for (const t of templates) {
     ? readFileSync(indexPath, "utf8")
     : null;
   errors.push(...checkEntrySchemaCoverage(t.id, manifest, indexSource));
+
+  // 5c. A resource marked reusable (`reuse.key`) must have its handle read from
+  // the entry input via `resolveResourceHandle` in the same index.ts — otherwise
+  // the picker offers a control the next run silently ignores (design-v2
+  // § Landmines). Reuses the index source read just above.
+  errors.push(...checkResourceReuse(t.id, manifest, indexSource));
 
   for (const assetPath of collectRegisteredProjectCopyAssets(dir)) {
     const repositoryPath = path
