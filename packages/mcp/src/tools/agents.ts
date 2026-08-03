@@ -17,10 +17,8 @@ import {
   cancelSchedule,
   check,
   clone,
-  createClient,
   createSchedule,
   deploy,
-  GatewayClient,
   getSchedule,
   inspect,
   inspectBuild,
@@ -42,76 +40,9 @@ import {
   type SchedulePolicy,
   type StubFile,
 } from "@sapiom/agent-core";
-import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
+import { type ResolvedEnvironment } from "../credentials.js";
 import { registerTool } from "../register-tool.js";
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
-
-function ok(data: unknown): ToolResult {
-  let text: string;
-  try {
-    text = JSON.stringify(data, null, 2);
-  } catch (err) {
-    // A value in the result resisted serialization. Don't drop the whole
-    // payload (e.g. a run_local trace) on the floor — emit a sanitized version
-    // that keeps everything serializable and marks the node that failed, so the
-    // result stays actionable instead of surfacing as an opaque crash.
-    text = JSON.stringify(
-      {
-        _serializationError: err instanceof Error ? err.message : String(err),
-        data: sanitize(data),
-      },
-      null,
-      2,
-    );
-  }
-  return { content: [{ type: "text" as const, text }] };
-}
-
-/** Best-effort deep copy that replaces any node which throws on access or
- *  serialization with a marker, so a single bad value can't sink the response. */
-function sanitize(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null || typeof value !== "object") return value;
-  if (seen.has(value)) return "[Circular]";
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) return value.map((v) => sanitize(v, seen));
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>)) {
-      try {
-        out[key] = sanitize((value as Record<string, unknown>)[key], seen);
-      } catch (err) {
-        out[key] =
-          `[unserializable: ${err instanceof Error ? err.message : String(err)}]`;
-      }
-    }
-    return out;
-  } catch (err) {
-    return `[unserializable: ${err instanceof Error ? err.message : String(err)}]`;
-  }
-}
-
-function fail(err: unknown): ToolResult {
-  const structured =
-    err instanceof AgentOperationError
-      ? err.toStructured()
-      : {
-          code: "UNEXPECTED",
-          message: err instanceof Error ? err.message : String(err),
-        };
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ error: structured }, null, 2),
-      },
-    ],
-    isError: true,
-  };
-}
+import { fail, gatewayClient, NOT_AUTHED, ok } from "./shared.js";
 
 /**
  * Coerce a tool argument that may arrive as a JSON string (some MCP clients
@@ -138,22 +69,6 @@ function coreTemplatesDir(): string {
   const entry = nodeRequire.resolve("@sapiom/agent-core");
   return path.resolve(path.dirname(entry), "..", "..", "templates");
 }
-
-async function gatewayClient(
-  env: ResolvedEnvironment,
-): Promise<GatewayClient | null> {
-  const creds = await readCredentials(env.name);
-  if (!creds) return null;
-  return createClient({ apiKey: creds.apiKey, host: env.apiURL });
-}
-
-const NOT_AUTHED = fail(
-  new AgentOperationError({
-    code: "NOT_AUTHENTICATED",
-    message: "Not authenticated.",
-    hint: "Use the sapiom_authenticate tool first.",
-  }),
-);
 
 /**
  * Agent-facing one-liner about a schedule's health: surfaces recent fire failures (with the

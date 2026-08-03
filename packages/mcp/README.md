@@ -76,6 +76,7 @@ authentication — they run entirely offline.
 | `sapiom_authenticate` | browser | Log in and cache an API key for the current environment |
 | `sapiom_status` | — | Report authentication status |
 | `sapiom_logout` | — | Clear cached credentials |
+| `sapiom_send_feedback` | ✓ | Relay the user's product feedback to the Sapiom team |
 | `sapiom_dev_agents_scaffold` | — | Create a new orchestration project |
 | `sapiom_dev_agents_check` | — | Bundle + validate the step graph offline |
 | `sapiom_dev_agents_run_local` | — | Run the workflow locally, resolving capability calls from stubs (no cost) |
@@ -102,6 +103,19 @@ from stubs; a real `run`/`deploy` executes them in the cloud (metered). This MCP
 never grows a per-capability tool of its own — capabilities live in
 `@sapiom/tools` and the remote `sapiom` MCP. See
 [the positioning doc](../../docs/mcp-servers.md) for the full policy.
+
+## Sending feedback
+
+`sapiom_send_feedback` relays a user's product feedback (a bug, a rough edge, a
+feature request) to the Sapiom team. The agent sends only what the user said;
+the server attaches package version, platform, arch, node version, environment
+and a timestamp itself, so the model never has to read those off the machine.
+
+A host embedding this server can advertise its own version with
+**`SAPIOM_HARNESS_VERSION`** — it rides along as `clientMeta.harnessVersion`,
+which is what makes "which build is this user on" answerable during triage. The
+field is omitted entirely when the variable is unset, never filled with a
+placeholder. `@sapiom/harness` sets it automatically.
 
 ## Usage analytics
 

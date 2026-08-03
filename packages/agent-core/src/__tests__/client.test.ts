@@ -75,6 +75,38 @@ describe('createClient / GatewayClient', () => {
     const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
     await expect(client.get('/foo')).rejects.toMatchObject({ code: 'NETWORK' });
   });
+
+  it('postAtHostRoot targets the host root, bypassing the /v1/workflows base', async () => {
+    const spy = mockFetch([{ status: 200, body: { id: 'fb_1' } }]);
+    const client = createClient({ host: 'https://example.com', apiKey: 'sk_test' });
+    await client.postAtHostRoot('/v1/studio-feedback', { message: 'hi' });
+
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://example.com/v1/studio-feedback');
+    expect(url).not.toContain('/v1/workflows');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk_test');
+    expect(init.body).toBe(JSON.stringify({ message: 'hi' }));
+  });
+
+  it('strips a trailing slash from the host for both bases', async () => {
+    const spy = mockFetch([{ status: 200, body: {} }]);
+    const client = createClient({ host: 'https://example.com/', apiKey: 'sk' });
+    await client.postAtHostRoot('/v1/studio-feedback');
+    await client.get('/foo');
+
+    expect(spy.mock.calls[0][0]).toBe('https://example.com/v1/studio-feedback');
+    expect(spy.mock.calls[1][0]).toBe('https://example.com/v1/workflows/foo');
+  });
+
+  it('maps postAtHostRoot failures through the same error shaping', async () => {
+    mockFetch([{ status: 401, body: { message: 'Unauthorized' } }]);
+    const client = createClient({ host: 'https://example.com', apiKey: 'bad' });
+    await expect(client.postAtHostRoot('/v1/studio-feedback', {})).rejects.toMatchObject({
+      code: 'HTTP_401',
+      message: 'Unauthorized',
+    });
+  });
 });
 
 // ── run ───────────────────────────────────────────────────────────────────────
