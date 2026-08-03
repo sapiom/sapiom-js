@@ -79,8 +79,8 @@ test.describe("theme — system preference", () => {
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({ page }) => {
-  await expect(page.locator(".brand-name")).toHaveText("Sapiom");
-  await expect(page.locator(".brand-product")).toHaveText("Studio");
+  await expect(page.locator(".brand-logotype")).toBeVisible();
+  await expect(page.locator(".brand-product")).toHaveText("agent.studio");
   // Mock mode is the static demo build: it must never claim a connected
   // Sapiom account — the identity chip reads "Demo workspace" instead.
   const identity = page.getByTestId("brand-identity");
@@ -1399,7 +1399,7 @@ test.describe("account profile row", () => {
     await expect(page.getByTestId("profile-switch-account")).toBeEnabled();
 
     // Dismisses like every other popover.
-    await page.locator(".brand-name").click();
+    await page.locator(".brand-lockup").click();
     await expect(menu).toHaveCount(0);
   });
 });

@@ -21,7 +21,7 @@ test.describe("session history dropdown", () => {
     await menu.getByText("Past sessions", { exact: true }).click();
     await expect(menu).toBeVisible();
 
-    await page.locator(".brand-name").click();
+    await page.locator(".brand-lockup").click();
     await expect(menu).toBeHidden();
   });
 
@@ -54,7 +54,7 @@ test.describe("settings popover", () => {
     await page.getByTestId("telemetry-toggle").click();
     await expect(popover).toBeVisible();
 
-    await page.locator(".brand-name").click();
+    await page.locator(".brand-lockup").click();
     await expect(popover).toBeHidden();
   });
 

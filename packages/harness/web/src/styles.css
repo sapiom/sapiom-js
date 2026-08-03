@@ -384,10 +384,14 @@ input {
   border-bottom: 1px solid var(--ui-line);
 }
 
+/* The lockup is an <h1>; strip the heading's default margin/size so it lays
+   out as a plain baseline row of wordmark + product name. */
 .brand-lockup {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: baseline;
+  gap: var(--sp2);
+  margin: 0;
+  font-size: var(--type-ui);
 }
 
 .brand-header-tools {
@@ -396,26 +400,20 @@ input {
   gap: var(--sp1);
 }
 
-.brand-mark {
-  width: 18px;
-  height: 18px;
-}
-
-.brand-name {
-  font-size: var(--type-ui);
-  font-weight: 600;
+/* The Sapiom wordmark renders in currentColor. Keep it neutral ink — the
+   wordmark is the name, not a status, so it is not green. A replaced element
+   has no baseline of its own, so drop it onto the product name's text baseline
+   by the descender the asset publishes (set as an inline custom property). */
+.brand-logotype {
+  display: block;
   color: var(--text);
-  letter-spacing: -0.01em;
+  transform: translateY(var(--brand-logotype-descender, 0));
 }
 
-.brand-divider {
-  width: 1px;
-  height: 14px;
-  background: var(--border-strong);
-}
-
+/* Lowercase mono product name, matching the terminal masthead's voice. */
 .brand-product {
-  font-size: var(--type-ui);
+  font-family: var(--mono);
+  font-size: var(--type-meta);
   font-weight: 500;
   color: var(--text-dim);
 }

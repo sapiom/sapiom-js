@@ -28,22 +28,11 @@ body {
 }
 
 /* ---- Header ------------------------------------------------------------- */
-/* Geometry lives in styles.css (the brand header is the rail's 56px top
-   row); this layer only carries the type texture. */
-.brand-name {
-  font-size: var(--type-body);
-  font-weight: 590;
-  letter-spacing: -0.03em;
-}
-
+/* The brand lockup (Sapiom wordmark + agent.studio) lives in styles.css. The
+   wordmark carries its own texture; the product name is on the mono ramp, so
+   this layer only nudges its tracking. */
 .brand-product {
-  font-weight: 510;
   letter-spacing: -0.01em;
-}
-
-.brand-divider {
-  height: 16px;
-  background: var(--ui-line-strong, var(--border-strong));
 }
 
 /* The jump/search field's geometry lives in styles.css (.rail-search); no
