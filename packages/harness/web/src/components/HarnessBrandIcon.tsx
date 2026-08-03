@@ -55,6 +55,10 @@ export function HarnessBrandIcon({ kind, size = 16 }: { kind: string; size?: num
       width={size}
       height={size}
       fill="currentColor"
+      /* Claude Code renders in Claude's brand orange (matching the terminal
+         banner's mark); other marks stay monochrome and inherit ink. The
+         harness mark is never tinted green — green is reserved for state. */
+      style={kind === "claude-code" ? { color: "var(--brand-claude)" } : undefined}
       aria-hidden="true"
       focusable="false"
     >

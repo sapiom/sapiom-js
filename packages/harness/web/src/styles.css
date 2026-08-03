@@ -56,6 +56,12 @@
      Every CLICKABLE chip/pill (run picker, Preview, composer starter pills)
      floors at this so the hit target never collapses to text height. */
   --chip-h: 28px;
+
+  /* Harness brand-mark color, a domain exception to "green is scarce" (like the
+     terminal ANSI ramp): the Claude Code mark renders in Claude's brand orange
+     wherever it identifies the harness, matching the terminal banner's mark.
+     Theme-independent — it reads on both surfaces. */
+  --brand-claude: #d97757;
 }
 
 /* --------------------------------------------------------------------------
