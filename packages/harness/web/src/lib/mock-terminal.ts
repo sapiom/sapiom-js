@@ -70,7 +70,7 @@ function welcomeBox(term: XTerm): string {
 function promptBox(term: XTerm): string {
   const w = boxWidth(term);
   const inner = w - 2;
-  const hint = "  ? for shortcuts · demo, not a live agent".slice(0, w);
+  const hint = "  ? for shortcuts · demo, not a live coding agent".slice(0, w);
   return (
     dim("╭" + "─".repeat(inner) + "╮") +
     "\r\n" +
@@ -193,7 +193,7 @@ export function attachMockTerminal(term: XTerm): MockTerminalHandle {
       if (typed.trim().length > 0) {
         term.write(
           green("⏺") +
-            dim(" This is a recorded demo. Prompts aren't sent to an agent here.") +
+            dim(" This is a recorded demo. Prompts aren't sent to a coding agent here.") +
             "\r\n" +
             dim("  Run `npx @sapiom/harness` locally to work with a real session.") +
             "\r\n\r\n",
