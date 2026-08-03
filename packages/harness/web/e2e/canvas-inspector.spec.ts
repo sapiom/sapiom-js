@@ -38,6 +38,13 @@ const pickNode = async (page: Page, nodeId: string): Promise<void> => {
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 };
 
+/** Post a Canvas document message from the iframe so the source-window guard
+ *  exercises the same path as a generated board. */
+const postFromCanvas = (page: Page, message: unknown): Promise<void> =>
+  page.frameLocator(".canvas-iframe").locator("body").evaluate((_, payload) => {
+    window.parent.postMessage(payload, "*");
+  }, message);
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
@@ -49,6 +56,14 @@ test("a board pick populates the inspector in place, with no tab switch", async 
   const panel = page.getByTestId("canvas-overview");
   await expect(panel).toContainText("Overview");
   await expect(panel).toContainText("Handles lease applications end to end");
+  await expect(page.getByTestId("canvas-overview-toggle")).toHaveAttribute(
+    "aria-label",
+    "Collapse agent overview",
+  );
+  await expect(page.getByTestId("canvas-chat-toggle")).toHaveAttribute(
+    "data-tooltip",
+    "Chat — ask about this agent or the selected step",
+  );
 
   await pickNode(page, "intake");
 
@@ -59,6 +74,10 @@ test("a board pick populates the inspector in place, with no tab switch", async 
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
   const inspector = page.getByTestId("canvas-step-inspector");
   await expect(inspector).toContainText("Logs the incoming order");
+  await expect(page.getByTestId("canvas-inspector-close")).toHaveAttribute(
+    "aria-label",
+    "Back to the agent overview",
+  );
   // Contract chips render from the posted graph.
   await expect(inspector).toContainText("records.read");
 
@@ -69,6 +88,68 @@ test("a board pick populates the inspector in place, with no tab switch", async 
   await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "detail");
   await expect(page.getByTestId("canvas-detail-title")).toHaveText("intake");
+});
+
+test("a generic render failure names the agent graph", async ({ page }) => {
+  await postFromCanvas(page, {
+    type: "sapiom-canvas:error",
+    title: "Could not extract graph",
+    reason: "x",
+  });
+
+  const error = page.getByTestId("canvas-render-error");
+  await expect(error).toContainText("The agent graph could not be extracted. Open the terminal for details.");
+  await expect(error).not.toContainText("workflow graph");
+  await expect(page.getByRole("button", { name: "Ask coding agent to fix" })).toBeVisible();
+});
+
+test("a launched-agent node keeps its private identifiers and navigates to the agent", async ({ page }) => {
+  await postFromCanvas(page, {
+    type: "sapiom-canvas:graph",
+    graph: {
+      name: "leasing",
+      entry: "intake",
+      nodes: [
+        {
+          id: "intake",
+          kind: "entry",
+          label: "intake",
+          role: "entry",
+          description: "Logs the incoming order.",
+          timeoutMs: null,
+          inputSchema: null,
+          capabilities: [],
+        },
+        {
+          id: "launch:rfq",
+          kind: "launched-workflow",
+          label: "rfq",
+          role: "launches another agent",
+          description: "Hands off quote generation.",
+          timeoutMs: null,
+          inputSchema: null,
+          capabilities: [],
+        },
+      ],
+      edges: [{ from: "intake", to: "launch:rfq", kind: "launch", label: "launch()" }],
+      groups: [],
+      warnings: [],
+    },
+  });
+
+  await page.getByTestId("right-tab-steps").click();
+  await expect(page.getByTestId("canvas-step-row-launch:rfq")).toBeVisible();
+  await page.getByTestId("right-tab-canvas").click();
+  await postFromCanvas(page, { type: "sapiom:node-click", stepName: "rfq" });
+
+  await expect(page.getByTestId("canvas-inspector-title")).toHaveText("rfq");
+  await expect(page.locator(".canvas-detail-kind")).toHaveText("Launched agent");
+  const openAgent = page.getByTestId("canvas-open-workflow-launch:rfq");
+  await expect(openAgent).toHaveText(/Open agent/);
+  await openAgent.click();
+
+  await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
+  await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
 });
 
 test("deselect restores the overview: Esc, the panel's close, and empty board space", async ({ page }) => {
@@ -133,7 +214,10 @@ test("the panel hugs its content up to half the pane; taller content scrolls ins
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("canvas-step-inspector")).toHaveCount(0);
   await expect(page.getByTestId("canvas-overview")).toHaveCount(0);
-  await expect(page.getByTestId("canvas-overview-toggle")).toBeVisible();
+  await expect(page.getByTestId("canvas-overview-toggle")).toHaveAttribute(
+    "aria-label",
+    "Show agent overview",
+  );
 });
 
 // The panel is capped at half the canvas pane, so the drag-grow assertion

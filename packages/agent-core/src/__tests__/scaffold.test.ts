@@ -9,7 +9,9 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,6 +34,20 @@ afterEach(() => {
 
 function makeTmp(): string {
   return mkdtempSync(path.join(tmpdir(), "sapiom-scaffold-test-"));
+}
+
+function readScaffoldedText(dir: string): string {
+  const files: string[] = [];
+  const visit = (current: string): void => {
+    for (const entry of readdirSync(current)) {
+      if (entry === ".git") continue;
+      const full = path.join(current, entry);
+      if (statSync(full).isDirectory()) visit(full);
+      else files.push(full);
+    }
+  };
+  visit(dir);
+  return files.map((file) => readFileSync(file, "utf8")).join("\n");
 }
 
 describe("scaffold", () => {
@@ -142,6 +158,42 @@ describe("scaffold", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+
+  it.each(["default", "coding-pause"])(
+    "copies the %s template with exact Agent terminology",
+    async (template) => {
+      const base = makeTmp();
+      const targetDir = path.join(base, `fresh-${template}`);
+      try {
+        await scaffold({
+          targetDir,
+          template,
+          versions: { agent: "1.0.0", tools: "1.0.0", zod: "3.0.0" },
+        });
+
+        const text = readScaffoldedText(targetDir);
+        expect(text).toContain(`# fresh-${template}`);
+        expect(text).not.toContain("__PROJECT_NAME__");
+        expect(text).toContain("This project defines exactly one Sapiom agent");
+        expect(text).toContain("agent run");
+        expect(text).not.toMatch(
+          /\b(?:workflow|workflows|orchestration|orchestrations)\b/i,
+        );
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("published package metadata", () => {
+  it("uses Agent terminology in discoverability keywords", () => {
+    const pkg = JSON.parse(
+      readFileSync(path.resolve(__dirname, "..", "..", "package.json"), "utf8"),
+    ) as { keywords: string[] };
+
+    expect(pkg.keywords).toEqual(["sapiom", "agent", "automation", "sdk"]);
   });
 });
 

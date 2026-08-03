@@ -68,6 +68,10 @@ test.describe("Describe with AI", () => {
     const btn = page.getByTestId("canvas-describe-ai");
     await expect(btn).toBeVisible();
     await expect(btn).toContainText(/with AI/i);
+    await expect(btn).toHaveAttribute(
+      "data-tooltip",
+      "Runs a hidden coding-agent session that writes descriptions into the agent source — the canvas updates when it saves",
+    );
   });
 
   test("clicking runs the hidden describe macro (workflow + prompt) and shows a loading state", async ({ page }) => {
@@ -97,7 +101,12 @@ test.describe("Describe with AI", () => {
     // leasing has an existing description, so the button is the destructive
     // Rewrite. Dismissing the confirm must launch no run and leave the button idle.
     await clearLastMacroRun(page);
-    page.on("dialog", (d) => void d.dismiss());
+    page.on("dialog", (d) => {
+      expect(d.message()).toBe(
+        "Rewrite this agent's descriptions? The coding agent will edit the source and may replace text you wrote by hand.",
+      );
+      void d.dismiss();
+    });
     await page.getByTestId("canvas-describe-ai").click();
     // Past the mock's macro delay — if it were going to run, it has.
     await page.waitForTimeout(500);

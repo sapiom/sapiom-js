@@ -57,6 +57,22 @@ describe("ensureConsent", () => {
     expect(settings.telemetryOptIn).toBe(false);
   });
 
+  it("describes detailed telemetry as coding-agent activity", async () => {
+    const wasTTY = process.stdin.isTTY;
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+
+    try {
+      await ensureConsent({ noTelemetry: false });
+      const printed = log.mock.calls.flat().join("\n");
+      expect(printed).toContain("the tool calls your coding agent makes");
+      expect(printed).not.toContain("the tool calls your agent makes");
+    } finally {
+      log.mockRestore();
+      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+    }
+  });
+
   it("defaults to OFF (opt-out) and persists on first run when stdin is not a TTY", async () => {
     // SAP-1988: the invasive Sapiom→BQ tier is opt-out by default — a non-TTY
     // first run (CI/Docker/headless) must never silently opt the user in.

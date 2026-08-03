@@ -3,6 +3,7 @@ import {
   defineStep,
   goto,
   pauseUntilSignal,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -409,9 +410,17 @@ const start = defineStep({
       "escalateTo",
       input.escalateTo?.trim() || config.ESCALATION_EMAIL || null,
     );
+    // The durable ledger is opt-in: absent a handle the chain runs off `ctx.shared`
+    // alone and provisions no Postgres. Read the chosen handle through the canonical
+    // injection seam (declared as `resources[].reuse.key: "ledgerHandle"`) so a
+    // deploy-time reuse picker can point it at a ledger DB the tenant already owns.
+    // Fallback is `""`, not a default handle: an empty result must degrade to null,
+    // never force a managed database onto a run that asked for none.
     ctx.shared.set(
       "ledgerHandle",
-      input.ledgerHandle?.trim() || config.LEDGER_HANDLE || null,
+      resolveResourceHandle(input, { key: "ledgerHandle", fallback: "" }) ||
+        config.LEDGER_HANDLE ||
+        null,
     );
     ctx.shared.set("maxReminders", input.maxReminders ?? DEFAULT_MAX_REMINDERS);
     ctx.shared.set("dryRun", input.dryRun === true);

@@ -488,7 +488,7 @@ export class SessionManager {
       throw new SessionNotResumeableError(
         id,
         `${label} no longer has the conversation for this session (${session.agentSessionId}) in ${session.cwd}. ` +
-          `Sessions that ended before their first prompt are never written to the agent's history, so there is nothing to resume — start a new session in this directory instead.`,
+          `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
     const opts: LaunchOpts = {

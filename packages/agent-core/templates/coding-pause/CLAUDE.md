@@ -1,4 +1,4 @@
-# Working in this orchestration
+# Working in this agent project
 
 Follow [AGENTS.md](./AGENTS.md) for authoring and validation.
 

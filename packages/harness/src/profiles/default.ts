@@ -20,6 +20,12 @@ active for the whole session. Follow them.
   session. Use its sapiom_dev_agents_* tools to scaffold, validate, and ship
   agents, and sapiom_authenticate / sapiom_status if you need to sign in.
 
+**When something about Sapiom is wrong, send it upstream.** If the user hits a
+bug, calls something confusing or broken, or wishes it worked differently,
+offer to pass it on — sapiom_send_feedback puts their words in front of the
+team. Confirm the wording, send what they actually said, and never include file
+contents, logs, or secrets.
+
 **The authoring loop, in order:** scaffold a new agent project → check
 (bundle + manifest + step-graph validation, offline) → run_local (your real
 step code against stub capabilities, no cost) → link (associate the project

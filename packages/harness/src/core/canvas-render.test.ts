@@ -106,6 +106,7 @@ describe("renderCanvasForSession", () => {
     const html = await readRender(cwd, HUB);
     expect(html).toContain("node--launched-workflow");
     expect(html).toContain(">spoke-workflow<");
+    expect(html).toContain("launches another agent");
     expect(html).toContain("canvas-edge--launch");
     expect(html).toContain(">launch()<");
   });
@@ -120,7 +121,8 @@ describe("renderCanvasForSession", () => {
     const html = await readRender(cwd, NO_DEFINITION);
     expect(html).toContain("broken-flow");
     expect(html).toContain("render failed");
-    expect(html).toContain("Could not extract this workflow's step graph");
+    expect(html).toContain("Could not extract this agent's step graph");
+    expect(html).toContain("Ask your coding agent to fix the issue");
     expect(html).not.toContain('class="canvas-node '); // no diagram — just the note
   });
 

@@ -12,7 +12,7 @@
   "keywords": [
     "sapiom",
     "agent",
-    "workflows",
+    "automation",
     "sdk"
   ],
   "main": "./dist/cjs/index.js",

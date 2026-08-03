@@ -189,6 +189,8 @@ describe('clone', () => {
     const spy = mockFetch([{ status: 200, body: {} }]);
     await expect(clone({ targetDir: '/tmp/whatever', cloneRepo: () => {} }, client)).rejects.toMatchObject({
       code: 'BAD_INPUT',
+      message:
+        'Provide a templateId (to fork then clone), a forkId (to clone an existing fork), or a definitionId (to clone a deployed agent).',
     });
     expect(spy).not.toHaveBeenCalled();
   });
@@ -196,7 +198,11 @@ describe('clone', () => {
   it('rejects when more than one of templateId, forkId, or definitionId is given', async () => {
     await expect(
       clone({ templateId: 't', forkId: 'f', targetDir: '/tmp/whatever', cloneRepo: () => {} }, client),
-    ).rejects.toMatchObject({ code: 'BAD_INPUT' });
+    ).rejects.toMatchObject({
+      code: 'BAD_INPUT',
+      hint:
+        'Use templateId to start from a gallery template, forkId to re-clone an existing fork, or definitionId to pull a deployed agent locally.',
+    });
     await expect(
       clone(
         { templateId: 't', definitionId: '1', targetDir: '/tmp/whatever', cloneRepo: () => {} },

@@ -45,6 +45,10 @@ describe("seedExampleProject", () => {
     const canvasDir = path.join(targetRoot, ".sapiom", "canvas");
     const canvasHtml = await fs.readFile(path.join(canvasDir, "index.html"), "utf8");
     expect(canvasHtml).toContain("order-triage");
+    expect(canvasHtml).toContain("standalone agent");
+    expect(canvasHtml).toContain("cross-agent signal/handoff");
+    expect(canvasHtml).toContain("after you change the agent");
+    expect(canvasHtml).not.toContain("standalone workflow");
     expect(existsSync(path.join(canvasDir, "_template.html"))).toBe(true);
   });
 

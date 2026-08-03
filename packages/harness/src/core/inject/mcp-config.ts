@@ -19,6 +19,15 @@ export interface McpConfigOptions {
   /** Root directory generated configs live under. Defaults to
    *  HARNESS_PATHS.generated. Override in tests to avoid the real home dir. */
   generatedRoot?: string;
+  /**
+   * This harness's own version, advertised to the sapiom-dev child as
+   * `SAPIOM_HARNESS_VERSION`. The MCP is `npx`'d from the registry and so has
+   * no way to know which Studio launched it; `sapiom_send_feedback` stamps this
+   * into every feedback record, which is what makes "which build is this user
+   * on" answerable during triage. Omitted when absent — the tool leaves the
+   * field out rather than inventing an "unknown".
+   */
+  harnessVersion?: string;
 }
 
 /**
@@ -36,9 +45,14 @@ export async function generateMcpConfig(
   await fs.mkdir(dir, { recursive: true });
 
   const sapiomEnvironment = options.environment ?? process.env.SAPIOM_ENVIRONMENT;
-  const devEnv: Record<string, string> | undefined = sapiomEnvironment
-    ? { SAPIOM_ENVIRONMENT: sapiomEnvironment }
-    : undefined;
+  const devEnvEntries: Record<string, string> = {
+    ...(sapiomEnvironment ? { SAPIOM_ENVIRONMENT: sapiomEnvironment } : {}),
+    ...(options.harnessVersion
+      ? { SAPIOM_HARNESS_VERSION: options.harnessVersion }
+      : {}),
+  };
+  const devEnv: Record<string, string> | undefined =
+    Object.keys(devEnvEntries).length > 0 ? devEnvEntries : undefined;
 
   const config = {
     mcpServers: {

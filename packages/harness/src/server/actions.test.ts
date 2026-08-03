@@ -261,6 +261,7 @@ describe("createActionsRouter", () => {
         method: "POST",
       });
       expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "agent id is required" });
       expect(coreDeps.deploy).not.toHaveBeenCalled();
     });
 
@@ -277,7 +278,7 @@ describe("createActionsRouter", () => {
       });
       expect(res.status).toBe(404);
       const body = (await res.json()) as Record<string, unknown>;
-      expect(body.error).toBe("workflow not found");
+      expect(body.error).toBe("agent not found");
       expect(coreDeps.deploy).not.toHaveBeenCalled();
     });
 

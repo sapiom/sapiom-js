@@ -199,7 +199,7 @@ export function SessionBar({
               data-status={activeSession.status}
               data-tooltip={
                 busy
-                  ? "The agent produced output in the last few seconds"
+                  ? "The coding agent produced output in the last few seconds"
                   : activeSession.status === "running"
                     ? "Session is live; the terminal is connected"
                     : activeSession.status === "exited"

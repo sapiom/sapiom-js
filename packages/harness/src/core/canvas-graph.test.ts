@@ -137,7 +137,7 @@ describe("extractWorkflowGraph", () => {
       id: "launch:spoke-workflow",
       kind: "launched-workflow",
       label: "spoke-workflow",
-      sublabel: "launched workflow",
+      sublabel: "launched agent",
     });
     expect(result.graph.edges).toContainEqual({
       from: "kickoff",

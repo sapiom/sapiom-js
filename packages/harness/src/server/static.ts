@@ -32,9 +32,9 @@ import express, { Router, type Request, type Response } from "express";
 
 const PLACEHOLDER_HTML = `<!doctype html>
 <html>
-  <head><meta charset="utf-8"><title>Sapiom Harness</title></head>
+  <head><meta charset="utf-8"><title>Agent Studio</title></head>
   <body style="font: 14px system-ui; padding: 2rem; color: #333;">
-    <h1>Sapiom Harness</h1>
+    <h1>Agent Studio</h1>
     <p>The web app hasn't been built yet. Run <code>pnpm --filter @sapiom/harness build:web</code>,
     or use <code>pnpm --filter @sapiom/harness dev:web</code> for a hot-reloading dev server.</p>
     <p>The API and WebSocket endpoints on this port are live.</p>

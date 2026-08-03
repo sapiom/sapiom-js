@@ -22,7 +22,7 @@ export function BrandHeader({ onCollapse }: { onCollapse: () => void }): JSX.Ele
         <img src={sapiomMark} alt="" className="brand-mark" />
         <span className="brand-name">Sapiom</span>
         <span className="brand-divider" />
-        <span className="brand-product">Studio</span>
+        <span className="brand-product">Agent Studio</span>
       </div>
 
       <div className="brand-header-tools">

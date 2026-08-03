@@ -70,7 +70,7 @@ function welcomeBox(term: XTerm): string {
 function promptBox(term: XTerm): string {
   const w = boxWidth(term);
   const inner = w - 2;
-  const hint = "  ? for shortcuts · demo, not a live agent".slice(0, w);
+  const hint = "  ? for shortcuts · demo, not a live coding agent".slice(0, w);
   return (
     dim("╭" + "─".repeat(inner) + "╮") +
     "\r\n" +
@@ -100,8 +100,8 @@ function transcript(): ScriptLine[] {
         "\r\n\r\n",
       delayMs: 300,
     },
-    { text: bold("> ") + "Map the leasing workflow and visualize it\r\n\r\n", delayMs: 700 },
-    { text: green("⏺") + " I'll read the workflow definition first.\r\n\r\n", delayMs: 800 },
+    { text: bold("> ") + "Map the leasing agent and visualize it\r\n\r\n", delayMs: 700 },
+    { text: green("⏺") + " I'll read the agent definition first.\r\n\r\n", delayMs: 800 },
     { text: green("⏺") + " " + bold("Read") + "(sapiom.json)\r\n", delayMs: 600 },
     { text: dim("  ⎿  Read 42 lines") + "\r\n\r\n", delayMs: 500 },
     {
@@ -110,7 +110,7 @@ function transcript(): ScriptLine[] {
       // pane width splits a step name mid-word.
       text:
         green("⏺") +
-        " Found workflow " +
+        " Found agent " +
         bold("leasing") +
         ": 4 typed steps, 2 exits\r\n  " +
         cyan("intake → screen → credit-check → approve?") +
@@ -193,7 +193,7 @@ export function attachMockTerminal(term: XTerm): MockTerminalHandle {
       if (typed.trim().length > 0) {
         term.write(
           green("⏺") +
-            dim(" This is a recorded demo. Prompts aren't sent to an agent here.") +
+            dim(" This is a recorded demo. Prompts aren't sent to a coding agent here.") +
             "\r\n" +
             dim("  Run `npx @sapiom/harness` locally to work with a real session.") +
             "\r\n\r\n",

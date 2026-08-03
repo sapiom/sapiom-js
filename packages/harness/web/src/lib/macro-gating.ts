@@ -12,7 +12,7 @@ export function macroDisabledReason(
   activeSessionId: string | null,
 ): string | null {
   if (macro.requiresWorkflow) {
-    if (!workflow) return "Select a workflow first";
+    if (!workflow) return "Select an agent first";
     if (
       macro.action.kind === "open-url" &&
       macro.action.url.includes("{{workflow.definitionId}}") &&

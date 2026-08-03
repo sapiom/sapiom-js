@@ -238,8 +238,8 @@ export function CanvasOverviewPanel({
             <button
               className="theme-toggle canvas-overview-close"
               data-testid="canvas-inspector-close"
-              aria-label="Back to the workflow overview"
-              data-tooltip="Back to the workflow overview (Esc)"
+              aria-label="Back to the agent overview"
+              data-tooltip="Back to the agent overview (Esc)"
               onClick={onDeselect}
             >
               <Icon name="X" size={13} />
@@ -266,8 +266,8 @@ export function CanvasOverviewPanel({
             <button
               className="theme-toggle canvas-overview-close"
               data-testid="canvas-overview-toggle"
-              aria-label="Collapse workflow overview"
-              data-tooltip="Collapse workflow overview"
+              aria-label="Collapse agent overview"
+              data-tooltip="Collapse agent overview"
               onClick={onCollapse}
             >
               <Icon name="X" size={13} />
@@ -309,7 +309,7 @@ export function CanvasOverviewPanel({
                       if (
                         overview.description &&
                         !window.confirm(
-                          "Rewrite this workflow's descriptions? The agent will edit the source and may replace text you wrote by hand.",
+                          "Rewrite this agent's descriptions? The coding agent will edit the source and may replace text you wrote by hand.",
                         )
                       ) {
                         return;
@@ -319,7 +319,7 @@ export function CanvasOverviewPanel({
                       setPending(true);
                       onDescribeWithAI();
                     }}
-                    data-tooltip="Runs a hidden agent that writes descriptions into the workflow source — the canvas updates when it saves"
+                    data-tooltip="Runs a hidden coding-agent session that writes descriptions into the agent source — the canvas updates when it saves"
                   >
                     {describeLoading ? (
                       <>

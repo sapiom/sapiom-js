@@ -7,7 +7,8 @@ import { AgentOperationError } from './errors.js';
 
 /**
  * Production host for the Sapiom backend tenant API.
- * The `/v1/workflows` path is appended internally.
+ * The `/v1/workflows` path is appended internally for every method except
+ * `postAtHostRoot`, which addresses the host root directly.
  */
 export const DEFAULT_WORKFLOWS_HOST = 'https://api.sapiom.ai';
 
@@ -27,31 +28,74 @@ export interface GatewayErrorBody {
  * A minimal, stateless HTTP client for the Sapiom workflows gateway. Construct
  * one per call-site with explicit credentials; pass it into networked core
  * functions rather than relying on environment look-ups.
+ *
+ * Its identity is host + credential. `/v1/workflows` is the base almost every
+ * route shares, not the whole of what this client can address — see
+ * {@link postAtHostRoot}.
  */
 export class GatewayClient {
+  /**
+   * API host root, no trailing slash. The primary field — {@link base} is
+   * derived from it. Kept because a few tenant-API routes are not workflow
+   * resources and sit at the root (see {@link postAtHostRoot}).
+   */
+  private readonly host: string;
+  /** `${host}/v1/workflows` — what get/post/request/openStream paths are relative to. */
   private readonly base: string;
   private readonly apiKey: string;
 
   constructor(opts: ClientOptions) {
-    const host = (opts.host ?? DEFAULT_WORKFLOWS_HOST).replace(/\/$/, '');
-    this.base = `${host}/v1/workflows`;
+    this.host = stripTrailingSlashes(opts.host ?? DEFAULT_WORKFLOWS_HOST);
+    this.base = `${this.host}/v1/workflows`;
     this.apiKey = opts.apiKey;
   }
 
-  async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+  /** `path` is relative to `/v1/workflows`. */
+  request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+    return this.send<T>(method, `${this.base}${path}`, body);
+  }
+
+  get<T = unknown>(path: string): Promise<T> {
+    return this.request<T>('GET', path);
+  }
+
+  post<T = unknown>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>('POST', path, body);
+  }
+
+  /**
+   * POST to a path rooted at the API HOST instead of the `/v1/workflows` base.
+   * `path` must be the full route including its version segment
+   * (e.g. `/v1/studio-feedback`).
+   *
+   * Most of the tenant API lives under `/v1/workflows`, so that prefix is baked
+   * into {@link base}. A few routes are not workflow resources but reach the
+   * same host with the same `x-api-key` — keeping them on this client keeps
+   * them on the one AgentOperationError mapping, rather than a bare `fetch`
+   * that re-implements it. A separate method rather than a special path prefix
+   * on {@link request}: which base a path is relative to must be declared by
+   * the call site, never inferred from how the path is spelled.
+   *
+   * POST-only on purpose — add sibling verbs when a route actually needs one.
+   */
+  postAtHostRoot<T = unknown>(path: string, body?: unknown): Promise<T> {
+    return this.send<T>('POST', `${this.host}${path}`, body);
+  }
+
+  /**
+   * The single JSON request path — every method above funnels here so the
+   * NETWORK / HTTP_* / 401-hint mapping is defined exactly once.
+   */
+  private async send<T>(method: string, url: string, body?: unknown): Promise<T> {
     let res: Response;
     try {
-      res = await fetch(`${this.base}${path}`, {
+      res = await fetch(url, {
         method,
         headers: { 'x-api-key': this.apiKey, 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
-      throw new AgentOperationError({
-        code: 'NETWORK',
-        message: `Could not reach ${this.base}.`,
-        hint: err instanceof Error ? err.message : String(err),
-      });
+      throw networkError(url, err);
     }
 
     const text = await res.text();
@@ -67,14 +111,6 @@ export class GatewayClient {
       });
     }
     return data as T;
-  }
-
-  get<T = unknown>(path: string): Promise<T> {
-    return this.request<T>('GET', path);
-  }
-
-  post<T = unknown>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('POST', path, body);
   }
 
   /**
@@ -101,15 +137,12 @@ export class GatewayClient {
       headers['last-event-id'] = opts.lastEventId;
     }
 
+    const url = `${this.base}${path}`;
     let res: Response;
     try {
-      res = await fetch(`${this.base}${path}`, { method: 'GET', headers, signal: opts.signal });
+      res = await fetch(url, { method: 'GET', headers, signal: opts.signal });
     } catch (err) {
-      throw new AgentOperationError({
-        code: 'NETWORK',
-        message: `Could not reach ${this.base}.`,
-        hint: err instanceof Error ? err.message : String(err),
-      });
+      throw networkError(url, err);
     }
 
     if (!res.ok) {
@@ -127,7 +160,7 @@ export class GatewayClient {
     if (!res.body) {
       throw new AgentOperationError({
         code: 'NETWORK',
-        message: `Stream at ${this.base}${path} returned no body.`,
+        message: `Stream at ${url} returned no body.`,
       });
     }
     return res;
@@ -141,6 +174,30 @@ export class GatewayClient {
  */
 export function createClient(opts: ClientOptions): GatewayClient {
   return new GatewayClient(opts);
+}
+
+/**
+ * Normalize a host by dropping every trailing slash — a hand-edited credentials
+ * file or a proxy config ending in `//` would otherwise produce `host//v1/...`,
+ * which many routers treat as a distinct (404ing) path.
+ *
+ * Deliberately not a regex. The obvious `/\/+$/` backtracks quadratically on a
+ * host with many interior slashes (`a` + `/`.repeat(n) + `b`), and the host is
+ * caller-supplied; this scan is linear and allocates once.
+ */
+function stripTrailingSlashes(host: string): string {
+  let end = host.length;
+  while (end > 0 && host.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  return end === host.length ? host : host.slice(0, end);
+}
+
+/** Unreachable-host failure, shaped identically wherever a fetch rejects. */
+function networkError(url: string, err: unknown): AgentOperationError {
+  return new AgentOperationError({
+    code: 'NETWORK',
+    message: `Could not reach ${url}.`,
+    hint: err instanceof Error ? err.message : String(err),
+  });
 }
 
 function safeParse(text: string): unknown {
