@@ -164,6 +164,10 @@ describe("portable continue — rehydrating a fresh session", () => {
         // The harness's own profile is still there — the brief is appended to
         // it, never a replacement for it.
         expect(prompt).toContain(DEFAULT_SYSTEM_PROMPT.slice(0, 60));
+        expect(prompt).toContain('"boundAgent"');
+        expect(prompt).toContain('"agents"');
+        expect(prompt).not.toContain('"boundWorkflow"');
+        expect(prompt).not.toContain('"workflows"');
         // …and it is labelled as a reconstruction before anything else.
         expect(prompt).toContain("reconstruction, not restored context");
         // What the session was doing.

@@ -448,7 +448,7 @@ export const App = (): JSX.Element => {
       session.id,
       trimmedIdea
         ? `${base} build this:\n\n${trimmedIdea}`
-        : `${base} define the first workflow.`,
+        : `${base} define the first agent.`,
       "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
     );
   };
@@ -476,7 +476,7 @@ export const App = (): JSX.Element => {
   const handleScaffoldInSession = (sessionId: string): void => {
     injectPromptWithRetry(
       sessionId,
-      "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to define the first workflow.",
+      "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to define the first agent.",
       "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
     );
   };

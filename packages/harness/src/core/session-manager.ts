@@ -216,21 +216,19 @@ export interface SessionManagerOptions {
    * state; this layer just decides *when* to call it. Called unconditionally
    * from `create()`, before the pty is spawned, so every session gets the
    * file regardless of entry point (REST, `autoCreateSession`) — no entry
-   * point can skip it by calling `create()` directly. Also used by
-   * `resume()` as a backfill when the file is entirely missing (see
-   * `workspaceContextExists`). Defaults to a no-op so tests that pass a fake
-   * `cwd` (e.g. `/tmp/proj`) never touch the real filesystem unless they opt
-   * in.
+   * point can skip it by calling `create()` directly. Defaults to a no-op so
+   * tests that pass a fake `cwd` (e.g. `/tmp/proj`) never touch the real
+   * filesystem unless they opt in.
    */
   writeWorkspaceContext?: (session: HarnessSession) => Promise<void>;
   /**
-   * Reports whether HARNESS_CONTEXT_FILE already exists for a cwd. Used only
-   * by `resume()`, to decide whether a backfill write is needed — resume
-   * must never clobber a file that could already reflect a real binding.
-   * Defaults to `true` (assume it exists, never backfill) to match the
-   * no-op default of `writeWorkspaceContext`.
+   * Validates or migrates HARNESS_CONTEXT_FILE before a resumed coding agent
+   * is spawned. The caller owns the current/legacy/invalid/missing schema
+   * policy and live registry resolution; this layer guarantees the operation
+   * is awaited in the same pre-spawn window as the regenerated system prompt.
+   * Defaults to a no-op for filesystem-free unit tests.
    */
-  workspaceContextExists?: (cwd: string) => Promise<boolean>;
+  prepareWorkspaceContext?: (session: HarnessSession) => Promise<void>;
   /**
    * Drops the canvas kit template into `<cwd>/.sapiom/canvas/index.html`
    * when nothing is there yet (backfill-only — the real implementation,
@@ -283,7 +281,7 @@ export class SessionManager {
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
-  private readonly workspaceContextExists: (cwd: string) => Promise<boolean>;
+  private readonly prepareWorkspaceContext: (session: HarnessSession) => Promise<void>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
 
@@ -308,7 +306,7 @@ export class SessionManager {
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
-    this.workspaceContextExists = options.workspaceContextExists ?? (async () => true);
+    this.prepareWorkspaceContext = options.prepareWorkspaceContext ?? (async () => {});
     this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
@@ -513,13 +511,12 @@ export class SessionManager {
     await this.persist();
     this.emitStatus(session);
     try {
-      // Backfill only — never overwrite a file that could already reflect a
-      // real binding. The caller resolves session.boundWorkflowPath against
-      // the live registry, so unlike the old cwd-only signature this actually
-      // reconstructs the real binding on backfill, not just `null`.
-      if (!(await this.workspaceContextExists(session.cwd))) {
-        await this.writeWorkspaceContext(session);
-      }
+      // Schema-aware and strict: the caller leaves a valid current file
+      // untouched, translates a valid legacy file, and reconstructs anything
+      // missing/invalid from this session plus the live registry. Await it in
+      // the prompt-regeneration window so no resumed process can observe the
+      // new prompt with an old context contract.
+      await this.prepareWorkspaceContext(session);
       // Also backfill-only (ensureCanvasTemplate does its own existence check)
       // — a session from before the canvas kit existed, or one whose canvas
       // file was somehow deleted, still gets a live pane on resume.

@@ -45,7 +45,7 @@ describe("CodexAdapter", () => {
     it("embeds the systemPromptFile's content inline via -c developer_instructions=<value>", async () => {
       const promptDir = await mkdtemp(join(tmpdir(), "harness-codex-prompt-"));
       const promptFile = join(promptDir, "prompt.txt");
-      await writeFile(promptFile, "You are a Sapiom workflow builder.\nBe concise.", "utf8");
+      await writeFile(promptFile, "You are the coding agent in Agent Studio.\nBe concise.", "utf8");
 
       const adapter = new CodexAdapter({ binary: "fake-codex" });
       const spec = adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj", systemPromptFile: promptFile });
@@ -65,8 +65,17 @@ describe("CodexAdapter", () => {
         "-c",
         'sandbox_mode="workspace-write"',
         "-c",
-        `developer_instructions=${JSON.stringify("You are a Sapiom workflow builder.\nBe concise.")}`,
+        `developer_instructions=${JSON.stringify("You are the coding agent in Agent Studio.\nBe concise.")}`,
       ]);
+
+      const resumed = adapter.resume("019e62d5-a020-75f1-b5e8-253383076f83", {
+        harnessSessionId: "h1",
+        cwd: "/tmp/proj",
+        systemPromptFile: promptFile,
+      });
+      expect(resumed.args.at(-1)).toBe(
+        `developer_instructions=${JSON.stringify("You are the coding agent in Agent Studio.\nBe concise.")}`,
+      );
 
       await rm(promptDir, { recursive: true, force: true });
     });

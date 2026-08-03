@@ -91,7 +91,7 @@ export function WorkflowActionsHeader({
           data-testid="canvas-detail-ask"
           aria-label="Ask agent"
           data-tooltip="Sends the request to the agent in the terminal"
-          onClick={() => onAskAgent(`Walk me through the "${detailStep.label}" step of this workflow: what it does, its inputs and outputs, and its transitions.`)}
+          onClick={() => onAskAgent(`Walk me through the "${detailStep.label}" step of this agent: what it does, its inputs and outputs, and its transitions.`)}
         >
           <Icon name="MessageSquare" size={13} />
           {/* Hidden by the subheader's container query when the pane is too
@@ -124,7 +124,7 @@ export function WorkflowActionsHeader({
                 role="menuitem"
                 className="profile-menu-item"
                 onClick={() => {
-                  onAskAgent(`Modify the "${detailStep.label}" step of this workflow. Show me the step's code first, then propose the change.`);
+                  onAskAgent(`Modify the "${detailStep.label}" step of this agent. Show me the step's code first, then propose the change.`);
                   closeMenu();
                 }}
               >

@@ -1,19 +1,19 @@
 /**
  * Writes HARNESS_CONTEXT_FILE (`.sapiom/harness-context.json`) in a
- * session's cwd — the agent-legible mirror of this workspace's UI state:
- * which workflow (if any) the session is bound to, every workflow the
+ * session's cwd — the coding-agent-legible mirror of this workspace's UI
+ * state: which agent (if any) the session is bound to, every agent the
  * registry currently knows about, and the session's own identity. Called
- * unconditionally from `SessionManager.create()` so the file exists for
- * every session regardless of entry point (REST, `autoCreateSession`), as a
- * backfill from `SessionManager.resume()` when it's missing entirely, on
+ * strictly from `SessionManager.create()` so the file exists for every
+ * session regardless of entry point (REST, `autoCreateSession`), through
+ * schema-aware preparation from `SessionManager.resume()`, on
  * every `PATCH /api/sessions/:id/workflow`, and whenever the workflow
  * registry changes (scan/connect) — see server/index.ts's
  * `writeSessionContext`/`scanWorkflowsAndBroadcast` for how those call
  * sites are wired, and both of which can legitimately fire concurrent
  * writes to the *same* destination (a scan's rewrite-all-open-sessions step
  * racing a user's live bind click, for instance) — see `withPerPathQueue`.
- * Unbinding writes `boundWorkflow: null` rather than deleting the file, so a
- * concurrent read from the agent never races a momentary ENOENT.
+ * Unbinding writes `boundAgent: null` rather than deleting the file, so a
+ * concurrent read from the coding agent never races a momentary ENOENT.
  */
 
 import * as crypto from "node:crypto";
@@ -22,13 +22,14 @@ import * as path from "node:path";
 
 import {
   HARNESS_CONTEXT_FILE,
+  SPAWNABLE_HARNESS_KINDS,
   type HarnessKind,
   type HarnessWorkspaceContext,
-  type HarnessWorkspaceContextWorkflow,
+  type HarnessWorkspaceContextAgent,
   type WorkflowInfo,
 } from "../shared/types.js";
 
-function toContextWorkflowEntry(workflow: WorkflowInfo): HarnessWorkspaceContextWorkflow {
+function toContextAgentEntry(workflow: WorkflowInfo): HarnessWorkspaceContextAgent {
   return { name: workflow.name, path: workflow.path, definitionId: workflow.definitionId };
 }
 
@@ -57,9 +58,9 @@ const writeQueues = new Map<string, Promise<void>>();
 
 async function withPerPathQueue(filePath: string, task: () => Promise<void>): Promise<void> {
   const previous = writeQueues.get(filePath) ?? Promise.resolve();
-  // `task` never throws (its own try/catch logs and swallows) — chaining
-  // onto both branches of `previous` is defense in depth, so one write's
-  // failure can never wedge the queue for the next one to this same path.
+  // Chain onto both branches of `previous`: strict launch/resume operations
+  // may throw when they cannot make the prompt-visible schema safe, but that
+  // must never wedge the queue for the next operation on this same path.
   const current = previous.then(task, task);
   writeQueues.set(filePath, current);
   try {
@@ -75,53 +76,189 @@ async function withPerPathQueue(filePath: string, task: () => Promise<void>): Pr
  * (permissions, deleted out from under the session) — that must never fail
  * the caller that triggered it, so errors are logged, not thrown.
  *
- * `workflows` is sorted by path before writing (deterministic, independent
- * of registry scan/insertion order) so an agent re-reading the file across
- * turns can diff it cheaply instead of re-parsing a reordered blob every
- * time.
+ * `agents` is sorted by path before writing (deterministic, independent
+ * of registry scan/insertion order) so a coding agent re-reading the file
+ * across turns can diff it cheaply instead of re-parsing a reordered blob
+ * every time.
  */
 export async function writeHarnessContext(
   session: WorkspaceContextSession,
   boundWorkflow: WorkflowInfo | null,
   workflows: WorkflowInfo[],
 ): Promise<void> {
-  const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
-  const sortedWorkflows = [...workflows].sort((a, b) => a.path.localeCompare(b.path)).map(toContextWorkflowEntry);
-  const context: HarnessWorkspaceContext = {
-    boundWorkflow: boundWorkflow ? toContextWorkflowEntry(boundWorkflow) : null,
-    workflows: sortedWorkflows,
-    session: { id: session.id, cwd: session.cwd, harness: session.harness },
-    updatedAt: new Date().toISOString(),
-  };
-
-  await withPerPathQueue(filePath, async () => {
-    try {
-      const dir = path.dirname(filePath);
-      await fs.mkdir(dir, { recursive: true });
-      // A random suffix, not just pid+Date.now(): millisecond resolution is
-      // not fine enough to stay unique across a burst of concurrent writes
-      // to the same destination (confirmed via repro). Collision-proof
-      // regardless of timing, independent of the queue above.
-      const tmpPath = path.join(dir, `.harness-context.json.tmp-${process.pid}-${crypto.randomUUID()}`);
-      await fs.writeFile(tmpPath, JSON.stringify(context, null, 2) + "\n", "utf8");
-      await fs.rename(tmpPath, filePath);
-    } catch (err) {
-      console.error(`[harness] failed to write ${filePath}:`, err);
-    }
-  });
+  try {
+    await writeHarnessContextForLaunch(session, boundWorkflow, workflows);
+  } catch (err) {
+    const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
+    console.error(`[harness] failed to write ${filePath}:`, err);
+  }
 }
 
 /**
- * True if `<cwd>/.sapiom/harness-context.json` already exists. Used by
- * `SessionManager.resume()` to decide whether a backfill write is needed —
- * resume must never clobber a file that could already reflect a real
- * binding.
+ * The strict form used in SessionManager.create()'s pre-spawn window. A write
+ * failure rejects creation so a coding agent can never receive the new prompt
+ * while an old or missing context contract remains on disk. Registry and bind
+ * refreshes use the best-effort wrapper above because a later refresh failure
+ * must not terminate an already-running session.
  */
-export async function harnessContextFileExists(cwd: string): Promise<boolean> {
+export async function writeHarnessContextForLaunch(
+  session: WorkspaceContextSession,
+  boundWorkflow: WorkflowInfo | null,
+  workflows: WorkflowInfo[],
+): Promise<void> {
+  const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
+  const context = buildHarnessContext(session, boundWorkflow, workflows);
+
+  await withPerPathQueue(filePath, async () => {
+    await writeContextAtomically(filePath, context);
+  });
+}
+
+export type HarnessContextResumePreparation = "current" | "migrated" | "rewritten";
+
+interface LegacyHarnessWorkspaceContext {
+  boundWorkflow: HarnessWorkspaceContextAgent | null;
+  workflows: HarnessWorkspaceContextAgent[];
+  session: HarnessWorkspaceContext["session"];
+  updatedAt: string;
+}
+
+function buildHarnessContext(
+  session: WorkspaceContextSession,
+  boundWorkflow: WorkflowInfo | null,
+  workflows: WorkflowInfo[],
+): HarnessWorkspaceContext {
+  const agents = [...workflows].sort((a, b) => a.path.localeCompare(b.path)).map(toContextAgentEntry);
+  return {
+    boundAgent: boundWorkflow ? toContextAgentEntry(boundWorkflow) : null,
+    agents,
+    session: { id: session.id, cwd: session.cwd, harness: session.harness },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function writeContextAtomically(filePath: string, context: HarnessWorkspaceContext): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, { recursive: true });
+  // A random suffix, not just pid+Date.now(): millisecond resolution is not
+  // fine enough to stay unique across a burst of concurrent writes.
+  const tmpPath = path.join(dir, `.harness-context.json.tmp-${process.pid}-${crypto.randomUUID()}`);
   try {
-    await fs.access(path.join(cwd, HARNESS_CONTEXT_FILE));
-    return true;
-  } catch {
+    await fs.writeFile(tmpPath, JSON.stringify(context, null, 2) + "\n", "utf8");
+    await fs.rename(tmpPath, filePath);
+  } finally {
+    await fs.rm(tmpPath, { force: true });
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function isContextAgent(value: unknown): value is HarnessWorkspaceContextAgent {
+  if (!isRecord(value) || !hasExactKeys(value, ["definitionId", "name", "path"])) return false;
+  return (
+    typeof value.name === "string" &&
+    typeof value.path === "string" &&
+    (typeof value.definitionId === "number" || value.definitionId === null)
+  );
+}
+
+function isContextSession(value: unknown): value is HarnessWorkspaceContext["session"] {
+  if (!isRecord(value) || !hasExactKeys(value, ["cwd", "harness", "id"])) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.cwd === "string" &&
+    typeof value.harness === "string" &&
+    SPAWNABLE_HARNESS_KINDS.some((harness) => harness === value.harness)
+  );
+}
+
+function hasSharedValidFields(value: Record<string, unknown>): boolean {
+  return isContextSession(value.session) && typeof value.updatedAt === "string";
+}
+
+function isCurrentContext(value: unknown): value is HarnessWorkspaceContext {
+  if (!isRecord(value) || !hasExactKeys(value, ["agents", "boundAgent", "session", "updatedAt"])) return false;
+  return (
+    hasSharedValidFields(value) &&
+    (value.boundAgent === null || isContextAgent(value.boundAgent)) &&
+    Array.isArray(value.agents) &&
+    value.agents.every(isContextAgent)
+  );
+}
+
+function isLegacyContext(value: unknown): value is LegacyHarnessWorkspaceContext {
+  if (!isRecord(value) || !hasExactKeys(value, ["boundWorkflow", "session", "updatedAt", "workflows"])) {
     return false;
   }
+  return (
+    hasSharedValidFields(value) &&
+    (value.boundWorkflow === null || isContextAgent(value.boundWorkflow)) &&
+    Array.isArray(value.workflows) &&
+    value.workflows.every(isContextAgent)
+  );
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return isRecord(error) && error.code === "ENOENT";
+}
+
+/**
+ * Makes HARNESS_CONTEXT_FILE safe for a resumed coding agent before its new
+ * Agent Studio prompt can reach the process. A valid current-schema file is
+ * byte-for-byte untouched; a valid legacy file keeps its values and only
+ * renames the two public keys; anything missing, malformed, mixed, or
+ * incomplete is rebuilt from the live session and registry.
+ *
+ * Unlike ordinary registry/bind refreshes, this is strict: an unreadable file
+ * or failed atomic replacement rejects resume so the prompt and on-disk
+ * contract can never disagree during a launch.
+ */
+export async function prepareHarnessContextForResume(
+  session: WorkspaceContextSession,
+  boundWorkflow: WorkflowInfo | null,
+  workflows: WorkflowInfo[],
+): Promise<HarnessContextResumePreparation> {
+  const filePath = path.join(session.cwd, HARNESS_CONTEXT_FILE);
+  let result: HarnessContextResumePreparation = "rewritten";
+
+  await withPerPathQueue(filePath, async () => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    } catch (error) {
+      if (!isMissingFileError(error) && !(error instanceof SyntaxError)) throw error;
+      await writeContextAtomically(filePath, buildHarnessContext(session, boundWorkflow, workflows));
+      result = "rewritten";
+      return;
+    }
+
+    if (isCurrentContext(parsed)) {
+      result = "current";
+      return;
+    }
+
+    if (isLegacyContext(parsed)) {
+      await writeContextAtomically(filePath, {
+        boundAgent: parsed.boundWorkflow,
+        agents: parsed.workflows,
+        session: parsed.session,
+        updatedAt: parsed.updatedAt,
+      });
+      result = "migrated";
+      return;
+    }
+
+    await writeContextAtomically(filePath, buildHarnessContext(session, boundWorkflow, workflows));
+    result = "rewritten";
+  });
+
+  return result;
 }

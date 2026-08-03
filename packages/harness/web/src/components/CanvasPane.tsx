@@ -946,7 +946,7 @@ export function CanvasPane({
                   data-testid="canvas-error-fix"
                   onClick={() =>
                     onInjectPrompt(
-                      `The canvas render for ${postedError.title || "this workflow"} failed: ${postedError.reason} Fix the project so the workflow graph extracts cleanly.`,
+                      `The canvas render for ${postedError.title || "this agent"} failed: ${postedError.reason} Fix the project so the agent graph extracts cleanly.`,
                     )
                   }
                 >

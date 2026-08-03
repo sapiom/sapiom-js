@@ -90,6 +90,12 @@ test.describe("add workspace (three doors)", () => {
         .__HARNESS_TEST__;
       return test?.lastInjectInput?.req.text.includes("sapiom agents init") ?? false;
     });
+    const scaffoldPrompt = await page.evaluate(() =>
+      (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+        .__HARNESS_TEST__?.lastInjectInput?.req.text,
+    );
+    expect(scaffoldPrompt).toContain("define the first agent");
+    expect(scaffoldPrompt?.toLowerCase()).not.toContain("workflow");
   });
 
   test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {

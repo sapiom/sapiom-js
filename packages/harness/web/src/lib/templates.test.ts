@@ -229,6 +229,8 @@ describe("useTemplatePrompt", () => {
   it("starter: names the real init command with the bundled template flag", () => {
     const prompt = useTemplatePrompt(STARTER_TEMPLATES[1], "/tmp/coding-pause");
     expect(prompt).toContain("sapiom agents init . -t coding-pause");
+    expect(prompt).toContain("adapt the agent");
+    expect(prompt.toLowerCase()).not.toContain("workflow");
   });
 
   it("both paths end with the free local test continuation (use to run is one path)", () => {

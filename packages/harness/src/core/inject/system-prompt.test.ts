@@ -24,6 +24,10 @@ describe("generateSystemPromptFile", () => {
 
     const content = await fs.readFile(filePath, "utf8");
     expect(content).toBe(DEFAULT_SYSTEM_PROMPT);
+    expect(content).toContain("coding agent running in Agent Studio");
+    expect(content).toContain('"boundAgent"');
+    expect(content).toContain('"agents"');
+    expect(content.toLowerCase()).not.toContain("workflow");
   });
 
   it("writes a custom prompt when one is provided", async () => {

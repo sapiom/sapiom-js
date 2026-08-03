@@ -322,9 +322,9 @@ function blockquote(text: string): string {
  */
 const HONESTY_HEADER = `# Continuing a prior session — reconstruction, not restored context
 
-You are a **fresh session**. The agent that ran the session described below is
+You are a **fresh session**. The coding agent that ran the session described below is
 gone and none of its context is loaded. What follows was assembled by the
-Sapiom Harness from its own recorded events — it is a briefing about that
+Agent Studio from its own recorded events — it is a briefing about that
 session, not a replay of it, and it is partial by construction.
 
 Treat every claim here as something a colleague told you, not as something you
@@ -421,19 +421,19 @@ function renderIdentity(record: SessionRecord, options: BuildResumeBriefOptions)
   if (options.title) lines.push(`- **Title:** ${options.title}`);
   lines.push(`- **Directory:** ${record.cwd ?? "not recorded"}`);
   if (options.gitBranch) lines.push(`- **Git branch:** ${options.gitBranch}`);
-  lines.push(`- **Agent:** ${record.harness}`);
+  lines.push(`- **Coding agent:** ${record.harness}`);
   if (options.workflow) {
     const { name, path: workflowPath, definitionId } = options.workflow;
     lines.push(
-      `- **Bound workflow:** ${name} (\`${workflowPath}\`)${
+      `- **Bound agent:** ${name} (\`${workflowPath}\`)${
         definitionId !== null ? ` — definition ${definitionId}` : " — not yet linked to a deployed definition"
       }`,
     );
   } else {
-    lines.push("- **Bound workflow:** none");
+    lines.push("- **Bound agent:** none");
   }
   const span = [record.startedAt, record.endedAt].filter(Boolean).join(" → ");
-  if (span) lines.push(`- **Ran:** ${span}`);
+  if (span) lines.push(`- **Agent run:** ${span}`);
   lines.push(`- **Recorded turns:** ${record.turnCount}`);
 
   if (record.limitations.length > 0) {

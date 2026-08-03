@@ -219,7 +219,10 @@ test.describe("templates journey (from the welcome panel)", () => {
       .poll(async () => (await lastInject(page))?.req.text ?? "")
       .toContain("sapiom agents init . -t coding-pause");
     // The starter path carries the same run continuation as the clone path.
-    expect((await lastInject(page))?.req.text).toContain("sapiom_dev_agents_run_local");
+    const prompt = (await lastInject(page))?.req.text ?? "";
+    expect(prompt).toContain("sapiom_dev_agents_run_local");
+    expect(prompt).toContain("adapt the agent");
+    expect(prompt.toLowerCase()).not.toContain("workflow");
   });
 
   test("use: straight from a card's spec sheet, skipping the read", async ({ page }) => {

@@ -82,6 +82,8 @@ describe("buildResumeBrief", () => {
         const brief = buildResumeBrief(record(), { maxTokens });
         expect(brief).toContain("reconstruction, not restored context");
         expect(brief).toContain("You are a **fresh session**");
+        expect(brief).toContain("coding agent");
+        expect(brief).toContain("Agent Studio");
         expect(brief).toContain("check the current state of the");
       }
     });
@@ -124,6 +126,11 @@ describe("buildResumeBrief", () => {
       expect(brief).toContain("/Users/dev/project");
       expect(brief).toContain("feat/SAP-2059");
       expect(brief).toContain("claude-code");
+      expect(brief).toContain("**Coding agent:** claude-code");
+      expect(brief).toContain("**Bound agent:** order-triage");
+      expect(brief).toContain("**Agent run:**");
+      expect(brief).not.toContain("**Bound workflow:**");
+      expect(brief.toLowerCase()).not.toContain("workflow");
       expect(brief).toContain("order-triage");
       expect(brief).toContain("definition 188");
     });

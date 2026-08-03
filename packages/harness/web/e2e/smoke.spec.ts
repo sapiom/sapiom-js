@@ -1731,6 +1731,36 @@ test("steps tab drills into a step's real transitions and slides back", async ({
   await expect(header.getByTestId("canvas-detail-ask")).toBeVisible();
   await expect(header.getByTestId("canvas-detail-menu")).toBeVisible();
 
+  await header.getByTestId("canvas-detail-ask").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+          .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+      ),
+    )
+    .toContain('step of this agent');
+  const askPrompt = await page.evaluate(() =>
+    (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+      .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+  );
+  expect(askPrompt.toLowerCase()).not.toContain("workflow");
+
+  await page.evaluate(() => {
+    const hook = (window as unknown as { __HARNESS_TEST__?: Record<string, unknown> }).__HARNESS_TEST__;
+    if (hook) delete hook.lastInjectInput;
+  });
+  await header.getByTestId("canvas-detail-menu").click();
+  await page.getByRole("menuitem", { name: "Ask agent to modify" }).click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+          .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+      ),
+    )
+    .toContain('step of this agent');
+
   // Real outgoing transitions with their branch conditions, both terminals.
   const detail = page.getByTestId("canvas-step-detail");
   await expect(detail).toContainText("draft-lease");
@@ -1752,6 +1782,33 @@ test("steps tab drills into a step's real transitions and slides back", async ({
   await expect(frame).toHaveAttribute("data-view", "steps");
   await page.getByTestId("right-tab-canvas").click();
   await expect(frame).toHaveAttribute("data-view", "board");
+});
+
+test("canvas repair sends the coding agent an Agent-terminology prompt", async ({ page }) => {
+  const canvasBody = page.frameLocator(".canvas-iframe").locator("body");
+  await expect(canvasBody).toBeVisible();
+  await canvasBody.evaluate(() => {
+    window.parent.postMessage(
+      { type: "sapiom-canvas:error", title: "leasing", reason: "TypeScript extraction failed" },
+      "*",
+    );
+  });
+  await expect(page.getByTestId("canvas-render-error")).toBeVisible();
+  await page.getByTestId("canvas-error-fix").click();
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+          .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+      ),
+    )
+    .toContain("agent graph extracts cleanly");
+  const prompt = await page.evaluate(() =>
+    (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+      .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+  );
+  expect(prompt.toLowerCase()).not.toContain("workflow");
 });
 
 test("a detected dev server surfaces a Preview chip on the action bar", async ({ page }) => {

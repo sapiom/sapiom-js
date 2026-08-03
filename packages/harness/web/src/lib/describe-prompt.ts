@@ -4,7 +4,7 @@ import type { WorkflowInfo } from "@shared/types";
  * The prompt behind the canvas "Describe with AI" action.
  *
  * The canvas descriptions are deterministic Option-A fields: the renderer reads
- * `description` off `defineAgent` / `defineStep` in the workflow source (no LLM
+ * `description` off `defineAgent` / `defineStep` in the agent source (no LLM
  * in the render path). This action hands the bound agent the one job that DOES
  * need a reading of the code — writing those `description` fields — and leaves
  * everything downstream deterministic. The output is durable, editable, and
@@ -18,10 +18,10 @@ import type { WorkflowInfo } from "@shared/types";
  */
 export function describeWorkflowPrompt(workflow: WorkflowInfo): string {
   return [
-    `Add human-readable descriptions to the "${workflow.name}" workflow so its Sapiom canvas explains what each part does.`,
+    `Add human-readable descriptions to the "${workflow.name}" agent so its Sapiom canvas explains what each part does.`,
     ``,
-    `Edit the workflow definition file(s) under ${workflow.path} (the entry is usually index.ts):`,
-    `1. Give the defineAgent({ ... }) call a one-line \`description\` summarizing what the whole workflow does.`,
+    `Edit the agent definition file(s) under ${workflow.path} (the entry is usually index.ts):`,
+    `1. Give the defineAgent({ ... }) call a one-line \`description\` summarizing what the whole agent does.`,
     `2. Give every defineStep({ ... }) a one-line \`description\` of what that step does — infer it from the step's own code: its input, the Sapiom services it calls, and where it transitions.`,
     ``,
     `Rules:`,

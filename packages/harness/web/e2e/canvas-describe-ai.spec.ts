@@ -85,6 +85,8 @@ test.describe("Describe with AI", () => {
     expect(run.req.subject ?? "").toContain("/Users/demo/acme-app/leasing");
     expect((run.req.subject ?? "").toLowerCase()).toContain("description");
     expect(run.req.subject ?? "").toContain("defineStep");
+    expect(run.req.subject ?? "").toContain("whole agent");
+    expect((run.req.subject ?? "").toLowerCase()).not.toContain("workflow");
 
     // Instant feedback: the button flips to a disabled loading state.
     await expect(btn).toBeDisabled();

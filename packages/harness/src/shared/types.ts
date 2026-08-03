@@ -106,10 +106,10 @@ export const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const JSON_BODY_LIMIT_BYTES = Math.ceil((MAX_IMAGE_UPLOAD_BYTES * 4) / 3) + 1024 * 1024;
 
 /**
- * Workspace-state convention: the harness mirrors this session's binding,
- * the full workflow registry, and its own identity here, relative to the
- * session cwd, so the agent has an always-current, agent-legible answer to
- * "what am I working on" and "what workflows exist" without asking. Written
+ * Workspace-state convention: Agent Studio mirrors this session's binding,
+ * the full agent registry, and its own identity here, relative to the
+ * session cwd, so the coding agent has an always-current answer to
+ * "what am I working on" and "what agents exist" without asking. Written
  * on session create, on every `PATCH /api/sessions/:id/workflow`, and
  * whenever the workflow registry changes (scan/connect) — see
  * HarnessWorkspaceContext. Kept present (never deleted) even on unbind.
@@ -163,9 +163,9 @@ export interface HarnessSession {
   lastActiveAt: string;
   /** Exit code when status === "exited". */
   exitCode?: number | null;
-  /** The workflow (by path) this session is currently bound to, if any. Set
+  /** The deployable agent (by path) this session is currently bound to, if any. Set
    *  via `PATCH /api/sessions/:id/workflow`; mirrored into
-   *  HARNESS_CONTEXT_FILE in the session's cwd so the agent can read it. */
+   *  HARNESS_CONTEXT_FILE in the session's cwd so the coding agent can read it. */
   boundWorkflowPath: string | null;
   /**
    * The prior session this one was seeded from (portable continue — see
@@ -994,29 +994,32 @@ export interface BindWorkflowRequest {
   workflowPath: string | null;
 }
 
-/** The trimmed workflow shape embedded in HarnessWorkspaceContext — just
- *  enough for an agent to identify a workflow, not the full WorkflowInfo
- *  (e.g. `source` is registry bookkeeping the agent has no use for). */
-export interface HarnessWorkspaceContextWorkflow {
+/** The trimmed agent shape embedded in HarnessWorkspaceContext — just
+ *  enough for a coding agent to identify a deployable agent, not the full
+ *  internal WorkflowInfo (e.g. `source` is registry bookkeeping it has no
+ *  use for). */
+export interface HarnessWorkspaceContextAgent {
   name: string;
   path: string;
   definitionId: number | null;
 }
+
+/** @deprecated Use {@link HarnessWorkspaceContextAgent}. */
+export type HarnessWorkspaceContextWorkflow = HarnessWorkspaceContextAgent;
 
 /**
  * The shape written to HARNESS_CONTEXT_FILE in a session's cwd. Schemaless
  * by convention elsewhere in the harness, but this one file IS a contract —
  * the default system prompt tells the agent to read it, so its shape is
  * fixed here like any other REST payload. Deliberately small and
- * stable-ordered (`workflows` sorted by path) so an agent can diff it
+ * stable-ordered (`agents` sorted by path) so a coding agent can diff it
  * cheaply across reads rather than re-parsing a growing blob.
  */
 export interface HarnessWorkspaceContext {
-  boundWorkflow: HarnessWorkspaceContextWorkflow | null;
-  /** Every workflow currently known to this harness instance's registry,
-   *  selected or not — lets an agent answer "what workflows exist" without
-   *  a UI action, not just "which one is selected." */
-  workflows: HarnessWorkspaceContextWorkflow[];
+  boundAgent: HarnessWorkspaceContextAgent | null;
+  /** Every deployable agent currently known to this Studio instance's
+   *  registry, selected or not. */
+  agents: HarnessWorkspaceContextAgent[];
   session: { id: string; cwd: string; harness: HarnessKind };
   updatedAt: string;
 }

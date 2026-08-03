@@ -226,7 +226,7 @@ export function useTemplatePrompt(template: StudioTemplate, dir: string): string
   return (
     `Scaffold the "${template.id}" starter in this directory: ` +
     `run \`sapiom agents init . -t ${template.id}\`, then run npm install and read AGENTS.md. ` +
-    "Use the sapiom-agent-authoring skill to adapt the workflow. " +
+    "Use the sapiom-agent-authoring skill to adapt the agent. " +
     runContinuation
   );
 }
