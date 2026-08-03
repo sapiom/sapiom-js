@@ -8,8 +8,8 @@ import {
 
 const fixturePath = "fixtures/visible-copy.tsx";
 
-function source(content, kind = "code") {
-  return { path: fixturePath, kind, content };
+function source(content, kind = "code", sourcePath = fixturePath) {
+  return { path: sourcePath, kind, content };
 }
 
 function allowed(id, pattern, occurrences = 1) {
@@ -35,13 +35,14 @@ describe("Agent Studio terminology guard", () => {
     assert.match(result.violations[0].context, /Create a workflow first/);
   });
 
-  it("ignores source comments and non-rendered type literals", () => {
+  it("ignores source comments and non-rendered type literals or type property names", () => {
     const result = auditSources({
       sources: [
         source(`
           // Old workflow implementation note.
           /* Workflows stay in this source comment for history. */
           type PrivateKind = "launched-workflow";
+          interface PrivateShape { "workflow-kind": string }
           export const Visible = () => <p>Agent ready.</p>;
         `),
         source("<!-- Workflow migration note -->\n# Agent Studio", "text"),
@@ -49,6 +50,80 @@ describe("Agent Studio terminology guard", () => {
     });
 
     assert.deepEqual(result.violations, []);
+  });
+
+  it("scans runtime string property names and JSON keys", () => {
+    const result = auditSources({
+      sources: [
+        source('export const labels = { "Workflow status": "ready" };'),
+        source(
+          JSON.stringify({ "Workflow label": "Agent" }),
+          "json",
+          "fixtures/manifest.json",
+        ),
+      ],
+    });
+
+    assert.equal(result.violations.length, 2);
+    assert.deepEqual(
+      result.violations.map(({ path }) => path),
+      [fixturePath, "fixtures/manifest.json"],
+    );
+    assert.match(result.violations[1].context, /Workflow label.*key/);
+  });
+
+  it("scans mts, cts, and CSS while ignoring CSS comments", () => {
+    const result = auditSources({
+      sources: [
+        source(
+          'export const title = "Workflow";',
+          "code",
+          "fixtures/surface.mts",
+        ),
+        source('exports.title = "Workflow";', "code", "fixtures/surface.cts"),
+        source(
+          '/* Workflow migration note. */\n.agent::after { content: "Workflow"; }',
+          "text",
+          "fixtures/surface.css",
+        ),
+      ],
+    });
+
+    assert.equal(result.violations.length, 3);
+    assert.deepEqual(
+      result.violations.map(({ path }) => path),
+      ["fixtures/surface.mts", "fixtures/surface.cts", "fixtures/surface.css"],
+    );
+  });
+
+  it("strips YAML comments without hiding quoted values, URL fragments, or block scalars", () => {
+    const result = auditSources({
+      sources: [
+        source(
+          [
+            "# Workflow full-line comment",
+            "name: Agent # Workflow inline comment",
+            'double: "Agent # Workflow quoted value"',
+            "single: 'Agent # Workflow quoted value'",
+            "url: https://example.test/#workflow",
+            "body: |",
+            "  # Workflow rendered heading",
+            "  Agent body",
+            "run: |",
+            "  echo Agent # Workflow shell comment",
+            '  echo "Agent # Workflow quoted shell output"',
+          ].join("\n"),
+          "text",
+          "fixtures/release.yml",
+        ),
+      ],
+    });
+
+    assert.equal(result.violations.length, 5);
+    assert.deepEqual(
+      result.violations.map(({ line }) => line),
+      [3, 4, 5, 7, 11],
+    );
   });
 
   it("allows every documented compatibility-literal category", () => {
@@ -110,7 +185,19 @@ describe("Agent Studio terminology guard", () => {
     assert.deepEqual(result.unusedAllowlist, []);
   });
 
-  it("fails when an allowlist entry is stale or its exact occurrence count changes", () => {
+  it("fails when an allowlist entry is stale after its literal is removed", () => {
+    const result = auditSources({
+      sources: [source('export const label = "Agent";')],
+      allowlist: [allowed("local-route", "^/api/workflows$")],
+    });
+
+    assert.deepEqual(result.violations, []);
+    assert.equal(result.unusedAllowlist.length, 1);
+    assert.equal(result.unusedAllowlist[0].used, 0);
+    assert.equal(result.unusedAllowlist[0].occurrences, 1);
+  });
+
+  it("fails when an allowlisted literal's exact occurrence count changes", () => {
     const result = auditSources({
       sources: [source('export const route = "/api/workflows";')],
       allowlist: [allowed("local-route", "^/api/workflows$", 2)],
@@ -126,6 +213,11 @@ describe("Agent Studio terminology guard", () => {
     const result = await auditRepository();
 
     assert.ok(result.files.length > 300);
+    assert.ok(result.files.includes(".github/workflows/desktop-release.yml"));
+    assert.ok(
+      result.files.includes("packages/harness-desktop/src/preload/desktop.mts"),
+    );
+    assert.ok(result.files.includes("packages/harness/web/src/styles.css"));
     assert.deepEqual(result.violations, []);
     assert.deepEqual(result.unusedAllowlist, []);
   });

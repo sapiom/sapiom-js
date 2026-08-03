@@ -13,8 +13,24 @@ export const DEFAULT_ALLOWLIST_PATH = path.join(
   "scripts/agent-studio-terminology-allowlist.json",
 );
 
-const CODE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"]);
-const TEXT_EXTENSIONS = new Set([".html", ".md", ".mdx", ".yaml", ".yml"]);
+const CODE_EXTENSIONS = new Set([
+  ".cjs",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".mts",
+  ".ts",
+  ".tsx",
+]);
+const TEXT_EXTENSIONS = new Set([
+  ".css",
+  ".html",
+  ".md",
+  ".mdx",
+  ".yaml",
+  ".yml",
+]);
 const SCANNED_EXTENSIONS = new Set([
   ...CODE_EXTENSIONS,
   ...TEXT_EXTENSIONS,
@@ -35,6 +51,7 @@ const TEST_FILE_RE = /(?:^|\/)[^/]+\.(?:spec|test)\.[cm]?[jt]sx?$/;
 const WORKFLOW_TOKEN_RE = /workflows?/giu;
 
 const STATIC_TARGETS = [
+  ".github/workflows/desktop-release.yml",
   "package.json",
   "packages/agent-core/package.json",
   "packages/agent-core/src",
@@ -149,13 +166,10 @@ function isModuleSpecifier(node) {
   );
 }
 
-function isPropertyName(node) {
+function isTypeOnlyPropertyName(node) {
   const parent = node.parent;
   return (
-    (ts.isPropertyAssignment(parent) && parent.name === node) ||
-    (ts.isPropertyDeclaration(parent) && parent.name === node) ||
     (ts.isPropertySignature(parent) && parent.name === node) ||
-    (ts.isMethodDeclaration(parent) && parent.name === node) ||
     (ts.isMethodSignature(parent) && parent.name === node)
   );
 }
@@ -194,7 +208,7 @@ function codeSegments(source) {
     ) {
       if (
         !isModuleSpecifier(node) &&
-        !isPropertyName(node) &&
+        !isTypeOnlyPropertyName(node) &&
         !isTypeOnlyLiteral(node)
       ) {
         push(node, node.text);
@@ -206,15 +220,89 @@ function codeSegments(source) {
   return segments;
 }
 
-function stripTextComments(content, extension) {
-  let stripped = content.replace(/<!--[\s\S]*?-->/g, (comment) =>
-    comment.replace(/[^\n]/g, " "),
+function blankComment(comment) {
+  return comment.replace(/[^\n]/g, " ");
+}
+
+function stripYamlSyntaxComment(line) {
+  let quote = null;
+  let escaped = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote === '"') {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "#" && (index === 0 || /\s/u.test(line[index - 1]))) {
+      return `${line.slice(0, index)}${" ".repeat(line.length - index)}`;
+    }
+  }
+
+  return line;
+}
+
+function yamlBlockScalar(line) {
+  const unquoted = line.replace(
+    /"(?:\\.|[^"\\])*"|'(?:''|[^'])*'/gu,
+    (quoted) => " ".repeat(quoted.length),
   );
-  if (extension === ".yaml" || extension === ".yml") {
-    stripped = stripped
-      .split("\n")
-      .map((line) => (line.trimStart().startsWith("#") ? "" : line))
-      .join("\n");
+  if (!/(?:^|[:-?]\s+)[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*$/u.test(unquoted)) {
+    return null;
+  }
+  const key = /([a-z0-9_-]+)\s*:\s*[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*$/iu.exec(
+    unquoted,
+  )?.[1];
+  return { stripHashComments: key === "run" };
+}
+
+function stripYamlComments(content) {
+  let block = null;
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      const indent = line.match(/^\s*/u)?.[0].length ?? 0;
+
+      if (block !== null) {
+        if (trimmed === "" || indent > block.parentIndent) {
+          return block.stripHashComments ? stripYamlSyntaxComment(line) : line;
+        }
+        block = null;
+      }
+
+      const stripped = stripYamlSyntaxComment(line);
+      const scalar = yamlBlockScalar(stripped);
+      if (scalar) block = { parentIndent: indent, ...scalar };
+      return stripped;
+    })
+    .join("\n");
+}
+
+function stripTextComments(content, extension) {
+  let stripped = content.replace(/<!--[\s\S]*?-->/g, blankComment);
+  if (extension === ".css") {
+    stripped = stripped.replace(/\/\*[\s\S]*?\*\//g, blankComment);
+  } else if (extension === ".yaml" || extension === ".yml") {
+    stripped = stripYamlComments(stripped);
   }
   return stripped;
 }
@@ -235,23 +323,35 @@ function textSegments(source) {
 function jsonSegments(source) {
   const parsed = JSON.parse(source.content);
   const segments = [];
-  const visit = (value, jsonPath) => {
+  const visit = (value, jsonPath, includeKeys = true) => {
     if (typeof value === "string") {
       segments.push({ value, line: 1, column: 1, jsonPath });
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach((child, index) => visit(child, `${jsonPath}[${index}]`));
+      value.forEach((child, index) =>
+        visit(child, `${jsonPath}[${index}]`, includeKeys),
+      );
       return;
     }
     if (!value || typeof value !== "object") return;
-    for (const [key, child] of Object.entries(value))
-      visit(child, `${jsonPath}.${key}`);
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = `${jsonPath}.${key}`;
+      if (includeKeys) {
+        segments.push({
+          value: key,
+          line: 1,
+          column: 1,
+          jsonPath: `${childPath} (key)`,
+        });
+      }
+      visit(child, childPath, includeKeys);
+    }
   };
 
   if (path.basename(source.path) === "package.json") {
     for (const key of ["name", "description", "keywords", "bin"]) {
-      if (key in parsed) visit(parsed[key], `$.${key}`);
+      if (key in parsed) visit(parsed[key], `$.${key}`, true);
     }
   } else {
     visit(parsed, "$");
@@ -266,6 +366,7 @@ function sourceSegments(source) {
       : source.kind === "json"
         ? jsonSegments(source)
         : textSegments(source);
+  if (source.kind !== "code") return segments;
   return segments.map((segment) => ({
     ...segment,
     value: segment.value

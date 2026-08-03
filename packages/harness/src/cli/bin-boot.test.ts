@@ -6,46 +6,13 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { parseArgs } from "./args.js";
+import { printBanner } from "./banner.js";
 import { AGENT_STUDIO_PRODUCT_NAME } from "../shared/branding.js";
 
 // ---------------------------------------------------------------------------
-// parseArgs is the REAL implementation (src/cli/args.ts). It used to be a
-// hand-copied mirror here, which meant a flag could ship with green tests that
-// never touched it. printBanner is still mirrored below — bin.ts self-executes,
-// so it cannot be imported directly.
+// parseArgs and printBanner are the REAL production implementations. bin.ts
+// self-executes, so side-effect-free CLI behavior lives in importable modules.
 // ---------------------------------------------------------------------------
-
-interface PrintBannerOpts {
-  dir: string;
-  port: number;
-  bootToken: string;
-  identity: { organizationName: string; userId: string; source: "cached" | "fresh" } | null;
-  telemetryOptIn: boolean;
-  serverStarted: boolean;
-}
-
-function printBanner(opts: PrintBannerOpts): void {
-  const authLine = opts.identity
-    ? `${opts.identity.organizationName} (${opts.identity.userId})${
-        opts.identity.source === "cached" ? " — cached" : ""
-      }`
-    : "not authenticated";
-
-  console.log("");
-  console.log(`  ${AGENT_STUDIO_PRODUCT_NAME}`);
-  console.log("  ------------");
-  console.log(`  directory   ${opts.dir}`);
-  console.log(`  auth        ${authLine}`);
-  console.log(`  telemetry   ${opts.telemetryOptIn ? "on" : "off"}`);
-  console.log(
-    `  url         ${
-      opts.serverStarted
-        ? `http://localhost:${opts.port}/?token=${opts.bootToken}`
-        : "(server not started)"
-    }`,
-  );
-  console.log("");
-}
 
 // ---------------------------------------------------------------------------
 // Tests

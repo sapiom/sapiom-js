@@ -554,9 +554,8 @@ jobs:
           body: |
             ${{ needs.prepare.outputs.channel == 'beta' && '> **Pre-release, for testers.** Only installs already following the beta channel are offered this build.' || '' }}
 
-            Sapiom runs your coding agent in a workspace that's already set up: Sapiom tools
-            connected, workflows tracked, one-click deploy and run, and a live canvas for previews.
-            Download it, sign in, pick a folder, and start working — there's nothing to install first.
+            Sapiom runs your coding agent in an Agent project with Sapiom tools connected, agents
+            tracked, one-click deploy and run, and a live Canvas for previews.
 
             ## Download
 
@@ -582,8 +581,10 @@ jobs:
             **Linux** — make the AppImage executable (`chmod +x Sapiom-Linux-x86_64.AppImage`) and
             run it, or install the `.deb` with `sudo apt install ./Sapiom-Linux-amd64.deb`.
 
-            On first launch Sapiom sets itself up: it installs the coding agent if you don't have
-            one, opens your browser once to sign in, and asks which folder to work in.
+            On first launch Sapiom checks for Claude Code or Codex. If neither is available, it
+            tries to install Claude Code and shows manual setup steps if that fails. It reuses a
+            cached Sapiom sign-in when present; otherwise it opens your browser to sign in, then
+            prepares a workspace folder for you.
 
             ## Updates are automatic
 

@@ -1,5 +1,19 @@
 [
   {
+    "id": "desktop-release-manual-trigger-key",
+    "path": ".github/workflows/desktop-release.yml",
+    "pattern": "(?:^|\\n)\\s*workflow_dispatch:\\s*(?:\\n|$)",
+    "occurrences": 1,
+    "reason": "workflow_dispatch is the exact GitHub Actions manual-trigger syntax."
+  },
+  {
+    "id": "desktop-release-concurrency-context",
+    "path": ".github/workflows/desktop-release.yml",
+    "pattern": "\\$\\{\\{\\s*github\\.workflow\\s*\\}\\}",
+    "occurrences": 1,
+    "reason": "github.workflow is the exact GitHub Actions context used to isolate concurrent runs."
+  },
+  {
     "id": "approval-chain-agents-signal-tools",
     "path": "examples/approval-chain/AGENTS.md",
     "pattern": "signal_workflow|workflow_signal",
@@ -192,7 +206,7 @@
     "id": "canvas-body-node-kind",
     "path": "packages/harness/src/core/canvas-body.ts",
     "pattern": "launched-workflow",
-    "occurrences": 1,
+    "occurrences": 2,
     "reason": "The private Canvas node-kind literal is a persisted compatibility identifier."
   },
   {
@@ -229,6 +243,27 @@
     "pattern": "\\{\\{workflow\\.(?:path|definitionId)\\}\\}",
     "occurrences": 4,
     "reason": "Macro placeholder names are compatibility-sensitive user configuration."
+  },
+  {
+    "id": "macro-runner-path-property",
+    "path": "packages/harness/src/core/macro-runner.ts",
+    "pattern": "^\\{\\{workflow\\.path\\}\\}$",
+    "occurrences": 1,
+    "reason": "This runtime object key implements the compatibility-sensitive workflow.path macro placeholder."
+  },
+  {
+    "id": "macro-runner-name-property",
+    "path": "packages/harness/src/core/macro-runner.ts",
+    "pattern": "^\\{\\{workflow\\.name\\}\\}$",
+    "occurrences": 1,
+    "reason": "This runtime object key implements the compatibility-sensitive workflow.name macro placeholder."
+  },
+  {
+    "id": "macro-runner-definition-property",
+    "path": "packages/harness/src/core/macro-runner.ts",
+    "pattern": "^\\{\\{workflow\\.definitionId\\}\\}$",
+    "occurrences": 1,
+    "reason": "This runtime object key implements the compatibility-sensitive workflow.definitionId macro placeholder."
   },
   {
     "id": "template-catalog-backend-routes",
@@ -390,5 +425,152 @@
     "pattern": "^workflows\\.changed$",
     "occurrences": 1,
     "reason": "The internal WebSocket event name remains stable for existing clients."
+  },
+  {
+    "id": "styles-rail-workflows-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])rail-workflows(?![a-z0-9_-])",
+    "occurrences": 3,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-item-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-item(?![a-z0-9_-])",
+    "occurrences": 10,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-actions-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-actions(?![a-z0-9_-])",
+    "occurrences": 4,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-status-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-status(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-item-trigger-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-item-trigger(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-session-dot-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-session-dot(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-expander-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-expander(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-dot-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-dot(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-dot-pinned-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-dot-pinned(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-deployed-tag-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-deployed-tag(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-menu-wrap-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-menu-wrap(?![a-z0-9_-])",
+    "occurrences": 4,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-menu-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-menu(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-menu-section-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-menu-section(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-session-workflow-chip-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-actions-header-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-actions-header(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-actions-name-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-actions-name(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-actions-count-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-actions-count(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-launched-workflow-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])dot--launched-workflow(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private Canvas node-kind CSS selector remains stable."
+  },
+  {
+    "id": "refine-workflow-item-selector",
+    "path": "packages/harness/web/src/styles/refine.css",
+    "pattern": "(?<![a-z0-9_-])workflow-item(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "refine-session-workflow-chip-selector",
+    "path": "packages/harness/web/src/styles/refine.css",
+    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "refine-workflow-dot-selector",
+    "path": "packages/harness/web/src/styles/refine.css",
+    "pattern": "(?<![a-z0-9_-])workflow-dot(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
   }
 ]
