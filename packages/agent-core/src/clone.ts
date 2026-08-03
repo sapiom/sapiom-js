@@ -34,7 +34,15 @@
  * only have a `number` (e.g. the MCP tool, on behalf of the harness) normalize at
  * that boundary with `String(definitionId)` before calling in.
  */
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import { GatewayClient } from './client.js';
@@ -82,7 +90,7 @@ export interface CloneOptions {
    * `deploy`). Mutually exclusive with `templateId` and `forkId`.
    */
   definitionId?: string;
-  /** Absolute path to clone into. Must not exist or must be empty. */
+  /** Absolute path to clone into. Must be empty except for Studio-owned `.sapiom/`. */
   targetDir: string;
   /**
    * Clone implementation, injectable for tests. Defaults to the real git clone.
@@ -141,14 +149,22 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
     });
   }
 
-  // Fail before any network call if the target can't receive a clone — the git
-  // clone would fail anyway, and this keeps the credential-minting side effect
-  // from happening on a doomed run.
-  if (existsSync(targetDir) && readdirSync(targetDir).length > 0) {
-    throw new AgentOperationError({
-      code: 'DIR_NOT_EMPTY',
-      message: `Target directory '${targetDir}' already exists and is not empty.`,
-    });
+  // Agent Studio creates private session/Canvas state before the coding agent
+  // receives the clone prompt. Accept exactly that one real `.sapiom/`
+  // directory, while keeping every other pre-existing entry a hard stop.
+  let preserveStudioState = false;
+  if (existsSync(targetDir)) {
+    const entries = readdirSync(targetDir);
+    if (entries.length === 1 && entries[0] === '.sapiom') {
+      const studioState = lstatSync(path.join(targetDir, '.sapiom'));
+      preserveStudioState = studioState.isDirectory() && !studioState.isSymbolicLink();
+    }
+    if (entries.length > 0 && !preserveStudioState) {
+      throw new AgentOperationError({
+        code: 'DIR_NOT_EMPTY',
+        message: `Target directory '${targetDir}' already exists and is not empty.`,
+      });
+    }
   }
 
   // 1. Provision the per-fork repo (unless the caller already has a fork id, or
@@ -188,15 +204,40 @@ export async function clone(opts: CloneOptions, client: GatewayClient): Promise<
   }
 
   // 3. Clone into the local checkout. The parent must exist for git's cwd.
+  // When Studio state is present, clone into an isolated sibling first and
+  // move the completed checkout beside `.sapiom/`. A failed clone therefore
+  // leaves Studio's existing state untouched.
   const parent = path.dirname(path.resolve(targetDir));
   mkdirSync(parent, { recursive: true });
-  runClone({
-    cloneUrl: token.cloneUrl,
-    targetDir,
-    branch: token.defaultBranch,
-    repoFullName: token.repoFullName,
-    cwd: parent,
-  });
+  const stagedTarget = preserveStudioState
+    ? mkdtempSync(path.join(parent, '.sapiom-clone-'))
+    : null;
+  const cloneTarget = stagedTarget ?? targetDir;
+  try {
+    runClone({
+      cloneUrl: token.cloneUrl,
+      targetDir: cloneTarget,
+      branch: token.defaultBranch,
+      repoFullName: token.repoFullName,
+      cwd: parent,
+    });
+
+    if (stagedTarget) {
+      const clonedEntries = readdirSync(stagedTarget);
+      if (clonedEntries.includes('.sapiom')) {
+        throw new AgentOperationError({
+          code: 'STUDIO_STATE_CONFLICT',
+          message: 'The cloned repository contains a reserved .sapiom directory.',
+          hint: 'Remove .sapiom from the template repository, then try again.',
+        });
+      }
+      for (const entry of clonedEntries) {
+        renameSync(path.join(stagedTarget, entry), path.join(targetDir, entry));
+      }
+    }
+  } finally {
+    if (stagedTarget) rmSync(stagedTarget, { recursive: true, force: true });
+  }
 
   // 4. Record the provenance so `link`/`deploy`/`run` know what this is. The
   // definitionId path writes `definitionId` directly — the checkout is

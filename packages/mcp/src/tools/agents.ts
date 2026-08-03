@@ -273,7 +273,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .string()
         .min(1)
         .describe(
-          "Target directory to clone into (created if absent; must be empty).",
+          "Target directory to clone into (created if absent; must otherwise be empty, except for Agent Studio's private .sapiom directory).",
         ),
       templateId: z
         .string()

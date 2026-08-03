@@ -431,18 +431,17 @@ function HaveProjectDoor({
 }
 
 /**
- * "This project isn't wired to Sapiom yet" — the job the old dialog spent five
- * permanent `Copy for <agent>` buttons on, in a 5-wide grid that was roughly 40%
- * of its height and shown even when the selected folder was already a perfectly
- * wired agent project.
+ * Terminal authoring handoff — the job the old dialog spent five permanent
+ * `Copy for <agent>` buttons on, in a 5-wide grid that was roughly 40% of its
+ * height.
  *
- * Two changes. It is CONTEXTUAL: it appears only inside the "no agent project"
- * outcome, because that is the only case it answers. And it is ONE row plus a
- * disclosure rather than five buttons: the agent you actually use is the primary
- * affordance, the rest are behind a caret.
+ * It is contextual and compact: one row for the preferred coding agent, with
+ * other installed adapters behind a disclosure. Marker detection says nothing
+ * about the user's global MCP registration, so the UI offers setup without
+ * claiming that the server is absent.
  *
  * Still copy-a-prompt for now. What the prompt contains is a shell command
- * (`claude mcp add sapiom-dev -- npx -y @sapiom/mcp`), so a desktop build can
+ * (`claude mcp add sapiom -- npx -y @sapiom/mcp`), so a desktop build can
  * run it for you — that needs the Electron preload and is deliberately a
  * separate change; this is the same capability, minus the clutter.
  */
@@ -482,7 +481,7 @@ function McpOffer({ entries }: { entries: HarnessEntry[] }): JSX.Element | null 
       <div className="aw-mcp-row">
         <span className="aw-mcp-text">
           Also drive this project from your own terminal?{" "}
-          <span className="aw-mcp-dim">Sapiom MCP isn&apos;t set up here.</span>
+          <span className="aw-mcp-dim">Copy the authoring setup for Claude Code.</span>
         </span>
         <button
           type="button"

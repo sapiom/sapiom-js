@@ -99,6 +99,28 @@ describe("createFsRouter", () => {
       expect(body.dirs.find((d) => d.name === "alpha")?.hasAgentProject).toBe(false);
     });
 
+    it("rejects malformed and non-object marker contents", async () => {
+      await fs.writeFile(path.join(root, "alpha", "sapiom.json"), "not-json");
+      await fs.writeFile(path.join(root, "zebra", "sapiom.json"), "[]");
+
+      const res = await list(`?path=${encodeURIComponent(root)}`);
+      const body = (await res.json()) as FsListResponse;
+
+      expect(body.dirs.find((d) => d.name === "alpha")?.hasAgentProject).toBe(false);
+      expect(body.dirs.find((d) => d.name === "zebra")?.hasAgentProject).toBe(false);
+    });
+
+    it("does not badge a project inside a scanner-ignored child", async () => {
+      const dist = path.join(root, "dist");
+      await fs.mkdir(dist);
+      await fs.writeFile(path.join(dist, "sapiom.json"), "{}");
+
+      const res = await list(`?path=${encodeURIComponent(root)}`);
+      const body = (await res.json()) as FsListResponse;
+
+      expect(body.dirs.find((d) => d.name === "dist")?.hasAgentProject).toBe(false);
+    });
+
     it("reports false for an unreadable child rather than failing the listing", async () => {
       const walled = path.join(root, "walled");
       await fs.mkdir(walled);

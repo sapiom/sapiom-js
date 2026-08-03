@@ -38,7 +38,7 @@ export function createTemplatesRouter(opts: TemplatesRouterOpts): Router {
    *
    * 200 always — a `TemplateListResponse`. Deliberately never an error status:
    * an unreachable or signed-out catalog is a degraded gallery (the bundled
-   * starters still work offline), not a failed request, and core's own endpoint
+   * starters remain available), not a failed request, and core's own endpoint
    * makes the same choice. `source`/`reason` carry the degradation so the dialog
    * can explain itself.
    */

@@ -30,7 +30,7 @@ No global install — run it on demand with `npx`:
 In Claude Code:
 
 ```sh
-claude mcp add sapiom-dev -- npx -y @sapiom/mcp
+claude mcp add sapiom -- npx -y @sapiom/mcp
 ```
 
 ## Configuration

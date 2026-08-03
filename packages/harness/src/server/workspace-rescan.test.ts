@@ -1,7 +1,7 @@
 /**
  * Wiring-level proof of the mid-session workflow rescan (Bug B): a workflow
  * scaffolded under a running session's workspace appears in the broadcast
- * workflow list, and a removed one drops out — without a server restart. The
+ * workflow list, and an invalidated one drops out — without a server restart. The
  * per-session workspace watcher (core/workspace-watcher.ts) drives a
  * prune + rescan that persists to the registry and broadcasts
  * `workflows.changed` on /ws/events.
@@ -83,7 +83,7 @@ describe("mid-session workflow rescan", () => {
   // interval, producing a spurious timeout on the first run. One retry isolates
   // a scheduling artifact from a genuine regression without masking real failures.
   it(
-    "adds a scaffolded workflow and drops a removed one, broadcasting each change",
+    "adds a scaffolded workflow and drops it when its marker is removed, broadcasting each change",
     { retry: 1, timeout: 20_000 },
     async () => {
       server = await startServer({
@@ -113,13 +113,19 @@ describe("mid-session workflow rescan", () => {
         { timeout: 8_000, interval: 150 },
       );
 
-      // Remove it — the prune in the rescan must drop it back out and broadcast again.
+      expect(server.sessionManager.get(session.id)?.boundWorkflowPath).toBe(
+        join(cwd, "hn-story-images"),
+      );
+
+      // Remove only its marker. Reconciliation must drop the existing directory,
+      // clear the stale session binding, and broadcast again.
       const framesBeforeRemoval = changedFrames;
-      await rm(join(cwd, "hn-story-images"), { recursive: true, force: true });
+      await rm(join(cwd, "hn-story-images", "sapiom.json"));
       await vi.waitFor(
         async () => {
           const workflows = await listWorkflows(port);
           expect(workflows.some((w) => w.name === "hn-story-images")).toBe(false);
+          expect(server?.sessionManager.get(session.id)?.boundWorkflowPath).toBeNull();
           expect(changedFrames).toBeGreaterThan(framesBeforeRemoval);
         },
         { timeout: 8_000, interval: 150 },

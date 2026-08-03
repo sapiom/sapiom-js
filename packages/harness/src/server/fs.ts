@@ -9,7 +9,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
-import { AGENT_PROJECT_MARKER, type FsDirEntry, type FsListResponse } from "../shared/types.js";
+import { type FsDirEntry, type FsListResponse } from "../shared/types.js";
+import {
+  isAgentProjectScanIgnoredDir,
+  readAgentProjectMarker,
+} from "../core/agent-project-discovery.js";
 import { hasTraversalSegment } from "../core/path-safety.js";
 
 export type { FsDirEntry, FsListResponse } from "../shared/types.js";
@@ -94,13 +98,11 @@ export function createFsRouter(): ExpressRouter {
     const dirs: FsDirEntry[] = await Promise.all(
       candidates.map(async (dir) => ({
         ...dir,
-        // stat().isFile(), not access(): a DIRECTORY named `sapiom.json` would
-        // pass an existence check but is not a project (the registry's
-        // readMarker would fail to parse it), so it must report false.
-        hasAgentProject: await fs
-          .stat(path.join(dir.path, AGENT_PROJECT_MARKER))
-          .then((stats) => stats.isFile())
-          .catch(() => false),
+        // Match the recursive registry: ignored children are not scan targets,
+        // and a marker must parse as a top-level JSON object (including `{}`).
+        hasAgentProject:
+          !isAgentProjectScanIgnoredDir(dir.name) &&
+          (await readAgentProjectMarker(dir.path)) !== null,
       })),
     );
 

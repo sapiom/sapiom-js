@@ -798,12 +798,12 @@ export const startServer = async (
   // agent scaffolds a new workflow directory, or one gets deleted — and the
   // rail must keep up rather than stay frozen at whatever the boot/session-
   // create scan found. On a (debounced) structural change under a session's
-  // workspace, prune dead paths, re-scan its cwd, and — only when the workflow
+  // workspace, prune dead paths, reconcile its cwd, and — only when the workflow
   // list actually changed — rewrite every open session's context file and
   // broadcast `workflows.changed` (the SPA refetches /api/workflows on it).
-  // Pruning here is what lets a deleted workflow drop out (a plain scan only
-  // ever merges in); it respects the same ENOENT/ENOTDIR-only guard as the
-  // boot prune, so a merely-unbuilt or unreadable project stays put.
+  // Path pruning respects the ENOENT/ENOTDIR-only guard. The scan additionally
+  // removes scan-sourced rows in this cwd's traversal envelope when their
+  // marker disappears or becomes invalid; manually connected folders remain.
   const rescanWorkspaceForSession = async (
     harnessSessionId: string,
   ): Promise<void> => {
@@ -814,6 +814,21 @@ export const startServer = async (
     await workflowRegistry.scan(session.cwd);
     const after = await workflowRegistry.list();
     workflowsCache = after;
+
+    // A removed project must not leave a live session permanently bound to a
+    // path that the registry can no longer resolve. Clear only stale bindings;
+    // the triggering session may immediately auto-bind to another candidate
+    // below its cwd in the block that follows.
+    const registeredPaths = new Set(after.map((workflow) => workflow.path));
+    for (const openSession of sessionManager.list()) {
+      if (
+        openSession.status !== "exited" &&
+        openSession.boundWorkflowPath &&
+        !registeredPaths.has(openSession.boundWorkflowPath)
+      ) {
+        sessionManager.setBoundWorkflowPath(openSession.id, null);
+      }
+    }
 
     // Auto-bind: if this session is still unbound, find the workflow at or
     // directly under its cwd and bind it — same mechanism as

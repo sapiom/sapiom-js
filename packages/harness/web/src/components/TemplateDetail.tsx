@@ -296,7 +296,7 @@ export function TemplateDetail({
       <p className="template-handoff" data-testid="template-handoff">
         {template.kind === "gallery"
           ? "Using it forks the template into a repo you own, then clones it here. Needs a signed-in Sapiom account; the coding agent asks you to sign in if it is missing."
-          : "Scaffolds offline from the template bundled with the CLI. No account, no network."}
+          : "Scaffolds from the template bundled with the CLI. No Sapiom account or capability spend; setup may access npm."}
       </p>
     </div>
   );

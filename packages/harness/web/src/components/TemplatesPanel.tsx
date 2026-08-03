@@ -51,10 +51,10 @@ interface TemplatesPanelProps {
  *    Studio once offered two templates while the dashboard had twenty-six.
  * 2. **A degraded fetch says so.** Signed out or core unreachable, the notice
  *    names the reason. Silence is what let a short list read as a whole catalog.
- * 3. **Bundled starters keep their own block.** They are the CLI's offline
- *    scaffolds, not catalog entries, and they stay reachable exactly when the
- *    gallery is not. They declare no category or trigger, and inventing one to
- *    tidy the grid would be fabricating registry data.
+ * 3. **Bundled starters keep their own block.** They do not require the live
+ *    gallery or a Sapiom account, and they are not catalog entries. They
+ *    declare no category or trigger, and inventing one to tidy the grid would
+ *    be fabricating registry data.
  *
  * There is no result-count line above the grid: every facet row already carries
  * its own count, and the hero states the total.
@@ -117,8 +117,8 @@ export function TemplatesPanel({
     if (loadError) return `Could not load the template gallery: ${loadError}`;
     if (!catalog || catalog.source === "live") return null;
     return catalog.reason === "signed-out"
-      ? "Sign in to Sapiom to browse the template gallery. The bundled starters below work offline."
-      : "The template gallery is unreachable right now. The bundled starters below work offline.";
+      ? "Sign in to Sapiom to browse the template gallery. The bundled starters below remain available."
+      : "The template gallery is unreachable right now. The bundled starters below remain available.";
   })();
 
   return (
@@ -217,7 +217,7 @@ export function TemplatesPanel({
                     <section className="templates-starters" data-testid="templates-starters">
                       <span className="facet-title">Bundled starters</span>
                       <p className="templates-starters-copy">
-                        Shipped with the CLI. These scaffold with no account and no network.
+                        Shipped with the CLI. No Sapiom account or capability spend; setup may access npm.
                       </p>
                       <div className="templates-grid">
                         {starters.map((template) => (

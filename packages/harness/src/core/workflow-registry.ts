@@ -14,22 +14,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 
-import { AGENT_PROJECT_MARKER, HARNESS_PATHS, type WorkflowInfo } from "../shared/types.js";
+import { HARNESS_PATHS, type WorkflowInfo } from "../shared/types.js";
+import {
+  AGENT_PROJECT_SCAN_MAX_DEPTH,
+  type AgentProjectMarker,
+  isAgentProjectScanIgnoredDir,
+  readAgentProjectMarker,
+} from "./agent-project-discovery.js";
 import { hasTraversalSegment, resolveWithinRoot } from "./path-safety.js";
-
-const MAX_SCAN_DEPTH = 3;
-const SKIP_DIR_NAMES = new Set(["node_modules", ".git"]);
 
 function expandHome(inputPath: string): string {
   if (inputPath === "~") return os.homedir();
   if (inputPath.startsWith("~/")) return path.join(os.homedir(), inputPath.slice(2));
   return inputPath;
-}
-
-interface SapiomMarker {
-  definitionId?: number | null;
-  /** The agent's `defineAgent({ name })`, cached by `link` — the executions-API slug. */
-  name?: string;
 }
 
 // `dir` reaching these sinks is always a resolved absolute path (from
@@ -38,14 +35,9 @@ interface SapiomMarker {
 // guarantee explicit and local to each fs read, and covers the arbitrary
 // path connectPath accepts (which has no scan root to confine it to).
 
-async function readMarker(dir: string): Promise<SapiomMarker | null> {
+async function readMarker(dir: string): Promise<AgentProjectMarker | null> {
   if (hasTraversalSegment(dir)) return null;
-  try {
-    const raw = await fs.readFile(path.join(dir, AGENT_PROJECT_MARKER), "utf8");
-    return JSON.parse(raw) as SapiomMarker;
-  } catch {
-    return null;
-  }
+  return readAgentProjectMarker(dir);
 }
 
 async function nameFor(dir: string): Promise<string> {
@@ -70,7 +62,7 @@ async function nameFor(dir: string): Promise<string> {
  * descended into either.
  */
 async function scanDir(root: string, dir: string, depth: number, found: WorkflowInfo[]): Promise<void> {
-  if (depth > MAX_SCAN_DEPTH) return;
+  if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
 
   const safeDir = resolveWithinRoot(root, dir);
   if (!safeDir) return;
@@ -95,9 +87,28 @@ async function scanDir(root: string, dir: string, depth: number, found: Workflow
   }
 
   for (const entry of entries) {
-    if (!entry.isDirectory() || SKIP_DIR_NAMES.has(entry.name)) continue;
+    if (!entry.isDirectory() || isAgentProjectScanIgnoredDir(entry.name)) continue;
     await scanDir(root, path.join(safeDir, entry.name), depth + 1, found);
   }
+}
+
+/**
+ * Whether a previously scanned path is inside the exact traversal envelope of
+ * a new scan. Only those entries may be reconciled away when their marker is no
+ * longer found; a narrow scan must never delete projects discovered from a
+ * different root.
+ */
+function isCoveredByScan(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  if (relative === "") return true;
+  if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    return false;
+  }
+  const segments = relative.split(path.sep).filter(Boolean);
+  return (
+    segments.length <= AGENT_PROJECT_SCAN_MAX_DEPTH &&
+    !segments.some((segment) => isAgentProjectScanIgnoredDir(segment))
+  );
 }
 
 export class WorkflowRegistry {
@@ -180,7 +191,11 @@ export class WorkflowRegistry {
     });
   }
 
-  /** Scans `root` and merges discovered projects into the persisted registry. */
+  /**
+   * Scans `root`, refreshes discovered projects, and removes scan-sourced rows
+   * in this scan's traversal envelope when their marker is gone or invalid.
+   * Manually connected rows remain until their path itself is pruned.
+   */
   async scan(root: string): Promise<WorkflowInfo[]> {
     return this.enqueue(async () => {
       await this.ensureLoaded();
@@ -188,7 +203,17 @@ export class WorkflowRegistry {
       const found: WorkflowInfo[] = [];
       await scanDir(absoluteRoot, absoluteRoot, 0, found);
 
-      const byPath = new Map(this.workflows.map((workflow) => [workflow.path, workflow]));
+      const foundPaths = new Set(found.map((workflow) => workflow.path));
+      const byPath = new Map(
+        this.workflows
+          .filter(
+            (workflow) =>
+              workflow.source !== "scan" ||
+              !isCoveredByScan(absoluteRoot, workflow.path) ||
+              foundPaths.has(workflow.path),
+          )
+          .map((workflow) => [workflow.path, workflow]),
+      );
       for (const workflow of found) {
         const existing = byPath.get(workflow.path);
         // A manually-connected entry keeps its `source`; a scan only refreshes name/definitionId.

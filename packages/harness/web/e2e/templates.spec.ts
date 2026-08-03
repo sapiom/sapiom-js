@@ -172,7 +172,7 @@ test.describe("templates journey (from the welcome panel)", () => {
     await expect(page.getByTestId("template-complexity-note")).toContainText("Minimal 1/5");
   });
 
-  test("read: the handoff line tells the truth per kind (clone needs auth, starter is offline)", async ({
+  test("read: the handoff line tells the truth per kind (clone needs auth, starter may use npm)", async ({
     page,
   }) => {
     await open(page, "web-research-digest");
@@ -180,7 +180,9 @@ test.describe("templates journey (from the welcome panel)", () => {
       "Using it forks the template into a repo you own, then clones it here. Needs a signed-in Sapiom account; the coding agent asks you to sign in if it is missing.",
     );
     await open(page, "coding-pause");
-    await expect(page.getByTestId("template-handoff")).toContainText("No account, no network");
+    await expect(page.getByTestId("template-handoff")).toContainText(
+      "No Sapiom account or capability spend; setup may access npm",
+    );
   });
 
   test("use (gallery): session at the destination + the real clone-tool prompt", async ({ page }) => {

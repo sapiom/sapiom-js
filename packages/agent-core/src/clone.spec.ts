@@ -7,7 +7,14 @@
  * and materializes an empty target dir. The filesystem (a temp dir) is the
  * only real dependency.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -229,6 +236,74 @@ describe('clone', () => {
         code: 'DIR_NOT_EMPTY',
       });
       expect(spy).not.toHaveBeenCalled();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves Agent Studio's private .sapiom directory while cloning", async () => {
+    mockFetch([{ status: 200, body: TOKEN_BODY }]);
+    const base = makeTmp();
+    const target = path.join(base, 'project');
+    const studioState = path.join(target, '.sapiom');
+    mkdirSync(studioState, { recursive: true });
+    writeFileSync(path.join(studioState, 'harness-context.json'), '{"session":"studio"}\n');
+    let actualCloneTarget = '';
+
+    try {
+      await clone(
+        {
+          forkId: 'fork-uuid-1',
+          targetDir: target,
+          cloneRepo: (opts) => {
+            actualCloneTarget = opts.targetDir;
+            mkdirSync(opts.targetDir, { recursive: true });
+            mkdirSync(path.join(opts.targetDir, '.git'));
+            writeFileSync(path.join(opts.targetDir, 'README.md'), '# cloned\n');
+          },
+        },
+        client,
+      );
+
+      expect(actualCloneTarget).not.toBe(target);
+      expect(readFileSync(path.join(studioState, 'harness-context.json'), 'utf8')).toBe(
+        '{"session":"studio"}\n',
+      );
+      expect(readFileSync(path.join(target, 'README.md'), 'utf8')).toBe('# cloned\n');
+      expect(readdirSync(base)).toEqual(['project']);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves Agent Studio state untouched when a staged clone fails", async () => {
+    mockFetch([{ status: 200, body: TOKEN_BODY }]);
+    const base = makeTmp();
+    const target = path.join(base, 'project');
+    const studioState = path.join(target, '.sapiom');
+    mkdirSync(studioState, { recursive: true });
+    writeFileSync(path.join(studioState, 'session.json'), '{"id":"studio"}\n');
+
+    try {
+      await expect(
+        clone(
+          {
+            forkId: 'fork-uuid-1',
+            targetDir: target,
+            cloneRepo: (opts) => {
+              writeFileSync(path.join(opts.targetDir, 'partial.txt'), 'partial');
+              throw new Error('clone failed');
+            },
+          },
+          client,
+        ),
+      ).rejects.toThrow('clone failed');
+
+      expect(readFileSync(path.join(studioState, 'session.json'), 'utf8')).toBe(
+        '{"id":"studio"}\n',
+      );
+      expect(readdirSync(target)).toEqual(['.sapiom']);
+      expect(readdirSync(base)).toEqual(['project']);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

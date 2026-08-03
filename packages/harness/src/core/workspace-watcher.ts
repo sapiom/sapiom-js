@@ -31,26 +31,21 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { AGENT_PROJECT_MARKER } from "../shared/types.js";
+import {
+  AGENT_PROJECT_SCAN_MAX_DEPTH,
+  isAgentProjectScanIgnoredDir,
+  readAgentProjectMarker,
+  readAgentProjectMarkerSync,
+} from "./agent-project-discovery.js";
 
 const DEBOUNCE_MS = 250;
 /** Longer than the watch debounce — the watcher path is the fast signal;
  *  the poll is just a backstop for platforms without recursive fs.watch. */
 const POLL_INTERVAL_MS = 2_000;
 
-/** Shared with core/workflow-registry.ts and server/fs.ts via
- *  AGENT_PROJECT_MARKER; this is only how deep the scan looks for it. */
-const WORKFLOW_MARKER = AGENT_PROJECT_MARKER;
-const MAX_SCAN_DEPTH = 3;
-
-/** Directories a workflow marker never lives in — skipped both when
- *  fingerprinting and when deciding whether a watch event is relevant.
- *  `.sapiom` covers the canvas renders that are rewritten on every render. */
-const IGNORED_DIR_NAMES = new Set(["node_modules", ".git", ".sapiom", "dist", "build", ".next"]);
-
 function firstSegmentIgnored(relPath: string): boolean {
   for (const segment of relPath.split(path.sep)) {
-    if (segment && IGNORED_DIR_NAMES.has(segment)) return true;
+    if (segment && isAgentProjectScanIgnoredDir(segment)) return true;
   }
   return false;
 }
@@ -70,7 +65,7 @@ export function snapshotWorkspaceWorkflows(root: string): string {
   const markerDirs: string[] = [];
 
   const walk = (dir: string, depth: number): void => {
-    if (depth > MAX_SCAN_DEPTH) return;
+    if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -79,12 +74,13 @@ export function snapshotWorkspaceWorkflows(root: string): string {
     }
     // A directory carrying the marker is itself a workflow — record it and
     // don't descend (matches the registry's scan semantics).
-    if (entries.some((entry) => entry.isFile() && entry.name === WORKFLOW_MARKER)) {
-      markerDirs.push(dir);
+    const marker = readAgentProjectMarkerSync(dir);
+    if (marker) {
+      markerDirs.push(`${dir}\0${JSON.stringify(marker)}`);
       return;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || IGNORED_DIR_NAMES.has(entry.name)) continue;
+      if (!entry.isDirectory() || isAgentProjectScanIgnoredDir(entry.name)) continue;
       walk(path.join(dir, entry.name), depth + 1);
     }
   };
@@ -103,19 +99,20 @@ export async function snapshotWorkspaceWorkflowsAsync(root: string): Promise<str
   const markerDirs: string[] = [];
 
   const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > MAX_SCAN_DEPTH) return;
+    if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
     let entries: fs.Dirent[];
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
-    if (entries.some((entry) => entry.isFile() && entry.name === WORKFLOW_MARKER)) {
-      markerDirs.push(dir);
+    const marker = await readAgentProjectMarker(dir);
+    if (marker) {
+      markerDirs.push(`${dir}\0${JSON.stringify(marker)}`);
       return;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || IGNORED_DIR_NAMES.has(entry.name)) continue;
+      if (!entry.isDirectory() || isAgentProjectScanIgnoredDir(entry.name)) continue;
       await walk(path.join(dir, entry.name), depth + 1);
     }
   };

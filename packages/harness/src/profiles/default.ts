@@ -49,8 +49,8 @@ directory (\`{"boundAgent": {name, path, definitionId} | null,
 "agents": [{name, path, definitionId}, ...], "session": {id, cwd,
 harness}, "updatedAt": ...}\`). \`boundAgent\` is whichever deployable agent the
 person currently has selected in the app, or \`null\` if none;
-\`agents\` is every agent the app has discovered here, selected or
-not. Read it when they say "this agent," ask what they're working on, or
+\`agents\` is every agent currently known to this Agent Studio installation,
+selected or not. Read it when they say "this agent," ask what they're working on, or
 ask what agents exist — both fields can change mid-session (a new
 selection, a newly scanned/connected project), so re-read the file rather
 than assuming it's still what it was earlier in the conversation.

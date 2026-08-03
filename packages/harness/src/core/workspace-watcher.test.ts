@@ -169,6 +169,25 @@ describe("snapshotWorkspaceWorkflows", () => {
     expect(snapshotWorkspaceWorkflows(dir)).toBe(before);
   });
 
+  it("changes when marker identity changes and excludes malformed markers", async () => {
+    const workflow = await scaffoldWorkflow(dir, "flow-a");
+    const before = snapshotWorkspaceWorkflows(dir);
+
+    await fs.writeFile(path.join(workflow, "sapiom.json"), JSON.stringify({ definitionId: 42 }));
+    const linked = snapshotWorkspaceWorkflows(dir);
+    expect(linked).not.toBe(before);
+
+    await fs.writeFile(path.join(workflow, "sapiom.json"), "not-json");
+    expect(snapshotWorkspaceWorkflows(dir)).toBe("");
+  });
+
+  it("uses the registry's ignored-directory contract", async () => {
+    for (const ignored of ["node_modules", ".git", ".sapiom", "dist", "build", ".next"]) {
+      await scaffoldWorkflow(path.join(dir, ignored), "generated");
+    }
+    expect(snapshotWorkspaceWorkflows(dir)).toBe("");
+  });
+
   it("does not descend into a marker directory (a nested marker never double-counts)", async () => {
     await scaffoldWorkflow(dir, "flow-a");
     await fs.writeFile(path.join(dir, "flow-a", "sapiom.json"), JSON.stringify({ definitionId: 2 }));
