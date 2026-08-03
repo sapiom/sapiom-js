@@ -29,7 +29,7 @@ describe("DEFAULT_MACROS", () => {
     expect(macro.requiresWorkflow).toBe(true);
     expect(macro.action).toEqual({
       kind: "open-url",
-      url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}",
+      url: "https://app.sapiom.ai/agents/{{workflow.definitionId}}",
     });
   });
 

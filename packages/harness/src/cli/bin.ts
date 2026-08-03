@@ -45,8 +45,8 @@ function printBanner(opts: {
     : "not authenticated";
 
   console.log("");
-  console.log("  Sapiom Studio");
-  console.log("  -------------");
+  console.log("  Agent Studio");
+  console.log("  ------------");
   console.log(`  directory   ${opts.dir}`);
   console.log(`  auth        ${authLine}`);
   console.log(`  telemetry   ${opts.telemetryOptIn ? "on" : "off"}`);
@@ -68,7 +68,7 @@ const main = async (): Promise<void> => {
   printDoctorReport(doctorReport);
   if (!doctorReport.ok) {
     console.error(
-      "\nsapiom-harness requires Node >= 20 and at least one coding agent on PATH:\n" +
+      "\nAgent Studio (`sapiom-harness`) requires Node >= 20 and at least one coding agent on PATH:\n" +
         `  Claude Code:  ${CLAUDE_INSTALL_COMMAND}\n` +
         `  Codex:        ${CODEX_INSTALL_COMMAND}\n` +
         "Fix the checks above and try again.",
@@ -79,7 +79,7 @@ const main = async (): Promise<void> => {
   if (!doctorReport.availableHarnesses.includes("claude-code")) {
     console.log(
       `\n⚠ Claude Code not found — install with: ${CLAUDE_INSTALL_COMMAND}\n` +
-        "  Continuing with the Codex harness.",
+        "  Continuing with the Codex coding agent.",
     );
   }
 
@@ -137,7 +137,7 @@ const main = async (): Promise<void> => {
   } catch (err) {
     if (!options.dev) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`\n⚠ Harness server is not wired up yet: ${message}`);
+    console.error(`\n⚠ Agent Studio server is not wired up yet: ${message}`);
     console.error(
       "--dev flow verified (doctor → auth → consent) without a live server.\n",
     );

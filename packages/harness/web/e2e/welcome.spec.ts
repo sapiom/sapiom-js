@@ -49,12 +49,13 @@ test.describe("first run", () => {
     await expect(page.locator(".terminal-empty")).toBeVisible();
 
     // "Welcome to" is the one thing that marks a first run.
-    await expect(panel).toContainText("Welcome to Sapiom Agent Studio");
-    await expect(panel).toContainText("Local runs are free and offline");
+    await expect(panel).toContainText("Welcome to Agent Studio");
+    await expect(panel).toContainText("Local agent runs are free and offline");
 
     // Each way in is a row that says what picking it does, not a bare button.
     const folder = page.getByTestId("welcome-open-card");
     await expect(folder).toContainText("Open a folder");
+    await expect(folder).toContainText("Agents in the folder appear in the rail");
     await expect(folder).toContainText("Nothing is uploaded");
     await expect(page.getByTestId("welcome-start-project")).toBeVisible();
 
@@ -115,7 +116,8 @@ test.describe("returning user", () => {
 
     const panel = page.getByTestId("welcome-panel");
     // Greeted once, on the first run — not every time you open Overview.
-    await expect(panel).toContainText("Sapiom Agent Studio");
+    await expect(panel).toContainText("Agent Studio");
+    await expect(panel).not.toContainText("Sapiom Agent Studio");
     await expect(panel).not.toContainText("Welcome to");
     // Everything else is the same surface, plus the thing a returning user came
     // for: where they have already been.

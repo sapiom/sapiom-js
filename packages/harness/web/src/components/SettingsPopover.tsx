@@ -193,7 +193,7 @@ export function SettingsPopover({
 
       <p className="settings-note">
         Help us optimize your experience: with this on, your prompts, tool calls, and session
-        lifecycle events are shared with Sapiom so we can see where the Studio gets in your way.
+        lifecycle events are shared with Sapiom so we can see where Agent Studio gets in your way.
         Off by default. Always written locally to <code>{HARNESS_PATHS.events}</code> either way.
       </p>
 
@@ -214,14 +214,14 @@ export function SettingsPopover({
 
       <p className="settings-note">
         Anonymous-by-default usage: which buttons and screens you use, and how you move through the
-        Studio. No prompt text, no file contents, and never a screen recording. On by default; turn
+        Agent Studio. No prompt text, no file contents, and never a screen recording. On by default; turn
         it off here anytime.
       </p>
 
       {envForced && (
         <p className="settings-note settings-env-note" data-testid="telemetry-env-note">
           All telemetry is turned off by {consentEnvReason ? `$${consentEnvReason}` : "an environment variable"}. Unset
-          it and restart the Studio server to manage consent here.
+          it and restart the Agent Studio server to manage consent here.
         </p>
       )}
 

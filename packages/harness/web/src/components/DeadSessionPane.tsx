@@ -270,7 +270,7 @@ function SessionRecordBody({ state }: { state: SessionRecordState }): JSX.Elemen
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />
         </span>
-        No transcript for this session: the harness has no recorded events for it. Sessions the
+        No transcript for this session: Agent Studio has no recorded events for it. Sessions Agent
         Studio didn't run — or ones whose events have aged out of the local log — show up here as
         history rows only.
       </div>

@@ -79,8 +79,13 @@ test.describe("theme — system preference", () => {
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({ page }) => {
+  await expect(page).toHaveTitle("Agent Studio");
   await expect(page.locator(".brand-name")).toHaveText("Sapiom");
-  await expect(page.locator(".brand-product")).toHaveText("Studio");
+  await expect(page.locator(".brand-product")).toHaveText("Agent Studio");
+  await expect(page.getByTestId("palette-trigger")).toHaveAttribute(
+    "aria-label",
+    "Jump to session, agent, or path",
+  );
   // Mock mode is the static demo build: it must never claim a connected
   // Sapiom account — the identity chip reads "Demo workspace" instead.
   const identity = page.getByTestId("brand-identity");
@@ -896,7 +901,7 @@ test.describe("workflow actions", () => {
     // tab bar for deployed workflows. leasing is deployed (definitionId set) on load.
     const dashLink = page.getByTestId("workflow-dashboard-link");
     await expect(dashLink).toBeVisible();
-    await expect(dashLink).toHaveAttribute("href", /app\.sapiom\.ai\/workflows\//);
+    await expect(dashLink).toHaveAttribute("href", /app\.sapiom\.ai\/agents\//);
     await expect(dashLink).toHaveAttribute("target", "_blank");
   });
 
@@ -1394,6 +1399,24 @@ test.describe("account profile row", () => {
     const menu = page.getByTestId("profile-menu");
     await expect(menu).toBeVisible();
     await expect(page.getByTestId("profile-open-dashboard")).toBeVisible();
+    await page.evaluate(() => {
+      const harnessWindow = window as unknown as {
+        __SAP_2332_OPENED_URL__?: string;
+        open: typeof window.open;
+      };
+      harnessWindow.open = ((url?: string | URL) => {
+        harnessWindow.__SAP_2332_OPENED_URL__ = String(url ?? "");
+        return null;
+      }) as typeof window.open;
+    });
+    await page.getByTestId("profile-open-dashboard").click();
+    await expect.poll(() => page.evaluate(() => (
+      window as unknown as { __SAP_2332_OPENED_URL__?: string }
+    ).__SAP_2332_OPENED_URL__)).toBe("https://app.sapiom.ai/agents");
+
+    // Reopen after the dashboard action closes the menu.
+    await profile.click();
+    await expect(menu).toBeVisible();
     // Demo build: the switch item reads as connect and stays actionable.
     await expect(page.getByTestId("profile-switch-account")).toHaveText(/Connect Sapiom account/);
     await expect(page.getByTestId("profile-switch-account")).toBeEnabled();

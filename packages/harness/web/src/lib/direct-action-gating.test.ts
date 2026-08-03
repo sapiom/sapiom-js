@@ -194,7 +194,7 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
     lastDeployError: string | null,
   ): string | null {
     if (kind === "deploy") {
-      return workflow ? null : "Select a workflow first.";
+      return workflow ? null : "Select an agent first.";
     }
     if (kind === "prod-run") {
       if (workflow?.definitionId != null) return null; // proceed
@@ -203,13 +203,13 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
         : "This agent isn't deployed yet — deploy it first.";
     }
     if (kind === "run-local") {
-      return workflow ? null : "Select a workflow first.";
+      return workflow ? null : "Select an agent first.";
     }
     return null;
   }
 
-  it("deploy with no workflow toasts 'Select a workflow first.'", () => {
-    expect(directActionToastReason("deploy", null, null)).toBe("Select a workflow first.");
+  it("deploy with no agent toasts 'Select an agent first.'", () => {
+    expect(directActionToastReason("deploy", null, null)).toBe("Select an agent first.");
   });
 
   it("deploy with a workflow proceeds (no toast)", () => {
@@ -217,8 +217,8 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
     expect(directActionToastReason("deploy", wf, null)).toBeNull();
   });
 
-  it("run-local with no workflow toasts 'Select a workflow first.'", () => {
-    expect(directActionToastReason("run-local", null, null)).toBe("Select a workflow first.");
+  it("run-local with no agent toasts 'Select an agent first.'", () => {
+    expect(directActionToastReason("run-local", null, null)).toBe("Select an agent first.");
   });
 
   it("run-local with a workflow proceeds (no toast)", () => {
@@ -287,9 +287,9 @@ describe("macroDisabledReason — existing gating not regressed", () => {
     expect(macroDisabledReason(macro, wf, "sess-1")).toBeNull();
   });
 
-  it("requiresWorkflow: returns 'Select a workflow first' when no workflow", () => {
+  it("requiresWorkflow: returns 'Select an agent first' when no agent is selected", () => {
     const macro = makeMacro({ requiresWorkflow: true });
-    expect(macroDisabledReason(macro, null, "sess-1")).toBe("Select a workflow first");
+    expect(macroDisabledReason(macro, null, "sess-1")).toBe("Select an agent first");
   });
 
   it("non-open-url + no session: returns 'Start a session first'", () => {

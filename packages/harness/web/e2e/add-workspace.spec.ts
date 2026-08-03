@@ -61,6 +61,8 @@ test.describe("the resting state", () => {
     for (const door of ["have", "template", "idea"]) {
       await expect(doors.getByTestId(`aw-door-${door}`)).toBeVisible();
     }
+    await expect(doors.getByTestId("aw-door-have")).toContainText("agent project");
+    await expect(doors.getByTestId("aw-door-template")).toContainText("Ready-made agents");
     // It is not left behind in the Sessions menu as well — one action, one home.
     await page.keyboard.press("Escape");
     await page.getByTestId("history-trigger").click();

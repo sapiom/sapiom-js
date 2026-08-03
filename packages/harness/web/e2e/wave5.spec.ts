@@ -28,11 +28,15 @@ test.describe("command palette sections and highlighting", () => {
     const list = page.getByTestId("command-palette-list");
     await expect(list).toBeVisible();
 
-    // Fixed section order: Sessions, then Past sessions, Workflows, Folders.
+    // Fixed section order: Sessions, then Past sessions, Agents, Folders.
     const sections = page.getByTestId("command-palette-section");
     await expect(sections.first()).toHaveText("Sessions");
     await expect(sections.filter({ hasText: "Past sessions" })).toHaveCount(1);
-    await expect(sections.filter({ hasText: "Workflows" })).toHaveCount(1);
+    await expect(sections.filter({ hasText: "Agents" })).toHaveCount(1);
+    await expect(page.getByTestId("command-palette-input")).toHaveAttribute(
+      "placeholder",
+      "Jump to a session, agent, or path…",
+    );
 
     // The exited fixture session is reachable from the palette now.
     await expect(list).toContainText("Build the leasing pipeline");

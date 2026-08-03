@@ -315,7 +315,7 @@ export const App = (): JSX.Element => {
   }, [harness.tasks, harness.showToast]);
 
   if (harness.loading) {
-    return <div className="app-status">Loading Sapiom Studio…</div>;
+    return <div className="app-status">Loading Agent Studio…</div>;
   }
   // Boot failed (no state to render): degrade gracefully to a recoverable
   // state instead of a dead "Failed to load" white screen. The classifier
@@ -639,7 +639,7 @@ export const App = (): JSX.Element => {
       if (direct !== null) {
         if (direct === "deploy") {
           if (!workflow) {
-            harness.showToast("Select a workflow first.");
+            harness.showToast("Select an agent first.");
           } else {
             void harness.deploy(workflow.path);
           }
@@ -662,7 +662,7 @@ export const App = (): JSX.Element => {
           }
         } else if (direct === "run-local") {
           if (!workflow) {
-            harness.showToast("Select a workflow first.");
+            harness.showToast("Select an agent first.");
           } else {
             void harness.runLocal(sessionId, workflow.path);
           }
@@ -1013,11 +1013,11 @@ export const App = (): JSX.Element => {
                   <a
                     className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
                     data-testid="workflow-dashboard-link"
-                    href={`https://app.sapiom.ai/workflows/${rightPaneWorkflow.definitionId}`}
+                    href={`https://app.sapiom.ai/agents/${rightPaneWorkflow.definitionId}`}
                     target="_blank"
                     rel="noreferrer"
                     aria-label="Deployed — open in the Sapiom dashboard"
-                    data-tooltip="Open this workflow in the Sapiom dashboard"
+                    data-tooltip="Open this agent in the Sapiom dashboard"
                   >
                     <Icon name="Cloud" size={12} />
                     deployed

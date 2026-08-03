@@ -91,8 +91,8 @@ interface AddWorkspaceDialogProps {
  *  of three labels is exactly how "Open a folder" and "I have a project" came
  *  to name the same action on two surfaces. */
 export const DOORS: { id: Door; title: string; sub: string; icon: "Folder" | "LayoutTemplate" | "Sparkles" }[] = [
-  { id: "have", title: "Open a folder", sub: "Add a folder that already holds an agent", icon: "Folder" },
-  { id: "template", title: "Start from a template", sub: "Ready-made workflows you can edit", icon: "LayoutTemplate" },
+  { id: "have", title: "Open a folder", sub: "Add a folder that already holds an agent project", icon: "Folder" },
+  { id: "template", title: "Start from a template", sub: "Ready-made agents you can edit", icon: "LayoutTemplate" },
   { id: "idea", title: "Start from an idea", sub: "Describe it; the agent scaffolds it", icon: "Sparkles" },
 ];
 
@@ -145,7 +145,7 @@ export function AddWorkspaceDialog({
       <div
         className="modal modal-add-workspace"
         role="dialog"
-        aria-label={activeDoor ? activeDoor.title : "Add to Sapiom"}
+        aria-label={activeDoor ? activeDoor.title : "Add a workspace"}
         ref={panelRef}
       >
         <div className="modal-header">
@@ -164,7 +164,7 @@ export function AddWorkspaceDialog({
               <Icon name="ArrowLeft" size={14} />
             </button>
           )}
-          <span className="aw-title">{activeDoor ? activeDoor.title : "Add to Sapiom"}</span>
+          <span className="aw-title">{activeDoor ? activeDoor.title : "Add a workspace"}</span>
           <button className="theme-toggle modal-close" aria-label="Close" title="Close" onClick={onClose}>
             <Icon name="X" size={14} />
           </button>

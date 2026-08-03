@@ -131,7 +131,7 @@ describe("macro gating", () => {
       id: "open_prod",
       label: "Open",
       icon: "ExternalLink",
-      action: { kind: "open-url", url: "https://app.sapiom.ai/workflows/{{workflow.definitionId}}" },
+      action: { kind: "open-url", url: "https://app.sapiom.ai/agents/{{workflow.definitionId}}" },
       requiresWorkflow: true,
     },
   ];
@@ -145,7 +145,7 @@ describe("macro gating", () => {
   });
 
   it("requires a selected workflow for requiresWorkflow macros", () => {
-    expect(macroDisabledReason(macros[1], null, "sess-1")).toBe("Select a workflow first");
+    expect(macroDisabledReason(macros[1], null, "sess-1")).toBe("Select an agent first");
   });
 
   it("blocks definitionId-dependent macros until deployed", () => {
