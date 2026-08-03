@@ -200,7 +200,15 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
 
   // The right pane stops inviting a Visualize that cannot run.
   await expect(page.getByTestId("canvas-empty-exited")).toContainText("Session ended");
+  await expect(page.getByTestId("canvas-empty-exited")).toContainText(
+    "Resume the session to see the agent's diagram here.",
+  );
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
+
+  await page.getByTestId("right-tab-steps").click();
+  await expect(page.getByTestId("canvas-empty-exited")).toContainText(
+    "Resume the session to see the agent's steps here.",
+  );
 });
 
 // ---------------------------------------------------------------------------

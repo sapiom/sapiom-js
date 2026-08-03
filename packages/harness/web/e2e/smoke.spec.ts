@@ -834,7 +834,7 @@ test("canvas pane shows its empty state for a session with nothing generated yet
   // the scratch session — no bundled doc — to see the honest empty state.
   await page.getByTestId("workspace-focus-scratch").click();
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
-  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound workflow");
+  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound agent");
 });
 
 test("settings popover: identity, telemetry toggle, and it persists across close/reopen", async ({ page }) => {
@@ -931,9 +931,9 @@ test("canvas empty state explains itself — no manual render action", async ({ 
   await page.getByTestId("workspace-focus-scratch").click();
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
   // Short supporting line, no file-editing instructions (there is no editor in
-  // this harness). The diagram generates automatically from the bound workflow
+  // this harness). The diagram generates automatically from the bound agent
   // — there is no manual render button anymore.
-  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound workflow");
+  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound agent");
   await expect(page.locator(".canvas-empty")).not.toContainText(".sapiom/canvas/index.html");
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 
@@ -948,7 +948,7 @@ test("steps tab shows its own empty state (not canvas copy) before anything is r
   await page.getByTestId("right-tab-steps").click();
   const empty = page.locator(".canvas-empty");
   await expect(empty).toContainText("No steps yet");
-  await expect(empty).toContainText("Steps are read from the bound workflow");
+  await expect(empty).toContainText("Steps are read from the bound agent");
   await expect(empty).not.toContainText("Nothing generated yet");
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 
@@ -1834,7 +1834,9 @@ test("an observed run renders its real steps even before anything is visualized"
   await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("local run");
   await expect(fallback).not.toContainText("$");
   // Structure (transitions, contracts) lives on the Canvas tab; the hint says so.
-  await expect(fallback).toContainText("Open the Canvas tab");
+  await expect(fallback).toContainText(
+    "Agent run data only. Open the Canvas tab for the diagram — transitions and contracts come from the agent.",
+  );
 });
 
 test("a second run never erases the first: the run picker recalls past runs", async ({
