@@ -27,6 +27,7 @@ import { ensureConsent } from "./consent.js";
 import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
 import { resolveStatePaths } from "../core/paths.js";
+import { AGENT_STUDIO_PRODUCT_NAME } from "../shared/branding.js";
 import { parseArgs } from "./args.js";
 import { startServer, type HarnessServer } from "../server/index.js";
 
@@ -45,7 +46,7 @@ function printBanner(opts: {
     : "not authenticated";
 
   console.log("");
-  console.log("  Agent Studio");
+  console.log(`  ${AGENT_STUDIO_PRODUCT_NAME}`);
   console.log("  ------------");
   console.log(`  directory   ${opts.dir}`);
   console.log(`  auth        ${authLine}`);

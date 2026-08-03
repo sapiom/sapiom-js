@@ -67,9 +67,14 @@ jobs:
       - name: Validate examples registry and manifests
         run: pnpm examples:check
 
+      - name: Check Agent Studio visible terminology
+        run: pnpm terminology:check
+
       # Fixture tests for the gate itself: a typo'd declaration field must fail
-      # rather than be silently stripped downstream.
-      - name: Test the examples checks
+      # rather than be silently stripped downstream. This glob also runs the
+      # terminology guard's forbidden-copy, compatibility, and stale-allowlist
+      # fixtures.
+      - name: Test repository content checks
         run: pnpm examples:check:test
 
   # Playwright mock-mode tier — harness web/e2e specs (VITE_MOCK=1, chromium only).

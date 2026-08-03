@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { parseArgs } from "./args.js";
+import { AGENT_STUDIO_PRODUCT_NAME } from "../shared/branding.js";
 
 // ---------------------------------------------------------------------------
 // parseArgs is the REAL implementation (src/cli/args.ts). It used to be a
@@ -31,7 +32,7 @@ function printBanner(opts: PrintBannerOpts): void {
     : "not authenticated";
 
   console.log("");
-  console.log("  Agent Studio");
+  console.log(`  ${AGENT_STUDIO_PRODUCT_NAME}`);
   console.log("  ------------");
   console.log(`  directory   ${opts.dir}`);
   console.log(`  auth        ${authLine}`);
@@ -114,7 +115,7 @@ describe("printBanner — 'Agent Studio' name", () => {
     });
 
     const lines = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(lines).toContain("  Agent Studio");
+    expect(lines).toContain(`  ${AGENT_STUDIO_PRODUCT_NAME}`);
     expect(lines.some((l) => l.includes("Sapiom Studio"))).toBe(false);
     expect(lines.some((l) => l.includes("Sapiom Harness"))).toBe(false);
   });
