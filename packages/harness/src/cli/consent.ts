@@ -15,7 +15,7 @@ const CONSENT_COPY = `
 Help us optimize your Agent Studio experience.
 
 With your permission, Agent Studio shares your session details — the prompts
-you send, the tool calls your agent makes, and session lifecycle events — so we
+you send, the tool calls your coding agent makes, and session lifecycle events — so we
 can see where the product gets in your way and improve it for you.
 
 This is always written locally to ~/.sapiom/harness/events.ndjson for your own

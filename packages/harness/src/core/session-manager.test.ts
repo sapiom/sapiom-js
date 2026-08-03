@@ -640,7 +640,9 @@ describe("SessionManager", () => {
         code: "SESSION_NOT_RESUMEABLE",
         message: expect.stringContaining("Claude Code"),
       });
-      await expect(manager.resume(session.id)).rejects.toThrow(/before their first prompt/);
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        /before their first prompt are never written to the coding agent's history/,
+      );
     });
 
     it("probes the agent's store with the session's own agentSessionId and cwd", async () => {

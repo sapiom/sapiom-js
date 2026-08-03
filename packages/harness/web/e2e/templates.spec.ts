@@ -176,7 +176,9 @@ test.describe("templates journey (from the welcome panel)", () => {
     page,
   }) => {
     await open(page, "web-research-digest");
-    await expect(page.getByTestId("template-handoff")).toContainText("Sapiom account");
+    await expect(page.getByTestId("template-handoff")).toHaveText(
+      "Using it forks the template into a repo you own, then clones it here. Needs a signed-in Sapiom account; the coding agent asks you to sign in if it is missing.",
+    );
     await open(page, "coding-pause");
     await expect(page.getByTestId("template-handoff")).toContainText("No account, no network");
   });

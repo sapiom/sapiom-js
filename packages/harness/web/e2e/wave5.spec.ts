@@ -198,7 +198,7 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
 
   const detail = page.getByTestId("dead-session-detail");
   await expect(detail).toBeVisible();
-  await expect(detail).toContainText("Agent");
+  await expect(detail).toContainText("Coding agent");
   await expect(detail).toContainText("Claude Code");
   await expect(detail).toContainText("Ended");
 

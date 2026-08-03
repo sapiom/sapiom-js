@@ -100,6 +100,18 @@ test("auto-selects the running boot session on initial load", async ({ page }) =
   const header = page.getByTestId("session-context");
   await expect(header).toHaveAttribute("data-session-id", "sess-boot");
   await expect(header.locator(".session-dot")).toHaveAttribute("data-status", "running");
+
+  await page.evaluate(() => {
+    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+      type: "session.activity",
+      harnessSessionId: "sess-boot",
+      at: new Date().toISOString(),
+    });
+  });
+  await expect(header.getByTestId("session-status-tag")).toHaveAttribute(
+    "data-tooltip",
+    "The coding agent produced output in the last few seconds",
+  );
 });
 
 test("session header: compact identity (name only; path in the tooltip); New session opens from the rail's history menu", async ({
@@ -499,7 +511,15 @@ test("add project: the rail's + registers a bare folder through the 'Open a fold
 test("new-session modal: directory picker navigates and validates", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
-  await expect(page.locator(".modal-new-session")).toBeVisible();
+  const modal = page.locator(".modal-new-session");
+  await expect(modal).toBeVisible();
+  await expect(modal.locator(".modal-field-hint")).toHaveText(
+    "Pick the workspace folder the coding agent runs in; the session is named after the folder.",
+  );
+  await expect(modal.getByTestId("harness-select")).toHaveAttribute(
+    "aria-label",
+    "Coding agent for this session",
+  );
 
   const startButton = page.getByRole("button", { name: "Start session" });
   const input = page.getByTestId("dir-picker-input");
@@ -1791,6 +1811,10 @@ test("a detected dev server surfaces a Preview chip on the action bar", async ({
   await expect(chip).toBeVisible();
   await expect(chip).toContainText("Preview :5173");
   await expect(chip).toHaveAttribute("href", "http://localhost:5173/");
+  await expect(chip).toHaveAttribute(
+    "data-tooltip",
+    "The coding agent is serving an app on port 5173. Opens http://localhost:5173/",
+  );
 });
 
 test("an observed run renders per-step status and latency in the steps tab", async ({ page }) => {

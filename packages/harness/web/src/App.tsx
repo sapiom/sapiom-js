@@ -449,7 +449,7 @@ export const App = (): JSX.Element => {
       trimmedIdea
         ? `${base} build this:\n\n${trimmedIdea}`
         : `${base} define the first workflow.`,
-      "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
+      "Couldn't send the scaffold prompt. Ask the coding agent to run sapiom agents init.",
     );
   };
 
@@ -477,7 +477,7 @@ export const App = (): JSX.Element => {
     injectPromptWithRetry(
       sessionId,
       "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to define the first workflow.",
-      "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
+      "Couldn't send the scaffold prompt. Ask the coding agent to run sapiom agents init.",
     );
   };
 
@@ -489,8 +489,8 @@ export const App = (): JSX.Element => {
       session.id,
       useTemplatePrompt(template, cwd),
       template.kind === "gallery"
-        ? "Couldn't send the clone prompt. Ask the agent to run sapiom_dev_agents_clone."
-        : "Couldn't send the starter prompt. Ask the agent to run sapiom agents init.",
+        ? "Couldn't send the clone prompt. Ask the coding agent to run sapiom_dev_agents_clone."
+        : "Couldn't send the starter prompt. Ask the coding agent to run sapiom agents init.",
     );
   };
 

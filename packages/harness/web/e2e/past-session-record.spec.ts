@@ -112,6 +112,9 @@ test("a session whose events are gone still renders — from its archived copy, 
   // This is the SAP-2060 case in the UI: events.ndjson swept this session out
   // weeks ago, and the record still opens.
   await expect(page.getByTestId("session-transcript")).toBeVisible();
+  const reason = page.getByTestId("past-session-reason");
+  await expect(reason).toContainText("the coding agent's history");
+  await expect(reason).toContainText("The new coding agent gets a briefing");
   const turns = page.getByTestId("transcript-turn");
   await expect(turns).toHaveCount(2);
   await expect(turns.nth(1).getByTestId("transcript-prompt")).toContainText("Ship the migration");

@@ -242,8 +242,9 @@ export function SettingsPopover({
 
       <p className="settings-note">
         Off by default, because it uses tokens you didn&rsquo;t ask to use: every 10 turns, and
-        once at the end, a cheap one-shot agent run folds the session into a short summary.
-        Continuing a session the agent can no longer reattach to then explains what the work was{" "}
+        once at the end, a cheap one-shot coding-agent pass folds the session into a short summary.
+        Continuing a session the coding agent can no longer reattach to then explains what the work
+        was{" "}
         <em>for</em>, not just what it last did. With this off, continuing still works — it
         carries the last few turns instead.
       </p>
