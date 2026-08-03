@@ -67,7 +67,9 @@ export interface ImageCreateInput {
   numImages?: number;
   /**
    * Optional model selector. Defaults to a fast image model; most callers omit it.
-   * (Model identifiers are an advanced, evolving surface.)
+   *
+   * When set, pass a raw *provider* model id — as with video, the SDK forwards `model`
+   * verbatim to the gateway, so a backend semantic alias is not resolved here.
    */
   model?: string;
   /**
@@ -251,8 +253,42 @@ export const images = { create: createImage };
 
 // ----- Video (async) -----
 
+/**
+ * `T` plus any other string — keeps editor autocomplete for the known literals in `T`
+ * while still accepting an arbitrary id (new gateway models work before this list catches
+ * up). The `Record<never, never>` is the lint-safe spelling of the `string & {}` idiom.
+ */
+type LiteralUnion<T extends string> = T | (string & Record<never, never>);
+
+/**
+ * The concrete video models the Sapiom video gateway serves today, ready to pass as
+ * {@link VideoCreateInput.model} — e.g. `VIDEO_MODELS.veo3Fast`. Omit `model` to use the
+ * default (`veo3Fast`).
+ *
+ * These are raw *provider* model ids. They are deliberately NOT the Sapiom backend's
+ * semantic aliases (`"veo3-fast"`, `"kling-standard"`, …): those aliases resolve server-side
+ * ONLY on the `content.generation.video` capability route. This SDK forwards `model` verbatim
+ * to the video gateway, so passing a semantic alias here fails upstream with a 404. When in
+ * doubt, use a value from this object.
+ */
+export const VIDEO_MODELS = {
+  /** Google Veo 3 Fast — fast text-to-video. The default. */
+  veo3Fast: "fal-ai/veo3/fast",
+  /** Kling Video v1.6 Standard — text-to-video. */
+  klingV16StandardText: "fal-ai/kling-video/v1.6/standard/text-to-video",
+  /** WAN v2.2 (a14b) — text-to-video. */
+  wanV22Text: "fal-ai/wan/v2.2-a14b/text-to-video",
+  /** ByteDance Seedance 2.0 Fast — native-audio single-call text-to-video. */
+  seedance20Fast: "bytedance/seedance-2.0/fast/text-to-video",
+  /** Minimax Video-01 — text-to-video (per-video pricing). */
+  minimaxVideo01: "fal-ai/minimax/video-01",
+} as const;
+
+/** A known video model id — one of the values of {@link VIDEO_MODELS}. */
+export type KnownVideoModel = (typeof VIDEO_MODELS)[keyof typeof VIDEO_MODELS];
+
 /** Default video model when the caller doesn't pick one. */
-const DEFAULT_VIDEO_MODEL = "fal-ai/veo3/fast";
+const DEFAULT_VIDEO_MODEL: KnownVideoModel = VIDEO_MODELS.veo3Fast;
 /** How often to poll for the async result, and when to give up. Caller-overridable. */
 const DEFAULT_VIDEO_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_VIDEO_TIMEOUT_MS = 5 * 60_000;
@@ -261,10 +297,16 @@ export interface VideoCreateInput {
   /** Text prompt describing the video to generate. */
   prompt: string;
   /**
-   * Optional model selector. Defaults to a standard video model; most callers omit it.
-   * (Model identifiers are an advanced, evolving surface.)
+   * Optional video model. Omit to use the default ({@link VIDEO_MODELS.veo3Fast}).
+   *
+   * Pass a value from {@link VIDEO_MODELS} — a raw *provider* model id. The Sapiom backend's
+   * semantic aliases (`"veo3-fast"`, `"kling-standard"`, …) are NOT accepted here: they resolve
+   * only on the server-side `content.generation.video` capability route, whereas this SDK
+   * forwards `model` verbatim to the gateway, so an alias fails upstream with a 404.
+   *
+   * @example VIDEO_MODELS.veo3Fast
    */
-  model?: string;
+  model?: LiteralUnion<KnownVideoModel>;
   /**
    * Optional: persist the generated output to Sapiom file storage. When set, the
    * returned `video` comes back annotated with `fileId` (or `storageError` if

@@ -97,6 +97,10 @@ export { FileStorageHttpError } from "./file-storage/index.js";
 
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
+// The concrete video model ids the gateway serves, so callers can discover valid
+// values (and avoid passing a backend semantic alias, which the SDK does not resolve).
+export { VIDEO_MODELS } from "./content-generation/index.js";
+export type { KnownVideoModel } from "./content-generation/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { VIDEO_RESULT_SIGNAL } from "./content-generation/index.js";
 // The shape a step resumed from `pauseUntilSignal(videoLaunchHandle, …)` receives
