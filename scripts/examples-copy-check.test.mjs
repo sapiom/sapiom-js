@@ -11,7 +11,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { MECHANISM_WORDS, checkCopy } from "./examples-copy-check.mjs";
+import {
+  MECHANISM_WORDS,
+  checkCopy,
+  checkRegisteredProjectCopyAsset,
+  isRegisteredProjectCopyAsset,
+  isRegisteredProjectCopyPathIgnored,
+} from "./examples-copy-check.mjs";
 
 /** A template whose copy is clean, plus whatever the case under test overrides. */
 const template = { id: "fixture", name: "Account Research Brief" };
@@ -102,6 +108,24 @@ test("human-readable Workflow terminology fails in nested registry and manifest 
   }
 });
 
+test("registry and manifest prose reject orchestration while the mechanism tag remains valid", () => {
+  const errors = check(
+    {
+      description: "Fan out work through a child orchestration.",
+      tags: ["orchestration"],
+    },
+    { notes: "This orchestration pauses until its child agent run completes." },
+  );
+
+  assert.equal(errors.length, 2);
+  assert.match(
+    errors[0],
+    /^copy-terminology: "fixture" registry\.description /,
+  );
+  assert.match(errors[1], /^copy-terminology: "fixture" manifest\.notes /);
+  assert.deepEqual(check({ tags: ["orchestration"] }), []);
+});
+
 test("compatibility API routes and tool identifiers stay exact", () => {
   assert.deepEqual(
     check(
@@ -122,6 +146,91 @@ test("compatibility identifiers do not hide surrounding Workflow prose", () => {
   );
   assert.equal(errors.length, 1);
   assert.match(errors[0], /^copy-terminology: "fixture" manifest\.notes /);
+});
+
+test("registered project authoring and source assets reject orchestration terminology", () => {
+  const errors = checkRegisteredProjectCopyAsset(
+    template,
+    "examples/fixture/index.ts",
+    [
+      "// The agent fans out one child run per item.",
+      'const input = z.string().describe("Deployed orchestration slug");',
+      "// Orchestrations resume after every child completes.",
+      "// This workflow pauses while a child runs.",
+    ].join("\n"),
+  );
+
+  assert.equal(errors.length, 3);
+  assert.match(
+    errors[0],
+    /^copy-project-terminology: "fixture" examples\/fixture\/index\.ts:2 /,
+  );
+  assert.match(errors[0], /human-readable "orchestration" terminology/i);
+  assert.match(errors[1], /index\.ts:3 .*"Orchestrations" terminology/);
+  assert.match(errors[2], /index\.ts:4 .*"workflow" terminology/);
+});
+
+test("registered project asset scope includes authored prose and source only", () => {
+  for (const assetPath of [
+    "README.md",
+    "AGENTS.md",
+    "index.ts",
+    "lib/render.mts",
+    "public/index.html",
+    "styles/main.css",
+    "package.json",
+  ]) {
+    assert.equal(isRegisteredProjectCopyAsset(assetPath), true, assetPath);
+  }
+
+  for (const assetPath of [
+    "index.test.ts",
+    "fixture.test.d.ts",
+    "index.spec.mjs",
+    "test/upload-sink.mjs",
+    "tests/fixture.ts",
+    "node_modules/dependency/index.js",
+    "dist/index.js",
+    "build/index.js",
+    "coverage/report.txt",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "image.png",
+  ]) {
+    assert.equal(isRegisteredProjectCopyAsset(assetPath), false, assetPath);
+  }
+  assert.equal(isRegisteredProjectCopyPathIgnored("src/contest.ts"), false);
+});
+
+test("registered project terminology check preserves compatibility identifiers", () => {
+  assert.deepEqual(
+    checkRegisteredProjectCopyAsset(
+      template,
+      "examples/fixture/index.ts",
+      [
+        "workflow_signal",
+        "signal_workflow",
+        "sapiom_workflow_run",
+        "/v1/workflows/templates",
+      ].join("\n"),
+    ),
+    [],
+  );
+});
+
+test("compatibility literals do not hide surrounding deployable prose", () => {
+  const errors = checkRegisteredProjectCopyAsset(
+    template,
+    "examples/fixture/index.ts",
+    [
+      "Use workflow_signal to resume this workflow.",
+      "Call /v1/workflows/templates, then this orchestration launches a child run.",
+    ].join("\n"),
+  );
+
+  assert.equal(errors.length, 2);
+  assert.match(errors[0], /human-readable "workflow" terminology/);
+  assert.match(errors[1], /human-readable "orchestration" terminology/);
 });
 
 test("private registry plumbing is outside the visible-copy check", () => {

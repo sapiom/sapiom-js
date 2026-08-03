@@ -27,7 +27,7 @@ import { z } from "zod/v4";
  * The child it fans out to defaults to THIS agent's own slug (`ctx.agentName`), so
  * the template composes itself with zero setup: a deployed run dispatches leaf runs
  * of the same deployment. Point `childDefinition` at any other deployed
- * orchestration's slug and it fans that out instead, one child run per item.
+ * agent's slug and it fans that out instead, one child run per item.
  *
  * The graph, one legible line per role:
  *   plan ─▶ fanOut (agents.run × N) ─▶ reduce (models.run) ─▶ done      (coordinate)
@@ -78,7 +78,7 @@ interface EntryInput {
   /** The sub-parts to fan out — one child run per item. Defaults to a sample set. */
   items?: string[];
   /**
-   * Slug of the deployed orchestration to run for each item. Defaults to THIS
+   * Slug of the deployed agent to run for each item. Defaults to THIS
    * agent's own slug, so the template composes itself with no other deployment.
    */
   childDefinition?: string;
@@ -180,7 +180,7 @@ const entryInput = z.object({
     .string()
     .optional()
     .describe(
-      "Slug of the deployed orchestration to run per item. Defaults to this agent's own slug.",
+      "Slug of the deployed agent to run per item. Defaults to this agent's own slug.",
     ),
   mode: z
     .enum(["coordinate", "leaf"])

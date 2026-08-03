@@ -90,6 +90,6 @@ A weekly cron schedule is active for this agent: **every Monday at 08:00 UTC**, 
 
 ## Authoring
 
-The orchestration is defined with `defineAgent({ steps })`; each step is a `defineStep({ name, next, run })`. The `run` body is ordinary code — inside it, the full Sapiom tool catalog is available, pre-auth'd and tenant-scoped, on `ctx.sapiom`. No credentials to wire — a per-agent-run tenant credential is injected when the orchestration runs.
+The agent is defined with `defineAgent({ steps })`; each step is a `defineStep({ name, next, run })`. The `run` body is ordinary code — inside it, the full Sapiom tool catalog is available, pre-auth'd and tenant-scoped, on `ctx.sapiom`. No credentials to wire — a per-agent-run tenant credential is injected when the agent run starts.
 
 See `AGENTS.md` for the full authoring loop (`check` → `run_local` → `deploy`).

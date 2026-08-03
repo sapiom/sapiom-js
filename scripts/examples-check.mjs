@@ -21,9 +21,10 @@
 //      names paths the code's entry `inputSchema` declares — a projection onto
 //      a field the schema never declares is the drift SAP-2226 exists to catch.
 //      See scripts/examples-entry-schema-check.mjs.
-//   6. house-style copy rules the schemas cannot express — see
-//      scripts/examples-copy-check.mjs. (The length caps ARE in the schemas,
-//      as `maxLength`, so they surface through checks 1 and 5.)
+//   6. house-style copy rules the schemas cannot express, including registered
+//      clone-facing authoring/source assets — see scripts/examples-copy-check.mjs.
+//      (The length caps ARE in the schemas, as `maxLength`, so they surface
+//      through checks 1 and 5.)
 //   6b. setup.provisions[] matches the kinds derived from the manifest's
 //      resources[]; a declared resources[].seed file exists.
 //   7. the authored `complexity` band against the one DERIVED from the declared
@@ -35,7 +36,7 @@
 // Usage:  node scripts/examples-check.mjs   (or `pnpm examples:check`)
 // =============================================================================
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
@@ -44,7 +45,12 @@ import {
   checkSetupSync,
   createManifestChecker,
 } from "./examples-manifest-check.mjs";
-import { checkCopy } from "./examples-copy-check.mjs";
+import {
+  checkCopy,
+  checkRegisteredProjectCopyAsset,
+  isRegisteredProjectCopyAsset,
+  isRegisteredProjectCopyPathIgnored,
+} from "./examples-copy-check.mjs";
 import { checkDiscipline } from "./examples-discipline-check.mjs";
 import { checkEntrySchemaCoverage } from "./examples-entry-schema-check.mjs";
 import {
@@ -59,6 +65,27 @@ const SCHEMA_PATH = path.join(EXAMPLES_DIR, "registry.schema.json");
 const MANIFEST_SCHEMA_PATH = path.join(EXAMPLES_DIR, "template.schema.json");
 
 const errors = [];
+
+function collectRegisteredProjectCopyAssets(sourceDir, currentDir = sourceDir) {
+  const assets = [];
+  for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+    const absolutePath = path.join(currentDir, entry.name);
+    const relativePath = path.relative(sourceDir, absolutePath);
+
+    if (entry.isDirectory()) {
+      if (isRegisteredProjectCopyPathIgnored(relativePath)) continue;
+      assets.push(
+        ...collectRegisteredProjectCopyAssets(sourceDir, absolutePath),
+      );
+      continue;
+    }
+
+    if (entry.isFile() && isRegisteredProjectCopyAsset(relativePath)) {
+      assets.push(absolutePath);
+    }
+  }
+  return assets;
+}
 
 const registry = JSON.parse(readFileSync(REGISTRY_PATH, "utf8"));
 const schema = JSON.parse(readFileSync(SCHEMA_PATH, "utf8"));
@@ -96,6 +123,7 @@ for (let i = 0; i < ids.length; i++) {
 const checkManifest = createManifestChecker(ajv, manifestSchema);
 const manifests = new Map(); // id -> parsed manifest, reused by the copy check
 let manifestsChecked = 0;
+let projectCopyAssetsChecked = 0;
 for (const t of templates) {
   if (!t.sourcePath) continue; // required-ness is a schema concern (check 1).
   const dir = path.join(ROOT, t.sourcePath);
@@ -137,6 +165,21 @@ for (const t of templates) {
     ? readFileSync(indexPath, "utf8")
     : null;
   errors.push(...checkEntrySchemaCoverage(t.id, manifest, indexSource));
+
+  for (const assetPath of collectRegisteredProjectCopyAssets(dir)) {
+    const repositoryPath = path
+      .relative(ROOT, assetPath)
+      .split(path.sep)
+      .join("/");
+    errors.push(
+      ...checkRegisteredProjectCopyAsset(
+        t,
+        repositoryPath,
+        readFileSync(assetPath, "utf8"),
+      ),
+    );
+    projectCopyAssetsChecked++;
+  }
 
   manifests.set(t.id, manifest);
   manifestsChecked++;
@@ -268,5 +311,5 @@ for (const [label, ids] of [
 }
 
 console.log(
-  `examples/registry.json OK — ${templates.length} templates, sorted, schema-valid, all sourcePaths present; ${manifestsChecked} template.json manifest(s) schema-valid.`,
+  `examples/registry.json OK — ${templates.length} templates, sorted, schema-valid, all sourcePaths present; ${manifestsChecked} template.json manifest(s) schema-valid; ${projectCopyAssetsChecked} registered project authoring/source asset(s) terminology-checked.`,
 );

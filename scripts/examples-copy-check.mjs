@@ -3,7 +3,8 @@
 //
 // House-style rules for the copy a buyer actually reads. Name/mechanism rules
 // target `name` (registry) and `whatItDoes` (manifest); terminology checks walk
-// every string relayed from the registry and manifest.
+// every relayed registry/manifest string plus the clone-facing authoring and
+// source assets selected by `examples-check.mjs`.
 //
 // Why these are rules and not guidance in AUTHORING.md: every prose field in
 // both schemas used to be `{ "type": "string" }` with no constraint, so the
@@ -57,6 +58,102 @@ const MECHANISM_RE = new RegExp(
 );
 
 const WORKFLOW_TERM_RE = /\bworkflows?\b/i;
+const ORCHESTRATION_TERM_RE = /\borchestrations?\b/i;
+const PROJECT_DEPLOYABLE_TERM_RE = /\b(?:workflows?|orchestrations?)\b/i;
+
+const REGISTERED_PROJECT_COPY_EXTENSIONS = new Set([
+  ".cjs",
+  ".css",
+  ".cts",
+  ".html",
+  ".js",
+  ".jsx",
+  ".md",
+  ".mjs",
+  ".mts",
+  ".sql",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".yaml",
+  ".yml",
+]);
+
+const REGISTERED_PROJECT_COPY_IGNORED_DIRS = new Set([
+  ".git",
+  "__tests__",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "test",
+  "tests",
+]);
+
+const REGISTERED_PROJECT_COPY_LOCKFILES = new Set([
+  "bun.lock",
+  "bun.lockb",
+  "npm-shrinkwrap.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+]);
+
+/**
+ * Generated, dependency, and test trees are not part of the project prose a
+ * template customer or coding agent authors. Keep this path rule narrow and
+ * segment-based so a legitimate source file such as `src/contest.ts` is not
+ * skipped by a substring match.
+ */
+export function isRegisteredProjectCopyPathIgnored(assetPath) {
+  return assetPath
+    .replaceAll("\\", "/")
+    .split("/")
+    .some((segment) => REGISTERED_PROJECT_COPY_IGNORED_DIRS.has(segment));
+}
+
+/**
+ * The clone-facing prose/source surface under a registered `sourcePath`.
+ * Extension allowlisting avoids trying to decode binary assets, while explicit
+ * test and lockfile exclusions keep fixture/history text out of the product
+ * terminology contract.
+ */
+export function isRegisteredProjectCopyAsset(assetPath) {
+  const normalized = assetPath.replaceAll("\\", "/");
+  if (isRegisteredProjectCopyPathIgnored(normalized)) return false;
+
+  const basename = normalized.split("/").at(-1) ?? "";
+  if (REGISTERED_PROJECT_COPY_LOCKFILES.has(basename)) return false;
+  if (/\.(?:spec|test)\./i.test(basename)) return false;
+  if (basename === "package.json") return true;
+
+  const dot = basename.lastIndexOf(".");
+  const extension = dot >= 0 ? basename.slice(dot).toLowerCase() : "";
+  return REGISTERED_PROJECT_COPY_EXTENSIONS.has(extension);
+}
+
+/**
+ * Checks one text asset copied from a registered project. Unlike registry and
+ * manifest projection fields, these assets include coding-agent instructions,
+ * source comments, and runtime metadata such as Zod `.describe(...)` strings.
+ */
+export function checkRegisteredProjectCopyAsset(template, assetPath, source) {
+  const id = template?.id ?? "(unknown)";
+  const errors = [];
+  const lines = String(source).split(/\r?\n/);
+
+  for (let index = 0; index < lines.length; index++) {
+    const match = PROJECT_DEPLOYABLE_TERM_RE.exec(
+      withoutCompatibilityLiterals(lines[index]),
+    );
+    if (!match) continue;
+    errors.push(
+      `copy-project-terminology: "${id}" ${assetPath}:${index + 1} contains human-readable "${match[0]}" terminology — use Agent for the deployable definition and Agent run for an execution.`,
+    );
+  }
+
+  return errors;
+}
 
 /**
  * These are compatibility-sensitive API and tool identifiers, not product
@@ -116,6 +213,11 @@ function registryDisplayCopy(template) {
   };
 }
 
+function registryProseCopy(template) {
+  const { tags: _mechanismTags, ...prose } = registryDisplayCopy(template);
+  return prose;
+}
+
 /**
  * Copy rules for one template.
  *
@@ -158,15 +260,16 @@ export function checkCopy(template, manifest) {
     );
   }
 
-  for (const [surface, value] of [
-    ["registry", registryDisplayCopy(template)],
-    ["manifest", manifest],
+  for (const [surface, value, terminology] of [
+    ["registry", registryDisplayCopy(template), WORKFLOW_TERM_RE],
+    ["registry", registryProseCopy(template), ORCHESTRATION_TERM_RE],
+    ["manifest", manifest, PROJECT_DEPLOYABLE_TERM_RE],
   ]) {
     for (const [path, copy] of stringValues(value)) {
-      if (!WORKFLOW_TERM_RE.test(withoutCompatibilityLiterals(copy))) continue;
+      if (!terminology.test(withoutCompatibilityLiterals(copy))) continue;
       fail(
         "copy-terminology",
-        `${surface}${path.slice(1)} contains human-readable Workflow terminology — use Agent for the deployable definition and Agent run for an execution.`,
+        `${surface}${path.slice(1)} contains human-readable Workflow/orchestration terminology — use Agent for the deployable definition and Agent run for an execution.`,
       );
     }
   }
