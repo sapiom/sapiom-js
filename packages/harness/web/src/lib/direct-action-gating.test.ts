@@ -150,7 +150,7 @@ describe("Fix 3 — Prod Run disabled-reason distinguishes deploy-failed from ne
   it("reads 'Last deploy failed — retry Deploy' after a deploy failure", () => {
     const reason = computeDisabledReason({
       ...base,
-      lastDeployError: "Deploy failed: mock build error (check your workflow definition)",
+      lastDeployError: "Deploy failed: mock build error (check your agent definition)",
     });
     expect(reason).toBe("Last deploy failed — retry Deploy");
   });

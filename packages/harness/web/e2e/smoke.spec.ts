@@ -287,7 +287,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // Zone 1 is a pure explorer: workspace folder headers and agent rows, no
     // sessions anywhere in the tree.
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-    await expect(page.getByTestId("workspace-group-rfq-workflows")).toBeVisible();
+    await expect(page.getByTestId("workspace-group-rfq-agent")).toBeVisible();
     await expect(page.getByText("No workspace")).toBeVisible();
 
     // Agents carry a deployed/draft cloud state; no session dot, no expander.
@@ -378,7 +378,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 
   test("focusing an agent with no session shows the start empty state", async ({ page }) => {
-    // rfq-workflows has no live session in the fixtures, so focusing rfq cannot
+    // rfq-agent has no live session in the fixtures, so focusing rfq cannot
     // render a board (the canvas is served per session). The workbench names
     // the absence and offers the one move; no tab strip renders.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
@@ -404,7 +404,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // Start runs the create+bind path in rfq's OWN folder (never borrowing the
     // acme-app session), and the workbench goes live with the terminal.
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-context-title")).toHaveText("rfq-workflows");
+    await expect(page.getByTestId("session-context-title")).toHaveText("rfq-agent");
     await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
     await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.locator(".session-tab")).toHaveCount(1);
@@ -505,12 +505,12 @@ test("new-session modal: directory picker navigates and validates", async ({ pag
 
   // Type-ahead: an unrecognized tail filters the nearest real ancestor's children.
   await input.fill("/Users/demo/rf");
-  await expect(page.getByTestId("dir-picker-item-rfq-workflows")).toBeVisible();
+  await expect(page.getByTestId("dir-picker-item-rfq-agent")).toBeVisible();
   await expect(page.getByTestId("dir-picker-item-onboarding-flow")).toHaveCount(0);
 
   // Clicking a listed directory drills into it.
-  await page.getByTestId("dir-picker-item-rfq-workflows").click();
-  await expect(input).toHaveValue("/Users/demo/rfq-workflows");
+  await page.getByTestId("dir-picker-item-rfq-agent").click();
+  await expect(input).toHaveValue("/Users/demo/rfq-agent");
   await expect(page.getByTestId("dir-picker-item-src")).toBeVisible();
 
   // "Up" walks to the parent.
@@ -603,7 +603,7 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   await expect(exited).not.toContainText("from summary");
   await expect(exited).not.toContainText("nothing recorded");
 
-  // The list is global — rfq-workflows' past session shows without
+  // The list is global — rfq-agent's past session shows without
   // switching directories.
   await expect(page.getByTestId("exited-session-sess-rfq")).toBeVisible();
 
@@ -731,7 +731,7 @@ test("one view only: there is no folders/groups toggle in the agent-primary rail
 test.describe("held arrangement", () => {
   test("workspace collapse, right tab, and right-pane collapse survive a reload", async ({ page }) => {
     // Collapse the rfq workspace group (plain header toggles on click).
-    await page.getByTestId("workspace-group-rfq-workflows").locator(".workspace-row-main").click();
+    await page.getByTestId("workspace-group-rfq-agent").locator(".workspace-row-main").click();
     await expect(page.getByTestId("workflow-rfq")).toHaveCount(0);
 
     // Pick the Steps tab, then fold the right pane away.
@@ -1084,7 +1084,7 @@ test("a mock session without a bundled canvas doc shows the empty state and neve
   await expect(page.locator(".canvas-iframe")).toBeVisible();
 
   // Open rfq and start a session: same-workspace, so it starts in
-  // rfq-workflows — a session with NO bundled demo document.
+  // rfq-agent — a session with NO bundled demo document.
   await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
   await page.getByTestId("open-agent-start-session").click();
   await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");

@@ -81,14 +81,14 @@ test.describe("first run", () => {
     await expect(page.getByTestId("aw-doors")).toHaveCount(0);
 
     // Already at door 1: pick a fixture folder that holds an agent project.
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-workflows");
+    await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-agent");
     await page.getByTestId("aw-have-continue").click();
     await expect(page.getByTestId("aw-result")).toContainText("This is an agent project");
     await page.getByTestId("aw-add").click();
 
     // The workspace joins the rail; the first-run pitch is done.
     await expect(page.locator(".modal-add-workspace")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-rfq-workflows")).toBeVisible();
+    await expect(page.getByTestId("workflow-rfq-agent")).toBeVisible();
   });
 
   test("documentation is a way out to the docs, never a dismiss", async ({ page }) => {
@@ -176,7 +176,7 @@ test.describe("returning user", () => {
     await openOverview(page);
 
     await expect(page.getByTestId("welcome-recent-scratch")).toBeVisible();
-    // Newest activity first: acme-app (a live session) above rfq-workflows (a day old).
+    // Newest activity first: acme-app (a live session) above rfq-agent (a day old).
     const rows = page.getByTestId("welcome-recents").locator("li");
     await expect(rows.first()).toContainText("acme-app");
     await expect(rows).toHaveCount(4);
@@ -230,7 +230,7 @@ test.describe("returning user", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await openOverview(page);
-    await page.getByTestId("welcome-recent-rfq-workflows").click();
+    await page.getByTestId("welcome-recent-rfq-agent").click();
     await expect(page.getByTestId("welcome-panel")).toHaveCount(0);
 
     // The directory picker's chips are the surface that still reads recentDirs
@@ -243,7 +243,7 @@ test.describe("returning user", () => {
     // Asserted on the label, not `title`: TooltipLayer moves a title into
     // data-tip-stash to render its own tooltip, so a title assertion races that
     // rewrite and reads null once it has run.
-    await expect(chips.first()).toContainText("rfq-workflows");
+    await expect(chips.first()).toContainText("rfq-agent");
   });
 
   test("rows disable while one is opening, so a second click cannot double-fire", async ({ page }) => {
@@ -252,7 +252,7 @@ test.describe("returning user", () => {
     await openOverview(page);
 
     const row = page.getByTestId("welcome-recent-acme-app");
-    const sibling = page.getByTestId("welcome-recent-rfq-workflows");
+    const sibling = page.getByTestId("welcome-recent-rfq-agent");
     // Don't wait for the navigation the click triggers — the guard's whole point
     // is what the DOM looks like DURING the two awaits (harness registry, then
     // session create), before the panel unmounts.

@@ -69,7 +69,7 @@ test("a CODEX session renders the same way — this reads our events, not a vend
   const transcript = page.getByTestId("session-transcript");
   await expect(transcript).toBeVisible();
   await expect(page.getByTestId("transcript-turn")).toHaveCount(1);
-  await expect(page.getByTestId("transcript-prompt")).toContainText("Summarize what the rfq workflow does");
+  await expect(page.getByTestId("transcript-prompt")).toContainText("Summarize what the rfq agent does");
   await expect(page.getByTestId("transcript-tool-call")).toHaveCount(1);
 
   // Codex reports no assistant text to the harness. The view says that

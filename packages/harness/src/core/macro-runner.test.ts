@@ -84,7 +84,7 @@ describe("resolveMacro", () => {
     };
     expect(() => resolveMacro(macro, { ...baseCtx, workflow: null })).toThrow(MacroValidationError);
     expect(() => resolveMacro(macro, { ...baseCtx, workflow: null })).toThrow(
-      "requires a selected workflow",
+      "requires a selected agent",
     );
   });
 

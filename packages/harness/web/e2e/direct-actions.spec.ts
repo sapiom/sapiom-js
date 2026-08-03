@@ -28,7 +28,7 @@
  *
  * Fixture quick-reference (MOCK_WORKFLOWS / MOCK_SESSIONS in mock-data.ts):
  *   leasing   path=/Users/demo/acme-app/leasing  definitionId=4821 (deployed)
- *   rfq       path=/Users/demo/rfq-workflows      definitionId=null (draft)
+ *   rfq       path=/Users/demo/rfq-agent          definitionId=null (draft)
  *   Boot session (sess-boot) is bound to leasing and running on load.
  *
  * F1 overlap avoided: smoke.spec.ts already has ONE assertion for the Run
@@ -166,7 +166,7 @@ test.describe("Deploy button — direct route, NDJSON build stream, no pty write
     const direct = await waitForDirectAction(page);
     expect(direct.action).toBe("deploy");
     // rfq's path, not leasing's.
-    expect(direct.req.workflowPath).toBe("/Users/demo/rfq-workflows");
+    expect(direct.req.workflowPath).toBe("/Users/demo/rfq-agent");
 
     // No pty involved.
     await assertNoPtyWrite(page, injectBefore);

@@ -8,7 +8,7 @@
  * action, and door 3 cannot submit a name that would break the scaffold.
  *
  * Runs in the same mock mode as smoke.spec.ts. The mock filesystem gives a
- * deliberate spread under /Users/demo: `rfq-workflows` and `onboarding-flow`
+ * deliberate spread under /Users/demo: `rfq-agent` and `onboarding-flow`
  * hold agent projects, `acme-app` is a container whose child `leasing` is one,
  * and `scratch` is a plain folder.
  */
@@ -128,7 +128,7 @@ test.describe("door 1 — Open a folder", () => {
     await page.getByTestId("aw-door-have").click();
 
     const input = page.locator(".dir-picker-input");
-    await input.fill("/Users/demo/rfq-workflows");
+    await input.fill("/Users/demo/rfq-agent");
     await page.getByTestId("aw-have-continue").click();
 
     const result = page.getByTestId("aw-result");
@@ -168,12 +168,12 @@ test.describe("door 1 — Open a folder", () => {
 
   test("Change returns to the picker without losing the path", async ({ page }) => {
     await page.getByTestId("aw-door-have").click();
-    await page.locator(".dir-picker-input").fill("/Users/demo/rfq-workflows");
+    await page.locator(".dir-picker-input").fill("/Users/demo/rfq-agent");
     await page.getByTestId("aw-have-continue").click();
     await expect(page.getByTestId("aw-result")).toBeVisible();
 
     await page.getByRole("button", { name: "Change" }).click();
-    await expect(page.locator(".dir-picker-input")).toHaveValue("/Users/demo/rfq-workflows");
+    await expect(page.locator(".dir-picker-input")).toHaveValue("/Users/demo/rfq-agent");
   });
 });
 

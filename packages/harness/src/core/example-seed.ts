@@ -188,7 +188,7 @@ const ORDER_TRIAGE_CANVAS_BODY = `
   <header class="canvas-header">
     <div class="canvas-title-row">
       <h1 class="canvas-title">order-triage</h1>
-      <span class="canvas-badge">standalone workflow</span>
+      <span class="canvas-badge">standalone agent</span>
       <span class="canvas-badge">not deployed yet</span>
     </div>
     <p class="canvas-subtitle">Support-ticket triage: intake -&gt; classify -&gt; route, then auto-resolve or escalate to a human.</p>
@@ -248,7 +248,7 @@ const ORDER_TRIAGE_CANVAS_BODY = `
     <span class="canvas-legend-marker canvas-legend-marker--terminal-warn"></span>
     <span class="canvas-interconnection-title">escalate -&gt; external</span>
     <span class="canvas-interconnection-tag">handoff</span>
-    <p class="canvas-interconnection-desc">routes to a human out-of-band, not to another workflow</p>
+    <p class="canvas-interconnection-desc">routes to a human out-of-band, not to another agent</p>
   </div>
 </section>
 
@@ -258,9 +258,9 @@ const ORDER_TRIAGE_CANVAS_BODY = `
     <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--step"></span>step</span>
     <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-success"></span>terminal &middot; success</span>
     <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--terminal-warn"></span>terminal &middot; escalation</span>
-    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-workflow signal/handoff</span>
+    <span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-agent signal/handoff</span>
   </div>
-  <p class="canvas-note">Static preview — ask your agent to regenerate this after you change the workflow.</p>
+  <p class="canvas-note">Static preview — ask your coding agent to regenerate this after you change the agent.</p>
 </footer>
 `.trim();
 

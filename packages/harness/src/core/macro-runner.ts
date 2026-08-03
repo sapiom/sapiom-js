@@ -105,7 +105,7 @@ function substitute(template: string, ctx: MacroContext): string {
  */
 export function resolveMacro(macro: MacroDef, ctx: MacroContext): ResolvedMacroAction {
   if (macro.requiresWorkflow && !ctx.workflow) {
-    throw new MacroValidationError(`Macro '${macro.id}' requires a selected workflow.`);
+    throw new MacroValidationError(`Macro '${macro.id}' requires a selected agent.`);
   }
 
   if (macro.action.kind === "open-url") {

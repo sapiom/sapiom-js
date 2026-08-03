@@ -80,6 +80,10 @@ describe("canvas router", () => {
   it("404s when no canvas has been written yet", async () => {
     const res = await fetch(`${baseUrl}/canvas/sess-1/`, { method: "HEAD" });
     expect(res.status).toBe(404);
+
+    const get = await fetch(`${baseUrl}/canvas/sess-1/`);
+    expect(get.status).toBe(404);
+    expect(await get.text()).toContain("Select an agent in the rail");
   });
 
   it("serves the bound workflow's render file at the canvas root — resolved at request time, no index.html rewrite", async () => {
@@ -118,7 +122,7 @@ describe("canvas router", () => {
     sessions.set("sess-1", { cwd: projectDir, boundWorkflowPath: "/registered/workflows/not-rendered-yet" });
     const res = await fetch(`${baseUrl}/canvas/sess-1/`);
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain("Rendering workflow diagram");
+    expect(await res.text()).toContain("Rendering agent diagram");
   });
 
   it("an unbound session serves a genuine agent-authored custom canvas at the root", async () => {

@@ -66,7 +66,7 @@ const EMPTY_STATE_HTML = `<!doctype html>
 <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #444; text-align: center; padding: 0 2rem;">
   <div>
     <h1 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Nothing rendered yet</h1>
-    <p style="margin: 0;">Select a workflow in the rail and its step graph renders here automatically.</p>
+    <p style="margin: 0;">Select an agent in the rail and its step graph renders here automatically.</p>
   </div>
 </body>
 </html>`;
@@ -80,7 +80,7 @@ const PENDING_RENDER_HTML = `<!doctype html>
 <head><meta charset="utf-8"><title>Canvas — rendering</title></head>
 <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #444; text-align: center; padding: 0 2rem;">
   <div>
-    <h1 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Rendering workflow diagram…</h1>
+    <h1 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Rendering agent diagram…</h1>
     <p style="margin: 0;">This pane reloads automatically when the diagram is ready.</p>
   </div>
 </body>

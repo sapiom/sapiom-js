@@ -450,7 +450,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
   router.post("/api/workflows/:id/deploy", async (req, res) => {
     const id = req.params.id;
     if (!id || typeof id !== "string" || id.trim() === "") {
-      res.status(400).json({ error: "workflow id is required" });
+      res.status(400).json({ error: "agent id is required" });
       return;
     }
     if (!provider.getKey()) {
@@ -460,7 +460,7 @@ export function createActionsRouter(opts: ActionsRouterOpts): Router {
 
     const workflow = opts.resolveWorkflow(id);
     if (!workflow) {
-      res.status(404).json({ error: "workflow not found" });
+      res.status(404).json({ error: "agent not found" });
       return;
     }
 

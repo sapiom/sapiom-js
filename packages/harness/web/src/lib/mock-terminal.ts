@@ -100,8 +100,8 @@ function transcript(): ScriptLine[] {
         "\r\n\r\n",
       delayMs: 300,
     },
-    { text: bold("> ") + "Map the leasing workflow and visualize it\r\n\r\n", delayMs: 700 },
-    { text: green("⏺") + " I'll read the workflow definition first.\r\n\r\n", delayMs: 800 },
+    { text: bold("> ") + "Map the leasing agent and visualize it\r\n\r\n", delayMs: 700 },
+    { text: green("⏺") + " I'll read the agent definition first.\r\n\r\n", delayMs: 800 },
     { text: green("⏺") + " " + bold("Read") + "(sapiom.json)\r\n", delayMs: 600 },
     { text: dim("  ⎿  Read 42 lines") + "\r\n\r\n", delayMs: 500 },
     {
@@ -110,7 +110,7 @@ function transcript(): ScriptLine[] {
       // pane width splits a step name mid-word.
       text:
         green("⏺") +
-        " Found workflow " +
+        " Found agent " +
         bold("leasing") +
         ": 4 typed steps, 2 exits\r\n  " +
         cyan("intake → screen → credit-check → approve?") +
