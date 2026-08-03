@@ -679,11 +679,19 @@ input {
   display: flex;
   align-items: center;
   gap: var(--sp2);
-  height: var(--pane-header-h);
+  /* A compact section-label row (a peer of the Search/Templates nav rows and
+     the folder rows below), not a 56px band — it reads as the header of the
+     tree it sits above, with a modest gap from the nav group. */
+  min-height: var(--control-h);
+  margin-top: var(--sp2);
   padding: 0 var(--sp2) 0 var(--pane-pad-x);
   font-size: var(--type-label);
-  font-weight: 510;
-  color: var(--text-faint);
+  font-weight: 590;
+  color: var(--text-dim);
+}
+
+.rail-header-label {
+  min-width: 0;
 }
 
 .rail-header-actions {

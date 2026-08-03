@@ -444,7 +444,8 @@ export function WorkflowsRail({
       </nav>
 
       <div className="rail-header">
-        Workspaces
+        <Icon name="Folder" size={14} />
+        <span className="rail-header-label">Workspaces</span>
         <div className="rail-header-actions">
           <button
             ref={historyTriggerRef}
@@ -454,7 +455,7 @@ export function WorkflowsRail({
             title="Sessions and history"
             onClick={toggleHistory}
           >
-            <Icon name="History" size={14} />
+            <Icon name="MoreHorizontal" size={14} />
             {exitedSessions.length > 0 && (
               <span className="session-history-badge" data-testid="session-history-badge">
                 {exitedSessions.length}
