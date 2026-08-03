@@ -12,7 +12,7 @@
     "Verify a deploy renders correctly",
     "Record a page behind authentication"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nRun it with nothing and it captures two stable public pages. Pass `urls` (the pages to capture) and `fullPage: true` for full-height captures. To capture behind a login, pass `loginUrl` and `loginUsername` and set the `BROWSER_LOGIN_PASSWORD` secret — the session opens signed in. Miss any of the three and it captures the public view and says so.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the flow for free (the browser capability is stubbed), or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nRun it with nothing and it captures two stable public pages. Pass `urls` (the pages to capture) and `fullPage: true` for full-height captures. To capture behind a login, pass `loginUrl` and `loginUsername` and set the `BROWSER_LOGIN_PASSWORD` secret — the session opens signed in. Miss any of the three and it captures the public view and says so.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the flow for free (the browser capability is stubbed), or edit and deploy it with the Sapiom MCP.",
   "requiredSecrets": [
     {
       "key": "BROWSER_LOGIN_PASSWORD",

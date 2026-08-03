@@ -27,12 +27,12 @@ import { buildJudgePrompt, parseScore } from "./judge.js";
  *
  * The judge is an ordinary `models.run` call, so it rides the same step→gateway
  * path as everything else and inherits the engine's routing / capacity / load
- * balancing for free — no evals-specific execution path is created.
+ * balancing for free — no evals-specific agent-run path is created.
  *
  * Shape: `(input, output, rubric, threshold) → { decision, score, threshold,
  * rationale }`. Copy this as a starter, or call it as a CHILD from a parent
- * workflow that produced `output` and branch on the returned decision — see the
- * "self-grading workflow" composition pattern in `README.md`.
+ * agent that produced `output` and branch on the returned decision — see the
+ * "self-grading agent" composition pattern in `README.md`.
  */
 
 /** Run-scoped values stashed in `ctx.shared` so later steps can read them. */
@@ -93,7 +93,7 @@ const judgeInputSchema = z
     examples: [{ ...SAMPLE_CASE, threshold: 0.7 }],
   });
 
-/** What the workflow is kicked off with. */
+/** What the agent run starts with. */
 export type EvalGateInput = z.infer<typeof judgeInputSchema>;
 
 // ---------------------------------------------------------------------------

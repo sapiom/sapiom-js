@@ -173,8 +173,8 @@ for (const t of templates) {
 }
 
 // 5. House-style copy rules the schemas cannot express. The length caps live in
-// the schemas as `maxLength` and are reported by check 1/3; these are the two
-// rules a `pattern` could reject but could not explain — naming the offending
+// the schemas as `maxLength` and are reported by check 1/3; these are the rules
+// a `pattern` could reject but could not explain — naming the offending
 // word is the whole value of the message. See scripts/examples-copy-check.mjs.
 for (const t of templates) {
   errors.push(...checkCopy(t, manifests.get(t.id) ?? null));

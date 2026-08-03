@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sapiom agent template: an LLM-judge quality gate — score an output against YOUR rubric with one metered models.run judge call, then branch publish/revise on a threshold. Composes as a child to self-grade a parent workflow.",
+  "description": "Sapiom agent template: an LLM-judge quality gate — score an output against YOUR rubric with one metered models.run judge call, then branch publish/revise on a threshold. Composes as a child to self-grade a parent agent.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",

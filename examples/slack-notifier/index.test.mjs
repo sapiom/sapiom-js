@@ -48,7 +48,7 @@ test("webhook mode uses native fetch for the secret-bearing URL", async () => {
   }
 });
 
-test("the webhook workflow branch does not require a Sapiom metering key", async () => {
+test("the webhook agent branch does not require a Sapiom metering key", async () => {
   const originalFetch = globalThis.fetch;
   const originalWebhook = process.env.SLACK_WEBHOOK_URL;
   const originalApiKey = process.env.SAPIOM_API_KEY;

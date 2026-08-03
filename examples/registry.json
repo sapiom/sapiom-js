@@ -399,7 +399,7 @@
     {
       "id": "fan-out-and-combine",
       "name": "Fan Out and Combine",
-      "description": "Split a goal into parts, run each part as its own child workflow in parallel, then merge the results into one answer.",
+      "description": "Split a goal into parts, run each part as its own child agent run in parallel, then merge the results into one answer.",
       "tags": ["orchestration", "fan-out", "map-reduce", "agents"],
       "category": "reliability-governance",
       "discipline": "Reliability",
@@ -410,7 +410,7 @@
       "steps": [
         {
           "name": "plan",
-          "description": "Resolve the goal, the parts to fan out, and the child workflow to run for each — this agent itself by default. A leaf handles one part; a dry run returns the plan.",
+          "description": "Resolve the goal, the parts to fan out, and the child agent to run for each — this agent itself by default. A leaf handles one part; a dry run returns the plan.",
           "kind": "compute",
           "next": ["solve", "fanOut", "planned"]
         },

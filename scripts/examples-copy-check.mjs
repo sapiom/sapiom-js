@@ -1,8 +1,9 @@
 // =============================================================================
 // scripts/examples-copy-check.mjs
 //
-// House-style rules for the copy a buyer actually reads: `name` (registry) and
-// `whatItDoes` (manifest).
+// House-style rules for the copy a buyer actually reads. Name/mechanism rules
+// target `name` (registry) and `whatItDoes` (manifest); terminology checks walk
+// every string relayed from the registry and manifest.
 //
 // Why these are rules and not guidance in AUTHORING.md: every prose field in
 // both schemas used to be `{ "type": "string" }` with no constraint, so the
@@ -21,10 +22,9 @@
 //
 // LENGTH IS NOT HERE. The caps live in the schemas as `maxLength` (name 32,
 // description 160, whatItDoes 320, useCases[] 40) now that all 26 templates are
-// under them — ajv reports those with a JSON pointer. This file carries only the
-// two rules JSON Schema cannot express readably: a `pattern` can reject a name
-// but cannot say WHICH word is the problem, which is the whole value of the
-// message.
+// under them — ajv reports those with a JSON pointer. This file carries the
+// rules JSON Schema cannot express readably: a `pattern` can reject copy but
+// cannot say WHICH word is the problem, which is the whole value of the message.
 // =============================================================================
 
 /**
@@ -51,7 +51,70 @@ export const MECHANISM_WORDS = [
   "handler",
 ];
 
-const MECHANISM_RE = new RegExp(`(?<![a-z])(${MECHANISM_WORDS.join("|")})(?![a-z])`, "i");
+const MECHANISM_RE = new RegExp(
+  `(?<![a-z])(${MECHANISM_WORDS.join("|")})(?![a-z])`,
+  "i",
+);
+
+const WORKFLOW_TERM_RE = /\bworkflows?\b/i;
+
+/**
+ * These are compatibility-sensitive API and tool identifiers, not product
+ * prose. Remove them before checking a string so the surrounding sentence is
+ * still held to the Agent / Agent run terminology contract.
+ */
+const COMPATIBILITY_LITERALS = [
+  /\/v1\/workflows(?:\/[a-z0-9._~!$&'()*+,;=:@%-]+)*/gi,
+  /\/api\/workflows(?:\/[a-z0-9._~!$&'()*+,;=:@%-]+)*/gi,
+  /sapiom_workflow_[a-z0-9_]+/gi,
+  /workflow_signal/gi,
+  /signal_workflow/gi,
+];
+
+function withoutCompatibilityLiterals(value) {
+  return COMPATIBILITY_LITERALS.reduce(
+    (copy, literal) => copy.replace(literal, ""),
+    value,
+  );
+}
+
+function* stringValues(value, path = "$", seen = new Set()) {
+  if (typeof value === "string") {
+    yield [path, value];
+    return;
+  }
+  if (value === null || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      yield* stringValues(value[i], `${path}[${i}]`, seen);
+    }
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    yield* stringValues(child, `${path}.${key}`, seen);
+  }
+}
+
+function registryDisplayCopy(template) {
+  return {
+    name: template?.name,
+    description: template?.description,
+    tags: template?.tags,
+    category: template?.category,
+    discipline: template?.discipline,
+    cadence: template?.cadence,
+    steps: Array.isArray(template?.steps)
+      ? template.steps.map((step) => ({
+          name: step?.name,
+          description: step?.description,
+        }))
+      : [],
+    setup: {
+      degradedWithoutSetup: template?.setup?.degradedWithoutSetup,
+    },
+  };
+}
 
 /**
  * Copy rules for one template.
@@ -93,6 +156,19 @@ export function checkCopy(template, manifest) {
       "copy-what-it-does",
       `whatItDoes opens with "For" — lead with the verb ("Create a cited account brief…"), not with who it is for.`,
     );
+  }
+
+  for (const [surface, value] of [
+    ["registry", registryDisplayCopy(template)],
+    ["manifest", manifest],
+  ]) {
+    for (const [path, copy] of stringValues(value)) {
+      if (!WORKFLOW_TERM_RE.test(withoutCompatibilityLiterals(copy))) continue;
+      fail(
+        "copy-terminology",
+        `${surface}${path.slice(1)} contains human-readable Workflow terminology — use Agent for the deployable definition and Agent run for an execution.`,
+      );
+    }
   }
 
   return errors;

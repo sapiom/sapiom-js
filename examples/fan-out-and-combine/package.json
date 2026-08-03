@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sapiom agent template: split a goal into parts, run each part as its own child workflow in parallel via ctx.sapiom.agents.run, then merge the results into one answer.",
+  "description": "Sapiom agent template: split a goal into parts, run each part as its own child agent run in parallel via ctx.sapiom.agents.run, then merge the results into one answer.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"**/*.ts\"",

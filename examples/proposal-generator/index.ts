@@ -12,7 +12,7 @@ import { z } from "zod/v4";
  * Proposal / Quote Generator — requirements in, a signed-off PDF quote out.
  *
  * The "draft → render → get sign-off → send" shape a salesperson or agency runs
- * by hand for every inbound request, done as one durable workflow:
+ * by hand for every inbound request, done as one durable agent:
  *
  *   draft ─▶ render ─▶ review ─(pause: proposal.decision, $0 while idle)─▶ onDecision
  *  (models.run) (sandbox+                                                    │
@@ -394,7 +394,7 @@ function toBase64(text: string): string {
  * working dir at `/blaxel` and `node render.mjs` looks under `/blaxel/render-a0`.
  * Same filesystem, two different absolute paths — so the write is never where the
  * process reads, and the render dies with `Cannot find module`. (Known bug class:
- * Linear AGENT-231 fixed it for the MCP file tools; the SDK/workflow path still
+ * Linear AGENT-231 fixed it for the MCP file tools; the SDK agent-run path still
  * double-nests — run 263 is the runtime repro that ticket said it lacked.) Doing
  * everything in ONE `exec` sidesteps the whole root mismatch: `mkdir` + `cd` into
  * a per-attempt dir, decode the script and proposal from base64 into files right

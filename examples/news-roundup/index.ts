@@ -171,7 +171,7 @@ const publish = defineStep({
         sandbox = ctx.sapiom.sandboxes.attach(sandboxName);
       } catch (err) {
         // Expired/missing sandbox is the normal weekly path; the reason distinguishes
-        // not-found from auth/network failures in the execution logs.
+        // not-found from auth/network failures in the agent-run logs.
         ctx.logger.warn("creating sandbox", { name: sandboxName, reason: String(err) });
         sandbox = await ctx.sapiom.sandboxes.create({ name: sandboxName, ttl: "24h", tier: "xs", port: SITE_PORT });
       }

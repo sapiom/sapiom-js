@@ -9,11 +9,11 @@ import { z } from "zod/v4";
 
 /**
  * Fan Out and Combine — split a goal into parts, run each part as its own child
- * workflow in parallel, then merge the results into one answer.
+ * agent run in parallel, then merge the results into one answer.
  *
- * This is the canonical "a workflow composes other workflows" template. It reaches
+ * This is the canonical "an agent composes other agents" template. It reaches
  * the child-run capability through the run context (`ctx.sapiom.agents.run`), so
- * every child is a real, independently-metered execution — not an in-process
+ * every child is a real, independently-metered agent run — not an in-process
  * function call. The pattern is fan-out → join → reduce, the durable equivalent of
  * `Promise.all` over sub-agents.
  *
@@ -83,7 +83,7 @@ interface EntryInput {
    */
   childDefinition?: string;
   /**
-   * Which role this execution plays. Omit (or "coordinate") for the parent; the
+   * Which role this agent run plays. Omit (or "coordinate") for the parent; the
    * coordinator sets "leaf" on the children it launches. A leaf does one item and
    * never fans out.
    */
@@ -186,7 +186,7 @@ const entryInput = z.object({
     .enum(["coordinate", "leaf"])
     .default("coordinate")
     .describe(
-      'Which role this execution plays; a "leaf" does one item and never fans out.',
+      'Which role this agent run plays; a "leaf" does one item and never fans out.',
     ),
   item: z
     .string()

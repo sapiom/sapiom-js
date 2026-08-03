@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { agent } from "./index.ts";
 
-// `publish` re-attaches the coding run's execution environment and deploys it.
+// `publish` re-attaches the coding run's environment and deploys it.
 // `deployPreview` only serves from a Blaxel cloud sandbox; a coding run in local
 // host mode leaves its files on the runner host, and attaching that id + deploying
 // 404s with "Sandbox not found" (SAP-2203). `publish` must detect the
@@ -99,8 +99,8 @@ test("builtNotPublished is a meaningful terminal that names the local-mode limit
     { environmentType: "local_host" },
     publishContext({
       seed: {
-        topic: "durable workflow engines",
-        reportTitle: "Durable Workflow Engines",
+        topic: "durable agent runtimes",
+        reportTitle: "Durable Agent Runtimes",
         reportTagline: "Retries, done right.",
         sources: [{ title: "s", url: "https://example.com" }],
         sandboxName: "/tmp/sapiom-coding-runs/runs/abc",
@@ -114,7 +114,7 @@ test("builtNotPublished is a meaningful terminal that names the local-mode limit
   assert.equal(out.built, true);
   assert.equal(out.reason, "non-deployable-environment");
   assert.equal(out.environmentType, "local_host");
-  assert.equal(out.title, "Durable Workflow Engines");
+  assert.equal(out.title, "Durable Agent Runtimes");
   // The note explains this publishes in production — an honest degrade, not a 404.
   assert.match(out.note, /production/i);
 });

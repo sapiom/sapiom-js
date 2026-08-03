@@ -32,7 +32,7 @@ import { z } from "zod/v4";
  *     graph offline (capabilities stubbed) for free before a billed, delivering
  *     deploy + run.
  *   - The recipient is ordinary run input (a declared setting), not a secret, and
- *     persisted in execution state — the same seam you'd read a delivery secret
+ *     persisted in agent-run state — the same seam you'd read a delivery secret
  *     from if you swapped in a bring-your-own channel (see `AGENTS.md`).
  *   - Each edge carries a slim payload; the large scraped bodies stay bounded and
  *     die at the `curate` boundary — they never enter `ctx.shared` (big shared

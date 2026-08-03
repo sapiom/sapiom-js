@@ -1,8 +1,8 @@
 # Fan Out and Combine
 
-Split a goal into parts, run each part as its own child workflow in parallel, then
-merge the results into one answer — fan out, join, reduce. The canonical "a workflow
-composes other workflows" template, built on `ctx.sapiom.agents.run`.
+Split a goal into parts, run each part as its own child agent run in parallel, then
+merge the results into one answer — fan out, join, reduce. The canonical "an agent
+composes other agents" template, built on `ctx.sapiom.agents.run`.
 
 ## What it does
 
@@ -39,7 +39,7 @@ Input:
 
 - `goal` and `items` are the two knobs — what to accomplish, and the parts to fan
   it across (one child run per item).
-- `childDefinition` (optional) is the slug of the workflow to run per item; it
+- `childDefinition` (optional) is the slug of the agent to run per item; it
   defaults to this agent, so the template composes itself with no other deployment.
 - `dryRun: true` returns the resolved fan-out plan without dispatching any children.
 

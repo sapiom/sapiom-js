@@ -28,7 +28,7 @@ import { z } from "zod/v4";
  *
  *   - plan     resolves the repo + commands and validates the input.
  *   - bump     launches the coding agent on the repo, then SUSPENDS at $0 until
- *              the run finishes — coding runs are long, so the workflow pauses
+ *              the run finishes — coding runs are long, so the agent run pauses
  *              rather than holding a worker.
  *   - verify   re-attaches the coding run's sandbox, installs, and runs the test
  *              suite. A non-zero exit (or a failed coding run) routes to rejected.
@@ -227,7 +227,7 @@ const bump = defineStep({
   name: "bump",
   next: [],
   // Async pause/resume: the launched coding run fires CODING_RESULT_SIGNAL on
-  // completion (or failure), resuming this workflow at `verify` with the result.
+  // completion (or failure), resuming this agent run at `verify` with the result.
   pause: { signal: CODING_RESULT_SIGNAL, resumeStep: "verify" },
   async run(_input: unknown, ctx: Ctx) {
     const repoSlug = ctx.shared.get("repoSlug") ?? "";

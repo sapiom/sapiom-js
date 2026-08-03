@@ -98,9 +98,9 @@ this scaffolding.
 
 ## Self-grading composition (call it as a child)
 
-Because the eval-gate is a deployable agent, a **parent** workflow can grade its
+Because the eval-gate is a deployable agent, a **parent** agent can grade its
 own output by launching the eval-gate as a **child** and branching on the
-returned decision — the canonical self-grading-workflow pattern:
+returned decision — the canonical self-grading-agent pattern:
 
 ```
 parent.produce ─▶ parent.grade ─(POST /v1/workflows/executions)─▶ eval-gate child
@@ -108,10 +108,10 @@ parent.produce ─▶ parent.grade ─(POST /v1/workflows/executions)─▶ eval
                                                                               └─▶ regenerate
 ```
 
-The parent produces an output, POSTs a child eval-gate execution, then **pauses
-at $0** until the child's decision arrives as a signal. A `dryRun` guard keeps
+The parent produces an output, starts the eval-gate as a child agent run, then
+**pauses at $0** until the child's decision arrives as a signal. A `dryRun` guard keeps
 `run_local` offline and free. Sketch of the parent (a separate agent you'd
-author alongside your workflow):
+author alongside your agent):
 
 ```ts
 import {

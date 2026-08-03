@@ -208,7 +208,7 @@ const login = defineStep({
   ) {
     // Re-read the password from the injected env at the point of use rather than
     // carrying it in the step transition: a step's input is persisted in the durable
-    // execution record, and a login secret must never land there. The secret is
+    // agent-run record, and a login secret must never land there. The secret is
     // injected into every step's env, so reading it here keeps it out of the trace.
     const password = (process.env[PASSWORD_ENV] ?? "").trim();
     if (!password) {

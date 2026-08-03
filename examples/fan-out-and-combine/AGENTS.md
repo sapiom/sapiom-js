@@ -2,7 +2,7 @@
 
 This project defines exactly one Sapiom agent in `index.ts` — **Fan Out and
 Combine** — authored against `@sapiom/agent`. It splits a goal into parts, runs each
-part as its own child workflow in parallel, then merges the results:
+part as its own child agent run in parallel, then merges the results:
 `plan` → `fanOut` → `reduce` → `done`, with a `solve` leaf and a `planned` (dry-run)
 off-ramp. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom`
 (here: `ctx.sapiom.agents.run`, `ctx.sapiom.models.run`).

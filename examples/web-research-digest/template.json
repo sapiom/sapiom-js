@@ -12,7 +12,7 @@
     "Quick pre-meeting briefing",
     "One capability, extendable"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\\n\\nPass a `topic` when you run it, for example `{ \"topic\": \"what is an LLM agent?\" }`. Each run does one billed web search and returns the digest plus its sources.\\n\\nPrefer to work from the code? Run it locally with `run_local` — the web search is stubbed, so you can trace the whole graph for free — or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\\n\\nPass a `topic` when you run it, for example `{ \"topic\": \"what is an LLM agent?\" }`. Each run does one billed web search and returns the digest plus its sources.\\n\\nPrefer to work from the code? Run it locally with `run_local` — the web search is stubbed, so you can trace the whole graph for free — or edit and deploy it with the Sapiom MCP.",
   "defaultInput": {
     "topic": "what is an LLM agent?"
   },

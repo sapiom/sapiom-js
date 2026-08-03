@@ -52,7 +52,7 @@ location. It declares what the credential _is_, in `template.json`:
 | `webhook`       | `SLACK_WEBHOOK_URL` | A Slack incoming-webhook URL.                   |
 
 Sapiom collects the declared credentials when you use the template, keeps them
-scoped to the deployed workflow, and injects them into the step's environment at
+scoped to the deployed agent, and injects them into the step's environment at
 dispatch — so `process.env.SLACK_BOT_TOKEN` resolves your secret at runtime with
 no extra wiring, and where it is stored can change without touching this template.
 

@@ -5,7 +5,7 @@
  * RUBRIC is the caller's — we own the harness, not an opinion about what
  * "quality" means. These are factored out (not inlined in the steps) so the same
  * judge scaffolding is reusable if you compose the eval-gate as a child of your
- * own workflow.
+ * own agent.
  *
  * There is NO gateway call in this file. The judge LLM call lives in the `judge`
  * step in `index.ts` and goes through `ctx.sapiom.models.run` — the real,
