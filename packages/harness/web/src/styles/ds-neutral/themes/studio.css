@@ -1,0 +1,73 @@
+/*
+ * Sapiom Studio
+ *
+ * Named Studio preset for dense IDE surfaces. Import after tokens.css.
+ * This file owns Studio-wide visual decisions; applications keep only
+ * domain-specific pane, menu, and terminal geometry locally.
+ */
+@import "./agent-cloud.css";
+
+[data-product="sapiom-studio"] {
+  /* Compact geometry and the one sub-grid inset used by dense chrome. */
+  --radius: 0.5rem;
+  --radius-full: 9999px;
+  --sp-half: 2px;
+  --line-box: 20px;
+  --card-pad: var(--sp3);
+
+  /* Vanilla-CSS aliases for the shared font families. */
+  --font-sans: var(--font);
+  --font-mono: var(--mono);
+
+  /* Studio type and weight ladders: body, metadata, display; regular to title. */
+  --type-label: 14px;
+  --type-meta: 12px;
+  --type-display: 24px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-strong: 600;
+  --lh-tight: 1.2;
+
+  /* One compact control height; labels remain visibly smaller than controls. */
+  --bar-h: var(--row-h-xs);
+  --control-h: var(--control-h-xs);
+  --glyph-control: 14px;
+  --pill-h: var(--line-box);
+
+  /* Shared status, elevation, motion, and scrollbar treatment. */
+  --dot: 7px;
+  --dot-sm: 6px;
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: var(--shadow-soft);
+  --shadow-lg: var(--shadow);
+  --transition-fast: var(--fast) var(--ease);
+  --scrollbar-thumb: color-mix(in srgb, var(--ink-muted) 75%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--ink-muted) 90%, transparent);
+
+  /* Containers share the raised plane; inset content uses one neutral wash. */
+  --surface-floating: var(--surface-raised);
+  --surface-inset: var(--active-shade);
+
+  /* Studio chrome is neutral. The product green is a semantic state, never
+     the keyboard ring, selection wash, or relationship line. */
+  --brand-wash: var(--active-shade);
+  --brand-line: var(--ui-line-strong);
+  --focus-ring: color-mix(in srgb, var(--ink) 54%, transparent);
+  --focus: var(--focus-ring);
+}
+
+[data-product="sapiom-studio"],
+[data-theme="dark"] [data-product="sapiom-studio"],
+[data-product="sapiom-studio"][data-theme="dark"] {
+  /* Green is scarce: success, live work, on, and confirmation only. */
+  --brand: #6be195;
+  --brand-hover: #8ceab0;
+  --brand-ink: #062b16;
+}
+
+[data-theme="light"] [data-product="sapiom-studio"],
+[data-product="sapiom-studio"][data-theme="light"] {
+  --brand: #167e3a;
+  --brand-hover: #116930;
+  --brand-ink: #ffffff;
+}

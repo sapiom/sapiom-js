@@ -1,0 +1,36 @@
+/* --------------------------------------------------------------------------
+   Geist + Geist Mono, loaded once for the whole monorepo.
+
+   `tokens.css` has named "Geist" in --font since the beginning, but nothing
+   ever LOADED it in most projects, so they rendered in system-ui while the
+   stylesheet claimed otherwise. That is worse than not using Geist at all:
+   the weight ramp is tuned per family, and system-ui has no 500, so every
+   `--fw-medium` silently rounded up to Semibold and chrome read as bold.
+
+   TWO files, not six. These are the VARIABLE cuts: one file per family
+   carries the whole 100–900 axis, so a weight is a number the renderer
+   interpolates rather than another network request. Three static TTFs
+   (Regular/SemiBold/Mono-Medium, ~300KB each) were the older answer and gave
+   three fixed weights for four times the bytes.
+
+   Import this BEFORE tokens.css. Projects that opt out of Geist simply do not
+   import it — the stack in --font falls through to system-ui on its own.
+   -------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: "Geist";
+  src: url("./assets/fonts/Geist-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  /* Text is readable in the fallback immediately and reflows once; a blocking
+     swap period would leave chrome invisible on a cold load. */
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./assets/fonts/GeistMono-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}

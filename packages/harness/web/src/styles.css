@@ -1,16 +1,25 @@
 /* ==========================================================================
    Sapiom design-system consumption (the one rule: never redefine a token).
-   tokens.css is the single source of truth; agent-cloud.css layers the
-   shared product accent on top. This app carries exactly two sanctioned
-   deviations, each documented at its declaration: the brand accent (the
-   Sapiom mark green replaces the shared teal) and the micro type
-   floor (10px raised to 11px). Everything below the imports is a
-   COMPATIBILITY BRIDGE: the upstream engineering frontend names its
-   variables --bg-0..3/--text/--accent/…, so we map those names onto the
-   shared semantic tokens instead of carrying a second palette.
+   Import order is part of the contract: fonts register the Geist faces,
+   tokens.css is the single source of truth, and the named `studio.css` preset
+   layers the dense-IDE decisions on top (compact control/type density, the
+   scarce green brand, and NEUTRAL focus/selection chrome). `studio.css` itself
+   composes `agent-cloud.css`, so it is not imported separately — importing both
+   would create two places to reason about accent precedence.
+
+   The preset is scoped to `[data-product="sapiom-studio"]` (set on <html> in
+   index.html), so it owns the deliberate overrides of shared names such as
+   `--radius`, `--card-pad`, `--type-label`, `--type-meta`, `--control-h`, and
+   `--glyph-control`; this app must NOT restate them below.
+
+   Everything below the imports is a COMPATIBILITY BRIDGE: the upstream
+   engineering frontend names its variables --bg-0..3/--text/--accent/…, so we
+   map those names onto the shared semantic tokens instead of carrying a second
+   palette. It never redefines a token the preset owns.
    ========================================================================== */
+@import "@sapiom/design-system/fonts.css";
 @import "@sapiom/design-system/tokens.css";
-@import "@sapiom/design-system/themes/agent-cloud.css";
+@import "@sapiom/design-system/themes/studio.css";
 
 :root {
   /* Geometry + motion bridge (theme-independent). */
@@ -28,19 +37,11 @@
   --font-sans: var(--font);
   --font-mono: var(--mono);
 
-  /* Legibility floor: the shared ramp's 10px micro step is below
-     comfortable reading size for this app's dense chrome (kbd hints, count
-     badges, section eyebrows), so the micro token is raised to 11px here.
-     Nothing in this app may render below 11px; 10px is reserved for
-     nothing. */
-  --type-micro: 11px;
-
-  /* Base UI font raised to 14px for comfortable reading; the rest of the
-     ramp steps down from it (14/13/12/11). Scoped override of the shared
-     type tokens for THIS app only — the design-system file is untouched. */
-  --type-ui: 14px;
-  --type-label: 13px;
-  --type-meta: 12px;
+  /* Type is owned by tokens.css + the Studio preset now, not restated here:
+     tokens.css already floors --type-micro at 11px and sets the 14px UI base,
+     and studio.css sets the dense ladder (--type-label 14px, --type-meta 12px,
+     --type-display 24px) under [data-product="sapiom-studio"]. Restating any of
+     them here would silently win the cascade over the preset. */
 
   /* Elevation — floating surfaces use the shared soft shadow; the small
      steps stay as subtle fixed alphas for popovers/menus. */
