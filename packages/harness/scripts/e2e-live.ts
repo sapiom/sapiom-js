@@ -359,6 +359,18 @@ async function testCoreFlow(): Promise<void> {
     assert(systemPromptText?.includes('"boundAgent"') === true, "the delivered prompt teaches boundAgent");
     assert(systemPromptText?.includes('"agents"') === true, "the delivered prompt teaches agents");
     assert(
+      systemPromptText?.includes("The Canvas follows that selection") === true,
+      "the delivered Claude prompt teaches automatic Canvas selection",
+    );
+    assert(
+      systemPromptText?.includes("Local Run, Prod Run, and Deploy") === true,
+      "the delivered Claude prompt names the real action bar",
+    );
+    assert(
+      !systemPromptText?.includes("Visualize button") && !systemPromptText?.includes("⌘K"),
+      "the delivered Claude prompt omits stale Visualize and command-palette lifecycle guidance",
+    );
+    assert(
       !systemPromptText?.toLowerCase().includes("workflow"),
       "the delivered prompt does not teach Workflow terminology",
     );
@@ -989,6 +1001,25 @@ async function testAutoSessionKindSelection(): Promise<void> {
     assert(
       capture.argv.includes("check_for_update_on_startup=false"),
       "the auto-created session actually launched via the codex adapter, not claude-code",
+    );
+    const developerInstructionsPrefix = "developer_instructions=";
+    const developerInstructionsArg = capture.argv.find((arg) => arg.startsWith(developerInstructionsPrefix));
+    assert(developerInstructionsArg !== undefined, "the codex adapter receives developer instructions");
+    const codexSystemPromptText = JSON.parse(
+      developerInstructionsArg.slice(developerInstructionsPrefix.length),
+    ) as string;
+    assert(codexSystemPromptText.includes("Agent Studio"), "the delivered Codex prompt names Agent Studio");
+    assert(
+      codexSystemPromptText.includes("The Canvas follows that selection"),
+      "the delivered Codex prompt teaches automatic Canvas selection",
+    );
+    assert(
+      codexSystemPromptText.includes("Local Run, Prod Run, and Deploy"),
+      "the delivered Codex prompt names the real action bar",
+    );
+    assert(
+      !codexSystemPromptText.includes("Visualize button") && !codexSystemPromptText.includes("⌘K"),
+      "the delivered Codex prompt omits stale Visualize and command-palette lifecycle guidance",
     );
   } finally {
     await server.close();

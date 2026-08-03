@@ -128,11 +128,20 @@ describe("buildResumeBrief", () => {
       expect(brief).toContain("claude-code");
       expect(brief).toContain("**Coding agent:** claude-code");
       expect(brief).toContain("**Bound agent:** order-triage");
-      expect(brief).toContain("**Agent run:**");
+      expect(brief).toContain("**Session span:** 2026-07-27T10:00:00.000Z → 2026-07-27T11:00:00.000Z");
+      expect(brief).not.toContain("**Agent run:**");
       expect(brief).not.toContain("**Bound workflow:**");
       expect(brief.toLowerCase()).not.toContain("workflow");
       expect(brief).toContain("order-triage");
       expect(brief).toContain("definition 188");
+    });
+
+    it("identifies a self-started turn as coding-agent activity", () => {
+      const brief = buildResumeBrief(
+        record({ turns: [turn(1, { prompt: null, promptAt: null })] }),
+      );
+      expect(brief).toContain("the coding agent started this turn itself");
+      expect(brief).not.toContain("or the agent started this turn itself");
     });
 
     it("says a workflow is not linked rather than printing a null definition", () => {

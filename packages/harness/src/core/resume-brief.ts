@@ -288,7 +288,7 @@ function renderTurn(turn: SessionRecordTurn, cwd: string | null): string {
   if (turn.prompt !== null) {
     lines.push("", "**Prompt:**", "", blockquote(clamp(turn.prompt, MAX_PROMPT_CHARS)));
   } else {
-    lines.push("", "**Prompt:** _not recorded — our recording started mid-turn, or the agent started this turn itself._");
+    lines.push("", "**Prompt:** _not recorded — our recording started mid-turn, or the coding agent started this turn itself._");
   }
 
   if (turn.toolCalls.length > 0) {
@@ -433,7 +433,7 @@ function renderIdentity(record: SessionRecord, options: BuildResumeBriefOptions)
     lines.push("- **Bound agent:** none");
   }
   const span = [record.startedAt, record.endedAt].filter(Boolean).join(" → ");
-  if (span) lines.push(`- **Agent run:** ${span}`);
+  if (span) lines.push(`- **Session span:** ${span}`);
   lines.push(`- **Recorded turns:** ${record.turnCount}`);
 
   if (record.limitations.length > 0) {

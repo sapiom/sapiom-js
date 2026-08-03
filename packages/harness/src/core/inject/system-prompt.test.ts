@@ -27,6 +27,10 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain("coding agent running in Agent Studio");
     expect(content).toContain('"boundAgent"');
     expect(content).toContain('"agents"');
+    expect(content).toContain("The Canvas follows that selection");
+    expect(content).toContain("Local Run, Prod Run, and Deploy");
+    expect(content).not.toContain("Visualize button");
+    expect(content).not.toContain("⌘K");
     expect(content.toLowerCase()).not.toContain("workflow");
   });
 
