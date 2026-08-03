@@ -100,6 +100,7 @@ test("a generic render failure names the agent graph", async ({ page }) => {
   const error = page.getByTestId("canvas-render-error");
   await expect(error).toContainText("The agent graph could not be extracted. Open the terminal for details.");
   await expect(error).not.toContainText("workflow graph");
+  await expect(page.getByRole("button", { name: "Ask coding agent to fix" })).toBeVisible();
 });
 
 test("a launched-agent node keeps its private identifiers and navigates to the agent", async ({ page }) => {

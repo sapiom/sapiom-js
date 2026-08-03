@@ -309,7 +309,7 @@ export function CanvasOverviewPanel({
                       if (
                         overview.description &&
                         !window.confirm(
-                          "Rewrite this agent's descriptions? The agent will edit the source and may replace text you wrote by hand.",
+                          "Rewrite this agent's descriptions? The coding agent will edit the source and may replace text you wrote by hand.",
                         )
                       ) {
                         return;
@@ -319,7 +319,7 @@ export function CanvasOverviewPanel({
                       setPending(true);
                       onDescribeWithAI();
                     }}
-                    data-tooltip="Runs a hidden agent that writes descriptions into the agent source — the canvas updates when it saves"
+                    data-tooltip="Runs a hidden coding-agent session that writes descriptions into the agent source — the canvas updates when it saves"
                   >
                     {describeLoading ? (
                       <>

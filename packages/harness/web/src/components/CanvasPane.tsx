@@ -950,7 +950,7 @@ export function CanvasPane({
                     )
                   }
                 >
-                  Ask agent to fix
+                  Ask coding agent to fix
                 </button>
                 <button
                   className="btn-ghost"
