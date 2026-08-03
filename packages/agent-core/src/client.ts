@@ -45,10 +45,7 @@ export class GatewayClient {
   private readonly apiKey: string;
 
   constructor(opts: ClientOptions) {
-    // All trailing slashes, not just one: a hand-edited credentials file or a
-    // proxy config ending in `//` would otherwise produce `host//v1/...`, which
-    // many routers treat as a distinct (404ing) path.
-    this.host = (opts.host ?? DEFAULT_WORKFLOWS_HOST).replace(/\/+$/, '');
+    this.host = stripTrailingSlashes(opts.host ?? DEFAULT_WORKFLOWS_HOST);
     this.base = `${this.host}/v1/workflows`;
     this.apiKey = opts.apiKey;
   }
@@ -177,6 +174,21 @@ export class GatewayClient {
  */
 export function createClient(opts: ClientOptions): GatewayClient {
   return new GatewayClient(opts);
+}
+
+/**
+ * Normalize a host by dropping every trailing slash — a hand-edited credentials
+ * file or a proxy config ending in `//` would otherwise produce `host//v1/...`,
+ * which many routers treat as a distinct (404ing) path.
+ *
+ * Deliberately not a regex. The obvious `/\/+$/` backtracks quadratically on a
+ * host with many interior slashes (`a` + `/`.repeat(n) + `b`), and the host is
+ * caller-supplied; this scan is linear and allocates once.
+ */
+function stripTrailingSlashes(host: string): string {
+  let end = host.length;
+  while (end > 0 && host.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  return end === host.length ? host : host.slice(0, end);
 }
 
 /** Unreachable-host failure, shaped identically wherever a fetch rejects. */

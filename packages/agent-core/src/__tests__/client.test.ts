@@ -89,14 +89,29 @@ describe('createClient / GatewayClient', () => {
     expect(init.body).toBe(JSON.stringify({ message: 'hi' }));
   });
 
-  it('strips a trailing slash from the host for both bases', async () => {
+  it('strips trailing slashes from the host for both bases', async () => {
     const spy = mockFetch([{ status: 200, body: {} }]);
-    const client = createClient({ host: 'https://example.com/', apiKey: 'sk' });
+    const client = createClient({ host: 'https://example.com//', apiKey: 'sk' });
     await client.postAtHostRoot('/v1/studio-feedback');
     await client.get('/foo');
 
     expect(spy.mock.calls[0][0]).toBe('https://example.com/v1/studio-feedback');
     expect(spy.mock.calls[1][0]).toBe('https://example.com/v1/workflows/foo');
+  });
+
+  it('normalizes the host in linear time, not by backtracking', () => {
+    // The natural `/\/+$/` is quadratic on a host with many interior slashes,
+    // and the host is caller-supplied (a project config or credentials file).
+    // 100k slashes finishes instantly if the scan is linear; the regex form
+    // takes seconds. Guards the fix for the js/polynomial-redos alert.
+    const nasty = `https://example.com/${'/'.repeat(100_000)}x`;
+    const started = Date.now();
+    const client = createClient({ host: nasty, apiKey: 'sk' });
+    expect(Date.now() - started).toBeLessThan(250);
+    // Nothing to strip — the string does not end in a slash.
+    const spy = mockFetch([{ status: 200, body: {} }]);
+    void client.get('/foo');
+    expect(spy.mock.calls[0][0]).toBe(`${nasty}/v1/workflows/foo`);
   });
 
   it('maps postAtHostRoot failures through the same error shaping', async () => {
