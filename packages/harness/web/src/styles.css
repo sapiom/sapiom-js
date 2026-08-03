@@ -266,10 +266,10 @@ input {
   color: var(--text-dim);
 }
 
-/* The auth state reads as "reconnect" (accent), the error state as a real
+/* The auth state reads as "reconnect" (neutral ink), the error state as a real
    fault (red); offline stays neutral — the copy carries the meaning. */
 .connectivity-screen[data-status="auth"] .connectivity-screen-icon {
-  color: var(--accent);
+  color: var(--ink-muted);
 }
 
 .connectivity-screen[data-status="error"] .connectivity-screen-icon {
@@ -380,8 +380,10 @@ input {
   justify-content: space-between;
   height: var(--pane-header-h);
   padding: 0 var(--pane-pad-x);
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--ui-line);
+  /* One continuous rail surface: no raised band, no permanent underline. A
+     header border states a boundary that is only true once content scrolls
+     under it; drawn always it is just one more decorative line. */
+  background: var(--surface-base);
 }
 
 /* The lockup is an <h1>; strip the heading's default margin/size so it lays
@@ -561,7 +563,7 @@ input {
   background: none;
   border: none;
   padding: 0;
-  color: var(--accent);
+  color: var(--text-dim);
   font-size: inherit;
   cursor: pointer;
   text-decoration: underline;
@@ -569,7 +571,7 @@ input {
 }
 
 .telemetry-notice-settings-link:hover {
-  color: var(--accent-hover);
+  color: var(--text);
 }
 
 .telemetry-notice-dismiss {
@@ -650,7 +652,9 @@ input {
 .rail {
   display: flex;
   flex-direction: column;
-  background: var(--bg-1);
+  /* Continuous base surface — the rail/main boundary is drawn by the resize
+     handle's border, not by a plane difference. */
+  background: var(--surface-base);
   min-width: 0;
   /* Upstream parity: without this the tree clips below the fold
      on first paint instead of scrolling. */
@@ -1839,8 +1843,8 @@ input {
   height: var(--pane-header-h);
   flex: 0 0 auto;
   padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-1);
+  /* Continuous surface with the terminal below — no decorative underline. */
+  background: var(--surface-base);
   position: relative;
 }
 
@@ -1936,8 +1940,8 @@ input {
   height: 14px;
   padding: 0 3px;
   border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--surface-inset);
+  color: var(--text-dim);
   font-size: var(--type-micro);
   font-weight: 700;
   line-height: 14px;
@@ -1957,7 +1961,7 @@ input {
   border-radius: var(--radius-md);
   background: var(--accent-dim);
   border: 1px solid var(--accent-border);
-  color: var(--accent);
+  color: var(--text-dim);
   font-size: var(--type-meta);
   font-weight: 500;
 }
@@ -2444,7 +2448,7 @@ input {
   border: 2px dashed var(--accent-border);
   border-radius: var(--radius-lg);
   background: var(--accent-dim);
-  color: var(--accent);
+  color: var(--text-dim);
   font-size: var(--type-ui);
   font-weight: 500;
   pointer-events: none;
@@ -4479,18 +4483,18 @@ input {
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 .canvas-describe-ai svg {
-  color: var(--accent);
+  color: var(--ink-muted);
 }
 .canvas-describe-ai:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--surface-hover);
+  border-color: var(--ui-line-strong);
+  color: var(--text);
 }
 .canvas-describe-ai:hover svg {
-  color: var(--accent-foreground);
+  color: var(--text);
 }
 .canvas-describe-ai:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 /* Loading: hold the resting accent wash (no hover fill) while the hidden agent
@@ -4507,7 +4511,7 @@ input {
   width: 12px;
   height: 12px;
   border: 2px solid var(--accent-border);
-  border-top-color: var(--accent);
+  border-top-color: var(--ink-muted);
   border-radius: 50%;
   animation: canvas-run-spin 0.9s linear infinite;
 }
@@ -5335,11 +5339,14 @@ input {
   outline-offset: 2px;
 }
 
-/* Matches Button variant="default": solid accent fill, no border. */
+/* The affirmative CTA is the theme's own ink ("Vercel black button"), NOT the
+   brand: green is reserved for state (live / success / on / deployed). Ink
+   inverts by construction — dark text on a light chip in dark mode, the
+   reverse in light — so it stays the highest-contrast object on any surface. */
 .btn-primary {
-  background: var(--accent);
+  background: var(--btn);
   border: 1px solid transparent;
-  color: var(--accent-foreground);
+  color: var(--btn-ink);
   font-weight: 500;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xs);
@@ -5349,7 +5356,7 @@ input {
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--ink-muted);
 }
 
 .btn-primary:focus-visible {
@@ -5416,7 +5423,7 @@ input {
 
 .command-palette-input:focus {
   outline: none;
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--focus);
 }
 
 .command-palette-list {
@@ -5448,9 +5455,10 @@ input {
 }
 
 .command-palette-item.is-selected {
-  background: var(--accent);
-  /* The icon has no color of its own — it inherits this via currentColor. */
-  color: var(--accent-foreground);
+  /* Neutral keyboard/hover selection — a wash, not the brand. Stronger step
+     (nested-shade) so it reads clearly on the raised palette surface. */
+  background: var(--nested-shade);
+  color: var(--text);
 }
 
 .command-palette-item-label {
@@ -5562,7 +5570,7 @@ input {
 
 .recent-dir-chip:hover {
   color: var(--text);
-  border-color: var(--accent);
+  border-color: var(--ui-line-strong);
 }
 
 .recent-dir-chip:focus-visible {
@@ -5968,7 +5976,7 @@ input {
 .right-pane {
   display: flex;
   flex-direction: column;
-  background: var(--bg-1);
+  background: var(--surface-base);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -5999,8 +6007,8 @@ input {
   flex-shrink: 0;
   height: var(--pane-header-h);
   padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
+  /* Continuous with the board below — no decorative underline. */
+  background: var(--surface-base);
 }
 
 /* Individual segment buttons — small, rounded pills (fill bg-1 / subtle
