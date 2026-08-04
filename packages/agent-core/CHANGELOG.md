@@ -1,5 +1,14 @@
 # @sapiom/orchestration-core
 
+## 0.10.2
+
+### Patch Changes
+
+- 87636c1: Make bundled starters work from a fresh Agent Studio session by preserving Studio-owned state, writing the project discovery marker, and handing Claude the local scaffold MCP tool directly.
+- Updated dependencies [cc1ac0c]
+  - @sapiom/tools@0.26.0
+  - @sapiom/agent@0.9.3
+
 ## 0.10.1
 
 ### Patch Changes

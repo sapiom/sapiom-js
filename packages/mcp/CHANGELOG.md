@@ -1,5 +1,14 @@
 # @sapiom/mcp
 
+## 0.12.1
+
+### Patch Changes
+
+- 87636c1: Make bundled starters work from a fresh Agent Studio session by preserving Studio-owned state, writing the project discovery marker, and handing Claude the local scaffold MCP tool directly.
+- Updated dependencies [87636c1]
+  - @sapiom/agent-core@0.10.2
+  - @sapiom/sandbox-preview@0.1.12
+
 ## 0.12.0
 
 ### Minor Changes

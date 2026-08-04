@@ -1,5 +1,18 @@
 # @sapiom/harness
 
+## 0.2.7
+
+### Patch Changes
+
+- 267598a: Publish `@sapiom/agent-studio` as the branded Agent Studio launcher while
+  keeping `@sapiom/harness` as the supported implementation and compatibility
+  command.
+- 87636c1: Make bundled starters work from a fresh Agent Studio session by preserving Studio-owned state, writing the project discovery marker, and handing Claude the local scaffold MCP tool directly.
+- Updated dependencies [87636c1]
+  - @sapiom/agent-core@0.10.2
+  - @sapiom/mcp@0.12.1
+  - @sapiom/agent@0.9.3
+
 ## 0.2.6
 
 ### Patch Changes
