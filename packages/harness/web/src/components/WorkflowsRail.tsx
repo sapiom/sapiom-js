@@ -1145,6 +1145,14 @@ function ProfileRow({
           >
             <Icon name={checkingUpdate ? "Loader" : "RefreshCw"} size={13} />
             {checkingUpdate ? "Checking…" : "Check for updates"}
+            {/* The app's own version, so the user always sees which build they're
+                on right where they'd check for a newer one. Empty on older
+                desktop builds that predate the appVersion bridge field. */}
+            {desktop.appVersion && (
+              <span className="profile-menu-version" data-testid="app-version">
+                v{desktop.appVersion}
+              </span>
+            )}
           </button>
         )}
         {!demo && !authenticated && (

@@ -1199,6 +1199,16 @@ input {
   cursor: default;
 }
 
+/* The desktop app version trailing "Check for updates": quiet mono metadata,
+   right-aligned, so a user always sees which build they're on. */
+.profile-menu-version {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
 .profile-menu-item:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
