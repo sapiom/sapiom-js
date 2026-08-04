@@ -45,13 +45,37 @@ export function parseAgentProjectMarker(
   }
 }
 
+/**
+ * Resolve the fixed marker filename beneath the directory the user selected.
+ * The folder picker deliberately accepts any absolute local directory, so the
+ * selected directory itself is not confined to one application-owned root.
+ * What we can and must prove is that the derived read stays inside that exact
+ * directory rather than treating either input as a free-form file path.
+ */
+function resolveAgentProjectMarkerPath(dir: string): string | null {
+  const resolvedDir = path.resolve(dir);
+  const markerPath = path.resolve(resolvedDir, AGENT_PROJECT_MARKER);
+  const relativeMarker = path.relative(resolvedDir, markerPath);
+  if (
+    !relativeMarker ||
+    relativeMarker.startsWith(`..${path.sep}`) ||
+    relativeMarker === ".." ||
+    path.isAbsolute(relativeMarker)
+  ) {
+    return null;
+  }
+  return markerPath;
+}
+
 export function readAgentProjectMarkerSync(
   dir: string,
 ): AgentProjectMarker | null {
   try {
-    return parseAgentProjectMarker(
-      fs.readFileSync(path.join(dir, AGENT_PROJECT_MARKER), "utf8"),
-    );
+    const markerPath = resolveAgentProjectMarkerPath(dir);
+    if (!markerPath) return null;
+    const markerStat = fs.lstatSync(markerPath);
+    if (!markerStat.isFile() || markerStat.isSymbolicLink()) return null;
+    return parseAgentProjectMarker(fs.readFileSync(markerPath, "utf8"));
   } catch {
     return null;
   }
@@ -61,9 +85,11 @@ export async function readAgentProjectMarker(
   dir: string,
 ): Promise<AgentProjectMarker | null> {
   try {
-    return parseAgentProjectMarker(
-      await fsp.readFile(path.join(dir, AGENT_PROJECT_MARKER), "utf8"),
-    );
+    const markerPath = resolveAgentProjectMarkerPath(dir);
+    if (!markerPath) return null;
+    const markerStat = await fsp.lstat(markerPath);
+    if (!markerStat.isFile() || markerStat.isSymbolicLink()) return null;
+    return parseAgentProjectMarker(await fsp.readFile(markerPath, "utf8"));
   } catch {
     return null;
   }
