@@ -70,4 +70,8 @@
   --brand: #167e3a;
   --brand-hover: #116930;
   --brand-ink: #ffffff;
+  /* The recessed shell (rail + terminal, --surface-base) is a clear "darker
+     white", so the raised graph column (--surface-raised, #ffffff) reads as the
+     forefront. Default #F8F9FA sat too close to white to give that depth. */
+  --bg: #f0f2f5;
 }

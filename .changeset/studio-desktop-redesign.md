@@ -2,7 +2,7 @@
 "@sapiom/harness": minor
 ---
 
-Studio (web app) redesign to match the new brand — Phase 1.
+Studio (web app) redesign to match the new brand.
 
 Adopt the shared design-system's named `sapiom-studio` preset in the web app, vendored into the committed public `ds-neutral` fallback so open-source builds and the packaged desktop app both render the new design with no private-registry dependency. This brings Geist typography, compact IDE control/type density, a scarce green brand (green now signals only live/success/on/confirmed), and neutral ink-based focus and selection chrome (previously green-tinted).
 
@@ -15,3 +15,7 @@ Main panel: the session bar, tab lane, and action row merge into ONE header. The
 Rail: Search and Templates are labelled destination rows (Search carries a right-aligned ⌘K / Ctrl+K, not a boxed field), and agent rows drop their leading glyph — indentation carries the nesting under the workspace folder. The `⋯` menu files the explorer by Workspace or Deployment and orders it by recent activity or name, with past sessions opening in a sub-card beside the menu rather than a scrolling list inside it. The footer is one continuous block: a plan summary (demo fixture only; live mode shows none) above the account row, no divider.
 
 Floating menus and dialogs paint an opaque surface (a portaled popover that inherited a translucent inset wash let the rail bleed through it); the canvas board is navigated only by its own zoom/fit/pan controls and never shows native scrollbars; and the canvas resize splitter stays welded to the board's edge at every window width.
+
+Depth: the raised graph column — its dotted board included — is a lighter white lifted off a slightly darker rail/terminal shell by a soft left-edge shadow, so it reads as the forefront panel instead of a fourth flat grey. The shadow paints the full column height (it must sit above the terminal's opaque, absolutely-positioned scroll viewport, which had been overpainting it from the terminal's top down). In light mode the canvas render's accent and success colour is now the brand green, matching the rest of the app; it had been an off-brand cyan in light only.
+
+In the packaged desktop app on macOS the window is frameless: it drops the native title bar and insets the OS traffic lights into the rail's 56px top line, which becomes the window's drag handle (every control on it opts back out, so buttons and tabs still click). The rail header splits across two rows — the Sapiom wordmark and the theme/collapse tools beside the lights, `agent.studio` on the line below — while the session bar and graph tabs stay a single top line. This chrome activates only in that host (signalled by a `frame=macos` query param); the `npx` browser app never sets it and is unchanged.

@@ -180,9 +180,35 @@ body {
   box-shadow: var(--shadow-soft);
 }
 
-/* ---- Graph block (tabs + board) — the raised, forefront surface -------- */
+/* ---- Graph block (tabs + board) — the raised, forefront surface --------
+   The white pane is LIFTED off the grey shell (rail + terminal) by a soft
+   left-edge shadow, so it reads as the forefront panel rather than another
+   flat block that merely happens to be a lighter grey. Matches the web app's
+   shell depth (--shell-pane-shadow in the reference). */
 .right-pane {
   background: var(--surface-raised);
+  /* Left-edge shadow lifts the raised graph column off the grey shell, kept
+     clearly visible against the (darker) shell. It must paint OVER the terminal,
+     which is the subtle part: xterm's `.xterm-viewport` is `position: absolute`
+     with an opaque --bg background, so it paints AFTER a *static* sibling. As a
+     static block the right-pane's shadow was overpainted from the terminal's top
+     down — the lift appeared to "stop" exactly where the terminal scroll area
+     began. The desktop rule below gives the pane its own stacking level so the
+     shadow clears the viewport for the full column height. */
+  box-shadow: -4px 0 16px -6px color-mix(in srgb, var(--ink) 24%, transparent);
+}
+
+/* Desktop only: raise the pane above the terminal's absolutely-positioned,
+   opaque viewport so the left-edge lift shadow paints the FULL column height.
+   Scoped to min-width:769px — the complement of MOBILE_SHELL_QUERY
+   (max-width:768px, use-pane-widths.ts) — because on the mobile shell
+   `.right-pane` is a `position: fixed` bottom sheet; a positioned/z-index
+   override there would break its geometry (it regressed mobile.spec.ts once). */
+@media (min-width: 769px) {
+  .right-pane {
+    position: relative;
+    z-index: 1;
+  }
 }
 
 .right-pane-tabs {
