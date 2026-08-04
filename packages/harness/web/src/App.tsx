@@ -679,7 +679,7 @@ export const App = (): JSX.Element => {
   };
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
       {isMobile && !railCollapsed && (
         <div
           className="shell-scrim"

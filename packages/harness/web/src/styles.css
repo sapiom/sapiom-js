@@ -385,6 +385,81 @@ input {
   background: transparent;
 }
 
+/* ── Frameless macOS host ────────────────────────────────────────────────
+   The Electron window drops its native title bar and insets the OS traffic
+   lights into the rail's 56px top line (harness-desktop main/windows.ts), and
+   tells the SPA via ?frame=macos → data-window-frame on :root. NONE of this
+   applies in a browser (npx), which never sets the attribute: a header padded
+   for lights that are not there, or a drag region that cannot drag, would be
+   wrong anywhere but the frameless window. */
+/* Two-row rail header: the wordmark + tools sit on the traffic-light line, and
+   `agent.studio` drops to the line below — into the space under the lights.
+   Only the rail's header grows; the session bar and tabs stay one 56px line. */
+:root[data-window-frame="macos"] .brand-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: var(--header-h) auto;
+  align-items: center;
+  height: auto;
+  padding: 0 var(--pane-pad-x) var(--sp2);
+  column-gap: var(--sp2);
+}
+
+/* Re-materialize the lockup's parts as grid items. */
+:root[data-window-frame="macos"] .brand-header .brand-lockup {
+  display: contents;
+}
+
+:root[data-window-frame="macos"] .brand-header .brand-mark {
+  display: flex;
+  align-items: center;
+  grid-column: 1;
+  grid-row: 1;
+  /* Clear the traffic-light group (it ends ~71px in) — only on this top line. */
+  padding-left: calc(78px - var(--pane-pad-x));
+}
+
+:root[data-window-frame="macos"] .brand-header .brand-header-tools {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+:root[data-window-frame="macos"] .brand-header .brand-product {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  /* Below the lights — no clearance; sits at the rail's normal left inset. */
+}
+
+/* The app's top line is the window's drag handle; every control on it opts back
+   out. Only these three chrome bars are draggable — never the panes below. */
+:root[data-window-frame="macos"] .brand-header,
+:root[data-window-frame="macos"] .session-bar,
+:root[data-window-frame="macos"] .right-pane-tabs {
+  -webkit-app-region: drag;
+}
+
+:root[data-window-frame="macos"] .brand-header :is(button, a, input, [role="tab"], [role="button"], [role="menuitem"]),
+:root[data-window-frame="macos"] .session-bar :is(button, a, input, [role="tab"], [role="button"], [role="menuitem"]),
+:root[data-window-frame="macos"] .right-pane-tabs :is(button, a, input, [role="tab"], [role="button"], [role="menuitem"]) {
+  -webkit-app-region: no-drag;
+}
+
+/* Collapsing the rail unmounts the brand header that clears the lights, so the
+   session bar becomes the top-left element — leading with its rail-expand
+   button, the affordance that brings the rail back. It takes over the
+   clearance so the lights never land on that button. */
+:root[data-window-frame="macos"] .app-shell[data-rail-collapsed] .session-bar {
+  padding-left: 78px;
+}
+
+/* An inline confirm (EndSessionConfirm) renders its full-screen backdrop INSIDE
+   the draggable session bar. Without opting out, a backdrop click landing in
+   the top drag strip is eaten as a window-move instead of dismissing — so the
+   whole scrim opts out (harmless for the top-level modal backdrops). */
+:root[data-window-frame="macos"] .modal-backdrop {
+  -webkit-app-region: no-drag;
+}
+
 /* The lockup is an <h1>; strip the heading's default margin/size so it lays
    out as a plain baseline row of wordmark + product name. */
 .brand-lockup {
@@ -393,6 +468,13 @@ input {
   gap: var(--sp2);
   margin: 0;
   font-size: var(--type-ui);
+}
+
+/* By default the mark wrapper dissolves — the logotype + hidden text sit
+   directly in the lockup's flex, so "sapiom agent.studio" reads inline. The
+   frameless-mac grid (below) re-materializes it to place it on its own row. */
+.brand-mark {
+  display: contents;
 }
 
 .brand-header-tools {

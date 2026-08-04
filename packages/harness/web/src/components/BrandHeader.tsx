@@ -23,9 +23,14 @@ export function BrandHeader({ onCollapse }: { onCollapse: () => void }): JSX.Ele
     <header className="brand-header">
       <h1 className="brand-lockup">
         {/* The wordmark IS "Sapiom"; the accessible name comes from the two
-            parts together, so neither repeats the other. */}
-        <BrandLogotype height={13} aria-hidden />
-        <span className="visually-hidden">Sapiom </span>
+            parts together, so neither repeats the other. The mark is wrapped so
+            the frameless-mac layout can place it on the traffic-light line while
+            `agent.studio` drops to the line below; in a browser the wrapper is
+            `display:contents` and the lockup reads inline exactly as before. */}
+        <span className="brand-mark">
+          <BrandLogotype height={13} aria-hidden />
+          <span className="visually-hidden">Sapiom </span>
+        </span>
         <span className="brand-product">agent.studio</span>
       </h1>
 
