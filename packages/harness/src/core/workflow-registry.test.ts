@@ -154,6 +154,35 @@ describe("WorkflowRegistry", () => {
     expect((await registry.list())[0].source).toBe("connect");
   });
 
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )(
+    "keeps a scanned project when its directory is temporarily unreadable",
+    async () => {
+      const projectDir = path.join(tmpRoot, "temporarily-unreadable");
+      await writeMarker(projectDir, 1);
+      await registry.scan(tmpRoot);
+
+      await fs.chmod(projectDir, 0o000);
+      try {
+        await registry.scan(tmpRoot);
+
+        expect(
+          (await registry.list()).map((workflow) => workflow.path),
+        ).toEqual([projectDir]);
+
+        // The protection must apply to persisted state, not only this instance.
+        const reloaded = new WorkflowRegistry(registryPath);
+        expect(
+          (await reloaded.list()).map((workflow) => workflow.path),
+        ).toEqual([projectDir]);
+      } finally {
+        await fs.chmod(projectDir, 0o700);
+      }
+    },
+  );
+
   it("does not reconcile a valid project outside the current scan envelope", async () => {
     const left = path.join(tmpRoot, "left", "project");
     const right = path.join(tmpRoot, "right", "project");

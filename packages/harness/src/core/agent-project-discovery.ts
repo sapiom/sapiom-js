@@ -27,6 +27,16 @@ export interface AgentProjectMarker {
   name?: string;
 }
 
+/**
+ * A detailed marker result for callers that must distinguish definitive
+ * absence/invalidity from a transient filesystem failure. Most UI callers only
+ * need the nullable wrappers below; registry reconciliation needs all states so
+ * an unreadable project is not mistaken for a deleted one.
+ */
+export type AgentProjectMarkerInspection =
+  | { status: "valid"; marker: AgentProjectMarker }
+  | { status: "absent" | "invalid" | "unreadable" };
+
 export function isAgentProjectScanIgnoredDir(name: string): boolean {
   return IGNORED_DIR_NAMES.has(name);
 }
@@ -67,6 +77,11 @@ function resolveAgentProjectMarkerPath(dir: string): string | null {
   return markerPath;
 }
 
+function markerReadErrorStatus(error: unknown): "absent" | "unreadable" {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
+}
+
 export function readAgentProjectMarkerSync(
   dir: string,
 ): AgentProjectMarker | null {
@@ -84,13 +99,33 @@ export function readAgentProjectMarkerSync(
 export async function readAgentProjectMarker(
   dir: string,
 ): Promise<AgentProjectMarker | null> {
+  const result = await inspectAgentProjectMarker(dir);
+  return result.status === "valid" ? result.marker : null;
+}
+
+export async function inspectAgentProjectMarker(
+  dir: string,
+): Promise<AgentProjectMarkerInspection> {
+  const markerPath = resolveAgentProjectMarkerPath(dir);
+  if (!markerPath) return { status: "invalid" };
+
+  let markerStat: import("node:fs").Stats;
   try {
-    const markerPath = resolveAgentProjectMarkerPath(dir);
-    if (!markerPath) return null;
-    const markerStat = await fsp.lstat(markerPath);
-    if (!markerStat.isFile() || markerStat.isSymbolicLink()) return null;
-    return parseAgentProjectMarker(await fsp.readFile(markerPath, "utf8"));
-  } catch {
-    return null;
+    markerStat = await fsp.lstat(markerPath);
+  } catch (error) {
+    return { status: markerReadErrorStatus(error) };
+  }
+
+  if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
+    return { status: "invalid" };
+  }
+
+  try {
+    const marker = parseAgentProjectMarker(
+      await fsp.readFile(markerPath, "utf8"),
+    );
+    return marker ? { status: "valid", marker } : { status: "invalid" };
+  } catch (error) {
+    return { status: markerReadErrorStatus(error) };
   }
 }

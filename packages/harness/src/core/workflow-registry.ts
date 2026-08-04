@@ -18,6 +18,8 @@ import { HARNESS_PATHS, type WorkflowInfo } from "../shared/types.js";
 import {
   AGENT_PROJECT_SCAN_MAX_DEPTH,
   type AgentProjectMarker,
+  type AgentProjectMarkerInspection,
+  inspectAgentProjectMarker,
   isAgentProjectScanIgnoredDir,
   readAgentProjectMarker,
 } from "./agent-project-discovery.js";
@@ -38,6 +40,18 @@ function expandHome(inputPath: string): string {
 async function readMarker(dir: string): Promise<AgentProjectMarker | null> {
   if (hasTraversalSegment(dir)) return null;
   return readAgentProjectMarker(dir);
+}
+
+async function inspectMarker(
+  dir: string,
+): Promise<AgentProjectMarkerInspection> {
+  if (hasTraversalSegment(dir)) return { status: "invalid" };
+  return inspectAgentProjectMarker(dir);
+}
+
+function isConfirmedMissingPath(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 async function nameFor(dir: string): Promise<string> {
@@ -61,14 +75,21 @@ async function nameFor(dir: string): Promise<string> {
  * (withFileTypes uses raw dirent info, not a followed stat) and so are never
  * descended into either.
  */
-async function scanDir(root: string, dir: string, depth: number, found: WorkflowInfo[]): Promise<void> {
+async function scanDir(
+  root: string,
+  dir: string,
+  depth: number,
+  found: WorkflowInfo[],
+  unreconciledRoots: string[],
+): Promise<void> {
   if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
 
   const safeDir = resolveWithinRoot(root, dir);
   if (!safeDir) return;
 
-  const marker = await readMarker(safeDir);
-  if (marker) {
+  const markerResult = await inspectMarker(safeDir);
+  if (markerResult.status === "valid") {
+    const marker = markerResult.marker;
     found.push({
       name: await nameFor(safeDir),
       path: safeDir,
@@ -78,17 +99,31 @@ async function scanDir(root: string, dir: string, depth: number, found: Workflow
     });
     return;
   }
+  if (markerResult.status === "unreadable") {
+    // The directory may still be a valid project. Treat the whole subtree as
+    // opaque for this pass so a transient filesystem error neither removes an
+    // existing entry nor discovers children that should be hidden beneath it.
+    unreconciledRoots.push(safeDir);
+    return;
+  }
 
   let entries: import("node:fs").Dirent[];
   try {
     entries = await fs.readdir(safeDir, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    if (!isConfirmedMissingPath(error)) unreconciledRoots.push(safeDir);
     return;
   }
 
   for (const entry of entries) {
     if (!entry.isDirectory() || isAgentProjectScanIgnoredDir(entry.name)) continue;
-    await scanDir(root, path.join(safeDir, entry.name), depth + 1, found);
+    await scanDir(
+      root,
+      path.join(safeDir, entry.name),
+      depth + 1,
+      found,
+      unreconciledRoots,
+    );
   }
 }
 
@@ -108,6 +143,16 @@ function isCoveredByScan(root: string, candidate: string): boolean {
   return (
     segments.length <= AGENT_PROJECT_SCAN_MAX_DEPTH &&
     !segments.some((segment) => isAgentProjectScanIgnoredDir(segment))
+  );
+}
+
+function isProtectedByIncompleteScan(
+  candidate: string,
+  unreconciledRoots: string[],
+): boolean {
+  return unreconciledRoots.some(
+    (unreconciledRoot) =>
+      resolveWithinRoot(unreconciledRoot, candidate) !== null,
   );
 }
 
@@ -193,15 +238,17 @@ export class WorkflowRegistry {
 
   /**
    * Scans `root`, refreshes discovered projects, and removes scan-sourced rows
-   * in this scan's traversal envelope when their marker is gone or invalid.
-   * Manually connected rows remain until their path itself is pruned.
+   * in this scan's traversal envelope when their marker is confirmed gone or
+   * invalid. Rows beneath a temporarily unreadable directory survive this pass;
+   * manually connected rows remain until their path itself is pruned.
    */
   async scan(root: string): Promise<WorkflowInfo[]> {
     return this.enqueue(async () => {
       await this.ensureLoaded();
       const absoluteRoot = path.resolve(expandHome(root));
       const found: WorkflowInfo[] = [];
-      await scanDir(absoluteRoot, absoluteRoot, 0, found);
+      const unreconciledRoots: string[] = [];
+      await scanDir(absoluteRoot, absoluteRoot, 0, found, unreconciledRoots);
 
       const foundPaths = new Set(found.map((workflow) => workflow.path));
       const byPath = new Map(
@@ -210,7 +257,8 @@ export class WorkflowRegistry {
             (workflow) =>
               workflow.source !== "scan" ||
               !isCoveredByScan(absoluteRoot, workflow.path) ||
-              foundPaths.has(workflow.path),
+              foundPaths.has(workflow.path) ||
+              isProtectedByIncompleteScan(workflow.path, unreconciledRoots),
           )
           .map((workflow) => [workflow.path, workflow]),
       );
