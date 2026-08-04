@@ -47,8 +47,12 @@ function resumeBlockedReason(session: HarnessSession): string {
  * no obvious way out) is the wrong default. Always offers a way forward.
  *
  * Context comes from the session record itself: title, agent, duration, when
- * it ended, exit code. The registry keeps no scrollback for an exited pty, so
- * there is no last-output tail to show.
+ * it ended, exit code. The live pty's scrollback is gone once it exits, but a
+ * session that exited ABNORMALLY (non-zero code) carries `exitTail` — the last
+ * readable output the harness preserved at exit — which is shown here. That is
+ * the one place the coding agent's own error line survives (e.g. `claude`
+ * rejecting a flag, a failed auth), so a startup crash is no longer just an
+ * opaque exit code.
  *
  * What it CAN show is the conversation, rebuilt from the harness's own recorded
  * events (see {@link SessionTranscript}) — the pty's scrollback is gone, our
@@ -149,6 +153,13 @@ export function DeadSessionPane({
           </div>
         )}
       </div>
+
+      {session.exitTail && (
+        <div className="dead-session-exit-tail" data-testid="dead-session-exit-tail">
+          <div className="dead-session-exit-tail-label">Last output before exit</div>
+          <pre className="dead-session-exit-tail-body">{session.exitTail}</pre>
+        </div>
+      )}
 
       {showRecord && (
         <div className="dead-session-record" data-testid="dead-session-record">

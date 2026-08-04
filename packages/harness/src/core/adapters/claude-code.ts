@@ -19,6 +19,70 @@ import type {
   PastSessionRecord,
   SpawnSpec,
 } from "../../shared/types.js";
+
+/**
+ * Minimum `claude` version the harness supports.
+ *
+ * Below this, the binary predates flags {@link ClaudeCodeAdapter.launch} /
+ * `resume` inject on EVERY spawn — most importantly `--plugin-dir`. A
+ * commander-style CLI aborts on an unknown option with a fast `exit 1`, BEFORE
+ * it ever runs its SessionStart hook, so the session dies with no
+ * `agentSessionId` and only an opaque exit code (the pty's stderr is discarded
+ * on exit) — exactly the "exited before establishing a session id" failure
+ * users report. `doctor()` reports a below-floor claude as NOT ok so the
+ * desktop host installs a current one and the CLI surfaces an actionable
+ * upgrade remedy, instead of every session crash-looping silently.
+ *
+ * Why 2.1.0, from the Claude Code CHANGELOG:
+ * - The plugin system did not exist before the "Plugin System Released" entry
+ *   in `2.0.12`, so no `1.x` or `2.0.0`–`2.0.11` build can recognize
+ *   `--plugin-dir` — they reject it outright.
+ * - The changelog itemizes `--plugin-dir` only as modifications from `2.1.74`
+ *   onward, and the harness's own `--plugin-dir` skills usage is verified
+ *   against `2.1.x` (see core/inject/skills-plugin.ts). `2.1.x` is thus the
+ *   earliest range we can GUARANTEE both recognizes the flag and loads our
+ *   skills.
+ * We floor at `2.1.0` — the earliest verified-safe version — rather than the
+ * `2.0.12` plugin-system release, because we can't prove `--plugin-dir` is
+ * present across the whole `2.0.x` line, and a spurious "please upgrade" for a
+ * rare old-`2.0.x` install is far cheaper than the silent exit-1 crash-loop
+ * this floor exists to prevent. This is the SINGLE source of truth — bump it
+ * whenever the adapter starts sending a flag, or relying on behavior, a newer
+ * `claude` introduced.
+ */
+export const MIN_CLAUDE_CODE_VERSION = "2.1.0";
+
+/**
+ * Extract a leading `major.minor.patch` from a `claude --version` line such as
+ * `"2.1.3 (Claude Code)"`. Returns null when no semver is present.
+ */
+export function parseClaudeVersion(
+  versionLine: string | null | undefined,
+): [number, number, number] | null {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(versionLine ?? "");
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/**
+ * Whether a `claude --version` line is at least {@link MIN_CLAUDE_CODE_VERSION}.
+ *
+ * Deliberately surgical: the ONLY case treated as unsupported is a version we
+ * can parse AND that is below the floor. An absent or unparseable version
+ * returns `true` (supported) so a future change to claude's `--version` format
+ * can never mass-reject working installs — the floor exists to catch provably
+ * ancient binaries, not to gate on our own parser's limits.
+ */
+export function isClaudeVersionSupported(versionLine: string | null | undefined): boolean {
+  const parsed = parseClaudeVersion(versionLine);
+  if (!parsed) return true;
+  const floor = parseClaudeVersion(MIN_CLAUDE_CODE_VERSION)!;
+  for (let i = 0; i < 3; i++) {
+    if (parsed[i] > floor[i]) return true;
+    if (parsed[i] < floor[i]) return false;
+  }
+  return true;
+}
+
 /**
  * Maps a project cwd to the directory name Claude Code uses for its transcript
  * store under `~/.claude/projects/`. Claude Code applies this encoding before
@@ -318,9 +382,10 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   }
 
   async doctor(): Promise<DoctorCheck[]> {
+    let versionLine: string;
     try {
       const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000 });
-      return [{ name: "claude", ok: true, detail: stdout.trim() || "installed" }];
+      versionLine = stdout.trim();
     } catch {
       return [
         {
@@ -330,6 +395,19 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
         },
       ];
     }
+    // A too-old claude passes "is it on PATH" but rejects the flags we inject on
+    // every launch (see MIN_CLAUDE_CODE_VERSION), so it must report NOT ok — a
+    // green doctor for a binary that exit-1s every session is worse than none.
+    if (!isClaudeVersionSupported(versionLine)) {
+      return [
+        {
+          name: "claude",
+          ok: false,
+          detail: `\`${this.binary}\` is ${versionLine || "an unknown version"}, older than the required ${MIN_CLAUDE_CODE_VERSION}. Upgrade Claude Code: https://docs.claude.com/en/docs/claude-code/setup`,
+        },
+      ];
+    }
+    return [{ name: "claude", ok: true, detail: versionLine || "installed" }];
   }
 
   launch(opts: LaunchOpts): SpawnSpec {

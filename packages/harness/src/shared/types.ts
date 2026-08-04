@@ -163,6 +163,19 @@ export interface HarnessSession {
   lastActiveAt: string;
   /** Exit code when status === "exited". */
   exitCode?: number | null;
+  /**
+   * The tail of terminal output captured when the session exited ABNORMALLY
+   * (a non-zero `exitCode`). This is the one place the coding agent's own
+   * error line survives: a live pty's scrollback is discarded the moment it
+   * exits, so without this a session that dies at startup — `claude` rejecting
+   * an unknown flag, a failed auth/provider init, a broken hook command —
+   * leaves only a bare exit code with no way to tell WHICH of those happened
+   * (the "exited before establishing a session id" reports). ANSI escapes are
+   * stripped to human-readable text (see `sanitizeExitTail`). Null/absent for
+   * a clean exit (code 0), a synthesized/killed exit, a session that produced
+   * no readable output, or one persisted by a build from before this existed.
+   */
+  exitTail?: string | null;
   /** The deployable agent (by path) this session is currently bound to, if any. Set
    *  via `PATCH /api/sessions/:id/workflow`; mirrored into
    *  HARNESS_CONTEXT_FILE in the session's cwd so the coding agent can read it. */

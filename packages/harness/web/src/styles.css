@@ -3465,6 +3465,41 @@ input {
   margin-top: 4px;
 }
 
+/* Last-output tail from a session that exited abnormally — the coding agent's
+   own error line (e.g. "unknown option --plugin-dir"), preserved at exit. Left-
+   aligned monospace block, not part of the centred metadata card: it is raw
+   output, so it reads like a terminal and scrolls on its own rather than
+   forcing the pane wide. */
+.dead-session-exit-tail {
+  align-self: stretch;
+  max-width: 640px;
+  width: 100%;
+  margin: var(--sp3) auto 0;
+  text-align: left;
+}
+
+.dead-session-exit-tail-label {
+  color: var(--text-faint);
+  font-size: var(--type-label);
+  margin-bottom: var(--sp1);
+}
+
+.dead-session-exit-tail-body {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: var(--sp2);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Past session: the reconstructed transcript ---------------------------
    Unlike .dead-session-pane (a centred metadata card), this one is a
    document: a fixed header with the actions, and a scrolling body. The

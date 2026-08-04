@@ -32,8 +32,28 @@ describe("generateClaudeSettings", () => {
 
     for (const event of events) {
       const command = settings.hooks[event][0].hooks[0].command;
-      expect(command).toBe(`node ${emitScriptPath} ${event}`);
+      expect(command).toBe(`node "${emitScriptPath}" ${event}`);
     }
+  });
+
+  it("double-quotes the hook command's script path so a home dir with a space still runs", async () => {
+    // A space in the home directory is the real-world trigger: Claude Code
+    // runs the command hook through a shell, so an unquoted path word-splits
+    // and the SessionStart hook never fires (agentSessionId stays null).
+    const spacedRoot = path.join(tmpDir, "First Last", ".sapiom", "generated");
+    const { emitScriptPath } = await generateClaudeSettings({
+      harnessSessionId: "session-space",
+      generatedRoot: spacedRoot,
+    });
+    expect(emitScriptPath).toContain(" ");
+
+    const settings = JSON.parse(
+      await fs.readFile(path.join(spacedRoot, "session-space", "settings.json"), "utf8"),
+    );
+    const command = settings.hooks.SessionStart[0].hooks[0].command;
+    expect(command).toBe(`node "${emitScriptPath}" SessionStart`);
+    // Guard against a regression to the unquoted form that word-splits on the space.
+    expect(command).not.toBe(`node ${emitScriptPath} SessionStart`);
   });
 
   it("writes a self-contained CommonJS emit.cjs with no requires", async () => {

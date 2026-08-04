@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HarnessAdapter, HarnessKind, HarnessSession, SpawnSpec } from "../shared/types.js";
-import { SessionManager, type PtySpawnFn, type SessionManagerOptions } from "./session-manager.js";
+import {
+  SessionManager,
+  sanitizeExitTail,
+  type PtySpawnFn,
+  type SessionManagerOptions,
+} from "./session-manager.js";
 import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
@@ -244,6 +249,82 @@ describe("SessionManager", () => {
       expect(ok).toBe(false);
       // Still just the one write from before the pty exited — no trailing \r.
       expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("exit output capture (exitTail)", () => {
+    it("preserves the tail of output when a session exits abnormally (non-zero code)", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      spawns[0]?.emitData("\x1b[31merror\x1b[0m: unknown option '--plugin-dir'\n");
+      spawns[0]?.emitExit(1);
+      await manager.flush();
+
+      const exited = manager.get(session.id);
+      expect(exited?.status).toBe("exited");
+      expect(exited?.exitCode).toBe(1);
+      // The agent's own error line survives — with ANSI stripped — which is the
+      // whole point: a startup crash is no longer an opaque exit code.
+      expect(exited?.exitTail).toContain("error: unknown option '--plugin-dir'");
+      expect(exited?.exitTail).not.toContain("\x1b");
+    });
+
+    it("captures nothing for a clean exit (code 0)", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      spawns[0]?.emitData("all good, bye\n");
+      spawns[0]?.emitExit(0);
+      await manager.flush();
+
+      expect(manager.get(session.id)?.exitTail ?? null).toBeNull();
+    });
+
+    it("captures nothing when an abnormal exit produced no readable output", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      // Only cursor/clear control noise — nothing a human could read.
+      spawns[0]?.emitData("\x1b[2J\x1b[H");
+      spawns[0]?.emitExit(1);
+      await manager.flush();
+
+      expect(manager.get(session.id)?.exitTail ?? null).toBeNull();
+    });
+
+    it("captures nothing for a user-initiated kill, even when the pty reports a non-zero signal code", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+
+      spawns[0]?.emitData("some normal session output the user was looking at\n");
+      // kill() marks the handle; node-pty then reports 143 (128 + SIGTERM) on
+      // some platforms — a non-zero code, but NOT a crash to diagnose.
+      const killed = manager.kill(session.id);
+      spawns[0]?.emitExit(143);
+      await killed;
+      await manager.flush();
+
+      const exited = manager.get(session.id);
+      expect(exited?.exitCode).toBe(143);
+      expect(exited?.exitTail ?? null).toBeNull();
+    });
+  });
+
+  describe("sanitizeExitTail", () => {
+    it("strips ANSI and trailing control noise, keeping readable text", () => {
+      expect(sanitizeExitTail("\x1b[31mboom\x1b[0m\r\n")).toBe("boom");
+    });
+
+    it("returns null when nothing readable remains", () => {
+      expect(sanitizeExitTail("\x1b[2J\x1b[H")).toBeNull();
+      expect(sanitizeExitTail("")).toBeNull();
+    });
+
+    it("keeps only the final window of a large buffer", () => {
+      const out = sanitizeExitTail("x".repeat(10_000) + "TAIL_MARKER");
+      expect(out?.endsWith("TAIL_MARKER")).toBe(true);
+      expect((out ?? "").length).toBeLessThanOrEqual(4_096);
     });
   });
 
