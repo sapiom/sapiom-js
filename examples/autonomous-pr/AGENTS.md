@@ -4,11 +4,14 @@ This project defines exactly one Sapiom agent in `index.ts` —
 **autonomous-pr** — authored against `@sapiom/agent`. It fuses
 `dependency-upgrade`'s pattern (coding agent → sandbox re-attach → real
 checks → gate the push on green) with `pr-review-bot`'s pattern (a second
-model reading a diff to write a structured review) into one end-to-end
-"do the work" agent. Inside a step's `run`, Sapiom capabilities are pre-auth'd
-on `ctx.sapiom` (here: `ctx.sapiom.repositories.get` / `.create`,
-`ctx.sapiom.models.coding.launch`, `ctx.sapiom.sandboxes.attach` + `box.exec`,
-`repo.pushFromSandbox`, and `ctx.sapiom.models.run`).
+model reading a diff to write a structured review), and borrows
+`nl-db-query-endpoint`'s provision-or-reuse demo-database pattern (for the
+repo itself) plus `research-to-microsite`'s `deployPreview` (for a live look
+at the branch) into one end-to-end repo-lifecycle agent. Inside a step's
+`run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
+`ctx.sapiom.repositories.get` / `.create`, `ctx.sapiom.models.coding.launch`,
+`ctx.sapiom.sandboxes.attach` / `.create` + `box.exec` / `.writeFile` /
+`.deployPreview`, `repo.pushFromSandbox`, and `ctx.sapiom.models.run`).
 
 ## Authoring
 
@@ -28,16 +31,49 @@ on `ctx.sapiom` (here: `ctx.sapiom.repositories.get` / `.create`,
   the branch and calls `pushFromSandbox` itself — keeps the branch and the
   push exact and repeatable instead of depending on the agent's own git
   behavior.
+- **`verify` confirms the checkout's real directory before trusting it, and
+  every exec bakes that absolute path into the command instead of using
+  `exec`'s `cwd` option.** `gitRepository` is *documented* to clone into
+  `/workspace/<slug>`, but that's the platform's word, not a guarantee this
+  run kept — `verify` probes it (`test -d "<abs>/.git"`), falls back to a
+  bounded `find` if it doesn't hold, and routes to a diagnostic `rejected`
+  rather than running in the wrong directory. Once confirmed, every command
+  targets it explicitly (`git -C "<abs>" ...`, `cd "<abs>" && ...`) rather
+  than passing `{ cwd }` to `exec` — `cwd` there is relative to the sandbox's
+  `workspaceRoot`, which `sandboxes.attach` (with no coding-run context to
+  infer it from) defaults to `/`, so a bare `{ cwd: "/workspace/<slug>" }`
+  is not a reliable way to land in the checkout. `push` reuses the same
+  confirmed `checkoutCwd` the same way.
 - **Green gates the push.** `verify` routes to `rejected` on a failed coding
   run, a failed install, or a non-zero check exit — a push only happens after
   a green check. Don't remove that gate.
-- **The seed only applies to the scratch repo.** `SEED_PREAMBLE` (and its
-  constants) are prepended to the task **only** when `plan` self-provisioned
-  the repo (no `repoSlug` given) — a real `repoSlug` a user supplies has its
-  own conventions already; never seed over them.
+- **The demo repo is provisioned once, then reused.** `plan` reads `repoSlug`
+  through `resolveResourceHandle` (fallback `""`, key `repoSlug`) — the same
+  seam `nl-db-query-endpoint` uses for its demo database. Empty ⇒ open (or,
+  the first time, provision) the persistent `DEFAULT_REPO_HANDLE`; a
+  caller-named handle that 404s is rejected, never silently reprovisioned.
+  `justProvisioned` (set only on the run that actually called
+  `repositories.create`) gates the seed in `implement` — every later run
+  against the reused repo skips it.
+- **The seed only applies on that first, provisioning run.** `SEED_PREAMBLE`
+  (and its constants, in `seed.ts`) is prepended to the task only when
+  `justProvisioned` is true — a real `repoSlug` a user supplies, or a demo
+  repo a prior run already seeded, has its own conventions already; never
+  seed over them.
+- **The preview server is deterministic, not agent-authored.** `push` writes
+  `PREVIEW_SERVER_FILE` (`PREVIEW_SERVER_SOURCE`) into the checkout itself,
+  right before the branch is pushed, so `preview` always has something real
+  to deploy from that branch regardless of what the coding agent touched. It
+  reads `examples/<id>/template.json` files live, at request time, from
+  whatever the checkout actually contains.
+- **A failed preview never fails the run.** `preview` degrades honestly
+  (`previewStatus`, `previewUrl: null`) on any deploy failure or thrown error
+  — the branch is already pushed by the time `preview` runs, so a preview
+  outage is a lesser story than a failed run over a bonus feature.
 - **No `prUrl`.** This platform's git host has no hosted pull-request object
   yet — never fabricate one. The pushed branch (`branch`, `sha`, `cloneUrl`)
-  is the honest artifact; `summary` sets `prUrl: null` on purpose.
+  plus its preview (`previewUrl`) is the honest artifact; `summary` sets
+  `prUrl: null` on purpose.
 
 ## Validating
 
@@ -50,12 +86,13 @@ run it after every small edit.
 - **check** — typecheck + bundle + manifest + step-graph validation (including
   the static `pause` annotation). The full local pre-flight before deploy.
 - **run_local** — runs your **real** step code against **stub capabilities**.
-  Pass `{}`: `repositories.create`/`get` and the coding launch are stubbed and
-  its pause auto-resumes, `sandboxes.exec` returns a clean exit, and `push`
-  "succeeds" against a stub repo — so the full graph traces offline, free,
-  with no real repo or coding agent.
+  Pass `{}`: `repositories.create`/`get`, the coding launch, and
+  `deployPreview` are all stubbed and its pause auto-resumes, `sandboxes.exec`
+  returns a clean exit, and `push` "succeeds" against a stub repo — so the
+  full graph traces offline, free, with no real repo or coding agent.
 - **deploy**, then **run** — ship it, then perform a real implement + check +
-  push against whichever repo you gave it (or the scratch one it provisions).
+  push + preview against whichever repo you gave it (or the persistent demo
+  repo it opens).
 
 > Write each step the way it should run in production. `run_local` adapts to
 > your code (stub capabilities), not the other way around — never weaken or

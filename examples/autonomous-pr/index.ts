@@ -3,6 +3,7 @@ import {
   defineStep,
   goto,
   pauseUntilSignal,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -12,42 +13,58 @@ import { SEED_PREAMBLE } from "./seed.js";
 
 /**
  * autonomous-pr — point it at a repo; a coding agent picks up a task, writes
- * the code, runs your checks, and pushes a branch carrying its own self-review.
+ * the code, runs your checks, deploys a live preview of the branch, and
+ * pushes it carrying its own self-review.
  *
  * Fuses `dependency-upgrade` (coding agent → sandbox re-attach → real checks →
  * gate the push on green) with `pr-review-bot` (a second model reading a diff
- * to write a structured review) into one end-to-end "do the work" agent rather
- * than a narrow bump or a read-only review.
+ * to write a structured review), and borrows the demo-database's
+ * provision-or-reuse pattern (`nl-db-query-endpoint`) for the repo itself
+ * plus `research-to-microsite`'s `deployPreview` for a live look at the
+ * branch, into one end-to-end repo-lifecycle agent rather than a narrow bump
+ * or a read-only review.
  *
- *   plan ─▶ implement ──(pause: models.coding.result → verify)──▶ verify ─┬─▶ push ─▶ review ─▶ summary
+ *   plan ─▶ implement ──(pause: models.coding.result → verify)──▶ verify ─┬─▶ push ─▶ preview ─▶ review ─▶ summary
  *                                                                          └─▶ rejected
  *
- *   - plan       resolves the repo. Given `repoSlug`, it must already exist —
- *                a repository is a RESOURCE. Given none, it self-provisions a
- *                small scratch repo so a zero-input run still has something
- *                real to work in (never a plausible-looking name; an actually
- *                created one).
+ *   - plan       resolves the repo through the SAME injection seam the demo
+ *                database uses (`resolveResourceHandle`, key `repoSlug`). A
+ *                named repo must already exist. With none named, it opens
+ *                (or provisions, the first time) a PERSISTENT demo repo
+ *                (`autonomous-pr-demo`) — reused across runs, never
+ *                recreated, exactly like `nl-db-query-endpoint`'s demo
+ *                database.
  *   - implement  launches a coding agent (`models.coding`) on the repo, then
- *                SUSPENDS at $0 until it finishes — coding runs are long. On
- *                the scratch repo it first seeds a tiny `AUTHORING.md` and two
- *                minimal examples (the repo is empty, so this is the same
- *                agent turn as the task itself, not a second billed run), then
- *                does the task: add one more example that follows it. The
+ *                SUSPENDS at $0 until it finishes — coding runs are long.
+ *                Only the run that actually provisions the demo repo (its
+ *                first use) also seeds a tiny `AUTHORING.md` and two minimal
+ *                examples first, in the SAME agent turn as the task, not a
+ *                second billed run; every later run against that same repo
+ *                just does the task against what is already there. The
  *                agent only edits files — it is never asked to run git.
- *   - verify     re-attaches that sandbox and runs the repo's own install +
- *                check commands over the agent's (still uncommitted) changes.
- *                A failed coding run or a red check routes to `rejected`;
- *                nothing is branched or pushed.
- *   - push       creates a fresh branch and pushes the agent's changes to it
- *                (`repositories.pushFromSandbox`, which commits whatever is
- *                pending and pushes) — the platform's git host has no hosted
- *                pull-request object yet, so the pushed branch is what you
- *                review.
+ *   - verify     re-attaches that sandbox, confirms the checkout's real
+ *                directory, and runs the repo's own install + check commands
+ *                over the agent's (still uncommitted) changes. A failed
+ *                coding run or a red check routes to `rejected`; nothing is
+ *                branched, previewed, or pushed.
+ *   - push       creates a fresh branch, adds a tiny static gallery server
+ *                (deterministic, not agent-authored) so the branch is
+ *                something `deployPreview` can actually serve, and pushes it
+ *                all (`repositories.pushFromSandbox`, which commits whatever
+ *                is pending and pushes) — the platform's git host has no
+ *                hosted pull-request object yet, so the pushed branch is
+ *                what you review.
+ *   - preview    deploys that branch to a live preview URL
+ *                (`sandboxes.deployPreview`, `source: { kind: "git" }`) so a
+ *                reviewer can look at the actual result, not just a diff. A
+ *                failed deploy degrades honestly (`previewStatus`,
+ *                `previewUrl: null`) rather than failing an otherwise green,
+ *                already-pushed run.
  *   - review     a second model (`models.run`) reads the diff and the coding
  *                agent's own notes and writes a short self-review: a verdict,
  *                a summary, and what it would flag.
- *   - summary    returns everything: the repo, the branch, the sha, and the
- *                self-review.
+ *   - summary    returns everything: the repo, the branch, the sha, the
+ *                preview URL, and the self-review.
  *   - rejected   no repo, a failed coding run, or a red check — archived only
  *                in the run's own output; nothing is branched or pushed.
  *
@@ -61,21 +78,127 @@ const DEFAULT_TASK =
   "runnable code plus its manifest. Keep the change small, self-contained, " +
   "and covered by the repo's own checks.";
 
-// The scratch repo self-provisioned on a zero-input run starts out empty, so
-// "add a new example following this repo's conventions" is meaningless until
+/**
+ * The persistent handle a zero-input run opens (or provisions, once). Naming
+ * a plausible-looking handle here would be exactly the mistake AUTHORING.md
+ * warns against for a `repoSlug` default; this one is different because this
+ * run actually provisions it when it is missing, the same contract
+ * `nl-db-query-endpoint`'s `DEFAULT_DB_HANDLE` keeps for its demo database.
+ */
+const DEFAULT_REPO_HANDLE = "autonomous-pr-demo";
+
+// The demo repo starts out empty THE FIRST TIME it is provisioned, so "add a
+// new example following this repo's conventions" is meaningless until
 // something establishes those conventions. `SEED_PREAMBLE` (imported above,
 // from `./seed.ts`) is handed to the SAME coding-agent run as exact file
 // content to write before the real task — a tiny, self-contained slice of a
-// real examples repo, not a copy of this one. It lives in its own module
-// because its literal text contains `entry:` / `defineAgent` / `defineStep` —
-// tokens a static scan of this file (`examples-entry-schema-check`) looks for
-// to find *this* template's own entry step; left inline, it would find the
-// seeded example's instead. Never applied to a `repoSlug` the caller
-// supplied — a real repo's conventions are whatever it already has.
+// real examples repo, not a copy of this one — but only on the run that
+// actually provisions it (`justProvisioned`); every later run against that
+// same reused repo finds the seed already there and just does the task. It
+// lives in its own module because its literal text contains `entry:` /
+// `defineAgent` / `defineStep` — tokens a static scan of this file
+// (`examples-entry-schema-check`) looks for to find *this* template's own
+// entry step; left inline, it would find the seeded example's instead.
+// Never applied to a `repoSlug` the caller supplied — a real repo's
+// conventions are whatever it already has.
+
+/**
+ * A tiny, dependency-free static server, deterministic (not agent-authored)
+ * so `preview` always has something real to deploy regardless of what the
+ * coding agent did. Written into the checkout in `push`, right before the
+ * branch is pushed, so it travels with every push. At request time it reads
+ * whatever `template.json` files exist under `examples/<id>/` in the checkout
+ * and renders a plain gallery listing — reads live, on every request, so the
+ * preview is always the branch's actual current content, never a snapshot
+ * baked in ahead of time. An unrelated repo with no `examples/` directory
+ * still serves cleanly; it just lists zero examples.
+ */
+const PREVIEW_SERVER_FILE = "sapiom-preview-server.mjs";
+const PREVIEW_PORT = 3000;
+const PREVIEW_SANDBOX_TTL = "1h";
+// Client-side bound on the preview deploy, kept under this step's own
+// `timeoutMs`. A git-source deploy waits for the branch's server to answer, so
+// bounding it ourselves guarantees a slow or unresponsive deploy becomes a
+// caught error the `catch` below degrades honestly — keeping "the preview is a
+// bonus; a failed one never fails an already-pushed run" true for a deploy
+// that never comes up, not just one that throws.
+const PREVIEW_DEPLOY_TIMEOUT_MS = 240_000;
+const PREVIEW_SERVER_SOURCE = `import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+const EXAMPLES_DIR = path.join(process.cwd(), "examples");
+
+function listExamples() {
+  if (!fs.existsSync(EXAMPLES_DIR)) return [];
+  return fs
+    .readdirSync(EXAMPLES_DIR, { withFileTypes: true })
+    .filter(function (entry) {
+      return entry.isDirectory();
+    })
+    .map(function (entry) {
+      var whatItDoes = "";
+      try {
+        var manifestPath = path.join(EXAMPLES_DIR, entry.name, "template.json");
+        var raw = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        if (typeof raw.whatItDoes === "string") whatItDoes = raw.whatItDoes;
+      } catch (err) {
+        // No manifest yet (or it does not parse). List the directory anyway.
+      }
+      return { id: entry.name, whatItDoes: whatItDoes };
+    })
+    .sort(function (a, b) {
+      return a.id.localeCompare(b.id);
+    });
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function render(examples) {
+  var items = examples
+    .map(function (example) {
+      var label = "<strong>" + escapeHtml(example.id) + "</strong>";
+      var detail = example.whatItDoes
+        ? " - " + escapeHtml(example.whatItDoes)
+        : "";
+      return "<li>" + label + detail + "</li>";
+    })
+    .join("\\n");
+  return (
+    "<!doctype html><html><head><meta charset=\\"utf-8\\">" +
+    "<title>Examples gallery</title></head><body>" +
+    "<h1>Examples gallery</h1>" +
+    "<p>" + examples.length + " example(s) in this repo.</p>" +
+    "<ul>" + items + "</ul>" +
+    "</body></html>"
+  );
+}
+
+http
+  .createServer(function (req, res) {
+    var examples = listExamples();
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(render(examples));
+  })
+  .listen(PORT, function () {
+    console.log("gallery preview listening on " + PORT);
+  });
+`;
 
 // ──────────────────────────────────────────────────────────────── input ──
 interface AutonomousPrInput {
-  /** In-network repo the coding agent works in. Absent ⇒ self-provisions a scratch repo. */
+  /**
+   * In-network repo the coding agent works in. Absent ⇒ opens (or provisions,
+   * the first time) the persistent demo repo instead — read through
+   * `resolveResourceHandle`, the same seam `nl-db-query-endpoint` uses for its
+   * demo database.
+   */
   repoSlug?: string;
   /** Plain-words task for the coding agent (default: add an example following AUTHORING.md). */
   task?: string;
@@ -85,7 +208,7 @@ interface AutonomousPrInput {
   checkCommand?: string;
 }
 
-type Mode = "byo" | "self-provisioned";
+type Mode = "byo" | "demo";
 
 interface Review {
   verdict: "approve" | "comment" | "request_changes";
@@ -96,6 +219,8 @@ interface Review {
 /** Run-scoped state; the values before the pause survive the suspend. */
 interface Shared extends Record<string, unknown> {
   mode: Mode;
+  /** True only for the run that actually called `repositories.create` — gates the seed. */
+  justProvisioned: boolean;
   repoSlug: string;
   cloneUrl: string;
   task: string;
@@ -111,6 +236,9 @@ interface Shared extends Record<string, unknown> {
   pushed: boolean;
   pushSha: string | null;
   pushBranch: string | null;
+  previewUrl: string | null;
+  previewStatus: string | null;
+  previewLogs: string | null;
   review: Review | null;
 }
 
@@ -129,7 +257,7 @@ const entryInput = z.object({
     .string()
     .optional()
     .describe(
-      "In-network repo the coding agent works in. Absent ⇒ self-provisions a scratch repo.",
+      "In-network repo the coding agent works in. Absent ⇒ opens (or provisions, the first time) the persistent demo repo.",
     ),
   task: z
     .string()
@@ -165,24 +293,42 @@ const plan = defineStep({
     ctx.shared.set("pushed", false);
     ctx.shared.set("pushSha", null);
     ctx.shared.set("pushBranch", null);
+    ctx.shared.set("previewUrl", null);
+    ctx.shared.set("previewStatus", null);
+    ctx.shared.set("previewLogs", null);
     ctx.shared.set("review", null);
 
-    const requestedSlug = (input?.repoSlug ?? "").trim();
+    // Read the target handle through the canonical injection seam so a
+    // deploy-time reuse picker can repoint this at a repo you already own —
+    // same seam, same fallback discipline as `nl-db-query-endpoint`'s
+    // `dbHandle`. The fallback is `""`, not `DEFAULT_REPO_HANDLE`: "no handle
+    // named" is what selects the persistent demo repo below, and a
+    // caller-named handle that 404s is rejected rather than silently
+    // reprovisioned under a name they didn't ask for.
+    const requestedSlug = resolveResourceHandle(input ?? {}, {
+      fallback: "",
+      key: "repoSlug",
+    });
+    const usingDemoRepo = !requestedSlug;
+    const targetSlug = usingDemoRepo ? DEFAULT_REPO_HANDLE : requestedSlug;
 
-    if (requestedSlug) {
-      // A repository is a RESOURCE: it has to exist. There is deliberately no
-      // default slug — naming a plausible one (`my-app`) turns a clean
-      // rejection into a 404 mid-run.
-      try {
-        const repo = await ctx.sapiom.repositories.get(requestedSlug);
-        ctx.shared.set("mode", "byo");
-        ctx.shared.set("repoSlug", repo.slug);
-        ctx.shared.set("cloneUrl", repo.cloneUrl);
-        ctx.logger.info("planning autonomous PR against an existing repo", {
-          repoSlug: repo.slug,
-        });
-        return goto("implement", {});
-      } catch (err) {
+    try {
+      const repo = await ctx.sapiom.repositories.get(targetSlug);
+      ctx.shared.set("mode", usingDemoRepo ? "demo" : "byo");
+      ctx.shared.set("justProvisioned", false);
+      ctx.shared.set("repoSlug", repo.slug);
+      ctx.shared.set("cloneUrl", repo.cloneUrl);
+      ctx.logger.info("opened an existing repo", {
+        repoSlug: repo.slug,
+        reused: usingDemoRepo,
+      });
+      return goto("implement", {});
+    } catch (err) {
+      if (!usingDemoRepo) {
+        // A repository is a RESOURCE: a caller-named one has to exist. There
+        // is deliberately no default slug — naming a plausible one (`my-app`)
+        // turns a clean rejection into a 404 mid-run, and a handle you did
+        // name is never silently reprovisioned under you.
         return goto("rejected", {
           reason: "repo-not-found",
           detail:
@@ -191,27 +337,27 @@ const plan = defineStep({
           unmet: ["repoSlug"],
         });
       }
-    }
-
-    // No repo named: self-provision a small scratch repo so a zero-input run
-    // still has something real to work in.
-    const demoSlug = `autonomous-pr-demo-${slugify(ctx.executionId)}`;
-    try {
-      const repo = await ctx.sapiom.repositories.create(demoSlug);
-      ctx.shared.set("mode", "self-provisioned");
-      ctx.shared.set("repoSlug", repo.slug);
-      ctx.shared.set("cloneUrl", repo.cloneUrl);
-      ctx.logger.info("provisioned a scratch demo repo", {
-        repoSlug: repo.slug,
+      // A resource-shaped need PROVISIONS rather than rejects — the demo repo
+      // just doesn't exist yet (its first use). Every later run finds it via
+      // `repositories.get` above and reuses it; nothing here recreates it.
+      ctx.logger.info("provisioning the persistent demo repo", {
+        repoSlug: targetSlug,
       });
-      return goto("implement", {});
-    } catch (err) {
-      return goto("rejected", {
-        reason: "provision-failed",
-        detail:
-          "Could not provision a scratch demo repository, so there was " +
-          `nothing to work in (${String(err)}).`,
-      });
+      try {
+        const repo = await ctx.sapiom.repositories.create(targetSlug);
+        ctx.shared.set("mode", "demo");
+        ctx.shared.set("justProvisioned", true);
+        ctx.shared.set("repoSlug", repo.slug);
+        ctx.shared.set("cloneUrl", repo.cloneUrl);
+        return goto("implement", {});
+      } catch (createErr) {
+        return goto("rejected", {
+          reason: "provision-failed",
+          detail:
+            "Could not provision the persistent demo repository, so there " +
+            `was nothing to work in (${String(createErr)}).`,
+        });
+      }
     }
   },
 });
@@ -227,14 +373,15 @@ const implement = defineStep({
   pause: { signal: CODING_RESULT_SIGNAL, resumeStep: "verify" },
   async run(_input: unknown, ctx: Ctx) {
     const repoSlug = ctx.shared.get("repoSlug") ?? "";
-    const mode = ctx.shared.get("mode") ?? "byo";
+    const justProvisioned = ctx.shared.get("justProvisioned") === true;
     const task = ctx.shared.get("task") ?? DEFAULT_TASK;
     const repo = await ctx.sapiom.repositories.get(repoSlug);
 
-    const fullTask =
-      (mode === "self-provisioned" ? SEED_PREAMBLE : "") + `Task: ${task}`;
+    // Seed only the run that just provisioned the demo repo — every later
+    // run against that same, reused repo finds the seed already there.
+    const fullTask = (justProvisioned ? SEED_PREAMBLE : "") + `Task: ${task}`;
 
-    ctx.logger.info("launching coding agent", { repoSlug, mode });
+    ctx.logger.info("launching coding agent", { repoSlug, justProvisioned });
     const handle = await ctx.sapiom.models.coding.launch({
       task: fullTask,
       gitRepository: repo,
@@ -298,9 +445,14 @@ const verify = defineStep({
 
     // Capture what changed, for the self-review — uncommitted, so a plain
     // `diff --stat` (no ref range) is exactly the agent's working-tree edits.
+    // `git -C <abs>` (not the `cwd` exec option) targets the checkout: `exec`'s
+    // `cwd` is relative to the sandbox's `workspaceRoot`, and `sandboxes.attach`
+    // has no way to know a coding run's checkout root, so it defaults that to
+    // `/` — a bare `{ cwd }` here would silently run against the sandbox's
+    // filesystem root instead of the checkout. Baking the confirmed absolute
+    // path straight into the command sidesteps that mismatch entirely.
     try {
-      const diff = await box.exec("git --no-pager diff --stat", {
-        cwd,
+      const diff = await box.exec(`git -C "${cwd}" --no-pager diff --stat`, {
         timeout: 30_000,
       });
       ctx.shared.set(
@@ -311,7 +463,9 @@ const verify = defineStep({
       ctx.shared.set("diffStat", `diff unavailable: ${String(err)}`);
     }
 
-    const install = await box.exec(installCommand, { cwd, timeout: 300_000 });
+    const install = await box.exec(`cd "${cwd}" && ${installCommand}`, {
+      timeout: 300_000,
+    });
     if (install.exitCode !== 0) {
       const installTail = tail(install.stdout, install.stderr);
       ctx.shared.set("checkTail", installTail);
@@ -331,7 +485,9 @@ const verify = defineStep({
       });
     }
 
-    const check = await box.exec(checkCommand, { cwd, timeout: 300_000 });
+    const check = await box.exec(`cd "${cwd}" && ${checkCommand}`, {
+      timeout: 300_000,
+    });
     ctx.shared.set("checkTail", tail(check.stdout, check.stderr));
     if (check.exitCode !== 0) {
       return goto("rejected", {
@@ -346,14 +502,16 @@ const verify = defineStep({
 });
 
 /**
- * Create a fresh branch ourselves (the agent never ran git) and push the
- * agent's changes to it. `pushFromSandbox` commits whatever is pending and
- * pushes the currently checked-out branch — the reviewable unit, since this
- * git host has no hosted pull-request object yet.
+ * Create a fresh branch ourselves (the agent never ran git), add the
+ * deterministic preview server so `preview` has something real to deploy
+ * from this branch, and push the agent's changes (plus that one file) to it.
+ * `pushFromSandbox` commits whatever is pending and pushes the currently
+ * checked-out branch — the reviewable unit, since this git host has no
+ * hosted pull-request object yet.
  */
 const push = defineStep({
   name: "push",
-  next: ["review"],
+  next: ["preview"],
   async run(_input: unknown, ctx: Ctx) {
     const sandboxName = ctx.shared.get("sandboxName") ?? "";
     const repoSlug = ctx.shared.get("repoSlug") ?? "";
@@ -364,11 +522,45 @@ const push = defineStep({
     // `verify` already found and confirmed the checkout's real directory —
     // reuse it rather than re-assume `/workspace/<slug>`, so the branch this
     // creates is the SAME checkout `verify` just ran the checks against.
+    // `git -C <abs>`, not the `cwd` exec option — see the note in `verify`.
     const cwd = ctx.shared.get("checkoutCwd") ?? `/workspace/${repoSlug}`;
-    await box.exec(`git checkout -b ${branchName}`, {
-      cwd,
+    await box.exec(`git -C "${cwd}" checkout -b ${branchName}`, {
       timeout: 30_000,
     });
+
+    // Deterministic, not agent-authored: written here so `preview` always has
+    // something real to serve from this branch, regardless of what the task
+    // touched. Written through `exec` with the confirmed ABSOLUTE checkout
+    // path — NOT `box.writeFile`, whose paths resolve against the sandbox's
+    // `workspaceRoot` (which `sandboxes.attach` roots away from this checkout),
+    // so `writeFile("${cwd}/…")` silently lands the file OUTSIDE the tree
+    // `pushFromSandbox` commits — the exact inverse of the `exec`-cwd trap
+    // `verify` documents. base64-pipe so the source survives shell quoting
+    // intact, then stage it explicitly.
+    const previewServerB64 = Buffer.from(PREVIEW_SERVER_SOURCE, "utf8").toString(
+      "base64",
+    );
+    await box.exec(
+      `printf %s '${previewServerB64}' | base64 -d > "${cwd}/${PREVIEW_SERVER_FILE}"`,
+      { timeout: 30_000 },
+    );
+    await box.exec(`git -C "${cwd}" add "${PREVIEW_SERVER_FILE}"`, {
+      timeout: 30_000,
+    });
+
+    // Keep installed dependencies out of the reviewed branch. `verify` ran the
+    // repo's install, so `node_modules/` now exists in the checkout, and
+    // `pushFromSandbox` stages pending files wholesale — without this the
+    // pushed branch is thousands of dependency files, not the change under
+    // review. Ensure `.gitignore` excludes it (idempotent), and drop it from
+    // the index if a prior reused run already tracked it. `cd "<abs>"` in the
+    // command targets the real checkout, same discipline as `verify`'s install.
+    await box.exec(
+      `cd "${cwd}" && (grep -qxF 'node_modules/' .gitignore 2>/dev/null || ` +
+        `printf 'node_modules/\\npackage-lock.json\\n' >> .gitignore) && ` +
+        `git add .gitignore && (git rm -r --cached --quiet node_modules 2>/dev/null || true)`,
+      { timeout: 60_000 },
+    );
 
     const repo = await ctx.sapiom.repositories.get(repoSlug);
     const message = truncate(`feat: ${task}`, 72);
@@ -387,6 +579,79 @@ const push = defineStep({
       branch: result.branch ?? branchName,
       sha: result.sha,
     });
+    return goto("preview", {});
+  },
+});
+
+/**
+ * Deploy a live preview of the pushed branch (`sandboxes.deployPreview`,
+ * `source: { kind: "git" }` — the server clones the branch itself, no local
+ * upload needed) so a reviewer can look at the actual result, not just a
+ * diff. Best-effort: a failed or unreachable deploy degrades honestly
+ * (`previewStatus`, `previewUrl: null`) rather than failing an otherwise
+ * green, already-pushed run — the pushed branch is the artifact that
+ * matters; the preview is a bonus look at it.
+ */
+const preview = defineStep({
+  name: "preview",
+  next: ["review"],
+  timeoutMs: 300_000,
+  async run(_input: unknown, ctx: Ctx) {
+    const repoSlug = ctx.shared.get("repoSlug") ?? "";
+    const branchName =
+      ctx.shared.get("pushBranch") ?? ctx.shared.get("branchName") ?? "main";
+    const hostName = `autonomous-pr-preview-${slugify(ctx.executionId)}`;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const host = await ctx.sapiom.sandboxes.create({
+        name: hostName,
+        port: PREVIEW_PORT,
+        ttl: PREVIEW_SANDBOX_TTL,
+      });
+      // Race the deploy against our own timer (see `PREVIEW_DEPLOY_TIMEOUT_MS`)
+      // so a deploy that never binds the port becomes a caught error the
+      // `catch` degrades, not a hang that stalls the whole run.
+      const deploy = await Promise.race([
+        host.deployPreview({
+          source: { kind: "git", repo: repoSlug, ref: branchName },
+          start: `node ${PREVIEW_SERVER_FILE}`,
+          port: PREVIEW_PORT,
+          env: { PORT: String(PREVIEW_PORT) },
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "preview deploy did not return within the preview budget",
+                ),
+              ),
+            PREVIEW_DEPLOY_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      ctx.shared.set("previewUrl", deploy.url);
+      ctx.shared.set("previewStatus", deploy.status);
+      ctx.shared.set("previewLogs", tail(deploy.logs, ""));
+      if (deploy.status === "failed" || !deploy.url) {
+        ctx.logger.warn("preview deploy did not come up", {
+          status: deploy.status,
+        });
+      } else {
+        ctx.logger.info("preview deployed", { url: deploy.url });
+      }
+    } catch (err) {
+      // Never fail the run over the preview — the branch is already pushed.
+      ctx.shared.set("previewUrl", null);
+      ctx.shared.set("previewStatus", "failed");
+      ctx.shared.set("previewLogs", String(err));
+      ctx.logger.warn("preview deploy did not complete", { err: String(err) });
+    } finally {
+      // Clear the timer whether the deploy resolved, threw, or timed out — a
+      // pending timer would otherwise reject later, unobserved.
+      if (timer) clearTimeout(timer);
+    }
     return goto("review", {});
   },
 });
@@ -443,14 +708,16 @@ const summary = defineStep({
       pushed: ctx.shared.get("pushed") === true,
       // No hosted pull-request object exists yet — never fabricate one.
       prUrl: null,
+      previewUrl: ctx.shared.get("previewUrl") ?? null,
+      previewStatus: ctx.shared.get("previewStatus") ?? null,
       task: ctx.shared.get("task") ?? DEFAULT_TASK,
       codingSummary: ctx.shared.get("codingSummary") ?? null,
       review: ctx.shared.get("review"),
       note:
-        (mode === "self-provisioned"
-          ? "Ran against a scratch demo repo Sapiom just provisioned for this " +
-            "run — set `repoSlug` to your own in-network repo to work on " +
-            "something real. "
+        (mode === "demo"
+          ? "Ran against Sapiom's persistent demo repo for this template " +
+            "(reused across runs) — set `repoSlug` to your own in-network " +
+            "repo to work on something real. "
           : "") +
         "This git host has no hosted pull-request object yet, so the pushed " +
         "branch above is what you review — there is no `prUrl` to open.",
@@ -504,13 +771,18 @@ function truncate(value: string, max: number): string {
  * Resolve the sandbox directory the coding run's checkout actually lives in,
  * instead of trusting that `gitRepository` cloned to exactly
  * `/workspace/<slug>`. That path is `models.coding`'s documented convention,
- * not a contract this run necessarily kept, so it's verified — a `test -d
- * .git` at the candidate — before anything is `exec`'d there. If it doesn't
- * hold, falls back to locating the checkout by its `.git` directory anywhere
- * in the sandbox, then re-verifies that candidate too. Returns `{ cwd: null,
- * probe }` (never a guess) when nothing can be confirmed, so the caller can
- * route to a clear, diagnosable rejection instead of running commands in the
- * wrong directory.
+ * not a contract this run necessarily kept, so it's verified — `test -d
+ * "<abs>/.git"` at the candidate — before anything is `exec`'d there. Every
+ * probe below bakes the absolute path directly into the command rather than
+ * passing `exec`'s `cwd` option: `cwd` is relative to the sandbox's
+ * `workspaceRoot`, which `sandboxes.attach` (no coding-run context to infer
+ * it from) defaults to `/` — so a bare `{ cwd: "/workspace/<slug>" }` here
+ * would NOT reliably land in the checkout the way an absolute path in the
+ * command itself does. If the documented path doesn't hold, falls back to
+ * locating the checkout by its `.git` directory anywhere in the sandbox, then
+ * re-verifies that candidate too. Returns `{ cwd: null, probe }` (never a
+ * guess) when nothing can be confirmed, so the caller can route to a clear,
+ * diagnosable rejection instead of running commands in the wrong directory.
  */
 async function resolveCheckoutCwd(
   box: ReturnType<Ctx["sapiom"]["sandboxes"]["attach"]>,
@@ -521,7 +793,7 @@ async function resolveCheckoutCwd(
 
   const hasGit = async (cwd: string): Promise<boolean> => {
     try {
-      const res = await box.exec("test -d .git", { cwd, timeout: 15_000 });
+      const res = await box.exec(`test -d "${cwd}/.git"`, { timeout: 15_000 });
       return res.exitCode === 0;
     } catch (err) {
       probeLines.push(`checking \`${cwd}\` threw: ${String(err)}`);
@@ -536,11 +808,12 @@ async function resolveCheckoutCwd(
   probeLines.push(`\`${candidate}\` has no checkout (no .git)`);
 
   // Fall back: locate any `.git` directory in the sandbox and prefer one
-  // whose parent directory name matches the repo slug.
+  // whose parent directory name matches the repo slug. Already an absolute
+  // search from `/` — no `cwd` option needed here either.
   try {
     const find = await box.exec(
       "find / -maxdepth 6 -type d -name .git -not -path '*/node_modules/*' 2>/dev/null",
-      { cwd: "/", timeout: 20_000 },
+      { timeout: 20_000 },
     );
     const gitDirs = find.stdout
       .split("\n")
@@ -615,5 +888,5 @@ function parseReview(output: string | null): Review {
 export const agent = defineAgent<AutonomousPrInput, Shared>({
   name: "autonomous-pr",
   entry: "plan",
-  steps: { plan, implement, verify, push, review, summary, rejected },
+  steps: { plan, implement, verify, push, preview, review, summary, rejected },
 });

@@ -5,19 +5,19 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "whatItDoes": "Implements a task in a coding sandbox, runs the repo's own checks, and pushes a branch with a self-reviewed diff. Give it a repo to work in, or give it nothing and it provisions its own scratch repo and adds one example to prove the flow end to end.",
-  "longDescription": "Point this at a repo and describe the work, and a coding agent clones it into a sandbox and makes the change. It never runs git itself; it only edits files, so the platform commits and pushes exactly what it wrote. Give it nothing and it provisions its own scratch repo first, seeds a tiny `AUTHORING.md` plus two minimal examples, and adds one more in the same shape this SDK's own examples gallery uses.\n\nOnce the agent finishes, the run reattaches that same sandbox, installs, and runs your check command (`npm run typecheck` by default). A red result stops here; nothing is branched or pushed. A green result gets its own branch and a push (`repositories.pushFromSandbox`), then a second model reads the diff and the coding agent's own notes and writes a short self-review with a verdict, a summary, and what it would flag. Sapiom's git host doesn't expose a hosted pull-request object yet, so the pushed branch itself is what you review.",
+  "whatItDoes": "Implement a task in a coding sandbox, run the repo's own checks, deploy a live preview of the branch, and push it with a self-reviewed diff. Give it a repo and it works there. Give it nothing and it opens Sapiom's persistent demo repo and adds one more example to it, the same repo every run reuses.",
+  "longDescription": "Point this at a repo and describe the work, and a coding agent clones it into a sandbox and makes the change. It never runs git itself. It only edits files, so the platform commits and pushes exactly what it wrote. Give it nothing and it opens a persistent demo repo instead, the same one every zero-input run reuses. The first time that repo is opened, the run also seeds a tiny `AUTHORING.md` plus two minimal examples, in the same coding turn as the task itself. Every later run against that same repo finds the seed already there and just does the task, so the repo's example gallery grows a little with each run.\n\nOnce the agent finishes, the run reattaches that same sandbox, installs, and runs your check command (`npm run typecheck` by default). A red result stops here. Nothing is branched, previewed, or pushed. A green result gets its own branch, a tiny static gallery server added alongside the agent's own changes, and a push (`repositories.pushFromSandbox`). The run then deploys a live preview of that branch so you can look at the actual result, not just a diff. A second model reads the diff and the coding agent's own notes and writes a short self-review with a verdict, a summary, and what it would flag. Sapiom's git host doesn't expose a hosted pull-request object yet, so the pushed branch itself, plus its preview, is what you review.",
   "useCases": [
     "Ship a scoped change end to end",
-    "Bootstrap a scratch repo demo",
-    "Green checks gate every push"
+    "Reuse one persistent demo repo",
+    "Preview the branch before merge"
   ],
-  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nLeave `repoSlug` empty to see the whole thing end to end. Sapiom provisions its own scratch repo, seeds it with a tiny examples contract, and the agent adds one more example to it. Nothing you own is touched. Set `repoSlug` to an in-network repo you already have to put it to real work, and set `task` to describe what you want built. `installCommand` / `checkCommand` default to `npm install` / `npm run typecheck`.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow. Every capability is stubbed, so the push always looks green. Or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nLeave `repoSlug` empty to see the whole thing end to end. Sapiom opens (or the first time, provisions) its own persistent demo repo, the same one every such run reuses, seeds it with a tiny examples contract on its first use, and the agent adds one more example to it. Nothing you own is touched. Set `repoSlug` to an in-network repo you already have to put it to real work, and set `task` to describe what you want built. `installCommand` / `checkCommand` default to `npm install` / `npm run typecheck`.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole flow. Every capability is stubbed, so the push and the preview always look green. Or edit and deploy it with the Sapiom MCP.",
   "settings": [
     {
       "path": "repoSlug",
       "label": "Repository to work in",
-      "description": "An in-network repo the coding agent works in. Leave it empty and a scratch repo is provisioned for this run instead.",
+      "description": "An in-network repo the coding agent works in. Leave it empty and Sapiom's persistent demo repo is opened (or provisioned, the first time) instead.",
       "type": "string",
       "default": "",
       "example": "your-repo-slug"
@@ -51,30 +51,32 @@
     {
       "kind": "repository",
       "handle": "autonomous-pr-demo",
-      "ephemeral": true
+      "ephemeral": false
     }
   ],
   "defaultInput": {},
   "examples": [
     {
-      "title": "No repository given — provisions its own scratch repo",
+      "title": "No repository given, opens the persistent demo repo",
       "input": {},
       "output": {
-        "mode": "self-provisioned",
-        "repoSlug": "autonomous-pr-demo-a1b2c3d4",
-        "cloneUrl": "https://git.sapiom.ai/autonomous-pr-demo-a1b2c3d4.git",
+        "mode": "demo",
+        "repoSlug": "autonomous-pr-demo",
+        "cloneUrl": "https://git.sapiom.ai/autonomous-pr-demo.git",
         "branch": "autonomous-pr/a1b2c3d4",
         "sha": "9f2c1a0",
         "pushed": true,
         "prUrl": null,
+        "previewUrl": "https://autonomous-pr-preview-a1b2c3d4.preview.bl.run",
+        "previewStatus": "deployed",
         "task": "Read this repo's AUTHORING.md (or nearest CONTRIBUTING/README) and add ONE new example directory that follows its conventions exactly — its own runnable code plus its manifest. Keep the change small, self-contained, and covered by the repo's own checks.",
-        "codingSummary": "Seeded AUTHORING.md, examples/hello-agent, and examples/echo, then added examples/word-count following the same shape.",
+        "codingSummary": "Added examples/word-count following the seeded AUTHORING.md shape exactly.",
         "review": {
           "verdict": "approve",
           "summary": "Adds examples/word-count following the seeded AUTHORING.md shape exactly; typecheck is green.",
           "notes": []
         },
-        "note": "Ran against a scratch demo repo Sapiom just provisioned for this run — set `repoSlug` to your own in-network repo to work on something real. This git host has no hosted pull-request object yet, so the pushed branch above is what you review — there is no `prUrl` to open."
+        "note": "Ran against Sapiom's persistent demo repo for this template (reused across runs) — set `repoSlug` to your own in-network repo to work on something real. This git host has no hosted pull-request object yet, so the pushed branch above is what you review — there is no `prUrl` to open."
       }
     },
     {
@@ -90,6 +92,8 @@
         "branch": "autonomous-pr/f00dcafe",
         "pushed": true,
         "prUrl": null,
+        "previewUrl": "https://autonomous-pr-preview-f00dcafe.preview.bl.run",
+        "previewStatus": "deployed",
         "review": {
           "verdict": "approve",
           "summary": "Adds a health check endpoint with a passing test; scoped to just the stated task.",
@@ -101,12 +105,13 @@
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [
-      { "path": "mode", "assert": "equals", "value": "self-provisioned" },
+      { "path": "mode", "assert": "equals", "value": "demo" },
       { "path": "pushed", "assert": "equals", "value": true },
       { "path": "branch", "assert": "nonEmptyString" },
       { "path": "repoSlug", "assert": "nonEmptyString" },
+      { "path": "previewStatus", "assert": "nonEmptyString" },
       { "path": "review.verdict", "assert": "nonEmptyString" }
     ],
-    "narrative": "With no repo given, it provisions its own scratch repo, seeds a tiny authoring contract, has a coding agent add one new example, checks it, and pushes a real branch there with a self-review — never touching a repo you didn't give it."
+    "narrative": "With no repo given, it opens Sapiom's persistent demo repo, has a coding agent add one new example, checks it, deploys a live preview of the branch, and pushes it with a self-review, never touching a repo you didn't give it."
   }
 }
