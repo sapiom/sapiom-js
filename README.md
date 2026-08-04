@@ -112,11 +112,13 @@ Add the local developer MCP so your coding agent can scaffold, test, deploy, and
 inspect Sapiom agents. In Claude Code:
 
 ```sh
-claude mcp add sapiom-dev -- npx -y @sapiom/mcp
+claude mcp add sapiom -- npx -y @sapiom/mcp
 ```
 
-> `@sapiom/mcp` is the **local developer** surface (`sapiom_dev_*`). It is
-> distinct from the remote Sapiom capability MCP that services paid tool calls —
+> `sapiom` is the recommended client alias for `@sapiom/mcp`, the **local
+> developer** surface (`sapiom_dev_*`). Its internal MCP `serverInfo.name`
+> remains `sapiom-dev`. Use `sapiom-direct` for the hosted capability MCP that
+> services paid tool calls —
 > see [docs/mcp-servers.md](./docs/mcp-servers.md) for which to use when.
 
 ## 📚 Documentation

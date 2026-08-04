@@ -1,14 +1,17 @@
 # @sapiom/mcp
 
 The **local developer** MCP server for Sapiom. It runs on your machine over
-stdio under the server name `sapiom-dev`. Today it gives a coding agent the
-tools to scaffold, test, deploy, and inspect Sapiom agents; the namespace leaves
-room for other developer tooling later.
+stdio and should be registered under the client alias `sapiom`; the MCP handshake
+still reports the internal wire identifier `sapiom-dev`. Today its `sapiom_dev_*`
+tools let a coding agent scaffold, test, deploy, and inspect Sapiom agents; the
+namespace leaves room for other non-capability developer tooling later.
 
 > **Not the capability surface.** This is _not_ the remote "Sapiom" MCP (the
 > hosted connector with `sapiom_sandbox_*`, scrape, search, … capability tools).
-> `sapiom-dev` exposes no direct capability tools. Its local check and Local
-> Run path uses stubbed capabilities without Sapiom capability spend; deploys,
+> Use `sapiom` for this local authoring connection and `sapiom-direct` for the
+> hosted capability connection. The local server exposes no direct capability
+> tools. Its check and Local Run path uses stubbed capabilities without Sapiom
+> capability spend; deploys,
 > cloud builds, production runs, signals, and schedules operate Sapiom cloud
 > state and may be metered. See
 > [the two Sapiom MCP servers](../../docs/mcp-servers.md) for which to use when.
@@ -20,7 +23,7 @@ No global install — run it on demand with `npx`:
 ```jsonc
 {
   "mcpServers": {
-    "sapiom-dev": {
+    "sapiom": {
       "command": "npx",
       "args": ["-y", "@sapiom/mcp"],
     },
@@ -42,7 +45,7 @@ The server targets the `production` environment by default. Override it with the
 ```jsonc
 {
   "mcpServers": {
-    "sapiom-dev": {
+    "sapiom": {
       "command": "npx",
       "args": ["-y", "@sapiom/mcp"],
       "env": { "SAPIOM_ENVIRONMENT": "staging" },
@@ -84,7 +87,7 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_agents_scaffold`         | npm optional     | Create a new agent project; may query npm for current dependency versions  |
 | `sapiom_dev_agents_check`            | author code only | Typecheck, import, bundle, and validate the definition and step graph      |
 | `sapiom_dev_agents_run_local`        | author code only | Run locally with `ctx.sapiom.*` calls stubbed (no Sapiom capability spend) |
-| `sapiom_dev_agents_link`             | ✓                | Resolve/create the hosted orchestration and cache its id                   |
+| `sapiom_dev_agents_link`             | ✓                | Resolve/create the hosted agent and cache its id                           |
 | `sapiom_dev_agents_clone`            | ✓                | Fork a gallery template (or re-clone a fork) into a local project          |
 | `sapiom_dev_agents_deploy`           | ✓                | Bundle current local source, build in the cloud, and wait                  |
 | `sapiom_dev_agents_run`              | ✓                | Start a real cloud execution                                               |
@@ -100,13 +103,12 @@ A typical loop: `scaffold` → write step code → `run_local` until green → `
 
 ## How capabilities fit in
 
-Workflows authored here call Sapiom capabilities — sandboxes, repositories,
+Agents authored here call Sapiom capabilities — sandboxes, repositories,
 coding agents, search, storage, content generation — through
 [`@sapiom/tools`](../tools) (`ctx.sapiom.*`). `run_local` resolves those calls
 from stubs; deploy and production run cross into authenticated cloud operations
 and can be metered. This MCP never grows a per-capability tool of its own —
-capabilities live in
-`@sapiom/tools` and the remote `sapiom` MCP. See
+capabilities live in `@sapiom/tools` and the hosted `sapiom-direct` MCP. See
 [the positioning doc](../../docs/mcp-servers.md) for the full policy.
 
 ## Sending feedback

@@ -137,6 +137,12 @@ describe("adapter contract — shape of every built-in entry", () => {
       expect(prompt.length).toBeGreaterThan(0);
       // Every install prompt names the Sapiom MCP server package.
       expect(prompt).toContain("@sapiom/mcp");
+      // `sapiom-dev` is the package's wire identifier, not a client config
+      // alias. All supported clients register the local authoring MCP as
+      // `sapiom`, leaving `sapiom-direct` available for the hosted connection.
+      expect(prompt).not.toContain("mcp add sapiom-dev");
+      expect(prompt).not.toContain("mcp_servers.sapiom-dev");
+      expect(prompt).not.toContain('"sapiom-dev":');
 
       const installed = await adapter.detectInstalled();
       expect(typeof installed).toBe("boolean");

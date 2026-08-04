@@ -43,6 +43,10 @@ describe("server instructions", () => {
     // The two-MCP frame: agents learn the hosted MCP exists for direct tool calls
     expect(AUTHORING_INSTRUCTIONS).toContain("hosted capability MCP");
     expect(AUTHORING_INSTRUCTIONS).toContain("api.sapiom.ai/v1/mcp");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-direct");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "claude mcp add sapiom --transport http",
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain("tool_discover");
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "claude mcp add --scope user --transport http sapiom-direct",

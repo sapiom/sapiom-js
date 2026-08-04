@@ -1,3 +1,8 @@
+import {
+  HOSTED_CAPABILITY_MCP_ALIAS,
+  LOCAL_AUTHORING_MCP_ALIAS,
+} from "../core/mcp-registration.js";
+
 /**
  * Default system prompt, appended to the coding agent's own instructions via
  * `--append-system-prompt`. Orients a fresh session to the Sapiom-specific
@@ -12,12 +17,13 @@ you have two Sapiom MCP servers pre-wired, and the conventions below are
 active for the whole session. Follow them.
 
 **The two MCPs, and when to use each:**
-- **sapiom-direct** (remote, HTTP) — the paid capability surface an agent calls at
+- **${HOSTED_CAPABILITY_MCP_ALIAS}** (hosted, HTTP) — the paid capability surface an agent calls at
   *runtime* from inside a deployed agent's step code (ctx.sapiom.*):
   repositories, sandboxes, models, and so on. You don't call this directly
   while authoring.
-- **sapiom-dev** (local, stdio) — the developer surface for this session. Its
-  scaffold, check, and Local Run path uses no Sapiom capability spend; Deploy
+- **${LOCAL_AUTHORING_MCP_ALIAS}** (local, stdio; wire name \`sapiom-dev\`) — the
+  developer surface for this session. Its scaffold, check, and Local Run paths
+  use no Sapiom capability spend; Deploy
   and Prod Run are authenticated cloud operations. Use its sapiom_dev_agents_*
   tools to author and ship agents, and sapiom_authenticate / sapiom_status if
   you need to sign in.

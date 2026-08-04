@@ -381,10 +381,13 @@ async function testCoreFlow(): Promise<void> {
     const mcpConfigJson = JSON.parse(await fs.readFile(mcpConfigPath, "utf8")) as {
       mcpServers?: Record<string, { type?: string; command?: string }>;
     };
-    assert(mcpConfigJson.mcpServers?.sapiom?.type === "http", "generated mcp-config registers the remote sapiom MCP");
     assert(
-      mcpConfigJson.mcpServers?.["sapiom-dev"]?.command === "npx",
-      "generated mcp-config registers the local sapiom-dev MCP",
+      mcpConfigJson.mcpServers?.["sapiom-direct"]?.type === "http",
+      "generated mcp-config registers the hosted sapiom-direct MCP",
+    );
+    assert(
+      mcpConfigJson.mcpServers?.sapiom?.command === "npx",
+      "generated mcp-config registers the local sapiom MCP alias",
     );
 
     assert(capture.env.SAPIOM_HARNESS_INGEST_URL?.endsWith("/ingest"), "pty env carries SAPIOM_HARNESS_INGEST_URL");
@@ -910,11 +913,11 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     const mcpConfigIdx = capture.argv.indexOf("--mcp-config");
     assert(mcpConfigIdx !== -1, "boot session launched with --mcp-config");
     const mcpConfigJson = JSON.parse(await fs.readFile(capture.argv[mcpConfigIdx + 1], "utf8")) as {
-      mcpServers?: { sapiom?: { headers?: Record<string, string> } };
+      mcpServers?: { "sapiom-direct"?: { headers?: Record<string, string> } };
     };
     assert(
-      mcpConfigJson.mcpServers?.sapiom?.headers?.["x-api-key"] === apiKey,
-      "generated mcp-config's remote sapiom entry carries the cached apiKey as x-api-key",
+      mcpConfigJson.mcpServers?.["sapiom-direct"]?.headers?.["x-api-key"] === apiKey,
+      "generated mcp-config's hosted sapiom-direct entry carries the cached apiKey as x-api-key",
     );
 
     // --- fs.ts's directory-autocomplete router (path picker) is mounted behind the boot token ---

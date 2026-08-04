@@ -293,7 +293,7 @@ function readVersion(): string {
  * today) simply ignores it, same as the claude-code adapter already does for
  * whichever of the three a given launch doesn't set. `apiKey` (from CLI auth,
  * null when unauthenticated / --no-auth) flows into the generated mcp-config
- * so the remote `sapiom` MCP is actually authenticated — a factory rather
+ * so the hosted `sapiom-direct` MCP is actually authenticated — a factory rather
  * than a plain function since it's per-server-instance state.
  */
 function createDefaultBuildLaunchOpts(

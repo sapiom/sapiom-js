@@ -141,7 +141,7 @@ test.describe("add workspace (three doors)", () => {
     await expect(copyClaude).toHaveText("Copied");
 
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    expect(clip).toContain("claude mcp add sapiom");
+    expect(clip).toContain("claude mcp add sapiom -- npx -y @sapiom/mcp");
 
     // The analytics event rode POST /api/track (intercepted in mock mode).
     const events = await page.evaluate(

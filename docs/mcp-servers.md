@@ -4,17 +4,23 @@ Two MCP servers carry the Sapiom name. They do different jobs, and conflating
 them is the most common source of confusion. This is the short version of which
 to use when.
 
-| | **Remote `sapiom`** | **Local `sapiom-dev`** |
+| | **Hosted `sapiom-direct`** | **Local `sapiom`** |
 | --- | --- | --- |
 | What it is | The production **capability surface** | The local **developer** surface |
-| Server name | `sapiom` | `sapiom-dev` |
+| Recommended client alias | `sapiom-direct` | `sapiom` |
 | Package | — (hosted connector) | [`@sapiom/mcp`](../packages/mcp) (`npx -y @sapiom/mcp`) |
 | Transport | Remote / hosted | stdio (runs on your machine) |
 | Tools | ~30+ capability tools — `sapiom_sandbox_*`, scrape, web search, content generation, storage, … | `sapiom_{authenticate,status,logout,send_feedback}`, `sapiom_dev_agents_{scaffold,check,run_local,link,clone,deploy,run,inspect,signal,schedule,…}`, `sapiom_dev_sandbox_*` — full list in the [package README](../packages/mcp#tools) |
 | Cost | Paid — capability calls are gateway-routed and metered (x402) | Unmetered — the surface itself makes no paid capability calls. `run` / `deploy` trigger real cloud runs whose capability calls are metered |
 | Use it to… | **call** a capability directly from an agent or client | **build, test, and operate on** Sapiom (today: author & ship agents that orchestrate capabilities) |
 
-## Remote `sapiom` — the production capability surface
+These names are client-configured aliases, not MCP protocol identities. The
+local package still reports `sapiom-dev` as its `serverInfo.name`, ships the
+`sapiom-mcp` binary, and exposes `sapiom_dev_*` tools. Giving the local authoring
+connection the short `sapiom` alias and the hosted connection the explicit
+`sapiom-direct` alias lets both coexist without a config-key collision.
+
+## Hosted `sapiom-direct` — the production capability surface
 
 The remote MCP is the product's capability surface. Connect it (it is the
 [claude.ai](https://claude.ai) "Sapiom" connector, also reachable through the
@@ -26,10 +32,11 @@ paid for via x402.
 Reach for it when you want an agent to **use** a capability right now — "scrape
 this page", "run this code in a sandbox", "search the web".
 
-## Local `sapiom-dev` — the developer surface
+## Local `sapiom` — the developer surface
 
-The local MCP is published as [`@sapiom/mcp`](../packages/mcp) and runs on your
-machine over stdio under the server name `sapiom-dev`. It is the local,
+The local MCP is published as [`@sapiom/mcp`](../packages/mcp), runs on your
+machine over stdio, and should be registered under the client alias `sapiom`.
+Its internal MCP `serverInfo.name` remains `sapiom-dev`. It is the local,
 unmetered developer surface for Sapiom — the `sapiom_dev_*` namespace for
 building and operating on Sapiom, as distinct from making paid capability calls.
 Today that means **authoring** agents: scaffold a project, validate it,
@@ -58,9 +65,9 @@ Reach for it when you want to **build or operate on** something rather than
 
 ## How they relate
 
-The `sapiom-dev` MCP is **not** a second, local copy of the product. It is the
+The local `sapiom` connection is **not** a second, local copy of the product. It is the
 local developer surface for building things that, at run time, call the same
-capabilities the remote `sapiom` MCP exposes. The dividing line is billing, not
+capabilities the hosted `sapiom-direct` MCP exposes. The dividing line is billing, not
 task: one surface *makes* paid, metered capability calls; the other is the
 local, unmetered developer surface for everything that isn't a paid capability
 call. The capability implementations live in exactly one place
@@ -70,8 +77,8 @@ call. The capability implementations live in exactly one place
 
 There is one rule that keeps the two surfaces from drifting into duplicates:
 
-> **Capabilities live in `@sapiom/tools` and are exposed by the remote `sapiom`
-> MCP. The developer MCP (`sapiom-dev`) is the local, unmetered surface for
+> **Capabilities live in `@sapiom/tools` and are exposed by the hosted
+> `sapiom-direct` MCP. The developer MCP (`sapiom`) is the local, unmetered surface for
 > building and operating on Sapiom; it does not hand-roll per-capability tools.**
 
 A new capability is added to `@sapiom/tools` (and surfaced on the remote MCP).

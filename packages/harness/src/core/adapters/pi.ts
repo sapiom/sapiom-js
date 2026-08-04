@@ -3,6 +3,7 @@
  * Scaffold adapter: detection is real; launch support is best-effort and
  * marked `experimental` until exercised by an end-to-end suite.
  */
+import { LOCAL_AUTHORING_MCP_ALIAS } from "../mcp-registration.js";
 import type { EmbeddedHarnessAdapterInfo } from "./adapter.js";
 import { isExecutableOnPath } from "./detect.js";
 
@@ -13,7 +14,7 @@ const INSTALL_MCP_PROMPT = [
   "npm package — a local stdio MCP server started with `npx -y @sapiom/mcp`.",
   "MCP support varies between pi versions: check `pi --help` and pi's",
   "documentation for how your version registers stdio MCP servers, and",
-  "register the command above under the name `sapiom-dev`. If your pi",
+  `register the command above under the name \`${LOCAL_AUTHORING_MCP_ALIAS}\`. If your pi`,
   "version has no MCP support, say so instead of guessing.",
 ].join("\n");
 

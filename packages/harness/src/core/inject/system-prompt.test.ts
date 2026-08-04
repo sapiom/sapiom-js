@@ -35,7 +35,7 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain('"agents"');
     expect(content).toContain("The Canvas follows that selection");
     expect(content).toContain("Local Run, Prod Run, and Deploy");
-    expect(content).toContain("**sapiom-direct** (remote, HTTP)");
+    expect(content).toContain("**sapiom-direct** (hosted, HTTP)");
     expect(content).toContain("no Sapiom capability spend");
     expect(content).not.toContain("stub capabilities, no cost");
     expect(content).not.toContain("Visualize button");

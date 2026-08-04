@@ -35,11 +35,12 @@ describe("generateMcpConfig", () => {
     const raw = await fs.readFile(filePath, "utf-8");
     const config = JSON.parse(raw);
 
-    expect(config.mcpServers.sapiom).toEqual({
+    expect(Object.keys(config.mcpServers).sort()).toEqual(["sapiom", "sapiom-direct"]);
+    expect(config.mcpServers["sapiom-direct"]).toEqual({
       type: "http",
       url: "https://api.sapiom.ai/v1/mcp",
     });
-    expect(config.mcpServers["sapiom-dev"]).toEqual({
+    expect(config.mcpServers.sapiom).toEqual({
       command: "npx",
       // Dist-tagged so npx resolves the published package, not a local
       // workspace copy when the harness runs inside the monorepo.
@@ -47,18 +48,18 @@ describe("generateMcpConfig", () => {
     });
   });
 
-  it("passes SAPIOM_ENVIRONMENT through to the sapiom-dev entry when set", async () => {
+  it("passes SAPIOM_ENVIRONMENT through to the local sapiom entry when set", async () => {
     const filePath = await generateMcpConfig("session-456", { environment: "staging" });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
 
-    expect(config.mcpServers["sapiom-dev"].env).toEqual({ SAPIOM_ENVIRONMENT: "staging" });
+    expect(config.mcpServers.sapiom.env).toEqual({ SAPIOM_ENVIRONMENT: "staging" });
   });
 
   it("advertises the harness version so feedback records can name the build", async () => {
     const filePath = await generateMcpConfig("session-457", { harnessVersion: "0.2.5" });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
 
-    expect(config.mcpServers["sapiom-dev"].env).toEqual({
+    expect(config.mcpServers.sapiom.env).toEqual({
       SAPIOM_HARNESS_VERSION: "0.2.5",
     });
   });
@@ -70,7 +71,7 @@ describe("generateMcpConfig", () => {
     });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
 
-    expect(config.mcpServers["sapiom-dev"].env).toEqual({
+    expect(config.mcpServers.sapiom.env).toEqual({
       SAPIOM_ENVIRONMENT: "staging",
       SAPIOM_HARNESS_VERSION: "0.2.5",
     });
@@ -82,28 +83,28 @@ describe("generateMcpConfig", () => {
     expect(path.dirname(a)).not.toBe(path.dirname(b));
   });
 
-  it("adds an x-api-key header to the remote sapiom entry when an apiKey is given", async () => {
+  it("adds an x-api-key header to the hosted sapiom-direct entry when an apiKey is given", async () => {
     const filePath = await generateMcpConfig("session-auth", { apiKey: "sk_live_test123" });
     const config = JSON.parse(await fs.readFile(filePath, "utf-8"));
 
-    expect(config.mcpServers.sapiom).toEqual({
+    expect(config.mcpServers["sapiom-direct"]).toEqual({
       type: "http",
       url: "https://api.sapiom.ai/v1/mcp",
       headers: { "x-api-key": "sk_live_test123" },
     });
-    // sapiom-dev (the local stdio MCP) authenticates itself separately via
+    // sapiom (the local stdio MCP alias) authenticates itself separately via
     // its own sapiom_authenticate tool — it doesn't need the apiKey.
-    expect(config.mcpServers["sapiom-dev"].headers).toBeUndefined();
+    expect(config.mcpServers.sapiom.headers).toBeUndefined();
   });
 
   it("omits headers entirely when apiKey is null or absent", async () => {
     const withoutOption = JSON.parse(await fs.readFile(await generateMcpConfig("session-1"), "utf-8"));
-    expect(withoutOption.mcpServers.sapiom.headers).toBeUndefined();
+    expect(withoutOption.mcpServers["sapiom-direct"].headers).toBeUndefined();
 
     const withNull = JSON.parse(
       await fs.readFile(await generateMcpConfig("session-2", { apiKey: null }), "utf-8"),
     );
-    expect(withNull.mcpServers.sapiom.headers).toBeUndefined();
+    expect(withNull.mcpServers["sapiom-direct"].headers).toBeUndefined();
   });
 
   it("writes the config file with owner-only permissions (it can carry a live API key)", async () => {

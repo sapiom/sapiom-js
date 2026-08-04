@@ -19,7 +19,7 @@ describe("conductorAdapterInfo", () => {
 
   it("guides MCP setup through Claude Code project scope", () => {
     const prompt = conductorAdapterInfo.installMcpPrompt();
-    expect(prompt).toContain("claude mcp add --scope project sapiom-dev -- npx -y @sapiom/mcp");
+    expect(prompt).toContain("claude mcp add --scope project sapiom -- npx -y @sapiom/mcp");
     expect(prompt).toContain(".mcp.json");
     expect(prompt).toContain("@sapiom/mcp");
   });
