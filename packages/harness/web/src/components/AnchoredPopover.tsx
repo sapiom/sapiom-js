@@ -37,7 +37,13 @@ const GAP_PX = 4;
 /** Keep the panel off the viewport edge so shadows never clip. */
 const VIEWPORT_INSET_PX = 8;
 
-function positionFor(anchor: HTMLElement, placement: PopoverPlacement, matchWidth: boolean): CSSProperties {
+function positionFor(
+  anchor: HTMLElement,
+  placement: PopoverPlacement,
+  matchWidth: boolean,
+  beside: HTMLElement | null,
+  clip: boolean,
+): CSSProperties {
   const rect = anchor.getBoundingClientRect();
   const style: CSSProperties = {
     position: "fixed",
@@ -45,38 +51,41 @@ function positionFor(anchor: HTMLElement, placement: PopoverPlacement, matchWidt
     right: "auto",
     bottom: "auto",
     left: "auto",
-    // The viewport-derived maxHeight below is a hard cap; the panel scrolls
-    // its own content rather than ever growing past an edge.
-    overflowY: "auto",
   };
+  // The viewport-derived maxHeight below is a hard cap; the panel scrolls its
+  // own content rather than ever growing past an edge. A flyer that HOSTS
+  // connected cards (noClip) opts out: it must not clip a sub-card sitting
+  // beside it, and its cards manage their own scroll.
+  if (clip) style.overflowY = "auto";
   // Row-shaped triggers (the rail's profile row) want a panel exactly as
   // wide as themselves — width rides the same measure as position.
   if (matchWidth) style.width = rect.width;
   // A panel can never be wider than the viewport minus both insets; the
   // measured clamp pass below then only ever needs to SHIFT it into view.
   style.maxWidth = window.innerWidth - 2 * VIEWPORT_INSET_PX;
-  // Side placement: the panel sits off the trigger's right edge and aligns
-  // horizontally to it, so the vertical/horizontal roles below are swapped.
-  // Width is deliberately NOT clamped to the space remaining on the right —
-  // the measured pass below already shifts an overhanging panel back inside,
-  // and clamping here would instead squeeze the card narrow on a small window.
+  // Side placement: the panel sits off a right edge and aligns vertically to
+  // the trigger. The horizontal edge to clear is `beside`'s when given (the
+  // whole rail, so a rail-header trigger's panel clears the tree beside it)
+  // and the trigger's otherwise. Width is deliberately NOT clamped to the
+  // space remaining on the right — the measured pass below already shifts an
+  // overhanging panel back inside.
   if (placement.startsWith("right")) {
-    style.left = rect.right + GAP_PX;
+    style.left = (beside ?? anchor).getBoundingClientRect().right + GAP_PX;
     if (placement.endsWith("start")) {
       style.top = rect.top;
-      style.maxHeight = window.innerHeight - rect.top - VIEWPORT_INSET_PX;
+      if (clip) style.maxHeight = window.innerHeight - rect.top - VIEWPORT_INSET_PX;
     } else {
       style.bottom = window.innerHeight - rect.bottom;
-      style.maxHeight = rect.bottom - VIEWPORT_INSET_PX;
+      if (clip) style.maxHeight = rect.bottom - VIEWPORT_INSET_PX;
     }
     return style;
   }
   if (placement.startsWith("down")) {
     style.top = rect.bottom + GAP_PX;
-    style.maxHeight = window.innerHeight - rect.bottom - GAP_PX - VIEWPORT_INSET_PX;
+    if (clip) style.maxHeight = window.innerHeight - rect.bottom - GAP_PX - VIEWPORT_INSET_PX;
   } else {
     style.bottom = window.innerHeight - rect.top + GAP_PX;
-    style.maxHeight = rect.top - GAP_PX - VIEWPORT_INSET_PX;
+    if (clip) style.maxHeight = rect.top - GAP_PX - VIEWPORT_INSET_PX;
   }
   if (placement.endsWith("start")) {
     style.left = Math.max(VIEWPORT_INSET_PX, rect.left);
@@ -95,6 +104,15 @@ export interface AnchoredPopoverProps {
   placement: PopoverPlacement;
   /** Size the panel to the anchor's own width (row-shaped triggers). */
   matchWidth?: boolean;
+  /** For `right-*` placements: the element whose right edge the panel must
+   *  clear, when it is not the trigger's. A rail-header glyph is the trigger,
+   *  but the edge to clear is the whole rail's — pass the rail here so the
+   *  panel opens beside the tree instead of over it. */
+  besideRef?: RefObject<HTMLElement | null>;
+  /** Skip the viewport maxHeight/overflow clamp. For a flyer that HOSTS
+   *  connected cards side by side (each scrolls itself); clamping the shell
+   *  would clip the sub-card that sits beside the primary card. */
+  noClip?: boolean;
   /** The panel's existing recipe class (e.g. "session-menu") — elevation,
    *  padding, and width stay in CSS. */
   className: string;
@@ -109,6 +127,8 @@ export function AnchoredPopover({
   onDismiss,
   placement,
   matchWidth = false,
+  besideRef,
+  noClip = false,
   className,
   role,
   testid,
@@ -123,8 +143,8 @@ export function AnchoredPopover({
 
   const reposition = useCallback((): void => {
     const anchor = anchorRef.current;
-    if (anchor) setStyle(positionFor(anchor, placement, matchWidth));
-  }, [anchorRef, placement, matchWidth]);
+    if (anchor) setStyle(positionFor(anchor, placement, matchWidth, besideRef?.current ?? null, !noClip));
+  }, [anchorRef, placement, matchWidth, besideRef, noClip]);
 
   // Position before paint on open (no one-frame jump), then follow window
   // resizes and any ancestor scroll (capture) while open.

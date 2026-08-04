@@ -152,7 +152,7 @@ test.describe("Deploy button — direct route, NDJSON build stream, no pty write
     // Switch to rfq (undeployed) and start a session so the bar is live.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
     const injectBefore = await captureInjectInputBefore(page);
 
@@ -172,9 +172,13 @@ test.describe("Deploy button — direct route, NDJSON build stream, no pty write
     await assertNoPtyWrite(page, injectBefore);
 
     // A successful deploy on the previously-undeployed rfq should flip the
-    // mock workflow's definitionId — the Deployed chip appears. MockApi.deploy
+    // mock workflow's definitionId. The lifecycle pill moved out of the session
+    // bar: a deployed workflow now surfaces the "deployed" dashboard link in the
+    // right-pane header (Canvas tab only) and makes Run enabled. MockApi.deploy
     // updates its local workflow copy, and refreshWorkflows re-reads it.
-    await expect(page.getByTestId("session-lifecycle-chip")).toContainText("Deployed", { timeout: 3_000 });
+    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.getByTestId("workflow-dashboard-link")).toContainText("deployed", { timeout: 3_000 });
+    await expect(page.getByTestId("session-step-run")).toBeEnabled();
   });
 
   test("double-clicking Deploy on an undeployed workflow only creates the agent once", async ({ page }) => {
@@ -185,7 +189,7 @@ test.describe("Deploy button — direct route, NDJSON build stream, no pty write
     // first call's in-flight promise.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
     const deployBtn = page.getByTestId("session-step-deploy");
     await expect(deployBtn).toBeEnabled();
@@ -246,7 +250,7 @@ test.describe("Prod-run button — direct route, executionId → inspector, no p
     // Focus rfq (undeployed) and start a session.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
     // The Run button must be disabled for a draft workflow.
     const runBtn = page.getByTestId("session-step-run");

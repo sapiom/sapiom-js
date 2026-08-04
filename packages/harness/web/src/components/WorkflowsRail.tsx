@@ -18,6 +18,8 @@ import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { Icon } from "./Icon";
 import { AddWorkspaceDialog, DoorList, DoorRow } from "./AddWorkspaceDialog";
 import type { Door } from "./AddWorkspaceDialog";
+import { DEMO_ACCOUNT_PLAN, PlanCard } from "./PlanCard";
+import { MenuChoice } from "./MenuChoice";
 import { NewSessionModal } from "./NewSessionModal";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
@@ -26,8 +28,8 @@ import { isMockMode } from "../lib/api";
 import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "../lib/history-meta";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
-
-const SAPIOM_DASHBOARD_URL = "https://app.sapiom.ai/workflows";
+import type { RailGrouping, RailSort } from "../lib/workspace-tree";
+import { SAPIOM_WORKFLOWS_URL } from "../lib/urls";
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
@@ -110,12 +112,17 @@ const SHORTCUT_HINT = IS_MAC ? "⌘K" : "Ctrl+K";
 function FolderHeader({
   label,
   cwd,
+  isDirectory = true,
   collapsed,
   onToggleCollapsed,
   onCopyPath,
 }: {
   label: string;
   cwd: string;
+  /** A real directory (Workspace grouping) carries a folder glyph and the
+   *  copy-path action; a deployment FACET bucket has no path behind it, so it
+   *  is a bare label + caret. */
+  isDirectory?: boolean;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onCopyPath: (path: string) => void;
@@ -125,23 +132,25 @@ function FolderHeader({
       <button
         className="workspace-row-main"
         onClick={onToggleCollapsed}
-        title={cwd}
+        title={isDirectory ? cwd : label}
         aria-expanded={!collapsed}
       >
-        <Icon name="Folder" size={13} />
+        {isDirectory && <Icon name={collapsed ? "Folder" : "FolderOpen"} size={13} />}
         <span className="tree-row-label">{label}</span>
         <span className={"workspace-caret" + (collapsed ? "" : " is-open")} aria-hidden="true">
           <Icon name="ChevronDown" size={13} />
         </span>
       </button>
-      <button
-        className="workspace-row-action"
-        aria-label={`Copy path for ${label}`}
-        data-tooltip="Copy path"
-        onClick={() => onCopyPath(cwd)}
-      >
-        <Icon name="Copy" size={13} />
-      </button>
+      {isDirectory && (
+        <button
+          className="workspace-row-action"
+          aria-label={`Copy path for ${label}`}
+          data-tooltip="Copy path"
+          onClick={() => onCopyPath(cwd)}
+        >
+          <Icon name="Copy" size={13} />
+        </button>
+      )}
     </div>
   );
 }
@@ -322,6 +331,9 @@ export function WorkflowsRail({
 }: WorkflowsRailProps): JSX.Element {
   const [addDialogMode, setAddDialogMode] = useState<"session" | "workspace" | null>(null);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
+  // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
+  // rail's right edge rather than just the header glyph's.
+  const railRef = useRef<HTMLElement>(null);
 
   /**
    * The Add menu — the intent question, asked in a popover hanging off the +
@@ -339,9 +351,30 @@ export function WorkflowsRail({
   const [addDoor, setAddDoor] = useState<Door>("have");
   const closeAddMenu = useCallback(() => setAddMenuOpen(false), []);
 
+  // The ⋯ overflow menu: how the tree is grouped, how it is sorted, and the
+  // sessions that have ended. Grouping and sort are persisted so the explorer
+  // resumes as the user left it (docs/IA.md).
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [pastOpen, setPastOpen] = useState(false);
+  const [grouping, setGrouping] = useState<RailGrouping>(
+    () => loadUiPrefs().railGrouping ?? "workspace",
+  );
+  const [sort, setSort] = useState<RailSort>(() => loadUiPrefs().railSort ?? "recent");
+  const pickGrouping = (next: RailGrouping): void => {
+    setGrouping(next);
+    saveUiPrefs({ railGrouping: next });
+  };
+  const pickSort = (next: RailSort): void => {
+    setSort(next);
+    saveUiPrefs({ railSort: next });
+  };
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
-  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  // Closing the menu also folds its Past-sessions sub-card, so it never
+  // reopens already flown out.
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+    setPastOpen(false);
+  }, []);
 
   // Per-workspace collapse, restored across reloads.
   const [collapsedCwds, setCollapsedCwds] = useState<Set<string>>(
@@ -366,6 +399,8 @@ export function WorkflowsRail({
     // Two popovers hanging off adjacent buttons: opening one closes the other,
     // or they overlap and the top one looks like a child of the wrong trigger.
     if (next) setAddMenuOpen(false);
+    // Every open lands on the menu, never mid-flyout.
+    setPastOpen(false);
     setHistoryOpen(next);
     if (next) {
       const dirs = historyDirs(sessions, recentDirs, activeSessionId);
@@ -399,7 +434,13 @@ export function WorkflowsRail({
   // because a registry session carries neither field.
   const historyByAgentId = new Map(history.map((summary) => [summary.agentSessionId, summary] as const));
 
-  const { workspaces, orphanAgents } = buildWorkspaceTree(workflows, sessions);
+  const { workspaces, orphanAgents } = buildWorkspaceTree(
+    workflows,
+    sessions,
+    grouping,
+    sort,
+    recentDirs,
+  );
 
   const copyPath = (path: string): void => {
     void navigator.clipboard
@@ -409,7 +450,7 @@ export function WorkflowsRail({
   };
 
   return (
-    <aside className="rail rail-workflows" style={{ width, minWidth }}>
+    <aside ref={railRef} className="rail rail-workflows" style={{ width, minWidth }}>
       <BrandHeader onCollapse={onCollapse} />
 
       {/* Search and Templates are the two persistent labelled destinations
@@ -451,16 +492,13 @@ export function WorkflowsRail({
             ref={historyTriggerRef}
             className="theme-toggle rail-header-btn"
             data-testid="history-trigger"
-            aria-label="Sessions and history"
-            title="Sessions and history"
+            aria-label="Workspace options"
+            aria-haspopup="menu"
+            aria-expanded={historyOpen}
+            data-tooltip="Grouping, sorting and past sessions"
             onClick={toggleHistory}
           >
             <Icon name="MoreHorizontal" size={14} />
-            {exitedSessions.length > 0 && (
-              <span className="session-history-badge" data-testid="session-history-badge">
-                {exitedSessions.length}
-              </span>
-            )}
           </button>
 
           <button
@@ -540,93 +578,198 @@ export function WorkflowsRail({
           </div>
         </AnchoredPopover>
 
+        {/* The ⋯ overflow menu. The popover is the TRACK, not the card: it
+            opens BESIDE the rail (never over the tree it configures), and its
+            one unbounded set — Past sessions — opens as a sub-card beside the
+            options card rather than a scrolling list nailed under four fixed
+            choices. */}
         <AnchoredPopover
           open={historyOpen}
           anchorRef={historyTriggerRef}
           onDismiss={closeHistory}
-          placement="down-end"
-          className="connect-card history-card"
+          placement="right-start"
+          besideRef={railRef}
+          noClip
+          className="menu-flyer"
           testid="history-menu"
         >
-          <div className="connect-card-header">
-            <span>Sessions</span>
-            <button
-              className="theme-toggle connect-card-close"
-              onClick={closeHistory}
-              aria-label="Close"
-              title="Close"
-            >
-              <Icon name="X" size={13} />
-            </button>
-          </div>
-          <div className="connect-card-body history-card-body">
-            {/* "New session…" used to lead this menu; it lives in the Add menu
-                now. This popover reviews work that already happened — the one
-                thing you do here is reopen a past session. */}
-            <div className="session-dropdown-section">Past sessions</div>
-            {pastRows.map((row) => {
-              if (row.kind === "exited") {
-                // No agentSessionId at all: the agent never established a
-                // session, so there is provably nothing to resume — no need to
-                // wait on history to say so.
-                const summary =
-                  row.session.agentSessionId == null
-                    ? undefined
-                    : historyByAgentId.get(row.session.agentSessionId);
-                const resumeMode =
-                  row.session.agentSessionId == null ? ("rehydrate" as const) : summary?.resumeMode;
-                return (
-                  <PastSessionRow
-                    key={row.session.id}
-                    testid={`exited-session-${row.session.id}`}
-                    harness={row.session.harness}
-                    title={row.session.title}
-                    meta={historyRowMeta(
-                      {
-                        ...row.session,
-                        gitBranch: summary?.gitBranch,
-                        turnCount: summary?.turnCount,
-                        messageCount: summary?.messageCount,
-                      },
-                      undefined,
-                      {
-                        includeHarness: false,
-                        state: sessionRowState({ resumeMode, turnCount: summary?.turnCount }),
-                      },
-                    )}
-                    cwd={row.session.cwd}
-                    resumeMode={resumeMode}
-                    isSelected={row.session.id === activeSessionId}
-                    onOpen={() => {
-                      onSelectSession(row.session.id);
-                      setHistoryOpen(false);
-                    }}
+          <div className="menu-flyer-track">
+            <div className="connect-card history-card">
+              <div className="connect-card-header">
+                <span>Workspaces</span>
+                <button
+                  className="theme-toggle connect-card-close"
+                  onClick={closeHistory}
+                  aria-label="Close"
+                  title="Close"
+                >
+                  <Icon name="X" size={13} />
+                </button>
+              </div>
+              <div className="connect-card-body" role="menu">
+                {/* Hovering the fixed choices closes the Past-sessions flyout,
+                    so moving off that row collapses its sub-card — the
+                    hover-open's natural inverse. (A plain wrapper would flatten
+                    the row gap; menu-choice-group re-states the column.) */}
+                <div className="menu-choice-group" onMouseEnter={() => setPastOpen(false)}>
+                  {/* Only axes the registry actually sends: a folder and a
+                      deployment state are real groupings; a repository is not
+                      (sapiom.json holds repoFullName, but the registry drops
+                      it). */}
+                  <div className="session-dropdown-section">Group by</div>
+                  <MenuChoice
+                    testid="group-workspace"
+                    icon="FolderOpen"
+                    label="Workspace"
+                    checked={grouping === "workspace"}
+                    onPick={() => pickGrouping("workspace")}
                   />
-                );
-              }
-              return (
-                <PastSessionRow
-                  key={row.summary.agentSessionId}
-                  testid={`history-${row.summary.agentSessionId}`}
-                  harness={row.summary.harness}
-                  title={row.summary.title}
-                  meta={historyRowMeta(row.summary, undefined, {
-                    includeHarness: false,
-                    state: sessionRowState(row.summary),
-                  })}
-                  cwd={row.summary.cwd}
-                  resumeMode={row.summary.resumeMode}
-                  isSelected={false}
-                  onOpen={() => {
-                    onReviewSummary(row.summary);
-                    setHistoryOpen(false);
-                  }}
-                />
-              );
-            })}
-            {historyLoading && <div className="session-dropdown-empty">Loading…</div>}
-            {!historyLoading && pastRows.length === 0 && (
-              <div className="session-dropdown-empty">No past sessions yet</div>
+                  <MenuChoice
+                    testid="group-deployment"
+                    icon="Cloud"
+                    label="Deployment"
+                    checked={grouping === "deployment"}
+                    onPick={() => pickGrouping("deployment")}
+                  />
+
+                  <div className="session-dropdown-section">Sort</div>
+                  <MenuChoice
+                    testid="sort-recent"
+                    icon="History"
+                    label="Recent activity"
+                    checked={sort === "recent"}
+                    onPick={() => pickSort("recent")}
+                  />
+                  <MenuChoice
+                    testid="sort-name"
+                    icon="ArrowDown"
+                    label="Name"
+                    checked={sort === "name"}
+                    onPick={() => pickSort("name")}
+                  />
+                </div>
+
+                {/* One row that opens a sub-card beside the menu — the set is
+                    unbounded (every session this install has finished), so a
+                    list nailed here would give a card of four choices a
+                    scrollbar. The count rides the row, not the ⋯ trigger.
+                    Opens on hover (moving onto it) as well as click. */}
+                <button
+                  type="button"
+                  className={"session-dropdown-item nested-trigger" + (pastOpen ? " is-open" : "")}
+                  data-testid="past-sessions-trigger"
+                  aria-haspopup="menu"
+                  aria-expanded={pastOpen}
+                  onMouseEnter={() => setPastOpen(true)}
+                  onClick={() => setPastOpen((open) => !open)}
+                >
+                  <span className="session-item-icon">
+                    <Icon name="History" size={13} />
+                  </span>
+                  <span className="session-item-copy">
+                    <span className="session-item-title">Past sessions</span>
+                  </span>
+                  {exitedSessions.length > 0 && (
+                    <span className="session-history-badge" data-testid="session-history-badge">
+                      {exitedSessions.length}
+                    </span>
+                  )}
+                  <Icon name="ChevronRight" size={13} />
+                </button>
+              </div>
+            </div>
+
+            {pastOpen && (
+              <>
+                {/* A real, hit-testable 2px bridge, not a margin: crossing it
+                    with the pointer must not drop the hover and close the card
+                    being reached for. */}
+                <div className="menu-flyer-bridge" aria-hidden="true" />
+                <div className="connect-card menu-flyer-nested">
+                  <div className="connect-card-header">
+                    <span>Past sessions</span>
+                    <button
+                      className="theme-toggle connect-card-close"
+                      onClick={() => setPastOpen(false)}
+                      aria-label="Back"
+                      title="Back"
+                    >
+                      <Icon name="X" size={13} />
+                    </button>
+                  </div>
+                  <div
+                    className="connect-card-body past-sessions-list"
+                    data-testid="past-sessions-card"
+                  >
+                    {pastRows.map((row) => {
+                      if (row.kind === "exited") {
+                        // No agentSessionId at all: the agent never established
+                        // a session, so there is provably nothing to resume —
+                        // no need to wait on history to say so.
+                        const summary =
+                          row.session.agentSessionId == null
+                            ? undefined
+                            : historyByAgentId.get(row.session.agentSessionId);
+                        const resumeMode =
+                          row.session.agentSessionId == null
+                            ? ("rehydrate" as const)
+                            : summary?.resumeMode;
+                        return (
+                          <PastSessionRow
+                            key={row.session.id}
+                            testid={`exited-session-${row.session.id}`}
+                            harness={row.session.harness}
+                            title={row.session.title}
+                            meta={historyRowMeta(
+                              {
+                                ...row.session,
+                                gitBranch: summary?.gitBranch,
+                                turnCount: summary?.turnCount,
+                                messageCount: summary?.messageCount,
+                              },
+                              undefined,
+                              {
+                                includeHarness: false,
+                                state: sessionRowState({ resumeMode, turnCount: summary?.turnCount }),
+                              },
+                            )}
+                            cwd={row.session.cwd}
+                            resumeMode={resumeMode}
+                            isSelected={row.session.id === activeSessionId}
+                            onOpen={() => {
+                              onSelectSession(row.session.id);
+                              closeHistory();
+                            }}
+                          />
+                        );
+                      }
+                      return (
+                        <PastSessionRow
+                          key={row.summary.agentSessionId}
+                          testid={`history-${row.summary.agentSessionId}`}
+                          harness={row.summary.harness}
+                          title={row.summary.title}
+                          meta={historyRowMeta(row.summary, undefined, {
+                            includeHarness: false,
+                            state: sessionRowState(row.summary),
+                          })}
+                          cwd={row.summary.cwd}
+                          resumeMode={row.summary.resumeMode}
+                          isSelected={false}
+                          onOpen={() => {
+                            onReviewSummary(row.summary);
+                            closeHistory();
+                          }}
+                        />
+                      );
+                    })}
+                    {historyLoading && <div className="session-dropdown-empty">Loading…</div>}
+                    {!historyLoading && pastRows.length === 0 && (
+                      <div className="session-dropdown-empty">No past sessions yet</div>
+                    )}
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </AnchoredPopover>
@@ -667,6 +810,7 @@ export function WorkflowsRail({
                 <FolderHeader
                   label={workspace.label}
                   cwd={workspace.cwd}
+                  isDirectory={workspace.isDirectory}
                   collapsed={collapsed}
                   onToggleCollapsed={() => toggleCollapsed(workspace.cwd)}
                   onCopyPath={copyPath}
@@ -709,6 +853,10 @@ export function WorkflowsRail({
       </div>
 
       <div className="rail-footer">
+        {/* The plan summary sits in the SAME footer block as the account row
+            (no divider). Only the demo fixture supplies a plan; live mode
+            passes null and the card renders nothing. */}
+        <PlanCard plan={isMockMode() ? DEMO_ACCOUNT_PLAN : null} />
         <ProfileRow
           onToast={onToast}
           authenticated={authenticated}
@@ -904,9 +1052,15 @@ function ProfileRow({
         </span>
         <span className="rail-profile-copy">
           <span className="rail-profile-name">{name}</span>
-          <span className="rail-profile-meta">{meta}</span>
+          <span className="rail-profile-meta">
+            <span
+              className="identity-dot"
+              data-authenticated={demo ? false : authenticated}
+              data-pending={isPending}
+            />
+            {meta}
+          </span>
         </span>
-        <span className="identity-dot" data-authenticated={demo ? false : authenticated} data-pending={isPending} />
         <Icon name="ChevronDown" size={13} />
       </button>
 
@@ -962,7 +1116,7 @@ function ProfileRow({
           className="profile-menu-item"
           data-testid="profile-open-dashboard"
           onClick={() => {
-            window.open(SAPIOM_DASHBOARD_URL, "_blank", "noopener,noreferrer");
+            window.open(SAPIOM_WORKFLOWS_URL, "_blank", "noopener,noreferrer");
             closeMenu();
           }}
         >
@@ -1025,7 +1179,7 @@ function ProfileRow({
             className="profile-menu-item"
             data-testid="profile-switch-account"
             onClick={() => {
-              window.open(SAPIOM_DASHBOARD_URL, "_blank", "noopener,noreferrer");
+              window.open(SAPIOM_WORKFLOWS_URL, "_blank", "noopener,noreferrer");
               closeMenu();
             }}
           >

@@ -14,6 +14,13 @@ export interface UiPrefs {
   rightTab?: "canvas" | "steps" | "code";
   /** Workspace cwds the user collapsed in the rail tree. */
   collapsedCwds?: string[];
+  /** How the rail's ⋯ menu files the tree: by workspace folder (default) or
+   *  by deployment state. Persisted so the explorer resumes as the user left
+   *  it. */
+  railGrouping?: "workspace" | "deployment";
+  /** Row/group order in the rail tree: newest activity first (default) or
+   *  A–Z by name. */
+  railSort?: "recent" | "name";
   /** The agent NEW sessions default to — set from the composer's provider
    *  dropdown (a session's own agent is pinned at launch, so the switch is
    *  honestly scoped to the next session) and read by the new-session

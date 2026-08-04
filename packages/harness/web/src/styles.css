@@ -56,12 +56,6 @@
      Every CLICKABLE chip/pill (run picker, Preview, composer starter pills)
      floors at this so the hit target never collapses to text height. */
   --chip-h: 28px;
-
-  /* Harness brand-mark color, a domain exception to "green is scarce" (like the
-     terminal ANSI ramp): the Claude Code mark renders in Claude's brand orange
-     wherever it identifies the harness, matching the terminal banner's mark.
-     Theme-independent — it reads on both surfaces. */
-  --brand-claude: #d97757;
 }
 
 /* --------------------------------------------------------------------------
@@ -386,10 +380,9 @@ input {
   justify-content: space-between;
   height: var(--pane-header-h);
   padding: 0 var(--pane-pad-x);
-  /* One continuous rail surface: no raised band, no permanent underline. A
-     header border states a boundary that is only true once content scrolls
-     under it; drawn always it is just one more decorative line. */
-  background: var(--surface-base);
+  /* Transparent — the rail block's surface shows through, so the wordmark row
+     is never a different colour from the rail beneath it. */
+  background: transparent;
 }
 
 /* The lockup is an <h1>; strip the heading's default margin/size so it lays
@@ -603,9 +596,8 @@ input {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  /* The rail's own border-right draws the left seam; only the canvas seam
-     belongs to this pane. */
-  border-right: 1px solid var(--border);
+  /* No shell divider: the panes read as one surface, told apart by their own
+     planes and the resize handle's hover affordance, not a permanent line. */
 }
 
 /* Rails ---------------------------------------------------------------- */
@@ -684,7 +676,12 @@ input {
      tree it sits above, with a modest gap from the nav group. */
   min-height: var(--control-h);
   margin-top: var(--sp2);
-  padding: 0 var(--sp2) 0 var(--pane-pad-x);
+  /* One deliberate divider under the Workspaces header, setting the explorer
+     tree off from the destinations above it (Search / Templates). It is the
+     rail's only rule — the main shell panes carry none. */
+  margin-bottom: var(--sp1);
+  padding: 0 var(--sp2) var(--sp2) var(--pane-pad-x);
+  border-bottom: 1px solid var(--ui-line);
   font-size: var(--type-label);
   font-weight: 590;
   color: var(--text-dim);
@@ -734,8 +731,13 @@ input {
    height/type token as the Workspace row it came from) + body. Portaled
    (AnchoredPopover) off the rail-header trigger, so no rail overflow or
    short viewport can crop its scroll body. */
+/* Opaque floating fill — NOT --surface-inset. This card is portaled to
+   document.body (AnchoredPopover), so it has no opaque parent to composite
+   over; the Studio preset remaps --surface-inset to a translucent wash
+   (--active-shade), which let the rail bleed through the whole card. --bg-2
+   (opaque --s2) is the same fill every sibling popover recipe already uses. */
 .connect-card {
-  background: var(--surface-inset);
+  background: var(--bg-2);
   border: 1px solid var(--ui-line-strong);
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
@@ -767,18 +769,128 @@ input {
   padding: var(--sp3);
 }
 
-/* Sessions/history variant: the body is a scrollable menu list on the
-   tighter menu inset. Portaled, so the width is its own (it no longer
-   inherits the tree's), clamped for very narrow viewports. */
+/* Workspaces (⋯) variant: the OPTIONS card — four fixed choices plus the one
+   Past-sessions row. It does NOT scroll: the unbounded set moved to the
+   sub-card beside it (.past-sessions-list), so this card only ever holds what
+   fits. Portaled, so the width is its own, clamped for narrow viewports. */
 .history-card {
-  width: min(320px, calc(100vw - var(--sp4)));
+  width: min(300px, calc(100vw - var(--sp4)));
 }
 
 .history-card .connect-card-body {
   gap: var(--tree-row-gap);
   padding: 6px;
+}
+
+/* ── The ⋯ menu is a FLYER, not a card ────────────────────────────────────
+   A transparent shell hosting a flex track: the options card, a hit-testable
+   2px bridge, and the Past-sessions sub-card. The pair lifts ONCE (the shadow
+   is on the track, not each card) so the seam between two surfaces at the same
+   elevation never reads as a crop mark. It opens BESIDE the rail. */
+.menu-flyer {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  animation: none;
+  /* The portal's positioned element IS the stacking context here (the cards
+     inside no longer set the layer), so the z-index lives on the shell — above
+     the pane resize splitters (z-index: 20), which otherwise paint over a menu
+     that overhangs a pane boundary. */
+  z-index: 40;
+}
+
+.menu-flyer-track {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.22));
+}
+
+.menu-flyer-track .connect-card {
+  box-shadow: none;
+}
+
+.menu-flyer-bridge {
+  align-self: stretch;
+  flex: 0 0 2px;
+  width: 2px;
+  pointer-events: auto;
+}
+
+/* The sub-card is .connect-card plus the two things that make it nested: it
+   aligns to the top of the track (the row that opened it) and slides in from
+   the left as it appears. */
+.menu-flyer-nested {
+  align-self: flex-start;
+  width: min(320px, calc(100vw - var(--sp4)));
+  animation: menu-nested-in 0.1s var(--ease) both;
+}
+
+@keyframes menu-nested-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-flyer-nested {
+    animation: none;
+  }
+}
+
+/* The scroller lives HERE, on the unbounded set — never on the options card. */
+.past-sessions-list {
   max-height: min(360px, 60vh);
   overflow-y: auto;
+}
+
+/* The fixed-choices region (Group by + Sort). A hover target that closes the
+   Past-sessions flyout, so it must be a real box — but it re-states the body's
+   column + gap so wrapping the choices doesn't flatten their rhythm. */
+.menu-choice-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tree-row-gap);
+}
+
+/* A choice row (Group by / Sort): the shared menu-row anatomy plus a check in
+   the trailing gutter. `menuitemradio` carries the semantics; this only sizes
+   the mark slot so every row's copy column ends on the same edge, checked or
+   not. */
+.menu-choice-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--line-box, 20px);
+  color: var(--text);
+}
+
+/* The Past-sessions trigger: a normal menu row whose trailing chevron and
+   count sit at the far edge, marking it as a row that opens another surface. */
+.nested-trigger > .session-history-badge {
+  margin-left: auto;
+}
+
+.nested-trigger > svg:last-child {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+/* When a badge already pushed itself to the edge, the chevron follows it
+   rather than the copy column. */
+.nested-trigger > .session-history-badge + svg:last-child {
+  margin-left: var(--sp1);
+}
+
+.nested-trigger.is-open {
+  background: var(--active-shade);
 }
 
 /* Add-menu variant: the same door rows the dialog shows, on the menu inset.
@@ -813,22 +925,57 @@ input {
   padding: var(--sp3) var(--sp2);
 }
 
-/* Footer: stacked full-width rows, each on the shared bar height —
-   connect, then the analytics indicator, then the account entry. */
+/* Footer: ONE continuous block, not divided bands — the plan card (demo only)
+   then the account row, told apart by a gap on the shared rail inset. No
+   border-top (the rail is a single surface) and no inter-row rule. */
 .rail-footer {
   flex: 0 0 auto;
-  border-top: 1px solid var(--ui-line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  /* Same horizontal inset as .rail-header / the tree — one vertical edge. */
+  padding: var(--sp2) var(--pane-pad-x) var(--sp3);
 }
 
 .rail-footer-row {
   display: flex;
   align-items: center;
-  height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
+  min-height: var(--pane-header-h);
+  /* The block's inset lives on .rail-footer now; rows are flush inside it. */
+  padding: 0;
 }
 
-.rail-footer-row + .rail-footer-row {
-  border-top: 1px solid var(--ui-line);
+/* The plan summary is compact — it doesn't claim a full bar height. */
+.plan-row {
+  min-height: 0;
+}
+
+/* Free plan · Active + one way out. NOT a shaded card — a plain row, aligned
+   to the same inset as the account row below it (no box, no background). Only
+   the CTA carries a surface (the shared .pill); the ↗ trails it. */
+.rail-plan-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color var(--fast) var(--ease);
+}
+
+.rail-plan-card:hover {
+  color: var(--text);
+}
+
+.rail-plan-card > .pill {
+  margin-left: auto;
+}
+
+.rail-plan-card > svg:last-child {
+  flex: 0 0 auto;
+  color: var(--text-faint);
 }
 
 /* Profile row: avatar tile at the shared control size, identity copy,
@@ -892,10 +1039,14 @@ input {
 }
 
 .rail-profile-meta {
+  /* Inline-flex so the live-auth dot sits with the meta text (● no account
+     connected) rather than off at the row's far edge. */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  min-width: 0;
   color: var(--text-faint);
   font-size: var(--type-meta);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1086,14 +1237,16 @@ input {
   margin-left: auto;
 }
 
+/* Idle verbs are OUTLINED (a hairline box), so the filled CTA reads as the one
+   emphasized act. */
 .session-step {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp2);
+  gap: var(--sp1);
   flex: 0 0 auto;
   height: var(--control-h-xs);
-  padding: 0 var(--sp2);
-  border: 0;
+  padding: 0 var(--sp3);
+  border: 1px solid var(--ui-line);
   background: transparent;
   border-radius: var(--radius);
   color: var(--text-dim);
@@ -1101,11 +1254,13 @@ input {
   font-weight: 510;
   transition:
     background-color var(--transition-fast),
+    border-color var(--transition-fast),
     color var(--transition-fast);
 }
 
 .session-step:hover:not(:disabled) {
   background: var(--surface-hover);
+  border-color: var(--ui-line-strong);
   color: var(--text);
 }
 
@@ -1119,16 +1274,30 @@ input {
   outline-offset: 2px;
 }
 
-/* Deploy is the row's primary: soft accent fill, same quiet scale. */
+/* The one filled CTA (Deploy for a Draft, Run for a Deployed agent): the ink
+   button, not the brand — green stays reserved for state. */
 .session-action-primary {
-  color: var(--brand);
-  background: var(--accent-dim);
-  box-shadow: inset 0 0 0 1px var(--accent-border);
+  color: var(--btn-ink);
+  background: var(--btn);
+  border-color: transparent;
+  box-shadow: var(--shadow-xs);
 }
 
 .session-action-primary:hover:not(:disabled) {
-  color: var(--brand);
-  background: var(--accent-dim);
+  color: var(--btn-ink);
+  background: var(--ink-muted);
+}
+
+/* Prod is a quiet icon-only shortcut, not one of the three verbs — no box. */
+.session-action-prod {
+  border-color: transparent;
+  padding: 0 var(--sp1);
+  color: var(--text-dim);
+}
+.session-action-prod:hover {
+  border-color: transparent;
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 /* In flight: this action was handed to the agent but no durable signal has
@@ -1815,16 +1984,123 @@ input {
   /* Continuous surface with the terminal below — no decorative underline. */
   background: var(--surface-base);
   position: relative;
+  /* The bar measures its own width so the verbs can compact before the session
+     queue starts clipping. */
+  container-type: inline-size;
 }
 
-/* Compact context strip — like Claude Code's own header: harness, status,
-   title, cwd, tags. Purely informative except the end-session ✕. */
-.session-context {
+/* Tight bar (e.g. the 3-pane split): the secondary verbs drop their labels to
+   icons, handing the freed width to the session queue so every session stays
+   reachable. The filled CTA (Run/Deploy) keeps its word; accessible names stay
+   on every button. */
+@container (max-width: 580px) {
+  .session-bar .session-step:not(.session-action-primary) .session-step-label {
+    display: none;
+  }
+}
+
+/* The session queue: a horizontally-scrollable row of the current session (an
+   options dropdown), the agent's other live sessions (switch chips), and a + to
+   add one. It grows to fill the bar and scrolls under pressure, so every session
+   stays reachable without a second lane. */
+.session-queue {
   display: flex;
   align-items: center;
-  gap: var(--sp2);
+  gap: var(--sp1);
   flex: 1;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* A right-edge fade signals there is more of the queue to scroll to when it
+     overflows; over a queue that fits, it fades only empty space. */
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--sp4)), transparent);
+}
+.session-queue::-webkit-scrollbar {
+  display: none;
+}
+
+.session-current-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* Each session in the queue is a compact chip. The current one carries the ⌄
+   options dropdown and a selected wash; the others switch on click. */
+.session-current,
+.session-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp2);
+  flex: 0 0 auto;
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  font-size: var(--type-label);
+  font-weight: 510;
+  white-space: nowrap;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.session-current {
+  color: var(--text);
+  background: var(--active-shade);
+}
+.session-title-trigger {
+  cursor: pointer;
+}
+.session-title-trigger:hover {
+  background: var(--nested-shade);
+}
+.session-current-static {
+  cursor: default;
+}
+
+.session-switch {
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.session-switch:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.session-switch-label {
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-title-trigger:focus-visible,
+.session-switch:focus-visible,
+.session-new:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* + at the end of the queue: a quiet ghost icon button. */
+.session-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--control-h-xs);
+  height: var(--control-h-xs);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.session-new:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 /* The title is the primary claim: it never shrinks below its content until
@@ -2374,7 +2650,8 @@ input {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-0);
+  /* Transparent — the shell block's surface (center-pane) shows through. */
+  background: transparent;
 }
 
 /* The xterm.js container (.harness-terminal) is the flex-growing child.
@@ -2526,7 +2803,7 @@ input {
   height: 100%;
   width: 100%;
   min-height: 0;
-  background: var(--bg-0);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -2537,11 +2814,110 @@ input {
   flex-shrink: 0;
   height: var(--pane-header-h);
   padding: 0 var(--pane-pad-x);
-  border-bottom: 1px solid var(--ui-line);
-  font-family: var(--font-mono);
+  /* No divider under the top elements: the session bar, this status line, and
+     the terminal read as one continuous shell block. */
+  font-family: var(--mono);
   font-size: var(--type-meta);
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+}
+
+/* Terminal masthead — the Sapiom boot banner (see TerminalBrand). One ruled
+   box, titled on its top edge, with the brand (pixel mark + wordmark, in ink)
+   on the left and a facts table on the right. It replaces the agent CLI's own
+   welcome box so the shell names itself here. */
+.terminal-masthead {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp5);
+  margin: var(--sp4) var(--pane-pad-x) var(--sp2);
+  padding: var(--sp4);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  color: var(--ink);
+}
+.terminal-masthead-legend {
+  position: absolute;
+  top: 0;
+  left: var(--sp3);
+  transform: translateY(-50%);
+  margin: 0;
+  padding: 0 var(--sp1);
+  background: var(--surface-base);
+  font-family: var(--mono);
+  font-size: var(--type-meta);
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+.terminal-masthead-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp4);
+  flex-shrink: 0;
+  align-self: stretch;
+  padding-right: var(--sp4);
+  border-right: 1px solid var(--ui-line);
+  color: var(--ink);
+}
+.terminal-masthead-mark,
+.terminal-masthead-logotype {
+  display: block;
+  flex-shrink: 0;
+}
+.terminal-masthead-name {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp0);
+  min-width: 0;
+  line-height: var(--lh-tight);
+}
+.terminal-masthead-product {
+  font-family: var(--mono);
+  font-size: var(--type-meta);
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--ink-muted);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-masthead-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp1) var(--sp3);
+  margin: 0;
+  min-width: 0;
+  flex: 1;
+  font-family: var(--mono);
+  font-size: var(--type-meta);
+  line-height: 1.5;
+}
+.terminal-masthead-fact {
+  display: contents;
+}
+.terminal-masthead-facts dt {
+  color: var(--ink-faint);
+}
+.terminal-masthead-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--ink-muted);
+}
+.terminal-masthead-facts code {
+  font-family: inherit;
+  color: var(--ink);
+}
+.terminal-masthead-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-masthead-status {
+  color: var(--amber-text);
 }
 
 .terminal-status-dot {
@@ -3349,13 +3725,10 @@ input {
   flex: 1;
   display: flex;
   min-height: 0;
-  /* Reserve a strip at the bottom for the floating zoom/fit controls so they
-     sit BELOW the canvas iframe instead of on top of the diagram card
-     ("l'un sur l'autre"). The iframe (flex child) stretches to the content box
-     — i.e. shrinks by this much — and the absolute .canvas-view-controls
-     (bottom-anchored) land in the reserved strip. Keep in sync with
-     .canvas-pan-layer's bottom inset below. */
-  padding-bottom: 56px;
+  /* The iframe (dotted board) fills the whole visual, so the dot grid runs to
+     the bottom edge and the floating zoom/fit controls sit OVER it — the board
+     document already reserves a node-free bottom strip (its own padding) so the
+     controls never land on a diagram node. */
 }
 
 /* Overview / step inspector: a full-bleed bottom split block in the pane

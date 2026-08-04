@@ -209,17 +209,24 @@ test.describe("cost-removed guard", () => {
   });
 
   test("workflow macro strip has no cost affordances", async ({ page }) => {
-    const stepsBar = page.locator(".session-steps");
+    // The agent action cluster kept its testid ("session-steps") but its CSS
+    // class is now ".session-actions", so address it by testid.
+    const stepsBar = page.getByTestId("session-steps");
     await expect(stepsBar).toBeVisible();
     await assertNoDollarInChrome(stepsBar, "macro strip");
     await assertNoCostAffordance(stepsBar, "macro strip");
 
-    // The lifecycle chip label is "Deployed" or "Draft" — not a cost term
-    const chip = page.getByTestId("session-lifecycle-chip");
-    await expect(chip).toBeVisible();
-    await expect(chip).not.toContainText("wallet");
-    await expect(chip).not.toContainText("spend");
-    await expect(chip).not.toContainText("price");
+    // The lifecycle pill left the macro strip: a deployed agent's pill now lives
+    // once in the right-pane header as "workflow-dashboard-link", rendered on the
+    // Canvas tab. It reads lowercase "deployed" — a lifecycle word, never a cost
+    // term (and the focused agent, leasing, is deployed).
+    await page.getByTestId("right-tab-canvas").click();
+    const deployedPill = page.getByTestId("workflow-dashboard-link");
+    await expect(deployedPill).toBeVisible();
+    await expect(deployedPill).toContainText("deployed");
+    await expect(deployedPill).not.toContainText("wallet");
+    await expect(deployedPill).not.toContainText("spend");
+    await expect(deployedPill).not.toContainText("price");
   });
 
   // -------------------------------------------------------------------------
@@ -370,7 +377,16 @@ test.describe("cost-removed guard", () => {
     await assertNoDollarInChrome(historyMenu, "history menu");
     await assertNoCostAffordance(historyMenu, "history menu");
 
-    // Open a dead-session pane
+    // Past sessions moved into a flyout sub-card: it opens on hover (a click
+    // would hover-open then toggle it shut in the same gesture). Assert its
+    // chrome — the rows a dead session is reached through — carries no cost terms.
+    await page.getByTestId("past-sessions-trigger").hover();
+    const pastCard = page.getByTestId("past-sessions-card");
+    await expect(pastCard).toBeVisible();
+    await assertNoDollarInChrome(pastCard, "past sessions card");
+    await assertNoCostAffordance(pastCard, "past sessions card");
+
+    // Open a dead-session pane from the flyout
     await page.getByTestId("exited-session-sess-leasing").click();
     const deadPane = page.getByTestId("dead-session-pane");
     await expect(deadPane).toBeVisible();

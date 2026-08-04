@@ -53,10 +53,13 @@ body {
   letter-spacing: -0.01em;
 }
 
-/* ---- Left rail ---------------------------------------------------------- */
+/* ---- Three blocks, three surfaces --------------------------------------
+   The app reads as exactly three blocks — rail, shell, graph — each ONE flat
+   surface, told apart by their surfaces alone (no dividers). The block surface
+   is painted on the block's OUTER container; every header/row inside is
+   transparent so nothing inside a block is a different colour from it. */
 .rail {
-  background: var(--surface-raised);
-  border-right: 1px solid var(--ui-line, var(--border));
+  background: var(--surface-base);
 }
 
 /* Workflow rows: exactly ONE row in the rail ever reads as selected - the
@@ -105,10 +108,10 @@ body {
   outline: none;
 }
 
-/* ---- Center surface + terminal ----------------------------------------- */
+/* ---- Shell block (session bar + terminal) — the recessed surface, SAME as
+   the rail, so the graph pane is the only forefront (raised) block. --------- */
 .center-pane {
-  border-right: 1px solid var(--ui-line, var(--border));
-  background: var(--surface-base, var(--bg-0));
+  background: var(--surface-base);
 }
 
 .terminal-empty,
@@ -116,10 +119,9 @@ body {
   color: var(--text-faint);
 }
 
-/* ---- Session bar --------------------------------------------------------- */
+/* ---- Session bar: transparent — it IS the shell block's surface --------- */
 .session-bar {
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--ui-line, var(--border));
+  background: transparent;
 }
 
 /* Bound-workflow suffix inside the active tab: quiet metadata text, not a
@@ -178,19 +180,19 @@ body {
   box-shadow: var(--shadow-soft);
 }
 
-/* ---- Right pane: Canvas | Skills tabs ---------------------------------- */
+/* ---- Graph block (tabs + board) — the raised, forefront surface -------- */
 .right-pane {
   background: var(--surface-raised);
 }
 
 .right-pane-tabs {
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--ui-line, var(--border));
+  background: transparent;
 }
 
 .right-pane-tab {
   display: inline-flex;
   align-items: center;
+  gap: var(--sp1);
   border-radius: var(--radius);
   height: var(--control-h-xs);
   padding: 0 var(--sp3);
@@ -208,10 +210,10 @@ body {
   color: var(--text);
 }
 
-/* ---- Canvas / studio panes --------------------------------------------- */
+/* ---- Canvas / studio panes: transparent — they show the graph block ---- */
 .canvas-pane,
 .right-pane-panel {
-  background: var(--surface-raised);
+  background: transparent;
 }
 
 .canvas-empty,

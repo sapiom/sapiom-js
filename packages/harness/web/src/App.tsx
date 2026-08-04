@@ -31,7 +31,6 @@ import { Icon } from "./components/Icon";
 import { ImageComposer } from "./components/ImageComposer";
 import { SessionBar } from "./components/SessionBar";
 import { SessionStepsBar } from "./components/SessionStepsBar";
-import { SessionTabs } from "./components/SessionTabs";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
@@ -43,6 +42,7 @@ import { ApiError, boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
 import { resolveProjectRoot } from "./lib/project-dir";
+import { workflowUrl } from "./lib/urls";
 import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
 import { initAnalytics } from "./lib/analytics/posthog";
@@ -367,8 +367,6 @@ export const App = (): JSX.Element => {
     !showAgentEmpty &&
     activeSession != null &&
     activeSession.status !== "exited";
-  // The tab strip renders in the workbench (one tab per belonging session).
-  const showTabs = showWorkbench && focusTabs.length > 0;
 
   // The right pane projects the ACTIVE session's bound agent — but nothing
   // (null) while a focused agent has no session, so it never shows a
@@ -526,21 +524,6 @@ export const App = (): JSX.Element => {
     harness.setActiveSessionId(id);
   };
 
-  // Close a tab (× -> end-session confirm handled in SessionTabs). If it was
-  // the active tab, fall back to another tab of the focused agent, or the
-  // empty state when none remain.
-  const handleCloseTab = (id: string): void => {
-    void (async () => {
-      const fallback = focusTabs.find((s) => s.id !== id) ?? null;
-      const wasActive = harness.activeSessionId === id;
-      try {
-        await harness.closeSession(id);
-      } catch {
-        return; // closeSession surfaced its own toast; keep the tab.
-      }
-      if (wasActive) harness.setActiveSessionId(fallback ? fallback.id : null);
-    })();
-  };
 
   // One entry point for reviewing a past (transcript) session.
   const reviewPastSession = (summary: SessionSummary): void => {
@@ -837,47 +820,61 @@ export const App = (): JSX.Element => {
               }
               onRenameSession={renameSession}
               boundWorkflowName={boundWorkflow?.name ?? null}
+              sessions={showWorkbench ? focusTabs : []}
+              onSelectSession={selectTab}
+              labelOf={(session) => {
+                // Sessions of the focused agent share its workspace folder, so
+                // labelling them by that folder is redundant (the rail already
+                // names the workspace). A session still on its folder default is
+                // labelled by its AGENT instead, numbering extras; a real
+                // rename/title passes through untouched.
+                const display = sessionDisplayName(session, state.sessions, sessionNames);
+                const folder = session.cwd.split("/").filter(Boolean).pop() ?? "";
+                // Folder-default forms ONLY: the bare basename, or "<basename> N"
+                // the dedup appends to repeats. A real rename or transcript title
+                // that merely begins with the basename (e.g. "leasing draft")
+                // must pass through — matching `startsWith("leasing ")` would have
+                // silently replaced it with the agent name.
+                const suffix = display.startsWith(`${folder} `) ? display.slice(folder.length + 1) : "";
+                const isFolderDefault = display === folder || /^\d+$/.test(suffix);
+                if (!isFolderDefault || !focusedWorkflow) return display;
+                const idx = focusTabs.findIndex((s) => s.id === session.id);
+                return idx > 0 ? `${focusedWorkflow.name} ${idx + 1}` : focusedWorkflow.name;
+              }}
               busy={activeSession != null && harness.busySessionIds.has(activeSession.id)}
               onCloseSession={(id) => void harness.closeSession(id)}
               onOpenInEditor={openInEditor}
               onToast={harness.showToast}
               onExpandRail={railCollapsed ? () => setRailCollapsed(false) : null}
               onExpandRight={rightCollapsed ? () => setRightCollapsed(false) : null}
+              onNewSession={
+                showWorkbench && (focusedWorkflow || focusedAgentPath)
+                  ? () => {
+                      if (focusedWorkflow) handleStartSessionForAgent(focusedWorkflow);
+                      else if (focusedAgentPath) void handleCreateSession(focusedAgentPath, "claude-code");
+                    }
+                  : null
+              }
+              /* The agent action cluster shares the one session bar — no
+                 separate tab lane or action row. Switching sessions moves to
+                 the rail / ⌘K / history. */
+              actions={
+                showWorkbench && activeSession && boundWorkflow ? (
+                  <SessionStepsBar
+                    workflow={boundWorkflow}
+                    activeSessionId={harness.activeSessionId}
+                    sessionReady={activeSession.ready === true && activeSession.status !== "exited"}
+                    macros={state.macros}
+                    onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
+                    preview={harness.previewBySession.get(activeSession.id) ?? null}
+                    lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
+                    authenticated={state.authenticated}
+                    directActionSettleSeq={harness.directActionSettleSeq}
+                  />
+                ) : null
+              }
             />
 
-            {/* Session tab strip: one tab per live session belonging to the
-                focused agent. Session switching lives here, not in the rail. */}
-            {showTabs && (
-              <SessionTabs
-                sessions={focusTabs}
-                activeSessionId={harness.activeSessionId}
-                busySessionIds={harness.busySessionIds}
-                labelOf={(session) => sessionDisplayName(session, state.sessions, sessionNames)}
-                agentName={focusedWorkflow?.name ?? activeSession?.title ?? "this agent"}
-                onSelect={selectTab}
-                onClose={handleCloseTab}
-                onNew={() => {
-                  if (focusedWorkflow) handleStartSessionForAgent(focusedWorkflow);
-                  else if (focusedAgentPath) void handleCreateSession(focusedAgentPath, "claude-code");
-                }}
-              />
-            )}
-
-            {/* Agent action bar: shown for the active session's bound workflow
-                in the workbench. Hidden while reviewing/dead/empty. */}
-            {showWorkbench && activeSession && boundWorkflow && (
-              <SessionStepsBar
-                workflow={boundWorkflow}
-                activeSessionId={harness.activeSessionId}
-                sessionReady={activeSession.ready === true && activeSession.status !== "exited"}
-                macros={state.macros}
-                onRunMacro={(macro) => handleRunMacroForWorkflow(boundWorkflow, macro)}
-                preview={harness.previewBySession.get(activeSession.id) ?? null}
-                lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
-                authenticated={state.authenticated}
-                directActionSettleSeq={harness.directActionSettleSeq}
-              />
-            )}
             <div className="terminal-slot">
               {showReview && reviewSummary ? (
                 <PastSessionPane
@@ -933,7 +930,11 @@ export const App = (): JSX.Element => {
                 >
                   <div className="agent-view" data-testid="agent-view">
                     <div className="agent-view-panel" id="agent-panel-terminal">
-                      <Terminal sessionId={harness.activeSessionId} token={harness.bootToken} />
+                      <Terminal
+                        sessionId={harness.activeSessionId}
+                        token={harness.bootToken}
+                        cwd={activeSession?.cwd ?? null}
+                      />
                     </div>
                   </div>
                 </ImageComposer>
@@ -951,7 +952,19 @@ export const App = (): JSX.Element => {
           {!rightCollapsed && !isMobile && (
             <div
               className="pane-resize-handle pane-resize-handle-canvas"
-              style={{ right: widths.canvas ?? "50%" }}
+              // Track the canvas column's ACTUAL edge, not the requested width.
+              // The column is `minmax(CANVAS_MIN, widths.canvas)`, so it clamps
+              // below widths.canvas once the terminal is at its own floor
+              // (100% − CANVAS_MIN). Positioning the handle at the raw
+              // widths.canvas then stranded it in the terminal, a growing gap
+              // to the left of the board it splits. The same clamp keeps them
+              // welded at every width. (null = the 1fr/1fr split, always at 50%.)
+              style={{
+                right:
+                  widths.canvas == null
+                    ? "50%"
+                    : `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`,
+              }}
               onPointerDown={startCanvasDrag}
               onDoubleClick={resetCanvas}
               role="separator"
@@ -982,6 +995,7 @@ export const App = (): JSX.Element => {
                 onClick={() => setRightTab("canvas")}
                 data-testid="right-tab-canvas"
               >
+                <Icon name="Workflow" size={14} />
                 Canvas
               </button>
               <button
@@ -991,6 +1005,7 @@ export const App = (): JSX.Element => {
                 onClick={() => setRightTab("steps")}
                 data-testid="right-tab-steps"
               >
+                <Icon name="List" size={14} />
                 Steps
               </button>
               <button
@@ -1003,6 +1018,7 @@ export const App = (): JSX.Element => {
                 }}
                 data-testid="right-tab-code"
               >
+                <Icon name="Code" size={14} />
                 Code
               </button>
               <div className="right-pane-corner">
@@ -1013,7 +1029,7 @@ export const App = (): JSX.Element => {
                   <a
                     className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
                     data-testid="workflow-dashboard-link"
-                    href={`https://app.sapiom.ai/workflows/${rightPaneWorkflow.definitionId}`}
+                    href={workflowUrl(rightPaneWorkflow.definitionId)}
                     target="_blank"
                     rel="noreferrer"
                     aria-label="Deployed — open in the Sapiom dashboard"

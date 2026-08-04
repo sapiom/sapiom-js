@@ -54,7 +54,11 @@ test.describe("settings popover", () => {
     await page.getByTestId("telemetry-toggle").click();
     await expect(popover).toBeVisible();
 
-    await page.locator(".brand-lockup").click();
+    // The popover is anchored to the footer account row and grows UP across the
+    // full-width rail (up-start + matchWidth), so it now covers the rail's
+    // brand lockup — click the main panel instead, which the rail-width popover
+    // never reaches.
+    await page.locator(".terminal-slot").click();
     await expect(popover).toBeHidden();
   });
 
