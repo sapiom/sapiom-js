@@ -8,8 +8,9 @@
  *
  * Why a folder is unavoidable, and why the name has to be decided up front:
  *   - a session is a PTY with a `cwd`, and scaffolding is "start a session in a
- *     folder, then ask the agent to run `sapiom agents init .`";
- *   - `scaffold()` REFUSES a non-empty target (agent-core `DIR_NOT_EMPTY`);
+ *     folder, then ask the agent to call `sapiom_dev_agents_scaffold`";
+ *   - `scaffold()` refuses user content in the target (agent-core
+ *     `DIR_NOT_EMPTY`) while allowing Studio's own `.sapiom/` state;
  *   - `projectName` defaults to `basename(targetDir)` and is stamped into
  *     `package.json` "name" and `defineAgent({ name })`.
  *

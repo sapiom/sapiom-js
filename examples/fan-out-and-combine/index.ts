@@ -9,11 +9,11 @@ import { z } from "zod/v4";
 
 /**
  * Fan Out and Combine — split a goal into parts, run each part as its own child
- * workflow in parallel, then merge the results into one answer.
+ * agent run in parallel, then merge the results into one answer.
  *
- * This is the canonical "a workflow composes other workflows" template. It reaches
+ * This is the canonical "an agent composes other agents" template. It reaches
  * the child-run capability through the run context (`ctx.sapiom.agents.run`), so
- * every child is a real, independently-metered execution — not an in-process
+ * every child is a real, independently-metered agent run — not an in-process
  * function call. The pattern is fan-out → join → reduce, the durable equivalent of
  * `Promise.all` over sub-agents.
  *
@@ -27,7 +27,7 @@ import { z } from "zod/v4";
  * The child it fans out to defaults to THIS agent's own slug (`ctx.agentName`), so
  * the template composes itself with zero setup: a deployed run dispatches leaf runs
  * of the same deployment. Point `childDefinition` at any other deployed
- * orchestration's slug and it fans that out instead, one child run per item.
+ * agent's slug and it fans that out instead, one child run per item.
  *
  * The graph, one legible line per role:
  *   plan ─▶ fanOut (agents.run × N) ─▶ reduce (models.run) ─▶ done      (coordinate)
@@ -78,12 +78,12 @@ interface EntryInput {
   /** The sub-parts to fan out — one child run per item. Defaults to a sample set. */
   items?: string[];
   /**
-   * Slug of the deployed orchestration to run for each item. Defaults to THIS
+   * Slug of the deployed agent to run for each item. Defaults to THIS
    * agent's own slug, so the template composes itself with no other deployment.
    */
   childDefinition?: string;
   /**
-   * Which role this execution plays. Omit (or "coordinate") for the parent; the
+   * Which role this agent run plays. Omit (or "coordinate") for the parent; the
    * coordinator sets "leaf" on the children it launches. A leaf does one item and
    * never fans out.
    */
@@ -180,13 +180,13 @@ const entryInput = z.object({
     .string()
     .optional()
     .describe(
-      "Slug of the deployed orchestration to run per item. Defaults to this agent's own slug.",
+      "Slug of the deployed agent to run per item. Defaults to this agent's own slug.",
     ),
   mode: z
     .enum(["coordinate", "leaf"])
     .default("coordinate")
     .describe(
-      'Which role this execution plays; a "leaf" does one item and never fans out.',
+      'Which role this agent run plays; a "leaf" does one item and never fans out.',
     ),
   item: z
     .string()

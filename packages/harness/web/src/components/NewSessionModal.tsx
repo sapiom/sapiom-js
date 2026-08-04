@@ -134,7 +134,7 @@ export function NewSessionModal({
           {/* The one field is a DIRECTORY, not a name — say so, and say what
               the name will be, so nobody types a session title into a path. */}
           <p className="modal-field-hint">
-            Pick the workspace folder the agent runs in; the session is named after the folder.
+            Pick the workspace folder the coding agent runs in; the session is named after the folder.
           </p>
           {error && <div className="modal-error">{error}</div>}
         </div>
@@ -151,7 +151,7 @@ export function NewSessionModal({
                 data-testid="harness-select"
                 aria-haspopup="menu"
                 aria-expanded={pickerOpen}
-                aria-label="Agent for this session"
+                aria-label="Coding agent for this session"
                 data-tooltip="Which coding agent runs this session"
                 disabled={busy}
                 onClick={() => setPickerOpen((v) => !v)}

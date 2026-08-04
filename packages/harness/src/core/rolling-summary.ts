@@ -112,7 +112,7 @@ export function buildRollingSummaryPrompt(record: SessionRecord, previous: strin
   return [
     `Summarize the coding session described below in at most ${ROLLING_SUMMARY_MAX_WORDS} words.`,
     "",
-    "The summary is read by a FRESH agent session that has none of this context,",
+    "The summary is read by a FRESH coding-agent session that has none of this context,",
     "so write for someone picking the work up cold. Cover, in this order and only",
     "where the material actually supports it:",
     "",

@@ -79,8 +79,13 @@ test.describe("theme — system preference", () => {
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({ page }) => {
+  await expect(page).toHaveTitle("Agent Studio");
   await expect(page.locator(".brand-logotype")).toBeVisible();
   await expect(page.locator(".brand-product")).toHaveText("agent.studio");
+  await expect(page.getByTestId("palette-trigger")).toHaveAttribute(
+    "aria-label",
+    "Search sessions, agents, and paths",
+  );
   // Mock mode is the static demo build: it must never claim a connected
   // Sapiom account — the identity chip reads "Demo workspace" instead.
   const identity = page.getByTestId("brand-identity");
@@ -306,7 +311,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // Zone 1 is a pure explorer: workspace folder headers and agent rows, no
     // sessions anywhere in the tree.
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-    await expect(page.getByTestId("workspace-group-rfq-workflows")).toBeVisible();
+    await expect(page.getByTestId("workspace-group-rfq-agent")).toBeVisible();
     // onboarding-flow is a known workspace (in recentDirs), so it files under
     // its own folder header rather than an orphan bucket.
     await expect(page.getByTestId("workspace-group-onboarding-flow")).toBeVisible();
@@ -404,7 +409,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 
   test("focusing an agent with no session shows the start empty state", async ({ page }) => {
-    // rfq-workflows has no live session in the fixtures, so focusing rfq cannot
+    // rfq-agent has no live session in the fixtures, so focusing rfq cannot
     // render a board (the canvas is served per session). The workbench names
     // the absence and offers the one move; no tab strip renders.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
@@ -526,7 +531,15 @@ test("add project: the rail's + registers a bare folder through the 'Open a fold
 test("new-session modal: directory picker navigates and validates", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
   await page.getByTestId("new-session-btn").click();
-  await expect(page.locator(".modal-new-session")).toBeVisible();
+  const modal = page.locator(".modal-new-session");
+  await expect(modal).toBeVisible();
+  await expect(modal.locator(".modal-field-hint")).toHaveText(
+    "Pick the workspace folder the coding agent runs in; the session is named after the folder.",
+  );
+  await expect(modal.getByTestId("harness-select")).toHaveAttribute(
+    "aria-label",
+    "Coding agent for this session",
+  );
 
   const startButton = page.getByRole("button", { name: "Start session" });
   const input = page.getByTestId("dir-picker-input");
@@ -537,12 +550,12 @@ test("new-session modal: directory picker navigates and validates", async ({ pag
 
   // Type-ahead: an unrecognized tail filters the nearest real ancestor's children.
   await input.fill("/Users/demo/rf");
-  await expect(page.getByTestId("dir-picker-item-rfq-workflows")).toBeVisible();
+  await expect(page.getByTestId("dir-picker-item-rfq-agent")).toBeVisible();
   await expect(page.getByTestId("dir-picker-item-onboarding-flow")).toHaveCount(0);
 
   // Clicking a listed directory drills into it.
-  await page.getByTestId("dir-picker-item-rfq-workflows").click();
-  await expect(input).toHaveValue("/Users/demo/rfq-workflows");
+  await page.getByTestId("dir-picker-item-rfq-agent").click();
+  await expect(input).toHaveValue("/Users/demo/rfq-agent");
   await expect(page.getByTestId("dir-picker-item-src")).toBeVisible();
 
   // "Up" walks to the parent.
@@ -641,7 +654,7 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   await expect(exited).not.toContainText("from summary");
   await expect(exited).not.toContainText("nothing recorded");
 
-  // The list is global — rfq-workflows' past session shows without
+  // The list is global — rfq-agent's past session shows without
   // switching directories.
   await expect(page.getByTestId("exited-session-sess-rfq")).toBeVisible();
 
@@ -789,7 +802,7 @@ test("the rail's ⋯ menu offers a Group by toggle (Workspace / Deployment)", as
 test.describe("held arrangement", () => {
   test("workspace collapse, right tab, and right-pane collapse survive a reload", async ({ page }) => {
     // Collapse the rfq workspace group (plain header toggles on click).
-    await page.getByTestId("workspace-group-rfq-workflows").locator(".workspace-row-main").click();
+    await page.getByTestId("workspace-group-rfq-agent").locator(".workspace-row-main").click();
     await expect(page.getByTestId("workflow-rfq")).toHaveCount(0);
 
     // Pick the Steps tab, then fold the right pane away.
@@ -893,7 +906,7 @@ test("canvas pane shows its empty state for a session with nothing generated yet
   // the scratch session — no bundled doc — to see the honest empty state.
   await page.getByTestId("workspace-focus-scratch").click();
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
-  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound workflow");
+  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound agent");
 });
 
 test("settings popover: identity, telemetry toggle, and it persists across close/reopen", async ({ page }) => {
@@ -958,7 +971,7 @@ test.describe("workflow actions", () => {
     await page.getByTestId("right-tab-canvas").click();
     const dashLink = page.getByTestId("workflow-dashboard-link");
     await expect(dashLink).toBeVisible();
-    await expect(dashLink).toHaveAttribute("href", /app\.sapiom\.ai\/workflows\//);
+    await expect(dashLink).toHaveAttribute("href", /app\.sapiom\.ai\/agents\//);
     await expect(dashLink).toHaveAttribute("target", "_blank");
   });
 
@@ -993,9 +1006,9 @@ test("canvas empty state explains itself — no manual render action", async ({ 
   await page.getByTestId("workspace-focus-scratch").click();
   await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
   // Short supporting line, no file-editing instructions (there is no editor in
-  // this harness). The diagram generates automatically from the bound workflow
+  // this harness). The diagram generates automatically from the bound agent
   // — there is no manual render button anymore.
-  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound workflow");
+  await expect(page.locator(".canvas-empty")).toContainText("Generated automatically from the bound agent");
   await expect(page.locator(".canvas-empty")).not.toContainText(".sapiom/canvas/index.html");
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 
@@ -1010,7 +1023,7 @@ test("steps tab shows its own empty state (not canvas copy) before anything is r
   await page.getByTestId("right-tab-steps").click();
   const empty = page.locator(".canvas-empty");
   await expect(empty).toContainText("No steps yet");
-  await expect(empty).toContainText("Steps are read from the bound workflow");
+  await expect(empty).toContainText("Steps are read from the bound agent");
   await expect(empty).not.toContainText("Nothing generated yet");
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 
@@ -1146,7 +1159,7 @@ test("a mock session without a bundled canvas doc shows the empty state and neve
   await expect(page.locator(".canvas-iframe")).toBeVisible();
 
   // Open rfq and start a session: same-workspace, so it starts in
-  // rfq-workflows — a session with NO bundled demo document.
+  // rfq-agent — a session with NO bundled demo document.
   await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
   await page.getByTestId("open-agent-start-session").click();
   await expect(page.getByTestId("session-context-title")).toContainText("rfq");
@@ -1469,6 +1482,24 @@ test.describe("account profile row", () => {
     const menu = page.getByTestId("profile-menu");
     await expect(menu).toBeVisible();
     await expect(page.getByTestId("profile-open-dashboard")).toBeVisible();
+    await page.evaluate(() => {
+      const harnessWindow = window as unknown as {
+        __SAP_2332_OPENED_URL__?: string;
+        open: typeof window.open;
+      };
+      harnessWindow.open = ((url?: string | URL) => {
+        harnessWindow.__SAP_2332_OPENED_URL__ = String(url ?? "");
+        return null;
+      }) as typeof window.open;
+    });
+    await page.getByTestId("profile-open-dashboard").click();
+    await expect.poll(() => page.evaluate(() => (
+      window as unknown as { __SAP_2332_OPENED_URL__?: string }
+    ).__SAP_2332_OPENED_URL__)).toBe("https://app.sapiom.ai/agents");
+
+    // Reopen after the dashboard action closes the menu.
+    await profile.click();
+    await expect(menu).toBeVisible();
     // Demo build: the switch item reads as connect and stays actionable.
     await expect(page.getByTestId("profile-switch-account")).toHaveText(/Connect Sapiom account/);
     await expect(page.getByTestId("profile-switch-account")).toBeEnabled();
@@ -1803,8 +1834,42 @@ test("steps tab drills into a step's real transitions and slides back", async ({
   const header = page.getByTestId("workflow-actions-header");
   await expect(header.getByTestId("canvas-detail-back")).toBeVisible();
   await expect(header.getByTestId("canvas-detail-title")).toHaveText("approve?");
-  await expect(header.getByTestId("canvas-detail-ask")).toBeVisible();
+  const askCodingAgent = header.getByTestId("canvas-detail-ask");
+  await expect(askCodingAgent).toBeVisible();
+  await expect(askCodingAgent).toHaveAccessibleName("Ask coding agent");
+  await expect(askCodingAgent).toHaveAttribute("data-tooltip", "Ask the coding agent in the terminal");
+  await expect(askCodingAgent).toContainText("Ask coding agent");
   await expect(header.getByTestId("canvas-detail-menu")).toBeVisible();
+
+  await askCodingAgent.click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+          .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+      ),
+    )
+    .toContain('step of this agent');
+  const askPrompt = await page.evaluate(() =>
+    (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+      .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+  );
+  expect(askPrompt.toLowerCase()).not.toContain("workflow");
+
+  await page.evaluate(() => {
+    const hook = (window as unknown as { __HARNESS_TEST__?: Record<string, unknown> }).__HARNESS_TEST__;
+    if (hook) delete hook.lastInjectInput;
+  });
+  await header.getByTestId("canvas-detail-menu").click();
+  await page.getByRole("menuitem", { name: "Ask coding agent to modify" }).click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+          .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+      ),
+    )
+    .toContain('step of this agent');
 
   // Real outgoing transitions with their branch conditions, both terminals.
   const detail = page.getByTestId("canvas-step-detail");
@@ -1829,6 +1894,33 @@ test("steps tab drills into a step's real transitions and slides back", async ({
   await expect(frame).toHaveAttribute("data-view", "board");
 });
 
+test("canvas repair sends the coding agent an Agent-terminology prompt", async ({ page }) => {
+  const canvasBody = page.frameLocator(".canvas-iframe").locator("body");
+  await expect(canvasBody).toBeVisible();
+  await canvasBody.evaluate(() => {
+    window.parent.postMessage(
+      { type: "sapiom-canvas:error", title: "leasing", reason: "TypeScript extraction failed" },
+      "*",
+    );
+  });
+  await expect(page.getByTestId("canvas-render-error")).toBeVisible();
+  await page.getByTestId("canvas-error-fix").click();
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+          .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+      ),
+    )
+    .toContain("agent graph extracts cleanly");
+  const prompt = await page.evaluate(() =>
+    (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
+      .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+  );
+  expect(prompt.toLowerCase()).not.toContain("workflow");
+});
+
 test("a detected dev server surfaces a Preview chip on the action bar", async ({ page }) => {
   await expect(page.getByTestId("session-preview-chip")).toHaveCount(0);
   await page.evaluate(() => {
@@ -1843,6 +1935,10 @@ test("a detected dev server surfaces a Preview chip on the action bar", async ({
   await expect(chip).toBeVisible();
   await expect(chip).toContainText("Preview :5173");
   await expect(chip).toHaveAttribute("href", "http://localhost:5173/");
+  await expect(chip).toHaveAttribute(
+    "data-tooltip",
+    "The coding agent is serving an app on port 5173. Opens http://localhost:5173/",
+  );
 });
 
 test("an observed run renders per-step status and latency in the steps tab", async ({ page }) => {
@@ -1909,7 +2005,9 @@ test("an observed run renders its real steps even before anything is visualized"
   await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("local run");
   await expect(fallback).not.toContainText("$");
   // Structure (transitions, contracts) lives on the Canvas tab; the hint says so.
-  await expect(fallback).toContainText("Open the Canvas tab");
+  await expect(fallback).toContainText(
+    "Agent run data only. Open the Canvas tab for the diagram — transitions and contracts come from the agent.",
+  );
 });
 
 test("a second run never erases the first: the run picker recalls past runs", async ({

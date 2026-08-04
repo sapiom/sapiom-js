@@ -134,6 +134,8 @@ test.describe("board-click inspector shows Input, Output, and Logs", () => {
     await expect(page.getByTestId("canvas-inspector-run")).toBeVisible({ timeout: 5000 });
 
     const inspector = page.getByTestId("canvas-step-inspector");
+    await expect(page.getByTestId("canvas-inspector-run")).toContainText("Agent run");
+    await expect(page.getByTestId("canvas-inspector-run")).not.toContainText("Last run");
 
     // Input disclosure must be present.
     const inputDetail = inspector.getByTestId("canvas-inspector-run-input-intake");
@@ -318,11 +320,24 @@ test.describe("Capability calls block", () => {
 
     const detail = page.getByTestId("canvas-step-detail");
     await expect(detail).toBeVisible({ timeout: 5000 });
+    await expect(detail.getByRole("heading", { name: "Agent run" })).toBeVisible();
+    await expect(detail).not.toContainText("Last run");
 
     const callsSection = detail.getByTestId("canvas-detail-capability-calls");
     await expect(callsSection).toBeVisible();
     await expect(callsSection).toContainText("records.write");
   });
+});
+
+test("the entry-step detail says the agent starts here", async ({ page }) => {
+  await loadBoard(page);
+  await page.getByTestId("right-tab-steps").click();
+  await page.getByTestId("canvas-step-row-intake").click();
+  await page.getByTestId("canvas-step-open-intake").click();
+
+  const detail = page.getByTestId("canvas-step-detail");
+  await expect(detail).toContainText("Entry point: the agent starts here.");
+  await expect(detail).not.toContainText("the workflow starts here");
 });
 
 // ---------------------------------------------------------------------------

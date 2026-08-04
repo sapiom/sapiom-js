@@ -3,10 +3,13 @@ import { Transport } from "../_client/index.js";
 import {
   images,
   createImage,
+  launchImage,
   createVideo,
   launchVideo,
   toVideoResumePayload,
+  toImageResumePayload,
   VIDEO_RESULT_SIGNAL,
+  IMAGE_RESULT_SIGNAL,
   ContentGenerationHttpError,
 } from "./index.js";
 
@@ -841,6 +844,194 @@ describe("createClient().contentGeneration.video.launch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// contentGeneration.images.launch() — routed async dispatch + resume token
+// ---------------------------------------------------------------------------
+
+describe("contentGeneration.images.launch()", () => {
+  it("POSTs the routed capability with x-api-key, dispatch:'async', and returns a handle", async () => {
+    const { transport, calls } = makeLaunchTransport(
+      { requestId: "img-1", responseUrl: `${BASE}/queue/img-1` },
+      { images: [{ url: "https://media/x.png" }] },
+    );
+
+    const handle = await launchImage({ prompt: "a red bike" }, transport, BASE);
+
+    // Routed URL (Core), NOT the fal-direct /run/<model> path video uses.
+    expect(calls[0]!.url).toBe(
+      `${BASE}/v1/capabilities/content.generation.images`,
+    );
+    expect(calls[0]!.init.method).toBe("POST");
+    // Routed auth header, not the gateway-direct one.
+    expect(headerOf(calls[0]!, "x-api-key")).toBe("test-key");
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBeUndefined();
+    // `dispatch: 'async'` is what selects the queue path over the sync 30s-capped one.
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "a red bike",
+      dispatch: "async",
+    });
+    expect(handle.requestId).toBe("img-1");
+  });
+
+  it("dispatch.correlationId equals requestId and resultSignal equals IMAGE_RESULT_SIGNAL", async () => {
+    const { transport } = makeLaunchTransport(
+      { requestId: "img-disp", responseUrl: `${BASE}/queue/img-disp` },
+      { images: [{ url: "u" }] },
+    );
+
+    const handle = await launchImage({ prompt: "a wave" }, transport, BASE);
+
+    expect(handle.dispatch.correlationId).toBe("img-disp");
+    expect(handle.dispatch.resultSignal).toBe(IMAGE_RESULT_SIGNAL);
+  });
+
+  it("IMAGE_RESULT_SIGNAL is the capability-stable terminal signal", () => {
+    expect(IMAGE_RESULT_SIGNAL).toBe("contentGeneration.images.result");
+  });
+
+  it("accepts a statusUrl-only handle, deriving the poll URL by stripping /status", async () => {
+    let polledUrl = "";
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      const url = String(input);
+      if (init.method === "POST") {
+        return jsonResponse({
+          requestId: "img-status-only",
+          statusUrl: `${BASE}/queue/img-status-only/status`,
+        });
+      }
+      polledUrl = url;
+      return jsonResponse({ images: [{ url: "https://media/x.png" }] });
+    }) as typeof globalThis.fetch;
+    const transport = new Transport({ apiKey: "test-key", fetch: fetchMock });
+
+    const handle = await launchImage({ prompt: "x" }, transport, BASE);
+    await expect(handle.wait({ pollMs: 1 })).resolves.toMatchObject({
+      images: [{ url: "https://media/x.png" }],
+    });
+    expect(polledUrl).toBe(`${BASE}/queue/img-status-only`);
+  });
+
+  it("forwards numImages, params, model, and storage alongside dispatch:'async'", async () => {
+    const { transport, calls } = makeLaunchTransport(
+      { requestId: "img-fields", responseUrl: `${BASE}/queue/img-fields` },
+      { images: [] },
+    );
+
+    await launchImage(
+      {
+        prompt: "x",
+        numImages: 2,
+        params: { image_size: "square" },
+        model: "fal-ai/flux/dev",
+        storage: { visibility: "private" },
+      },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      prompt: "x",
+      dispatch: "async",
+      numImages: 2,
+      params: { image_size: "square" },
+      model: "fal-ai/flux/dev",
+      storage: { visibility: "private" },
+    });
+  });
+
+  it("includes x-sapiom-workflow-token when transport.resumeToken is set", async () => {
+    const { transport, calls } = makeLaunchTransport(
+      { requestId: "img-tok", responseUrl: `${BASE}/queue/img-tok` },
+      { images: [{ url: "u" }] },
+      "tok-workflow-img",
+    );
+
+    await launchImage({ prompt: "x" }, transport, BASE);
+
+    expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBe(
+      "tok-workflow-img",
+    );
+  });
+
+  it("omits x-sapiom-workflow-token when resumeToken is not set", async () => {
+    const { transport, calls } = makeLaunchTransport(
+      { requestId: "img-notok", responseUrl: `${BASE}/queue/img-notok` },
+      { images: [{ url: "u" }] },
+    );
+
+    await launchImage({ prompt: "x" }, transport, BASE);
+
+    expect(headerOf(calls[0]!, "x-sapiom-workflow-token")).toBeUndefined();
+  });
+
+  it("wait() polls the responseUrl and returns the mapped result; maps fileId", async () => {
+    let polls = 0;
+    const calls: FetchCall[] = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      calls.push({ url: String(input), init });
+      if (init.method === "POST") {
+        return jsonResponse({
+          requestId: "img-wait",
+          responseUrl: `${BASE}/queue/img-wait`,
+        });
+      }
+      polls += 1;
+      return polls < 2
+        ? jsonResponse({ status: "IN_PROGRESS" })
+        : jsonResponse({
+            images: [{ url: "https://media/x.png", fileId: "f-img" }],
+          });
+    }) as typeof globalThis.fetch;
+    const transport = new Transport({ apiKey: "test-key", fetch: fetchMock });
+
+    const handle = await launchImage({ prompt: "x" }, transport, BASE);
+    const result = await handle.wait({ pollMs: 1 });
+
+    expect(result.images?.[0]?.fileId).toBe("f-img");
+    expect(calls.filter((c) => c.init.method === "GET")).toHaveLength(2);
+  });
+
+  it("throws ContentGenerationHttpError when the submit fails — never polls", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ error: "bad model" }, { status: 422 }),
+    ]);
+
+    await expect(
+      launchImage({ prompt: "x" }, transport, BASE),
+    ).rejects.toBeInstanceOf(ContentGenerationHttpError);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("wait() throws if the result isn't ready before the timeout", async () => {
+    const { transport } = makeLaunchTransport(
+      { requestId: "img-timeout", responseUrl: `${BASE}/queue/img-timeout` },
+      { status: "IN_PROGRESS" },
+    );
+
+    const handle = await launchImage({ prompt: "x" }, transport, BASE);
+    await expect(handle.wait({ timeoutMs: 20, pollMs: 1 })).rejects.toThrow(
+      /did not complete within/,
+    );
+  });
+
+  it("`images.launch` is the same operation as `launchImage`", async () => {
+    const { transport } = makeLaunchTransport(
+      { requestId: "img-ns", responseUrl: `${BASE}/queue/img-ns` },
+      { images: [{ url: "u" }] },
+    );
+
+    const handle = await images.launch({ prompt: "x" }, transport, BASE);
+    expect(handle.requestId).toBe("img-ns");
+    expect(handle.dispatch.resultSignal).toBe(IMAGE_RESULT_SIGNAL);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // toVideoResumePayload()
 // ---------------------------------------------------------------------------
 
@@ -891,9 +1082,63 @@ describe("toVideoResumePayload()", () => {
     });
     expect(payload).toEqual({
       outputs: [
-        { fileId: "f-3", downloadUrl: "https://dl/f-3", downloadUrlExpiresAt: "2026-03-03T00:00:00Z" },
+        {
+          fileId: "f-3",
+          downloadUrl: "https://dl/f-3",
+          downloadUrlExpiresAt: "2026-03-03T00:00:00Z",
+        },
       ],
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toImageResumePayload()
+// ---------------------------------------------------------------------------
+
+describe("toImageResumePayload()", () => {
+  it("maps each image to an outputs[] entry (one per image, order preserved)", () => {
+    const payload = toImageResumePayload({
+      images: [
+        { url: "u1", fileId: "f-1" },
+        { url: "u2", fileId: "f-2", storageError: "partial" },
+      ],
+    });
+    expect(payload).toEqual({
+      outputs: [{ fileId: "f-1" }, { fileId: "f-2", storageError: "partial" }],
+    });
+  });
+
+  it("returns empty outputs when there are no images", () => {
+    expect(toImageResumePayload({})).toEqual({ outputs: [] });
+    expect(toImageResumePayload({ images: [] })).toEqual({ outputs: [] });
+  });
+
+  it("carries the convenience downloadUrl + its expiry alongside fileId", () => {
+    const payload = toImageResumePayload({
+      images: [
+        {
+          url: "u",
+          fileId: "f-3",
+          downloadUrl: "https://dl/f-3",
+          downloadUrlExpiresAt: "2026-03-03T00:00:00Z",
+        },
+      ],
+    });
+    expect(payload).toEqual({
+      outputs: [
+        {
+          fileId: "f-3",
+          downloadUrl: "https://dl/f-3",
+          downloadUrlExpiresAt: "2026-03-03T00:00:00Z",
+        },
+      ],
+    });
+  });
+
+  it("emits an empty-field entry for an image with no storage annotations", () => {
+    const payload = toImageResumePayload({ images: [{ url: "u" }] });
+    expect(payload).toEqual({ outputs: [{}] });
   });
 });
 
@@ -901,7 +1146,7 @@ describe("toVideoResumePayload()", () => {
 // prompt-guard: null / empty / non-string prompt throws before any fetch
 // ---------------------------------------------------------------------------
 
-describe("prompt-guard — createImage, createVideo, launchVideo throw on invalid prompt", () => {
+describe("prompt-guard — createImage, launchImage, createVideo, launchVideo throw on invalid prompt", () => {
   const noFetch = (): never => {
     throw new Error("fetch should not be called with an invalid prompt");
   };
@@ -962,6 +1207,23 @@ describe("prompt-guard — createImage, createVideo, launchVideo throw on invali
       ).rejects.toBeInstanceOf(ContentGenerationHttpError);
       await expect(
         launchVideo(
+          { prompt: prompt as unknown as string },
+          noFetchTransport,
+          BASE,
+        ),
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it(`launchImage throws ContentGenerationHttpError(400) for prompt = ${label}`, async () => {
+      await expect(
+        launchImage(
+          { prompt: prompt as unknown as string },
+          noFetchTransport,
+          BASE,
+        ),
+      ).rejects.toBeInstanceOf(ContentGenerationHttpError);
+      await expect(
+        launchImage(
           { prompt: prompt as unknown as string },
           noFetchTransport,
           BASE,

@@ -12,7 +12,7 @@
     "One page per company",
     "Refreshed on demand"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `companyName` — that's the only input. Each run adds a new dated page to that company's site and returns the live URL. The site is served from a sandbox with a 24-hour TTL, so its URL changes once the sandbox expires and is recreated on the next run — read the latest run's output for the current link instead of bookmarking one. To keep a company's page fresh, put it on a schedule (the shipped example runs weekly).\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"companyName\": \"Polsia\" }` to trace search → select → illustrate → publish for free against the committed stubs — nothing generated or deployed. (For a local run that exercises the real uploads, start the bundled upload sink first; see the README.) Or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nGive it a `companyName` — that's the only input. Each run adds a new dated page to that company's site and returns the live URL. The site is served from a sandbox with a 24-hour TTL, so its URL changes once the sandbox expires and is recreated on the next run — read the latest run's output for the current link instead of bookmarking one. To keep a company's page fresh, put it on a schedule (the shipped example runs weekly).\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"companyName\": \"Polsia\" }` to trace search → select → illustrate → publish for free against the committed stubs — nothing generated or deployed. (For a local run that exercises the real uploads, start the bundled upload sink first; see the README.) Or edit and deploy it with the Sapiom MCP.",
   "resources": [
     {
       "kind": "sandbox",
@@ -20,7 +20,7 @@
     }
   ],
   "defaultInput": {
-    "companyName": "Sapiom"
+    "companyName": "Nvidia"
   },
   "examples": [
     {
@@ -55,15 +55,20 @@
       },
       "output": {
         "status": "no-news",
-        "companyName": "Polsia"
+        "published": false,
+        "companyName": "Polsia",
+        "articles": [],
+        "note": "No recent news turned up for \"Polsia\", so nothing was published. Point it at a company with coverage in the last week."
       }
     }
   ],
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [
-      { "path": "status", "assert": "nonEmptyString" }
+      { "path": "status", "assert": "equals", "value": "published" },
+      { "path": "siteUrl", "assert": "nonEmptyString" },
+      { "path": "articles", "assert": "nonEmptyArray" }
     ],
-    "narrative": "Searches the web for the company's recent news and publishes an illustrated roundup page; with no recent news it honestly reports no-news."
+    "narrative": "Searches the web for a well-covered default company and publishes a dated, illustrated roundup page at a live sandbox URL; a company with no recent coverage ends in a distinct no-news terminal instead."
   }
 }

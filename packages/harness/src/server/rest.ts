@@ -423,7 +423,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const { workflowPath } = parsed.data;
     if (workflowPath !== null && !options.findWorkflow(workflowPath)) {
       res.status(400).json({
-        error: `Unknown workflow path '${workflowPath}' — scan or connect it before binding a session to it`,
+        error: `Unknown agent path '${workflowPath}' — scan or connect it before binding a session to it`,
       });
       return;
     }

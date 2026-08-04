@@ -29,7 +29,7 @@ import { HARNESS_LABELS, historyDirs, historyRowMeta, sessionRowState } from "..
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { buildWorkspaceTree } from "../lib/workspace-tree";
 import type { RailGrouping, RailSort } from "../lib/workspace-tree";
-import { SAPIOM_WORKFLOWS_URL } from "../lib/urls";
+import { SAPIOM_AGENTS_URL } from "../lib/urls";
 
 interface WorkflowsRailProps {
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
@@ -464,7 +464,7 @@ export function WorkflowsRail({
           type="button"
           className="rail-nav-row"
           data-testid="palette-trigger"
-          aria-label="Search sessions, workflows, and paths"
+          aria-label="Search sessions, agents, and paths"
           onClick={onOpenPalette}
         >
           <Icon name="Search" size={14} />
@@ -1116,7 +1116,7 @@ function ProfileRow({
           className="profile-menu-item"
           data-testid="profile-open-dashboard"
           onClick={() => {
-            window.open(SAPIOM_WORKFLOWS_URL, "_blank", "noopener,noreferrer");
+            window.open(SAPIOM_AGENTS_URL, "_blank", "noopener,noreferrer");
             closeMenu();
           }}
         >
@@ -1179,7 +1179,7 @@ function ProfileRow({
             className="profile-menu-item"
             data-testid="profile-switch-account"
             onClick={() => {
-              window.open(SAPIOM_WORKFLOWS_URL, "_blank", "noopener,noreferrer");
+              window.open(SAPIOM_AGENTS_URL, "_blank", "noopener,noreferrer");
               closeMenu();
             }}
           >

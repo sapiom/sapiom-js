@@ -78,7 +78,7 @@ const DEFAULT_SUBDOMAIN = "www";
  * credential, so a real search gives the coding agent something real to build
  * from — and `synthesize` refuses to build at all from an empty report.
  */
-const DEFAULT_TOPIC = "how durable workflow engines handle retries";
+const DEFAULT_TOPIC = "how durable agent runtimes handle retries";
 /** Build/start config for the static site the coding agent produces. */
 const SITE_PORT = 3000;
 const SITE_START = "node server.js";

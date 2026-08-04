@@ -22,44 +22,14 @@ import {
   CLAUDE_INSTALL_COMMAND,
   CODEX_INSTALL_COMMAND,
 } from "./doctor.js";
-import { ensureAuthenticated, type HarnessIdentity } from "./auth.js";
+import { ensureAuthenticated } from "./auth.js";
+import { printBanner } from "./banner.js";
 import { ensureConsent } from "./consent.js";
 import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
 import { resolveStatePaths } from "../core/paths.js";
 import { parseArgs } from "./args.js";
 import { startServer, type HarnessServer } from "../server/index.js";
-
-function printBanner(opts: {
-  dir: string;
-  port: number;
-  bootToken: string;
-  identity: HarnessIdentity | null;
-  telemetryOptIn: boolean;
-  serverStarted: boolean;
-}): void {
-  const authLine = opts.identity
-    ? `${opts.identity.organizationName} (${opts.identity.userId})${
-        opts.identity.source === "cached" ? " — cached" : ""
-      }`
-    : "not authenticated";
-
-  console.log("");
-  console.log("  Sapiom Studio");
-  console.log("  -------------");
-  console.log(`  directory   ${opts.dir}`);
-  console.log(`  auth        ${authLine}`);
-  console.log(`  telemetry   ${opts.telemetryOptIn ? "on" : "off"}`);
-  // Always the full tokened URL — with --no-open (or a browser that failed
-  // to launch) this is the only way to reach the app; a bare host:port
-  // 401s on every /api call and can't open the WS connections.
-  console.log(
-    `  url         ${
-      opts.serverStarted ? `http://localhost:${opts.port}/?token=${opts.bootToken}` : "(server not started)"
-    }`,
-  );
-  console.log("");
-}
 
 const main = async (): Promise<void> => {
   const options = parseArgs(process.argv.slice(2));
@@ -68,7 +38,7 @@ const main = async (): Promise<void> => {
   printDoctorReport(doctorReport);
   if (!doctorReport.ok) {
     console.error(
-      "\nsapiom-harness requires Node >= 20 and at least one coding agent on PATH:\n" +
+      "\nAgent Studio (`sapiom-harness`) requires Node >= 20 and at least one coding agent on PATH:\n" +
         `  Claude Code:  ${CLAUDE_INSTALL_COMMAND}\n` +
         `  Codex:        ${CODEX_INSTALL_COMMAND}\n` +
         "Fix the checks above and try again.",
@@ -79,7 +49,7 @@ const main = async (): Promise<void> => {
   if (!doctorReport.availableHarnesses.includes("claude-code")) {
     console.log(
       `\n⚠ Claude Code not found — install with: ${CLAUDE_INSTALL_COMMAND}\n` +
-        "  Continuing with the Codex harness.",
+        "  Continuing with the Codex coding agent.",
     );
   }
 
@@ -137,7 +107,7 @@ const main = async (): Promise<void> => {
   } catch (err) {
     if (!options.dev) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`\n⚠ Harness server is not wired up yet: ${message}`);
+    console.error(`\n⚠ Agent Studio server is not wired up yet: ${message}`);
     console.error(
       "--dev flow verified (doctor → auth → consent) without a live server.\n",
     );

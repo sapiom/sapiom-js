@@ -10,7 +10,6 @@ const selectionSchema = z
       imagePrompt: z.string().min(1),
     }),
   )
-  .min(1)
   .max(5);
 
 export function buildSelectionPrompt(
@@ -23,7 +22,7 @@ export function buildSelectionPrompt(
     .join("\n");
   return `Today is ${runDate}. Below are web search results for news about the company "${companyName}".
 
-Select the 3 to 5 results that are genuinely recent news (roughly the last 7 days) about this specific company. Drop results about unrelated companies or people with similar names, duplicates, and pages that are not news articles. If fewer than 3 qualify, select only those that do (minimum 1).
+Select the 3 to 5 results that are genuinely recent news (roughly the last 7 days) about this specific company. Drop results about unrelated companies or people with similar names, duplicates, and pages that are not news articles. If fewer than 3 qualify, select only those that do. If none qualify, respond with an empty array [].
 
 For each selected article provide:
 - "title": the article title

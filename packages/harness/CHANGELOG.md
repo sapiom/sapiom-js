@@ -1,5 +1,32 @@
 # @sapiom/harness
 
+## 0.2.7
+
+### Patch Changes
+
+- 267598a: Publish `@sapiom/agent-studio` as the branded Agent Studio launcher while
+  keeping `@sapiom/harness` as the supported implementation and compatibility
+  command.
+- 87636c1: Make bundled starters work from a fresh Agent Studio session by preserving Studio-owned state, writing the project discovery marker, and handing Claude the local scaffold MCP tool directly.
+- Updated dependencies [87636c1]
+  - @sapiom/agent-core@0.10.2
+  - @sapiom/mcp@0.12.1
+  - @sapiom/agent@0.9.3
+
+## 0.2.6
+
+### Patch Changes
+
+- 824eb1e: Use Agent terminology across generated Canvas content, server errors, and demo fixtures.
+- 368125b: Normalize Agent Studio shell terminology and route dashboard links to the canonical Agents page.
+- addb63c: Clarify Agent Studio coding-agent prompts, resume metadata, and authoring action labels.
+- 9199e10: Use Agent and Agent run terminology throughout the Canvas and Steps interfaces.
+- 94584a2: Guard visible Agent Studio terminology and share the product name across CLI and desktop hosts.
+- Updated dependencies [40d1c64]
+- Updated dependencies [be2b81b]
+  - @sapiom/agent-core@0.10.0
+  - @sapiom/mcp@0.12.0
+
 ## 0.2.5
 
 ### Patch Changes

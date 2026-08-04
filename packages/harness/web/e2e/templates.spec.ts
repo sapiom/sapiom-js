@@ -6,7 +6,7 @@
  * bundled starters are local, the detail view renders only real manifest fields,
  * and "Use template" performs the REAL handoff shape — a session at the
  * destination folder plus the agent prompt naming sapiom_dev_agents_clone
- * (gallery) or `sapiom agents init -t` (bundled starter). MockApi records the
+ * (gallery) or `sapiom_dev_agents_scaffold` (bundled starter). MockApi records the
  * injection on window.__HARNESS_TEST__.lastInjectInput.
  *
  * Browsing is a DESTINATION now, not a dialog, and that changes the shape of
@@ -59,6 +59,8 @@ test.describe("templates journey (from the welcome panel)", () => {
   });
 
   test("browse: catalog cards plus the two bundled starters", async ({ page }) => {
+    await expect(page.locator(".templates-hero-copy")).toContainText("runnable agents");
+    await expect(page.locator(".templates-hero-copy")).not.toContainText("workflows");
     // Real clonable slugs from the catalog, not a hardcoded pair.
     await expect(page.getByTestId("template-card-web-research-digest")).toBeVisible();
     await expect(page.getByTestId("template-card-hello-agent")).toBeVisible();
@@ -174,7 +176,9 @@ test.describe("templates journey (from the welcome panel)", () => {
     page,
   }) => {
     await open(page, "web-research-digest");
-    await expect(page.getByTestId("template-handoff")).toContainText("Sapiom account");
+    await expect(page.getByTestId("template-handoff")).toHaveText(
+      "Using it forks the template into a repo you own, then clones it here. Needs a signed-in Sapiom account; the coding agent asks you to sign in if it is missing.",
+    );
     await open(page, "coding-pause");
     await expect(page.getByTestId("template-handoff")).toContainText("No account, no network");
   });
@@ -206,7 +210,7 @@ test.describe("templates journey (from the welcome panel)", () => {
     expect(record?.req.text).toContain("free local test run (sapiom_dev_agents_run_local)");
   });
 
-  test("use (starter): the real bundled-template init command", async ({ page }) => {
+  test("use (starter): the real bundled-template scaffold tool", async ({ page }) => {
     await open(page, "coding-pause");
     await page.getByTestId("template-use-btn").click();
     await expect(page.getByTestId("dir-picker-input")).toHaveValue(
@@ -217,9 +221,15 @@ test.describe("templates journey (from the welcome panel)", () => {
     await expect(page.getByTestId("session-context-title")).toContainText("coding-pause");
     await expect
       .poll(async () => (await lastInject(page))?.req.text ?? "")
-      .toContain("sapiom agents init . -t coding-pause");
+      .toContain("sapiom_dev_agents_scaffold");
     // The starter path carries the same run continuation as the clone path.
-    expect((await lastInject(page))?.req.text).toContain("sapiom_dev_agents_run_local");
+    const prompt = (await lastInject(page))?.req.text ?? "";
+    expect(prompt).toContain(
+      '{"dir":"/Users/demo/acme-app/projects/coding-pause","template":"coding-pause"}',
+    );
+    expect(prompt).toContain("sapiom_dev_agents_run_local");
+    expect(prompt).toContain("Keep the shipped starter unchanged");
+    expect(prompt.toLowerCase()).not.toContain("workflow");
   });
 
   test("use: straight from a card's spec sheet, skipping the read", async ({ page }) => {

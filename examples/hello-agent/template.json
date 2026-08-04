@@ -12,7 +12,7 @@
     "Smallest valid agent",
     "Free end-to-end deploy test"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\\n\\nThe `name` input is optional: pass `{ \\\"name\\\": \\\"Ada\\\" }` to get `Hello, Ada!`, or run it with no input to get `Hello, world!`. There are no capabilities, so every run costs nothing.\\n\\nPrefer to work from the code? Run it locally with `run_local` to trace the flow for free — since there are no capabilities, a local run and a real run behave identically — or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\\n\\nThe `name` input is optional: pass `{ \\\"name\\\": \\\"Ada\\\" }` to get `Hello, Ada!`, or run it with no input to get `Hello, world!`. There are no capabilities, so every run costs nothing.\\n\\nPrefer to work from the code? Run it locally with `run_local` to trace the flow for free — since there are no capabilities, a local run and a real run behave identically — or edit and deploy it with the Sapiom MCP.",
   "examples": [
     {
       "title": "Greet a name",

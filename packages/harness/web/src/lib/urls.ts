@@ -7,10 +7,10 @@
  */
 export const SAPIOM_DASHBOARD_ROOT = "https://app.sapiom.ai";
 
-/** The workflows index — the account's agents. */
-export const SAPIOM_WORKFLOWS_URL = `${SAPIOM_DASHBOARD_ROOT}/workflows`;
+/** The agents index — the account's deployed agents. */
+export const SAPIOM_AGENTS_URL = `${SAPIOM_DASHBOARD_ROOT}/agents`;
 
 /** A deployed agent's own page, by its Sapiom definition id. */
-export function workflowUrl(definitionId: number): string {
-  return `${SAPIOM_WORKFLOWS_URL}/${definitionId}`;
+export function agentUrl(definitionId: number): string {
+  return `${SAPIOM_AGENTS_URL}/${definitionId}`;
 }

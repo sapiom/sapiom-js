@@ -177,7 +177,7 @@ export function WelcomePanel({
         role="dialog"
         aria-modal="true"
         aria-label={
-          firstRun ? "Welcome to Sapiom Agent Studio" : "Sapiom Agent Studio"
+          firstRun ? "Welcome to Agent Studio" : "Agent Studio"
         }
       >
         <div className="welcome-card" ref={cardRef}>
@@ -202,8 +202,8 @@ export function WelcomePanel({
                 brand-new install, so it renders nothing. */}
             <h1 className="welcome-title">
               {firstRun
-                ? "Welcome to Sapiom Agent Studio"
-                : "Sapiom Agent Studio"}
+                ? "Welcome to Agent Studio"
+                : "Agent Studio"}
             </h1>
             {/* Three beats, in the order the product earns trust: what it makes of
                 your code, what a run costs and shows, who decides to ship. The
@@ -211,8 +211,8 @@ export function WelcomePanel({
                 spend the one paragraph anybody reads on instructions they are
                 about to be given. */}
             <p className="welcome-intro">
-              Studio turns the agent workflows in your codebase into a diagram
-              you can run. Local runs are free and offline, with every
+              Agent Studio turns the agents in your codebase into diagrams you
+              can inspect and run. Local agent runs are free and offline, with every
               step&rsquo;s input, output and capability call on screen. Nothing
               ships until you say so.
             </p>
@@ -231,7 +231,7 @@ export function WelcomePanel({
               <span className="welcome-open-copy">
                 <span className="welcome-open-title">Open a folder</span>
                 <span className="welcome-open-desc">
-                  Workflows in the folder appear in the rail. Nothing is
+                  Agents in the folder appear in the rail. Nothing is
                   uploaded.
                 </span>
               </span>
@@ -300,7 +300,7 @@ export function WelcomePanel({
               </button>
               <span className="welcome-consent-copy">
                 Help us optimize your experience — share your session details with
-                Sapiom so we can improve how the Studio works for you. Off by
+                Sapiom so we can improve how Agent Studio works for you. Off by
                 default; change it anytime in Settings.
               </span>
             </label>

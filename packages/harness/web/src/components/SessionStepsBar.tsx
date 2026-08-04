@@ -5,7 +5,7 @@ import type { MacroDef, WorkflowInfo } from "@shared/types";
 import { Icon } from "./Icon";
 import { macroDisabledReason } from "../lib/macro-gating";
 import { track } from "../lib/track";
-import { SAPIOM_DASHBOARD_ROOT, workflowUrl } from "../lib/urls";
+import { SAPIOM_DASHBOARD_ROOT, agentUrl } from "../lib/urls";
 
 interface SessionStepsBarProps {
   workflow: WorkflowInfo;
@@ -57,7 +57,7 @@ export function SessionStepsBar({
   // agent has no definition yet, so the globe falls back to the dashboard root
   // — always a real destination, never a dead click.
   const dashboardUrl =
-    workflow.definitionId != null ? workflowUrl(workflow.definitionId) : SAPIOM_DASHBOARD_ROOT;
+    workflow.definitionId != null ? agentUrl(workflow.definitionId) : SAPIOM_DASHBOARD_ROOT;
 
   const [pendingId, setPendingId] = useState<string | null>(null);
   useEffect(() => {
@@ -120,7 +120,7 @@ export function SessionStepsBar({
           target="_blank"
           rel="noreferrer"
           aria-label={`Preview :${preview.port}`}
-          data-tooltip={`The agent is serving an app on port ${preview.port}. Opens ${preview.url}`}
+          data-tooltip={`The coding agent is serving an app on port ${preview.port}. Opens ${preview.url}`}
         >
           <Icon name="ExternalLink" size={12} />
           <span className="session-preview-label">{"Preview "}</span>:{preview.port}

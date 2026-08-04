@@ -133,7 +133,7 @@ export function nodeKindLabel(kind: CanvasNodeKind): string {
     case "terminal-warn":
       return "Terminal · needs attention";
     case "launched-workflow":
-      return "Launched workflow";
+      return "Launched agent";
     default:
       return "Step";
   }

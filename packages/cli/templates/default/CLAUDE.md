@@ -1,1 +1,1 @@
-See [AGENTS.md](./AGENTS.md) for how to work in this orchestration project.
+See [AGENTS.md](./AGENTS.md) for how to work in this agent project.

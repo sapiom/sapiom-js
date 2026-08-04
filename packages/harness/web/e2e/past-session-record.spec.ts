@@ -75,7 +75,7 @@ test("a CODEX session renders the same way — this reads our events, not a vend
   const transcript = page.getByTestId("session-transcript");
   await expect(transcript).toBeVisible();
   await expect(page.getByTestId("transcript-turn")).toHaveCount(1);
-  await expect(page.getByTestId("transcript-prompt")).toContainText("Summarize what the rfq workflow does");
+  await expect(page.getByTestId("transcript-prompt")).toContainText("Summarize what the rfq agent does");
   await expect(page.getByTestId("transcript-tool-call")).toHaveCount(1);
 
   // Codex reports no assistant text to the harness. The view says that
@@ -120,6 +120,9 @@ test("a session whose events are gone still renders — from its archived copy, 
   // This is the SAP-2060 case in the UI: events.ndjson swept this session out
   // weeks ago, and the record still opens.
   await expect(page.getByTestId("session-transcript")).toBeVisible();
+  const reason = page.getByTestId("past-session-reason");
+  await expect(reason).toContainText("the coding agent's history");
+  await expect(reason).toContainText("The new coding agent gets a briefing");
   const turns = page.getByTestId("transcript-turn");
   await expect(turns).toHaveCount(2);
   await expect(turns.nth(1).getByTestId("transcript-prompt")).toContainText("Ship the migration");

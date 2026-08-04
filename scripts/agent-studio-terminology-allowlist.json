@@ -1,0 +1,576 @@
+[
+  {
+    "id": "desktop-release-manual-trigger-key",
+    "path": ".github/workflows/desktop-release.yml",
+    "pattern": "(?:^|\\n)\\s*workflow_dispatch:\\s*(?:\\n|$)",
+    "occurrences": 1,
+    "reason": "workflow_dispatch is the exact GitHub Actions manual-trigger syntax."
+  },
+  {
+    "id": "desktop-release-concurrency-context",
+    "path": ".github/workflows/desktop-release.yml",
+    "pattern": "\\$\\{\\{\\s*github\\.workflow\\s*\\}\\}",
+    "occurrences": 1,
+    "reason": "github.workflow is the exact GitHub Actions context used to isolate concurrent runs."
+  },
+  {
+    "id": "approval-chain-agents-signal-tools",
+    "path": "examples/approval-chain/AGENTS.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "approval-chain-readme-signal-tools",
+    "path": "examples/approval-chain/README.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "approval-chain-manifest-signal-tools",
+    "path": "examples/approval-chain/template.json",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "cold-outreach-readme-signal-tool",
+    "path": "examples/cold-outreach-engine/README.md",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "cold-outreach-manifest-signal-tool",
+    "path": "examples/cold-outreach-engine/template.json",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "error-triage-readme-signal-tool",
+    "path": "examples/error-triage-digest/README.md",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "error-triage-manifest-signal-tool",
+    "path": "examples/error-triage-digest/template.json",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "eval-gate-agents-backend-route",
+    "path": "examples/eval-gate/AGENTS.md",
+    "pattern": "/v1/workflows/executions",
+    "occurrences": 1,
+    "reason": "The backend execution route remains stable for compatibility."
+  },
+  {
+    "id": "eval-gate-readme-backend-routes",
+    "path": "examples/eval-gate/README.md",
+    "pattern": "/v1/workflows/executions",
+    "occurrences": 2,
+    "reason": "The backend execution route remains stable for compatibility."
+  },
+  {
+    "id": "eval-gate-readme-signal-tools",
+    "path": "examples/eval-gate/README.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "human-loop-agents-signal-tools",
+    "path": "examples/human-in-the-loop/AGENTS.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "human-loop-readme-signal-tools",
+    "path": "examples/human-in-the-loop/README.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "human-loop-manifest-signal-tools",
+    "path": "examples/human-in-the-loop/template.json",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "meeting-notes-readme-signal-tool",
+    "path": "examples/meeting-notes-crm/README.md",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "meeting-notes-manifest-signal-tool",
+    "path": "examples/meeting-notes-crm/template.json",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "pr-review-agents-signal-tools",
+    "path": "examples/pr-review-bot/AGENTS.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "pr-review-readme-signal-tools",
+    "path": "examples/pr-review-bot/README.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "pr-review-manifest-signal-tools",
+    "path": "examples/pr-review-bot/template.json",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "proposal-agents-signal-tools",
+    "path": "examples/proposal-generator/AGENTS.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "proposal-readme-signal-tools",
+    "path": "examples/proposal-generator/README.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "proposal-manifest-signal-tools",
+    "path": "examples/proposal-generator/template.json",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "compliance-readme-signal-tools",
+    "path": "examples/scheduled-compliance-audit/README.md",
+    "pattern": "signal_workflow|workflow_signal",
+    "occurrences": 2,
+    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
+  },
+  {
+    "id": "compliance-manifest-signal-tool",
+    "path": "examples/scheduled-compliance-audit/template.json",
+    "pattern": "workflow_signal",
+    "occurrences": 1,
+    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
+  },
+  {
+    "id": "agent-core-backend-base-route",
+    "path": "packages/agent-core/src/client.ts",
+    "pattern": "^/v1/workflows$",
+    "occurrences": 1,
+    "reason": "The backend API route remains stable for compatibility."
+  },
+  {
+    "id": "agent-core-deploy-analytics-event",
+    "path": "packages/agent-core/src/deploy.ts",
+    "pattern": "^workflow\\.deploy$",
+    "occurrences": 2,
+    "reason": "The analytics event name remains stable for historical reporting continuity."
+  },
+  {
+    "id": "agent-core-link-analytics-event",
+    "path": "packages/agent-core/src/link.ts",
+    "pattern": "^workflow\\.link$",
+    "occurrences": 2,
+    "reason": "The analytics event name remains stable for historical reporting continuity."
+  },
+  {
+    "id": "agent-core-run-analytics-event",
+    "path": "packages/agent-core/src/run.ts",
+    "pattern": "^workflow\\.run$",
+    "occurrences": 2,
+    "reason": "The analytics event name remains stable for historical reporting continuity."
+  },
+  {
+    "id": "canvas-body-node-kind",
+    "path": "packages/harness/src/core/canvas-body.ts",
+    "pattern": "launched-workflow",
+    "occurrences": 2,
+    "reason": "The private Canvas node-kind literal is a persisted compatibility identifier."
+  },
+  {
+    "id": "canvas-derive-node-kinds",
+    "path": "packages/harness/src/core/canvas-derive.ts",
+    "pattern": "launched-workflow",
+    "occurrences": 2,
+    "reason": "The private Canvas node-kind literal is a persisted compatibility identifier."
+  },
+  {
+    "id": "canvas-graph-node-kind",
+    "path": "packages/harness/src/core/canvas-graph.ts",
+    "pattern": "launched-workflow",
+    "occurrences": 1,
+    "reason": "The private Canvas node-kind literal is a persisted compatibility identifier."
+  },
+  {
+    "id": "canvas-render-slug-fallback",
+    "path": "packages/harness/src/core/canvas-render.ts",
+    "pattern": "^workflow$",
+    "occurrences": 1,
+    "reason": "The private render filename fallback remains stable for existing generated paths."
+  },
+  {
+    "id": "canvas-template-private-selectors",
+    "path": "packages/harness/src/core/canvas-template.ts",
+    "pattern": "(?:launched|cross)-workflow",
+    "occurrences": 3,
+    "reason": "Private generated-Canvas CSS selectors and node kinds remain stable."
+  },
+  {
+    "id": "macro-placeholder-contracts",
+    "path": "packages/harness/src/core/macros.ts",
+    "pattern": "\\{\\{workflow\\.(?:path|definitionId)\\}\\}",
+    "occurrences": 4,
+    "reason": "Macro placeholder names are compatibility-sensitive user configuration."
+  },
+  {
+    "id": "macro-runner-path-property",
+    "path": "packages/harness/src/core/macro-runner.ts",
+    "pattern": "^\\{\\{workflow\\.path\\}\\}$",
+    "occurrences": 1,
+    "reason": "This runtime object key implements the compatibility-sensitive workflow.path macro placeholder."
+  },
+  {
+    "id": "macro-runner-name-property",
+    "path": "packages/harness/src/core/macro-runner.ts",
+    "pattern": "^\\{\\{workflow\\.name\\}\\}$",
+    "occurrences": 1,
+    "reason": "This runtime object key implements the compatibility-sensitive workflow.name macro placeholder."
+  },
+  {
+    "id": "macro-runner-definition-property",
+    "path": "packages/harness/src/core/macro-runner.ts",
+    "pattern": "^\\{\\{workflow\\.definitionId\\}\\}$",
+    "occurrences": 1,
+    "reason": "This runtime object key implements the compatibility-sensitive workflow.definitionId macro placeholder."
+  },
+  {
+    "id": "template-catalog-backend-routes",
+    "path": "packages/harness/src/core/template-catalog.ts",
+    "pattern": "^/v1/workflows/templates/?$",
+    "occurrences": 2,
+    "reason": "The backend template-catalog routes remain stable for compatibility."
+  },
+  {
+    "id": "workflow-registry-local-routes",
+    "path": "packages/harness/src/core/workflow-registry.ts",
+    "pattern": "^/api/workflows(?:/(?:connect|scan))?$",
+    "occurrences": 3,
+    "reason": "Studio localhost API routes remain stable for existing clients."
+  },
+  {
+    "id": "workspace-context-legacy-keys",
+    "path": "packages/harness/src/core/workspace-context.ts",
+    "pattern": "^(?:boundWorkflow|workflows)$",
+    "occurrences": 2,
+    "reason": "Legacy context keys are read only to migrate existing sessions atomically."
+  },
+  {
+    "id": "actions-local-route",
+    "path": "packages/harness/src/server/actions.ts",
+    "pattern": "^/api/workflows/:id/deploy$",
+    "occurrences": 1,
+    "reason": "The Studio localhost deploy route remains stable for existing clients."
+  },
+  {
+    "id": "server-workflow-change-event",
+    "path": "packages/harness/src/server/index.ts",
+    "pattern": "^workflows\\.changed$",
+    "occurrences": 2,
+    "reason": "The internal WebSocket event name remains stable for existing clients."
+  },
+  {
+    "id": "rest-session-binding-route",
+    "path": "packages/harness/src/server/rest.ts",
+    "pattern": "^/sessions/:id/workflow$",
+    "occurrences": 1,
+    "reason": "The internal session-binding route remains stable for existing clients."
+  },
+  {
+    "id": "registry-state-filename",
+    "path": "packages/harness/src/shared/types.ts",
+    "pattern": "^/workflows\\.json$",
+    "occurrences": 1,
+    "reason": "The persisted registry filename remains stable for existing installations."
+  },
+  {
+    "id": "app-private-css-and-test-ids",
+    "path": "packages/harness/web/src/App.tsx",
+    "pattern": "workflow-(?:deployed-tag|dashboard-link)",
+    "occurrences": 2,
+    "reason": "Private CSS classes and test IDs remain stable."
+  },
+  {
+    "id": "canvas-pane-icon-identifier",
+    "path": "packages/harness/web/src/components/CanvasPane.tsx",
+    "pattern": "^Workflow$",
+    "occurrences": 4,
+    "reason": "The design-system Workflow icon identifier is private and remains unchanged."
+  },
+  {
+    "id": "canvas-step-private-identifiers",
+    "path": "packages/harness/web/src/components/CanvasStepDetail.tsx",
+    "pattern": "^(?:launched-workflow|canvas-open-workflow-)$",
+    "occurrences": 2,
+    "reason": "Private Canvas node kinds and test IDs remain stable."
+  },
+  {
+    "id": "code-panel-private-css",
+    "path": "packages/harness/web/src/components/CodePanel.tsx",
+    "pattern": "workflow-(?:actions-(?:header|name)|deployed-tag|dot(?:-pinned)?)",
+    "occurrences": 5,
+    "reason": "Private CSS classes remain stable."
+  },
+  {
+    "id": "command-palette-private-identifiers",
+    "path": "packages/harness/web/src/components/CommandPalette.tsx",
+    "pattern": "^workflow:?$",
+    "occurrences": 3,
+    "reason": "The private palette discriminator, item prefix, and icon identifier remain stable."
+  },
+  {
+    "id": "session-bar-private-css-and-test-id",
+    "path": "packages/harness/web/src/components/SessionBar.tsx",
+    "pattern": "^session-workflow-chip$",
+    "occurrences": 2,
+    "reason": "Private CSS classes and test IDs remain stable."
+  },
+  {
+    "id": "tooltip-private-selector",
+    "path": "packages/harness/web/src/components/TooltipLayer.tsx",
+    "pattern": "^\\.rail-workflows$",
+    "occurrences": 1,
+    "reason": "The private rail CSS selector remains stable."
+  },
+  {
+    "id": "actions-header-private-css-and-test-ids",
+    "path": "packages/harness/web/src/components/WorkflowActionsHeader.tsx",
+    "pattern": "workflow-actions-(?:header|name|count)",
+    "occurrences": 7,
+    "reason": "Private CSS classes and test IDs remain stable."
+  },
+  {
+    "id": "workflow-row-private-css-and-test-ids",
+    "path": "packages/harness/web/src/components/WorkflowRow.tsx",
+    "pattern": "(?:workflow-(?:item(?:-trigger)?|status-?)|^workflow-$)",
+    "occurrences": 5,
+    "reason": "Private CSS classes and test IDs remain stable."
+  },
+  {
+    "id": "rail-private-css",
+    "path": "packages/harness/web/src/components/WorkflowsRail.tsx",
+    "pattern": "rail-workflows",
+    "occurrences": 1,
+    "reason": "The private rail CSS class remains stable."
+  },
+  {
+    "id": "web-api-local-workflow-routes",
+    "path": "packages/harness/web/src/lib/api.ts",
+    "pattern": "^/api/workflows(?:/(?:connect|scan)?)?$",
+    "occurrences": 4,
+    "reason": "Studio localhost API routes remain stable for existing clients."
+  },
+  {
+    "id": "web-api-session-binding-route",
+    "path": "packages/harness/web/src/lib/api.ts",
+    "pattern": "^/workflow$",
+    "occurrences": 1,
+    "reason": "The internal session-binding route remains stable for existing clients."
+  },
+  {
+    "id": "web-canvas-node-kind",
+    "path": "packages/harness/web/src/lib/canvas-graph.ts",
+    "pattern": "^launched-workflow$",
+    "occurrences": 1,
+    "reason": "The private Canvas node-kind literal remains stable."
+  },
+  {
+    "id": "web-macro-placeholder-contract",
+    "path": "packages/harness/web/src/lib/macro-gating.ts",
+    "pattern": "^\\{\\{workflow\\.definitionId\\}\\}$",
+    "occurrences": 2,
+    "reason": "Macro placeholder names are compatibility-sensitive user configuration."
+  },
+  {
+    "id": "mock-macro-placeholder-contracts",
+    "path": "packages/harness/web/src/lib/mock-data.ts",
+    "pattern": "\\{\\{workflow\\.path\\}\\}",
+    "occurrences": 3,
+    "reason": "Mock macros mirror the compatibility-sensitive live placeholder contract."
+  },
+  {
+    "id": "web-workflow-change-event",
+    "path": "packages/harness/web/src/lib/use-harness-state.ts",
+    "pattern": "^workflows\\.changed$",
+    "occurrences": 1,
+    "reason": "The internal WebSocket event name remains stable for existing clients."
+  },
+  {
+    "id": "styles-rail-workflows-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])rail-workflows(?![a-z0-9_-])",
+    "occurrences": 3,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-item-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-item(?![a-z0-9_-])",
+    "occurrences": 10,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-actions-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-actions(?![a-z0-9_-])",
+    "occurrences": 4,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-status-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-status(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-item-trigger-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-item-trigger(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-session-dot-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-session-dot(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-expander-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-expander(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-dot-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-dot(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-dot-pinned-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-dot-pinned(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-deployed-tag-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-deployed-tag(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-menu-wrap-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-menu-wrap(?![a-z0-9_-])",
+    "occurrences": 4,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-menu-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-menu(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-row-menu-section-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-row-menu-section(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-session-workflow-chip-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-actions-header-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-actions-header(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-actions-name-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-actions-name(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-workflow-actions-count-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])workflow-actions-count(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "styles-launched-workflow-selector",
+    "path": "packages/harness/web/src/styles.css",
+    "pattern": "(?<![a-z0-9_-])dot--launched-workflow(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private Canvas node-kind CSS selector remains stable."
+  },
+  {
+    "id": "refine-workflow-item-selector",
+    "path": "packages/harness/web/src/styles/refine.css",
+    "pattern": "(?<![a-z0-9_-])workflow-item(?![a-z0-9_-])",
+    "occurrences": 2,
+    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "refine-session-workflow-chip-selector",
+    "path": "packages/harness/web/src/styles/refine.css",
+    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
+  },
+  {
+    "id": "refine-workflow-dot-selector",
+    "path": "packages/harness/web/src/styles/refine.css",
+    "pattern": "(?<![a-z0-9_-])workflow-dot(?![a-z0-9_-])",
+    "occurrences": 1,
+    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
+  }
+]

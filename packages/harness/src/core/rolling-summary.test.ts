@@ -281,6 +281,8 @@ describe("rolling summary", () => {
     it("carries the record and asks for a bounded, tool-free, honest summary", () => {
       const prompt = buildRollingSummaryPrompt(record(), null);
       expect(prompt).toContain("at most 500 words");
+      expect(prompt).toContain("FRESH coding-agent session");
+      expect(prompt).not.toContain("FRESH agent session");
       expect(prompt).toContain("Do not use any tools");
       expect(prompt).toContain("Do not invent anything the material does not state");
       expect(prompt).toContain("make the backoff jittered");

@@ -226,9 +226,12 @@ describe("useTemplatePrompt", () => {
     expect(prompt).toContain('templateId "cold-outreach-engine"');
   });
 
-  it("starter: names the real init command with the bundled template flag", () => {
+  it("starter: names the local scaffold tool with exact arguments", () => {
     const prompt = useTemplatePrompt(STARTER_TEMPLATES[1], "/tmp/coding-pause");
-    expect(prompt).toContain("sapiom agents init . -t coding-pause");
+    expect(prompt).toContain("sapiom_dev_agents_scaffold");
+    expect(prompt).toContain('{"dir":"/tmp/coding-pause","template":"coding-pause"}');
+    expect(prompt).toContain("Keep the shipped starter unchanged");
+    expect(prompt.toLowerCase()).not.toContain("workflow");
   });
 
   it("both paths end with the free local test continuation (use to run is one path)", () => {

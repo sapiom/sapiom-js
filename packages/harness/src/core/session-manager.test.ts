@@ -90,7 +90,7 @@ describe("SessionManager", () => {
       spawnPty?: PtySpawnFn;
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
-      workspaceContextExists?: SessionManagerOptions["workspaceContextExists"];
+      prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
       isPidAlive?: SessionManagerOptions["isPidAlive"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
@@ -116,7 +116,7 @@ describe("SessionManager", () => {
       spawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
       writeWorkspaceContext: opts.writeWorkspaceContext,
-      workspaceContextExists: opts.workspaceContextExists,
+      prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
       isPidAlive: opts.isPidAlive,
     });
@@ -640,7 +640,9 @@ describe("SessionManager", () => {
         code: "SESSION_NOT_RESUMEABLE",
         message: expect.stringContaining("Claude Code"),
       });
-      await expect(manager.resume(session.id)).rejects.toThrow(/before their first prompt/);
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        /before their first prompt are never written to the coding agent's history/,
+      );
     });
 
     it("probes the agent's store with the session's own agentSessionId and cwd", async () => {
@@ -752,10 +754,22 @@ describe("SessionManager", () => {
       expect(manager.list()[0]?.status).toBe("exited");
     });
 
-    it("resume() backfills the workspace context only when it's missing", async () => {
-      const writeWorkspaceContext = vi.fn(async () => {});
-      const workspaceContextExists = vi.fn(async () => false);
-      const { manager } = makeManager({ writeWorkspaceContext, workspaceContextExists });
+    it("resume() always awaits schema-aware context preparation before spawning", async () => {
+      const order: string[] = [];
+      const buildLaunchOpts = vi.fn(async () => {
+        order.push("prompt");
+        return {};
+      });
+      const prepareWorkspaceContext = vi.fn(async () => {
+        order.push("prepare");
+      });
+      const spawnPty: PtySpawnFn = (file, args) => {
+        order.push("spawn");
+        void file;
+        void args;
+        return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
+      };
+      const { manager } = makeManager({ buildLaunchOpts, prepareWorkspaceContext, spawnPty });
 
       const session = manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
@@ -764,23 +778,18 @@ describe("SessionManager", () => {
         title: "past session",
         lastActiveAt: "2026-01-01T00:00:00.000Z",
       });
-      writeWorkspaceContext.mockClear(); // registerHistorical() doesn't call it; isolate resume()'s call
-
       await manager.resume(session.id);
 
-      expect(workspaceContextExists).toHaveBeenCalledWith("/tmp/proj");
-      expect(writeWorkspaceContext).toHaveBeenCalledTimes(1);
-      // Same object reference resume() mutated in place (status, exitCode,
-      // lastActiveAt) before writing — the callee (server/index.ts's
-      // writeSessionContext) resolves boundWorkflowPath itself, so passing
-      // the whole session is all resume() needs to do here.
-      expect(writeWorkspaceContext).toHaveBeenCalledWith(manager.get(session.id));
+      expect(prepareWorkspaceContext).toHaveBeenCalledTimes(1);
+      expect(prepareWorkspaceContext).toHaveBeenCalledWith(manager.get(session.id));
+      expect(order).toEqual(["prompt", "prepare", "spawn"]);
     });
 
-    it("resume() never overwrites an existing workspace context file", async () => {
-      const writeWorkspaceContext = vi.fn(async () => {});
-      const workspaceContextExists = vi.fn(async () => true);
-      const { manager } = makeManager({ writeWorkspaceContext, workspaceContextExists });
+    it("resume() refuses to spawn when context preparation cannot make the prompt schema safe", async () => {
+      const prepareWorkspaceContext = vi.fn(async () => {
+        throw new Error("context path unreadable");
+      });
+      const { manager, spawns } = makeManager({ prepareWorkspaceContext });
 
       const session = manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
@@ -790,10 +799,13 @@ describe("SessionManager", () => {
         lastActiveAt: "2026-01-01T00:00:00.000Z",
       });
 
-      await manager.resume(session.id);
+      await expect(manager.resume(session.id)).rejects.toThrow("context path unreadable");
 
-      expect(workspaceContextExists).toHaveBeenCalledWith("/tmp/proj");
-      expect(writeWorkspaceContext).not.toHaveBeenCalled();
+      expect(spawns).toHaveLength(0);
+      expect(manager.get(session.id)).toMatchObject({
+        status: "exited",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+      });
     });
 
     it("defaults to a no-op for both hooks so tests with fake cwds never touch the real filesystem", async () => {

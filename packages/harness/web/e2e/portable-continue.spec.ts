@@ -1,5 +1,5 @@
 /**
- * Portable continue (SAP-2059): a session the agent can no longer reattach to
+ * Portable continue (SAP-2059): a session the coding agent can no longer reattach to
  * is still continuable, because the Studio seeds a FRESH session with its own
  * reconstruction of the old one.
  *
@@ -58,8 +58,10 @@ test("a recorded, un-resumable session offers Continue and says what carries ove
   const reason = page.getByTestId("dead-session-resume-reason");
   await expect(reason).toContainText("no saved conversation for this session");
   await expect(reason).toContainText("seeded with the reconstruction below");
-  // Honest about what the new agent is actually getting.
+  // Honest about what the new coding agent is actually getting.
   await expect(reason).toContainText("a briefing about this session, not its context");
+  await expect(reason).toContainText("The new coding agent will need to check the repository");
+  await expect(reason).toContainText("the coding agent never writes a transcript");
 
   await page.screenshot({ path: "web/e2e/screenshots/portable-continue-pane.png", fullPage: true });
 });
@@ -111,6 +113,11 @@ test("the rolling summary is off by default and reachable from settings", async 
   await expect(page.getByTestId("profile-menu")).toBeVisible();
   await page.getByTestId("settings-trigger").click();
   await expect(page.getByTestId("settings-popover")).toBeVisible();
+
+  const note = page.locator(".settings-note").filter({ hasText: "uses tokens" });
+  await expect(note).toContainText("a cheap one-shot coding-agent pass");
+  await expect(note).toContainText("the coding agent can no longer reattach");
+  await expect(note).not.toContainText("one-shot agent run");
 
   const toggle = page.getByTestId("rolling-summary-toggle");
   // Opt-in: it spends tokens on a background LLM call nobody asked for, and

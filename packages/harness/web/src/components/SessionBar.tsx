@@ -190,6 +190,17 @@ export function SessionBar({
                   <Icon name="ChevronDown" size={13} />
                 </button>
               )}
+              {/* Bound-agent suffix on the active session: a quiet metadata tail
+                  next to the title (styled in refine.css), never a boxed tag. */}
+              {boundWorkflowName && (
+                <span
+                  className="session-workflow-chip"
+                  data-testid="session-workflow-chip"
+                  data-tooltip={`Bound to ${boundWorkflowName}; shown in Canvas`}
+                >
+                  · {boundWorkflowName}
+                </span>
+              )}
               <AnchoredPopover
                 open={menuOpen}
                 anchorRef={menuTriggerRef}

@@ -74,6 +74,7 @@ import * as contentGeneration from "./content-generation/index.js";
 import type {
   ImageCreateInput,
   ImageGenerationResult,
+  ImageLaunchHandle,
   VideoCreateInput,
   VideoGenerationResult,
   VideoLaunchHandle,
@@ -160,6 +161,8 @@ import type {
   ActiveSession,
 } from "./browser-automation/index.js";
 import * as vault from "./vault/index.js";
+import * as keys from "./keys/index.js";
+import type { MintScopedInput, ScopedKey } from "./keys/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -242,9 +245,20 @@ export interface Sapiom {
     images: {
       /**
        * Generate image(s) from a prompt. Pass `storage` to persist each output into
-       * file-storage (the returned images then carry `file_id`).
+       * file-storage (the returned images then carry `file_id`). Synchronous: the
+       * request is held open for the full generate+store, so prefer `launch` from a
+       * workflow or when fanning out many at once.
        */
       create(input: ImageCreateInput): Promise<ImageGenerationResult>;
+      /**
+       * Submit an image generation job and return a dispatchable handle immediately.
+       * Pass the handle to `pauseUntilSignal(handle, { resumeStep })` to suspend the
+       * workflow step until the image is ready, or call `handle.wait()` to block inline
+       * (equivalent result to `images.create`). Unlike `create`, the submit returns as
+       * soon as the job is enqueued, so it never meets Core's 30s router cap. Pass
+       * `storage` to persist the output.
+       */
+      launch(input: ImageCreateInput): Promise<ImageLaunchHandle>;
     };
     video: {
       /**
@@ -423,6 +437,17 @@ export interface Sapiom {
     getMany(ref: string, keys: string[]): Promise<Record<string, string>>;
     getAll(ref: string): Promise<Record<string, string>>;
   };
+  /**
+   * Mint a durable, narrowly-scoped Sapiom API key for an artifact this step deploys
+   * (SAP-2300). The per-run credential expires with the step, so a long-lived child
+   * (e.g. a deployed HTTP endpoint) needs its own key: `mintScoped` returns one that
+   * is attenuated to a subset of this run's authority (never wildcard), attributed to
+   * the workflow definition, and always expiring/revocable. Inject the returned `key`
+   * into the artifact's environment (e.g. `SAPIOM_API_KEY`) — never persist or echo it.
+   */
+  readonly keys: {
+    mintScoped(input: MintScopedInput): Promise<ScopedKey>;
+  };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
     /** Generate speech audio from text. */
@@ -449,7 +474,9 @@ export interface Sapiom {
       /** Open a new browser session. */
       create(): Promise<BrowserSession>;
       /** Open a new browser session pre-authenticated with an identity. */
-      createWithIdentity(input: { identityId: string }): Promise<BrowserSession>;
+      createWithIdentity(input: {
+        identityId: string;
+      }): Promise<BrowserSession>;
       /** Close a session and settle its billing. */
       close(sessionId: string): Promise<SessionSettlement>;
     };
@@ -542,6 +569,7 @@ function bind(transport: Transport): Sapiom {
     contentGeneration: {
       images: {
         create: (input) => contentGeneration.createImage(input, transport),
+        launch: (input) => contentGeneration.launchImage(input, transport),
       },
       video: {
         create: (input) => contentGeneration.createVideo(input, transport),
@@ -626,6 +654,9 @@ function bind(transport: Transport): Sapiom {
       getMany: (ref, keys) => vault.getMany(ref, keys, transport),
       getAll: (ref) => vault.getAll(ref, transport),
     },
+    keys: {
+      mintScoped: (input) => keys.mintScoped(input, transport),
+    },
     speech: {
       textToSpeech: {
         create: (input) => speech.createSpeech(input, transport),
@@ -642,7 +673,8 @@ function bind(transport: Transport): Sapiom {
         create: () => browserAutomation.createSession(transport),
         createWithIdentity: (input) =>
           browserAutomation.createSessionWithIdentity(input, transport),
-        close: (sessionId) => browserAutomation.closeSession(sessionId, transport),
+        close: (sessionId) =>
+          browserAutomation.closeSession(sessionId, transport),
       },
       screenshot: (input) => browserAutomation.screenshot(input, transport),
       withSession: (fn, opts) =>

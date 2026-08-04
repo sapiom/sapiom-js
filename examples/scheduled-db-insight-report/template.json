@@ -12,14 +12,15 @@
     "Read-only SQL snapshot",
     "Dry-run preview"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nWith no config it reports on the database's own catalog (rows per table, size), so you get a real report immediately. To report on your own data, pass `queries` — an array of `{ name, sql }` where each query returns `label` and `value` columns (a single `value` row is read as a KPI). It runs with no setup: Sapiom provisions a small Postgres and seeds a demo dataset, so the first report has real numbers in it, and the run says the data is the demo set rather than yours. To report on your own database, supply `REPORT_DATABASE_URL` or point `dbHandle` at it. Set `deliverTo` to have the report emailed; without it the report is returned in the run's output. The managed demo Postgres expires after 7 days and there is no renew verb, so a scheduled run reports when it had to provision a fresh one. Pass `dryRun: true` to report on sample metrics and get the report back without sending. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed workflow.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole snapshot → narrate → chart → deliver flow for free (capabilities stubbed, the DB query and delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nWith no config it reports on the database's own catalog (rows per table, size), so you get a real report immediately. To report on your own data, pass `queries` — an array of `{ name, sql }` where each query returns `label` and `value` columns (a single `value` row is read as a KPI). It runs with no setup: Sapiom provisions a small Postgres and seeds a demo dataset, so the first report has real numbers in it, and the run says the data is the demo set rather than yours. To report on your own database, supply `REPORT_DATABASE_URL` or point `dbHandle` at it. Set `deliverTo` to have the report emailed; without it the report is returned in the run's output. The managed demo Postgres expires after 7 days and there is no renew verb, so a scheduled run reports when it had to provision a fresh one. Pass `dryRun: true` to report on sample metrics and get the report back without sending. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole snapshot → narrate → chart → deliver flow for free (capabilities stubbed, the DB query and delivery skipped), or edit and deploy it with the Sapiom MCP.",
   "resources": [
     {
       "kind": "postgres",
       "handle": "db-insight-demo",
       "duration": "7d",
       "seed": "seed.sql",
-      "ephemeral": false
+      "ephemeral": false,
+      "reuse": { "key": "dbHandle" }
     }
   ],
   "requiredSecrets": [
@@ -82,5 +83,15 @@
         "deliverTo": "founders@example.com"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      { "path": "report", "assert": "nonEmptyString" },
+      { "path": "chartUrl", "assert": "nonEmptyString" },
+      { "path": "delivered", "assert": "equals", "value": false },
+      { "path": "unmet", "assert": "nonEmptyArray" }
+    ],
+    "narrative": "Snapshots the seeded demo database's own catalog, writes a real narrative report with a rendered chart, and returns it inline — nothing is emailed, because no `deliverTo` recipient is set."
+  }
 }

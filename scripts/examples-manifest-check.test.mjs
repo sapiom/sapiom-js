@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import Ajv from "ajv";
 import {
+  checkResourceReuse,
   checkResourceSeeds,
   checkSetupSync,
   createManifestChecker,
@@ -55,7 +56,7 @@ test("every existing manifest in the repo validates unchanged", () => {
     );
   }
   assert.deepEqual(problems, []);
-  assert.ok(registry.templates.length >= 25);
+  assert.ok(registry.templates.length >= 24);
 });
 
 test("the copy length caps are enforced by the schema, with a pointer", () => {
@@ -244,6 +245,221 @@ test("a resource naming a storage location fails", () => {
   });
   assert.equal(errors.length, 1);
   assert.match(errors[0], /\/resources\/0 must NOT have additional properties/);
+});
+
+// --- reuse descriptor (the deploy-time "use my own database" picker) --------
+
+test("a resource with a fully declared reuse descriptor is valid", () => {
+  assert.deepEqual(
+    check({
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "dbHandle" } },
+      ],
+    }),
+    [],
+  );
+});
+
+test("a reuse descriptor missing key fails", () => {
+  assert.deepEqual(
+    check({ resources: [{ kind: "postgres", handle: "db", reuse: {} }] }),
+    [
+      `manifest-schema: "fixture" template.json /resources/0/reuse must have required property 'key'.`,
+    ],
+  );
+});
+
+test("a reuse descriptor with an extra property fails", () => {
+  const errors = check({
+    resources: [
+      {
+        kind: "postgres",
+        handle: "db",
+        reuse: { key: "dbHandle", copy: true },
+      },
+    ],
+  });
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /\/resources\/0\/reuse must NOT have additional properties/,
+  );
+});
+
+test("a reuse key that is a dotted path fails — the seam reads a top-level key", () => {
+  const errors = check({
+    resources: [
+      { kind: "postgres", handle: "db", reuse: { key: "config.dbHandle" } },
+    ],
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\/resources\/0\/reuse\/key must match pattern/);
+});
+
+// checkResourceReuse is the semantic half — reuse is postgres-only, and its key
+// must actually be read via resolveResourceHandle in the step code.
+const READS_DEFAULT = `const h = resolveResourceHandle(input, { fallback: DEFAULT_DB_HANDLE });`;
+const READS_LEDGER = `resolveResourceHandle(input, { key: "ledgerHandle", fallback: "" });`;
+const HARDCODED = `const DB_HANDLE = "the-brain"; const h = DB_HANDLE;`;
+
+test("checkResourceReuse: a reuse marker on a non-postgres resource fails", () => {
+  const errors = checkResourceReuse(
+    "fixture",
+    {
+      resources: [{ kind: "sandbox", handle: "s", reuse: { key: "dbHandle" } }],
+    },
+    READS_DEFAULT,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /only postgres resources may carry it/);
+});
+
+test("checkResourceReuse: a reusable resource whose handle the code hardcodes fails", () => {
+  const errors = checkResourceReuse(
+    "fixture",
+    {
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "dbHandle" } },
+      ],
+    },
+    HARDCODED,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /never read via resolveResourceHandle/);
+});
+
+test("checkResourceReuse: the default key is satisfied by a bare resolveResourceHandle call", () => {
+  assert.deepEqual(
+    checkResourceReuse(
+      "fixture",
+      {
+        resources: [
+          { kind: "postgres", handle: "db", reuse: { key: "dbHandle" } },
+        ],
+      },
+      READS_DEFAULT,
+    ),
+    [],
+  );
+});
+
+test("checkResourceReuse: a non-default key must be named explicitly in the options bag", () => {
+  const drift = checkResourceReuse(
+    "fixture",
+    {
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "ledgerHandle" } },
+      ],
+    },
+    READS_DEFAULT, // reads dbHandle, not ledgerHandle
+  );
+  assert.equal(drift.length, 1);
+  assert.match(drift[0], /never read via resolveResourceHandle/);
+  assert.deepEqual(
+    checkResourceReuse(
+      "fixture",
+      {
+        resources: [
+          { kind: "postgres", handle: "db", reuse: { key: "ledgerHandle" } },
+        ],
+      },
+      READS_LEDGER,
+    ),
+    [],
+  );
+});
+
+test("checkResourceReuse: a reusable resource with no index.ts fails", () => {
+  const errors = checkResourceReuse(
+    "fixture",
+    {
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "dbHandle" } },
+      ],
+    },
+    null,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /no index\.ts/);
+});
+
+// Loophole 1: a declared default key must be read by a call that actually reads
+// the default — not credited just because *some* resolveResourceHandle call
+// exists. Here the only call reads a different key.
+test("checkResourceReuse: a declared dbHandle is not satisfied by a call reading another key", () => {
+  const errors = checkResourceReuse(
+    "fixture",
+    {
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "dbHandle" } },
+      ],
+    },
+    `const h = resolveResourceHandle(input, { key: "somethingElse", fallback: "" });`,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /never read via resolveResourceHandle/);
+});
+
+// Loophole 2: the declared key appearing only in a comment (or any text outside
+// a real call's arguments) must NOT satisfy the check — the exact shape this
+// PR's own templates carry, e.g. `reuse.key: "ledgerHandle"` in a doc comment.
+test("checkResourceReuse: a key named only in a comment does not count as read", () => {
+  const commentOnly = [
+    `// declared as \`resources[].reuse.key: "ledgerHandle"\``,
+    `const h = resolveResourceHandle(input, { fallback: "" }); // reads dbHandle`,
+  ].join("\n");
+  const errors = checkResourceReuse(
+    "fixture",
+    {
+      resources: [
+        { kind: "postgres", handle: "db", reuse: { key: "ledgerHandle" } },
+      ],
+    },
+    commentOnly,
+  );
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /never read via resolveResourceHandle/);
+});
+
+test("checkResourceReuse: an internal-state resource with no reuse marker is fine", () => {
+  // the-brain: hardcoded handle, no reuse descriptor ⇒ no picker, no error.
+  assert.deepEqual(
+    checkResourceReuse(
+      "fixture",
+      { resources: [{ kind: "postgres", handle: "the-brain" }] },
+      HARDCODED,
+    ),
+    [],
+  );
+});
+
+test("checkResourceReuse passes for every real reusable manifest against its index.ts", () => {
+  const registry = JSON.parse(
+    readFileSync(path.join(ROOT, "examples", "registry.json"), "utf8"),
+  );
+  for (const t of registry.templates) {
+    const dir = path.join(ROOT, t.sourcePath ?? path.join("examples", t.id));
+    let manifest;
+    try {
+      manifest = JSON.parse(
+        readFileSync(path.join(dir, "template.json"), "utf8"),
+      );
+    } catch {
+      continue;
+    }
+    const indexPath = path.join(dir, "index.ts");
+    let indexSource = null;
+    try {
+      indexSource = readFileSync(indexPath, "utf8");
+    } catch {
+      indexSource = null;
+    }
+    assert.deepEqual(
+      checkResourceReuse(t.id, manifest, indexSource),
+      [],
+      `${t.id} declares a reuse descriptor its step code does not honor`,
+    );
+  }
 });
 
 test("a settings entry missing default fails", () => {

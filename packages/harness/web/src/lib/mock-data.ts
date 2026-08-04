@@ -340,8 +340,8 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     agentSessionId: "9c1a2b3d-4e5f-4061-8a7b-6c5d4e3f2a10",
     boundWorkflowPath: null,
     harness: "codex",
-    cwd: "/Users/demo/rfq-workflows",
-    title: "rfq-workflows",
+    cwd: "/Users/demo/rfq-agent",
+    title: "rfq-agent",
     status: "exited",
     createdAt: daysAgo(2),
     lastActiveAt: daysAgo(1),
@@ -431,14 +431,14 @@ export const MOCK_ACTIVITY_SESSION_ID = "sess-leasing-2";
 export const MOCK_FS_TREE: Record<string, string[]> = {
   "/": ["Users"],
   "/Users": ["demo"],
-  "/Users/demo": ["acme-app", "rfq-workflows", "onboarding-flow", "scratch"],
+  "/Users/demo": ["acme-app", "rfq-agent", "onboarding-flow", "scratch"],
   "/Users/demo/acme-app": ["leasing", "src", "docs"],
   "/Users/demo/acme-app/leasing": [],
   "/Users/demo/acme-app/src": [],
   "/Users/demo/acme-app/docs": [],
-  "/Users/demo/rfq-workflows": ["src", "tests"],
-  "/Users/demo/rfq-workflows/src": [],
-  "/Users/demo/rfq-workflows/tests": [],
+  "/Users/demo/rfq-agent": ["src", "tests"],
+  "/Users/demo/rfq-agent/src": [],
+  "/Users/demo/rfq-agent/tests": [],
   "/Users/demo/onboarding-flow": [],
   "/Users/demo/scratch": [],
 };
@@ -544,13 +544,13 @@ export const MOCK_HISTORY: Record<string, SessionSummary[]> = {
       turnCount: 9,
     },
   ],
-  "/Users/demo/rfq-workflows": [
+  "/Users/demo/rfq-agent": [
     {
       harnessSessionId: "sess-rfq",
       agentSessionId: "9c1a2b3d-4e5f-4061-8a7b-6c5d4e3f2a10",
       harness: "codex",
-      cwd: "/Users/demo/rfq-workflows",
-      title: "rfq-workflows",
+      cwd: "/Users/demo/rfq-agent",
+      title: "rfq-agent",
       lastActiveAt: daysAgo(1),
       source: "registry",
       resumeMode: "agent-resume",
@@ -587,13 +587,13 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     turns: [
       {
         index: 1,
-        prompt: "Add the screening step to the leasing workflow and wire it to the credit check.",
+        prompt: "Add the screening step to the leasing agent and wire it to the credit check.",
         promptAt: minutesAgo(48),
         toolCalls: [
           {
             name: "Read",
             input: '{"file_path":"/Users/demo/acme-app/leasing/index.ts"}',
-            responseSummary: "export const leasing = defineWorkflow({ … })",
+            responseSummary: "export const leasing = defineAgent({ … })",
             responseTruncated: false,
             at: minutesAgo(47),
           },
@@ -752,7 +752,7 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     mergedSessionIds: ["sess-rfq"],
     agentSessionId: "9c1a2b3d-4e5f-4061-8a7b-6c5d4e3f2a10",
     harness: "codex",
-    cwd: "/Users/demo/rfq-workflows",
+    cwd: "/Users/demo/rfq-agent",
     startedAt: daysAgo(1),
     endedAt: null,
     turnCount: 1,
@@ -765,13 +765,13 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
     turns: [
       {
         index: 1,
-        prompt: "Summarize what the rfq workflow does.",
+        prompt: "Summarize what the rfq agent does.",
         promptAt: daysAgo(1),
         toolCalls: [
           {
             name: "shell",
             input: '{"command":["cat","README.md"]}',
-            responseSummary: "# rfq-workflows\nRequest-for-quote intake and routing.",
+            responseSummary: "# rfq-agent\nRequest-for-quote intake and routing.",
             responseTruncated: false,
             at: daysAgo(1),
           },
@@ -842,7 +842,7 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
 
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
   { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821, definitionSlug: "leasing", source: "scan" },
-  { name: "rfq", path: "/Users/demo/rfq-workflows", definitionId: null, definitionSlug: null, source: "scan" },
+  { name: "rfq", path: "/Users/demo/rfq-agent", definitionId: null, definitionSlug: null, source: "scan" },
   // Deployed like "leasing" but with a much longer name — exercises the
   // canvas header's deployed-dot staying pinned regardless of name length.
   { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: 9001, definitionSlug: "onboarding-flow", source: "connect" },
@@ -955,10 +955,9 @@ export const MOCK_HARNESSES: HarnessEntry[] = [
 
 export const MOCK_SETTINGS: HarnessSettings = {
   telemetryOptIn: false,
-  recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-workflows", "/Users/demo/onboarding-flow"],
+  recentDirs: ["/Users/demo/acme-app", "/Users/demo/rfq-agent", "/Users/demo/onboarding-flow"],
   // Matches the real default: opt-in, because it spends tokens on a background
   // LLM call the user never asked for.
   rollingSummary: false,
 };
-
 

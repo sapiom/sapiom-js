@@ -221,7 +221,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 1,
-        "degradedWithoutSetup": "Repurposes a built-in sample post into a newsletter, tweet thread, video script, and LinkedIn post."
+        "degradedWithoutSetup": "Repurposes the built-in sample post into copy plus real rendered quote graphics; skips the pricey teaser clip and emails nothing because no recipient is set."
       }
     },
     {
@@ -296,54 +296,6 @@
         "connectionCount": 0,
         "settingCount": 1,
         "degradedWithoutSetup": "Runs a coding agent to triage upgrades and writes a report; pushes nothing (no repo)."
-      }
-    },
-    {
-      "id": "durable-backfill",
-      "name": "Large Dataset Backfill",
-      "description": "Process a huge dataset in resumable chunks, checkpointing progress so the job survives restarts and picks up where it left off.",
-      "tags": ["durable", "backfill", "batch", "cron"],
-      "category": "data-knowledge",
-      "discipline": "Data",
-      "cadence": "scheduled",
-      "complexity": "simple",
-      "sourcePath": "examples/durable-backfill",
-      "capabilities": [
-        "database.get",
-        "sandboxes.create",
-        "sandboxes.exec",
-        "fileStorage.upload",
-        "fileStorage.getDownloadUrl",
-        "fileStorage.list",
-        "fileStorage.delete"
-      ],
-      "steps": [
-        {
-          "name": "plan",
-          "description": "Works out the job — dataset size, chunk size, and a stable job id — then resumes from a saved checkpoint if one exists for that id.",
-          "kind": "compute",
-          "next": ["process"]
-        },
-        {
-          "name": "process",
-          "description": "Process the current chunk, save its result and rewrite the checkpoint, then wait for the next heartbeat — or, running offline with nothing to fire one, loop straight to the next chunk. Finishes once the last chunk is done.",
-          "kind": "pause",
-          "capability": "sandboxes.exec",
-          "next": ["finalize", "process"]
-        },
-        {
-          "name": "finalize",
-          "description": "Writes a manifest of the run and returns a summary.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 1,
-        "provisions": ["sandbox"],
-        "degradedWithoutSetup": "Runs the backfill offline over 3 chunks (25 records); persists nothing (no dbHandle)."
       }
     },
     {
@@ -447,7 +399,7 @@
     {
       "id": "fan-out-and-combine",
       "name": "Fan Out and Combine",
-      "description": "Split a goal into parts, run each part as its own child workflow in parallel, then merge the results into one answer.",
+      "description": "Split a goal into parts, run each part as its own child agent run in parallel, then merge the results into one answer.",
       "tags": ["orchestration", "fan-out", "map-reduce", "agents"],
       "category": "reliability-governance",
       "discipline": "Reliability",
@@ -458,7 +410,7 @@
       "steps": [
         {
           "name": "plan",
-          "description": "Resolve the goal, the parts to fan out, and the child workflow to run for each — this agent itself by default. A leaf handles one part; a dry run returns the plan.",
+          "description": "Resolve the goal, the parts to fan out, and the child agent to run for each — this agent itself by default. A leaf handles one part; a dry run returns the plan.",
           "kind": "compute",
           "next": ["solve", "fanOut", "planned"]
         },
@@ -777,7 +729,7 @@
         "connectionCount": 0,
         "settingCount": 0,
         "provisions": ["sandbox"],
-        "degradedWithoutSetup": "Searches the web for the company's recent news and publishes an illustrated roundup page; with no recent news it honestly reports no-news."
+        "degradedWithoutSetup": "Searches the web for a well-covered default company and publishes a dated, illustrated roundup page at a live sandbox URL; a company with no recent coverage ends in a distinct no-news terminal instead."
       }
     },
     {
@@ -910,7 +862,7 @@
         "connectionCount": 1,
         "settingCount": 0,
         "provisions": ["postgres"],
-        "degradedWithoutSetup": "Translates a sample question to SQL and validates it; deploys no endpoint (needs a scoped key)."
+        "degradedWithoutSetup": "Translates a sample question to SQL, mints the endpoint its own scoped key, and deploys a working /query endpoint."
       }
     },
     {
@@ -1385,10 +1337,11 @@
         }
       ],
       "setup": {
-        "runsWithNoSetup": false,
+        "runsWithNoSetup": true,
         "connectionCount": 1,
         "settingCount": 1,
-        "provisions": ["postgres"]
+        "provisions": ["postgres"],
+        "degradedWithoutSetup": "Snapshots the seeded demo database's own catalog, writes a real narrative report with a rendered chart, and returns it inline — nothing is emailed, because no `deliverTo` recipient is set."
       }
     },
     {
@@ -1435,7 +1388,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 1,
-        "degradedWithoutSetup": "Researches the topic and writes a brief with sources; emails nothing (no recipient)."
+        "degradedWithoutSetup": "Researches the topic, writes a sourced brief, and emails it to the agent's own Sapiom-hosted demo inbox; set deliverTo to send it to your address."
       }
     },
     {
@@ -1486,97 +1439,6 @@
         "connectionCount": 2,
         "settingCount": 1,
         "degradedWithoutSetup": "Composes the message and prints it; posts nothing to Slack (no bot token)."
-      }
-    },
-    {
-      "id": "the-brain",
-      "name": "Workflow Fleet Monitor",
-      "description": "Watches a fleet of workflows, spots which member is off cadence, and launches it — with a model that may only pick from a fixed list of safe moves.",
-      "tags": ["orchestration", "agents-managing-agents", "meta-workflow"],
-      "category": "reliability-governance",
-      "discipline": "Reliability",
-      "cadence": "scheduled",
-      "complexity": "involved",
-      "sourcePath": "examples/the-brain",
-      "capabilities": ["models.run", "database.get", "database.create"],
-      "steps": [
-        {
-          "name": "scan",
-          "description": "Reads the event log and works out which members are off cadence — missed today, overdue, or launched with no result.",
-          "kind": "capability",
-          "capability": "database.get",
-          "next": ["assess"]
-        },
-        {
-          "name": "assess",
-          "description": "Hands those situations to a model that may only pick a move from a fixed list, then re-checks its answer in code.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["actuate"]
-        },
-        {
-          "name": "actuate",
-          "description": "Runs the plan behind guardrails, launching each due member as a child workflow and recording each launch.",
-          "kind": "compute",
-          "next": ["report"]
-        },
-        {
-          "name": "report",
-          "description": "Posts a short briefing to a Slack channel, records the run, and advances its place in the log.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": false,
-        "connectionCount": 1,
-        "settingCount": 1,
-        "provisions": ["postgres"]
-      }
-    },
-    {
-      "id": "wait-for-webhook",
-      "name": "Slow Job Callback",
-      "description": "Start a slow external job, pause until a webhook calls back, then summarize the result and decide whether to accept it.",
-      "tags": ["durable", "pause-resume", "webhook", "async"],
-      "category": "product-engineering",
-      "discipline": "Engineering",
-      "cadence": "on-demand",
-      "complexity": "simple",
-      "sourcePath": "examples/wait-for-webhook",
-      "capabilities": ["models.run"],
-      "steps": [
-        {
-          "name": "kickoff",
-          "description": "Register the resume contract with the external job and pause until it calls back — costing nothing while idle. With no register URL, no job was started, so it decides on an empty payload rather than waiting forever.",
-          "kind": "pause",
-          "next": ["decide"]
-        },
-        {
-          "name": "decide",
-          "description": "Wakes when the callback arrives; its input is the callback payload. A model summarizes the result and picks accept or reject.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["accept", "reject"]
-        },
-        {
-          "name": "accept",
-          "description": "Ends the run — the callback result looked complete and usable.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "reject",
-          "description": "Ends the run — the callback result failed or looked wrong.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 0,
-        "degradedWithoutSetup": "Evaluates the sample job and returns a decision; registers no external callback."
       }
     },
     {

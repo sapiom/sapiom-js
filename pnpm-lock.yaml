@@ -159,6 +159,12 @@ importers:
         specifier: ^4.1.0
         version: 4.4.3
 
+  packages/agent-studio:
+    dependencies:
+      '@sapiom/harness':
+        specifier: workspace:*
+        version: link:../harness
+
   packages/analytics-core:
     devDependencies:
       '@stryker-mutator/core':
@@ -247,7 +253,7 @@ importers:
         specifier: workspace:^
         version: link:../analytics-core
       '@sapiom/harness':
-        specifier: '>=0.2.5'
+        specifier: '>=0.2.6'
         version: link:../harness
       '@sapiom/sandbox-preview':
         specifier: workspace:^

@@ -743,6 +743,9 @@ describe("createRestRouter", () => {
       );
 
       expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "Unknown agent path '/not/registered' — scan or connect it before binding a session to it",
+      });
       expect(sessionManager.setBoundWorkflowPath).not.toHaveBeenCalled();
       expect(writeWorkspaceContext).not.toHaveBeenCalled();
     });
@@ -1467,4 +1470,3 @@ describe("createRestRouter", () => {
     });
   });
 });
-

@@ -54,6 +54,13 @@ export interface CapabilityCallOptions {
   makeError: (message: string, status: number, body: unknown) => Error;
   /** Human-readable prefix for the thrown error's message. */
   errorPrefix: string;
+  /**
+   * Extra request headers to merge in (after `content-type`, so they can't drop it).
+   * The async-dispatch verbs use this to forward the engine's `x-sapiom-workflow-token`
+   * so the service can resume a paused workflow step on completion — a header, not a
+   * body field, so author-supplied request fields can't clobber it.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -75,7 +82,7 @@ export async function capabilityCall<Res>(
     `${baseUrl}/v1/capabilities/${id}`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...opts.headers },
       body: JSON.stringify(req),
     },
     { authHeader: "x-api-key" },

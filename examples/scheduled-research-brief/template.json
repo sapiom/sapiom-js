@@ -6,13 +6,13 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Research a topic on a schedule and email a short, sourced brief. Searches the web, reads the top results in full, and links every claim back to where it came from. Scrapes fail routinely; when one does it keeps the snippet and still sends a brief from the survivors.",
-  "longDescription": "You give it a topic and a schedule. On each tick it searches the web, reads the top results, and emails you a short brief that summarizes what it found and links every claim back to its source.\n\nThe graph is four steps: `search` (web.search) finds candidates, `scrape` reads them for full text, `curate` (`models.run`, the live x402-served model) ranks and synthesizes them into a sourced brief, and `deliver` emails it. Scrapes fail routinely on paywalls and timeouts — when one does, it keeps the search snippet and moves on, so a brief from the survivors still goes out. A `dryRun` flag computes the brief and returns it as a preview without sending; so does a run with no recipient set.\n\nIts simpler sibling is `web-research-digest`: fork that for a one-shot digest that formats in-process with no LLM and no delivery. Fork this one when you want a standing, LLM-curated brief that lands in an inbox on a cadence.\n\nYou pay for the web search, the scrapes, and the model reasoning on each run — the emails are cheap, and a dry run costs nothing beyond the search and scrape it still performs.",
+  "longDescription": "You give it a topic and a schedule. On each tick it searches the web, reads the top results, and emails you a short brief that summarizes what it found and links every claim back to its source.\n\nThe graph is four steps: `search` (web.search) finds candidates, `scrape` reads them for full text, `curate` (`models.run`, the live x402-served model) ranks and synthesizes them into a sourced brief, and `deliver` emails it. Scrapes fail routinely on paywalls and timeouts — when one does, it keeps the search snippet and moves on, so a brief from the survivors still goes out. With no `deliverTo` set it emails the brief to the agent's own Sapiom-hosted inbox, so the delivery is real and inspectable on a zero-setup run; set `deliverTo` to send it to your address instead. A `dryRun` flag computes the brief and returns it as a preview without sending anything.\n\nIts simpler sibling is `web-research-digest`: fork that for a one-shot digest that formats in-process with no LLM and no delivery. Fork this one when you want a standing, LLM-curated brief that lands in an inbox on a cadence.\n\nYou pay for the web search, the scrapes, and the model reasoning on each run — the emails are cheap, and a dry run costs nothing beyond the search and scrape it still performs.",
   "useCases": [
     "Sourced brief on a cadence",
     "Every claim links out",
     "Dry-run preview"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you, then run it from the workflow page. Your $5 signup credit covers first runs.\n\nGive it a `topic` (what to research) and a `schedule` (the cron cadence). It runs with no setup: given no topic it researches AI agent reliability incidents and says so in its output. Set `deliverTo` to have the brief emailed; without it the brief is returned in the run's output. Pass `dryRun: true` to compute the brief and get it back without sending anything. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed workflow.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole search → scrape → curate → deliver flow for free (capabilities stubbed, delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nGive it a `topic` (what to research) and a `schedule` (the cron cadence). It runs with no setup: given no topic it researches AI agent reliability incidents and says so in its output. With no `deliverTo` it emails the brief to a Sapiom-hosted demo inbox so you see a real, inspectable delivery; set `deliverTo` to send it to your own address instead. Pass `dryRun: true` to compute the brief and get it back without sending anything. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole search → scrape → curate → deliver flow for free (capabilities stubbed, delivery skipped), or edit and deploy it with the Sapiom MCP.",
   "settings": [
     {
       "path": "deliverTo",
@@ -57,12 +57,13 @@
     }
   ],
   "zeroSetup": {
-    "terminalState": "completed_partial",
+    "terminalState": "completed",
     "expect": [
       { "path": "brief", "assert": "nonEmptyString" },
       { "path": "sources", "assert": "nonEmptyArray" },
-      { "path": "delivered", "assert": "equals", "value": false }
+      { "path": "delivered", "assert": "equals", "value": true },
+      { "path": "messageId", "assert": "nonEmptyString" }
     ],
-    "narrative": "Researches the topic and writes a brief with sources; emails nothing (no recipient)."
+    "narrative": "Researches the topic, writes a sourced brief, and emails it to the agent's own Sapiom-hosted demo inbox; set deliverTo to send it to your address."
   }
 }

@@ -9,17 +9,18 @@
  * There is no local copy of the gallery any more — a stale copy IS the bug.
  *
  * **Starters** stay local, and should: they are the templates bundled with
- * `@sapiom/agent-core` (`templates/{default,coding-pause}`), scaffolded by
- * `sapiom agents init -t <name>` with no account and no network. They are the
- * offline floor — what the dialog can still offer when the catalog is
- * unreachable — so describing them from the package is correct, not a shortcut.
+ * `@sapiom/agent-core` (`templates/{default,coding-pause}`), scaffolded by the
+ * local `sapiom_dev_agents_scaffold` tool with no Sapiom account or capability
+ * calls. They are the offline-capable floor — what the dialog can still offer
+ * when the catalog is unreachable — so describing them from the package is
+ * correct, not a shortcut.
  *
  * Both "use" paths are real operations driven through the session's agent:
  * - Gallery: `sapiom_dev_agents_clone` (`{dir, templateId}`) forks the template
  *   into a repo the user owns, clones it, and writes `sapiom.json` provenance.
  *   Its `templateId` is a free-form string relayed to core's fork endpoint — no
  *   allowlist — so every catalog id works, not just the two once pinned here.
- * - Starters: `sapiom agents init <dir> -t <name>`, offline.
+ * - Starters: `sapiom_dev_agents_scaffold` (`{dir, template}`), local.
  */
 import type { TemplateComplexity, TemplateDetailView, TemplateSummary } from "@shared/types";
 
@@ -32,7 +33,7 @@ export type GalleryTemplate = TemplateSummary & { kind: "gallery" };
 /** A template bundled with @sapiom/agent-core — scaffolds offline. */
 export interface StarterTemplate {
   kind: "starter";
-  /** The bundled template directory name — what `init -t` takes. */
+  /** The bundled template directory name passed as the scaffold tool's `template`. */
   id: string;
   name: string;
   description: string;
@@ -206,8 +207,8 @@ export function matchesQuery(template: StudioTemplate, query: string): boolean {
 /**
  * The prompt handed to the session's agent after "Use template" starts a session
  * in the destination folder. Both branches name the REAL operation: the clone
- * MCP tool for gallery templates (with its auth failure path), the bundled
- * template init command for starters. Both end with the same next move (a free
+ * MCP tool for gallery templates (with its auth failure path), the local
+ * scaffold MCP tool for starters. Both end with the same next move (a free
  * local test run), so use → edit → run is one continuous path rather than a
  * journey that stops at the clone.
  */
@@ -225,10 +226,15 @@ export function useTemplatePrompt(template: StudioTemplate, dir: string): string
   }
   return (
     `Scaffold the "${template.id}" starter in this directory: ` +
-    `run \`sapiom agents init . -t ${template.id}\`, then run npm install and read AGENTS.md. ` +
-    "Use the sapiom-agent-authoring skill to adapt the workflow. " +
+    `${starterScaffoldInstruction(dir, template.id)}, then run npm install and read AGENTS.md. ` +
+    "Keep the shipped starter unchanged until the user describes what to build. " +
     runContinuation
   );
+}
+
+/** Exact local MCP handoff shared by every bundled-starter entry point. */
+export function starterScaffoldInstruction(dir: string, template: string): string {
+  return "call the sapiom_dev_agents_scaffold tool with " + JSON.stringify({ dir, template });
 }
 
 /**

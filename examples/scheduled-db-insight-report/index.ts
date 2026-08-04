@@ -320,7 +320,7 @@ const entryInput = z.object({
     .array(z.object({ name: z.string(), sql: z.string() }))
     .optional()
     .describe(
-      "Queries to snapshot; defaults to catalog introspection when omitted.",
+      "Advanced: read-only queries to snapshot, each `{ name, sql }` where `sql` returns `label`/`value` columns. Optional — defaults to catalog introspection when omitted.",
     ),
   schedule: z
     .string()

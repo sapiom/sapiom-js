@@ -2,6 +2,7 @@ import {
   defineAgent,
   defineStep,
   goto,
+  resolveResourceHandle,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
@@ -29,11 +30,13 @@ import { z } from "zod/v4";
  *      only deployed once the safe path is proven.
  *   5. deploy   — write a small server (which re-runs translate → guard → execute
  *      per request) into a sandbox and expose it at a stable URL
- *      (`sandboxes.deployPreview`). DATABASE_URL and the server's own API key
- *      (injected into this step's environment as `ENDPOINT_SAPIOM_API_KEY`) are
- *      passed as env — never baked into source. With no key, nothing is deployed
- *      and the run stops at `endpoint_skipped`: a URL whose only route cannot
- *      answer is worse than no URL.
+ *      (`sandboxes.deployPreview`). DATABASE_URL and the server's own API key are
+ *      passed as env — never baked into source. The endpoint's key is MINTED for it
+ *      (`ctx.sapiom.keys.mintScoped`): a durable, narrowly-scoped credential the
+ *      long-lived server uses to call `models.run`, since the engine's per-run token
+ *      expires with this step. Only if minting is unavailable and no key was supplied
+ *      does the run stop at `endpoint_skipped`: a URL whose only route cannot answer
+ *      is worse than no URL.
  *   6. deployed / endpoint_skipped / deploy_failed / rejected — terminal.
  *
  * The read-only guardrail is defense-in-depth: the LLM is *told* to emit a SELECT,
@@ -110,22 +113,34 @@ const DEFAULT_PORT = 3000;
  */
 const DEFAULT_DB_HANDLE = "nl-db-query-demo";
 /**
- * Env key holding the API key the DEPLOYED endpoint uses to call `models.run` on
- * each request. Declared as a required secret in `template.json`; the platform
- * injects it here and the step forwards it to the server as `SAPIOM_API_KEY`.
- * The declared key cannot itself be named `SAPIOM_*` — that namespace belongs to
- * the engine and a template may never override it.
- *
- * This is the template's one genuinely unsolved requirement: the endpoint needs a
- * Sapiom credential of its own, and there is no primitive today that mints one
- * scoped to a deployed preview. Until there is, a run with no key translates and
- * guards for real and then stops, rather than publishing a URL whose only
- * interesting route cannot answer.
+ * Optional OVERRIDE env key for the API key the DEPLOYED endpoint uses to call
+ * `models.run` on each request. The default path needs none: the deploy step mints
+ * the endpoint its own durable, narrowly-scoped key via `ctx.sapiom.keys.mintScoped`
+ * (SAP-2300) and forwards it to the server as `SAPIOM_API_KEY`. This secret only
+ * exists as an escape hatch — bring-your-own key when you want to control which
+ * credential the endpoint runs as. The declared key cannot itself be named
+ * `SAPIOM_*` — that namespace belongs to the engine and a template may never
+ * override it.
  */
 const ENDPOINT_API_KEY = "ENDPOINT_SAPIOM_API_KEY";
 
+/**
+ * Lifetime of the scoped key minted for the deployed endpoint. The key is durable
+ * relative to the run (the per-run `sat_` the engine injects expires with the step)
+ * but still bounded — long enough for the preview to serve requests, short enough
+ * that a leaked key is not forever. It carries transaction (payment) authority only,
+ * and can be revoked by its id before the TTL.
+ */
+const ENDPOINT_KEY_TTL = "30d";
+
 function resolveConfig(input: EntryInput | undefined): Config {
-  const dbHandle = input?.dbHandle?.trim() ?? "";
+  // Read the target handle through the canonical injection seam so a deploy-time
+  // reuse picker (declared as `resources[].reuse.key: "dbHandle"`) can repoint the
+  // endpoint at a database the caller already owns. The fallback is `""`, not
+  // DEFAULT_DB_HANDLE: "no handle named" is a real state here — it selects the
+  // seeded demo DB below only when no `connectionString` was given either, and a
+  // user-named handle that 404s is rejected rather than silently reprovisioned.
+  const dbHandle = resolveResourceHandle(input ?? {}, { fallback: "" });
   const connectionString = input?.connectionString?.trim() ?? "";
   const usingDemoDatabase = !dbHandle && !connectionString;
   return {
@@ -521,10 +536,31 @@ const deploy = defineStep({
     const connectionString = ctx.shared.get("connectionString") ?? "";
     const sampleSql = ctx.shared.get("sampleSql") ?? "";
 
-    // The server's own API key (used to call models.run per request) comes from
-    // the environment the platform injected it into, or the dev-only input.
-    const apiKey =
+    // The server's own API key (used to call models.run per request). A caller can
+    // bring one — the dev-only input, or the optional ENDPOINT_SAPIOM_API_KEY
+    // override — but the zero-setup default is to MINT the endpoint its own durable,
+    // narrowly-scoped key. The engine's per-run `sat_` expires with this step, so it
+    // can't be handed to a long-lived artifact; `keys.mintScoped` returns one that can.
+    let apiKey =
       config.sapiomApiKey || process.env[ENDPOINT_API_KEY]?.trim() || "";
+    if (!apiKey && !config.dryRun) {
+      try {
+        const minted = await ctx.sapiom.keys.mintScoped({
+          ttl: ENDPOINT_KEY_TTL,
+        });
+        apiKey = minted.key;
+        ctx.logger.info("minted scoped endpoint credential", {
+          keyId: minted.id,
+          expiresAt: minted.expiresAt,
+        });
+      } catch (err) {
+        // Fail honest, not silent: if minting is unavailable we still translate and
+        // guard, then stop at endpoint_skipped rather than publishing a dead URL.
+        ctx.logger.warn("could not mint an endpoint credential", {
+          err: String(err),
+        });
+      }
+    }
 
     const env: Record<string, string> = {
       PORT: String(config.port),
@@ -537,7 +573,8 @@ const deploy = defineStep({
     // No key means the deployed server cannot call `models.run`, so `/query` — the
     // only interesting route — would return an error for every request. Publishing
     // that URL is the worst failure mode this template has. Stop with the
-    // translated, guarded SQL instead and name what is missing.
+    // translated, guarded SQL instead and name what is missing. Reached now only if
+    // minting failed AND no key was supplied — the default zero-setup run deploys.
     if (!apiKey && !config.dryRun) {
       ctx.logger.warn("no endpoint credential — not deploying", {
         key: ENDPOINT_API_KEY,

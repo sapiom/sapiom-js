@@ -16,7 +16,7 @@ genuinely new code is `judge.ts` (`buildJudgePrompt` + `parseScore`).
   env vars or POST `/v1/messages` directly; those are not injected on deploy.
 - The judge rides the same step→gateway path as everything else, so the engine's
   routing / capacity / load-balancing sit in front of it for free — no
-  evals-specific execution path.
+  evals-specific agent-run path.
 
 ## The rubric is yours; the harness is ours
 
@@ -81,7 +81,7 @@ tools (`sapiom_dev_agents_*`). See `README.md` for the full lifecycle.
 
 ## Composition — self-grading with the eval-gate as a child
 
-A parent workflow can grade its own output by launching the deployed eval-gate as
+A parent agent can grade its own output by launching the deployed eval-gate as
 a **child** and branching on the returned decision. The parent POSTs to
 `https://api.sapiom.ai/v1/workflows/executions` with
 `{ definitionId, input, idempotencyKey }` using `process.env.SAPIOM_API_KEY` (a

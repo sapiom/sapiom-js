@@ -64,7 +64,7 @@ linux:
   artifactName: sapiom-${version}-${arch}.${ext}
   executableName: sapiom
   maintainer: Sapiom <team@sapiom.ai>
-  synopsis: One-click Sapiom harness — run your coding agent on Sapiom.
+  synopsis: Agent Studio — run your coding agent on Sapiom.
 
 mac:
   # dmg AND zip. The zip is not a duplicate download for testers — it is the

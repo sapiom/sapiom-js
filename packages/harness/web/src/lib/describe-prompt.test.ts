@@ -26,6 +26,8 @@ describe("describeWorkflowPrompt", () => {
     const leasing = describeWorkflowPrompt(workflow());
     expect(leasing).toContain('"leasing"');
     expect(leasing).toContain("/Users/demo/acme-app/leasing");
+    expect(leasing).toContain("whole agent");
+    expect(leasing.toLowerCase()).not.toContain("workflow");
 
     const rfq = describeWorkflowPrompt(workflow({ name: "rfq", path: "/Users/demo/rfq-workflows" }));
     expect(rfq).toContain('"rfq"');

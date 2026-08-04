@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_SYSTEM_PROMPT } from "../../profiles/default.js";
 import { ClaudeCodeAdapter, encodeProjectPath } from "./claude-code.js";
 
 describe("ClaudeCodeAdapter", () => {
@@ -42,7 +43,7 @@ describe("ClaudeCodeAdapter", () => {
     it("builds a launch SpawnSpec with settings/mcp-config/system-prompt flags and unsets CLAUDECODE", async () => {
       const promptDir = await mkdtemp(join(tmpdir(), "harness-claude-test-"));
       const promptFile = join(promptDir, "prompt.txt");
-      await writeFile(promptFile, "You are a Sapiom workflow builder.", "utf8");
+      await writeFile(promptFile, DEFAULT_SYSTEM_PROMPT, "utf8");
 
       const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
       const spec = adapter.launch({
@@ -62,7 +63,19 @@ describe("ClaudeCodeAdapter", () => {
         "--mcp-config",
         "/tmp/proj/.sapiom/mcp.json",
         "--append-system-prompt",
-        "You are a Sapiom workflow builder.",
+        DEFAULT_SYSTEM_PROMPT,
+      ]);
+
+      const resumed = adapter.resume("agent-uuid-123", {
+        harnessSessionId: "h1",
+        cwd: "/tmp/proj",
+        systemPromptFile: promptFile,
+      });
+      expect(resumed.args).toEqual([
+        "--resume",
+        "agent-uuid-123",
+        "--append-system-prompt",
+        DEFAULT_SYSTEM_PROMPT,
       ]);
 
       await rm(promptDir, { recursive: true, force: true });

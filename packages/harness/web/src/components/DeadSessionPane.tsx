@@ -37,7 +37,7 @@ interface DeadSessionPaneProps {
 function resumeBlockedReason(session: HarnessSession): string {
   return session.agentSessionId == null
     ? "This session can't be resumed: it exited before establishing a session id."
-    : `${HARNESS_LABELS[session.harness]} has no saved conversation for this session, so there's nothing to hand back. That happens when a session ends before its first prompt — the agent never writes a transcript for those.`;
+    : `${HARNESS_LABELS[session.harness]} has no saved conversation for this session, so there's nothing to hand back. That happens when a session ends before its first prompt — the coding agent never writes a transcript for those.`;
 }
 
 /**
@@ -106,7 +106,7 @@ export function DeadSessionPane({
             </div>
           )}
           <div className="dead-session-detail-row">
-            <dt>Agent</dt>
+            <dt>Coding agent</dt>
             <dd>{HARNESS_LABELS[session.harness]}</dd>
           </div>
           {duration && (
@@ -144,7 +144,7 @@ export function DeadSessionPane({
           <div className="dead-session-resume-reason" data-testid="dead-session-resume-reason">
             {resumeBlockedReason(session)}{" "}
             {canContinue
-              ? "Continuing opens a fresh session in this directory, seeded with the reconstruction below — a briefing about this session, not its context. The new agent will need to check the repository before relying on any of it."
+              ? "Continuing opens a fresh session in this directory, seeded with the reconstruction below — a briefing about this session, not its context. The new coding agent will need to check the repository before relying on any of it."
               : "Start a new session in this directory instead; there is no recording of this one to carry over either."}
           </div>
         )}
@@ -230,9 +230,9 @@ export function PastSessionPane({
         <div className="dead-session-resume-reason" data-testid="past-session-reason">
           {HARNESS_LABELS[summary.harness]} has no saved conversation for this session, so it can't
           be reattached — sessions that end before their first prompt are never written to the
-          agent's history.{" "}
+          coding agent's history.{" "}
           {canRehydrate
-            ? "Continuing opens a fresh session here, seeded with the reconstruction below. The new agent gets a briefing about this session, not its context — it will need to check the repository before relying on any of it."
+            ? "Continuing opens a fresh session here, seeded with the reconstruction below. The new coding agent gets a briefing about this session, not its context — it will need to check the repository before relying on any of it."
             : "Starting opens a fresh session in the same directory, with no context from this one."}
         </div>
       )}
@@ -270,7 +270,7 @@ function SessionRecordBody({ state }: { state: SessionRecordState }): JSX.Elemen
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />
         </span>
-        No transcript for this session: the harness has no recorded events for it. Sessions the
+        No transcript for this session: Agent Studio has no recorded events for it. Sessions Agent
         Studio didn't run — or ones whose events have aged out of the local log — show up here as
         history rows only.
       </div>

@@ -32,7 +32,7 @@ import { z } from "zod/v4";
  *     graph offline (capabilities stubbed) for free before a billed, delivering
  *     deploy + run.
  *   - The recipient is ordinary run input (a declared setting), not a secret, and
- *     persisted in execution state — the same seam you'd read a delivery secret
+ *     persisted in agent-run state — the same seam you'd read a delivery secret
  *     from if you swapped in a bring-your-own channel (see `AGENTS.md`).
  *   - Each edge carries a slim payload; the large scraped bodies stay bounded and
  *     die at the `curate` boundary — they never enter `ctx.shared` (big shared
@@ -288,44 +288,44 @@ const deliver = defineStep({
     // as a `deliverTo` setting in template.json) rather than from a write-only
     // secret store nothing in the product can populate.
     const deliverTo = ctx.shared.get("deliverTo");
+    const note = ctx.shared.get("note");
 
-    // The safe path: a dry run — or a live run with no recipient configured yet —
-    // returns the computed brief without sending anything.
-    if (dryRun || !deliverTo) {
-      ctx.logger.info("skipping delivery", {
-        dryRun,
-        hasRecipient: Boolean(deliverTo),
-      });
+    // dryRun is an explicit author opt-in: compute the brief and return it as a
+    // preview without emailing anyone.
+    if (dryRun) {
+      ctx.logger.info("dry run — skipping delivery", {});
       return terminate({
         topic,
         schedule,
         delivered: false,
-        dryRun,
-        reason: dryRun ? "dry-run" : "no-recipient",
-        ...(dryRun ? {} : { unmet: ["deliverTo"] }),
-        note: [
-          dryRun
-            ? "`dryRun` was set, so nothing was emailed."
-            : "Nothing was emailed: no `deliverTo` address is set, so the brief is returned inline below.",
-          ctx.shared.get("note"),
-        ]
+        dryRun: true,
+        reason: "dry-run",
+        note: ["`dryRun` was set, so nothing was emailed.", note]
           .filter(Boolean)
           .join(" "),
-        to: deliverTo ?? null,
+        to: null,
         subject,
         brief,
         sources,
       });
     }
 
+    // The "email" headline must fire on a zero-setup run, so with no `deliverTo`
+    // we deliver to this agent's own Sapiom-hosted inbox — a real, inspectable
+    // mailbox the platform provisions for us via `resolveSenderInbox` (an
+    // `inboxId` IS its email address). A caller-supplied `deliverTo` is the
+    // upgrade that sends to a real external address instead.
     const inboxId = await resolveSenderInbox(ctx);
+    const toDemoInbox = !deliverTo;
+    const recipient = deliverTo ?? inboxId;
     const sent = await ctx.sapiom.email.messages.send(inboxId, {
-      to: deliverTo,
+      to: recipient,
       subject,
       text: brief,
     });
     ctx.logger.info("brief delivered", {
-      to: deliverTo,
+      to: recipient,
+      demo: toDemoInbox,
       messageId: sent.messageId,
     });
     return terminate({
@@ -333,11 +333,21 @@ const deliver = defineStep({
       schedule,
       delivered: true,
       dryRun: false,
-      to: deliverTo,
+      demo: toDemoInbox,
+      to: recipient,
       subject,
       messageId: sent.messageId,
+      brief,
       sources,
-      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
+      note:
+        [
+          toDemoInbox
+            ? `Emailed the brief to this agent's Sapiom-hosted demo inbox (${recipient}) — the message above is real and inspectable. Set \`deliverTo\` to send it to your own address instead.`
+            : null,
+          note,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined,
     });
   },
 });

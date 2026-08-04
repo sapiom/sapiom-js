@@ -34,7 +34,7 @@ const NODE_KIND_LABEL: Record<CanvasNodeKind, string> = {
   pause: "pause / waits for input",
   "terminal-success": "terminal · success",
   "terminal-warn": "terminal · escalation",
-  "launched-workflow": "launches another workflow",
+  "launched-workflow": "launches another agent",
 };
 
 const NODE_KIND_ORDER: CanvasNodeKind[] = [
@@ -58,7 +58,7 @@ export function buildLegendHtml(nodeKinds: Set<CanvasNodeKind>, edgeKinds: Set<C
   );
   if (edgeKinds.has("cross")) {
     items.push(
-      `<span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-workflow signal/handoff</span>`,
+      `<span class="canvas-legend-item"><span class="canvas-legend-marker canvas-legend-marker--cross"></span>cross-agent signal/handoff</span>`,
     );
   }
   if (items.length === 0) return "";
@@ -184,7 +184,7 @@ export function buildErrorPanelHtml(title: string, reason: string): string {
     </div>
   </header>
   <div class="canvas-diagram-panel">
-    <p class="canvas-empty-note">Could not extract this workflow's step graph: ${esc(reason)}. Ask your agent to fix the issue (see the terminal for details) — this pane updates automatically once it builds cleanly.</p>
+    <p class="canvas-empty-note">Could not extract this agent's step graph: ${esc(reason)}. Ask your coding agent to fix the issue (see the terminal for details) — this pane updates automatically once it builds cleanly.</p>
   </div>
 </section>`;
 }

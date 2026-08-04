@@ -1,7 +1,7 @@
 {
   "name": "@sapiom/cli",
-  "version": "1.0.2",
-  "description": "The Sapiom command-line interface — scaffold, validate, and ship Sapiom orchestrations.",
+  "version": "1.0.3",
+  "description": "The Sapiom command-line interface — scaffold, validate, and ship Sapiom agents.",
   "license": "MIT",
   "author": "Sapiom",
   "type": "module",
@@ -13,8 +13,8 @@
   "keywords": [
     "sapiom",
     "cli",
-    "orchestration",
-    "workflows"
+    "agents",
+    "automation"
   ],
   "bin": {
     "sapiom": "./dist/bin.js"
@@ -46,7 +46,7 @@
     "zod": "^3.25.76"
   },
   "peerDependencies": {
-    "@sapiom/harness": ">=0.2.5"
+    "@sapiom/harness": ">=0.2.6"
   },
   "peerDependenciesMeta": {
     "@sapiom/harness": {

@@ -87,8 +87,9 @@ import { ExecutionDetector } from "../core/execution-detector.js";
 import { PortDetector, portFromUrl } from "../core/port-detector.js";
 import { EventBus } from "../core/event-bus.js";
 import {
+  prepareHarnessContextForResume,
   writeHarnessContext,
-  harnessContextFileExists,
+  writeHarnessContextForLaunch,
 } from "../core/workspace-context.js";
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
 import { renderCanvasForSession } from "../core/canvas-render.js";
@@ -340,6 +341,7 @@ function createDefaultBuildLaunchOpts(
           environment: process.env.SAPIOM_ENVIRONMENT,
           apiKey,
           generatedRoot,
+          harnessVersion: readVersion(),
         }),
         generateSystemPromptFile(harnessSessionId, {
           generatedRoot,
@@ -484,13 +486,13 @@ export const startServer = async (
       }),
   });
 
-  // Declared before sessionManager: writeSessionContext (sessionManager's
-  // writeWorkspaceContext option) needs workflowsCache in scope to resolve a
-  // session's boundWorkflowPath into a full WorkflowInfo. scanWorkflowsAndBroadcast
-  // stays defined below sessionManager instead, since it needs sessionManager
+  // Declared before sessionManager: its context writers need workflowsCache
+  // in scope to resolve a session's boundWorkflowPath into a full WorkflowInfo.
+  // scanWorkflowsAndBroadcast stays defined below sessionManager instead,
+  // since it needs sessionManager
   // itself (to rewrite every open session's context file on a registry change) —
-  // no circularity, since only writeSessionContext is threaded into SessionManager's
-  // constructor, and it doesn't need sessionManager.
+  // no circularity, since the context callbacks threaded into SessionManager's
+  // constructor don't need sessionManager themselves.
   const workflowRegistry = new WorkflowRegistry(
     options.workflowsRegistryPath ?? statePaths.workflows,
   );
@@ -503,11 +505,11 @@ export const startServer = async (
     const prunedWorkflows = await workflowRegistry.prune();
     for (const workflow of prunedWorkflows) {
       console.error(
-        `[harness] pruned workflow registry entry with missing path: ${workflow.path}`,
+        `[harness] pruned agent registry entry with missing path: ${workflow.path}`,
       );
     }
   } catch (err) {
-    console.error("[harness] workflow registry prune failed:", err);
+    console.error("[harness] agent registry prune failed:", err);
   }
   // Same hygiene for settings.json's recentDirs — dead entries are already
   // filtered from every read, but pruning here persists their removal.
@@ -527,23 +529,35 @@ export const startServer = async (
   }, WORKFLOWS_CACHE_REFRESH_MS);
   workflowsCacheTimer.unref?.();
 
+  const boundWorkflowForSession = (session: HarnessSession): WorkflowInfo | null =>
+    session.boundWorkflowPath
+      ? (workflowsCache.find((workflow) => workflow.path === session.boundWorkflowPath) ?? null)
+      : null;
+
   /**
    * Writes HARNESS_CONTEXT_FILE for a single session, resolving its
    * `boundWorkflowPath` against the live registry so the file always
    * reflects the session's actual current binding (not just what a caller
-   * happened to have on hand) — and the full `workflows` list, so an agent
-   * can answer "what workflows exist" without a UI round-trip. Shared by
-   * SessionManager's create()/resume(), the PATCH bind/unbind route, and
-   * scanWorkflowsAndBroadcast's rewrite-all-open-sessions step below.
+   * happened to have on hand) — and the full agent list. Bind/unbind and
+   * registry refreshes use this best-effort writer; create and resume use
+   * their strict pre-spawn counterparts below.
    */
   const writeSessionContext = async (
     session: HarnessSession,
   ): Promise<void> => {
-    const boundWorkflow = session.boundWorkflowPath
-      ? (workflowsCache.find((w) => w.path === session.boundWorkflowPath) ??
-        null)
-      : null;
-    await writeHarnessContext(session, boundWorkflow, workflowsCache);
+    await writeHarnessContext(session, boundWorkflowForSession(session), workflowsCache);
+  };
+
+  const initializeSessionContext = async (
+    session: HarnessSession,
+  ): Promise<void> => {
+    await writeHarnessContextForLaunch(session, boundWorkflowForSession(session), workflowsCache);
+  };
+
+  const prepareSessionContext = async (
+    session: HarnessSession,
+  ): Promise<void> => {
+    await prepareHarnessContextForResume(session, boundWorkflowForSession(session), workflowsCache);
   };
 
   // Declared before the launch-opts builder (rather than beside the ingest
@@ -678,8 +692,8 @@ export const startServer = async (
     buildLaunchOpts,
     // Every session gets its initial harness-context.json regardless of
     // entry point (REST, autoCreateSession) — see SessionManager.create().
-    writeWorkspaceContext: writeSessionContext,
-    workspaceContextExists: (cwd) => harnessContextFileExists(cwd),
+    writeWorkspaceContext: initializeSessionContext,
+    prepareWorkspaceContext: prepareSessionContext,
     ensureCanvasTemplate,
   });
   await sessionManager.init();
@@ -964,7 +978,7 @@ export const startServer = async (
 
   const initialWorkflowScan = scanWorkflowsAndBroadcast(launchDir).catch(
     (err: unknown) => {
-      console.error("[harness] initial workflow scan failed:", err);
+      console.error("[harness] initial agent scan failed:", err);
       return [] as WorkflowInfo[];
     },
   );
@@ -1105,7 +1119,7 @@ export const startServer = async (
           })
           .catch((err: unknown) => {
             console.error(
-              "[harness] workflow scan on session create failed:",
+              "[harness] agent scan on session create failed:",
               err,
             );
           });

@@ -79,7 +79,10 @@ export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";
 // `releaseSession` — deferred capacity, repeatable calls).
 export * as llm from "./llm/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on an llm step.
-export { LLM_ROUTE_RESULT_SIGNAL, LLM_SESSION_READY_SIGNAL } from "./llm/index.js";
+export {
+  LLM_ROUTE_RESULT_SIGNAL,
+  LLM_SESSION_READY_SIGNAL,
+} from "./llm/index.js";
 // The shape a step resumed from `pauseUntilSignal(llmHandle, …)` receives as
 // input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { LlmRouteResultPayload } from "./llm/index.js";
@@ -94,13 +97,20 @@ export { FileStorageHttpError } from "./file-storage/index.js";
 
 export * as contentGeneration from "./content-generation/index.js";
 export { ContentGenerationHttpError } from "./content-generation/index.js";
+// The concrete video model ids the gateway serves, so callers can discover valid
+// values (and avoid passing a backend semantic alias, which the SDK does not resolve).
+export { VIDEO_MODELS } from "./content-generation/index.js";
+export type { KnownVideoModel } from "./content-generation/index.js";
 // Surfaced top-level for the static `pause: { signal }` decl on a workflow step.
 export { VIDEO_RESULT_SIGNAL } from "./content-generation/index.js";
-// The shape a step resumed from `pauseUntilSignal(videoLaunchHandle, …)` receives
-// as input — annotate the resumed step with it instead of hand-rolling the shape.
+export { IMAGE_RESULT_SIGNAL } from "./content-generation/index.js";
+// The shape a step resumed from `pauseUntilSignal(launchHandle, …)` receives as input
+// — annotate the resumed step with it instead of hand-rolling the shape.
 export type { VideoResultPayload } from "./content-generation/index.js";
-// Map a live VideoGenerationResult to the wire shape the resumed step receives.
+export type { ImageResultPayload } from "./content-generation/index.js";
+// Map a live generation result to the wire shape the resumed step receives.
 export { toVideoResumePayload } from "./content-generation/index.js";
+export { toImageResumePayload } from "./content-generation/index.js";
 
 export * as search from "./search/index.js";
 export { SearchHttpError } from "./search/index.js";
@@ -125,3 +135,7 @@ export { BrowserAutomationHttpError } from "./browser-automation/index.js";
 
 export * as vault from "./vault/index.js";
 export { VaultHttpError } from "./vault/index.js";
+
+export * as keys from "./keys/index.js";
+export { KeysHttpError } from "./keys/index.js";
+export type { MintScopedInput, ScopedKey } from "./keys/index.js";

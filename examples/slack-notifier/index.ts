@@ -298,9 +298,9 @@ const post = defineStep({
         } satisfies PostResult);
       }
 
-      // Live workflow steps receive SAPIOM_API_KEY as their principal
+      // Live agent steps receive SAPIOM_API_KEY as their principal
       // credential. Bot mode fails closed if Core cannot authorize and
-      // attribute the external request to this execution.
+      // attribute the external request to this agent run.
       const meteredFetch = createFetch({
         apiKey: process.env.SAPIOM_API_KEY,
         agentName: "slack-notifier",

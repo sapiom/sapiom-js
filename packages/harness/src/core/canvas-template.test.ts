@@ -170,6 +170,17 @@ describe("TEMPLATE_HTML", () => {
 
   it("carries a friendly empty-state note, not a blank panel", () => {
     expect(TEMPLATE_HTML).toMatch(/nothing visualized yet/i);
+    expect(TEMPLATE_HTML).toContain("run Visualize on an agent");
+  });
+
+  it("uses Agent Studio terminology in generated authoring copy", () => {
+    expect(TEMPLATE_HTML).toContain("<title>Agent Studio canvas</title>");
+    expect(TEMPLATE_HTML).toContain("AGENT STUDIO CANVAS TEMPLATE");
+    expect(TEMPLATE_HTML).toContain("standalone agent");
+    expect(TEMPLATE_HTML).toContain("Untitled agent");
+    expect(TEMPLATE_HTML).toContain("cross-agent signal/handoff");
+    expect(TEMPLATE_HTML).not.toContain("standalone workflow");
+    expect(TEMPLATE_HTML).not.toContain("Untitled workflow");
   });
 
   it("documents one example of every node kind and edge kind inside an inert <template>", () => {

@@ -13,23 +13,9 @@
  * complete no-op (zero network calls, zero disk writes). `track()` is a
  * synchronous enqueue that never throws and never blocks a tool call.
  */
-import { createRequire } from "node:module";
-
 import { createAnalytics, type SapiomAnalytics } from "@sapiom/analytics-core";
 
-const nodeRequire = createRequire(import.meta.url);
-
-/** This package's own version, for the envelope's `sdk_version` field. */
-function packageVersion(): string {
-  try {
-    const pkg = nodeRequire("../package.json") as { version?: unknown };
-    return typeof pkg.version === "string" && pkg.version.length > 0
-      ? pkg.version
-      : "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
+import { packageVersion } from "./version.js";
 
 let instance: SapiomAnalytics | null = null;
 

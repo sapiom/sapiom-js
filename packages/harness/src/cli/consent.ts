@@ -12,10 +12,10 @@ import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 const DEFAULT_TELEMETRY_OPT_IN = false;
 
 const CONSENT_COPY = `
-Help us optimize your Studio experience.
+Help us optimize your Agent Studio experience.
 
-With your permission, Sapiom Studio shares your session details — the prompts
-you send, the tool calls your agent makes, and session lifecycle events — so we
+With your permission, Agent Studio shares your session details — the prompts
+you send, the tool calls your coding agent makes, and session lifecycle events — so we
 can see where the product gets in your way and improve it for you.
 
 This is always written locally to ~/.sapiom/harness/events.ndjson for your own

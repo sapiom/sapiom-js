@@ -42,8 +42,8 @@ import { ApiError, boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
 import { resolveProjectRoot } from "./lib/project-dir";
-import { workflowUrl } from "./lib/urls";
-import { useTemplatePrompt, type StudioTemplate } from "./lib/templates";
+import { agentUrl } from "./lib/urls";
+import { starterScaffoldInstruction, useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
 import { initAnalytics } from "./lib/analytics/posthog";
 import { registerViewContext, track as trackProduct } from "./lib/analytics/events";
@@ -315,7 +315,7 @@ export const App = (): JSX.Element => {
   }, [harness.tasks, harness.showToast]);
 
   if (harness.loading) {
-    return <div className="app-status">Loading Sapiom Studio…</div>;
+    return <div className="app-status">Loading Agent Studio…</div>;
   }
   // Boot failed (no state to render): degrade gracefully to a recoverable
   // state instead of a dead "Failed to load" white screen. The classifier
@@ -429,9 +429,8 @@ export const App = (): JSX.Element => {
    *
    * `idea` is what the "start from an idea" door collects. It rides along
    * verbatim — the agent needs the intent, not our paraphrase of it. Omitted
-   * (door 1's plain/new outcomes, the bare-folder affordance), the prompt is
-   * byte-identical to what it has always been, so the blank-starter path is
-   * unchanged.
+   * (door 1's plain/new outcomes, the bare-folder affordance), the prompt keeps
+   * the same default-starter path without inventing an idea for the user.
    */
   const handleScaffoldSession = async (
     cwd: string,
@@ -440,14 +439,15 @@ export const App = (): JSX.Element => {
   ): Promise<void> => {
     const session = await createSessionAt(cwd, agentHarness);
     const base =
-      "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to";
+      `Scaffold a new Sapiom agent project in this directory: ${starterScaffoldInstruction(cwd, "default")}, ` +
+      "then run npm install, read AGENTS.md, and use the sapiom-agent-authoring skill to";
     const trimmedIdea = idea?.trim();
     injectPromptWithRetry(
       session.id,
       trimmedIdea
         ? `${base} build this:\n\n${trimmedIdea}`
-        : `${base} define the first workflow.`,
-      "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
+        : `${base} define the first agent.`,
+      "Couldn't send the scaffold prompt. Ask the coding agent to call sapiom_dev_agents_scaffold.",
     );
   };
 
@@ -472,10 +472,11 @@ export const App = (): JSX.Element => {
   // Bare-scaffold folder affordance: a live session sits in a folder
   // with no agent yet. Ask that session to scaffold its first agent in place.
   const handleScaffoldInSession = (sessionId: string): void => {
+    const cwd = state.sessions.find((session) => session.id === sessionId)?.cwd ?? ".";
     injectPromptWithRetry(
       sessionId,
-      "Scaffold a new Sapiom agent project in this directory: run `sapiom agents init .`, then use the sapiom-agent-authoring skill to define the first workflow.",
-      "Couldn't send the scaffold prompt. Ask the agent to run sapiom agents init.",
+      `Scaffold a new Sapiom agent project in this directory: ${starterScaffoldInstruction(cwd, "default")}, then run npm install, read AGENTS.md, and use the sapiom-agent-authoring skill to define the first agent.`,
+      "Couldn't send the scaffold prompt. Ask the coding agent to call sapiom_dev_agents_scaffold.",
     );
   };
 
@@ -487,8 +488,8 @@ export const App = (): JSX.Element => {
       session.id,
       useTemplatePrompt(template, cwd),
       template.kind === "gallery"
-        ? "Couldn't send the clone prompt. Ask the agent to run sapiom_dev_agents_clone."
-        : "Couldn't send the starter prompt. Ask the agent to run sapiom agents init.",
+        ? "Couldn't send the clone prompt. Ask the coding agent to run sapiom_dev_agents_clone."
+        : "Couldn't send the starter prompt. Ask the coding agent to call sapiom_dev_agents_scaffold.",
     );
   };
 
@@ -622,7 +623,7 @@ export const App = (): JSX.Element => {
       if (direct !== null) {
         if (direct === "deploy") {
           if (!workflow) {
-            harness.showToast("Select a workflow first.");
+            harness.showToast("Select an agent first.");
           } else {
             void harness.deploy(workflow.path);
           }
@@ -645,7 +646,7 @@ export const App = (): JSX.Element => {
           }
         } else if (direct === "run-local") {
           if (!workflow) {
-            harness.showToast("Select a workflow first.");
+            harness.showToast("Select an agent first.");
           } else {
             void harness.runLocal(sessionId, workflow.path);
           }
@@ -1029,11 +1030,11 @@ export const App = (): JSX.Element => {
                   <a
                     className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
                     data-testid="workflow-dashboard-link"
-                    href={workflowUrl(rightPaneWorkflow.definitionId)}
+                    href={agentUrl(rightPaneWorkflow.definitionId)}
                     target="_blank"
                     rel="noreferrer"
                     aria-label="Deployed — open in the Sapiom dashboard"
-                    data-tooltip="Open this workflow in the Sapiom dashboard"
+                    data-tooltip="Open this agent in the Sapiom dashboard"
                   >
                     <Icon name="Cloud" size={12} />
                     deployed

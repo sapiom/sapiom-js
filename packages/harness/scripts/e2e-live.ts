@@ -23,21 +23,21 @@
  *   5. Writing to the session's canvas dir produces a canvas.reload frame,
  *      and GET /canvas/:id/ serves what was written.
  *   6. POST /api/macros/:id/run is accepted (injects into the pty).
- *   7. The CLI's launch directory is scanned for workflows at boot, and a
+ *   7. The CLI's launch directory is scanned for agents at boot, and a
  *      new directory is scanned when a session opens in it — both fire a
  *      workflows.changed frame on /ws/events AND rewrite every open
- *      session's HARNESS_CONTEXT_FILE with the newly discovered workflow in
- *      its `workflows` array (not just GET /api/workflows), even before any
- *      bind happens.
+ *      session's HARNESS_CONTEXT_FILE with the newly discovered agent in
+ *      its `agents` array (not just GET /api/workflows), independent of
+ *      whether the workspace watcher's concurrent auto-bind has landed.
  *   8. (separate, isolated server instance) autoCreateSession creates a
  *      session in launchDir without any client ever calling POST
  *      /api/sessions, AppState.launchDir reports it, the generated
  *      mcp-config for an authenticated identity carries the x-api-key header,
  *      and — the entry point that used to skip this file entirely, since the
  *      write used to live only in the POST /api/sessions REST handler —
- *      HARNESS_CONTEXT_FILE already exists in its cwd with
- *      boundWorkflow: null, before any PATCH has ever run, with its
- *      `workflows` array already populated from the seeded launch dir.
+ *      HARNESS_CONTEXT_FILE already exists in its cwd with its `agents`
+ *      array populated from the seeded launch dir; its binding is either
+ *      null or the workspace watcher's schema-consistent auto-bind.
  *   9. GET /api/fs/list (the path-picker's directory autocomplete) is
  *      mounted and boot-token-gated like the rest of /api.
  *  10. (third, isolated server instance) `defaultHarnessKind: "codex"`
@@ -46,11 +46,11 @@
  *      `availableHarnesses` passed to startServer() round-trips through
  *      GET /api/state.
  *  11. PATCH /api/sessions/:id/workflow binds a session to a registered
- *      workflow, writes HARNESS_CONTEXT_FILE in the session's cwd with the
- *      bound workflow's {name, path, definitionId} plus the session's own
+ *      agent, writes HARNESS_CONTEXT_FILE in the session's cwd with the
+ *      bound agent's {name, path, definitionId} plus the session's own
  *      {id, cwd, harness}, broadcasts the change as a session.status frame
  *      on /ws/events, and unbinding (workflowPath: null) writes
- *      `boundWorkflow: null` to the same file rather than deleting it.
+ *      `boundAgent: null` to the same file rather than deleting it.
  *  12. A tool.call event that echoes the harness's own listening port and
  *      the analytics collector's port produces no port.detected frame at
  *      all — proving server/index.ts's exclusion wiring, not just
@@ -71,10 +71,8 @@
  *      default path never touches the pty. A second render of the unchanged
  *      workflow is served from the extraction cache (no child process), and
  *      unbinding flips GET /canvas/:id/ back to the agent-authored
- *      index.html untouched. Binding that cleanly-extracting workflow also
- *      auto-spawns ONE bounded AI enrichment task (--model sonnet,
- *      --max-turns 8, graph-inline JSON-only prompt), reported in
- *      AppState.tasks scoped to the session + workflow (item 14a).
+ *      index.html untouched. Binding that cleanly-extracting agent derives
+ *      annotations in-process and spawns no coding-agent enrichment task.
  *  15. State isolation + registry hygiene: `stateRoot` alone (no per-file
  *      overrides, no machineId) roots every piece of persistent state under
  *      the scratch dir — machine-id included — and a pre-seeded registry
@@ -303,10 +301,10 @@ async function testCoreFlow(): Promise<void> {
     console.log(`created session ${sessionId}`);
     assert(session.boundWorkflowPath === null, "a freshly created session reports boundWorkflowPath: null");
 
-    type HarnessContextWorkflowLike = { name: string; path: string; definitionId: number | null };
+    type HarnessContextAgentLike = { name: string; path: string; definitionId: number | null };
     type HarnessContextLike = {
-      boundWorkflow: HarnessContextWorkflowLike | null;
-      workflows: HarnessContextWorkflowLike[];
+      boundAgent: HarnessContextAgentLike | null;
+      agents: HarnessContextAgentLike[];
       session: { id: string; cwd: string; harness: string };
       updatedAt: string;
     };
@@ -315,7 +313,11 @@ async function testCoreFlow(): Promise<void> {
 
     // Written synchronously before POST /api/sessions responds — should already be there.
     const initialContext = await readContext();
-    assert(initialContext.boundWorkflow === null, "harness-context.json is written on session create with boundWorkflow: null");
+    assert(initialContext.boundAgent === null, "harness-context.json is written on session create with boundAgent: null");
+    assert(
+      !("boundWorkflow" in initialContext) && !("workflows" in initialContext),
+      "harness-context.json emits only boundAgent/agents public keys",
+    );
 
     // The canvas kit's template is also backfilled before the pty spawns —
     // the canvas pane must never open to a bare empty iframe, and a pristine
@@ -353,6 +355,25 @@ async function testCoreFlow(): Promise<void> {
     assert(settingsPath?.includes(sessionId), "--settings path is scoped to this session");
     assert(mcpConfigPath?.includes(sessionId), "--mcp-config path is scoped to this session");
     assert((systemPromptText?.length ?? 0) > 0, "--append-system-prompt carries non-empty text");
+    assert(systemPromptText?.includes("Agent Studio") === true, "the delivered prompt names Agent Studio");
+    assert(systemPromptText?.includes('"boundAgent"') === true, "the delivered prompt teaches boundAgent");
+    assert(systemPromptText?.includes('"agents"') === true, "the delivered prompt teaches agents");
+    assert(
+      systemPromptText?.includes("The Canvas follows that selection") === true,
+      "the delivered Claude prompt teaches automatic Canvas selection",
+    );
+    assert(
+      systemPromptText?.includes("Local Run, Prod Run, and Deploy") === true,
+      "the delivered Claude prompt names the real action bar",
+    );
+    assert(
+      !systemPromptText?.includes("Visualize button") && !systemPromptText?.includes("⌘K"),
+      "the delivered Claude prompt omits stale Visualize and command-palette lifecycle guidance",
+    );
+    assert(
+      !systemPromptText?.toLowerCase().includes("workflow"),
+      "the delivered prompt does not teach Workflow terminology",
+    );
 
     const settingsJson = JSON.parse(await fs.readFile(settingsPath, "utf8")) as { hooks?: Record<string, unknown> };
     assert(Object.keys(settingsJson.hooks ?? {}).length === 6, "generated settings.json registers all 6 hooks");
@@ -530,16 +551,18 @@ async function testCoreFlow(): Promise<void> {
       "boot-time scan of the CLI's launch directory discovered its sapiom.json (definitionId read from the marker)",
     );
 
-    // --- 11'. the scan also rewrites harness-context.json's own workflows array — not just
-    // GET /api/workflows — for every already-open session, before any bind happens ---
+    // --- 11'. the scan also rewrites harness-context.json's own agents array — not just
+    // GET /api/workflows — for every already-open session. The workspace watcher may
+    // auto-bind the project concurrently, so either binding state is valid here. ---
     const scannedContext = await waitFor(async () => {
       const context = await readContext();
-      return context.workflows.some((w) => w.path === projectDir) ? context : undefined;
+      return context.agents.some((w) => w.path === projectDir) ? context : undefined;
     });
+    const scannedAgent = scannedContext.agents.find((agent) => agent.path === projectDir);
     assert(
-      scannedContext.workflows.some((w) => w.path === projectDir && w.definitionId === 4821) &&
-        scannedContext.boundWorkflow === null,
-      "workflows.changed rewrites harness-context.json's workflows array with the newly scanned project, still unbound",
+      scannedAgent?.definitionId === 4821 &&
+        (scannedContext.boundAgent === null || scannedContext.boundAgent.path === scannedAgent.path),
+      "workflows.changed rewrites harness-context.json's agents array and any concurrent auto-bind stays schema-consistent",
     );
     assert(
       scannedContext.session.id === sessionId &&
@@ -548,14 +571,14 @@ async function testCoreFlow(): Promise<void> {
       "harness-context.json embeds the session's own {id, cwd, harness}",
     );
 
-    // --- 10a. visualize with nothing bound yet — the force-refresh macro is unbound-friendly
-    // (requiresWorkflow: false, a cheap no-op), unlike every other action-rail macro. ---
+    // --- 10a. visualize is binding-independent (requiresWorkflow: false, a
+    // cheap no-op), unlike every other action-rail macro. ---
     const unboundMacroRes = await fetch(`${baseUrl}/api/macros/visualize/run`, {
       method: "POST",
       headers,
       body: JSON.stringify({ harnessSessionId: sessionId }),
     });
-    assert(unboundMacroRes.status === 200, "POST /api/macros/visualize/run succeeds with no workflow bound");
+    assert(unboundMacroRes.status === 200, "POST /api/macros/visualize/run succeeds independent of binding");
 
     // --- 11a. bind the session to that discovered workflow ---
     const workflowStatusBefore = wsMessages.filter((m) => m.type === "session.status").length;
@@ -568,22 +591,26 @@ async function testCoreFlow(): Promise<void> {
     const boundSession = (await bindRes.json()) as { boundWorkflowPath: string | null };
     assert(boundSession.boundWorkflowPath === projectDir, "response reports the new boundWorkflowPath");
 
-    await waitFor(async () => {
-      const count = wsMessages.filter((m) => m.type === "session.status").length;
-      return count > workflowStatusBefore ? true : undefined;
-    });
-    const lastStatusFrame = wsMessages
-      .filter((m) => m.type === "session.status")
-      .at(-1) as { session?: { id: string; boundWorkflowPath: string | null } } | undefined;
-    assert(
-      lastStatusFrame?.session?.id === sessionId && lastStatusFrame.session.boundWorkflowPath === projectDir,
-      "binding broadcasts a session.status frame reflecting the new boundWorkflowPath",
-    );
+    if (scannedContext.boundAgent?.path !== projectDir) {
+      await waitFor(async () => {
+        const count = wsMessages.filter((m) => m.type === "session.status").length;
+        return count > workflowStatusBefore ? true : undefined;
+      });
+      const lastStatusFrame = wsMessages
+        .filter((m) => m.type === "session.status")
+        .at(-1) as { session?: { id: string; boundWorkflowPath: string | null } } | undefined;
+      assert(
+        lastStatusFrame?.session?.id === sessionId && lastStatusFrame.session.boundWorkflowPath === projectDir,
+        "binding broadcasts a session.status frame reflecting the new boundWorkflowPath",
+      );
+    } else {
+      console.log("workspace watcher had already auto-bound this path; the idempotent PATCH needs no new status frame");
+    }
 
     const boundContext = await readContext();
     assert(
-      boundContext.boundWorkflow?.path === projectDir && boundContext.boundWorkflow.definitionId === 4821,
-      "harness-context.json reflects the bound workflow's {name, path, definitionId}",
+      boundContext.boundAgent?.path === projectDir && boundContext.boundAgent.definitionId === 4821,
+      "harness-context.json reflects the bound agent's {name, path, definitionId}",
     );
 
     // --- 11a-2. also run visualize now that a workflow IS bound — here it's a
@@ -633,6 +660,9 @@ async function testCoreFlow(): Promise<void> {
     });
     assert(connectRes.status === 200, "POST /api/workflows/connect registers the real order-triage project");
 
+    const reloadFramesBefore = wsMessages.filter(
+      (message) => message.type === "canvas.reload" && message.harnessSessionId === sessionId,
+    ).length;
     const renderBindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
       method: "PATCH",
       headers,
@@ -640,50 +670,21 @@ async function testCoreFlow(): Promise<void> {
     });
     assert(renderBindRes.status === 200, "binds the session to the real order-triage workflow");
 
-    // --- 14a. binding a cleanly-extracting workflow with no fresh enrichment
-    // cached auto-spawns ONE bounded enrichment task: a headless fake-claude
-    // run pinned to the enrichment model and turn cap, carrying the
-    // extracted graph inline and the JSON-only contract. The task's capture
-    // overwrites the interactive session's — every argv/env assertion on
-    // that one already ran above. (The fixture never completes its "turn",
-    // so no enrichment is ever persisted here; server.close() reaps it.) ---
-    const enrichmentCapture = await waitFor<FakeClaudeCapture>(async () => {
-      try {
-        const capture = JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
-        return capture.argv.includes("--max-turns") ? capture : undefined;
-      } catch {
-        return undefined;
-      }
-    });
+    // --- 14a. annotations are derived in-process from the extracted graph.
+    // Binding/rendering must not launch a second coding-agent process or add
+    // a background task for this agent. ---
+    const captureAfterBind = JSON.parse(await fs.readFile(captureFile, "utf8")) as FakeClaudeCapture;
     assert(
-      enrichmentCapture.argv[enrichmentCapture.argv.indexOf("--model") + 1] === "sonnet",
-      "the auto-spawned enrichment task pins --model sonnet",
+      !captureAfterBind.argv.includes("--max-turns"),
+      "deterministic Canvas enrichment launches no bounded coding-agent task",
     );
-    assert(
-      enrichmentCapture.argv[enrichmentCapture.argv.indexOf("--max-turns") + 1] === "8",
-      "the auto-spawned enrichment task caps --max-turns at 8",
-    );
-    const enrichmentPrompt = enrichmentCapture.argv[enrichmentCapture.argv.indexOf("-p") + 1] ?? "";
-    assert(enrichmentPrompt.includes("RETURN ONLY a JSON object"), "enrichment prompt demands JSON-only output");
-    assert(
-      enrichmentPrompt.includes('"manifestName": "order-triage"'),
-      "enrichment prompt carries the extracted graph inline",
-    );
-    // The fixture exits as soon as its (ignored) stdin drains, so the task
-    // may already be finished here — what matters is the SCOPING it was
-    // launched with: the pane filters its activity by exactly these fields.
-    const stateWithTask = (await (await fetch(`${baseUrl}/api/state`, { headers })).json()) as {
+    const stateAfterBind = (await (await fetch(`${baseUrl}/api/state`, { headers })).json()) as {
       tasks?: Array<{ macroId: string; workflowPath: string | null; harnessSessionId: string; status: string }>;
     };
-    const enrichmentTask = stateWithTask.tasks?.find((t) => t.workflowPath === workflowDir);
     assert(
-      enrichmentTask?.macroId === "visualize" && enrichmentTask.harnessSessionId === sessionId,
-      "AppState.tasks reports the enrichment task scoped to this session + workflow",
+      !stateAfterBind.tasks?.some((task) => task.workflowPath === workflowDir),
+      "AppState.tasks contains no coding-agent enrichment task for the deterministic render",
     );
-
-    const reloadFramesBefore = wsMessages.filter(
-      (m) => m.type === "canvas.reload" && m.harnessSessionId === sessionId,
-    ).length;
 
     const renderRes = await fetch(`${baseUrl}/api/canvas/${sessionId}/render`, { method: "POST", headers });
     assert(renderRes.status === 200, "POST /api/canvas/:id/render returns 200");
@@ -709,7 +710,7 @@ async function testCoreFlow(): Promise<void> {
       ).length;
       return count > reloadFramesBefore ? true : undefined;
     });
-    console.log("canvas.reload frame received for the deterministic render's write");
+    console.log("canvas.reload frame received for the deterministic bind/render write");
 
     // GET /canvas/:id/ resolves the session's binding at request time and
     // serves the bound workflow's render file.
@@ -732,7 +733,7 @@ async function testCoreFlow(): Promise<void> {
       "re-rendering the unchanged workflow is served from the extraction cache (no child process)",
     );
 
-    // --- 11b. unbind — the context file gets boundWorkflow: null, not deleted ---
+    // --- 11b. unbind — the context file gets boundAgent: null, not deleted ---
     const unbindRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workflow`, {
       method: "PATCH",
       headers,
@@ -742,9 +743,9 @@ async function testCoreFlow(): Promise<void> {
 
     const unboundContext = await waitFor(async () => {
       const context = await readContext();
-      return context.boundWorkflow === null ? context : undefined;
+      return context.boundAgent === null ? context : undefined;
     });
-    assert(unboundContext.boundWorkflow === null, "unbinding writes boundWorkflow: null to harness-context.json");
+    assert(unboundContext.boundAgent === null, "unbinding writes boundAgent: null to harness-context.json");
 
     // Unbound again, the canvas root falls back to the legacy agent-authored
     // index.html — the render files stay on disk for the next bind.
@@ -819,7 +820,7 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
   await fs.mkdir(projectDir, { recursive: true });
   // Seeded before startServer(), same as testCoreFlow's launch-dir marker —
   // proves the auto-created boot session's harness-context.json reflects the
-  // boot-time scan's `workflows` array, not just its own (unbound) session.
+  // boot-time scan's `agents` array, not just its own (unbound) session.
   await fs.writeFile(path.join(projectDir, "sapiom.json"), JSON.stringify({ definitionId: 7331 }));
 
   const bootToken = crypto.randomUUID();
@@ -863,39 +864,40 @@ async function testAutoSessionAndMcpAuth(): Promise<void> {
     // This is the exact entry point that used to skip harness-context.json
     // entirely — autoCreateSession calls sessionManager.create() directly,
     // bypassing the POST /api/sessions REST handler the write used to live
-    // in. Assert it now exists, unbound, with no PATCH ever having run.
+    // in. Assert it now exists with no PATCH ever having run.
     // Polled, not a single read: the session appears in GET /api/state as
     // soon as it's added to the in-memory registry, which happens before
     // create()'s own await on the context-file write completes.
-    type HarnessContextWorkflowLike = { name: string; path: string; definitionId: number | null };
+    type HarnessContextAgentLike = { name: string; path: string; definitionId: number | null };
     type HarnessContextLike = {
-      boundWorkflow: HarnessContextWorkflowLike | null;
-      workflows: HarnessContextWorkflowLike[];
+      boundAgent: HarnessContextAgentLike | null;
+      agents: HarnessContextAgentLike[];
       session: { id: string; cwd: string; harness: string };
       updatedAt: string;
     };
-    // Polled on workflows, not just file existence: the initial write from
+    // Polled on agents, not just file existence: the initial write from
     // SessionManager.create() can land before the boot-time scan of
     // launchDir finishes populating the registry (both run concurrently at
     // startup) — scanWorkflowsAndBroadcast's rewrite-all-open-sessions step
-    // is what backfills `workflows` once the scan completes.
+    // is what backfills `agents` once the scan completes.
     const autoSessionContext = await waitFor<HarnessContextLike>(async () => {
       try {
         const context = JSON.parse(
           await fs.readFile(path.join(projectDir, ".sapiom", "harness-context.json"), "utf8"),
         ) as HarnessContextLike;
-        return context.workflows.some((w) => w.path === projectDir) ? context : undefined;
+        return context.agents.some((w) => w.path === projectDir) ? context : undefined;
       } catch {
         return undefined;
       }
     });
+    const autoAgent = autoSessionContext.agents.find((agent) => agent.path === projectDir);
     assert(
-      autoSessionContext.boundWorkflow === null,
-      "the auto-created boot session's harness-context.json exists with boundWorkflow: null, before any bind",
+      autoSessionContext.boundAgent === null || autoSessionContext.boundAgent.path === autoAgent?.path,
+      "the auto-created boot session's context is unbound or carries the workspace watcher's schema-consistent auto-bind",
     );
     assert(
-      autoSessionContext.workflows.some((w) => w.path === projectDir && w.definitionId === 7331),
-      "the auto-created boot session's harness-context.json workflows array is populated from the seeded launch dir",
+      autoSessionContext.agents.some((w) => w.path === projectDir && w.definitionId === 7331),
+      "the auto-created boot session's harness-context.json agents array is populated from the seeded launch dir",
     );
 
     const capture = await waitFor<FakeClaudeCapture>(async () => {
@@ -999,6 +1001,25 @@ async function testAutoSessionKindSelection(): Promise<void> {
     assert(
       capture.argv.includes("check_for_update_on_startup=false"),
       "the auto-created session actually launched via the codex adapter, not claude-code",
+    );
+    const developerInstructionsPrefix = "developer_instructions=";
+    const developerInstructionsArg = capture.argv.find((arg) => arg.startsWith(developerInstructionsPrefix));
+    assert(developerInstructionsArg !== undefined, "the codex adapter receives developer instructions");
+    const codexSystemPromptText = JSON.parse(
+      developerInstructionsArg.slice(developerInstructionsPrefix.length),
+    ) as string;
+    assert(codexSystemPromptText.includes("Agent Studio"), "the delivered Codex prompt names Agent Studio");
+    assert(
+      codexSystemPromptText.includes("The Canvas follows that selection"),
+      "the delivered Codex prompt teaches automatic Canvas selection",
+    );
+    assert(
+      codexSystemPromptText.includes("Local Run, Prod Run, and Deploy"),
+      "the delivered Codex prompt names the real action bar",
+    );
+    assert(
+      !codexSystemPromptText.includes("Visualize button") && !codexSystemPromptText.includes("⌘K"),
+      "the delivered Codex prompt omits stale Visualize and command-palette lifecycle guidance",
     );
   } finally {
     await server.close();

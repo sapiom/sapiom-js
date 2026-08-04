@@ -53,7 +53,7 @@ const SCREEN_COPY: Record<
   offline: {
     icon: "CloudOff",
     title: "You're offline",
-    body: "Sapiom Studio can't reach the network. Check your connection — the moment you're back, retry to pick up right where you left off.",
+    body: "Agent Studio can't reach the network. Check your connection — the moment you're back, retry to pick up right where you left off.",
   },
   auth: {
     icon: "Plug",
@@ -62,7 +62,7 @@ const SCREEN_COPY: Record<
   },
   error: {
     icon: "TriangleAlert",
-    title: "Couldn't reach Sapiom Studio",
+    title: "Couldn't reach Agent Studio",
     body: "The server didn't respond as expected. This is usually temporary — retry in a moment.",
   },
 };
@@ -190,7 +190,7 @@ export function ConnectivityBanner({
         <Icon name="CloudOff" size={14} />
       </span>
       <span className="connectivity-banner-text">
-        You're offline. The Studio stays usable, but live actions (runs,
+        You're offline. Agent Studio stays usable, but live actions (runs,
         deploys, the terminal) pause until your connection returns.
       </span>
       {onDismiss && (

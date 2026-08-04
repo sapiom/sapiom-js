@@ -53,7 +53,7 @@ const SECTION_LABELS: Record<PaletteItem["kind"], string> = {
   command: "Actions",
   session: "Sessions",
   past: "Past sessions",
-  workflow: "Workflows",
+  workflow: "Agents",
   recent: "Folders",
   path: "Folders",
 };
@@ -306,7 +306,7 @@ export function CommandPalette({
           ref={inputRef}
           className="command-palette-input"
           data-testid="command-palette-input"
-          placeholder="Jump to a session, workflow, or path…"
+          placeholder="Jump to a session, agent, or path…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}

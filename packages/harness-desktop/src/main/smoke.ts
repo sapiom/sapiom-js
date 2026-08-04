@@ -12,6 +12,7 @@
  * one maps to a real failure we've had:
  *
  *   http-spa        SPA is served from inside app.asar (express static + fs patch)
+ *   host-terminology desktop title and CLI banner use the same product identity
  *   http-state      the REST surface answers with the boot token …
  *   http-authz      … and rejects a request without it
  *   preload-bridge  the setup window's preload actually loaded (an ESM/sandbox
@@ -45,7 +46,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { app } from "electron";
-import { resolveSpawnTarget } from "@sapiom/harness";
+import { AGENT_STUDIO_PRODUCT_NAME, resolveSpawnTarget } from "@sapiom/harness";
 import { createSetupWindow } from "./windows.js";
 import { resolveWebDir } from "./paths.js";
 import { shimDir } from "./runtime-shims.js";
@@ -751,6 +752,17 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
       const html = await fetchOk(`${base}/`, null, 200);
       if (!html.includes('id="root"')) throw new Error("served HTML has no #root — wrong webDir?");
       return `index.html served from ${resolveWebDir()}`;
+    }),
+    await check("host-terminology", async () => {
+      const html = await fetchOk(`${base}/`, null, 200);
+      const title = /<title>\s*([^<]+?)\s*<\/title>/i.exec(html)?.[1];
+      if (title !== AGENT_STUDIO_PRODUCT_NAME) {
+        throw new Error(
+          `desktop title ${JSON.stringify(title)} does not match the CLI product name ` +
+            JSON.stringify(AGENT_STUDIO_PRODUCT_NAME),
+        );
+      }
+      return `desktop title matches CLI banner: ${AGENT_STUDIO_PRODUCT_NAME}`;
     }),
     await check("http-state", async () => {
       if (!token) throw new Error("boot url carried no token");
