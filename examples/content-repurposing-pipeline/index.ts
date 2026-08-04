@@ -620,6 +620,28 @@ const packageStep = defineStep({
     const graphicsList = must(ctx.shared.get("graphics"), "graphics");
     const value = must(ctx.shared.get("clip"), "clip");
 
+    // `contentGeneration.images` returns only a `fileId` (with a
+    // `downloadUrlUnavailable` signal), so a graphic's usable URL must be minted
+    // from its fileId here — the same resolution the `clip` step already does.
+    // Without this, a run that skips the clip (renderClip=false) packages and
+    // delivers null graphic links yet still reports success. Best-effort: a mint
+    // hiccup drops that one link rather than failing the run (the pack ships inline).
+    for (const g of graphicsList) {
+      if (!g.downloadUrl && g.fileId) {
+        try {
+          g.downloadUrl = (
+            await ctx.sapiom.fileStorage.getDownloadUrl(g.fileId)
+          ).downloadUrl;
+        } catch (err) {
+          ctx.logger.warn("quote graphic download URL mint failed", {
+            fileId: g.fileId,
+            err: String(err),
+          });
+        }
+      }
+    }
+    ctx.shared.set("graphics", graphicsList);
+
     const markdown = renderPackMarkdown(title, pack, graphicsList, value);
     const bytes = Buffer.from(markdown, "utf8");
     const slug =
