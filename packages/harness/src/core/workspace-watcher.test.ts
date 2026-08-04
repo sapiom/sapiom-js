@@ -181,6 +181,36 @@ describe("snapshotWorkspaceWorkflows", () => {
     expect(snapshotWorkspaceWorkflows(dir)).toBe("");
   });
 
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )(
+    "distinguishes an unreadable project from a subsequently invalid marker",
+    async () => {
+      const workflow = await scaffoldWorkflow(dir, "flow-unreadable");
+      const valid = snapshotWorkspaceWorkflows(dir);
+
+      await fs.chmod(workflow, 0o000);
+      let unreadable: string;
+      try {
+        unreadable = snapshotWorkspaceWorkflows(dir);
+        expect(unreadable).not.toBe(valid);
+        expect(unreadable).toContain("<unreadable>");
+        expect(await snapshotWorkspaceWorkflowsAsync(dir)).toBe(unreadable);
+      } finally {
+        await fs.chmod(workflow, 0o700);
+      }
+
+      // No intervening valid snapshot: this models restore + corruption being
+      // coalesced into one debounced watcher check.
+      await fs.writeFile(path.join(workflow, "sapiom.json"), "not-json");
+      const invalid = snapshotWorkspaceWorkflows(dir);
+      expect(invalid).not.toBe(unreadable);
+      expect(invalid).toBe("");
+      expect(await snapshotWorkspaceWorkflowsAsync(dir)).toBe(invalid);
+    },
+  );
+
   it("uses the registry's ignored-directory contract", async () => {
     for (const ignored of ["node_modules", ".git", ".sapiom", "dist", "build", ".next"]) {
       await scaffoldWorkflow(path.join(dir, ignored), "generated");

@@ -85,14 +85,32 @@ function markerReadErrorStatus(error: unknown): "absent" | "unreadable" {
 export function readAgentProjectMarkerSync(
   dir: string,
 ): AgentProjectMarker | null {
+  const result = inspectAgentProjectMarkerSync(dir);
+  return result.status === "valid" ? result.marker : null;
+}
+
+export function inspectAgentProjectMarkerSync(
+  dir: string,
+): AgentProjectMarkerInspection {
+  const markerPath = resolveAgentProjectMarkerPath(dir);
+  if (!markerPath) return { status: "invalid" };
+
+  let markerStat: import("node:fs").Stats;
   try {
-    const markerPath = resolveAgentProjectMarkerPath(dir);
-    if (!markerPath) return null;
-    const markerStat = fs.lstatSync(markerPath);
-    if (!markerStat.isFile() || markerStat.isSymbolicLink()) return null;
-    return parseAgentProjectMarker(fs.readFileSync(markerPath, "utf8"));
-  } catch {
-    return null;
+    markerStat = fs.lstatSync(markerPath);
+  } catch (error) {
+    return { status: markerReadErrorStatus(error) };
+  }
+
+  if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
+    return { status: "invalid" };
+  }
+
+  try {
+    const marker = parseAgentProjectMarker(fs.readFileSync(markerPath, "utf8"));
+    return marker ? { status: "valid", marker } : { status: "invalid" };
+  } catch (error) {
+    return { status: markerReadErrorStatus(error) };
   }
 }
 
