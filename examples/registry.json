@@ -5,7 +5,7 @@
     {
       "id": "autonomous-pr",
       "name": "Autonomous PR",
-      "description": "A coding agent implements your task in a sandbox, runs the repo's checks, and pushes a self-reviewed branch.",
+      "description": "A coding agent implements your task, runs the repo's checks, deploys a live preview, and pushes a self-reviewed branch.",
       "tags": ["coding-agent", "git", "self-review", "automation"],
       "category": "product-engineering",
       "discipline": "Engineering",
@@ -18,12 +18,13 @@
         "models.coding",
         "sandboxes.exec",
         "repositories.pushFromSandbox",
+        "sandboxes.deployPreview",
         "models.run"
       ],
       "steps": [
         {
           "name": "plan",
-          "description": "Resolves the repo, using an existing one you name or provisioning a scratch repo when none is given.",
+          "description": "Resolves the repo, opening an existing one you name or Sapiom's persistent demo repo when none is given.",
           "kind": "compute",
           "next": ["implement", "rejected"]
         },
@@ -43,9 +44,16 @@
         },
         {
           "name": "push",
-          "description": "Creates a branch and pushes the agent's changes to it.",
+          "description": "Creates a branch, adds a small preview server, and pushes the agent's changes to it.",
           "kind": "capability",
           "capability": "repositories.pushFromSandbox",
+          "next": ["preview"]
+        },
+        {
+          "name": "preview",
+          "description": "Deploys a live preview of the pushed branch so you can look at the actual result.",
+          "kind": "capability",
+          "capability": "sandboxes.deployPreview",
           "next": ["review"]
         },
         {
@@ -57,7 +65,7 @@
         },
         {
           "name": "summary",
-          "description": "Returns the repo, the branch, the sha, and the self-review.",
+          "description": "Returns the repo, the branch, the sha, the preview URL, and the self-review.",
           "kind": "compute",
           "terminal": true
         },
@@ -73,7 +81,7 @@
         "connectionCount": 0,
         "settingCount": 4,
         "provisions": ["repository"],
-        "degradedWithoutSetup": "With no repo given, it provisions its own scratch repo, seeds a tiny authoring contract, has a coding agent add one new example, checks it, and pushes a real branch there with a self-review — never touching a repo you didn't give it."
+        "degradedWithoutSetup": "With no repo given, it opens Sapiom's persistent demo repo, has a coding agent add one new example, checks it, deploys a live preview of the branch, and pushes it with a self-review, never touching a repo you didn't give it."
       }
     },
     {
