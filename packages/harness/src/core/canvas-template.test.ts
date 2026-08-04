@@ -125,8 +125,9 @@ describe("renderCanvasDocument", () => {
     // Exact dark-theme accent hex from web/src/styles.css — same palette the
     // rest of the app renders in dark mode.
     expect(html).toContain("#6be195");
-    // Exact light-theme accent hex.
-    expect(html).toContain("#05a9bc");
+    // Exact light-theme accent hex — the Studio light --brand green (aligned
+    // with the dark theme's green; it was an off-brand cyan before).
+    expect(html).toContain("#167e3a");
   });
 
   it("reads the theme from a ?theme= query param client-side, with no server-side dependency", () => {
