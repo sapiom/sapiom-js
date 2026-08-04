@@ -50,11 +50,13 @@ async function open(page: Page, id: string): Promise<void> {
   await expect(page.getByTestId("template-detail")).toBeVisible();
 }
 
-test.describe("templates journey (from the welcome panel)", () => {
+test.describe("templates journey (from the composer)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/?mockState=fresh");
-    await expect(page.getByTestId("welcome-panel")).toBeVisible();
-    await page.getByTestId("welcome-browse-templates").click();
+    // A fresh install opens on the composer-first "new session" home; its
+    // "Browse all templates" is the way into the catalog destination.
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await page.getByTestId("composer-browse-templates").click();
     await expect(page.getByTestId("templates-panel")).toBeVisible();
     // The grid renders from the fetch; waiting on it keeps every test below
     // from racing the catalog.

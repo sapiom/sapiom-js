@@ -50,10 +50,12 @@ interface WorkflowsRailProps {
   onCollapse: () => void;
   /** Selects a session from the history menu (a past/exited session). */
   onSelectSession: (id: string) => void;
-  /** Overview lives in the account menu: it shows the intro panel in the
+  /** Overview lives in the account menu: it shows the composer home in the
    *  main slot. Selecting any session leaves it. */
   overviewSelected: boolean;
   onSelectOverview: () => void;
+  /** The "Create new" CTA opens the composer-first "new session" home. */
+  onNewSession: () => void;
   /** Opens the past-session review pane for a history entry. */
   onReviewSummary: (summary: SessionSummary) => void;
   history: SessionSummary[];
@@ -297,6 +299,7 @@ export function WorkflowsRail({
   onSelectSession,
   overviewSelected,
   onSelectOverview,
+  onNewSession,
   onReviewSummary,
   history,
   historyLoading,
@@ -331,9 +334,6 @@ export function WorkflowsRail({
 }: WorkflowsRailProps): JSX.Element {
   const [addDialogMode, setAddDialogMode] = useState<"session" | "workspace" | null>(null);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
-  // The prominent "Create new" CTA in the nav opens the SAME Add menu as the
-  // header +; the popover anchors to whichever trigger the user pressed.
-  const createTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
@@ -352,9 +352,6 @@ export function WorkflowsRail({
    */
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [addDoor, setAddDoor] = useState<Door>("have");
-  // Which trigger the Add menu hangs off — the compact header + or the nav CTA
-  // — so the popover anchors to the button the user actually pressed.
-  const [addMenuFrom, setAddMenuFrom] = useState<"header" | "cta">("header");
   const closeAddMenu = useCallback(() => setAddMenuOpen(false), []);
 
   // The ⋯ overflow menu: how the tree is grouped, how it is sorted, and the
@@ -483,22 +480,18 @@ export function WorkflowsRail({
         </button>
 
         {/* The primary creative action, promoted out of the header + into a
-            standing CTA directly under Search: the fastest path to a first
-            agent. It opens the same Add menu as the + (anchored to itself), and
-            when the rail has nothing yet it becomes the filled primary button so
-            an empty workspace has an obvious next step. */}
+            standing CTA directly under Search: the fastest path to a new agent.
+            It opens the composer-first "new session" home; when the rail has
+            nothing yet it becomes the filled primary button so an empty
+            workspace has an obvious next step. */}
         <button
           type="button"
-          ref={createTriggerRef}
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
           data-testid="rail-create-new"
-          aria-label="Create new agent or workspace"
-          aria-haspopup="menu"
-          aria-expanded={addMenuOpen && addMenuFrom === "cta"}
+          aria-label="Create a new agent"
           onClick={() => {
             setHistoryOpen(false);
-            setAddMenuFrom("cta");
-            setAddMenuOpen((open) => !open);
+            onNewSession();
           }}
         >
           <Icon name="Plus" size={14} />
@@ -539,11 +532,10 @@ export function WorkflowsRail({
             className="theme-toggle rail-header-btn"
             data-testid="add-workspace"
             aria-label="Add workspace"
-            aria-expanded={addMenuOpen && addMenuFrom === "header"}
+            aria-expanded={addMenuOpen}
             title="Add a workspace: a folder containing an agent project (sapiom.json). Its agent appears in the rail."
             onClick={() => {
               setHistoryOpen(false);
-              setAddMenuFrom("header");
               setAddMenuOpen((open) => !open);
             }}
           >
@@ -560,11 +552,11 @@ export function WorkflowsRail({
             the catalog. */}
         <AnchoredPopover
           open={addMenuOpen}
-          anchorRef={addMenuFrom === "cta" ? createTriggerRef : connectTriggerRef}
+          anchorRef={connectTriggerRef}
           onDismiss={closeAddMenu}
-          // Beside the rail, not over it. Both triggers are pinned to the rail's
-          // right edge, so a downward panel grows back across the workspace tree
-          // it is about to add to — covering the list you are checking against.
+          // Beside the rail, not over it. The + is pinned to the rail's right
+          // edge, so a downward panel grows back across the workspace tree it
+          // is about to add to — covering the list you are checking against.
           placement="right-start"
           className="connect-card add-card"
           testid="add-menu"

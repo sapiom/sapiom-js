@@ -17,7 +17,7 @@
  * The mapping invariant: rail focused agent == tab strip's agent == active
  * tab's bound agent == right panel's subject.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import type { HarnessKind, HarnessSession, MacroDef, SessionSummary, WorkflowInfo } from "@shared/types";
 
@@ -36,15 +36,27 @@ import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
-import { WelcomePanel } from "./components/WelcomePanel";
+import { NewSessionComposer } from "./components/NewSessionComposer";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { ApiError, boundWorkflowPathOf } from "./lib/api";
+import { ApiError, boundWorkflowPathOf, isMockMode } from "./lib/api";
+import { hasMockCanvasDoc } from "./lib/mock-data";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
-import { resolveProjectRoot } from "./lib/project-dir";
+import {
+  FALLBACK_PROJECT_NAME,
+  nextAvailableName,
+  projectDirSuggestion,
+  resolveProjectRoot,
+  slugifyIdea,
+} from "./lib/project-dir";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { agentUrl } from "./lib/urls";
-import { starterScaffoldInstruction, useTemplatePrompt, type StudioTemplate } from "./lib/templates";
+import {
+  starterScaffoldInstruction,
+  useTemplatePrompt,
+  type GalleryTemplate,
+  type StudioTemplate,
+} from "./lib/templates";
 import { track } from "./lib/track";
 import { initAnalytics } from "./lib/analytics/posthog";
 import { registerViewContext, track as trackProduct } from "./lib/analytics/events";
@@ -87,13 +99,22 @@ export const App = (): JSX.Element => {
   // Combined with the boot-error kind below to pick the honest shell state.
   const online = useConnectivity();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // Overview (in the rail's account menu): shows the intro panel in the main
-  // slot. Opening any session leaves it (openSession below is the one path).
-  const [overviewSelected, setOverviewSelected] = useState(false);
-  // First-run Overview is shown unprompted; once dismissed it must not spring
-  // back on the next render. Boot-scoped on purpose — settings.recentDirs being
-  // empty is what makes it a first run, and that is the server's to change.
-  const [welcomeDismissed, setWelcomeDismissed] = useState(false);
+  // The composer-first "new session" home. `composing` is explicit New-session
+  // intent (Create new / the +); the home also shows whenever nothing else
+  // claims the centre pane (first run, or every session closed).
+  const [composing, setComposing] = useState(false);
+  // Sessions started terminal-first FROM THE COMPOSER, eligible for the canvas
+  // auto-reveal on first content — and, once revealed, the set of those already
+  // done so a later manual fold is never fought. A pre-existing session that
+  // simply loads with content (the boot session, or any session on mobile) is
+  // never in `pendingReveal`, so the reveal only ever applies to a brand-new
+  // composer session. Refs: they gate a callback, they must not trigger renders.
+  const pendingReveal = useRef<Set<string>>(new Set());
+  const autoRevealed = useRef<Set<string>>(new Set());
+  // Sessions known to have painted canvas content (from CanvasPane's
+  // onCanvasContent). Lets a session SWITCH show the pane immediately for a
+  // session whose board we've already seen, and hide it for one that has none.
+  const sessionsWithCanvas = useRef<Set<string>>(new Set());
   // The focused agent (or bare-scaffold folder) path — the rail's single
   // selection and the main panel's tab-strip subject. The active tab's
   // session is harness.activeSessionId.
@@ -123,11 +144,6 @@ export const App = (): JSX.Element => {
   const [sessionNames, setSessionNames] = useState<Record<string, string>>(
     () => loadUiPrefs().sessionNames ?? {},
   );
-  const dismissWelcome = (): void => {
-    setOverviewSelected(false);
-    setWelcomeDismissed(true);
-  };
-
   const renameSession = (id: string, name: string): void => {
     setSessionNames((prev) => {
       const next = { ...prev };
@@ -152,7 +168,66 @@ export const App = (): JSX.Element => {
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const isMobile = useMobileShell();
 
-  const { widths, startRailDrag, startCanvasDrag, resetRail, resetCanvas } = usePaneWidths();
+  const { widths, canvasResizing, startRailDrag, startCanvasDrag, resetRail, resetCanvas } =
+    usePaneWidths();
+  // The canvas slides open/shut by animating its grid column to/from 0 (the
+  // transition is always-on in refine.css). During that slide the pane's content
+  // must NOT reflow (squish) with the moving column — so a ResizeObserver keeps a
+  // --rp-w custom property equal to the pane's settled EXPANDED width, and while
+  // `paneSliding` is set the content is pinned to --rp-w and right-aligned, so a
+  // shrinking column CLIPS it from the left (a drawer slide) rather than squeezing
+  // it, and a growing one REVEALS it the same way. Once the slide ends the pin
+  // drops: the collapsed pane's content truly goes to zero (reads as hidden), and
+  // an expanded pane's content tracks the column again (window resize / drag).
+  // --rp-w is frozen for the length of a slide so it holds the pre-slide width in
+  // both directions.
+  const [paneSliding, setPaneSliding] = useState(false);
+  const rightCollapsedRef = useRef(false);
+  const paneSlidingRef = useRef(false);
+  const paneElRef = useRef<HTMLDivElement | null>(null);
+  const paneObserverRef = useRef<ResizeObserver | null>(null);
+  const captureExpandedWidth = useCallback((el: HTMLDivElement | null): void => {
+    if (el && !rightCollapsedRef.current) el.style.setProperty("--rp-w", `${el.offsetWidth}px`);
+  }, []);
+  const setRightPaneEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      paneObserverRef.current?.disconnect();
+      paneElRef.current = el;
+      if (!el) {
+        paneObserverRef.current = null;
+        return;
+      }
+      // Track the expanded width on live resizes (window, rail drag), but NOT
+      // mid-slide — the guard freezes --rp-w so the content clips at the pre-slide
+      // width. A slide's own resizes are therefore skipped, which is why the
+      // slide-end effect below re-captures the settled width.
+      const observer = new ResizeObserver(() => {
+        if (!paneSlidingRef.current) captureExpandedWidth(el);
+      });
+      observer.observe(el);
+      paneObserverRef.current = observer;
+    },
+    [captureExpandedWidth],
+  );
+  rightCollapsedRef.current = rightCollapsed;
+  paneSlidingRef.current = paneSliding;
+
+  // Mark the slide as in flight whenever the collapse state flips, so refine.css
+  // pins the content (via .canvas-sliding) for the transition's length. Only the
+  // collapse/expand toggle animates; a resize-handle drag/reset (no collapse flip)
+  // stays instant. ~260ms covers the 0.22s transition plus a small buffer; when it
+  // clears we re-capture the settled EXPANDED width into --rp-w (the observer
+  // skipped the slide's own resizes, and after an expand settles there is no
+  // further resize to trigger one) so the NEXT collapse pins to the right width.
+  useLayoutEffect(() => {
+    if (isMobile) return;
+    setPaneSliding(true);
+    const timer = window.setTimeout(() => {
+      setPaneSliding(false);
+      captureExpandedWidth(paneElRef.current);
+    }, 260);
+    return () => window.clearTimeout(timer);
+  }, [rightCollapsed, isMobile, captureExpandedWidth]);
 
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // Cmd/Ctrl+1..9 selects the nth TAB of the FOCUSED agent (same oldest-first
@@ -170,7 +245,7 @@ export const App = (): JSX.Element => {
         const target = tabs[Number(e.key) - 1];
         if (target) {
           e.preventDefault();
-          setOverviewSelected(false);
+          setComposing(false);
           setReviewSummary(null);
           harness.setActiveSessionId(target.id);
         }
@@ -266,6 +341,7 @@ export const App = (): JSX.Element => {
     setRightCollapsed(isMobile);
   }, [isMobile]);
 
+
   // Persist the arrangement. Mobile's forced-collapsed defaults are
   // mode behavior, not a user choice.
   useEffect(() => {
@@ -351,27 +427,30 @@ export const App = (): JSX.Element => {
 
   // The focused subject's tabs, and which surface the main panel shows.
   const focusTabs = liveSessionsForFocus(state.sessions, focusedAgentPath);
-  const hasLiveSession = state.sessions.some((session) => session.status !== "exited");
-  // Overview floats OVER the shell, so it deliberately does not gate the states
-  // below it — the workbench, a review pane, a dead session all stay exactly as
-  // they were behind the card. Dismissed once, the first-run copy stays down for
-  // the rest of the boot; the account menu is how it comes back.
-  const showWelcome =
-    overviewSelected || (state.firstRun === true && !hasLiveSession && !welcomeDismissed);
   const showReview = reviewSummary != null;
   const showDead = !showReview && activeSession?.status === "exited";
   // An agent focused with no live session: honest absence, the reason opening
   // one lands on the "start a session" state rather than a board (the canvas
-  // is served per session).
+  // is served per session). `composing` (explicit New-session intent) forces
+  // the composer over this and the workbench.
   const showAgentEmpty =
-    !showReview && !showDead && focusedWorkflow != null && focusTabs.length === 0;
+    !showReview && !showDead && !composing && focusedWorkflow != null && focusTabs.length === 0;
   // The workbench: an active live session in the focused subject's tabs.
   const showWorkbench =
     !showReview &&
     !showDead &&
+    !composing &&
     !showAgentEmpty &&
     activeSession != null &&
     activeSession.status !== "exited";
+  // The composer-first "new session" home: explicit intent, or nothing else to
+  // show (first run, or every session closed). Replaces the WelcomePanel overlay
+  // AND the old "No active session" fallback.
+  const showComposer =
+    !showReview && !showDead && (composing || (!showAgentEmpty && !showWorkbench));
+  // A live session to return to when the composer was opened over the workbench.
+  const composerCanCancel =
+    composing && activeSession != null && activeSession.status !== "exited";
 
   // The right pane projects the ACTIVE session's bound agent — but nothing
   // (null) while a focused agent has no session, so it never shows a
@@ -413,11 +492,15 @@ export const App = (): JSX.Element => {
   // The ONE choke point for session creation: sets the focus to the new
   // session's folder (so the main panel shows it) and fires telemetry once.
   const createSessionAt = async (cwd: string, agentHarness: HarnessKind): Promise<HarnessSession> => {
-    setOverviewSelected(false);
+    setComposing(false);
     setReviewSummary(null);
     setFocusedAgentPath(cwd);
     closeMobileDrawer();
     const session = await harness.createSession({ cwd, harness: agentHarness });
+    // Any new session is eligible for the canvas auto-reveal: the first time it
+    // paints a board (e.g. starting one on a populated/deployed workflow), the
+    // pane opens itself.
+    if (!isMobile) pendingReveal.current.add(session.id);
     track("session.created");
     trackProduct("session.started", { harness_kind: agentHarness, origin: "user" });
     return session;
@@ -515,6 +598,44 @@ export const App = (): JSX.Element => {
     );
   };
 
+  // The composer home's two on-ramps. Both open a session in a FRESH project
+  // folder under the project root (deduped so an existing folder is never
+  // clobbered) and open the workbench terminal-only — the canvas reveals itself
+  // once the agent generates content (see CanvasPane's onCanvasContent below).
+  const uniqueProjectDir = (base: string): string => {
+    const taken = new Set<string>();
+    for (const session of state.sessions) {
+      const name = session.cwd.split("/").filter(Boolean).pop();
+      if (name) taken.add(name);
+    }
+    for (const workflow of state.workflows) {
+      const name = workflow.path.split("/").filter(Boolean).pop();
+      if (name) taken.add(name);
+    }
+    return projectDirSuggestion(nextAvailableName(base, taken), projectRoot || null);
+  };
+
+  const handleComposerSubmitIdea = (idea: string, agentHarness: HarnessKind): void => {
+    const cwd = uniqueProjectDir(idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME);
+    if (!cwd) {
+      harness.showToast("Set a project folder first — use the + to open one.");
+      return;
+    }
+    // Terminal-first: the new session's canvas slides in once it paints.
+    setRightCollapsed(true);
+    void handleScaffoldSession(cwd, agentHarness, idea.trim() || undefined);
+  };
+
+  const handleComposerUseTemplate = (template: GalleryTemplate): void => {
+    const cwd = uniqueProjectDir(template.id);
+    if (!cwd) {
+      harness.showToast("Set a project folder first — use the + to open one.");
+      return;
+    }
+    setRightCollapsed(true);
+    void handleUseTemplate(cwd, template);
+  };
+
   // Bulk discovery from the add dialog.
   const handleScanWorkflows = async (root: string): Promise<number> => {
     const found = await harness.scanWorkflows(root);
@@ -528,29 +649,57 @@ export const App = (): JSX.Element => {
     return found.length;
   };
 
+  // Canvas follows the session on an explicit switch: show the pane if that
+  // session's board is populated (either one we've already seen, or a mock
+  // session with a bundled doc), hide it if there's nothing yet — in which case
+  // it slides in later once content paints (onCanvasContent). Desktop only (the
+  // mobile sheet has its own collapse), and NOT run on initial load/reload, so a
+  // persisted manual fold still survives (held-arrangement contract).
+  const applyCanvasVisibility = (id: string | null): void => {
+    if (isMobile) return;
+    // No live session for this view (a focused agent with none) — nothing to
+    // inspect, so hide the pane.
+    if (id == null) {
+      setRightCollapsed(true);
+      return;
+    }
+    // A dead session keeps its own "resume to see it" invite; leave the pane.
+    if (state.sessions.find((s) => s.id === id)?.status === "exited") return;
+    const populated =
+      sessionsWithCanvas.current.has(id) || (isMockMode() && hasMockCanvasDoc(id));
+    if (populated) {
+      setRightCollapsed(false);
+    } else {
+      setRightCollapsed(true);
+      pendingReveal.current.add(id);
+    }
+  };
+
   // Switch to a session (history-menu pick, palette hit): focus follows it so
   // the main panel shows its context (its bound agent, or its own folder).
   const openSession = (id: string): void => {
-    setOverviewSelected(false);
+    setComposing(false);
     setReviewSummary(null);
     closeMobileDrawer();
     const session = state.sessions.find((s) => s.id === id);
     if (session) setFocusedAgentPath(boundWorkflowPathOf(session) ?? session.cwd);
     harness.setActiveSessionId(id);
+    applyCanvasVisibility(id);
   };
 
   // Select a tab in the strip — same as openSession, but the tab always
   // belongs to the current focus, so focus never moves.
   const selectTab = (id: string): void => {
-    setOverviewSelected(false);
+    setComposing(false);
     setReviewSummary(null);
     harness.setActiveSessionId(id);
+    applyCanvasVisibility(id);
   };
 
 
   // One entry point for reviewing a past (transcript) session.
   const reviewPastSession = (summary: SessionSummary): void => {
-    setOverviewSelected(false);
+    setComposing(false);
     setReviewSummary(summary);
     closeMobileDrawer();
   };
@@ -571,16 +720,20 @@ export const App = (): JSX.Element => {
   // its most-recent session (or none -> the "start a session" empty state).
   // Opening agent A never disturbs another agent's binding.
   const handleFocusAgent = (path: string): void => {
-    setOverviewSelected(false);
+    setComposing(false);
     setReviewSummary(null);
     setFocusedAgentPath(path);
     closeMobileDrawer();
     const tabs = liveSessionsForFocus(state.sessions, path);
     // Keep the active session if it already belongs; otherwise take the
     // most-recent (last in the oldest-first tab order), or none.
-    if (tabs.some((s) => s.id === harness.activeSessionId)) return;
-    const mostRecent = tabs[tabs.length - 1] ?? null;
-    harness.setActiveSessionId(mostRecent ? mostRecent.id : null);
+    const nextActiveId = tabs.some((s) => s.id === harness.activeSessionId)
+      ? harness.activeSessionId
+      : (tabs[tabs.length - 1]?.id ?? null);
+    if (nextActiveId !== harness.activeSessionId) harness.setActiveSessionId(nextActiveId);
+    // The canvas follows the focus target: shown for a populated session, hidden
+    // for one with nothing yet or an agent with no session at all.
+    applyCanvasVisibility(nextActiveId);
   };
 
   // Binds a workflow to a live session in its own workspace and focuses it —
@@ -606,7 +759,7 @@ export const App = (): JSX.Element => {
             .sort((a, b) => b.cwd.length - a.cwd.length || b.createdAt.localeCompare(a.createdAt))[0];
     let targetId: string;
     if (owner) {
-      setOverviewSelected(false);
+      setComposing(false);
       setReviewSummary(null);
       if (owner.id !== harness.activeSessionId) harness.setActiveSessionId(owner.id);
       targetId = owner.id;
@@ -735,12 +888,13 @@ export const App = (): JSX.Element => {
           }}
           onCollapse={() => setRailCollapsed(true)}
           onSelectSession={openSession}
-          overviewSelected={overviewSelected}
+          overviewSelected={showComposer}
           onSelectOverview={() => {
-            setOverviewSelected(true);
+            setComposing(true);
             setReviewSummary(null);
             closeMobileDrawer();
           }}
+          onNewSession={() => setComposing(true)}
           onReviewSummary={reviewPastSession}
           history={harness.history}
           historyLoading={harness.historyLoading}
@@ -809,18 +963,41 @@ export const App = (): JSX.Element => {
         )}
 
         <div
-          className={"app" + (templatesOpen ? " is-browsing" : "")}
+          className={
+            "app" +
+            (templatesOpen ? " is-browsing" : "") +
+            // The workbench animates the canvas column open/closed (see
+            // .app.canvas-animated). Off while browsing / composing / mobile,
+            // where the single-column switch should be instant.
+            (!templatesOpen && !isMobile && !showComposer ? " canvas-animated" : "") +
+            // Present only DURING an open/close slide: it pins the pane content
+            // to its expanded width so it CLIPS instead of squishing. Dropped
+            // when settled, so a collapsed pane's content truly goes to zero.
+            (paneSliding ? " canvas-sliding" : "") +
+            // A resize-handle drag or double-click reset suppresses the open/close
+            // ease, so the pane snaps to the cursor / equal split instead of
+            // lagging the always-on transition by 0.22s.
+            (canvasResizing ? " canvas-dragging" : "")
+          }
           style={{
             gridTemplateColumns:
-              // Browsing takes the whole width: a two-column card grid inside
-              // half the shell is the letterbox this view exists to escape.
-              templatesOpen || isMobile
+              // Browsing and the composer home take the whole width: a
+              // two-column card grid inside half the shell is the letterbox this
+              // view exists to escape, and the composer has no canvas yet.
+              templatesOpen || isMobile || showComposer
                 ? "minmax(0, 1fr)"
-                : rightCollapsed
-                  ? `minmax(${CANVAS_MIN}px, 1fr)`
-                  : widths.canvas == null
-                    ? `minmax(${CANVAS_MIN}px, 1fr) minmax(${CANVAS_MIN}px, 1fr)`
-                    : `minmax(${CANVAS_MIN}px, 1fr) minmax(${CANVAS_MIN}px, ${widths.canvas}px)`,
+                : // Two tracks always, so the canvas column can animate to 0 on
+                  // collapse — the pane (and its left-edge shadow) slides shut,
+                  // and back open, instead of blinking via display:none.
+                  `minmax(${CANVAS_MIN}px, 1fr) ${
+                    rightCollapsed
+                      ? widths.canvas == null
+                        ? "0fr"
+                        : "0px"
+                      : widths.canvas == null
+                        ? "1fr"
+                        : `${widths.canvas}px`
+                  }`,
           }}
         >
           {/* Templates is a DESTINATION, not a session sub-view: it stands in
@@ -844,6 +1021,7 @@ export const App = (): JSX.Element => {
             <SessionBar
               openedAgentName={noSessionAgentName}
               reviewTitle={reviewSummary ? reviewSummary.title : null}
+              composing={showComposer}
               activeSession={showWorkbench ? activeSession : showDead ? activeSession : null}
               sessionName={
                 activeSession ? sessionDisplayName(activeSession, state.sessions, sessionNames) : null
@@ -877,14 +1055,7 @@ export const App = (): JSX.Element => {
               onToast={harness.showToast}
               onExpandRail={railCollapsed ? () => setRailCollapsed(false) : null}
               onExpandRight={rightCollapsed ? () => setRightCollapsed(false) : null}
-              onNewSession={
-                showWorkbench && (focusedWorkflow || focusedAgentPath)
-                  ? () => {
-                      if (focusedWorkflow) handleStartSessionForAgent(focusedWorkflow);
-                      else if (focusedAgentPath) void handleCreateSession(focusedAgentPath, "claude-code");
-                    }
-                  : null
-              }
+              onNewSession={() => setComposing(true)}
               /* The agent action cluster shares the one session bar — no
                  separate tab lane or action row. Switching sessions moves to
                  the rail / ⌘K / history. */
@@ -969,17 +1140,37 @@ export const App = (): JSX.Element => {
                   </div>
                 </ImageComposer>
               ) : (
-                <EmptyState
-                  className="terminal-empty"
-                  icon="Radio"
-                  title="No active session"
-                  body="Focus an agent in the workspace panel, then start a session. Your coding agent runs right here, in a real terminal. ⌘K jumps anywhere."
+                /* The composer-first home: no terminal, no canvas yet. Describe
+                   an outcome (or pick a template) and a session starts; this
+                   screen gives way to the terminal (createSessionAt clears
+                   `composing`), and the canvas reveals itself once populated. */
+                <NewSessionComposer
+                  firstRun={state.firstRun === true}
+                  onBack={composerCanCancel ? () => setComposing(false) : null}
+                  onSubmitIdea={handleComposerSubmitIdea}
+                  onUseTemplate={handleComposerUseTemplate}
+                  onBrowseTemplates={() => setTemplatesOpen(true)}
+                  listHarnesses={harness.listHarnesses}
+                  listTemplates={harness.listTemplates}
+                  telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
+                  onToggleTelemetry={async (next) => {
+                    await harness.updateSettings({ telemetryOptIn: next });
+                  }}
+                  recentDirs={harness.settings?.recentDirs ?? []}
+                  projectRoot={projectRoot || null}
+                  listDir={harness.listDir}
+                  onConnect={async (cwd) => {
+                    await harness.connectWorkflow(cwd);
+                  }}
+                  onScan={handleScanWorkflows}
+                  onScaffold={handleScaffoldSession}
+                  onSaveProjectRoot={saveProjectRoot}
                 />
               )}
             </div>
           </div>
 
-          {!rightCollapsed && !isMobile && (
+          {!rightCollapsed && !isMobile && !showComposer && (
             <div
               className="pane-resize-handle pane-resize-handle-canvas"
               // Track the canvas column's ACTUAL edge, not the requested width.
@@ -1016,7 +1207,10 @@ export const App = (): JSX.Element => {
           {/* Right pane: Canvas | Steps | Code segmented switch + panels.
               Collapsed via CSS (never unmounted) so a running Visualize
               enrichment survives the collapse. */}
-          <div className={"right-pane" + (rightCollapsed ? " is-collapsed" : "")}>
+          <div
+            ref={setRightPaneEl}
+            className={"right-pane" + (rightCollapsed || showComposer ? " is-collapsed" : "")}
+          >
             <div className="right-pane-tabs" role="tablist" aria-label="Right pane">
               <button
                 role="tab"
@@ -1109,8 +1303,24 @@ export const App = (): JSX.Element => {
                 lastMessage={harness.lastMessage}
                 boundWorkflow={rightPaneWorkflow}
                 noSessionAgent={noSessionAgentName}
-                overviewActive={showWelcome}
+                overviewActive={showComposer}
                 sessionExited={showDead}
+                onCanvasContent={() => {
+                  // Remember this session's board is populated, so a later switch
+                  // back to it shows the pane straight away.
+                  const id = harness.activeSessionId;
+                  if (!id) return;
+                  sessionsWithCanvas.current.add(id);
+                  // Slide the pane in the first time an ELIGIBLE session paints
+                  // content: one started terminal-first from the composer, or one
+                  // just switched to whose board we hadn't seen. A pre-existing
+                  // session on initial load (never marked pending) keeps its
+                  // collapse state, and mobile never auto-reveals its sheet.
+                  if (isMobile || !pendingReveal.current.has(id) || autoRevealed.current.has(id)) return;
+                  autoRevealed.current.add(id);
+                  pendingReveal.current.delete(id);
+                  setRightCollapsed(false);
+                }}
                 expanded={canvasExpanded}
                 onToggleExpanded={() => setCanvasExpanded((v) => !v)}
                 macros={state.macros}
@@ -1167,34 +1377,6 @@ export const App = (): JSX.Element => {
           onOpenPath={(cwd) => void handleCreateSession(cwd, "claude-code")}
           onBrowseTemplates={() => setTemplatesOpen(true)}
           onClose={() => setPaletteOpen(false)}
-        />
-      )}
-
-      {showWelcome && (
-        <WelcomePanel
-          recentDirs={harness.settings?.recentDirs ?? []}
-          sessions={state.sessions}
-          workflows={state.workflows}
-          projectRoot={projectRoot || null}
-          onConnect={async (cwd) => {
-            await harness.connectWorkflow(cwd);
-          }}
-          onScan={handleScanWorkflows}
-          onScaffold={handleScaffoldSession}
-          onSaveProjectRoot={saveProjectRoot}
-          listDir={harness.listDir}
-          onCreateSession={handleCreateSession}
-          listHarnesses={harness.listHarnesses}
-          onBrowseTemplates={() => {
-            dismissWelcome();
-            setTemplatesOpen(true);
-          }}
-          onDismiss={dismissWelcome}
-          firstRun={state.firstRun === true}
-          telemetryOptIn={harness.settings?.telemetryOptIn ?? state.telemetryOptIn}
-          onToggleTelemetry={async (next) => {
-            await harness.updateSettings({ telemetryOptIn: next });
-          }}
         />
       )}
 

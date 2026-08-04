@@ -101,25 +101,21 @@ test.describe("the resting state", () => {
 
 test.describe("entry points", () => {
   // Both "add a workspace" entries must reach the SAME dialog. The welcome
-  // panel's primary CTA — "Open folder" since the panel adopted the option-row
-  // anatomy, "New workspace" before it — once opened the one-question SESSION
-  // modal instead, which is the most prominent button on a first-run screen
-  // delivering the wrong thing. The label is allowed to change; what it opens
+  // composer's + (open a folder / connect a workspace) must reach the folder
+  // door directly, never the one-question SESSION modal — that was the bug on
+  // the old first-run screen. The affordance is allowed to change; what it opens
   // is not.
-  test("the welcome panel's primary CTA opens the folder door, not the session modal", async ({
+  test("the composer's + opens the folder door, not the session modal", async ({
     page,
   }) => {
     await page.goto("/?mockState=fresh");
-    const welcome = page.getByTestId("welcome-panel");
-    await expect(welcome).toBeVisible();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
-    await welcome.getByTestId("welcome-start-project").click();
+    await page.getByTestId("composer-open-folder").click();
 
     await expect(page.locator(".modal-add-workspace")).toBeVisible();
     await expect(page.locator(".modal-new-session")).toHaveCount(0);
-    // It lands ON the folder question. The row is called "Open a folder"; it
-    // used to answer that click with three intents, one of which was opening a
-    // folder — the same question asked twice, in two vocabularies.
+    // It lands ON the folder question, not the three-door list.
     await expect(page.locator(".dir-picker")).toBeVisible();
     await expect(page.getByTestId("aw-doors")).toHaveCount(0);
   });
