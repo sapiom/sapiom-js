@@ -8,11 +8,27 @@
     <title>Agent Studio</title>
     <script>
       // Set the theme before first paint to avoid a flash of the wrong one.
-      // Storage key must match web/src/lib/theme.ts (this can't import it).
+      // Resolution order must match web/src/lib/theme.ts (this can't import
+      // it): the server-stamped data-display-mode wins — it is the persisted
+      // setting, and in the desktop app it is the ONLY source, since that host
+      // serves this page from a fresh ephemeral port (a new, empty origin
+      // store) every launch — then this origin's localStorage, then the
+      // pre-display-mode key, then dark.
       (function () {
-        var stored = localStorage.getItem("sapiom-harness-theme");
-        var theme = stored === "light" || stored === "dark" ? stored : "dark";
-        document.documentElement.dataset.theme = theme;
+        var el = document.documentElement;
+        function known(value) {
+          return value === "light" || value === "dark" || value === "system" ? value : null;
+        }
+        var mode =
+          known(el.dataset.displayMode) ||
+          known(localStorage.getItem("sapiom-harness-display-mode")) ||
+          known(localStorage.getItem("sapiom-harness-theme")) ||
+          "dark";
+        el.dataset.displayMode = mode;
+        el.dataset.theme =
+          mode === "system"
+            ? window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+            : mode;
       })();
     </script>
   </head>

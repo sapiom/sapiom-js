@@ -52,6 +52,8 @@ import { resolveMacroUrl } from "./lib/macro-gating";
 import { directActionKind } from "./lib/macro-actions";
 import { describeWorkflowPrompt } from "./lib/describe-prompt";
 import { sessionDisplayName } from "./lib/session-name";
+import { applyDisplayMode, getDisplayMode, registerDisplayModePersistence } from "./lib/theme";
+import { onOpenSettingsRequest } from "./lib/desktop";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState, type ObservedRun } from "./lib/use-harness-state";
@@ -175,6 +177,36 @@ export const App = (): JSX.Element => {
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harness.state?.sessions, focusedAgentPath]);
+
+  // Display mode (Settings → Display mode, and the rail header's toggle).
+  //
+  // settings.json is the persisted copy, not localStorage: the desktop host
+  // serves this SPA from a fresh ephemeral port every launch, so its origin —
+  // and with it the browser store — is new each time. lib/theme paints and
+  // caches; these two effects are the halves that make a choice outlive a quit.
+  const updateSettings = harness.updateSettings;
+  const showToast = harness.showToast;
+  useEffect(() => {
+    registerDisplayModePersistence((mode) => {
+      void updateSettings({ displayMode: mode }).catch(() => {
+        showToast("Couldn't save your display mode — it will revert next launch.");
+      });
+    });
+    return () => registerDisplayModePersistence(null);
+  }, [updateSettings, showToast]);
+
+  const storedDisplayMode = harness.settings?.displayMode;
+  useEffect(() => {
+    // The boot fetch is the first time this page can learn what the LAST launch
+    // chose (the server also stamps it into the HTML, so this is normally a
+    // no-op — it isn't under the Vite dev server, or after another window
+    // changed it).
+    if (storedDisplayMode && storedDisplayMode !== getDisplayMode()) applyDisplayMode(storedDisplayMode);
+  }, [storedDisplayMode]);
+
+  // Sapiom → Settings… (⌘,) in the desktop app's native menu. No-op in a
+  // browser, where there is no menu to fire it.
+  useEffect(() => onOpenSettingsRequest(() => setSettingsOpen(true)), []);
 
   // Where NEW agent projects are created — ONE value, shared by every surface
   // that creates one (the template door and the idea door). They used to

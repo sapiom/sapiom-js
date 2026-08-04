@@ -1259,6 +1259,15 @@ export interface TemplateListResponse {
   reason?: "signed-out" | "unreachable";
 }
 
+/**
+ * How the Studio picks its colour scheme. `"system"` follows the OS
+ * (`prefers-color-scheme`) and keeps following it while the app runs; the
+ * other two pin it.
+ */
+export const DISPLAY_MODES = ["light", "dark", "system"] as const;
+
+export type DisplayMode = (typeof DISPLAY_MODES)[number];
+
 export interface HarnessSettings {
   /**
    * Opt-in to sending the *invasive* usage telemetry to Sapiom → BigQuery
@@ -1303,6 +1312,17 @@ export interface HarnessSettings {
    * user never asked for. With it off, briefs degrade to last-N-turns.
    */
   rollingSummary?: boolean;
+  /**
+   * Light / dark / follow-the-OS, set from the Settings panel.
+   *
+   * Lives here rather than only in the SPA's localStorage because the desktop
+   * host loads the SPA from `http://127.0.0.1:<free port>` and that port is
+   * different on every launch — a new origin, so a new (empty) localStorage.
+   * A choice kept only in the browser store would therefore be forgotten
+   * every time the app is quit and reopened. localStorage stays as a
+   * pre-paint cache; this file is what the next launch resolves from.
+   */
+  displayMode?: DisplayMode;
 }
 
 // ---------------------------------------------------------------------------

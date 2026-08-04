@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { JSX } from "react";
-import type { AppState } from "@shared/types";
+import type { AppState, DisplayMode } from "@shared/types";
 import { HARNESS_PATHS } from "@shared/types";
 
 import type { AuthStartResponse } from "../lib/api";
 import { Icon } from "./Icon";
+import { getDisplayMode, setDisplayMode, subscribeDisplayMode } from "../lib/theme";
 import { track } from "../lib/track";
 
 /** Sign-in progress state in the Settings popover. */
@@ -34,6 +35,12 @@ interface SettingsPopoverProps {
   onDisconnect: () => Promise<void>;
 }
 
+const DISPLAY_MODE_OPTIONS: ReadonlyArray<{ mode: DisplayMode; label: string }> = [
+  { mode: "light", label: "Light" },
+  { mode: "dark", label: "Dark" },
+  { mode: "system", label: "System" },
+];
+
 export function SettingsPopover({
   authenticated,
   organizationName,
@@ -49,6 +56,11 @@ export function SettingsPopover({
   onDisconnect,
 }: SettingsPopoverProps): JSX.Element {
   const [busy, setBusy] = useState(false);
+  // Read from lib/theme rather than a prop: the rail header's toggle sets the
+  // same value, and this control has to show that too. Persisting for the next
+  // launch is wired up once, in App.
+  const [displayMode, setLocalDisplayMode] = useState(getDisplayMode());
+  useEffect(() => subscribeDisplayMode(setLocalDisplayMode), []);
   const [authProgress, setAuthProgress] = useState<AuthProgress>({ status: "idle" });
   // An env override outranks any stored preference; flipping the toggle here
   // would silently lose to it on the next boot, so the control locks instead.
@@ -175,6 +187,25 @@ export function SettingsPopover({
           </button>
         </div>
       )}
+
+      <div className="settings-choice-row" data-testid="display-mode-row">
+        <span id="display-mode-label">Display mode</span>
+        <div className="settings-segmented" role="radiogroup" aria-labelledby="display-mode-label">
+          {DISPLAY_MODE_OPTIONS.map(({ mode, label }) => (
+            <button
+              key={mode}
+              type="button"
+              role="radio"
+              aria-checked={displayMode === mode}
+              data-testid={`display-mode-${mode}`}
+              className={"settings-segment" + (displayMode === mode ? " is-on" : "")}
+              onClick={() => setDisplayMode(mode)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <label className="settings-toggle-row">
         <span>Share session details with Sapiom</span>

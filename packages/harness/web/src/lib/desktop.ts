@@ -30,6 +30,13 @@ export interface DesktopBridge {
   /** The desktop app's own version (may be empty on older builds). */
   appVersion: string;
   checkForUpdates: () => Promise<UpdateCheckOutcome>;
+  /**
+   * Subscribe to the native menu's Sapiom → Settings… (⌘,) item; returns an
+   * unsubscribe. Optional because a desktop build older than this SPA has no
+   * such menu — the SPA then simply never hears from it, which is the same
+   * thing that happens in a browser.
+   */
+  onOpenSettings?: (listener: () => void) => () => void;
   // No restart method: applying an update is confirmed by a native dialog in the
   // desktop app, so page code — which shares an origin with agent-authored files
   // the harness serves — has no way to end a user's sessions.
@@ -68,7 +75,21 @@ export function getDesktopBridge(host: DesktopHost | undefined = defaultHost()):
   return {
     appVersion: typeof bridge.appVersion === "string" ? bridge.appVersion : "",
     checkForUpdates: bridge.checkForUpdates,
+    ...(typeof bridge.onOpenSettings === "function" ? { onOpenSettings: bridge.onOpenSettings } : {}),
   };
+}
+
+/**
+ * Run `listener` whenever the desktop app's Settings… menu item is chosen.
+ * Returns an unsubscribe, and is a no-op everywhere the menu doesn't exist, so
+ * callers need no host check of their own.
+ */
+export function onOpenSettingsRequest(
+  listener: () => void,
+  host: DesktopHost | undefined = defaultHost(),
+): () => void {
+  const subscribe = getDesktopBridge(host)?.onOpenSettings;
+  return subscribe ? subscribe(listener) : () => {};
 }
 
 /** How the Settings popover should render a check result. */

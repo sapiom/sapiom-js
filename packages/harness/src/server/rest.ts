@@ -35,6 +35,7 @@ import type {
 } from "../shared/types.js";
 import {
   ALLOWED_IMAGE_MEDIA_TYPES,
+  DISPLAY_MODES,
   HARNESS_UPLOADS_DIR,
   JSON_BODY_LIMIT_BYTES,
   MAX_IMAGE_UPLOAD_BYTES,
@@ -99,6 +100,7 @@ const settingsPatchSchema = z.object({
   recentDirs: z.array(z.string()).optional(),
   projectRoot: z.string().optional(),
   rollingSummary: z.boolean().optional(),
+  displayMode: z.enum(DISPLAY_MODES).optional(),
 }) satisfies z.ZodType<Partial<HarnessSettings>>;
 
 const UI_EVENT_NAMES: readonly UiEventName[] = [

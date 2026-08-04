@@ -71,7 +71,7 @@ import {
   type CodexTailerHandle,
 } from "../core/collector/codex-tailer.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
-import { loadSettings, pruneDeadRecentDirs } from "../cli/settings.js";
+import { loadSettings, pruneDeadRecentDirs, readDisplayModeSync } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
 import { generateClaudeSettings } from "../core/inject/claude-settings.js";
 import { generateMcpConfig } from "../core/inject/mcp-config.js";
@@ -1449,7 +1449,7 @@ export const startServer = async (
   // NOTE: mount additional routers above this line — the static/SPA fallback
   // below is a catch-all and must stay last.
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
-  app.use(createStaticRouter(webDir, options.bootToken));
+  app.use(createStaticRouter(webDir, options.bootToken, () => readDisplayModeSync(statePaths.settings)));
 
   app.use(
     (

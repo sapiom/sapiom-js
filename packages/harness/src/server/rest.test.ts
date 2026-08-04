@@ -272,6 +272,7 @@ describe("createRestRouter", () => {
         telemetryOptIn: false,
         recentDirs: [],
         rollingSummary: false,
+        displayMode: "dark",
       });
     });
 
@@ -286,6 +287,7 @@ describe("createRestRouter", () => {
         telemetryOptIn: true,
         recentDirs: [],
         rollingSummary: false,
+        displayMode: "dark",
       });
 
       const reread = await fetch(`${baseUrl}/settings`);
@@ -293,6 +295,7 @@ describe("createRestRouter", () => {
         telemetryOptIn: true,
         recentDirs: [],
         rollingSummary: false,
+        displayMode: "dark",
       });
     });
 
@@ -332,6 +335,27 @@ describe("createRestRouter", () => {
         body: JSON.stringify({ telemetryOptIn: true }),
       });
       expect(onTelemetryOptInChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("persists a display mode and rejects one it can't paint", async () => {
+      start();
+      const res = await fetch(`${baseUrl}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ displayMode: "system" }),
+      });
+      expect(await res.json()).toMatchObject({ displayMode: "system" });
+      // Re-read: this is the value the NEXT launch resolves from, which is the
+      // whole point of storing it server-side rather than in localStorage.
+      const reread = await fetch(`${baseUrl}/settings`);
+      expect(await reread.json()).toMatchObject({ displayMode: "system" });
+
+      const bad = await fetch(`${baseUrl}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ displayMode: "sepia" }),
+      });
+      expect(bad.status).toBe(400);
     });
 
     it("rejects a malformed patch body", async () => {

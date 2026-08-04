@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { HARNESS_PATHS, type HarnessSettings } from "../shared/types.js";
+import { DISPLAY_MODES, HARNESS_PATHS, type DisplayMode, type HarnessSettings } from "../shared/types.js";
 import { expandHome } from "./paths.js";
 
 const DEFAULT_SETTINGS: HarnessSettings = {
@@ -10,6 +11,10 @@ const DEFAULT_SETTINGS: HarnessSettings = {
   // user never asked for. Off, portable continue still works — its brief just
   // degrades to the last N turns. See core/rolling-summary.ts.
   rollingSummary: false,
+  // Dark, not "system": the Studio has always opened dark regardless of the
+  // OS, and an installed app must not change appearance because a setting was
+  // added underneath it. "System" is a choice, not the fallback.
+  displayMode: "dark",
 };
 
 const MAX_RECENT_DIRS = 8;
@@ -39,6 +44,30 @@ async function normalizeRecentDir(candidate: string): Promise<string | null> {
     return null;
   }
   return resolved;
+}
+
+/** A stored `displayMode`, or undefined for anything this build doesn't know. */
+function normalizeDisplayMode(candidate: unknown): DisplayMode | undefined {
+  return DISPLAY_MODES.find((mode) => mode === candidate);
+}
+
+/**
+ * The persisted display mode, read synchronously.
+ *
+ * The static router bakes it into the served HTML so the desktop app paints
+ * the right theme on the first frame (server/static.ts) — that path is inside
+ * a request handler with no await to spend, and it must see the CURRENT value
+ * rather than one captured at boot. One small local read per HTML navigation.
+ * Returns undefined when the file is missing/unreadable/unrecognised, leaving
+ * the page's own fallback in charge.
+ */
+export function readDisplayModeSync(settingsPath: string = defaultSettingsFilePath()): DisplayMode | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as Partial<HarnessSettings>;
+    return normalizeDisplayMode(parsed.displayMode);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -96,6 +125,7 @@ export async function loadSettings(settingsPath: string = defaultSettingsFilePat
     const projectRoot = normalizeProjectRoot(parsed.projectRoot);
     return {
       ...parsed,
+      displayMode: normalizeDisplayMode(parsed.displayMode) ?? DEFAULT_SETTINGS.displayMode,
       recentDirs: await sanitizeRecentDirs(parsed.recentDirs),
       // Omit rather than store undefined, so JSON.stringify on the way back out
       // doesn't leave a dangling `"projectRoot": null`-shaped hole.
@@ -113,6 +143,7 @@ export async function saveSettings(
   const normalizedRoot = normalizeProjectRoot(settings.projectRoot);
   const sanitized: HarnessSettings = {
     ...settings,
+    displayMode: normalizeDisplayMode(settings.displayMode) ?? DEFAULT_SETTINGS.displayMode,
     recentDirs: await sanitizeRecentDirs(settings.recentDirs),
     ...(normalizedRoot ? { projectRoot: normalizedRoot } : { projectRoot: undefined }),
   };

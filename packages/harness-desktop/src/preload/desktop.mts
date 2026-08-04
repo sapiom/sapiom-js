@@ -13,7 +13,7 @@
  * on and `ipcRenderer` is never handed to the page.
  */
 import { contextBridge, ipcRenderer } from "electron";
-import { APP_VERSION_ARG, UPDATE_CHECK, type UpdateCheckOutcome } from "../main/ipc.js";
+import { APP_VERSION_ARG, OPEN_SETTINGS, UPDATE_CHECK, type UpdateCheckOutcome } from "../main/ipc.js";
 
 const api = {
   /** The desktop app's version — NOT the harness's (the SPA already knows that one). */
@@ -22,6 +22,21 @@ const api = {
   /** Check now, on the user's behalf. Resolves with what happened; never rejects. */
   checkForUpdates(): Promise<UpdateCheckOutcome> {
     return ipcRenderer.invoke(UPDATE_CHECK) as Promise<UpdateCheckOutcome>;
+  },
+  /**
+   * Subscribe to Sapiom → Settings… (⌘,). Returns an unsubscribe, so a React
+   * effect can clean up rather than stacking a listener per remount.
+   *
+   * Inbound-only and payload-free: the page cannot use it to reach the main
+   * process, and the callback is wrapped so `ipcRenderer`'s event object never
+   * escapes into page code.
+   */
+  onOpenSettings(listener: () => void): () => void {
+    const handler = (): void => listener();
+    ipcRenderer.on(OPEN_SETTINGS, handler);
+    return () => {
+      ipcRenderer.off(OPEN_SETTINGS, handler);
+    };
   },
   // No restart method, on purpose — see ipc.ts. An update that is ready to install
   // is confirmed through a native dialog, so nothing the page can call ends a

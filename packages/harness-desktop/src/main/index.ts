@@ -12,7 +12,8 @@
 // `spawn ENOTDIR`. See esbuild-binary.ts.
 import "./esbuild-binary.js";
 import { writeFileSync } from "node:fs";
-import { app, dialog, Menu } from "electron";
+import { app, dialog } from "electron";
+import { installApplicationMenu } from "./menu.js";
 import { resolveInstanceLockAction } from "./single-instance.js";
 import { createSetupWindow } from "./windows.js";
 import { boot, type BootResult } from "./boot.js";
@@ -85,11 +86,12 @@ if (lock.action === "fail") {
   });
 
   app.whenReady().then(async () => {
-    // No application menu — the harness SPA is the whole UI. Removes the
-    // File/Edit/View/Window/Help bar on Linux/Windows. (On macOS the top menu
-    // bar is OS-level and can't be removed; this leaves a bare default there —
-    // a proper minimal macOS menu with edit roles can be added in the mac phase.)
-    Menu.setApplicationMenu(null);
+    // No application menu on Linux/Windows — the harness SPA is the whole UI,
+    // so the File/Edit/View/Window/Help bar goes. macOS keeps its menu bar
+    // whatever we do, so there it gets ours: edit roles the SPA needs for
+    // ⌘C/⌘V, and Settings… (⌘,) where the platform says Settings lives. The
+    // window doesn't exist yet, hence the getter. See menu.ts.
+    installApplicationMenu(() => bootResult?.mainWindow);
     const setupWin = createSetupWindow();
     try {
       bootResult = await boot(setupWin, { devMode, smoke: smokeMode });

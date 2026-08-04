@@ -2670,6 +2670,49 @@ input {
   color: var(--text-dim);
 }
 
+/* A setting with three answers rather than two — same row rhythm as
+   .settings-toggle-row, with a segmented control in place of the switch. */
+.settings-choice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--type-label);
+  color: var(--text-dim);
+}
+
+.settings-segmented {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.settings-segment {
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.settings-segment.is-on {
+  background: var(--accent);
+  color: var(--text);
+}
+
+.settings-segment:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 .toggle-switch {
   flex: 0 0 auto;
   width: 34px;

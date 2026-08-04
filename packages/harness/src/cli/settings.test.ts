@@ -10,7 +10,14 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpDir };
 });
 
-import { hasStoredSettings, loadSettings, saveSettings, recordRecentDir, pruneDeadRecentDirs } from "./settings.js";
+import {
+  hasStoredSettings,
+  loadSettings,
+  saveSettings,
+  recordRecentDir,
+  pruneDeadRecentDirs,
+  readDisplayModeSync,
+} from "./settings.js";
 
 /** A real, existing directory to use as a valid recent-dir candidate. */
 async function makeRealDir(name: string): Promise<string> {
@@ -33,14 +40,14 @@ describe("settings persistence", () => {
   });
 
   it("loadSettings returns defaults when nothing is persisted", async () => {
-    expect(await loadSettings()).toEqual({ telemetryOptIn: false, recentDirs: [], rollingSummary: false });
+    expect(await loadSettings()).toEqual({ telemetryOptIn: false, recentDirs: [], rollingSummary: false, displayMode: "dark" });
   });
 
   it("round-trips saved settings", async () => {
     const a = await makeRealDir("a");
     await saveSettings({ telemetryOptIn: true, recentDirs: [a] });
     expect(await hasStoredSettings()).toBe(true);
-    expect(await loadSettings()).toEqual({ telemetryOptIn: true, recentDirs: [a], rollingSummary: false });
+    expect(await loadSettings()).toEqual({ telemetryOptIn: true, recentDirs: [a], rollingSummary: false, displayMode: "dark" });
   });
 
   describe("recordRecentDir", () => {
@@ -148,6 +155,50 @@ describe("settings persistence", () => {
     });
   });
 
+  describe("displayMode", () => {
+    it("round-trips a mode, and reads back the same value the SPA will paint with", async () => {
+      const settingsPath = path.join(tmpDir, "display", "settings.json");
+      await saveSettings({ telemetryOptIn: false, recentDirs: [], displayMode: "system" }, settingsPath);
+
+      expect((await loadSettings(settingsPath)).displayMode).toBe("system");
+      // The sync reader is what the static router stamps into the HTML; it has
+      // to agree with the async load or the page paints one mode and the
+      // Settings panel then shows another.
+      expect(readDisplayModeSync(settingsPath)).toBe("system");
+    });
+
+    it("falls back to dark for a missing, unknown, or unparseable value", async () => {
+      // An install that predates the setting must keep opening dark, not start
+      // following the OS because a field was added underneath it.
+      const legacyPath = path.join(tmpDir, "legacy", "settings.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, JSON.stringify({ telemetryOptIn: true, recentDirs: [] }));
+      expect((await loadSettings(legacyPath)).displayMode).toBe("dark");
+
+      // A value from a future build (or hand-edited junk) is not a mode this
+      // build can paint, so it is not one it will honour.
+      const junkPath = path.join(tmpDir, "junk", "settings.json");
+      await fs.mkdir(path.dirname(junkPath), { recursive: true });
+      await fs.writeFile(junkPath, JSON.stringify({ displayMode: "sepia" }));
+      expect((await loadSettings(junkPath)).displayMode).toBe("dark");
+
+      await fs.writeFile(junkPath, "{ not json");
+      expect(readDisplayModeSync(junkPath)).toBeUndefined();
+      expect(readDisplayModeSync(path.join(tmpDir, "nope", "settings.json"))).toBeUndefined();
+    });
+
+    it("does not persist an unknown mode through a save", async () => {
+      const settingsPath = path.join(tmpDir, "save", "settings.json");
+      await saveSettings(
+        // A patch from an older/newer client; the store normalizes rather than
+        // writing a value nothing can read back.
+        { telemetryOptIn: false, recentDirs: [], displayMode: "sepia" as never },
+        settingsPath,
+      );
+      expect(readDisplayModeSync(settingsPath)).toBe("dark");
+    });
+  });
+
   describe("explicit settingsPath", () => {
     it("reads and writes the given file instead of the home-dir default", async () => {
       const customPath = path.join(tmpDir, "custom-root", "settings.json");
@@ -155,7 +206,7 @@ describe("settings persistence", () => {
       await saveSettings({ telemetryOptIn: true, recentDirs: [a] }, customPath);
 
       expect(await hasStoredSettings(customPath)).toBe(true);
-      expect(await loadSettings(customPath)).toEqual({ telemetryOptIn: true, recentDirs: [a], rollingSummary: false });
+      expect(await loadSettings(customPath)).toEqual({ telemetryOptIn: true, recentDirs: [a], rollingSummary: false, displayMode: "dark" });
       // The (mocked-home) default location was never touched.
       expect(await hasStoredSettings()).toBe(false);
     });

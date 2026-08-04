@@ -6,6 +6,7 @@ import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createStaticRouter } from "./static.js";
+import type { DisplayMode } from "../shared/types.js";
 
 // ---------------------------------------------------------------------------
 // The static router is the SPA-serving seam: `pnpm build` emits the Studio to
@@ -28,9 +29,13 @@ describe("createStaticRouter", () => {
   let baseUrl: string;
   const tmpDirs: string[] = [];
 
-  function start(webDir: string, bootToken = TEST_BOOT_TOKEN): void {
+  function start(
+    webDir: string,
+    bootToken = TEST_BOOT_TOKEN,
+    readDisplayMode: () => DisplayMode | undefined = () => undefined,
+  ): void {
     const app = express();
-    app.use(createStaticRouter(webDir, bootToken));
+    app.use(createStaticRouter(webDir, bootToken, readDisplayMode));
     server = app.listen(0);
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
@@ -108,6 +113,34 @@ describe("createStaticRouter", () => {
       expect(scriptPos).toBeGreaterThan(-1);
       expect(headClosePos).toBeGreaterThan(-1);
       expect(scriptPos).toBeLessThan(headClosePos);
+    });
+
+    // The desktop host serves this SPA from a new ephemeral port every launch,
+    // so localStorage is empty there and the persisted display mode can only
+    // reach the page through the HTML itself — before first paint, or the user
+    // sees a flash of the mode they didn't choose.
+    it("stamps the persisted display mode onto <html>", async () => {
+      start(makeBuiltWebDir(), TEST_BOOT_TOKEN, () => "light");
+
+      const html = await (await fetch(`${baseUrl}/`)).text();
+      expect(html).toContain('<html data-display-mode="light"');
+    });
+
+    it("re-reads the mode per response, so a change lands on the next reload", async () => {
+      let mode: DisplayMode | undefined = "dark";
+      start(makeBuiltWebDir(), TEST_BOOT_TOKEN, () => mode);
+
+      expect(await (await fetch(`${baseUrl}/`)).text()).toContain('data-display-mode="dark"');
+      mode = "system";
+      // Deep route as well: a reload can land anywhere.
+      expect(await (await fetch(`${baseUrl}/deep/route`)).text()).toContain('data-display-mode="system"');
+    });
+
+    it("leaves the HTML alone when nothing is persisted (the SPA's own default wins)", async () => {
+      start(makeBuiltWebDir());
+
+      const html = await (await fetch(`${baseUrl}/`)).text();
+      expect(html).not.toContain("data-display-mode");
     });
 
     it("injects window.__HARNESS__ on deep SPA routes too (navigation/reload safety)", async () => {

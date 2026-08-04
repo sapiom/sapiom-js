@@ -31,7 +31,8 @@
  *                   so every deploy from the packaged app failed)
  *   desktop-bridge  the main window's preload exposed window.sapiomDesktop — the
  *                   SPA feature-detects it, so a broken preload just makes the
- *                   "Check for updates" button silently absent
+ *                   "Check for updates" button silently absent, and ⌘, silently
+ *                   dead (onOpenSettings is how the native menu reaches the SPA)
  *   update-config   the auto-update metadata is baked in and electron-updater
  *                   loads — otherwise the app runs fine and never updates again
  *
@@ -606,20 +607,22 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   const shape = (await win.webContents.executeJavaScript(
     "({ bridge: typeof window.sapiomDesktop," +
       " check: typeof window.sapiomDesktop?.checkForUpdates," +
+      " openSettings: typeof window.sapiomDesktop?.onOpenSettings," +
       " version: window.sapiomDesktop?.appVersion })",
-  )) as { bridge: string; check: string; version: unknown };
+  )) as { bridge: string; check: string; openSettings: string; version: unknown };
 
   if (shape.bridge !== "object") {
     throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
   }
-  if (shape.check !== "function") {
+  if (shape.check !== "function" || shape.openSettings !== "function") {
     throw new Error(`bridge incomplete: ${JSON.stringify(shape)}`);
   }
   // The bridge must stay MINIMAL as well as present. A restart method would let
   // same-origin agent-authored content end every running session, which is why
   // applying an update is a native dialog and has no channel (ipc.ts).
   const extra = (await win.webContents.executeJavaScript(
-    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates')",
+    "Object.keys(window.sapiomDesktop).filter((k) => " +
+      "k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'onOpenSettings')",
   )) as string[];
   if (extra.length > 0) {
     throw new Error(`bridge exposes unexpected members to page code: ${extra.join(", ")}`);

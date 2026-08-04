@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { describeUpdateOutcome, getDesktopBridge } from "./desktop";
+import { describeUpdateOutcome, getDesktopBridge, onOpenSettingsRequest } from "./desktop";
 
 const noop = (): Promise<never> => Promise.reject(new Error("not called"));
 
@@ -50,6 +50,36 @@ describe("getDesktopBridge", () => {
     for (const junk of [null, 0, "yes", true, {}, []]) {
       expect(getDesktopBridge({ sapiomDesktop: junk })).toBeNull();
     }
+  });
+});
+
+describe("onOpenSettingsRequest", () => {
+  it("subscribes through the bridge and hands back its unsubscribe", () => {
+    const listeners: Array<() => void> = [];
+    const unsubscribe = onOpenSettingsRequest(() => listeners.push(() => undefined), {
+      sapiomDesktop: {
+        appVersion: "0.1.2",
+        checkForUpdates: noop,
+        onOpenSettings: (listener: () => void) => {
+          listeners.push(listener);
+          return () => listeners.splice(listeners.indexOf(listener), 1);
+        },
+      },
+    });
+    expect(listeners).toHaveLength(1);
+    unsubscribe();
+    expect(listeners).toHaveLength(0);
+  });
+
+  it("is a harmless no-op in a browser, and on a desktop build with no such menu", () => {
+    // The SPA ships in both hosts, and can also be newer than the desktop app
+    // installed around it — neither may throw on a subscribe or an unsubscribe.
+    expect(() => onOpenSettingsRequest(() => undefined, {})()).not.toThrow();
+    expect(() =>
+      onOpenSettingsRequest(() => undefined, {
+        sapiomDesktop: { appVersion: "0.1.0", checkForUpdates: noop },
+      })(),
+    ).not.toThrow();
   });
 });
 

@@ -55,6 +55,14 @@ export const APP_VERSION_ARG = "--sapiom-app-version=";
 
 /** SPA → main (invoke): check for an update now. Returns `UpdateCheckOutcome`. */
 export const UPDATE_CHECK = "update:check";
+
+/**
+ * main → SPA: the native menu's Sapiom → Settings… (⌘,) was chosen; open the
+ * Settings panel. One-way and argument-free — the menu asks the SPA to show
+ * its own surface rather than the main process owning a second one.
+ */
+export const OPEN_SETTINGS = "settings:open";
+
 /*
  * There is deliberately NO "apply the update" channel. The restart is destructive —
  * it ends every running agent session — and the page that would call it is the same
