@@ -56,6 +56,7 @@ const STATIC_TARGETS = [
   "packages/agent-core/package.json",
   "packages/agent-core/src",
   "packages/agent-core/templates",
+  "packages/agent-studio",
   "packages/cli/package.json",
   "packages/cli/src",
   "packages/cli/templates",
