@@ -14,7 +14,7 @@ const mockedExecSync = vi.mocked(execSync);
 function callbackToServer(
   port: number,
   params: Record<string, string>,
-): Promise<string> {
+): Promise<{ body: string; status: number }> {
   return new Promise((resolve, reject) => {
     const query = new URLSearchParams(params).toString();
     const req = http.request(
@@ -22,7 +22,7 @@ function callbackToServer(
       (res) => {
         let data = "";
         res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => resolve(data));
+        res.on("end", () => resolve({ body: data, status: res.statusCode! }));
       },
     );
     req.on("error", reject);
@@ -75,10 +75,16 @@ describe("performBrowserAuth", () => {
 
     const { state, port } = extractAuthInfo();
 
-    await callbackToServer(Number(port), { code: "auth-code-123", state });
+    const callback = await callbackToServer(Number(port), {
+      code: "auth-code-123",
+      state,
+    });
 
     const result = await authPromise;
     expect(result).toEqual(mockResult);
+    expect(callback.status).toBe(200);
+    expect(callback.body).toContain("return to Sapiom");
+    expect(callback.body).not.toContain("return to your terminal");
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://api.test.com/v1/auth/cli/token",
@@ -100,7 +106,7 @@ describe("performBrowserAuth", () => {
 
     const { port } = extractAuthInfo();
 
-    await callbackToServer(Number(port), {
+    const callback = await callbackToServer(Number(port), {
       code: "auth-code",
       state: "wrong-state",
     });
@@ -108,6 +114,8 @@ describe("performBrowserAuth", () => {
     const error = await authPromise;
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("State mismatch");
+    expect(callback.status).toBe(400);
+    expect(callback.body).toContain("could not be completed");
   });
 
   it("should reject when no code is received", async () => {
@@ -120,13 +128,14 @@ describe("performBrowserAuth", () => {
 
     const { state, port } = extractAuthInfo();
 
-    await callbackToServer(Number(port), { state });
+    const callback = await callbackToServer(Number(port), { state });
 
     const error = await authPromise;
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain(
       "No authorization code received",
     );
+    expect(callback.status).toBe(400);
   });
 
   it("should reject when token exchange fails", async () => {
@@ -145,11 +154,15 @@ describe("performBrowserAuth", () => {
 
     const { state, port } = extractAuthInfo();
 
-    await callbackToServer(Number(port), { code: "bad-code", state });
+    const callback = await callbackToServer(Number(port), {
+      code: "bad-code",
+      state,
+    });
 
     const error = await authPromise;
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("Invalid code");
+    expect(callback.status).toBe(400);
   });
 
   it("should return 404 for non-callback paths", async () => {

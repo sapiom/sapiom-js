@@ -34,6 +34,7 @@ import { esbuildBinaryPath } from "./esbuild-binary.js";
 import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
 import { ensureSapiomCli, installClaudeCode } from "./agent-install.js";
+import { resolveDesktopIdentity } from "./desktop-auth.js";
 import { installRuntimeShims } from "./runtime-shims.js";
 import { BOOT_PROGRESS, BOOT_ERROR, CONSENT_SUBMIT, RETRY, type BootProgress, type BootErrorPayload } from "./ipc.js";
 
@@ -314,20 +315,28 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
 
   // 5. Auth. Probe for a cached credential first (non-interactive) so we can
   //    show the right message: a cached credential signs in instantly; without
-  //    one we must open the browser and tell the user to complete sign-in there
-  //    (otherwise the window just sits on a vague "Signing you in…").
+  //    one we open the browser and explain that it connects cloud actions. A
+  //    cancelled or failed flow continues signed out for local work.
   progress(setupWin, { phase: "auth", message: "Signing you in…", status: "active" });
   //    Smoke mode stops at the cached probe: an interactive sign-in would open
   //    a browser and block forever on a CI runner. Booting unauthenticated is a
   //    supported state (identity is optional to startServer).
-  let identity: HarnessIdentity | null = await ensureAuthenticated({ interactive: false });
-  if (!identity && !smoke) {
-    progress(setupWin, {
-      phase: "auth",
-      message: "Opening your browser — sign in to Sapiom to continue, then come back here.",
-      status: "active",
-    });
-    identity = await ensureAuthenticated({ interactive: true });
+  const auth = await resolveDesktopIdentity({
+    authenticate: ensureAuthenticated,
+    smoke,
+    beforeInteractive: () =>
+      progress(setupWin, {
+        phase: "auth",
+        message:
+          "Opening your browser — sign in to connect cloud actions, then come back here.",
+        status: "active",
+      }),
+  });
+  const identity: HarnessIdentity | null = auth.identity;
+  if (auth.error) {
+    debug(
+      `authentication unavailable; continuing signed out: ${auth.error instanceof Error ? auth.error.message : String(auth.error)}`,
+    );
   }
   progress(setupWin, {
     phase: "auth",

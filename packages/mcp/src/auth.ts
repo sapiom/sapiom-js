@@ -67,20 +67,8 @@ export async function performBrowserAuth(
       const code = reqURL.searchParams.get("code");
       const returnedState = reqURL.searchParams.get("state");
 
-      // Serve the "you can close this tab" page immediately
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(`<!DOCTYPE html>
-<html>
-<head><title>Sapiom CLI Auth</title></head>
-<body style="font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
-  <div style="text-align: center;">
-    <h1>Authentication complete</h1>
-    <p>You can close this tab and return to your terminal.</p>
-  </div>
-</body>
-</html>`);
-
       if (!returnedState || returnedState !== state) {
+        authResponse(res, false);
         settled = true;
         clearTimeout(timeout);
         server.close();
@@ -91,6 +79,7 @@ export async function performBrowserAuth(
       }
 
       if (!code) {
+        authResponse(res, false);
         settled = true;
         clearTimeout(timeout);
         server.close();
@@ -103,11 +92,13 @@ export async function performBrowserAuth(
         const address = server.address() as { port: number };
         const redirectUri = `http://localhost:${address.port}/callback`;
         const result = await exchangeCodeForApiKey(apiURL, code, redirectUri);
+        authResponse(res, true);
         settled = true;
         clearTimeout(timeout);
         server.close();
         resolve(result);
       } catch (err) {
+        authResponse(res, false);
         settled = true;
         clearTimeout(timeout);
         server.close();
@@ -140,6 +131,23 @@ export async function performBrowserAuth(
       }
     });
   });
+}
+
+function authResponse(res: http.ServerResponse, success: boolean): void {
+  res.writeHead(success ? 200 : 400, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  res.end(`<!DOCTYPE html>
+<html>
+<head><title>Sapiom authentication</title></head>
+<body style="font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
+  <div style="text-align: center;">
+    <h1>${success ? "Authentication complete" : "Authentication could not be completed"}</h1>
+    <p>${success ? "You can close this tab and return to Sapiom." : "Close this tab and try connecting again from Sapiom."}</p>
+  </div>
+</body>
+</html>`);
 }
 
 async function exchangeCodeForApiKey(
