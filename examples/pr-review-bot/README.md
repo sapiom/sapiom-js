@@ -31,8 +31,8 @@ watch  ──(pause: wait for "pr.opened", $0 while idle)──▶  review  ─�
    `SLACK_BOT_TOKEN` and a direct `fetch` — nothing baked into code.
 
 Input: `{ "repo": { "owner": "acme", "name": "api" }, "via": "email", "to": "you@example.com", "config": { "WEBHOOK_REGISTER_URL": "…" } }`.
-With no `WEBHOOK_REGISTER_URL` (or `DRY_RUN` set), `watch` runs offline via its
-`dryRun` guard and the report step skips the real send.
+With no `WEBHOOK_REGISTER_URL` (or `DRY_RUN` set), `watch` skips registration via
+its `dryRun` guard and the report step skips the real send.
 
 ## Run it with Claude + the Sapiom MCP
 
@@ -48,7 +48,8 @@ With no `WEBHOOK_REGISTER_URL` (or `DRY_RUN` set), `watch` runs offline via its
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
-   (offline via the `dryRun` guard, free) → `sapiom_dev_agents_link` →
+   (Sapiom capabilities stubbed and ordinary sends guarded, with no Sapiom
+   capability spend) → `sapiom_dev_agents_link` →
    `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run` (a real run that pauses).
 
 ## Delivering to Slack (bring your own token)
@@ -63,10 +64,9 @@ degrades to a skip (it still completes) so you can trace the graph first.
 ## Resuming a paused run in dev
 
 A real `run` pauses at `watch` and waits for the `pr.opened` signal. Instead of
-a real webhook, fire it yourself with **Resume run** in Run Inspector, local MCP
-`sapiom_dev_agents_signal`, or hosted MCP `sapiom_workflow_signal`. The
-`correlationId` is the paused run's `executionId`, and the `payload`
-becomes `review`'s input:
+a real webhook, fire it yourself with local MCP `sapiom_dev_agents_signal`. Run
+Inspector does not provide a one-click signal control. The `correlationId` is the
+paused run's `executionId`, and the `payload` becomes `review`'s input:
 
 ```json
 {

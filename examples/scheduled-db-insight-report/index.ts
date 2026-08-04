@@ -35,11 +35,11 @@ import { z } from "zod/v4";
  *   - **deliver** assembles the report (narrative + chart link + a compact metrics
  *     table) and emails it. A `dryRun` (or a run with no recipient) returns the
  *     report as a preview without sending, so `run_local` traces the whole graph
- *     for free (capabilities stubbed, the real DB query and the send skipped).
+ *     with no Sapiom capability spend (capabilities stubbed, the real DB query and the send skipped).
  *
  * Side-effect discipline (copied from `error-triage-digest` / `scheduled-research-brief`):
  *   - The real SQL is gated behind `dryRun`: a dry run reports on sample metrics so
- *     the graph traces offline without connecting to a database.
+ *     the graph traces locally without connecting to a database.
  *   - The recipient — and an optional external database URL — are read from the
  *     injected environment for a DSN, and ordinary run input for the recipient.
  *   - Non-deterministic values (the snapshot timestamp) are captured once at the DB
@@ -320,7 +320,7 @@ const entryInput = z.object({
     .array(z.object({ name: z.string(), sql: z.string() }))
     .optional()
     .describe(
-      "Queries to snapshot; defaults to catalog introspection when omitted.",
+      "Advanced: read-only queries to snapshot, each `{ name, sql }` where `sql` returns `label`/`value` columns. Optional — defaults to catalog introspection when omitted.",
     ),
   schedule: z
     .string()

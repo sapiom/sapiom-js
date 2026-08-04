@@ -52,11 +52,11 @@ import { z } from "zod/v4";
  * This template copies that pattern rather than fighting it; migrate to
  * `agents.launch` if/when it is fixed (see README).
  *
- * ── Determinism / offline tracing ─────────────────────────────────────────────
+ * ── Determinism / local tracing ───────────────────────────────────────────────
  * Raw Postgres/Slack sockets and the raw-HTTP child launch aren't stubbable by
  * run_local, so every external side effect is gated behind `dryRun`: run_local
- * exercises the full control flow plus the real ctx.sapiom.* calls (models.run)
- * while skipping the raw network I/O. `observeOnly` does everything real but
+ * exercises the full control flow with ctx.sapiom.* calls (including models.run)
+ * stubbed while skipping the raw network I/O. `observeOnly` does everything real but
  * launches nothing — the briefing shows what it WOULD launch.
  *
  * Trigger input: { dryRun?, observeOnly?, briefingChannelId?, fleet?, now? }.

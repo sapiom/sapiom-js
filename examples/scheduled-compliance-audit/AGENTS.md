@@ -49,8 +49,8 @@ after every small edit.
   local pre-flight before deploy.
 - **run_local** — runs your **real** step code against **stub capabilities**, so
   `web.scrape` / `models.run` / `fileStorage.upload` return built-in defaults and
-  the agent runs end-to-end offline for free. The pause is auto-resumed with no
-  decision, so the offline trace lands on `rejected`; pass `dryRun: true` so
+  the trace creates no Sapiom capability spend. The pause is auto-resumed with no
+  decision, so the local trace lands on `rejected`; pass `dryRun: true` so
   `archive` would skip the (stubbed) upload if you drive the approve path with a
   real signal. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed collect + policy

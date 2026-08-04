@@ -1,5 +1,20 @@
 # @sapiom/cli
 
+## 1.0.3
+
+### Patch Changes
+
+- 40d1c64: Use Agent and Agent run terminology in scaffolded and published authoring assets.
+- Updated dependencies [824eb1e]
+- Updated dependencies [368125b]
+- Updated dependencies [addb63c]
+- Updated dependencies [40d1c64]
+- Updated dependencies [9199e10]
+- Updated dependencies [be2b81b]
+- Updated dependencies [94584a2]
+  - @sapiom/harness@0.2.6
+  - @sapiom/agent-core@0.10.0
+
 ## 1.0.2
 
 ### Patch Changes

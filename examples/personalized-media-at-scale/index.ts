@@ -7,7 +7,12 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
-import { VIDEO_RESULT_SIGNAL, type VideoResultPayload } from "@sapiom/tools";
+import {
+  VIDEO_RESULT_SIGNAL,
+  IMAGE_RESULT_SIGNAL,
+  type VideoResultPayload,
+  type ImageResultPayload,
+} from "@sapiom/tools";
 import postgres from "postgres";
 import { z } from "zod/v4";
 
@@ -20,31 +25,33 @@ import { z } from "zod/v4";
  * asset — an image (`contentGeneration.images`) or a short clip
  * (`contentGeneration.video`) — persists it, and emails the recipient a link.
  *
- * The graph forks on the chosen medium:
+ * The graph forks on the chosen medium — both are async launch/collect loops:
  *
- *   fetch ─▶ renderImages ─────────────────▶ deliver
- *   (db)  └▶ renderClip ⇄ collectClip ──────▶ deliver
- *            (video.launch)   (drain)          (email)
+ *   fetch ─▶ renderImage ⇄ collectImage ────▶ deliver
+ *   (db)  └▶ renderClip  ⇄ collectClip  ────▶ deliver
+ *            (images/video.launch) (drain)     (email)
  *
  *   1. fetch — read up to `limit` recipient rows from a Postgres table
  *      (`ctx.sapiom.database`), creating and seeding it on first run so the
  *      template works out of the box. `dryRun` stops here and returns the rows
  *      plus the prompt each would get, with nothing generated or sent.
- *   2a. renderImages (image medium) — fan out one personalized image per row,
- *       all at once (sync), each persisted for a durable `fileId`.
- *   2b. renderClip ⇄ collectClip (video medium) — one row at a time, launch an
- *       async text-to-video job and `pauseUntilSignal` on it; the FAL webhook
- *       resumes `collectClip`, which records the clip and loops back for the
- *       next row or advances once every row is done.
+ *   2a. renderImage ⇄ collectImage (image medium) — one row at a time, launch an
+ *       async image job and `pauseUntilSignal` on it; the FAL webhook resumes
+ *       `collectImage`, which records the image and loops back for the next row
+ *       or advances once every row is done.
+ *   2b. renderClip ⇄ collectClip (video medium) — same shape with `video.launch`.
  *   3. deliver — email each recipient a link to their own asset.
  *
- * Why sequential clips rather than launching every video at once: a paused step
- * waits on a single `(signal, correlationId)` pair, so launching shot i only
- * after shot i-1 has resumed keeps a paused step always waiting before its job
- * can complete (the `scene-to-video` lesson).
+ * Why sequential rather than launching every job at once: a paused step waits on a
+ * single `(signal, correlationId)` pair, so launching row i only after row i-1 has
+ * resumed keeps a paused step always waiting before its job can complete (the
+ * `scene-to-video` lesson). This is also why images moved OFF the old sync
+ * `Promise.all` fan-out: the routed sync `images.create` holds the request open for
+ * the full generate+store, and a concurrent fan-out drove every request past Core's
+ * 30s router cap → 503s. `images.launch` enqueues and returns immediately, so the
+ * 30s wall no longer applies.
  *
- * Images are the cheaper default. Video is async and pricier — keep `limit`
- * small while you try it.
+ * Images are the cheaper default. Video is pricier — keep `limit` small while you try it.
  */
 
 // ─────────────────────────────────────────────────────────────── config ──
@@ -70,7 +77,7 @@ type Medium = "image" | "video";
 interface EntryInput {
   /** Database handle holding the recipient table. */
   dbHandle?: string;
-  /** "image" (default, sync, cheaper) or "video" (async, pricier). */
+  /** "image" (default, cheaper) or "video" (pricier). Both render async per row. */
   medium?: Medium;
   /** Cron cadence this batch is meant to run on (e.g. "0 9 * * *"). */
   schedule?: string;
@@ -114,8 +121,8 @@ interface Shared extends Record<string, unknown> {
   videoModel: string;
   rows: Recipient[];
   assets: Asset[];
-  /** Index of the next row to animate; advanced by `collectClip`. */
-  clipIndex: number;
+  /** Index of the next row to render; advanced by `collectImage` / `collectClip`. */
+  mediaIndex: number;
   /** One plain sentence about whose rows these are and whether we provisioned them. */
   note?: string;
 }
@@ -314,7 +321,7 @@ const entryInput = z.object({
 const fetch = defineStep({
   name: "fetch",
   inputSchema: entryInput,
-  next: ["renderImages", "renderClip"],
+  next: ["renderImage", "renderClip"],
   terminal: true,
   async run(input: EntryInput, ctx: Ctx) {
     const dbHandle = resolveResourceHandle(input, {
@@ -334,7 +341,7 @@ const fetch = defineStep({
     ctx.shared.set("aspectRatio", aspectRatio);
     ctx.shared.set("videoModel", videoModel);
     ctx.shared.set("assets", []);
-    ctx.shared.set("clipIndex", 0);
+    ctx.shared.set("mediaIndex", 0);
 
     // Read the recipient rows (free — runs on a dry run too). Under stubbed
     // capabilities in run_local there's no connection string, so `rows` stays
@@ -410,44 +417,65 @@ const fetch = defineStep({
           .join(" "),
       });
     }
-    return goto(medium === "video" ? "renderClip" : "renderImages", {});
+    return goto(medium === "video" ? "renderClip" : "renderImage", {});
   },
 });
 
-const renderImages = defineStep({
-  name: "renderImages",
-  next: ["deliver"],
+const renderImage = defineStep({
+  name: "renderImage",
+  next: [],
+  // Async pause/resume, same as the video path: `images.launch` submits and returns a
+  // handle immediately (the submit is a quick enqueue, so it never meets Core's 30s
+  // router cap — the 503 the old sync `Promise.all` fan-out hit). The FAL webhook fires
+  // IMAGE_RESULT_SIGNAL on completion, resuming `collectImage` with the image's result.
+  pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep: "collectImage" },
   async run(_input: unknown, ctx: Ctx) {
     const rows = must(ctx.shared.get("rows"), "rows");
     const style = ctx.shared.get("style") ?? "";
-    ctx.logger.info("generating images", { rows: rows.length });
+    const index = must(ctx.shared.get("mediaIndex"), "mediaIndex");
+    const row = rows[index];
 
-    // Fan-out: one personalized image per row, generated concurrently. `storage`
-    // persists each output so we get a durable `fileId` + a ready-to-use link.
-    const generated = await Promise.all(
-      rows.map((row) =>
-        ctx.sapiom.contentGeneration.images.create({
-          prompt: buildPrompt(row, "image", style),
-          numImages: 1,
-          storage: { visibility: "private" },
-        }),
-      ),
-    );
-    const assets: Asset[] = generated.map((result, i) => {
-      const row = rows[i];
-      const img = result.images?.[0];
-      return {
-        recipientId: row.id,
-        name: row.name,
-        email: row.email,
-        medium: "image",
-        fileId: img?.fileId ?? null,
-        downloadUrl: img?.downloadUrl ?? img?.url ?? null,
-      };
+    ctx.logger.info("rendering image", { index: index + 1, of: rows.length });
+    const handle = await ctx.sapiom.contentGeneration.images.launch({
+      prompt: buildPrompt(row, "image", style),
+      numImages: 1,
+      storage: { visibility: "private" },
     });
-    ctx.shared.set("assets", assets);
-    ctx.logger.info("images ready", { count: assets.length });
-    return goto("deliver", { assets });
+    return await pauseUntilSignal(handle, { resumeStep: "collectImage" });
+  },
+});
+
+const collectImage = defineStep({
+  name: "collectImage",
+  next: ["renderImage", "deliver"],
+  async run(result: ImageResultPayload, ctx: Ctx) {
+    const rows = must(ctx.shared.get("rows"), "rows");
+    const assets = must(ctx.shared.get("assets"), "assets");
+    const index = must(ctx.shared.get("mediaIndex"), "mediaIndex");
+    const row = rows[index];
+
+    const out = result.outputs?.[0];
+    const asset: Asset = {
+      recipientId: row.id,
+      name: row.name,
+      email: row.email,
+      medium: "image",
+      fileId: out?.fileId ?? null,
+      downloadUrl: out?.downloadUrl ?? null,
+    };
+    const nextAssets = [...assets, asset];
+    const nextIndex = index + 1;
+    ctx.shared.set("assets", nextAssets);
+    ctx.shared.set("mediaIndex", nextIndex);
+    ctx.logger.info("collected image", {
+      collected: nextAssets.length,
+      of: rows.length,
+    });
+
+    // More rows to render? Loop back. Otherwise every image is in — deliver them.
+    return nextIndex < rows.length
+      ? goto("renderImage", {})
+      : goto("deliver", { assets: nextAssets });
   },
 });
 
@@ -460,7 +488,7 @@ const renderClip = defineStep({
   async run(_input: unknown, ctx: Ctx) {
     const rows = must(ctx.shared.get("rows"), "rows");
     const style = ctx.shared.get("style") ?? "";
-    const index = must(ctx.shared.get("clipIndex"), "clipIndex");
+    const index = must(ctx.shared.get("mediaIndex"), "mediaIndex");
     const row = rows[index];
 
     ctx.logger.info("rendering clip", { index: index + 1, of: rows.length });
@@ -482,7 +510,7 @@ const collectClip = defineStep({
   async run(result: VideoResultPayload, ctx: Ctx) {
     const rows = must(ctx.shared.get("rows"), "rows");
     const assets = must(ctx.shared.get("assets"), "assets");
-    const index = must(ctx.shared.get("clipIndex"), "clipIndex");
+    const index = must(ctx.shared.get("mediaIndex"), "mediaIndex");
     const row = rows[index];
 
     const out = result.outputs?.[0];
@@ -497,7 +525,7 @@ const collectClip = defineStep({
     const nextAssets = [...assets, asset];
     const nextIndex = index + 1;
     ctx.shared.set("assets", nextAssets);
-    ctx.shared.set("clipIndex", nextIndex);
+    ctx.shared.set("mediaIndex", nextIndex);
     ctx.logger.info("collected clip", {
       collected: nextAssets.length,
       of: rows.length,
@@ -618,5 +646,5 @@ const deliver = defineStep({
 export const agent = defineAgent<EntryInput, Shared>({
   name: "personalized-media-at-scale",
   entry: "fetch",
-  steps: { fetch, renderImages, renderClip, collectClip, deliver },
+  steps: { fetch, renderImage, collectImage, renderClip, collectClip, deliver },
 });

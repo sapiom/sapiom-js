@@ -21,7 +21,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so Hunter / `models.run` / `database` / `email` return built-in defaults and the agent runs offline for free. Pass `dryRun: true` so `launch` returns the plan and skips the (stubbed) send, DB, and drip. Returns a per-step trace.
+- **run_local** — runs your **real** step code against **stub capabilities**, so Hunter / `models.run` / `database` / `email` return built-in defaults; the trace creates no Sapiom capability spend. Pass `dryRun: true` so `launch` returns the plan and skips the (stubbed) send, DB, and drip. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed run that enriches, personalizes, verifies, and sends. Fire the `reply.received` signal to end the drip early, or attach the `schedule` as a cron trigger.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

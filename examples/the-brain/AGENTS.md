@@ -54,8 +54,9 @@ it after every small edit.
   local pre-flight before deploy.
 - **run_local** — runs your **real** step code against **stub capabilities**.
   Pass `{ "dryRun": true }`: the full `scan → assess → actuate → report` graph
-  traces offline — raw Postgres/Slack/child-launch I/O is skipped, while the real
-  `models.run` call still runs, with no API key needed.
+  traces with `database` and `models.run` stubbed, while the template's `dryRun`
+  guards skip raw Postgres, Slack, and child-launch I/O. Authored code still runs;
+  this combination creates no Sapiom capability spend.
 - **deploy**, then **run** — ship it, then a real run. Pass `{ "observeOnly": true }`
   first to report what it WOULD launch without launching; then run with actuation
   on. A second run the same day is cooldown-skipped (idempotency).

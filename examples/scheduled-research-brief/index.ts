@@ -29,8 +29,8 @@ import { z } from "zod/v4";
  * Side-effect discipline (copied from `mushroom-cloud` / `backlog-nudge`):
  *   - `dryRun` gates the real send: it computes the brief and returns it as a
  *     preview without emailing anyone. Pass it to `run_local` to trace the whole
- *     graph offline (capabilities stubbed) for free before a billed, delivering
- *     deploy + run.
+ *     graph with Sapiom capabilities stubbed and no Sapiom capability spend before
+ *     a billed, delivering deploy + run.
  *   - The recipient is ordinary run input (a declared setting), not a secret, and
  *     persisted in agent-run state — the same seam you'd read a delivery secret
  *     from if you swapped in a bring-your-own channel (see `AGENTS.md`).

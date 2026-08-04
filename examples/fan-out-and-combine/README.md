@@ -47,5 +47,5 @@ Input:
 
 - **Use this template** in the app — Sapiom builds and deploys it, and a run with
   no input fans a sample goal into three parallel child runs of itself.
-- **Locally:** `run_local` with `{ "dryRun": true }` traces the fan-out plan for
-  free (the child capability is stubbed offline).
+- **Locally:** `run_local` with `{ "dryRun": true }` traces the fan-out plan with
+  no Sapiom capability spend; the child capability is stubbed and dispatch is skipped.

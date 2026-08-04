@@ -34,9 +34,9 @@ off-ramp. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapi
 
 ## Test it
 
-- `run_local` with `{ "dryRun": true }` traces the fan-out plan offline for free (no
-  capability calls). A non-dry local run dispatches STUBBED children that complete
+- `run_local` with `{ "dryRun": true }` traces the fan-out plan without dispatching
+  and creates no Sapiom capability spend. A non-dry local run dispatches STUBBED children that complete
   with empty output, so `reduce` reports that no analysis came back — expected
-  offline, and honest.
+  under local stubs, and honest.
 - Deployed, a run with `{}` fans a sample goal into three parallel child runs of
   itself and returns one combined answer.

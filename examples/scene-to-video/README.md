@@ -53,8 +53,8 @@ small for real runs.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` with
-   `{ "scene": "...", "dryRun": true }` (capabilities stubbed, free — traces the
-   full graph offline) → `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
+   `{ "scene": "...", "dryRun": true }` (Sapiom capabilities stubbed with no
+   Sapiom capability spend) → `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
    `sapiom_dev_agents_run` (a real, billed image + video + stitch run).
 
 ## Model choice

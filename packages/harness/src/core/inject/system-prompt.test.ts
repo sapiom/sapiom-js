@@ -11,7 +11,9 @@ describe("generateSystemPromptFile", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-system-prompt-test-"));
+    tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-system-prompt-test-"),
+    );
   });
 
   afterEach(async () => {
@@ -19,8 +21,12 @@ describe("generateSystemPromptFile", () => {
   });
 
   it("writes the default profile prompt to a session-scoped file", async () => {
-    const filePath = await generateSystemPromptFile("session-abc", { generatedRoot: tmpDir });
-    expect(filePath).toBe(path.join(tmpDir, "session-abc", "system-prompt.txt"));
+    const filePath = await generateSystemPromptFile("session-abc", {
+      generatedRoot: tmpDir,
+    });
+    expect(filePath).toBe(
+      path.join(tmpDir, "session-abc", "system-prompt.txt"),
+    );
 
     const content = await fs.readFile(filePath, "utf8");
     expect(content).toBe(DEFAULT_SYSTEM_PROMPT);
@@ -29,6 +35,9 @@ describe("generateSystemPromptFile", () => {
     expect(content).toContain('"agents"');
     expect(content).toContain("The Canvas follows that selection");
     expect(content).toContain("Local Run, Prod Run, and Deploy");
+    expect(content).toContain("**sapiom-direct** (remote, HTTP)");
+    expect(content).toContain("no Sapiom capability spend");
+    expect(content).not.toContain("stub capabilities, no cost");
     expect(content).not.toContain("Visualize button");
     expect(content).not.toContain("⌘K");
     expect(content.toLowerCase()).not.toContain("workflow");
@@ -43,14 +52,24 @@ describe("generateSystemPromptFile", () => {
   });
 
   it("isolates sessions into separate files", async () => {
-    const a = await generateSystemPromptFile("session-a", { generatedRoot: tmpDir });
-    const b = await generateSystemPromptFile("session-b", { generatedRoot: tmpDir });
+    const a = await generateSystemPromptFile("session-a", {
+      generatedRoot: tmpDir,
+    });
+    const b = await generateSystemPromptFile("session-b", {
+      generatedRoot: tmpDir,
+    });
     expect(path.dirname(a)).not.toBe(path.dirname(b));
   });
 
   it("is safe to regenerate for the same session (overwrites in place)", async () => {
-    const first = await generateSystemPromptFile("session-abc", { generatedRoot: tmpDir, prompt: "v1" });
-    const second = await generateSystemPromptFile("session-abc", { generatedRoot: tmpDir, prompt: "v2" });
+    const first = await generateSystemPromptFile("session-abc", {
+      generatedRoot: tmpDir,
+      prompt: "v1",
+    });
+    const second = await generateSystemPromptFile("session-abc", {
+      generatedRoot: tmpDir,
+      prompt: "v2",
+    });
     expect(second).toBe(first);
     expect(await fs.readFile(second, "utf8")).toBe("v2");
   });

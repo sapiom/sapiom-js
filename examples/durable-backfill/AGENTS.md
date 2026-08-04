@@ -26,12 +26,14 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation, including the static `pause` annotation.
-- **run_local** — runs your **real** step code against **stub capabilities**. Leave `dbHandle` unset (or pass `dryRun: true`) so `process` counts each chunk in-process and skips the sandbox / database / file-storage calls; the local runner auto-resumes each heartbeat pause, so you get the full `plan → process → … → finalize` trace offline for free.
+- **run_local** — runs your **real** step code against **stub capabilities**. Leave `dbHandle` unset (or pass `dryRun: true`) so `process` counts each chunk in-process and skips the sandbox / database / file-storage calls; the local runner auto-resumes each heartbeat pause, so you get the full `plan → process → … → finalize` trace with no Sapiom capability spend.
 - **deploy**, then **run** — ship it, then perform a real run that pauses between chunks.
 
 ### Advancing a paused run in dev
 
-A real `run` pauses after each chunk. To advance it without a schedule, fire the heartbeat with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`):
+A real `run` pauses after each chunk. To advance it without a schedule, fire the heartbeat
+via local MCP `sapiom_dev_agents_signal`. Run Inspector does not provide a one-click
+signal control. The request is:
 
 ```json
 {
@@ -43,7 +45,7 @@ A real `run` pauses after each chunk. To advance it without a schedule, fire the
 
 To resume an interrupted job, start a new run with the same `jobId` — `plan` reads the checkpoint from file storage and continues.
 
-> Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities + the offline `dryRun` path), not the other way around — never weaken or drop real logic to shape a local run.
+> Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities + the `dryRun` guard), not the other way around — never weaken or drop real logic to shape a local run.
 
 Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev tools (`sapiom_dev_agents_*`). See `README.md` for the full lifecycle.
 

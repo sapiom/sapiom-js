@@ -36,7 +36,7 @@ import { z } from "zod/v4";
  *   - **summary** writes a markdown recap — fields updated, action items new vs.
  *     already tracked — and emails it to the rep. A `dryRun` (or a run with no
  *     recipient) returns the recap as a preview without touching the database or
- *     sending, so `run_local` traces the whole graph for free.
+ *     sending, so `run_local` traces the whole graph with no Sapiom capability spend.
  *
  * Determinism: each step body runs once on the happy path (again only on retry).
  * Non-deterministic values — the row timestamps — are captured once at the DB

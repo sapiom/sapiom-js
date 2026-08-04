@@ -25,7 +25,7 @@ import { z } from "zod/v4";
  *
  * Resume contract: `kickoff` registers `{ executionId, signal, correlationId }`
  * with the external job and pauses; the external caller fires that signal (in
- * dev, via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — see README). The
+ * dev, via local MCP `sapiom_dev_agents_signal` — see README). The
  * resumed `decide` step's input IS the callback payload; everything else survives
  * the pause in `ctx.shared`.
  *
@@ -52,7 +52,7 @@ interface WaitForWebhookInput {
   job?: Record<string, unknown>;
   /**
    * Config bag. `CALLBACK_REGISTER_URL` (+ optional `CALLBACK_REGISTER_KEY`)
-   * points at the external job — absent (or `DRY_RUN`) ⇒ offline. Optional
+   * points at the external job — absent (or `DRY_RUN`) ⇒ skip registration. Optional
    * `CALLBACK_TIMEOUT_MS` caps the wait (see `parseTimeoutMs`); absent ⇒ waits
    * indefinitely at $0.
    */
@@ -99,7 +99,7 @@ function must<T>(value: T | undefined, name: string): T {
 /**
  * True when there's no live external dependency to talk to — no register URL, or
  * `DRY_RUN` explicitly set. Lets `run_local` exercise the full control flow
- * offline, mirroring how a real deploy talks to a real job endpoint.
+ * while skipping the authored registration call.
  */
 function isDryRun(config: Config): boolean {
   const flag = (config.DRY_RUN ?? "").toLowerCase();
@@ -159,7 +159,7 @@ async function registerJob(
 /**
  * The entry contract — this agent's public API, and what the dashboard "Run
  * once" form renders its labelled fields from. Both fields are optional: absent
- * `config` (or `DRY_RUN`) runs offline; a `CALLBACK_TIMEOUT_MS` caps the wait.
+ * `config` (or `DRY_RUN`) skips registration; a `CALLBACK_TIMEOUT_MS` caps the wait.
  */
 const entryInput = z.object({
   job: z

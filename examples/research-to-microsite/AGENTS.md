@@ -19,7 +19,7 @@ capabilities are pre-auth'd on `ctx.sapiom` (here: `ctx.sapiom.search.webSearch`
   guessing. A wrong capability or method name fails typecheck.
 - **The coding run is async.** `build` LAUNCHES the coding agent
   (`models.coding.launch`) and returns `pauseUntilSignal(handle, { resumeStep:
-  "publish" })`; `publish` resumes with a `CodingResultPayload`. The run costs
+"publish" })`; `publish` resumes with a `CodingResultPayload`. The run costs
   nothing while the agent works. Don't turn it into a blocking `run(...)` — the
   pause is what keeps a minutes-long build durable and free while idle.
 - **The site must self-serve.** The coding task asks for `index.html` (inline CSS,
@@ -44,8 +44,8 @@ it after every small edit.
 - **run_local** — runs your **real** step code against **stub capabilities**. Pass
   `{ "topic": "...", "dryRun": true }`: it traces `search → scrape → synthesize`
   and returns the computed report via `drafted` **without** building or deploying
-  — so the graph traces offline, free. The coding build, the sandbox deploy, and
-  their cost are only exercised on the deployed path.
+  — Sapiom capabilities are stubbed with no Sapiom capability spend. The coding
+  build and sandbox deploy are only exercised on the deployed path.
 - **deploy**, then **run** — ship it, then perform a real research → build →
   deploy and get back a live URL.
 

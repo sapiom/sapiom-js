@@ -60,6 +60,26 @@ const MECHANISM_RE = new RegExp(
 const WORKFLOW_TERM_RE = /\bworkflows?\b/i;
 const ORCHESTRATION_TERM_RE = /\borchestrations?\b/i;
 const PROJECT_DEPLOYABLE_TERM_RE = /\b(?:workflows?|orchestrations?)\b/i;
+const LOCAL_RUN_TERM_RE = /\b(?:run_local|local run)\b/i;
+const OVERBROAD_LOCAL_RUN_GUARANTEE_RE =
+  /\b(?:offline|for free|zero[- ]cost|no cost)\b/i;
+const UNSUPPORTED_RUN_INSPECTOR_CONTROL_RE = /\bResume run\b/i;
+
+function overbroadLocalRunClaims(source) {
+  const lines = String(source).split(/\r?\n/);
+  const claims = [];
+  for (let index = 0; index < lines.length; index++) {
+    const guarantee = OVERBROAD_LOCAL_RUN_GUARANTEE_RE.exec(lines[index]);
+    if (!guarantee) continue;
+    const nearby = lines
+      .slice(Math.max(0, index - 2), Math.min(lines.length, index + 3))
+      .join("\n");
+    if (LOCAL_RUN_TERM_RE.test(nearby)) {
+      claims.push({ line: index + 1, guarantee: guarantee[0] });
+    }
+  }
+  return claims;
+}
 
 const REGISTERED_PROJECT_COPY_EXTENSIONS = new Set([
   ".cjs",
@@ -149,6 +169,24 @@ export function checkRegisteredProjectCopyAsset(template, assetPath, source) {
     if (!match) continue;
     errors.push(
       `copy-project-terminology: "${id}" ${assetPath}:${index + 1} contains human-readable "${match[0]}" terminology — use Agent for the deployable definition and Agent run for an execution.`,
+    );
+  }
+
+  // Local Run replaces only `ctx.sapiom.*` calls. It still executes the
+  // project's JavaScript, so authored network / file / process side effects
+  // stay real unless that project guards them. Check a small line window so
+  // wrapped Markdown cannot turn that boundary into a blanket offline/free
+  // guarantee. "No Sapiom capability spend" is intentionally allowed.
+  for (const claim of overbroadLocalRunClaims(source)) {
+    errors.push(
+      `copy-local-run-boundary: "${id}" ${assetPath}:${claim.line} describes Local Run as "${claim.guarantee}" — say that Sapiom capabilities are stubbed and name any project-specific dry-run guards; authored code and its side effects still execute.`,
+    );
+  }
+
+  for (let index = 0; index < lines.length; index++) {
+    if (!UNSUPPORTED_RUN_INSPECTOR_CONTROL_RE.test(lines[index])) continue;
+    errors.push(
+      `copy-unsupported-control: "${id}" ${assetPath}:${index + 1} promises a Resume run control that Run Inspector does not expose — use sapiom_dev_agents_signal or the API.`,
     );
   }
 
@@ -270,6 +308,21 @@ export function checkCopy(template, manifest) {
       fail(
         "copy-terminology",
         `${surface}${path.slice(1)} contains human-readable Workflow/orchestration terminology — use Agent for the deployable definition and Agent run for an execution.`,
+      );
+    }
+  }
+
+  for (const [path, copy] of stringValues(manifest)) {
+    for (const claim of overbroadLocalRunClaims(copy)) {
+      fail(
+        "copy-local-run-boundary",
+        `manifest${path.slice(1)}:${claim.line} describes Local Run as "${claim.guarantee}" — say that Sapiom capabilities are stubbed and name any project-specific dry-run guards; authored code and its side effects still execute.`,
+      );
+    }
+    if (UNSUPPORTED_RUN_INSPECTOR_CONTROL_RE.test(copy)) {
+      fail(
+        "copy-unsupported-control",
+        `manifest${path.slice(1)} promises a Resume run control that Run Inspector does not expose — use sapiom_dev_agents_signal or the API.`,
       );
     }
   }

@@ -69,17 +69,18 @@ after every small edit.
   the static `pause` annotations (the cycle through `remind` is legal).
 - **run_local** — runs your **real** step code against **stub capabilities** and
   auto-resumes each pause with no payload, so the default trace walks
-  `present → reminder(s) → escalate` to a terminal for free. With no
-  `ledgerHandle`, no live Postgres is touched.
+  `present → reminder(s) → escalate` to a terminal with no Sapiom capability
+  spend. With no `ledgerHandle`, no live Postgres is touched.
 - **deploy**, then **run** — ship it, then perform a real run that pauses at each
   gate.
 
 ### Firing the resume signals in dev
 
 A real `run` pauses at every gate. To resume without a real approver, fire the
-signals with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — the manual
+signals via local MCP `sapiom_dev_agents_signal` — the manual
 stand-in. The `correlationId` is the paused run's `executionId`, and each
 `payload` arrives as `decide`'s input.
+Run Inspector does not provide a one-click signal control.
 
 ```json
 {

@@ -195,6 +195,24 @@ describe("fileStorage.getDownloadUrl()", () => {
 });
 
 // ---------------------------------------------------------------------------
+// getPublicUrl()
+// ---------------------------------------------------------------------------
+
+describe("fileStorage.getPublicUrl()", () => {
+  it("builds the /public/:fileId permalink with no network call", () => {
+    expect(fileStorage.getPublicUrl("f-123", BASE)).toBe(
+      `${BASE}/public/f-123`,
+    );
+  });
+
+  it("encodes special characters in fileId", () => {
+    expect(fileStorage.getPublicUrl("file id/with slash", BASE)).toBe(
+      `${BASE}/public/file%20id%2Fwith%20slash`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // list()
 // ---------------------------------------------------------------------------
 
@@ -373,7 +391,7 @@ describe("fileStorage.setVisibility()", () => {
 // ---------------------------------------------------------------------------
 
 describe("fileStorage — client wiring + credential", () => {
-  it("createClient().fileStorage routes all five methods with the credential", async () => {
+  it("createClient().fileStorage exposes the public permalink and routes network methods with the credential", async () => {
     const calls: FetchCall[] = [];
     const fetchMock = (async (
       input: Parameters<typeof globalThis.fetch>[0],
@@ -409,6 +427,9 @@ describe("fileStorage — client wiring + credential", () => {
     const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
     await sapiom.fileStorage.upload({ contentType: "text/plain", fileSize: 8 });
     await sapiom.fileStorage.getDownloadUrl("f");
+    expect(sapiom.fileStorage.getPublicUrl("f")).toBe(
+      fileStorage.getPublicUrl("f"),
+    );
     await sapiom.fileStorage.list();
     await sapiom.fileStorage.delete("f");
     await sapiom.fileStorage.setVisibility("f", "private");

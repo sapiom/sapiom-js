@@ -67,7 +67,7 @@ Defense-in-depth, so a write can't slip through even if one layer is wrong:
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
    (pass a stub override returning a real SELECT plus `{ "dryRun": true }` to trace
-   the deploy branch offline, free) → `sapiom_dev_agents_link` →
+   the deploy branch with no Sapiom capability spend) → `sapiom_dev_agents_link` →
    `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run` (a real deploy that stands
    up the endpoint).
 
@@ -84,7 +84,16 @@ Example `run_local` input:
 with the stub override so `plan` returns real SQL and `guard` passes:
 
 ```json
-{ "version": 1, "steps": { "plan": { "models.run": { "output": "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC" } } } }
+{
+  "version": 1,
+  "steps": {
+    "plan": {
+      "models.run": {
+        "output": "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC"
+      }
+    }
+  }
+}
 ```
 
 ## Files

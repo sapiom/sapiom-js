@@ -12,7 +12,7 @@
     "Map-reduce over sub-agents",
     "Compose many agents into one"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nRun it with nothing and it fans a sample goal into three parallel child runs of itself and merges them. Pass your own `goal` and `items` (one child run per item) to fan out your own work, or set `childDefinition` to another deployed agent's slug to fan THAT out — each child receives `{ goal, item }`. Pass `dryRun: true` to see exactly what it would dispatch without spending on child runs.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the fan-out plan for free (the child capability is stubbed offline), or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nRun it with nothing and it fans a sample goal into three parallel child runs of itself and merges them. Pass your own `goal` and `items` (one child run per item) to fan out your own work, or set `childDefinition` to another deployed agent's slug to fan THAT out — each child receives `{ goal, item }`. Pass `dryRun: true` to see exactly what it would dispatch without spending on child runs.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the fan-out plan with no Sapiom capability spend; the child capability is stubbed and dispatch is skipped. Or edit and deploy it with the Sapiom MCP.",
   "defaultInput": {},
   "examples": [
     {

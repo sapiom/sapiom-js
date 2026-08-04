@@ -50,6 +50,8 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.search).toBe("object");
     expect(typeof sapiom.search.scrape).toBe("function");
 
+    expect(typeof sapiom.fileStorage.getPublicUrl).toBe("function");
+
     expect(typeof sapiom.database).toBe("object");
     expect(typeof sapiom.database.create).toBe("function");
     expect(typeof sapiom.database.get).toBe("function");

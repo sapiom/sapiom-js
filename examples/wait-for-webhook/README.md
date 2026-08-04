@@ -26,8 +26,8 @@ kickoff  ──(pause: wait for "webhook.callback", $0 while idle)──▶  dec
 4. **accept | reject** — terminal branches keyed off the decision.
 
 Input: `{ "job": { ... }, "config": { "CALLBACK_REGISTER_URL": "...", "CALLBACK_REGISTER_KEY": "..." } }`.
-With no `CALLBACK_REGISTER_URL` (or `DRY_RUN` set), `kickoff` runs offline via its
-`dryRun` guard.
+With no `CALLBACK_REGISTER_URL` (or `DRY_RUN` set), `kickoff` skips the external
+registration call via its `dryRun` guard.
 
 ## Capping the wait (optional deadline)
 
@@ -60,16 +60,17 @@ meant to prevent).
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
-   (offline via the `dryRun` guard, free) → `sapiom_dev_agents_link` →
+   (Sapiom capabilities stubbed and the external POST guarded, with no Sapiom
+   capability spend) → `sapiom_dev_agents_link` →
    `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run` (a real run that pauses).
 
 ## Resuming a paused run in dev
 
 A real `run` pauses at `kickoff` and waits for the `webhook.callback` signal.
-Instead of a real webhook, fire it yourself with **Resume run** in Run Inspector,
-local MCP `sapiom_dev_agents_signal`, or hosted MCP `sapiom_workflow_signal`.
-The `correlationId` is the paused run's `executionId`,
-and the `payload` becomes `decide`'s input:
+Instead of a real webhook, fire it yourself with local MCP
+`sapiom_dev_agents_signal`. Run Inspector does not provide a one-click signal
+control. The `correlationId` is the paused run's `executionId`, and the `payload`
+becomes `decide`'s input:
 
 ```json
 {

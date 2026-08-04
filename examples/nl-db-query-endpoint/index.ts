@@ -48,7 +48,8 @@ import { z } from "zod/v4";
  * `run_local` stubs `models.run`, so on defaults the `plan` output is a non-SQL
  * placeholder and `guard` routes to `rejected` — a legible demo of the guardrail
  * refusing junk. Pass a stub override that returns a real SELECT (see AGENTS.md)
- * and add `{ "dryRun": true }` to trace the deploy branch offline for free.
+ * and add `{ "dryRun": true }` to trace the deploy branch with Sapiom capabilities
+ * stubbed and no Sapiom capability spend.
  */
 
 // ────────────────────────────────────────────────────────────────── config ──
@@ -72,7 +73,7 @@ interface EntryInput {
   sapiomApiKey?: string;
   /**
    * Assemble everything but skip the real `deployPreview` — so `run_local` traces
-   * the full graph offline, with no sandbox and no real deploy.
+   * the full graph with Sapiom capabilities stubbed, no sandbox, and no real deploy.
    */
   dryRun?: boolean;
 }

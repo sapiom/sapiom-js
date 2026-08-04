@@ -29,7 +29,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` / `web.scrape` / `models.run` / `images.create` return built-in defaults and the agent runs end-to-end offline for free. Pass `dryRun: true` so `deliver` skips the (stubbed) send and returns the preview. Returns a per-step trace.
+- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` / `web.scrape` / `models.run` / `images.create` return built-in defaults; the trace creates no Sapiom capability spend. Pass `dryRun: true` so `deliver` skips the (stubbed) send and returns the preview. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed search + scrape + LLM write + header image, and deliver the issue. Attach the `schedule` as a cron trigger to run it weekly.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

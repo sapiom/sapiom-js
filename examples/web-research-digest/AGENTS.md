@@ -14,7 +14,7 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` returns a built-in default and the agent runs end-to-end offline for free. Returns a per-step trace.
+- **run_local** — runs your **real** step code against **stub capabilities**, so `web.search` returns a built-in default and the agent runs end-to-end with Sapiom capabilities stubbed and no Sapiom capability spend. Returns a per-step trace.
 - **deploy**, then **run** — ship it, then perform a real, billed web search.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

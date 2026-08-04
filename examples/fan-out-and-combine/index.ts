@@ -41,8 +41,8 @@ import { z } from "zod/v4";
  *     account of what happened — it never reports a combined answer it doesn't have.
  *   - `dryRun` returns the resolved fan-out PLAN (which child, how many items, the
  *     resolved inputs) without dispatching anything. Pass it to `run_local` to see
- *     the shape of the fan-out offline, for free, before spending on child runs.
- *   - Offline (`run_local`) the child capability is stubbed, so children complete
+ *     the fan-out shape with no Sapiom capability spend before spending on child runs.
+ *   - During `run_local` the child capability is stubbed, so children complete
  *     with empty output; the reduce says so rather than inventing analysis.
  */
 

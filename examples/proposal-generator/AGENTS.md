@@ -17,7 +17,7 @@ Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom`
   PUTs the bytes to the presigned URL from `ctx.sapiom.fileStorage.upload`. The
   sandbox is destroyed in a `finally`. Under `run_local` the sandbox exec is
   stubbed (empty output) — the step detects the empty render and skips the real
-  byte PUT while still walking the upload shape, so the offline trace stays whole.
+  byte PUT while still walking the upload shape, so the local trace stays whole.
 - **`review`** emails the approver, then returns
   `pauseUntilSignal({ signal: "proposal.decision", resumeStep: "onDecision", correlationId: ctx.executionId })`.
   It carries a static `pause: { signal, resumeStep: "onDecision" }` annotation —
@@ -57,14 +57,14 @@ after every small edit.
   static `pause` annotation.
 - **run_local** — runs your **real** step code against **stub capabilities** and
   auto-resumes the pause. With no payload injected, the approval resume takes the
-  safe reject branch, so you get a full offline trace for free.
+  safe reject branch, so you get a full local trace with no Sapiom capability spend.
 - **deploy**, then **run** — ship it, then perform a real run that pauses.
 
 ### Firing the resume signal in dev
 
 A real `run` pauses once, at `review`. To resume without a real approver, fire the
-signal with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — the manual
-stand-in:
+signal via local MCP `sapiom_dev_agents_signal` — the manual stand-in. Run Inspector
+does not provide a one-click signal control. The request is:
 
 ```json
 {

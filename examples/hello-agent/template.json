@@ -12,7 +12,7 @@
     "Smallest valid agent",
     "No-capability deploy test"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\\n\\nThe `name` input is optional: pass `{ \\\"name\\\": \\\"Ada\\\" }` to get `Hello, Ada!`, or run it with no input to get `Hello, world!`. The agent makes no metered capability calls.\\n\\nPrefer to work from the code? Use `run_local` without signing in to execute the real step code on your machine. Because this template has no capabilities to stub, its agent logic and parsed input/output match the cloud path; the process environment is still local. Authenticate only when you are ready to link, deploy, or run in Sapiom cloud.",
+  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nThe `name` input is optional: pass `{ \"name\": \"Ada\" }` to get `Hello, Ada!`, or run it with no input to get `Hello, world!`. The agent makes no metered capability calls.\n\nPrefer to work from the code? Use `run_local` without signing in to execute the real step code on your machine. Because this template has no capabilities to stub, its agent logic and parsed input/output match the cloud path; the process environment is still local. Authenticate only when you are ready to link, deploy, or run in Sapiom cloud.",
   "examples": [
     {
       "title": "Greet a name",

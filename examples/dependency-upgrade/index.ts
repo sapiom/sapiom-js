@@ -39,7 +39,8 @@ import { z } from "zod/v4";
  *
  * The push is the one irreversible action, so it sits behind a `dryRun` guard:
  * with `dryRun: true`, every step runs but the push and the report upload are
- * skipped, so `run_local` traces the whole graph offline for free.
+ * skipped, so `run_local` traces the whole graph with Sapiom capabilities
+ * stubbed and no Sapiom capability spend.
  */
 
 type RiskLevel = "low" | "medium" | "high";

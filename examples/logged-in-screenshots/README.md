@@ -36,4 +36,4 @@ Input:
 
 - **Use this template** in the app — Sapiom builds and deploys it, and a run with no
   input captures two public pages.
-- **Locally:** `run_local` traces the flow for free (the browser capability is stubbed).
+- **Locally:** `run_local` traces the flow with no Sapiom capability spend (the browser capability is stubbed).

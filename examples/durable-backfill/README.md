@@ -53,7 +53,8 @@ skips the sandbox / database / file-storage calls.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
-   (offline, free — leave `dbHandle` unset or pass `dryRun: true`) →
+   (Sapiom capabilities stubbed with no Sapiom capability spend — leave
+   `dbHandle` unset or pass `dryRun: true` to skip the template's ordinary effects) →
    `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
    `sapiom_dev_agents_run` (a real run that pauses between chunks).
 
@@ -61,8 +62,8 @@ skips the sandbox / database / file-storage calls.
 
 A deployed run processes one chunk, then pauses for the `backfill.heartbeat`
 signal. In production a schedule fires that signal on a cadence; in dev, fire it
-yourself with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`). The
-`correlationId` is the paused run's `executionId`:
+yourself via local MCP `sapiom_dev_agents_signal`. Run Inspector does not provide a
+one-click signal control. The `correlationId` is the paused run's `executionId`:
 
 ```json
 {

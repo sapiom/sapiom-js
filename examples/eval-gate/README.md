@@ -55,7 +55,7 @@ Input contract: `{ input, output, rubric, threshold=0.7, model? }`.
    `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run` (a real, **billed** judge
    call that meters `models.run`).
 
-### Tracing both branches offline (run_local)
+### Tracing both branches with local stubs (run_local)
 
 `run_local` resolves `ctx.sapiom.models.run` from a stub. The _default_ stub
 returns a non-numeric placeholder, and `parseScore` throws on a reply with no
@@ -109,9 +109,10 @@ parent.produce ─▶ parent.grade ─(POST /v1/workflows/executions)─▶ eval
 ```
 
 The parent produces an output, starts the eval-gate as a child agent run, then
-**pauses at $0** until the child's decision arrives as a signal. A `dryRun` guard keeps
-`run_local` offline and free. Sketch of the parent (a separate agent you'd
-author alongside your agent):
+**pauses at $0** until the child's decision arrives as a signal. A `dryRun` guard
+keeps the parent's raw HTTP dispatch from executing during `run_local`; Sapiom
+capability calls are stubbed separately. Sketch of the parent (a separate agent
+you'd author alongside your agent):
 
 ```ts
 import {
@@ -237,10 +238,10 @@ export const agent = defineAgent<{ brief: string }, Shared>({
 
 The child's terminal output (`{ decision, score, threshold, rationale }`) is
 delivered as `decision`'s input via the `CHILD_DONE` signal, correlated by the
-parent's `executionId`. In dev you fire that signal yourself with **Resume run**
-in Run Inspector, local MCP `sapiom_dev_agents_signal`, or hosted MCP
-`sapiom_workflow_signal` once the child run finishes — the same manual stand-in
-the Wait-for-Webhook template uses:
+parent's `executionId`. In dev you fire that signal yourself with local MCP
+`sapiom_dev_agents_signal` once the child run finishes — the same manual stand-in
+the Wait-for-Webhook template uses. Run Inspector does not provide a one-click
+signal control. The request is:
 
 ```json
 {

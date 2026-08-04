@@ -40,10 +40,20 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("https://docs.sapiom.ai/agents");
     expect(AUTHORING_INSTRUCTIONS).toContain("AGENTS.md");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
-    // The two-MCP frame: agents learn the remote MCP exists for direct tool calls
-    expect(AUTHORING_INSTRUCTIONS).toContain("remote MCP");
+    // The two-MCP frame: agents learn the hosted MCP exists for direct tool calls
+    expect(AUTHORING_INSTRUCTIONS).toContain("hosted capability MCP");
     expect(AUTHORING_INSTRUCTIONS).toContain("api.sapiom.ai/v1/mcp");
     expect(AUTHORING_INSTRUCTIONS).toContain("tool_discover");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "claude mcp add --scope user --transport http sapiom-direct",
+    );
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("exposes every capability");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "Before the first cloud action, call `sapiom_authenticate`",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "authored code and its ordinary side effects still execute",
+    );
   });
 
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {

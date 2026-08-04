@@ -239,7 +239,7 @@ const post = defineStep({
     const message = ctx.shared.get("message")!;
     const username = ctx.shared.get("username") ?? null;
 
-    // Explicit dryRun: skip the network so the full graph runs offline for free.
+    // Explicit dryRun: skip the authored Slack network call during local tracing.
     if (dryRun) {
       ctx.logger.info("dryRun — skipping Slack post", { via, channel });
       return goto("posted", {

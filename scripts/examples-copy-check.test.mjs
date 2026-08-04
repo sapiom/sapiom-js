@@ -218,6 +218,73 @@ test("registered project terminology check preserves compatibility identifiers",
   );
 });
 
+test("registered project copy rejects blanket Local Run cost and network guarantees", () => {
+  const errors = checkRegisteredProjectCopyAsset(
+    template,
+    "examples/fixture/AGENTS.md",
+    [
+      "- `run_local` executes the real step code against stub capabilities,",
+      "  so the whole agent runs offline for free.",
+    ].join("\n"),
+  );
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^copy-local-run-boundary: "fixture" /);
+  assert.match(errors[0], /authored code and its side effects still execute/);
+});
+
+test("registered project copy accepts the precise Local Run boundary", () => {
+  assert.deepEqual(
+    checkRegisteredProjectCopyAsset(
+      template,
+      "examples/fixture/AGENTS.md",
+      [
+        "- `run_local` executes the real step code with Sapiom capabilities stubbed.",
+        "  Keep ordinary network, file, and process effects behind `dryRun`; the",
+        "  trace creates no Sapiom capability spend.",
+      ].join("\n"),
+    ),
+    [],
+  );
+});
+
+test("manifest copy uses the same precise Local Run boundary", () => {
+  const errors = check(
+    {},
+    {
+      notes:
+        "Run it locally with `run_local` to trace the whole graph for free.",
+    },
+  );
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /^copy-local-run-boundary: "fixture" manifest\.notes:1 /,
+  );
+});
+
+test("registered project copy rejects a nonexistent Run Inspector resume control", () => {
+  const errors = checkRegisteredProjectCopyAsset(
+    template,
+    "examples/fixture/README.md",
+    "Click **Resume run** in Run Inspector to deliver the signal.",
+  );
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^copy-unsupported-control: "fixture" /);
+  assert.match(errors[0], /sapiom_dev_agents_signal/);
+});
+
+test("manifest copy rejects the same nonexistent control", () => {
+  const errors = check(
+    {},
+    { notes: "Use **Resume run** in Run Inspector to deliver the signal." },
+  );
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^copy-unsupported-control: "fixture" /);
+});
+
 test("compatibility literals do not hide surrounding deployable prose", () => {
   const errors = checkRegisteredProjectCopyAsset(
     template,

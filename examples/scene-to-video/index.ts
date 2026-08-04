@@ -40,7 +40,7 @@ import { z } from "zod/v4";
  * i-1 has resumed keeps a paused step always waiting before its job can complete.
  *
  * A `dryRun` guard short-circuits after `decompose` so authors can trace the
- * graph offline without incurring the (higher) image + video generation cost.
+ * graph without incurring image or video generation spend.
  */
 
 /** A single planned shot, as the LLM returns it (see {@link parsePlan}). */

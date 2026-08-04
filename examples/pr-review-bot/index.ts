@@ -33,7 +33,7 @@ import { z } from "zod/v4";
  *
  * Resume contract: `watch` registers `{ executionId, signal, correlationId }`
  * with the webhook source and pauses; the source fires that signal when a PR is
- * opened (in dev, via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — see
+ * opened (in dev, via local MCP `sapiom_dev_agents_signal` — see
  * README). The resumed `review` step's input IS the PR payload.
  *
  * Offline: with no `WEBHOOK_REGISTER_URL` configured (or `DRY_RUN` set), nothing
@@ -69,7 +69,7 @@ interface PrReviewInput {
   to?: string;
   /** Optional sample PR used when the resume payload is empty (local runs). */
   samplePr?: PrEvent;
-  /** Absent (or `DRY_RUN`) ⇒ offline: skip registration and the real send. */
+  /** Absent (or `DRY_RUN`) ⇒ skip registration and the real send. */
   config?: Config;
 }
 
@@ -150,8 +150,8 @@ function must<T>(value: T | undefined, name: string): T {
 
 /**
  * True when there's no live external dependency to talk to — no register URL, or
- * `DRY_RUN` explicitly set. Lets `run_local` exercise the full control flow
- * offline, mirroring how a real deploy talks to a real webhook source and Slack.
+ * `DRY_RUN` explicitly set. Lets `run_local` exercise the full control flow while
+ * skipping the authored registration and Slack network calls.
  */
 function isDryRun(config: Config): boolean {
   const flag = (config.DRY_RUN ?? "").toLowerCase();
@@ -310,9 +310,7 @@ const entryInput = z.object({
   config: z
     .record(z.string(), z.string())
     .optional()
-    .describe(
-      "Absent (or DRY_RUN) ⇒ offline: skip registration and the real send.",
-    ),
+    .describe("Absent (or DRY_RUN) ⇒ skip registration and the real send."),
 });
 
 const watch = defineStep({
@@ -471,7 +469,7 @@ const reportEmail = defineStep({
     const pr = must(ctx.shared.get("pr"), "pr");
     const review = must(ctx.shared.get("review"), "review");
 
-    // dryRun (run_local / offline): skip the network, report what it would do.
+    // dryRun (including the Local Run default): skip the network and report the plan.
     if (dryRun) {
       ctx.logger.info("dryRun — skipping review email", { to });
       return goto("posted", skip("dryRun", "email", review));

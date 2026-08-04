@@ -38,9 +38,9 @@ import { z } from "zod/v4";
  *   - `dryRun` gates the one irreversible action: `archive` computes the
  *     attestation and returns it as a preview WITHOUT uploading anything. The
  *     upload's presigned PUT is a raw `fetch` (not a stubbed capability), so it
- *     must stay behind this guard or it would hit the network offline.
+ *     must stay behind this guard or it would hit the network during Local Run.
  *   - A resume with no explicit `approve` takes the SAFE branch (`rejected`,
- *     nothing archived). `run_local` auto-resumes the pause, so the offline trace
+ *     nothing archived). `run_local` auto-resumes the pause, so the local trace
  *     lands on `rejected` by default; fire a real `attestation.signoff` signal
  *     with `{ "decision": "approve" }` to drive the archive path (see README).
  *   - The scraped bodies are the only large data; they stay bounded (truncated,

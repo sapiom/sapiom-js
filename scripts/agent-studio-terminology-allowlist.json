@@ -14,27 +14,6 @@
     "reason": "github.workflow is the exact GitHub Actions context used to isolate concurrent runs."
   },
   {
-    "id": "approval-chain-agents-signal-tools",
-    "path": "examples/approval-chain/AGENTS.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "approval-chain-readme-signal-tools",
-    "path": "examples/approval-chain/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "approval-chain-manifest-signal-tools",
-    "path": "examples/approval-chain/template.json",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
     "id": "eval-gate-agents-backend-route",
     "path": "examples/eval-gate/AGENTS.md",
     "pattern": "/v1/workflows/executions",
@@ -47,69 +26,6 @@
     "pattern": "/v1/workflows/executions",
     "occurrences": 2,
     "reason": "The backend execution route remains stable for compatibility."
-  },
-  {
-    "id": "eval-gate-readme-signal-tools",
-    "path": "examples/eval-gate/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "human-loop-agents-signal-tools",
-    "path": "examples/human-in-the-loop/AGENTS.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "human-loop-readme-signal-tools",
-    "path": "examples/human-in-the-loop/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "pr-review-agents-signal-tools",
-    "path": "examples/pr-review-bot/AGENTS.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "pr-review-readme-signal-tools",
-    "path": "examples/pr-review-bot/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "proposal-agents-signal-tools",
-    "path": "examples/proposal-generator/AGENTS.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "proposal-readme-signal-tools",
-    "path": "examples/proposal-generator/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "compliance-readme-signal-tools",
-    "path": "examples/scheduled-compliance-audit/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 1,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "compliance-manifest-signal-tool",
-    "path": "examples/scheduled-compliance-audit/template.json",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
   },
   {
     "id": "agent-core-backend-base-route",

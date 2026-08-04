@@ -82,7 +82,8 @@ publish` end to end — free, with nothing pushed.
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
    (pass `{ "repoSlug": "my-app", "dryRun": true }` to trace the whole graph
-   offline, free) → `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
+   with Sapiom capabilities stubbed and no Sapiom capability spend) →
+   `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
    `sapiom_dev_agents_run` (a real upgrade + test + push).
 
 ## Files

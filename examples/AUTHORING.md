@@ -161,10 +161,11 @@ run, and secrets are read at step dispatch.
 
 1. **Compile.** From your template directory: `npm install`, then `npm run typecheck`. It must
    pass — the gallery only ships templates that build.
-2. **Trace a run for free.** Drive the agent through the Sapiom MCP: `run_local` executes the
-   whole graph locally and traces every step without spending anything, so you can watch the
-   flow before you deploy. The lifecycle is `check → run_local → link → deploy → run`; each
-   template's `README.md` shows it.
+2. **Trace a run locally.** Drive the agent through the Sapiom MCP: `run_local` executes the
+   real step code while stubbing every `ctx.sapiom.*` call, so the trace creates no Sapiom
+   capability spend. It is not a process sandbox: ordinary network, file, environment, and
+   process effects in authored code still execute unless the template guards them. The
+   lifecycle is `check → run_local → link → deploy → run`; each template's `README.md` shows it.
 
    **Be aware of what it does not check.** Every capability is stubbed, so `database.get`
    returns a `localhost` connection string and `repositories.get` returns a plausible
@@ -505,17 +506,18 @@ Exactly 3 bullets. Each starts with a verb and names a real situation:
 This is the field users hit when they want to actually run the thing. **Lead with the
 one-click webapp path; put the code/MCP path second, clearly optional.**
 
-1. **Use this template.** "Click **Use this template** — Sapiom builds and deploys it for you,
-   then run it from the workflow page. Your $5 signup credit covers first runs."
+1. **Use this template.** "Click **Use this template** — Sapiom builds and deploys it for you;
+   open it on the **Agents** page and run it. Your $5 signup credit covers first runs."
 2. **Anything template-specific** the user must know to see it work — e.g. required inputs,
    a secret to set (BYO-API templates), or that it pauses on a real signal.
 3. **Advanced (only if relevant):** "Prefer to work from the code? Run it locally with
-   `run_local` to trace the whole flow with no Sapiom capability spend, or edit and deploy it with the Sapiom MCP."
+   `run_local` to trace the whole flow with Sapiom capabilities stubbed and no Sapiom
+   capability spend; name any `dryRun` guard required for ordinary side effects. Or edit and
+   deploy it with the Sapiom MCP."
 
 For templates that **pause on a live signal** (human-in-the-loop, wait-for-webhook), say so
-plainly and show how to send the signal with **Resume run** in Run Inspector, local MCP
-`sapiom_dev_agents_signal`, hosted MCP `sapiom_workflow_signal`, or the API. Keep payloads short
-and correct.
+plainly and show how to send the signal with local MCP `sapiom_dev_agents_signal` or the API —
+there is no one-click signal control in Run Inspector. Keep payloads short and correct.
 
 ---
 

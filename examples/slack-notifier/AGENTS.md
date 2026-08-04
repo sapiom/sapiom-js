@@ -41,7 +41,7 @@ run it after every small edit.
   local pre-flight before deploy.
 - **run_local** — runs your **real** step code against **stub capabilities**. With
   no token in your environment the `no-credential` guard skips the post, so the
-  agent runs end to end offline for free and returns a per-step trace.
+  trace creates no Sapiom capability spend and returns every step.
 - **deploy**, then supply your Slack token (see `README.md`), then **run** — posts
   to Slack for real.
 

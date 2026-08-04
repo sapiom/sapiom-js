@@ -39,7 +39,7 @@ parse → rank → notifyApprover ─(pause: approval.decision, $0 while idle)�
    → `commit`; `decline`/`timeout` → advance to the next candidate (loop back to
    `offer`) or `escalate` once the list is exhausted.
 7. **commit** — the single irreversible/expensive action, reached only after
-   approval **and** an accept. A `dryRun` guard makes it a no-op offline.
+   approval **and** an accept. A `dryRun` guard makes it a no-op during local tracing.
 8. **revert / escalate** — terminal branches: revert to a safe state, or escalate
    to a human channel.
 
@@ -74,15 +74,17 @@ The `approver` and `escalateTo` addresses fall back to `config.APPROVER_EMAIL` /
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
-   (capabilities stubbed, pauses auto-resumed, free) → `sapiom_dev_agents_link` →
+   (Sapiom capabilities stubbed, pauses auto-resumed, and no Sapiom capability
+   spend) → `sapiom_dev_agents_link` →
    `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run` (a real run that pauses).
 
 ## Resuming a paused run in dev
 
 A real `run` pauses twice. Instead of a real approver / candidate, fire the
-signals yourself with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`). The
+signals yourself via local MCP `sapiom_dev_agents_signal`. The
 `correlationId` is the paused run's `executionId`, and each `payload` becomes the
 resumed step's input.
+Run Inspector does not provide a one-click signal control.
 
 **Approve** (resumes `onDecision`):
 

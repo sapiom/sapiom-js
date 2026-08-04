@@ -15,7 +15,7 @@ genuinely new code is `judge.ts` (`buildJudgePrompt` + `parseScore`).
 - **`ctx.sapiom.llm` does not exist** — use `models.run`. Do not read `LLM_GATEWAY_*`
   env vars or POST `/v1/messages` directly; those are not injected on deploy.
 - The judge rides the same step→gateway path as everything else, so the engine's
-  routing / capacity / load-balancing sit in front of it for free — no
+  routing / capacity / load-balancing sit in front of it with no Sapiom capability spend — no
   evals-specific agent-run path.
 
 ## The rubric is yours; the harness is ours
@@ -88,8 +88,10 @@ a **child** and branching on the returned decision. The parent POSTs to
 raw HTTP call — **not** a capability namespace, and **not**
 `ctx.sapiom.agents.launch`, which 404s in prod), then `pauseUntilSignal(...)` at
 $0 until the child's decision arrives as a signal, and branches ship/regenerate.
-Guard the outbound POST behind a `dryRun` flag so `run_local` stays offline and
-free. Full parent sketch + the dev resume signal are in `README.md`.
+Guard the outbound POST behind a `dryRun` flag so `run_local` skips that ordinary
+network call; Sapiom capability calls are stubbed separately. Full parent sketch
+
+- the dev resume signal are in `README.md`.
 
 ## Determinism
 

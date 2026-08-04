@@ -25,8 +25,9 @@ Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
 - **Green gates the push.** `verify` routes to `rejected` on a failed coding run,
   a failed install, or a non-zero test exit — a push only happens after a green
   build. Don't remove that gate.
-- **Never push on a dry run.** The push and the report upload are guarded on
-  `dryRun` so `run_local` traces the whole graph offline with no side effects.
+- **Never push on a dry run.** The push and report upload are guarded on
+  `dryRun`, while `run_local` stubs Sapiom capabilities. Ordinary step code still
+  executes, so keep each external side effect behind that guard.
   Keep the guard.
 
 ## Validating
@@ -43,7 +44,7 @@ it after every small edit.
   Pass `{ "repoSlug": "my-app", "dryRun": true }`: the coding launch is stubbed
   and its pause auto-resumes, `verify` synthesizes a green result (no real
   sandbox), and `publish` skips the push + upload — so the full graph traces
-  offline, free, with no real repo.
+  with no Sapiom capability spend and no real repo.
 - **deploy**, then **run** — ship it, then perform a real upgrade + test + push.
 
 > Write each step the way it should run in production. `run_local` adapts to your

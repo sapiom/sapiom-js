@@ -58,16 +58,16 @@ small edit.
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local
   pre-flight before deploy.
 - **run_local** with `{ "source": "...", "dryRun": true }` — runs your **real** step
-  code against **stub capabilities** and traces the copy step offline for free, without
-  any billed media.
+  code against **stub capabilities** and traces the copy step with no Sapiom
+  capability spend or billed media.
 - **deploy**, then **run** — ship it, then perform a real, billed run: copy → quote
   graphics → teaser clip → packaged + emailed.
 
-> A full offline `run_local` (no `dryRun`) exercises `graphics` → `clip` → `package`.
+> A full `run_local` (no `dryRun`) exercises `graphics` → `clip` → `package`.
 > The default stubs return placeholder values, and `package` PUTs the pack to the
-> stubbed upload URL with a raw `fetch` — which is why the upload is best-effort: on a
-> stub it warns and continues to `deliver` rather than failing. `dryRun` is the clean
-> free trace of the copy step.
+> stubbed upload URL with a raw `fetch`. That authored network call still executes;
+> on a placeholder URL it warns and continues to `deliver` rather than failing. Use
+> `dryRun` to stop after the copy step with no Sapiom capability spend.
 
 > Write each step the way it should run in production. `run_local` adapts to your code
 > (stub capabilities), not the other way around — never weaken or drop real logic to

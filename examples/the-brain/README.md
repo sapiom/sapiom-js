@@ -93,12 +93,12 @@ surfaces `cooldown_due`. Swap the slugs for your real fleet.
   `/definitions` lookup will also resolve them if it lists them; `launchChild`
   throws a clear error if a slug still can't be resolved.
 
-## Offline tracing & safe rollout
+## Local tracing & safe rollout
 
 - **`dryRun`** — `run_local` with `{ "dryRun": true }` traces the full
   `scan → assess → actuate → report` graph: raw Postgres / Slack / child-launch
-  I/O is skipped, while the real `models.run` call still runs. With no API key,
-  `launchChild` returns a synthetic execution id.
+  I/O is skipped, while Sapiom capability calls such as `models.run` use local
+  stubs. With no API key, `launchChild` returns a synthetic execution id.
 - **`observeOnly`** — do everything real (read the bus, post the briefing) but
   **launch nothing**; the briefing shows what it WOULD launch. Run a live cron in
   observe-only for a few days to calibrate before switching actuation on.
@@ -111,15 +111,14 @@ surfaces `cooldown_due`. Swap the slugs for your real fleet.
    claude mcp add sapiom -- npx -y @sapiom/mcp
    ```
 
-2. In your client, authenticate: run `sapiom_authenticate`, then confirm with
-   `sapiom_status`. Your agent becomes an API-key principal; `scan`/`assess`/
-   `actuate`/`report` inherit that authority to read the DB handle, call
-   `models.run` and launch children.
-
-3. From this directory: `npm install`, then drive the lifecycle via the MCP —
+2. From this directory: `npm install`, then drive the local lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local`
-   (pass `{ "dryRun": true }` to trace the loop offline, free) →
-   `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run`
+   (pass `{ "dryRun": true }` to use local capability stubs and skip the raw
+   network effects, with no Sapiom capability spend).
+
+3. Before linking or another cloud action, run `sapiom_authenticate`, then confirm
+   with `sapiom_status`. Continue with `sapiom_dev_agents_link` →
+   `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run`
    (pass `{ "observeOnly": true }` first to report without launching, then run
    with actuation on).
 

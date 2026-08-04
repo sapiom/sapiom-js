@@ -41,10 +41,10 @@ import { z } from "zod/v4";
  * lives in file storage keyed by `jobId`, so a brand-new run started with the
  * same `jobId` reads it in `plan` and picks up mid-dataset.
  *
- * Offline: with no `dbHandle` (or `dryRun` set), `process` handles each chunk
+ * Local trace: with no `dbHandle` (or `dryRun` set), `process` handles each chunk
  * in-process and skips the sandbox / database / file-storage calls, so
- * `run_local` traces the whole plan → process → … → finalize loop for free. The
- * local runner auto-resumes each heartbeat pause, so you see every chunk.
+ * `run_local` traces the whole plan → process → … → finalize loop with no Sapiom
+ * capability spend. The local runner auto-resumes each heartbeat pause.
  */
 
 /** String-only config bag (matches how templates receive their `config`). */
@@ -367,8 +367,8 @@ const plan = defineStep({
     const jobId = (input.jobId ?? "").trim() || ctx.executionId;
     const dbHandle = (input.dbHandle ?? "").trim() || null;
     const command = (input.command ?? "").trim() || DEFAULT_COMMAND;
-    // No dataset handle (or explicit dryRun) ⇒ run offline: no sandbox, DB, or
-    // file storage, so run_local traces the whole loop for free.
+    // No dataset handle (or explicit dryRun) ⇒ skip sandbox, DB, and file
+    // storage; run_local traces the whole loop with no Sapiom capability spend.
     const dryRun = input.dryRun === true || !dbHandle;
 
     let cursor = 0;

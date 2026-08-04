@@ -35,6 +35,6 @@ Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here:
 
 ## Test it
 
-- `run_local` traces the flow offline for free — the browser capability is stubbed,
+- `run_local` traces the flow with no Sapiom capability spend — the browser capability is stubbed,
   so `session.screenshot` returns a stub image URL.
 - Deployed, a run with `{}` opens a session and captures two public pages.

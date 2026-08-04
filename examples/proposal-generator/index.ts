@@ -37,9 +37,9 @@ import { z } from "zod/v4";
  *   5. send — the one outward action: email the finished proposal to the client.
  *      A `dryRun` guard makes it a no-op so a deployed run can be traced safely.
  *
- * Offline: `run_local` stubs the capabilities and auto-resumes the pause. A
+ * Local Run: `run_local` stubs the capabilities and auto-resumes the pause. A
  * resume with no payload takes the safe reject branch, so the whole graph traces
- * end to end for free. The sandbox exec returns empty output under stubs, so
+ * end to end with no Sapiom capability spend. The sandbox exec returns empty output under stubs, so
  * `render` skips the real byte upload but still walks its full shape. Fire a real
  * `proposal.decision` signal (in dev, via the MCP `sapiom_dev_agents_signal` tool — see
  * README) to drive the approve → send path.
@@ -496,7 +496,7 @@ const render = defineStep({
     // Persist the bytes to file storage. `upload` hands back a presigned URL we
     // PUT the bytes to ourselves. Under `run_local` the sandbox exec is stubbed
     // (empty output), so there are no bytes to PUT — we still walk the upload
-    // shape and return a (stub) fileId, keeping the offline trace complete.
+    // shape and return a (stub) fileId, keeping the local trace complete.
     const bytes = Buffer.from(pdfBase64, "base64");
     const upload = await ctx.sapiom.fileStorage.upload({
       contentType: "application/pdf",

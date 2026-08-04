@@ -28,8 +28,8 @@ import { z } from "zod/v4";
  * Side-effect discipline (copied from `scheduled-research-brief`):
  *   - `dryRun` gates the real send: it still searches, writes, and generates the
  *     header image, then returns the finished issue as a preview WITHOUT emailing
- *     anyone. Pass it to `run_local` to trace the whole graph offline (capabilities
- *     stubbed) for free before a billed, delivering deploy + run.
+ *     anyone. Pass it to `run_local` to trace the whole graph with Sapiom capabilities
+ *     stubbed and no Sapiom capability spend before a billed, delivering deploy + run.
  *   - The subscriber list is ordinary run input (a declared setting), not a secret,
  *     baked into the code — the same seam you'd read any delivery config from.
  *   - The header image is best-effort: if generation returns nothing (e.g. a

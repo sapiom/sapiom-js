@@ -57,12 +57,16 @@ import type {
   ListResponse,
   FileMetadata,
 } from "../file-storage/index.js";
+import { getPublicUrl } from "../file-storage/index.js";
 import {
   VIDEO_RESULT_SIGNAL,
+  IMAGE_RESULT_SIGNAL,
   toVideoResumePayload,
+  toImageResumePayload,
 } from "../content-generation/index.js";
 import type {
   ImageGenerationResult,
+  ImageLaunchHandle,
   VideoGenerationResult,
   VideoLaunchHandle,
 } from "../content-generation/index.js";
@@ -1075,6 +1079,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             expiresAt: "2099-01-01T00:00:00Z",
           })) as DownloadUrlResponse,
         ),
+      getPublicUrl: (fileId) => getPublicUrl(fileId),
       list: (listOpts) =>
         Promise.resolve(
           r("fileStorage.list", [listOpts], () => ({
@@ -1123,6 +1128,45 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               ],
             })) as ImageGenerationResult,
           ),
+        launch: (input) => {
+          const requestId = `stub-image-${++launchSeq}`;
+          const result = r(
+            dispatchedKeys("contentGeneration.images"),
+            [input],
+            () => ({
+              images: [
+                {
+                  url: "https://content.local/stub-image.png",
+                  contentType: "image/png",
+                  width: 512,
+                  height: 512,
+                  ...(input.storage
+                    ? {
+                        fileId: "stub-file",
+                        downloadUrl: "https://content.local/stub-download",
+                        downloadUrlExpiresAt: "2026-01-01T00:00:00Z",
+                      }
+                    : {}),
+                },
+              ],
+            }),
+          ) as ImageGenerationResult;
+
+          const handle: ImageLaunchHandle = {
+            requestId,
+            dispatch: {
+              correlationId: requestId,
+              resultSignal: IMAGE_RESULT_SIGNAL,
+            },
+            wait: () => Promise.resolve(result),
+          };
+
+          // Register the resume payload so a local `pauseUntilSignal` on this handle
+          // resolves with an ImageResultPayload.
+          return dispatchable(handle, opts.signals, () =>
+            toImageResumePayload(result),
+          );
+        },
       },
       video: {
         create: (input) =>

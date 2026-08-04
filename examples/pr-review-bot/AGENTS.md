@@ -48,12 +48,14 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists.
 - **check** — typecheck + bundle + manifest + step-graph validation, including the static `pause` annotation.
-- **run_local** — runs your **real** step code against **stub capabilities**. With no `WEBHOOK_REGISTER_URL` configured (or `DRY_RUN` set), the `dryRun` guard skips the live registration and the report step skips the real send, and the local runner auto-resumes the pause with an empty payload — so `review` uses the sample PR and you get the full `watch → paused → review → assess → report → posted` trace offline for free.
+- **run_local** — runs your **real** step code against **stub capabilities**. With no `WEBHOOK_REGISTER_URL` configured (or `DRY_RUN` set), the `dryRun` guard skips the live registration and the report step skips the real send, and the local runner auto-resumes the pause with an empty payload — so `review` uses the sample PR and you get the full `watch → paused → review → assess → report → posted` trace with no Sapiom capability spend.
 - **deploy**, then **run** — ship it, then perform a real run that pauses.
 
 ### Firing the resume signal in dev
 
-A real `run` pauses at `watch`. To resume it without a real webhook, fire the signal with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — the manual stand-in for the PR webhook:
+A real `run` pauses at `watch`. To resume it without a real webhook, fire the signal
+via local MCP `sapiom_dev_agents_signal` — the manual stand-in for the PR webhook.
+Run Inspector does not provide a one-click signal control. The request is:
 
 ```json
 {

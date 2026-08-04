@@ -90,11 +90,13 @@ function promptBox(term: XTerm): string {
 function transcript(): ScriptLine[] {
   return [
     // Authored demo copy must never split a word at the xterm column
-    // boundary: the tip is pre-broken into two short lines that fit
+    // boundary: the tip is pre-broken into short lines that fit
     // every pane width the demo renders at, instead of relying on wrap.
     {
       text:
-        dim("  ※ Tip: run `npx @sapiom/harness`") +
+        dim("  ※ Tip: run") +
+        "\r\n" +
+        dim("    `npx @sapiom/agent-studio@latest`") +
         "\r\n" +
         dim("    for the real, PTY-backed session") +
         "\r\n\r\n",
@@ -195,7 +197,9 @@ export function attachMockTerminal(term: XTerm): MockTerminalHandle {
           green("⏺") +
             dim(" This is a recorded demo. Prompts aren't sent to a coding agent here.") +
             "\r\n" +
-            dim("  Run `npx @sapiom/harness` locally to work with a real session.") +
+            dim("  Run `npx @sapiom/agent-studio@latest`") +
+            "\r\n" +
+            dim("    locally to work with a real session.") +
             "\r\n\r\n",
         );
       }

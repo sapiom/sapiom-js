@@ -33,7 +33,9 @@ When you've made a coherent change and want to validate it — the same point yo
 
 - **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists (plus the `VIDEO_RESULT_SIGNAL` import).
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
-- **run_local** with `{ "dryRun": true }` — runs your **real** step code against **stub capabilities** and traces the full graph offline for free, without any billed generation.
+- **run_local** with `{ "dryRun": true }` — runs your **real** step code against
+  **stub capabilities** and traces the full graph with no Sapiom capability spend
+  or billed generation.
 - **deploy**, then **run** — ship it, then perform a real, billed run: LLM plan → keyframe images → per-shot clips → stitched video.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.

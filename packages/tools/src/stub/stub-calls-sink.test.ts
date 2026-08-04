@@ -51,7 +51,11 @@ describe("stub calls sink — basic recording", () => {
 
   it("records no calls when no capabilities are invoked", () => {
     const calls: StubCallRecord[] = [];
-    createStubClient({ calls });
+    const client = createStubClient({ calls });
+
+    expect(client.fileStorage.getPublicUrl("file id/with slash")).toContain(
+      "/public/file%20id%2Fwith%20slash",
+    );
     expect(calls).toHaveLength(0);
   });
 

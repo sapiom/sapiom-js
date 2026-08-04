@@ -3,8 +3,9 @@
  * `ctx.sapiom.*` capability call from a stub file. Runs the author's actual
  * step bodies on the `@sapiom/agent-runtime` walker, so a local pass is real
  * evidence without a Sapiom account, capability request, or capability spend.
- * Author code remains ordinary local code and can still read files, inspect
- * environment variables, start processes, or make its own network requests.
+ * It is not a process sandbox: ordinary network, filesystem, process, and
+ * environment effects in the author's code remain real unless that project
+ * guards them.
  *
  * Returns a structured per-step trace plus `unusedStubs` (supplied keys that
  * matched no call) and `stubWarnings` (keys that matched but carried the wrong

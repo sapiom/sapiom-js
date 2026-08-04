@@ -50,8 +50,8 @@ import { z } from "zod/v4";
  *   - `dryRun` gates every irreversible/billed step after research: it computes
  *     the report and returns it via the `drafted` off-ramp WITHOUT building,
  *     deploying, or touching DNS. Pass it to `run_local` to trace
- *     search → scrape → synthesize offline (capabilities stubbed) for free before
- *     a billed deploy. The coding-agent build, the sandbox deploy, and their cost
+ *     search → scrape → synthesize with Sapiom capabilities stubbed and no Sapiom
+ *     capability spend before a billed deploy. The coding-agent build, the sandbox deploy, and their cost
  *     are only exercised on the deployed path.
  *   - The custom domain is optional. With none set, the preview URL IS the
  *     deliverable; `mapDomain` is skipped. Mapping assumes you already OWN the

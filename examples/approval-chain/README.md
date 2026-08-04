@@ -66,8 +66,8 @@ signal, not by an engine deadline:
 - the run-detail **one-click Approve/Reject** (a human acting whenever they get to it),
 - a **cron** you wire to fire `{ "decision": "remind" }` on a cadence, escalating
   to `{ "decision": "timeout" }` when you want to give up, or
-- a `run_local` **auto-resume** (offline), which fires an empty payload and so
-  walks `remind` → … → `escalate` for free.
+- a `run_local` **auto-resume** with Sapiom capabilities stubbed, which fires an
+  empty payload and walks `remind` → … → `escalate` with no Sapiom capability spend.
 
 `maxReminders` (default 2) bounds how many reminder ticks a gate takes before it
 escalates. (The mirror template `wait-for-webhook` _wants_ the terminal timeout and
@@ -111,16 +111,18 @@ in `ctx.shared` only (no Postgres touched).
    `sapiom_dev_agents_deploy` → `sapiom_dev_agents_run` (a real run that pauses
    at each gate).
 
-Offline, the default `run_local` trace walks `present → reminder(s) → escalate` —
-with no `ledgerHandle` no live Postgres is touched, so it's free. Keep
+With local stubs, the default `run_local` trace walks `present → reminder(s) → escalate` —
+with no `ledgerHandle` no live Postgres is touched, and there is no Sapiom
+capability spend. Keep
 `maxReminders` small so it terminates quickly.
 
 ## Resuming a paused run in dev
 
 A real `run` pauses at each gate. Instead of a real approver, fire the signals
-yourself with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`). The
+yourself via local MCP `sapiom_dev_agents_signal`. The
 `correlationId` is the paused run's `executionId`, and each `payload` becomes the
 resumed `decide` step's input.
+Run Inspector does not provide a one-click signal control.
 
 **Approve** the current gate (advances to the next, or finalises on the last):
 

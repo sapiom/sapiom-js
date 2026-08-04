@@ -59,8 +59,8 @@ keep `numQuotes` small for real runs.
 
 3. From this directory: `npm install`, then drive the lifecycle via the MCP —
    `sapiom_dev_agents_check` → `sapiom_dev_agents_run_local` with
-   `{ "source": "...", "dryRun": true }` (capabilities stubbed, free — traces the
-   copy step offline) → `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
+   `{ "source": "...", "dryRun": true }` (Sapiom capabilities stubbed, no Sapiom
+   capability spend, and the raw upload path skipped) → `sapiom_dev_agents_link` → `sapiom_dev_agents_deploy` →
    `sapiom_dev_agents_run` (a real, billed copy + images + clip + email run).
 
 ## Model choice
