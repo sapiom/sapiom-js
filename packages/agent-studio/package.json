@@ -1,0 +1,48 @@
+{
+  "name": "@sapiom/agent-studio",
+  "version": "0.1.0",
+  "description": "Agent Studio — build, test, deploy, and run Sapiom agents with your coding agent in a local workspace.",
+  "keywords": [
+    "sapiom",
+    "agent-studio",
+    "claude",
+    "codex",
+    "agents"
+  ],
+  "homepage": "https://github.com/sapiom/sapiom-js/tree/main/packages/agent-studio#readme",
+  "bugs": {
+    "url": "https://github.com/sapiom/sapiom-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
+    "directory": "packages/agent-studio"
+  },
+  "license": "MIT",
+  "author": "Sapiom",
+  "type": "module",
+  "bin": {
+    "agent-studio": "./bin/agent-studio.mjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "node --check bin/agent-studio.mjs && node --check lib/launcher.mjs",
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@sapiom/harness": "workspace:*"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

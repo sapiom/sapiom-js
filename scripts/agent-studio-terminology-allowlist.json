@@ -14,27 +14,6 @@
     "reason": "github.workflow is the exact GitHub Actions context used to isolate concurrent runs."
   },
   {
-    "id": "approval-chain-agents-signal-tools",
-    "path": "examples/approval-chain/AGENTS.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "approval-chain-readme-signal-tools",
-    "path": "examples/approval-chain/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "approval-chain-manifest-signal-tools",
-    "path": "examples/approval-chain/template.json",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
     "id": "cold-outreach-readme-signal-tool",
     "path": "examples/cold-outreach-engine/README.md",
     "pattern": "workflow_signal",
@@ -44,97 +23,6 @@
   {
     "id": "cold-outreach-manifest-signal-tool",
     "path": "examples/cold-outreach-engine/template.json",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "error-triage-readme-signal-tool",
-    "path": "examples/error-triage-digest/README.md",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "error-triage-manifest-signal-tool",
-    "path": "examples/error-triage-digest/template.json",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "eval-gate-agents-backend-route",
-    "path": "examples/eval-gate/AGENTS.md",
-    "pattern": "/v1/workflows/executions",
-    "occurrences": 1,
-    "reason": "The backend execution route remains stable for compatibility."
-  },
-  {
-    "id": "eval-gate-readme-backend-routes",
-    "path": "examples/eval-gate/README.md",
-    "pattern": "/v1/workflows/executions",
-    "occurrences": 2,
-    "reason": "The backend execution route remains stable for compatibility."
-  },
-  {
-    "id": "eval-gate-readme-signal-tools",
-    "path": "examples/eval-gate/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "human-loop-agents-signal-tools",
-    "path": "examples/human-in-the-loop/AGENTS.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "human-loop-readme-signal-tools",
-    "path": "examples/human-in-the-loop/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "human-loop-manifest-signal-tools",
-    "path": "examples/human-in-the-loop/template.json",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "meeting-notes-readme-signal-tool",
-    "path": "examples/meeting-notes-crm/README.md",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "meeting-notes-manifest-signal-tool",
-    "path": "examples/meeting-notes-crm/template.json",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "pr-review-agents-signal-tools",
-    "path": "examples/pr-review-bot/AGENTS.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "pr-review-readme-signal-tools",
-    "path": "examples/pr-review-bot/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "pr-review-manifest-signal-tools",
-    "path": "examples/pr-review-bot/template.json",
     "pattern": "workflow_signal",
     "occurrences": 1,
     "reason": "The literal MCP signal tool ID is compatibility-sensitive."
@@ -156,20 +44,6 @@
   {
     "id": "proposal-manifest-signal-tools",
     "path": "examples/proposal-generator/template.json",
-    "pattern": "workflow_signal",
-    "occurrences": 1,
-    "reason": "The literal MCP signal tool ID is compatibility-sensitive."
-  },
-  {
-    "id": "compliance-readme-signal-tools",
-    "path": "examples/scheduled-compliance-audit/README.md",
-    "pattern": "signal_workflow|workflow_signal",
-    "occurrences": 2,
-    "reason": "Literal MCP signal tool IDs are compatibility-sensitive."
-  },
-  {
-    "id": "compliance-manifest-signal-tool",
-    "path": "examples/scheduled-compliance-audit/template.json",
     "pattern": "workflow_signal",
     "occurrences": 1,
     "reason": "The literal MCP signal tool ID is compatibility-sensitive."
@@ -322,6 +196,13 @@
     "reason": "Private CSS classes and test IDs remain stable."
   },
   {
+    "id": "app-canvas-tab-icon-identifier",
+    "path": "packages/harness/web/src/App.tsx",
+    "pattern": "^Workflow$",
+    "occurrences": 1,
+    "reason": "The design-system Workflow icon identifier is private and remains unchanged (matches the CanvasPane allowlist entry)."
+  },
+  {
     "id": "canvas-pane-icon-identifier",
     "path": "packages/harness/web/src/components/CanvasPane.tsx",
     "pattern": "^Workflow$",
@@ -353,8 +234,8 @@
     "id": "session-bar-private-css-and-test-id",
     "path": "packages/harness/web/src/components/SessionBar.tsx",
     "pattern": "^session-workflow-chip$",
-    "occurrences": 2,
-    "reason": "Private CSS classes and test IDs remain stable."
+    "occurrences": 1,
+    "reason": "The private bound-agent test ID remains stable (the e2e suite addresses the line by it)."
   },
   {
     "id": "tooltip-private-selector",
@@ -518,13 +399,6 @@
     "reason": "The private CSS selector remains stable with its React class name."
   },
   {
-    "id": "styles-session-workflow-chip-selector",
-    "path": "packages/harness/web/src/styles.css",
-    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
-    "occurrences": 1,
-    "reason": "The private CSS selector remains stable with its React class name."
-  },
-  {
     "id": "styles-workflow-actions-header-selector",
     "path": "packages/harness/web/src/styles.css",
     "pattern": "(?<![a-z0-9_-])workflow-actions-header(?![a-z0-9_-])",
@@ -557,13 +431,6 @@
     "path": "packages/harness/web/src/styles/refine.css",
     "pattern": "(?<![a-z0-9_-])workflow-item(?![a-z0-9_-])",
     "occurrences": 2,
-    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
-  },
-  {
-    "id": "refine-session-workflow-chip-selector",
-    "path": "packages/harness/web/src/styles/refine.css",
-    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
-    "occurrences": 1,
     "reason": "The private refinement-layer CSS selector remains stable with its React class name."
   },
   {

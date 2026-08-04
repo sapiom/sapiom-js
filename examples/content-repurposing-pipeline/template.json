@@ -5,22 +5,22 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "whatItDoes": "Turn one blog post or transcript into a tweet thread, LinkedIn post, newsletter, quote graphics, and a short clip, then email the whole pack. Runs on a schedule against your latest post, or with `dryRun` to read the copy before anything is generated.",
-  "longDescription": "Give it one blog post or transcript and it hands you a whole content pack: a tweet thread, a LinkedIn post, a newsletter section, quote graphics, and a short teaser clip. An LLM (`models.run`) rewrites the source into every channel at once, keeping your meaning instead of inventing new claims.\n\nFrom there it makes the media. It renders each pull-quote into a graphic, all at once, then animates the first graphic into a short clip — that video job runs in the background and the agent run pauses until a webhook says it's ready, costing nothing while it waits. It gathers everything into one markdown pack, saves a durable copy to file storage, and emails the pack to you.\n\nIt ships with a `schedule` input, so you can point it at your latest post and let it run on a cron cadence instead of by hand. Set `dryRun` and it stops right after writing the copy, returning the text without paying for any images or video.\n\nYou pay for one LLM call, one image per quote, one short clip, and the email — the waiting is free. Start with a small `numQuotes`; the images and the clip are the pricey part.",
+  "whatItDoes": "Turns one blog post or transcript into a tweet thread, LinkedIn post, newsletter section, quote graphics, and a short clip, then emails the pack to everyone on your list. Runs on a schedule against your latest post, or set `dryRun` to read the copy before anything is generated.",
+  "longDescription": "Give it one blog post or transcript and it hands you a whole content pack: a tweet thread, a LinkedIn post, a newsletter section, quote graphics, and a short teaser clip. An LLM (`models.run`) rewrites the source into every channel at once, keeping your meaning instead of inventing new claims. From there it makes the media one async job at a time, a quote graphic per pull-quote (`images.launch`), then the first graphic animated into a short clip (`video.launch`); each job runs in the background and the run pauses until a webhook says it's ready.\n\nIt gathers everything into one markdown pack, saves a durable copy to file storage, then fans the pack out to one email per recipient on your `deliverTo` list. A bad or placeholder address degrades that one recipient rather than sinking the run, and the result names exactly how many recipients it delivered to. It ships with a `schedule` input so you can point it at your latest post and let it run on a cron cadence, and `dryRun` stops it right after writing the copy, returning the text before any images or video are generated.",
   "useCases": [
     "One post, five formats",
-    "Scheduled repurposing",
-    "Draft-first dry run"
+    "Distribution-list send",
+    "Scheduled repurposing"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\n`source` is the only required input — paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it without paying for any images or video. A full run bills the LLM, one image per quote, one short image-to-video clip, and the email, so keep `numQuotes` small (default 2, max 4). To have it email the pack, set `deliverTo`; without it the run returns the pack and says nothing was sent. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step for free, or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\n`source` is the only required input. Paste the blog post or transcript text. Set `dryRun: true` to stop after writing the copy and read it before any images or video are generated. Keep `numQuotes` small (default 2, max 4). To have it email the pack, set `deliverTo` to one or more addresses; the pack fans out, one send per recipient. Without it the run returns the pack and sends nothing. Give it a `schedule` (a cron string) to run it as a standing job.\n\nPrefer to work from the code? Run it locally with `run_local` and `{ \"dryRun\": true }` to trace the copy step, or edit and deploy it with the Sapiom MCP.",
   "settings": [
     {
       "path": "deliverTo",
       "label": "Email the pack to",
-      "description": "Where the pack is emailed. Leave it empty and the pack is returned in the run's output instead.",
-      "type": "email",
-      "default": "",
-      "example": "you@yourcompany.com"
+      "description": "One or more addresses to fan the pack out to. Leave it empty and the pack is returned in the run's output instead.",
+      "type": "email[]",
+      "default": [],
+      "example": ["you@yourcompany.com"]
     }
   ],
   "defaultInput": {
@@ -56,12 +56,12 @@
       }
     },
     {
-      "title": "Full run, emailed",
+      "title": "Full run, fanned out to a distribution list",
       "input": {
         "source": "Long-form blog post about why small teams ship faster...",
         "title": "Why small teams ship faster",
         "numQuotes": 2,
-        "deliverTo": "me@example.com",
+        "deliverTo": ["me@example.com", "team@example.com"],
         "schedule": "0 9 * * 1"
       },
       "output": {
@@ -77,9 +77,12 @@
         "packFileId": "file_abc123",
         "packDownloadUrl": "https://files.sapiom.ai/download/file_abc123?sig=...",
         "clipFileId": "file_def456",
-        "delivered": true,
-        "to": "me@example.com",
-        "messageId": "msg_789"
+        "rendered": 2,
+        "delivered": 2,
+        "recipients": [
+          { "to": "me@example.com", "messageId": "msg_789" },
+          { "to": "team@example.com", "messageId": "msg_790" }
+        ]
       }
     }
   ],
@@ -87,9 +90,9 @@
     "terminalState": "completed_partial",
     "expect": [
       { "path": "graphics", "assert": "nonEmptyArray" },
-      { "path": "delivered", "assert": "equals", "value": false },
+      { "path": "delivered", "assert": "equals", "value": 0 },
       { "path": "unmet", "assert": "nonEmptyArray" }
     ],
-    "narrative": "Repurposes the built-in sample post into copy plus real rendered quote graphics; skips the pricey teaser clip and emails nothing because no recipient is set."
+    "narrative": "Repurposes the built-in sample post into copy plus real rendered quote graphics; skips the pricey teaser clip and emails nothing because no recipients are set."
   }
 }

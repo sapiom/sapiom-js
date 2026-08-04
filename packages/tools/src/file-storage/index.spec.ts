@@ -195,6 +195,22 @@ describe("fileStorage.getDownloadUrl()", () => {
 });
 
 // ---------------------------------------------------------------------------
+// getPublicUrl()
+// ---------------------------------------------------------------------------
+
+describe("fileStorage.getPublicUrl()", () => {
+  it("builds the /public/:fileId permalink with no network call", () => {
+    expect(fileStorage.getPublicUrl("f-123", BASE)).toBe(`${BASE}/public/f-123`);
+  });
+
+  it("encodes special characters in fileId", () => {
+    expect(fileStorage.getPublicUrl("file id/with slash", BASE)).toBe(
+      `${BASE}/public/file%20id%2Fwith%20slash`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // list()
 // ---------------------------------------------------------------------------
 

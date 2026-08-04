@@ -1036,6 +1036,13 @@ export function CanvasPane({
             className="canvas-iframe"
             src={`${import.meta.env.BASE_URL}canvas/${sessionId}/${isMockMode() ? "index.html" : ""}?theme=${theme}`}
             sandbox="allow-scripts"
+            // The board is navigated only through the app's zoom/fit/pan
+            // controls (the view is posted INTO the document); it must never
+            // show native scrollbars. Sandboxed, it is cross-origin, so this
+            // element-level attribute — not CSS on the frame — is the one thing
+            // that suppresses the inner document's scrollbars, and it covers
+            // real renders as well as the mock board.
+            scrolling="no"
             onLoad={() => {
               handleFrameLoaded();
               // A fresh document starts at identity; re-sync the current view.

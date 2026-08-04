@@ -74,6 +74,7 @@ import * as contentGeneration from "./content-generation/index.js";
 import type {
   ImageCreateInput,
   ImageGenerationResult,
+  ImageLaunchHandle,
   VideoCreateInput,
   VideoGenerationResult,
   VideoLaunchHandle,
@@ -233,6 +234,11 @@ export interface Sapiom {
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
     getDownloadUrl(fileId: string): Promise<DownloadUrlResponse>;
+    /**
+     * Build the durable PUBLIC permalink for a file. Pure and synchronous — no
+     * network call. See `fileStorage.getPublicUrl` for the full doc.
+     */
+    getPublicUrl(fileId: string): string;
     list(opts?: ListOptions): Promise<ListResponse>;
     delete(fileId: string): Promise<void>;
     setVisibility(
@@ -244,9 +250,20 @@ export interface Sapiom {
     images: {
       /**
        * Generate image(s) from a prompt. Pass `storage` to persist each output into
-       * file-storage (the returned images then carry `file_id`).
+       * file-storage (the returned images then carry `file_id`). Synchronous: the
+       * request is held open for the full generate+store, so prefer `launch` from a
+       * workflow or when fanning out many at once.
        */
       create(input: ImageCreateInput): Promise<ImageGenerationResult>;
+      /**
+       * Submit an image generation job and return a dispatchable handle immediately.
+       * Pass the handle to `pauseUntilSignal(handle, { resumeStep })` to suspend the
+       * workflow step until the image is ready, or call `handle.wait()` to block inline
+       * (equivalent result to `images.create`). Unlike `create`, the submit returns as
+       * soon as the job is enqueued, so it never meets Core's 30s router cap. Pass
+       * `storage` to persist the output.
+       */
+      launch(input: ImageCreateInput): Promise<ImageLaunchHandle>;
     };
     video: {
       /**
@@ -549,6 +566,7 @@ function bind(transport: Transport): Sapiom {
     fileStorage: {
       upload: (input) => fileStorage.upload(input, transport),
       getDownloadUrl: (fileId) => fileStorage.getDownloadUrl(fileId, transport),
+      getPublicUrl: (fileId) => fileStorage.getPublicUrl(fileId),
       list: (opts) => fileStorage.list(opts, transport),
       delete: (fileId) => fileStorage.delete(fileId, transport),
       setVisibility: (fileId, visibility) =>
@@ -557,6 +575,7 @@ function bind(transport: Transport): Sapiom {
     contentGeneration: {
       images: {
         create: (input) => contentGeneration.createImage(input, transport),
+        launch: (input) => contentGeneration.launchImage(input, transport),
       },
       video: {
         create: (input) => contentGeneration.createVideo(input, transport),

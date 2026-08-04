@@ -5,77 +5,108 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "whatItDoes": "Open a real hosted browser, optionally log in with credentials you supply, visit the pages you list, and capture each one as a hosted image. It captures every page in a single session — the rendered view a logged-in user sees, which a scraper can't reach. With no login it captures public pages.",
-  "longDescription": "You give it a list of pages. It opens one real browser session, visits each page, and captures it as a hosted image you get a URL back for. Because it drives an actual browser rather than fetching HTML, it captures what the page really looks like — and, if you hand it a login, what it looks like to a signed-in user.\n\nEverything happens in a single session. In-session screenshots carry no per-shot charge — billing settles once when the session closes — so capturing five pages costs one session, not five one-shots. The session is always closed for you, even if a capture fails, so it can never leak at the ceiling charge.\n\nThe login is optional and honest. Set `loginUrl`, `loginUsername`, and the `BROWSER_LOGIN_PASSWORD` secret and it stores them as a browser identity and opens the session already signed in. Leave any of them out — or let the login fail — and it captures the public view instead and tells you `authenticated: false`, rather than claiming a logged-in capture it didn't make. Every requested URL comes back as a row whether its shot worked or not.\n\nYou pay for the browser session; creating the login identity is free.",
+  "whatItDoes": "Crawl a bounded set of a site's pages, screenshot each one, and check that it renders. A model audits the content and structure for real issues, and it verifies Terms and Privacy links exist and resolve. It reports exactly what's broken.",
+  "longDescription": "Give it a site and it crawls a bounded set of its pages: the homepage plus a handful more, prioritizing whatever looks like a Terms or Privacy link. It reads each page's content and opens one browser session to screenshot every page so you can see it actually rendered.\n\nA model reads the crawled pages in one pass and flags concrete content problems: placeholder text, thin sections, missing or duplicate titles, citing the page for every issue. Link integrity is checked separately: any page that didn't resolve is reported, and Terms and Privacy are marked present-and-resolving, present-but-broken, or missing. Every page in the bounded set gets a crawl result, a render result, and (when it has real content) a content pass. A page that fails becomes a row in the report, never a silent gap or a thrown error, and the report always compiles whether the site is spotless or full of gaps.",
   "useCases": [
-    "Archive a dashboard behind a login",
-    "Verify a deploy renders correctly",
-    "Record a page behind authentication"
+    "Catch broken pages after a deploy",
+    "Confirm Terms and Privacy resolve",
+    "Spot thin or placeholder content"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nRun it with nothing and it captures two stable public pages. Pass `urls` (the pages to capture) and `fullPage: true` for full-height captures. To capture behind a login, pass `loginUrl` and `loginUsername` and set the `BROWSER_LOGIN_PASSWORD` secret — the session opens signed in. Miss any of the three and it captures the public view and says so.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the flow for free (the browser capability is stubbed), or edit and deploy it with the Sapiom MCP.",
-  "requiredSecrets": [
+  "notes": "Click **Use this template**. Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nRun it with nothing and it QA-checks `https://sapiom.ai`: the homepage plus a few more pages, capped at 5 total. Pass `siteUrl` to check your own site instead.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the flow (every capability is stubbed), or edit and deploy it with the Sapiom MCP.",
+  "settings": [
     {
-      "key": "BROWSER_LOGIN_PASSWORD",
-      "label": "Login password",
-      "provider": "custom",
-      "credentialKind": "basic",
-      "description": "The password for the login you want to capture behind, paired with `loginUsername`. Only needed for authenticated capture — without it the run captures the public view.",
-      "optional": true
+      "path": "siteUrl",
+      "label": "Site URL",
+      "description": "The site to crawl and QA-check.",
+      "type": "string",
+      "default": "https://sapiom.ai",
+      "example": "https://example.com"
     }
   ],
   "defaultInput": {
-    "urls": ["https://example.com", "https://example.org"]
+    "siteUrl": "https://sapiom.ai"
   },
   "examples": [
     {
-      "title": "Capture public pages",
-      "input": {
-        "urls": ["https://example.com"]
-      },
+      "title": "QA-check the default site",
+      "input": {},
       "output": {
-        "authenticated": false,
-        "requested": 1,
-        "captured": 1,
+        "site": "https://sapiom.ai/",
+        "pagesChecked": 5,
         "screenshots": [
           {
-            "url": "https://example.com",
+            "url": "https://sapiom.ai/",
             "imageUrl": "https://cdn.sapiom.ai/screenshots/abc123.png",
             "expiresAt": "2026-08-01T00:00:00Z",
-            "ok": true,
+            "rendered": true,
             "error": null
+          }
+        ],
+        "legal": {
+          "terms": {
+            "present": true,
+            "url": "https://sapiom.ai/terms",
+            "resolved": true
+          },
+          "privacy": {
+            "present": true,
+            "url": "https://sapiom.ai/privacy",
+            "resolved": true
+          }
+        },
+        "issues": [
+          {
+            "type": "content",
+            "url": "https://sapiom.ai/pricing",
+            "detail": "The pricing table has no descriptive text for the enterprise tier.",
+            "severity": "low"
           }
         ]
       }
     },
     {
-      "title": "Capture a page behind a login",
+      "title": "QA-check a different site",
       "input": {
-        "urls": ["https://app.example.com/dashboard"],
-        "loginUrl": "https://app.example.com/login",
-        "loginUsername": "you@example.com"
+        "siteUrl": "https://example.com"
       },
       "output": {
-        "authenticated": true,
-        "requested": 1,
-        "captured": 1,
+        "site": "https://example.com/",
+        "pagesChecked": 1,
         "screenshots": [
           {
-            "url": "https://app.example.com/dashboard",
+            "url": "https://example.com/",
             "imageUrl": "https://cdn.sapiom.ai/screenshots/def456.png",
             "expiresAt": "2026-08-01T00:00:00Z",
-            "ok": true,
+            "rendered": true,
             "error": null
+          }
+        ],
+        "legal": {
+          "terms": { "present": false, "url": null, "resolved": false },
+          "privacy": { "present": false, "url": null, "resolved": false }
+        },
+        "issues": [
+          {
+            "type": "legal-missing",
+            "url": null,
+            "detail": "No Terms of Service link found on the homepage"
+          },
+          {
+            "type": "legal-missing",
+            "url": null,
+            "detail": "No Privacy Policy link found on the homepage"
           }
         ]
       }
     }
   ],
   "zeroSetup": {
-    "terminalState": "completed",
+    "terminalState": "completed_partial",
     "expect": [
       { "path": "screenshots", "assert": "nonEmptyArray" },
-      { "path": "authenticated", "assert": "equals", "value": false }
+      { "path": "issues", "assert": "nonEmptyArray" },
+      { "path": "site", "assert": "nonEmptyString" }
     ],
-    "narrative": "Opens a browser session and captures two stable public pages as hosted images; no login, so authenticated is false."
+    "narrative": "Crawls a bounded set of sapiom.ai pages, screenshots each one, audits the content with a model, and checks link integrity — reporting whatever it finds broken, including whether Terms and Privacy links resolve."
   }
 }

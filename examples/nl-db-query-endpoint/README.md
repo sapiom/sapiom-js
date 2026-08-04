@@ -1,35 +1,47 @@
 # Natural-Language DB Query Endpoint
 
 Deploy a live HTTP endpoint that turns a plain-English question into a **read-only**
-SQL query and returns the answer. One run stands up the endpoint; the endpoint
-answers questions.
+SQL query and returns the answer. One run stands up the endpoint AND proves the
+pipeline for real: it runs the sample question against the seeded demo database
+and returns the actual rows.
 
 ## What it does
 
 ```
-validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ deploy ─┬─▶ deployed      (terminal)
-           (database   (models  (read- │           └─▶ deploy_failed (terminal)
-            .get)       .run)   only    └─▶ rejected                 (terminal)
-                                check)
+validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ execute ─┬─▶ deploy ─┬─▶ deployed         (terminal)
+           (database   (models  (read- │            │          ├─▶ deploy_failed   (terminal)
+            .get)       .run)   only    │            │          └─▶ endpoint_skipped(terminal)
+                                check)  │            └─▶ query_failed              (terminal)
+                                       └─▶ rejected                                (terminal)
 ```
 
 1. **validate** — checks the input (a `dbHandle` or `connectionString`) and resolves
    config (sample question, port, row cap, model). No target → `rejected`.
 2. **resolve** — reads the target Postgres connection string from a Sapiom-managed
-   database handle (`database.get`) to inject into the endpoint.
-3. **plan** — previews the pipeline: translates the sample question into SQL with an
-   LLM (`models.run`), system-prompted to emit a single read-only `SELECT`.
-4. **guard** — applies the read-only guardrail to that sample SQL. Anything that
-   isn't a single read-only statement → `rejected`, so the endpoint is only
-   deployed once the safe path is proven.
-5. **deploy** — writes a small server into a sandbox and exposes it at a stable URL
+   database handle (`database.get`) to inject into the endpoint, and — for the
+   managed demo database — seeds it (`customers`/`invoices`) if deploy's own
+   `seed.sql` hasn't already run. Idempotent.
+3. **plan** — translates the sample question into SQL. On the seeded demo database
+   with the unmodified default question (the zero-setup path), this is a fixed,
+   known-safe `SELECT` written once by us — no LLM call, no dependency on it
+   returning valid SQL. Any other question or database still asks an LLM
+   (`models.run`), system-prompted to emit a single read-only `SELECT`.
+4. **guard** — applies the read-only guardrail to that sample SQL, whichever
+   source produced it. Anything that isn't a single read-only statement →
+   `rejected`.
+5. **execute** — runs the guarded SQL for real against the resolved database,
+   inside a `READ ONLY` transaction with a statement timeout and the same row cap
+   the deployed endpoint enforces. The returned rows ARE the zero-setup artifact.
+   A connection or query failure → `query_failed`, rather than faking rows.
+6. **deploy** — writes a small server into a sandbox and exposes it at a stable URL
    (`sandboxes.deployPreview`). `DATABASE_URL` and the server's own
    `SAPIOM_API_KEY` are passed as env — never baked into source. The key is minted
    for the endpoint (`ctx.sapiom.keys.mintScoped`): a durable, narrowly-scoped
    credential, since the engine's per-run token expires with the step. (Set
    `ENDPOINT_SAPIOM_API_KEY` to override with a key you control.)
-6. **deployed** / **deploy_failed** / **rejected** — terminal; report the endpoint
-   URL, surface the deploy logs, or explain the rejection.
+7. **deployed** / **deploy_failed** / **endpoint_skipped** / **query_failed** /
+   **rejected** — terminal; report the endpoint URL and the real sample rows,
+   surface the deploy logs, or explain the failure/rejection.
 
 ## The endpoint
 
@@ -46,11 +58,13 @@ Per request it introspects the schema (cached), asks the LLM for a read-only
 
 Defense-in-depth, so a write can't slip through even if one layer is wrong:
 
-1. The LLM is **told** to emit a single `SELECT`.
+1. The SQL source is **told** (an LLM system prompt) or **known** (the built-in
+   zero-setup query) to be a single `SELECT`.
 2. The SQL is **checked** — single statement, starts with `SELECT`/`WITH`, no
    `INSERT`/`UPDATE`/`DELETE`/DDL keywords.
-3. The endpoint **executes** it in a `READ ONLY` transaction, which Postgres
-   enforces at the engine level, with a statement timeout and a row cap.
+3. `execute` and the deployed endpoint both **run** it in a `READ ONLY`
+   transaction, which Postgres enforces at the engine level, with a statement
+   timeout and a row cap.
 
 ## Run it with Claude + the Sapiom MCP
 
@@ -81,7 +95,8 @@ Example `run_local` input:
 }
 ```
 
-with the stub override so `plan` returns real SQL and `guard` passes:
+with the stub override so `plan` returns real SQL and `guard` passes; `execute`
+then reports fixed sample rows under `dryRun` rather than opening a connection:
 
 ```json
 { "version": 1, "steps": { "plan": { "models.run": { "output": "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC" } } } }
@@ -90,6 +105,7 @@ with the stub override so `plan` returns real SQL and `guard` passes:
 ## Files
 
 - `index.ts` — the agent + the embedded endpoint server (`SERVER_SOURCE`). Edit this.
+- `seed.sql` — the read-side seed for the managed demo database (`customers`, `invoices`); `index.ts`'s `ensureSeeded` mirrors it for a run that has to provision the database itself.
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
 
 Run `npm run typecheck` to confirm it compiles.

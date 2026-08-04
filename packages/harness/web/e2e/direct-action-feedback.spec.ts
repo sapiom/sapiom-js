@@ -126,7 +126,8 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
 
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    // The single session bar labels a folder-default session by its agent name.
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
     const runBtn = page.getByTestId("session-step-run");
     const deployBtn = page.getByTestId("session-step-deploy");
@@ -152,7 +153,7 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
 
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
     const deployBtn = page.getByTestId("session-step-deploy");
     const runBtn = page.getByTestId("session-step-run");
@@ -171,30 +172,42 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
     await expect(runBtn).toHaveAttribute("aria-label", /Last deploy failed — retry Deploy/);
   });
 
-  test("deploy-failed chip label reads 'Deploy failed' (not 'Draft')", async ({ page }) => {
+  test("deploy-failed state is distinct from draft — Prod-run reason changes, Deploy stays primary", async ({
+    page,
+  }) => {
+    // The Draft/Deployed/Deploy-failed lifecycle chip was removed from the bar.
+    // Deploy-failed is now distinguished from a virgin Draft by the Prod-run
+    // button's disabled reason: "Not deployed yet" (draft) vs "Last deploy
+    // failed — retry Deploy" (deploy-failed). Deploy stays the primary CTA in
+    // both states (nothing is live yet).
     await page.goto("/?seed=0&mockError=deploy");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
-    const chip = page.getByTestId("session-lifecycle-chip");
+    const runBtn = page.getByTestId("session-step-run");
+    const deployBtn = page.getByTestId("session-step-deploy");
 
-    // Before any deploy: chip reads "Draft".
-    await expect(chip).toContainText("Draft");
+    // Draft (never deployed): Run reads "Not deployed yet", Deploy is primary.
+    await expect(runBtn).toHaveAttribute("aria-label", /Not deployed yet/);
+    await expect(deployBtn).toHaveClass(/session-action-primary/);
 
-    // After failed deploy: chip reads "Deploy failed".
-    await page.getByTestId("session-step-deploy").click();
+    // After a failed deploy: Run's reason changes to the deploy-failed message,
+    // and Deploy remains the primary CTA (retry Deploy is the next act).
+    await deployBtn.click();
     await expect(page.getByTestId("toast")).toContainText("Deploy failed", { timeout: 5_000 });
-    await expect(chip).toContainText("Deploy failed", { timeout: 3_000 });
-    await expect(chip).toHaveAttribute("data-deployment-state", "failed");
+    await expect(runBtn).toHaveAttribute("aria-label", /Last deploy failed — retry Deploy/, {
+      timeout: 3_000,
+    });
+    await expect(deployBtn).toHaveClass(/session-action-primary/);
     // The mock persists a definition id before the failed first build, just
     // like production. That link must not enable Prod Run or Code snippets.
-    await expect(page.getByTestId("workflow-dashboard-link")).toContainText(
-      "deploy failed",
-    );
-    await expect(page.getByTestId("session-step-run")).toBeDisabled();
+    const dashboardLink = page.getByTestId("workflow-dashboard-link");
+    await expect(dashboardLink).toContainText("deploy failed");
+    await expect(dashboardLink).toHaveAttribute("data-deployment-state", "failed");
+    await expect(runBtn).toBeDisabled();
     await page.getByTestId("right-tab-code").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
     await expect(page.getByTestId("right-panel-code")).toContainText(
@@ -202,7 +215,7 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
     );
   });
 
-  test("a successful retry clears the deploy-failed state — chip and Prod-run return to normal", async ({
+  test("a successful retry clears the deploy-failed state — Prod-run returns to normal", async ({
     page,
   }) => {
     // First, make a deploy fail.
@@ -211,15 +224,16 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
 
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
     const deployBtn = page.getByTestId("session-step-deploy");
     const runBtn = page.getByTestId("session-step-run");
-    const chip = page.getByTestId("session-lifecycle-chip");
 
     await deployBtn.click();
     await expect(page.getByTestId("toast")).toContainText("Deploy failed", { timeout: 5_000 });
-    await expect(chip).toContainText("Deploy failed", { timeout: 3_000 });
+    await expect(runBtn).toHaveAttribute("aria-label", /Last deploy failed — retry Deploy/, {
+      timeout: 3_000,
+    });
 
     // Now navigate to a URL without ?mockError=deploy so the retry succeeds.
     // We simulate this by reloading the page without the error flag, then
@@ -229,19 +243,27 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
-    // Fresh state: chip reads "Draft", run reads "Not deployed yet".
-    await expect(chip).toContainText("Draft");
+    // Fresh draft state: no "deployed" pill on the Canvas tab, Deploy is primary,
+    // and Run reads "Not deployed yet". (The lifecycle chip that used to say
+    // "Draft" is gone; draft-ness is now Deploy-as-primary + no deployed pill.)
+    await page.getByTestId("right-tab-canvas").click();
+    await expect(page.getByTestId("workflow-dashboard-link")).toHaveCount(0);
+    await expect(deployBtn).toHaveClass(/session-action-primary/);
     await expect(runBtn).toHaveAttribute("aria-label", /Not deployed yet/);
 
     // Successful deploy.
     await deployBtn.click();
     await expect(page.getByTestId("toast")).toContainText("Deployed to Sapiom.", { timeout: 5_000 });
 
-    // After success: chip reads "Deployed", run is enabled.
-    await expect(chip).toContainText("Deployed", { timeout: 3_000 });
+    // After success the agent is DEPLOYED: the "deployed" pill appears on the
+    // Canvas tab, Run becomes enabled and takes over as the primary CTA.
+    await expect(page.getByTestId("workflow-dashboard-link")).toContainText("deployed", {
+      timeout: 3_000,
+    });
     await expect(runBtn).toBeEnabled({ timeout: 3_000 });
+    await expect(runBtn).toHaveClass(/session-action-primary/);
   });
 });
 
@@ -338,7 +360,7 @@ test.describe("Fix 1 — no silent direct-action dead-clicks", () => {
     // rfq is undeployed — Prod Run must be disabled AND carry a reason.
     await page.getByTestId("workflow-rfq").locator(".workflow-item-trigger").click();
     await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+    await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
     const runBtn = page.getByTestId("session-step-run");
     await expect(runBtn).toBeDisabled();

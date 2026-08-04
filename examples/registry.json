@@ -3,73 +3,77 @@
   "version": 1,
   "templates": [
     {
-      "id": "approval-chain",
-      "name": "Sequential Sign-Off",
-      "description": "A durable sequential sign-off chain — pause-per-gate approvals with reminders, timeout escalation, and compensation on rejection.",
-      "tags": ["approval", "saga", "pause-resume", "durable"],
-      "category": "reliability-governance",
-      "discipline": "Governance",
+      "id": "autonomous-pr",
+      "name": "Autonomous PR",
+      "description": "A coding agent implements your task in a sandbox, runs the repo's checks, and pushes a self-reviewed branch.",
+      "tags": ["coding-agent", "git", "self-review", "automation"],
+      "category": "product-engineering",
+      "discipline": "Engineering",
       "cadence": "on-demand",
-      "complexity": "simple",
-      "sourcePath": "examples/approval-chain",
-      "capabilities": ["email.send", "database.create"],
+      "complexity": "advanced",
+      "sourcePath": "examples/autonomous-pr",
+      "capabilities": [
+        "repositories.get",
+        "repositories.create",
+        "models.coding",
+        "sandboxes.exec",
+        "repositories.pushFromSandbox",
+        "models.run"
+      ],
       "steps": [
         {
-          "name": "start",
-          "description": "Resolve the subject, the ordered approvers, and the escalation / ledger / reminder settings; initialise the chain state. An empty chain escalates.",
-          "kind": "capability",
-          "capability": "database.create",
-          "next": ["present", "escalate"]
-        },
-        {
-          "name": "present",
-          "description": "Record the gate as pending and email the current approver, then pause until the approval signal (resumes at 'decide').",
-          "kind": "pause",
-          "checkpoint": true,
-          "capability": "email.send",
-          "next": ["decide"]
-        },
-        {
-          "name": "decide",
-          "description": "Resume target — its input is the approval payload; approve advances to the next gate or finalises, reject compensates, timeout/no-response escalates, and any other resume is a reminder tick.",
+          "name": "plan",
+          "description": "Resolves the repo, using an existing one you name or provisioning a scratch repo when none is given.",
           "kind": "compute",
-          "next": ["present", "remind", "finalize", "compensate", "escalate"]
+          "next": ["implement", "rejected"]
         },
         {
-          "name": "remind",
-          "description": "Email a reminder to the current approver, then pause again on the same gate (resumes at 'decide').",
-          "kind": "pause",
-          "capability": "email.send",
-          "next": ["decide"]
+          "name": "implement",
+          "description": "Launches a coding agent to do the task in a sandbox, then pauses until the run finishes.",
+          "kind": "llm",
+          "capability": "models.coding",
+          "next": ["verify"]
         },
         {
-          "name": "finalize",
-          "description": "The single irreversible action — reached only after every party approved; a dryRun guard makes it a no-op offline.",
+          "name": "verify",
+          "description": "Re-attaches that sandbox and runs the install and check commands over the agent's changes; a failed run or a red check is rejected.",
           "kind": "capability",
-          "capability": "email.send",
+          "capability": "sandboxes.exec",
+          "next": ["push", "rejected"]
+        },
+        {
+          "name": "push",
+          "description": "Creates a branch and pushes the agent's changes to it.",
+          "kind": "capability",
+          "capability": "repositories.pushFromSandbox",
+          "next": ["review"]
+        },
+        {
+          "name": "review",
+          "description": "Asks a model to self-review the diff and write a verdict, a summary, and what it would flag.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": ["summary"]
+        },
+        {
+          "name": "summary",
+          "description": "Returns the repo, the branch, the sha, and the self-review.",
+          "kind": "compute",
           "terminal": true
         },
         {
-          "name": "compensate",
-          "description": "Saga rollback: someone rejected — notify everyone who already approved that the chain was cancelled.",
-          "kind": "capability",
-          "capability": "email.send",
-          "terminal": true
-        },
-        {
-          "name": "escalate",
-          "description": "Terminal branch: a gate went silent or timed out — escalate to a human channel.",
-          "kind": "capability",
-          "capability": "email.send",
+          "name": "rejected",
+          "description": "No repo, a failed coding run, or a red check, so nothing was branched or pushed.",
+          "kind": "compute",
           "terminal": true
         }
       ],
       "setup": {
         "runsWithNoSetup": true,
         "connectionCount": 0,
-        "settingCount": 2,
-        "provisions": ["postgres"],
-        "degradedWithoutSetup": "Runs the saga with no approvers supplied, so nothing is committed and it escalates."
+        "settingCount": 4,
+        "provisions": ["repository"],
+        "degradedWithoutSetup": "With no repo given, it provisions its own scratch repo, seeds a tiny authoring contract, has a coding agent add one new example, checks it, and pushes a real branch there with a self-review — never touching a repo you didn't give it."
       }
     },
     {
@@ -96,7 +100,7 @@
       "steps": [
         {
           "name": "enrich",
-          "description": "Resolve a real contact for each lead with Hunter — look up the named person, or surface a decision-maker when you only have the company.",
+          "description": "Resolve a real contact for each lead with Hunter, looking up the named person or surfacing a decision-maker when you only have the company.",
           "kind": "capability",
           "capability": "email.domain.search",
           "next": ["scrape"]
@@ -131,7 +135,7 @@
         },
         {
           "name": "send",
-          "description": "Deliver the current touch to everyone still active and log it, then pause at $0 until the drip interval elapses or a prospect replies.",
+          "description": "Deliver the current touch to everyone still active and log it, then pause until the drip interval elapses or a prospect replies.",
           "kind": "pause",
           "capability": "email.send",
           "next": ["advance", "done"]
@@ -144,7 +148,7 @@
         },
         {
           "name": "done",
-          "description": "Return the campaign summary — who was enriched, how many were deliverable, what was sent, and who replied.",
+          "description": "Return the campaign summary, covering who was enriched, how many were deliverable, what was sent, and who replied.",
           "kind": "compute",
           "terminal": true
         }
@@ -154,14 +158,14 @@
         "connectionCount": 0,
         "settingCount": 1,
         "provisions": ["postgres"],
-        "degradedWithoutSetup": "Runs the outreach engine with no leads, so there is nobody to write to and nothing is sent."
+        "degradedWithoutSetup": "Works 3 built-in demo leads end to end: enrichment and verification are simulated for these fabricated companies, but the opener comes from a real model call and the first touch is a real, inspectable send to this agent's own Sapiom-hosted demo inbox. Pass your own `leads` to run a real campaign, including the multi-touch drip and reply-to-stop."
       }
     },
     {
       "id": "content-repurposing-pipeline",
-      "name": "Content Repurposing",
-      "description": "Turn one blog post or transcript into a tweet thread, LinkedIn post, newsletter, quote graphics, and a short clip — then email the whole pack.",
-      "tags": ["content", "marketing", "media", "scheduled", "pipeline"],
+      "name": "Content Pack",
+      "description": "Turn one post into a full channel pack, including a thread, LinkedIn post, newsletter, quote graphics, and a short clip, then email it to your list.",
+      "tags": ["content", "marketing", "media", "fan-out"],
       "category": "revenue-marketing",
       "discipline": "Marketing",
       "cadence": "scheduled",
@@ -184,10 +188,16 @@
         },
         {
           "name": "graphics",
-          "description": "Make one quote graphic per pull-quote, all at once, and save each one.",
-          "kind": "capability",
+          "description": "Launch a quote-graphic image job for the next pull-quote and pause until it's ready.",
+          "kind": "pause",
           "capability": "contentGeneration.images",
-          "next": ["clip"]
+          "next": ["collectGraphic"]
+        },
+        {
+          "name": "collectGraphic",
+          "description": "Save the finished quote graphic, then loop back for the next quote or move on once every graphic is in.",
+          "kind": "compute",
+          "next": ["graphics", "clip", "package"]
         },
         {
           "name": "clip",
@@ -211,7 +221,7 @@
         },
         {
           "name": "deliver",
-          "description": "Email the pack to your recipient, or return it when no recipient is set. Ends the run with a summary of everything produced.",
+          "description": "Fan the pack out, one email per recipient on your list, and end the run with a summary of everything produced and how many recipients it reached.",
           "kind": "capability",
           "capability": "email.send",
           "terminal": true
@@ -221,170 +231,50 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 1,
-        "degradedWithoutSetup": "Repurposes the built-in sample post into copy plus real rendered quote graphics; skips the pricey teaser clip and emails nothing because no recipient is set."
-      }
-    },
-    {
-      "id": "dependency-upgrade",
-      "name": "Dependency Upgrade",
-      "description": "On a schedule, a coding agent bumps a repo's dependencies in a sandbox, runs the tests, and pushes only when the build is green.",
-      "tags": ["dependencies", "coding-agent", "scheduled", "ci"],
-      "category": "product-engineering",
-      "discipline": "Release engineering",
-      "cadence": "scheduled",
-      "complexity": "advanced",
-      "sourcePath": "examples/dependency-upgrade",
-      "capabilities": [
-        "models.coding",
-        "sandboxes.exec",
-        "models.run",
-        "fileStorage.upload",
-        "repositories.pushFromSandbox"
-      ],
-      "steps": [
-        {
-          "name": "plan",
-          "description": "Resolves the repo and the install and test commands and checks the input; with no repo it stops right away.",
-          "kind": "compute",
-          "next": ["bump", "rejected"]
-        },
-        {
-          "name": "bump",
-          "description": "Launches a coding agent to bump the repo's dependencies in a sandbox, then pauses until the run finishes.",
-          "kind": "llm",
-          "capability": "models.coding",
-          "next": ["verify"]
-        },
-        {
-          "name": "verify",
-          "description": "Re-attaches that sandbox and runs the install and test suite there; a failed run or a red build is rejected.",
-          "kind": "capability",
-          "capability": "sandboxes.exec",
-          "next": ["assess", "rejected"]
-        },
-        {
-          "name": "assess",
-          "description": "Asks a model to rate the upgrade's risk from the dependency diff, holding anything above your bar.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["publish", "held"]
-        },
-        {
-          "name": "publish",
-          "description": "Pushes the bumped branch from the sandbox and archives the triage report.",
-          "kind": "capability",
-          "capability": "repositories.pushFromSandbox",
-          "terminal": true
-        },
-        {
-          "name": "held",
-          "description": "The build was green but the risk was too high, so it archives the report and waits for a human.",
-          "kind": "pause",
-          "checkpoint": true,
-          "capability": "fileStorage.upload",
-          "terminal": true
-        },
-        {
-          "name": "rejected",
-          "description": "The coding run failed or the tests were red, so it archives the report and pushes nothing.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 1,
-        "degradedWithoutSetup": "Runs a coding agent to triage upgrades and writes a report; pushes nothing (no repo)."
-      }
-    },
-    {
-      "id": "error-triage-digest",
-      "name": "Daily Error Digest",
-      "description": "Ingest errors by webhook or a scheduled pull, cluster and summarize them with an LLM, dedupe against a database, and email a daily digest.",
-      "tags": ["errors", "triage", "digest", "dedupe", "scheduled", "logs"],
-      "category": "reliability-governance",
-      "discipline": "Reliability",
-      "cadence": "scheduled",
-      "complexity": "moderate",
-      "sourcePath": "examples/error-triage-digest",
-      "capabilities": [
-        "models.run",
-        "database.get",
-        "database.create",
-        "email.send"
-      ],
-      "steps": [
-        {
-          "name": "collect",
-          "description": "Gather the error batch — take it directly, GET it from a pull URL, or pause at $0 until a webhook pushes one via the errors.pushed signal.",
-          "kind": "pause",
-          "next": ["triage"]
-        },
-        {
-          "name": "triage",
-          "description": "Hand the raw errors to an LLM to cluster them into distinct issues, each with a stable fingerprint, a severity, and an occurrence count.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["dedupe"]
-        },
-        {
-          "name": "dedupe",
-          "description": "Look each fingerprint up in a Postgres store: never-seen ones are new, the rest are recurring, and their running totals are updated. Skipped on a dry run.",
-          "kind": "capability",
-          "capability": "database.get",
-          "next": ["digest"]
-        },
-        {
-          "name": "digest",
-          "description": "Write a markdown digest — new issues first, recurring below — and email it. A dry run, or a run with no recipient, returns it without sending.",
-          "kind": "capability",
-          "capability": "email.send",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 2,
-        "provisions": ["postgres"],
-        "degradedWithoutSetup": "Triages sample errors into a digest; emails nothing because no recipient is set."
+        "degradedWithoutSetup": "Repurposes the built-in sample post into copy plus real rendered quote graphics; skips the pricey teaser clip and emails nothing because no recipients are set."
       }
     },
     {
       "id": "eval-gate",
-      "name": "Output Quality Check",
-      "description": "Score an output against your own rubric with an LLM judge, then branch to publish or revise on whether it clears a threshold.",
-      "tags": ["evals", "quality-gate", "llm-judge", "composition"],
+      "name": "Self-Editing Writer",
+      "description": "Draft a piece against your brief, grade it against your own rubric with an LLM judge, and revise in a bounded loop until it clears the bar.",
+      "tags": ["writing", "llm-judge", "self-revision", "bounded-loop"],
       "category": "product-engineering",
       "discipline": "AI operations",
       "cadence": "on-demand",
-      "complexity": "moderate",
+      "complexity": "advanced",
       "sourcePath": "examples/eval-gate",
       "capabilities": ["models.run"],
       "steps": [
         {
-          "name": "judge",
-          "description": "Build a judge prompt from your rubric, call the LLM (models.run), and parse a 0-to-1 score from the reply.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["gate"]
+          "name": "parse",
+          "description": "Validate the brief and rubric, defaulting to a built-in sample, and seed the attempt counter.",
+          "kind": "compute",
+          "next": ["draft"]
         },
         {
-          "name": "gate",
-          "description": "Compare the score to your threshold. At or above goes to publish, below goes to revise. No LLM call here.",
+          "name": "draft",
+          "description": "Write the piece from the brief. On a revision, address the rejected draft and the judge's critique too.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": ["judge"]
+        },
+        {
+          "name": "judge",
+          "description": "Score the draft against your rubric with a second model call and parse a 0-to-1 score plus a critique.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": ["decide"]
+        },
+        {
+          "name": "decide",
+          "description": "Compare the score to your threshold and the attempt count to the cap: below both, loop back to draft; otherwise publish. No model call here.",
           "kind": "compute",
-          "next": ["publish", "revise"]
+          "next": ["draft", "publish"]
         },
         {
           "name": "publish",
-          "description": "The output cleared the threshold. Return the decision, score, threshold, and rationale.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "revise",
-          "description": "The output fell below the threshold. Return the decision, score, threshold, and rationale.",
+          "description": "The one terminal, returning the final draft, whether it passed, the score, and how many attempts it took.",
           "kind": "compute",
           "terminal": true
         }
@@ -393,380 +283,121 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 0,
-        "degradedWithoutSetup": "Grades the built-in sample against a rubric and returns a decision with rationale."
-      }
-    },
-    {
-      "id": "fan-out-and-combine",
-      "name": "Fan Out and Combine",
-      "description": "Split a goal into parts, run each part as its own child agent run in parallel, then merge the results into one answer.",
-      "tags": ["orchestration", "fan-out", "map-reduce", "agents"],
-      "category": "reliability-governance",
-      "discipline": "Reliability",
-      "cadence": "on-demand",
-      "complexity": "involved",
-      "sourcePath": "examples/fan-out-and-combine",
-      "capabilities": ["agents.run", "models.run"],
-      "steps": [
-        {
-          "name": "plan",
-          "description": "Resolve the goal, the parts to fan out, and the child agent to run for each — this agent itself by default. A leaf handles one part; a dry run returns the plan.",
-          "kind": "compute",
-          "next": ["solve", "fanOut", "planned"]
-        },
-        {
-          "name": "solve",
-          "description": "Leaf role: analyse one part toward the goal with a model, then finish. A leaf never fans out, which bounds the recursion to one level.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": [],
-          "terminal": true
-        },
-        {
-          "name": "fanOut",
-          "description": "Launch one child run per part in parallel and wait for all of them; a child that fails becomes a row, not a crash.",
-          "kind": "capability",
-          "capability": "agents.run",
-          "next": ["reduce"]
-        },
-        {
-          "name": "reduce",
-          "description": "Merge the children's analyses into one answer. If nothing came back with content, say so rather than invent it.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["done"]
-        },
-        {
-          "name": "done",
-          "description": "Return the combined answer and each child's status.",
-          "kind": "compute",
-          "next": [],
-          "terminal": true
-        },
-        {
-          "name": "planned",
-          "description": "Off-ramp for a dry run: return the fan-out plan with nothing dispatched.",
-          "kind": "compute",
-          "next": [],
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 0,
-        "degradedWithoutSetup": "Fans a sample goal into three parallel child runs of itself and returns one combined answer."
-      }
-    },
-    {
-      "id": "hello-agent",
-      "name": "Hello Agent",
-      "description": "The smallest working Sapiom agent — one step that returns a greeting, so you can confirm build, deploy, and run before adding a real capability.",
-      "tags": ["starter", "minimal"],
-      "category": "starter",
-      "discipline": "Starter",
-      "cadence": "on-demand",
-      "complexity": "minimal",
-      "sourcePath": "examples/hello-agent",
-      "capabilities": [],
-      "steps": [
-        {
-          "name": "greet",
-          "description": "Read the optional name input and return a greeting, defaulting to \"world\" when none is given. This is the only step, and it ends the run.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 0,
-        "degradedWithoutSetup": "Runs immediately with no setup and returns a greeting."
-      }
-    },
-    {
-      "id": "human-in-the-loop",
-      "name": "Approval Before Action",
-      "description": "An agent does the prep, then waits for a person to approve before it spends money or does anything it can't undo.",
-      "tags": ["approval", "human-in-the-loop", "hitl", "fallback"],
-      "category": "reliability-governance",
-      "discipline": "Governance",
-      "cadence": "on-demand",
-      "complexity": "advanced",
-      "sourcePath": "examples/human-in-the-loop",
-      "capabilities": ["models.run", "email.send"],
-      "steps": [
-        {
-          "name": "parse",
-          "description": "Read the free-text request and pull out what's being asked and the criteria that should drive the choice (models.run).",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["rank"]
-        },
-        {
-          "name": "rank",
-          "description": "Score and order the candidates by how well they fit the criteria, not just price (models.run).",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["notifyApprover"]
-        },
-        {
-          "name": "notifyApprover",
-          "description": "Email the approver the ranked recommendation, then pause and wait for their decision — costing nothing while idle. With no approver set, stop at the gate with the shortlist instead of waiting forever.",
-          "kind": "pause",
-          "checkpoint": true,
-          "capability": "email.send",
-          "next": ["onDecision", "pending"]
-        },
-        {
-          "name": "onDecision",
-          "description": "Read the approval reply: approve enters the offer loop, reject backs out, and no candidates escalates to a person.",
-          "kind": "compute",
-          "next": ["offer", "escalate", "revert"]
-        },
-        {
-          "name": "revert",
-          "description": "Rejected — back out to a safe state and finish, having committed nothing.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "offer",
-          "description": "Make a provisional, non-binding offer to the top-ranked candidate, then pause until they confirm (resumes at 'resolve').",
-          "kind": "pause",
-          "capability": "email.send",
-          "next": ["resolve"]
-        },
-        {
-          "name": "resolve",
-          "description": "Read the candidate's reply: accept commits, decline or timeout moves to the next candidate, and an exhausted list escalates.",
-          "kind": "compute",
-          "next": ["commit", "offer", "escalate"]
-        },
-        {
-          "name": "commit",
-          "description": "The one irreversible step — runs only after a human approved and a candidate accepted; a dry run makes it a no-op offline.",
-          "kind": "capability",
-          "capability": "email.send",
-          "terminal": true
-        },
-        {
-          "name": "pending",
-          "description": "No approver was set, so the run stops holding the ranked shortlist and the signal that continues it. Nothing was offered, and nothing was approved.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "escalate",
-          "description": "The ranked list ran out, or nobody could be contacted — hand off to a person.",
-          "kind": "capability",
-          "capability": "email.send",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 2,
-        "degradedWithoutSetup": "Ranks the sample shortlist and stops at pending-approval; commits nothing (no approver)."
+        "degradedWithoutSetup": "Drafts and grades the built-in sample brief against a rubric, revising once if needed, and publishes the final draft with its score."
       }
     },
     {
       "id": "logged-in-screenshots",
-      "name": "Logged-In Page Screenshots",
-      "description": "Open a real browser, optionally log in, and capture the pages you list as hosted images — the view a signed-in user sees.",
-      "tags": ["browser", "screenshot", "authenticated", "visual"],
+      "name": "Website QA Crawler",
+      "description": "Crawl a site's pages, screenshot each one, audit content with a model, and check that Terms and Privacy links resolve.",
+      "tags": ["crawler", "qa", "content-audit", "broken-links"],
       "category": "reliability-governance",
       "discipline": "Reliability",
       "cadence": "on-demand",
-      "complexity": "simple",
+      "complexity": "moderate",
       "sourcePath": "examples/logged-in-screenshots",
       "capabilities": [
-        "browser.identity",
+        "web.scrape",
         "browser.session",
-        "browser.screenshot"
+        "browser.screenshot",
+        "models.run"
       ],
       "steps": [
         {
-          "name": "start",
-          "description": "Resolve the pages to capture and decide whether to log in — a login needs a URL, a username, and the password secret; miss any and it captures the public view.",
-          "kind": "compute",
-          "next": ["login", "capture"]
-        },
-        {
-          "name": "login",
-          "description": "Store the supplied credentials as a browser identity so the session opens signed in. If it fails, fall back to a public capture.",
+          "name": "crawl",
+          "description": "Read the homepage's markdown and links, then crawl a bounded set of internal pages, prioritizing anything that looks like a Terms or Privacy link.",
           "kind": "capability",
-          "capability": "browser.identity",
-          "next": ["capture"]
+          "capability": "web.scrape",
+          "next": ["render", "rejected"]
         },
         {
-          "name": "capture",
-          "description": "Open one browser session and screenshot every page in it; a page that fails becomes a row, the rest are still captured.",
+          "name": "render",
+          "description": "Open one browser session and screenshot every crawled page in it; a page that fails to render becomes a row, the rest are still captured.",
           "kind": "capability",
           "capability": "browser.session",
-          "next": ["done"]
+          "next": ["audit"]
         },
         {
-          "name": "done",
-          "description": "Return one row per requested page — its image URL or its failure — with the captured count and whether it was authenticated.",
+          "name": "audit",
+          "description": "Ask a model to read every crawled page's content in one call and flag concrete content and structure issues.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": ["linkCheck"]
+        },
+        {
+          "name": "linkCheck",
+          "description": "Turn the crawl and render results into a link-integrity verdict: which pages didn't resolve, and whether Terms and Privacy are present and resolve.",
           "kind": "compute",
-          "next": [],
+          "next": ["report"]
+        },
+        {
+          "name": "report",
+          "description": "Compile the screenshots, content findings, and link integrity into one QA report.",
+          "kind": "compute",
           "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 1,
-        "settingCount": 0,
-        "degradedWithoutSetup": "Opens a browser session and captures two stable public pages as hosted images; no login, so authenticated is false."
-      }
-    },
-    {
-      "id": "meeting-notes-crm",
-      "name": "Meeting Notes to CRM",
-      "description": "Take a meeting transcript, pull out the contact, the CRM fields to update, and the action items, write them to a database, and email a summary.",
-      "tags": ["crm", "sales", "transcript", "pause-resume"],
-      "category": "revenue-marketing",
-      "discipline": "Revenue",
-      "cadence": "on-demand",
-      "complexity": "moderate",
-      "sourcePath": "examples/meeting-notes-crm",
-      "capabilities": [
-        "models.run",
-        "database.get",
-        "database.create",
-        "email.send"
-      ],
-      "steps": [
-        {
-          "name": "intake",
-          "description": "Takes the transcript — passed in directly, or, with webhook set, pauses at $0 until a note-taker pushes one via the transcript.ready signal.",
-          "kind": "pause",
-          "next": ["extract"]
         },
         {
-          "name": "extract",
-          "description": "Hands the transcript to an LLM to pull the contact, the CRM fields to update, and the action items as structured JSON.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["upsert"]
-        },
-        {
-          "name": "upsert",
-          "description": "Writes to a Postgres CRM store: updates the contact's row without wiping unmentioned fields, and records each action item under a stable id. Skipped on a dry run.",
-          "kind": "capability",
-          "capability": "database.get",
-          "next": ["summary"]
-        },
-        {
-          "name": "summary",
-          "description": "Writes a markdown recap — fields updated, action items new vs. already tracked — and emails it. A dry run, or a run with no recipient, returns it without sending.",
-          "kind": "capability",
-          "capability": "email.send",
+          "name": "rejected",
+          "description": "Terminal off-ramp when siteUrl isn't a usable URL or the site can't be reached at all.",
+          "kind": "compute",
           "terminal": true
         }
       ],
       "setup": {
         "runsWithNoSetup": true,
         "connectionCount": 0,
-        "settingCount": 2,
-        "provisions": ["postgres"],
-        "degradedWithoutSetup": "Turns sample meeting notes into a CRM update summary; emails nothing (no recipient)."
-      }
-    },
-    {
-      "id": "news-roundup",
-      "name": "Company News Roundup",
-      "description": "Search the web for a company's recent news, then publish a dated, illustrated roundup page to a small website for that company.",
-      "tags": ["news", "summarize", "images", "publish"],
-      "category": "revenue-marketing",
-      "discipline": "Marketing",
-      "cadence": "on-demand",
-      "complexity": "involved",
-      "sourcePath": "examples/news-roundup",
-      "capabilities": [
-        "web.search",
-        "models.run",
-        "contentGeneration.images",
-        "fileStorage.upload",
-        "sandboxes.create",
-        "sandboxes.deployPreview"
-      ],
-      "steps": [
-        {
-          "name": "search",
-          "description": "Search the web for the company's news from the last week. If nothing comes back, stop early and report no news instead of publishing.",
-          "kind": "capability",
-          "capability": "web.search",
-          "next": ["select"]
-        },
-        {
-          "name": "select",
-          "description": "Ask an LLM to pick the three-to-five most relevant articles and write a plain-language summary and an image prompt for each.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["illustrate"]
-        },
-        {
-          "name": "illustrate",
-          "description": "Generate one image per selected article and save each to storage; an article whose image fails degrades to a text-only card.",
-          "kind": "capability",
-          "capability": "contentGeneration.images",
-          "next": ["publish"]
-        },
-        {
-          "name": "publish",
-          "description": "Save the dated page, rebuild the company's site from storage in a sandbox, and deploy it — returning the live site and page URLs.",
-          "kind": "capability",
-          "capability": "sandboxes.deployPreview",
-          "next": [],
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 0,
-        "provisions": ["sandbox"],
-        "degradedWithoutSetup": "Searches the web for a well-covered default company and publishes a dated, illustrated roundup page at a live sandbox URL; a company with no recent coverage ends in a distinct no-news terminal instead."
+        "settingCount": 1,
+        "degradedWithoutSetup": "Crawls a bounded set of sapiom.ai pages, screenshots each one, audits the content with a model, and checks link integrity — reporting whatever it finds broken, including whether Terms and Privacy links resolve."
       }
     },
     {
       "id": "newsletter-autopilot",
       "name": "Newsletter Autopilot",
-      "description": "On a weekly schedule, it researches a niche, writes and illustrates the issue, and emails it to your subscriber list.",
-      "tags": ["newsletter", "scheduled", "llm", "email"],
+      "description": "On a schedule, it researches a niche, dedupes and self-edits the issue against a quality bar, and emails it to your list.",
+      "tags": ["newsletter", "scheduled", "llm-judge", "email"],
       "category": "revenue-marketing",
       "discipline": "Marketing",
       "cadence": "scheduled",
-      "complexity": "involved",
+      "complexity": "advanced",
       "sourcePath": "examples/newsletter-autopilot",
-      "capabilities": ["web.search", "models.run", "contentGeneration.images"],
+      "capabilities": [
+        "web.search",
+        "web.scrape",
+        "models.run",
+        "contentGeneration.images",
+        "email.send"
+      ],
       "steps": [
         {
-          "name": "search",
+          "name": "research",
           "description": "Search the web for the niche and collect candidate sources.",
           "kind": "capability",
           "capability": "web.search",
-          "next": ["scrape"]
+          "next": ["dedupe"]
         },
         {
-          "name": "scrape",
-          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
+          "name": "dedupe",
+          "description": "Read the top candidates for full text, drop near-duplicate stories, and rank the survivors down to the strongest few.",
           "kind": "capability",
-          "capability": "web.search",
+          "capability": "web.scrape",
           "next": ["write"]
         },
         {
           "name": "write",
-          "description": "Hand the sources to an LLM to curate them and write this week's issue: a subject, a body that cites each source, and a header-image prompt.",
+          "description": "Hand the deduped sources to an LLM to curate them and write this week's issue: a subject, a body that cites each source, and a header-image prompt.",
           "kind": "llm",
           "capability": "models.run",
-          "next": ["header"]
+          "next": ["selfEdit"]
         },
         {
-          "name": "header",
+          "name": "selfEdit",
+          "description": "Grade the draft against a fixed quality bar with a second model call; below the bar it revises once via write, otherwise it moves on.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": ["write", "illustrate"]
+        },
+        {
+          "name": "illustrate",
           "description": "Generate a header image for the issue; if none comes back, the issue still goes out without it.",
           "kind": "capability",
           "capability": "contentGeneration.images",
@@ -774,8 +405,9 @@
         },
         {
           "name": "deliver",
-          "description": "Email each subscriber their own copy; a dry run, or a run with no subscribers set, returns the issue without sending.",
-          "kind": "compute",
+          "description": "Email each subscriber their own copy; with none configured, email the agent's own demo inbox instead so the send is still real.",
+          "kind": "capability",
+          "capability": "email.send",
           "terminal": true
         }
       ],
@@ -783,7 +415,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 1,
-        "degradedWithoutSetup": "Writes a newsletter from researched sources; sends to nobody (empty subscriber list)."
+        "degradedWithoutSetup": "Researches the default niche, writes and self-edits the issue against a quality bar, illustrates it, and emails it to the agent's own Sapiom-hosted demo inbox; set subscribers to send it to your list instead."
       }
     },
     {
@@ -807,46 +439,58 @@
         },
         {
           "name": "resolve",
-          "description": "Reads the target Postgres connection string from a Sapiom database handle to inject into the endpoint.",
+          "description": "Reads the target Postgres connection string from a Sapiom database handle; on the built-in demo database it also seeds the sample schema so the query returns real rows.",
           "kind": "capability",
           "capability": "database.get",
           "next": ["plan", "rejected"]
         },
         {
           "name": "plan",
-          "description": "Previews the pipeline: translates the sample question into SQL with an LLM.",
+          "description": "Translates the sample question into SQL with an LLM, or, for the built-in demo question, uses a fixed known-safe SELECT so the zero-setup path needs no model.",
           "kind": "llm",
           "capability": "models.run",
           "next": ["guard"]
         },
         {
           "name": "guard",
-          "description": "Applies the read-only guardrail to the sample SQL; anything that isn't a single read-only statement is rejected.",
+          "description": "Applies the read-only guardrail to the SQL; anything that isn’t a single read-only statement is rejected.",
           "kind": "compute",
-          "next": ["deploy", "rejected"]
+          "next": ["execute", "rejected"]
+        },
+        {
+          "name": "execute",
+          "description": "Runs the guarded SELECT for real inside a READ ONLY transaction, statement-timeout-bounded and row-capped, and returns the actual rows.",
+          "kind": "compute",
+          "next": ["deploy", "query_failed"]
         },
         {
           "name": "deploy",
-          "description": "Write the endpoint server into a sandbox and expose it at a stable URL, injecting DATABASE_URL and the endpoint's own API key. With no key, nothing is deployed.",
+          "description": "Write the endpoint server into a sandbox and expose it at a stable URL, injecting DATABASE_URL and the endpoint’s own minted API key. With no key, nothing is deployed.",
           "kind": "capability",
           "capability": "sandboxes.deployPreview",
           "next": ["deployed", "deploy_failed", "endpoint_skipped"]
         },
         {
-          "name": "endpoint_skipped",
-          "description": "The endpoint needs an API key of its own to translate each request; without one nothing is deployed, and the run returns the translated, guarded SQL instead of a URL that cannot answer.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
           "name": "deployed",
-          "description": "The endpoint is live — returns its URL and the previewed sample query.",
+          "description": "The endpoint is live, returning its URL plus the real rows from the sample query.",
           "kind": "compute",
           "terminal": true
         },
         {
           "name": "deploy_failed",
-          "description": "The deploy failed — surfaces the deployPreview logs.",
+          "description": "The deploy failed, surfacing the deployPreview logs alongside the real sample rows already fetched.",
+          "kind": "compute",
+          "terminal": true
+        },
+        {
+          "name": "endpoint_skipped",
+          "description": "Without an API key of its own the endpoint is not deployed; the run still returns the real rows from the guarded sample query.",
+          "kind": "compute",
+          "terminal": true
+        },
+        {
+          "name": "query_failed",
+          "description": "The guarded query could not run against the database; nothing was deployed and the failing SQL is surfaced.",
           "kind": "compute",
           "terminal": true
         },
@@ -862,135 +506,7 @@
         "connectionCount": 1,
         "settingCount": 0,
         "provisions": ["postgres"],
-        "degradedWithoutSetup": "Translates a sample question to SQL, mints the endpoint its own scoped key, and deploys a working /query endpoint."
-      }
-    },
-    {
-      "id": "personalized-media-at-scale",
-      "name": "Personalized Media Per Lead",
-      "description": "Read a table of leads and, per row, generate a personalized image or short clip, store it, and email each person a link — on a schedule.",
-      "rank": 3,
-      "tags": ["marketing", "generative", "media", "scheduled"],
-      "category": "revenue-marketing",
-      "discipline": "Marketing",
-      "cadence": "scheduled",
-      "complexity": "involved",
-      "sourcePath": "examples/personalized-media-at-scale",
-      "capabilities": [
-        "database.get",
-        "database.create",
-        "contentGeneration.images",
-        "contentGeneration.video",
-        "email.send"
-      ],
-      "steps": [
-        {
-          "name": "fetch",
-          "description": "Read up to `limit` recipient rows from a database table, seeding a demo table on the first run. If you set dryRun, it stops here and returns the rows and their prompts.",
-          "kind": "capability",
-          "capability": "database.get",
-          "next": ["renderImages", "renderClip"]
-        },
-        {
-          "name": "renderImages",
-          "description": "For the image medium: make one personalized image per row, all at once, and save each.",
-          "kind": "capability",
-          "capability": "contentGeneration.images",
-          "next": ["deliver"]
-        },
-        {
-          "name": "renderClip",
-          "description": "For the video medium: launch a short clip for one row, then pause until it finishes.",
-          "kind": "pause",
-          "capability": "contentGeneration.video",
-          "next": ["collectClip"]
-        },
-        {
-          "name": "collectClip",
-          "description": "Save the finished clip, then loop back for the next row, or move on once every row is done.",
-          "kind": "compute",
-          "next": ["renderClip", "deliver"]
-        },
-        {
-          "name": "deliver",
-          "description": "Email each recipient a link to their own asset; a dry run generates and sends nothing.",
-          "kind": "capability",
-          "capability": "email.send",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 0,
-        "provisions": ["postgres"],
-        "degradedWithoutSetup": "Renders personalized images; delivers nothing because no recipients are set."
-      }
-    },
-    {
-      "id": "pr-review-bot",
-      "name": "PR Review Bot",
-      "description": "When a pull request opens, a coding agent reviews the code and flags missing tests, then posts the review to your email or Slack.",
-      "rank": 6,
-      "tags": ["coding-agent", "review", "pause-resume", "webhook"],
-      "category": "product-engineering",
-      "discipline": "Engineering",
-      "cadence": "on-webhook",
-      "complexity": "advanced",
-      "sourcePath": "examples/pr-review-bot",
-      "capabilities": ["models.coding", "models.run", "email.send"],
-      "steps": [
-        {
-          "name": "watch",
-          "description": "Register with the webhook source and pause until a PR opens — costing nothing while idle. With no source configured, review the built-in sample PR instead of waiting forever.",
-          "kind": "pause",
-          "next": ["review"]
-        },
-        {
-          "name": "review",
-          "description": "Wakes when a PR opens; its input is the PR payload. A coding agent checks the code out and analyzes the diff, flagging changes that lack tests.",
-          "kind": "llm",
-          "capability": "models.coding",
-          "next": ["assess"]
-        },
-        {
-          "name": "assess",
-          "description": "A model turns the coding agent's raw findings into a structured review — a verdict, a summary, and the list of missing tests.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["reportEmail", "reportSlack"]
-        },
-        {
-          "name": "reportEmail",
-          "description": "Emails the review to the configured recipient.",
-          "kind": "capability",
-          "capability": "email.send",
-          "next": ["posted", "failed"]
-        },
-        {
-          "name": "reportSlack",
-          "description": "Post the review to the configured channel with your Slack bot token. Without one, the review is returned in the run's output and nothing is posted.",
-          "kind": "compute",
-          "next": ["posted", "failed"]
-        },
-        {
-          "name": "posted",
-          "description": "Return the result — the channel used and the verdict.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "failed",
-          "description": "The send errored; return the error.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 1,
-        "settingCount": 1,
-        "degradedWithoutSetup": "Runs a coding agent to review the sample PR and returns a verdict; posts nothing (no webhook)."
+        "degradedWithoutSetup": "Runs the built-in sample question against the seeded demo database for real rows, mints the endpoint its own scoped key, and deploys a working /query endpoint."
       }
     },
     {
@@ -1012,7 +528,7 @@
       "steps": [
         {
           "name": "draft",
-          "description": "An LLM turns the request into a structured proposal — title, summary, scope, and priced line items — then the totals are computed in code, not trusted from the model.",
+          "description": "An LLM turns the request into a structured proposal, including a title, summary, scope, and priced line items, then the totals are computed in code, not trusted from the model.",
           "kind": "llm",
           "capability": "models.run",
           "next": ["render", "rejected"]
@@ -1026,7 +542,7 @@
         },
         {
           "name": "review",
-          "description": "Email the approver a summary and the PDF link, then pause and wait for their decision — costing nothing while idle. With no approver set, stop at the gate with the drafted proposal instead of waiting forever.",
+          "description": "Email the approver a summary and the PDF link, then pause and wait for their decision. With no approver set, stop at the gate with the drafted proposal instead of waiting forever.",
           "kind": "pause",
           "checkpoint": true,
           "capability": "email.send",
@@ -1040,7 +556,7 @@
         },
         {
           "name": "send",
-          "description": "The one outward step — email the approved proposal to the client. A dry run skips the send.",
+          "description": "The one outward step, emailing the approved proposal to the client. A dry run skips the send.",
           "kind": "capability",
           "capability": "email.send",
           "terminal": true
@@ -1053,23 +569,24 @@
         },
         {
           "name": "rejected",
-          "description": "Rejected at review — nothing goes to the client, and the draft PDF stays on file.",
+          "description": "Rejected at review. Nothing goes to the client, and the draft PDF stays on file.",
           "kind": "compute",
           "terminal": true
         }
       ],
       "setup": {
-        "runsWithNoSetup": false,
+        "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 1,
-        "provisions": ["sandbox"]
+        "provisions": ["sandbox"],
+        "degradedWithoutSetup": "Drafts the built-in sample brief into a priced proposal and renders it to a real PDF, then stops at the sign-off gate — no approver is configured, so nothing is emailed yet."
       }
     },
     {
       "id": "research-to-microsite",
       "name": "Research Micro-Site",
-      "description": "Research a topic across the web, then build and deploy a shareable live report site — not just a document.",
-      "tags": ["research", "coding-agent", "sandbox", "publish"],
+      "description": "Research a topic, self-critique and revise the write-up, illustrate it, then build and deploy a live, cited micro-site.",
+      "tags": ["research", "coding-agent", "media", "self-critique"],
       "category": "data-knowledge",
       "discipline": "Research",
       "cadence": "on-demand",
@@ -1080,34 +597,54 @@
         "web.scrape",
         "models.run",
         "models.coding",
+        "contentGeneration.images",
         "sandboxes.deployPreview",
         "domains.dns.create"
       ],
       "steps": [
         {
-          "name": "search",
-          "description": "Take the topic and run one web search for candidate sources.",
-          "kind": "capability",
-          "capability": "web.search",
-          "next": ["scrape"]
+          "name": "plan",
+          "description": "Plan a couple of complementary search queries from the topic.",
+          "kind": "compute",
+          "next": ["gather"]
         },
         {
-          "name": "scrape",
-          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
+          "name": "gather",
+          "description": "Run each query, dedupe the hits by URL, then read the survivors for full article text.",
           "kind": "capability",
-          "capability": "web.scrape",
+          "capability": "web.search",
           "next": ["synthesize"]
         },
         {
           "name": "synthesize",
-          "description": "Hand the sources to an LLM to write a structured, cited report. A dry run — or a report too empty to build a site from — stops here and returns the report.",
+          "description": "Hand the sources to an LLM to write a structured, cited report, or revise one after a critique. No sources at all stops here with an empty report.",
           "kind": "llm",
           "capability": "models.run",
-          "next": ["build", "drafted"]
+          "next": ["critique", "drafted"]
+        },
+        {
+          "name": "critique",
+          "description": "Grade the report against a fixed editorial rubric; below the bar with attempts left, send it back to synthesize for a revision, bounded by maxDraftAttempts.",
+          "kind": "llm",
+          "capability": "models.run",
+          "next": ["synthesize", "illustrate", "drafted"]
+        },
+        {
+          "name": "illustrate",
+          "description": "Launch an image-generation job for the next section, then pause until it finishes, or skip straight to the build when no illustrations are wanted.",
+          "kind": "pause",
+          "capability": "contentGeneration.images",
+          "next": ["collectIllustration", "build"]
+        },
+        {
+          "name": "collectIllustration",
+          "description": "Record the finished illustration, or note it produced nothing usable, then loop for the next section or move on to the build.",
+          "kind": "compute",
+          "next": ["illustrate", "build"]
         },
         {
           "name": "build",
-          "description": "Launch a coding agent to build a self-contained static site from the report, then pause until it finishes — costing nothing while it works.",
+          "description": "Launch a coding agent to build a self-contained static site from the report and any illustrations, then pause until it finishes.",
           "kind": "pause",
           "capability": "models.coding",
           "next": ["publish"]
@@ -1117,18 +654,18 @@
           "description": "Re-attach the coding agent's sandbox and deploy the site to a stable public URL.",
           "kind": "capability",
           "capability": "sandboxes.deployPreview",
-          "next": ["mapDomain", "live", "failed"]
+          "next": ["mapDomain", "live", "failed", "builtNotPublished"]
         },
         {
           "name": "mapDomain",
-          "description": "If a domain you own is configured, point a subdomain at the live site with a free CNAME; otherwise this is skipped.",
+          "description": "If a domain you own is configured, point a subdomain at the live site with a CNAME; otherwise this is skipped.",
           "kind": "capability",
           "capability": "domains.dns.create",
           "next": ["live"]
         },
         {
           "name": "live",
-          "description": "Return the live URL, the custom URL when one was mapped, the report title, and the sources.",
+          "description": "Return the live URL, the custom URL when one was mapped, the report title, the sources, and the self-critique score.",
           "kind": "compute",
           "terminal": true
         },
@@ -1140,15 +677,22 @@
         },
         {
           "name": "drafted",
-          "description": "The dry-run off-ramp: the report was computed but nothing was built or deployed.",
+          "description": "The off-ramp: the report was computed but nothing was illustrated, built, or deployed, a dry run after self-critique, or no sources to research from.",
+          "kind": "compute",
+          "terminal": true
+        },
+        {
+          "name": "builtNotPublished",
+          "description": "The site was built but the local coding run's environment can't be preview-deployed; return what was built.",
           "kind": "compute",
           "terminal": true
         }
       ],
       "setup": {
-        "runsWithNoSetup": false,
+        "runsWithNoSetup": true,
         "connectionCount": 0,
-        "settingCount": 0
+        "settingCount": 0,
+        "degradedWithoutSetup": "Researches, self-critiques, illustrates, and deploys a live, cited micro-site about a default topic."
       }
     },
     {
@@ -1170,17 +714,23 @@
       "steps": [
         {
           "name": "decompose",
-          "description": "An LLM turns your scene into a style guide and an ordered shot list. If you set dryRun, it stops here and returns the plan.",
+          "description": "An LLM turns your scene into a style guide and an ordered shot list. A zero-setup run plans a single shot; pass dryRun to stop here and return just the plan.",
           "kind": "llm",
           "capability": "models.run",
-          "next": ["keyframes"]
+          "next": ["keyframe"]
         },
         {
-          "name": "keyframes",
-          "description": "Make one keyframe image per shot, all at once, and save each one.",
-          "kind": "capability",
+          "name": "keyframe",
+          "description": "Launch an image job for one shot’s keyframe, then pause until it finishes.",
+          "kind": "pause",
           "capability": "contentGeneration.images",
-          "next": ["animate"]
+          "next": ["collectKeyframe"]
+        },
+        {
+          "name": "collectKeyframe",
+          "description": "Save the finished keyframe, then loop back for the next shot’s frame, or move on once every keyframe is in.",
+          "kind": "compute",
+          "next": ["keyframe", "animate"]
         },
         {
           "name": "animate",
@@ -1197,14 +747,14 @@
         },
         {
           "name": "stitch",
-          "description": "Join every clip with the synchronous merge endpoint, using a bounded polling fallback if the provider unexpectedly queues it.",
+          "description": "Join every clip with the synchronous merge endpoint; a single clip skips the merge, and a bounded polling fallback covers a provider that unexpectedly queues it.",
           "kind": "capability",
           "capability": "contentGeneration.video",
           "next": ["finalize"]
         },
         {
           "name": "finalize",
-          "description": "Return the stitched video's file id and download link.",
+          "description": "Return the stitched video’s file id and download link.",
           "kind": "compute",
           "terminal": true
         }
@@ -1213,78 +763,7 @@
         "runsWithNoSetup": true,
         "connectionCount": 0,
         "settingCount": 0,
-        "degradedWithoutSetup": "Shoots the built-in sample scene into a shot list with a style bible (dry run)."
-      }
-    },
-    {
-      "id": "scheduled-compliance-audit",
-      "name": "Signed Compliance Audit",
-      "description": "On a schedule, it audits your resources against a policy, waits for a person to sign off, then archives the signed attestation.",
-      "tags": ["compliance", "scheduled", "human-in-the-loop", "attestation"],
-      "category": "finance-legal-people",
-      "discipline": "Legal",
-      "cadence": "scheduled",
-      "complexity": "involved",
-      "sourcePath": "examples/scheduled-compliance-audit",
-      "capabilities": [
-        "web.scrape",
-        "models.run",
-        "fileStorage.upload",
-        "fileStorage.getDownloadUrl"
-      ],
-      "steps": [
-        {
-          "name": "collect",
-          "description": "Read the current state of each resource with a scrape, keeping the error as missing evidence when a page won't load.",
-          "kind": "capability",
-          "capability": "web.scrape",
-          "next": ["audit"]
-        },
-        {
-          "name": "audit",
-          "description": "Hand the collected state and your policy to an LLM to produce a verdict and one evidence-cited check per requirement.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["review"]
-        },
-        {
-          "name": "review",
-          "description": "Hold the drafted attestation and pause for a human sign-off — costing nothing while idle. With no signer set, stop at the gate with the draft instead of waiting forever.",
-          "kind": "pause",
-          "checkpoint": true,
-          "next": ["onSignoff", "pending"]
-        },
-        {
-          "name": "onSignoff",
-          "description": "Read the sign-off reply: an explicit approve archives the attestation, anything else backs out with nothing filed.",
-          "kind": "compute",
-          "next": ["archive", "rejected"]
-        },
-        {
-          "name": "archive",
-          "description": "Write the signed attestation to durable file storage and return its file id and download link; a dry run skips the upload.",
-          "kind": "capability",
-          "capability": "fileStorage.upload",
-          "terminal": true
-        },
-        {
-          "name": "pending",
-          "description": "No signer was set, so the run stops holding a DRAFT attestation. Nothing was signed, filed, or archived.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "rejected",
-          "description": "Sign-off was declined — return the audit findings, having archived nothing.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 1,
-        "degradedWithoutSetup": "Runs the audit checks and drafts an attestation; files nothing (nobody signed off)."
+        "degradedWithoutSetup": "Shoots the built-in sample scene as a single real keyframe and clip, and returns the finished video's download link."
       }
     },
     {
@@ -1295,7 +774,7 @@
       "category": "data-knowledge",
       "discipline": "Data",
       "cadence": "scheduled",
-      "complexity": "involved",
+      "complexity": "advanced",
       "sourcePath": "examples/scheduled-db-insight-report",
       "capabilities": [
         "database.get",
@@ -1309,168 +788,53 @@
       "steps": [
         {
           "name": "snapshot",
-          "description": "Runs the read-only queries against the database and normalizes each result into a metric — a labeled series or a scalar KPI.",
+          "description": "Resolve the target database (self-provisioning and seeding the demo DB if needed) and snapshot its current catalog metrics.",
           "kind": "capability",
           "capability": "database.get",
+          "next": ["detectAnomalies"]
+        },
+        {
+          "name": "detectAnomalies",
+          "description": "A model flags the one table most worth attention, trusting only labels the snapshot actually returned.",
+          "kind": "llm",
+          "capability": "models.run",
           "next": ["narrate"]
         },
         {
           "name": "narrate",
-          "description": "Hands the metrics to a model to write a short markdown report — a summary, insights that cite the numbers, and what to watch.",
+          "description": "A model writes the narrative around the movement, leading with the flagged anomaly.",
           "kind": "llm",
           "capability": "models.run",
+          "next": ["followUp"]
+        },
+        {
+          "name": "followUp",
+          "description": "Run a parameterized read into the flagged table's recent write activity for a second, data-driven angle.",
+          "kind": "capability",
+          "capability": "database.get",
           "next": ["chart"]
         },
         {
           "name": "chart",
-          "description": "Renders the series into an SVG bar chart inside a sandbox, hosts it in file storage, and takes a shareable link.",
+          "description": "Render the metrics and the follow-up read into a chart image in a sandbox and upload it.",
           "kind": "capability",
           "capability": "sandboxes.create",
           "next": ["deliver"]
         },
         {
           "name": "deliver",
-          "description": "Emails the report — narrative, chart link, and a metrics table. A dry run or a missing recipient returns it as a preview instead.",
+          "description": "Compile the report with the chart inline and email it to the configured recipient; with none set, return it in the run.",
           "kind": "capability",
           "capability": "email.send",
           "terminal": true
         }
       ],
       "setup": {
-        "runsWithNoSetup": false,
+        "runsWithNoSetup": true,
         "connectionCount": 1,
         "settingCount": 1,
-        "provisions": ["postgres"]
-      }
-    },
-    {
-      "id": "scheduled-research-brief",
-      "name": "Scheduled Research Brief",
-      "description": "On a schedule, it researches a topic and emails you a short, sourced brief.",
-      "tags": ["research", "search", "scheduled", "llm"],
-      "category": "data-knowledge",
-      "discipline": "Research",
-      "cadence": "scheduled",
-      "complexity": "moderate",
-      "sourcePath": "examples/scheduled-research-brief",
-      "capabilities": ["web.search", "models.run"],
-      "steps": [
-        {
-          "name": "search",
-          "description": "Search the web for the topic and collect candidate sources.",
-          "kind": "capability",
-          "capability": "web.search",
-          "next": ["scrape"]
-        },
-        {
-          "name": "scrape",
-          "description": "Read the top candidates for their full article text, keeping just the snippet when a page won't load.",
-          "kind": "capability",
-          "capability": "web.search",
-          "next": ["curate"]
-        },
-        {
-          "name": "curate",
-          "description": "Hand the sources to an LLM to rank them, drop the weak ones, and write a short brief that cites each one.",
-          "kind": "llm",
-          "capability": "models.run",
-          "next": ["deliver"]
-        },
-        {
-          "name": "deliver",
-          "description": "Email the brief to your recipient; a dry run, or a run with no recipient set, returns it without sending.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 1,
-        "degradedWithoutSetup": "Researches the topic, writes a sourced brief, and emails it to the agent's own Sapiom-hosted demo inbox; set deliverTo to send it to your address."
-      }
-    },
-    {
-      "id": "slack-notifier",
-      "name": "Slack Notifier",
-      "description": "Post a message to Slack with your own bot token — the starter for wiring up any external API.",
-      "tags": ["integration", "starter", "slack"],
-      "category": "starter",
-      "discipline": "Starter",
-      "cadence": "on-demand",
-      "complexity": "minimal",
-      "sourcePath": "examples/slack-notifier",
-      "capabilities": [],
-      "steps": [
-        {
-          "name": "validate",
-          "description": "Check the message, pick the auth mode (bot or webhook), and resolve the target channel.",
-          "kind": "compute",
-          "next": ["post", "rejected"]
-        },
-        {
-          "name": "post",
-          "description": "Post with authorized HTTP in bot mode, or protect the credential-bearing URL in webhook mode. Without a credential, return the message without posting.",
-          "kind": "compute",
-          "next": ["posted", "failed", "rejected"]
-        },
-        {
-          "name": "posted",
-          "description": "Return the result — for bot mode, the channel and the message timestamp.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "failed",
-          "description": "The Slack call errored; return the error.",
-          "kind": "compute",
-          "terminal": true
-        },
-        {
-          "name": "rejected",
-          "description": "The input didn't pass validation, so nothing was posted.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 2,
-        "settingCount": 1,
-        "degradedWithoutSetup": "Composes the message and prints it; posts nothing to Slack (no bot token)."
-      }
-    },
-    {
-      "id": "web-research-digest",
-      "name": "Web Research Digest",
-      "description": "Search the web for a topic and get back a short, sourced digest.",
-      "tags": ["research", "search"],
-      "category": "data-knowledge",
-      "discipline": "Research",
-      "cadence": "on-demand",
-      "complexity": "simple",
-      "sourcePath": "examples/web-research-digest",
-      "capabilities": ["web.search"],
-      "steps": [
-        {
-          "name": "search",
-          "description": "Take the topic and run one web search, returning a synthesized answer and ranked results.",
-          "kind": "capability",
-          "capability": "web.search",
-          "next": ["summarize"]
-        },
-        {
-          "name": "summarize",
-          "description": "Format that answer and its source links into a markdown digest, in the run and with no model call.",
-          "kind": "compute",
-          "terminal": true
-        }
-      ],
-      "setup": {
-        "runsWithNoSetup": true,
-        "connectionCount": 0,
-        "settingCount": 0,
-        "degradedWithoutSetup": "Researches a default topic and returns a digest with cited sources."
+        "provisions": ["postgres"],
+        "degradedWithoutSetup": "Snapshots the seeded demo database's own catalog, has a model flag the one table most worth attention, runs a second query into that table's write activity, writes a real narrative around both, and returns the full report with a rendered chart inline — nothing is emailed, because no `deliverTo` recipient is set."
       }
     }
   ]

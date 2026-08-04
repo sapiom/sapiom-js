@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { DoctorCheck, HarnessKind } from "../shared/types.js";
+import { MIN_CLAUDE_CODE_VERSION, isClaudeVersionSupported } from "../core/adapters/claude-code.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,10 +40,20 @@ async function binaryCheck(
   bin: string,
   versionArgs: string[],
   notFoundDetail: string,
+  /**
+   * Optional version gate. Receives the reported version line (or null when
+   * `--version` produced nothing) and returns an error detail when the binary
+   * is present but too old to use, or null when it is acceptable. Keeps the
+   * "how old is too old" policy with the caller that knows the flags it sends,
+   * so this stays a generic presence-plus-version check.
+   */
+  versionGate?: (versionLine: string | null) => string | null,
 ): Promise<DoctorCheck> {
   const found = await which(bin);
   if (!found) return { name, ok: false, detail: notFoundDetail };
   const v = await version(bin, versionArgs);
+  const gateError = versionGate?.(v);
+  if (gateError) return { name, ok: false, detail: gateError };
   return { name, ok: true, detail: v ?? found };
 }
 
@@ -73,6 +84,14 @@ export async function runDoctor(): Promise<DoctorReport> {
       "claude",
       ["--version"],
       `not found on PATH — install: ${CLAUDE_INSTALL_COMMAND}`,
+      // A claude older than the flags we inject exit-1s every session before it
+      // can establish a session id. Report it as unavailable so the desktop
+      // host installs a current one and the CLI shows an upgrade remedy, rather
+      // than letting a green check hide a binary that crash-loops on launch.
+      (v) =>
+        isClaudeVersionSupported(v)
+          ? null
+          : `${v ?? "unknown version"} is too old — need >= ${MIN_CLAUDE_CODE_VERSION}; upgrade: ${CLAUDE_INSTALL_COMMAND}`,
     ),
     binaryCheck("codex", "codex", ["--version"], `not found on PATH — install: ${CODEX_INSTALL_COMMAND}`),
     binaryCheck("git", "git", ["--version"], "not found on PATH"),

@@ -1,24 +1,24 @@
 /* ============================================================================
-   Neutral design tokens — public fallback.
+   Neutral design tokens — public fallback (mirrors the private source).
    ----------------------------------------------------------------------------
    This file is the DEFAULT token layer the public build imports (via the
-   `@sapiom/design-system` -> ./ds-neutral resolve alias). It supplies a
-   complete, unbranded token set so `styles.css` resolves its
+   `@sapiom/design-system` -> ./ds-neutral resolve alias in web/vite.config.ts).
+   It supplies a complete token set so `styles.css` resolves its
    `@import "@sapiom/design-system/tokens.css"` and the app builds and renders
    legibly with no private assets present.
 
-   Values here are deliberately NEUTRAL: a generic grayscale surface/ink ramp
-   plus a single restrained accent. It carries NO proprietary palette. Official
-   builds swap this alias for the private package, which supplies the branded
-   values against the same token names; nothing else in the app changes.
+   It is kept a faithful, value-for-value mirror of the private design-system's
+   `tokens.css` (same token NAMES *and* values). Official builds swap this alias
+   for the private package; nothing else in the app changes. Re-sync this file
+   whenever the private source moves — the seam only works while the names match.
 
-   Layers (kept parallel to the private source, names only):
-     1. semantic  — what a token MEANS (--bg, --ink, --line, state hues…)
-     2. aliases   — shadcn-standard names <-> the vanilla vocabulary
-     3. scales    — spacing, radii, type, motion, layout (theme-independent)
+   Layers (never skip one):
+     1. semantic: what a token MEANS (--background, --card, --border, --ink…)
+     2. aliases:  shadcn-standard names <-> the vanilla vocabulary, same values
+     3. scales:   spacing, radii, type, motion, layout (theme-independent)
 
-   Color carries meaning ONLY for state (severity, status, live). Both themes
-   target legible contrast.
+   Monochrome by design: colour carries meaning ONLY for state (severity,
+   status, live). Both themes target legible contrast.
    ============================================================================ */
 
 :root,
@@ -26,155 +26,250 @@
   color-scheme: dark;
 
   /* surfaces (recessed -> raised) */
-  --bg:   #0c0c0e;   /* app background / content well              */
-  --list: #0e0e11;   /* the middle list well (one step off chrome) */
-  --s1:   #131316;   /* chrome + raised cards                       */
-  --s2:   #1a1a1e;   /* inset controls, bubbles                     */
-  --s3:   #232327;   /* deepest inset                              */
+  --bg:   #0B0E13;   /* app background / content well              */
+  --list: #0d1016;   /* the middle list well (one step off chrome) */
+  --s1:   #12161d;   /* chrome + raised cards                       */
+  --s2:   #181d26;   /* inset controls, bubbles                     */
+  --s3:   #1f2630;   /* deepest inset                              */
 
   /* hairlines + hover washes */
-  --line:   rgba(255, 255, 255, 0.08);
-  --line-2: rgba(255, 255, 255, 0.14);
-  --hl:     rgba(255, 255, 255, 0.05);
-  --hl-2:   rgba(255, 255, 255, 0.1);
+  --line:   rgba(255,255,255,.07);
+  --line-2: rgba(255,255,255,.13);
+  --hl:     rgba(255,255,255,.045);
+  --hl-2:   rgba(255,255,255,.09);
 
-  /* ink (text) — the faintest step still clears comfortable contrast */
-  --ink:       #f3f3f5;
-  --ink-muted: #a6a6ae;
-  --ink-faint: #83838d;
+  /* ink (text), --ink-faint is the dimmest and still clears 4.5:1 */
+  --ink:        #f4f4f5;
+  --ink-muted:  #a7a7b0;
+  --ink-faint:  #85858f;
 
-  /* primary action (inverted in dark: light chip, dark ink) */
-  --btn:     #f3f3f5;
-  --btn-ink: #0c0c0e;
+  /* primary action (the "Vercel black button", inverted in dark) */
+  --btn:     #f4f4f5;
+  --btn-ink: #0B0E13;
 
-  /* semantic state — the only hue-bearing tokens in the base set */
-  --red:   #e05a57;  --red-text:   #efa6a3;   /* severity: high / destructive */
-  --amber: #d99a34;  --amber-text: #e8c58a;    /* severity: medium / warning   */
-  --green: #3bb56f;  --green-text: #8fdcac;    /* status: keep / live / success */
-  --slate: #8a8a94;                            /* neutral status               */
+  /* semantic state — the ONLY colour in the system */
+  --red:   #ef5350;  --red-text:   #f4a09d;   /* severity: high / destructive */
+  --amber: #f0a12d;  --amber-text: #eec584;   /* severity: medium / warning   */
+  --green: #34c471;  --green-text: #8ce3b0;   /* status: keep / live / success */
+  --slate: #8b8b95;                            /* neutral status               */
 
-  --shadow:   0 24px 64px -20px rgba(0, 0, 0, 0.6);
-  --scrim-bg: rgba(4, 4, 6, 0.55);
+  /* Marketing canvas and status display. Dark mode stays on the established
+     system surfaces and semantic state colours. */
+  --marketing-bg:         var(--bg);
+  --marketing-hero-muted: var(--ink-faint);
+  --marketing-hero-ink:   var(--ink);
+  --marketing-hero-live:  var(--green-text);
+
+  --shadow:   0 24px 64px -20px rgba(0,0,0,.65);
+  --scrim-bg: rgba(3,3,5,.55);
+
+  /* Categorical data-viz scale: cool hues and neutrals only.
+     Red-ish and green-ish are excluded by rule, not by taste, because this
+     product already spends them on severity and a chart series that borrows a
+     state colour is a lie waiting to be read. What is left is two blues, two
+     greys and two purples, which is enough: blue and grey carry the first four
+     slots so default charts stay calm, and purple appears when legends grow.
+     Each pair separates on LIGHTNESS, which
+     is the one channel every kind of colour blindness preserves. That is why
+     the pairs are adjacent, and why this scale needs no hue-diversity trick.
+     Never cycle past slot 6; a seventh series folds into "Other". */
+  --viz-1: #6BA3DC;  /* blue, primary   */
+  --viz-2: #4278AC;  /* blue, deep      */
+  --viz-3: #A9B1BB;  /* grey, light     */
+  --viz-4: #6A727C;  /* grey, dark      */
+  --viz-5: #A08FDB;  /* purple, primary */
+  --viz-6: #7663B5;  /* purple, deep    */
 }
 
 [data-theme="light"] {
   color-scheme: light;
 
-  --bg:   #fbfbfc;
-  --list: #f3f3f5;
+  --bg:   #F8F9FA;
+  --list: #f1f3f5;
   --s1:   #ffffff;
-  --s2:   #f2f2f4;
-  --s3:   #eaeaee;
+  --s2:   #eef1f4;
+  --s3:   #e5e9ed;
 
-  --line:   rgba(18, 18, 22, 0.08);
-  --line-2: rgba(18, 18, 22, 0.15);
-  --hl:     rgba(18, 18, 22, 0.04);
-  --hl-2:   rgba(18, 18, 22, 0.075);
+  --line:   rgba(17,17,20,.08);
+  --line-2: rgba(17,17,20,.15);
+  --hl:     rgba(17,17,20,.04);
+  --hl-2:   rgba(17,17,20,.075);
 
-  --ink:       #16161a;
-  --ink-muted: #55555f;
-  --ink-faint: #6b6b75;
+  --ink:        #141417;
+  --ink-muted:  #54545e;
+  --ink-faint:  #6a6a74;
 
-  --btn:     #16161a;
+  --btn:     #141417;
   --btn-ink: #ffffff;
 
-  --red:   #cf3d39;  --red-text:   #ab2925;
-  --amber: #b57a12;  --amber-text: #855700;
-  --green: #219d57;  --green-text: #0f7740;
-  --slate: #77777f;
+  --red:   #d13b37;  --red-text:   #b02a26;
+  --amber: #c07b00;  --amber-text: #8a5800;
+  --green: #1e9e56;  --green-text: #0f7a40;
+  --slate: #787882;
 
-  --shadow:   0 24px 64px -28px rgba(20, 20, 28, 0.28);
-  --scrim-bg: rgba(24, 24, 30, 0.32);
+  /* Exact light marketing state shared with the live sapiom.ai hero. */
+  --marketing-bg:         #F4F4F2;
+  --marketing-hero-muted: #858684;
+  --marketing-hero-ink:   #08090B;
+  --marketing-hero-live:  #7DC15A;
+
+  --shadow:   0 24px 64px -28px rgba(20,20,30,.28);
+  --scrim-bg: rgba(24,24,30,.32);
+
+  /* Same six roles, re-stepped for white cards. */
+  --viz-1: #1B5FA6;
+  --viz-2: #6494C9;
+  --viz-3: #838B95;
+  --viz-4: #464C55;
+  --viz-5: #5A3E9E;
+  --viz-6: #907FCB;
 }
 
 /* --------------------------------------------------------------------------
-   shadcn / Tailwind-standard aliases — same values, industry-standard names,
-   so alias-driven components theme themselves from this one source.
+   shadcn / Tailwind-standard aliases, the SAME values, industry-standard
+   names, so shadcn/ui components theme themselves from this one source.
    -------------------------------------------------------------------------- */
 :root,
 [data-theme="dark"],
 [data-theme="light"] {
-  --background:             var(--bg);
-  --foreground:             var(--ink);
-  --card:                   var(--s1);
-  --card-foreground:        var(--ink);
-  --popover:                var(--s1);
-  --popover-foreground:     var(--ink);
-  --muted:                  var(--s2);
-  --muted-foreground:       var(--ink-muted);
-  --border-soft:            var(--line);
-  --border-strong:          var(--line-2);
-  --border:                 var(--border-soft);
-  --input:                  var(--border-soft);
-  --ring:                   var(--ink-muted);
-  --primary:                var(--btn);
-  --primary-foreground:     var(--btn-ink);
-  --secondary:              var(--s2);
-  --secondary-foreground:   var(--ink);
-  --accent:                 var(--hl-2);
-  --accent-foreground:      var(--ink);
-  --destructive:            var(--red);
-  --destructive-foreground: var(--btn-ink);
+  --background:            var(--bg);
+  --foreground:            var(--ink);
+  --card:                  var(--s1);
+  --card-foreground:       var(--ink);
+  --popover:               var(--s1);
+  --popover-foreground:    var(--ink);
+  --muted:                 var(--s2);
+  --muted-foreground:      var(--ink-muted);
+  --border-soft:           var(--line);
+  --border-strong:         var(--line-2);
+  --border:                var(--border-soft);
+  --input:                 var(--border-soft);
+  --ring:                  var(--ink-muted);
+  --primary:               var(--btn);
+  --primary-foreground:    var(--btn-ink);
+  --secondary:             var(--s2);
+  --secondary-foreground:  var(--ink);
+  --accent:                var(--hl-2);
+  --accent-foreground:     var(--ink);
+  --destructive:           var(--red);
+  --destructive-foreground:var(--btn-ink);
 }
 
 /* --------------------------------------------------------------------------
-   Scales — theme-independent. Spacing on a 4/8/12/16/24/32/48/64 ramp; an
-   ease-out spring for motion, fast for hovers.
+   Scales, theme-independent. Spacing follows a 4/8/12/16/24/32/48/64 ramp
+   (never arbitrary values). Motion: ease-out spring, fast for hovers.
    -------------------------------------------------------------------------- */
 :root {
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --type-title: 1.5rem;
-  --type-h2: 1rem;
-  --type-metric: 1.5rem;
-  --type-body: 14px;
-  --type-ui: 13px;
-  --type-label: 12px;
-  --type-meta: 11px;
-  --type-micro: 10px;
+  /* One 14px base. Two headings above it (section 16, title 22/metric 22),
+     two dense sizes below (label 12, meta 11). No stray 13/10px steps. */
+  --type-title: 1.375rem;   /* 22px, page hero */
+  --type-h2: 1rem;          /* 16px, section heading */
+  --type-metric: 1.375rem;  /* 22px, big numbers */
+  --type-body: 0.875rem;    /* 14px, base body + UI */
+  --type-ui: 0.875rem;      /* 14px, alias of base for chrome */
+  --type-label: 0.75rem;    /* 12px, secondary labels */
+  --type-meta: 0.6875rem;   /* 11px, dense meta / timestamps */
+  --type-micro: 0.6875rem;  /* 11px, folded into meta */
 
+  /* --sp0 is the HAIRLINE gap: the space between rows that belong to one
+     stack, where the rows must read as a list rather than as separate
+     objects. Below --sp1 because 4px between 28px rows already looks like
+     air, and a dense tree wants its rows nearly touching. */
+  --sp0: 2px;
   --sp1: 4px;  --sp2: 8px;  --sp3: 12px; --sp4: 16px;
   --sp5: 24px; --sp6: 32px; --sp7: 48px; --sp8: 64px;
 
   --r-sm: 6px; --r: 10px; --r-lg: 14px; --r-xl: 16px; --radius: var(--r);
 
-  /* Product geometry — shared by buttons, inputs, tabs, lists, tables. */
+  /* Product geometry. These values are intentionally shared by buttons,
+     inputs, tabs, lists, tables, charts, and Storybook. */
   --header-h: 56px;
   --pane-header-h: var(--header-h);
   --control-h: 40px;
   --control-h-sm: 36px;
   --control-h-xs: 32px;
+  /* Dense list row: a file tree, a menu, anything you scan a lot of at once.
+     Still a comfortable pointer target; below this a row stops feeling
+     clickable. */
+  --control-h-2xs: 28px;
   --row-h: 56px;
   --row-h-sm: 48px;
   --row-h-xs: 40px;
   --icon: 40px;
   --icon-sm: 32px;
   --icon-lg: 44px;
+  /* Visible glyph inside a button or tab. `--icon*` above sizes the control
+     container; this token sizes its mark and never changes at breakpoints. */
+  --glyph-control: 1rem;
   --card-pad: clamp(20px, 2vw, 28px);
+  /* One application page measure. Product surfaces may contain narrower
+     reading measures, but every page shell uses this same outer column. */
+  --page-max: 80rem;
+  --page-gutter: clamp(1.5rem, 3vw, 3rem);
+  --page-y: clamp(2rem, 3vw, 2.75rem);
   --assistant-measure: 52rem;
   --assistant-measure-ide: 40.625rem;
+  /* Tooltip measure, in CHARACTERS rather than pixels: a tooltip is a line of
+     prose, so what makes it readable is how many characters sit on a line, and
+     a px cap only accidentally answers that at one type size. In ch it holds
+     whether the tooltip is 12px chrome or scaled up by a user's browser
+     setting, and it is short enough that a hint reads as a hint and not as a
+     paragraph laid across the window. */
+  --tooltip-measure: 30ch;
+
+  /* THE side column, and everything cut to it.
+     A nav rail and a floating menu are the same measure of the same grid: one
+     column of rows, each a glyph, a label and maybe a trailing mark. When they
+     disagree the app has two column widths for one job, and the difference is
+     small enough to read as sloppiness rather than intent. Studio's rail sat
+     at 16rem and its menus at 17.5rem, so every card opened 24px proud of the
+     column beside it. 16rem is the narrower of the two and the one already
+     load-bearing (it is the rail's floor), so it is the one that wins. */
+  --col-w: 16rem;
+
   --assistant-textarea-min: 64px;
   --command-input-h: var(--row-h);
   --command-row-h: var(--row-h-sm);
   --overlay-radius: calc(var(--r-xl) + 12px);
   --ui-line: var(--border-soft);
   --ui-line-strong: var(--border-strong);
+  /* THE selected wash: a selected tab, a held-open trigger, an inline label.
+     Translucent, so it composites onto whatever surface it lands on. */
   --active-shade: color-mix(in srgb, var(--ink) 8%, transparent);
   --nested-shade: color-mix(in srgb, var(--ink) 11%, transparent);
+  /* The same two washes, re-cut for a RAISED plane, because a wash is only
+     ever as loud as what it lands on. A card is --s1 (pure white in light),
+     while the app well is --bg, already ~2% down from it. So a 4% wash on a
+     card lands at roughly the brightness of the PAGE behind it: the row does
+     not read as highlighted, it reads as a hole punched through to the
+     backdrop. 1.5x puts both steps back where they land on the well (6%
+     clears the page; 12% is unmistakably "this one"), and, more importantly,
+     keeps the DISTANCE between them. Scaling only the hover would have
+     collapsed hover into held-open, and a trigger that looks the same
+     hovered and open has stopped saying anything.
+     Apply them as a pair, by re-declaring --surface-hover and --active-shade
+     on the container that paints the plane; they inherit from there. */
+  --active-shade-raised: color-mix(in srgb, var(--ink) 12%, transparent);
+  --surface-hover-raised: color-mix(in srgb, var(--ink) 6%, transparent);
   --surface-base: var(--bg);
   --surface-raised: var(--s1);
   --surface-inset: var(--s2);
   --surface-hover: var(--hl);
-  --surface-selected: var(--active-shade);
   --flow-grid-dot: color-mix(in srgb, var(--ink) 22%, transparent);
-  --table-indent: calc(var(--sp5) + 32px);
+  /* The left edge nested content aligns to: a row's gutter, its disclosure
+     track, and the gap between them. Anything a row expands to show starts
+     here, never at the gutter. Omitting the gap put this 12px short of where
+     rows actually land, which is why nothing consumed it. */
+  --table-indent: calc(var(--sp5) + 2rem + var(--sp4));
   --shadow-soft: 0 12px 32px -18px color-mix(in srgb, var(--ink) 28%, transparent);
 
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);  /* ease-out spring for entering */
-  --fast: 0.13s;                           /* hovers          */
-  --base: 0.22s;                           /* standard        */
-  --slow: 0.34s;                           /* panels          */
+  --ease: cubic-bezier(.16, 1, .3, 1);  /* ease-out spring for entering */
+  --fast: .13s;                          /* hovers          */
+  --base: .22s;                          /* standard        */
+  --slow: .34s;                          /* panels          */
 
   /* layout rails shared by the app shells */
   --rail: 264px; --panel: 400px; --detail: min(520px, 40vw); --drawer: min(580px, 94vw);

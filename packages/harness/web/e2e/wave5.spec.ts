@@ -203,6 +203,9 @@ test("recent-path chips middle-truncate long paths and keep the full path in the
 
 test("the dead-session pane shows the record's real metadata and the canvas invites a resume", async ({ page }) => {
   await page.getByTestId("history-trigger").click();
+  // Past sessions live in a flyout sub-card that opens on hover of its row.
+  await page.getByTestId("past-sessions-trigger").hover();
+  await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId("exited-session-sess-leasing").click();
 
   const detail = page.getByTestId("dead-session-detail");

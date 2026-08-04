@@ -3,7 +3,9 @@
 Agent Studio is a local web app for building on Sapiom with your own coding agent.
 
 ```bash
-npx @sapiom/harness [dir]
+npx @sapiom/agent-studio@latest [dir]
+# supported direct implementation command:
+npx @sapiom/harness@latest [dir]
 # also available via the Sapiom CLI (npm i -g @sapiom/cli @sapiom/harness):
 sapiom dev [dir]
 ```

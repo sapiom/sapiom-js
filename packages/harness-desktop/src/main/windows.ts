@@ -48,11 +48,24 @@ export function createSetupWindow(): BrowserWindow {
  * omits those affordances in a browser — see `harness/web/src/lib/desktop.ts`.
  */
 export function createMainWindow(loadUrl: string): BrowserWindow {
+  // macOS only: drop the native title bar and inset the traffic lights so they
+  // sit in the rail's 56px top line, which the SPA then treats as a drag region.
+  // trafficLightPosition centres the ~14px light group vertically in that line;
+  // the SPA is told it is this frame via ?frame=macos (below) and pads its brand
+  // header to clear the lights. Windows/Linux keep their native frame for now.
+  //
+  // COUPLING: {x:19,y:21} and the SPA's `padding-left:78px`
+  // (:root[data-window-frame="macos"] .brand-header) are both sized to the
+  // 56px header line (--header-h in the design-system tokens). The main process
+  // can't read CSS, so if --header-h ever changes, re-center y and re-check the
+  // x/padding clearance here and in styles.css together.
+  const isMac = process.platform === "darwin";
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
     show: false, // show on ready-to-show to avoid a white flash
     title: "Sapiom",
+    ...(isMac ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 19, y: 21 } } : {}),
     webPreferences: {
       preload: desktopPreloadPath(),
       contextIsolation: true,
@@ -104,8 +117,22 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
     }
   });
 
-  void win.loadURL(loadUrl);
+  // Hand the SPA its frame so it clears the traffic lights and drags by its top
+  // line — only on the frameless-mac window; a browser (npx) never carries it.
+  const framedUrl = isMac ? withFrameParam(loadUrl, "macos") : loadUrl;
+  void win.loadURL(framedUrl);
   return win;
+}
+
+/** Append ?frame=<value> without disturbing the existing boot-token query. */
+function withFrameParam(loadUrl: string, frame: string): string {
+  try {
+    const u = new URL(loadUrl);
+    u.searchParams.set("frame", frame);
+    return u.toString();
+  } catch {
+    return loadUrl;
+  }
 }
 
 /**

@@ -20,6 +20,13 @@ import react from "@vitejs/plugin-react";
 
 const HARNESS_SERVER = "http://localhost:4100";
 
+// The harness package version, baked into the bundle so the terminal masthead
+// shows the running build's version instead of a hand-edited literal that goes
+// stale. Read from this package's manifest — always present at build time.
+const STUDIO_VERSION = (
+  createRequire(import.meta.url)("../package.json") as { version: string }
+).version;
+
 const DS_PACKAGE = "@sapiom/design-system";
 const DS_NEUTRAL_DIR = fileURLToPath(new URL("./src/styles/ds-neutral", import.meta.url));
 
@@ -72,6 +79,9 @@ export default defineConfig({
   // `--config web/vite.config.ts`, so pin the project root to this dir.
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [react()],
+  define: {
+    __STUDIO_VERSION__: JSON.stringify(STUDIO_VERSION),
+  },
   resolve: {
     alias: {
       // The frontend imports its runtime contract from `@shared/types`. It

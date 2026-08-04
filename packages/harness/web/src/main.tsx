@@ -2,12 +2,19 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
 import { interceptMockTrack } from "./lib/api.js";
+import { appFrameFromSearch } from "./lib/window-frame.js";
 import "./styles.css";
 import "./styles/refine.css";
 
 // In mock mode, intercept /api/track calls so Playwright tests can assert
 // that track() events fire without a real server. No-op in real mode.
 interceptMockTrack();
+
+// The window frame the desktop host handed off (macOS = frameless, traffic
+// lights inset into the rail's top line). Set on the root so the window-chrome
+// CSS can scope the header padding + drag region to it; a browser stays "web"
+// and never pays for either.
+document.documentElement.dataset.windowFrame = appFrameFromSearch();
 
 // The shell is viewport-locked (html/body overflow:hidden) — page scroll is
 // never legitimate. overflow:hidden stops user scrolling but NOT the

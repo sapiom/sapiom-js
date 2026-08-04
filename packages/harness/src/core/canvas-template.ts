@@ -42,14 +42,19 @@ function themeStyleBlock(): string {
   // canvas look before per-theme passthrough landed for embedded iframes.
   return `
 :root {
-  --canvas-bg: #f3f4f6;
+  /* The whole graph column is the raised "lighter white" (--surface-raised in
+     the app) — the dotted board included, so it never reads darker than the
+     rail/terminal shell it's meant to sit in front of. */
+  --canvas-bg: #ffffff;
   --canvas-panel: #f5f5f5;
   --canvas-border: #e5e5e5;
   --canvas-border-strong: #d4d4d8;
   --canvas-text: #1a1a1a;
   --canvas-text-dim: #737373;
-  --canvas-accent: #05a9bc;
-  --canvas-success: #05a9bc;
+  /* Brand green (Studio light --brand), matching the dark theme's #6be195 — the
+     graph accent/success were an off-brand cyan (#05a9bc) in light only. */
+  --canvas-accent: #167e3a;
+  --canvas-success: #167e3a;
   --canvas-running: #2563eb;
   --canvas-passed: #16a34a;
   --canvas-escalation: #b45309;

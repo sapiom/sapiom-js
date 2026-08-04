@@ -25,7 +25,8 @@ import { z } from "zod/v4";
  *   - **enrich** takes a lead list — a company domain, optionally a person —
  *     and resolves a real contact with Hunter: `findEmail` when you name the
  *     person, `domainSearch` to surface a decision-maker when you only have the
- *     company. Per-lead failures are skipped, never fatal.
+ *     company. Per-lead failures are skipped, never fatal. Pass no `leads` at
+ *     all and it works the built-in demo batch instead (see below).
  *   - **scrape** reads each company's site (`web.scrape`) for a few lines of
  *     context. The bodies are bounded and die here — they never enter shared
  *     state or cross the drip edges.
@@ -47,6 +48,18 @@ import { z } from "zod/v4";
  * short-circuits the instant a `reply.received` signal arrives. Determinism:
  * each step body runs once on the happy path (again only on retry), and every
  * timestamp is captured server-side via Postgres `now()`.
+ *
+ * Zero-setup demo: with no `leads`, the run works `DEMO_LEADS` — three
+ * fabricated companies and contacts — instead of stopping with nobody to write
+ * to. Hunter has no real person to find at a company that doesn't exist, so
+ * `enrich` and `verify` simulate its response for these deterministically
+ * rather than calling it. Everything else is real: `personalize` still calls
+ * the live model, `launch` still persists the campaign, and `send` still
+ * delivers the first touch — to this agent's own Sapiom-hosted demo inbox
+ * (`resolveSenderInbox`), never to the fabricated address, so the send is real
+ * and inspectable. The run stops right there rather than entering the
+ * multi-touch drip or the durable reply-wait, which have no real prospect to
+ * wait on; pass your own `leads` to unlock both.
  */
 
 // ─────────────────────────────────────────────────────────────── config ──
@@ -126,6 +139,8 @@ interface Contact {
   verifyStatus?: string;
   /** Drip state: "active" until it replies or the sequence ends. */
   status?: "active" | "replied" | "done";
+  /** Set on the built-in zero-setup batch — see `DEMO_LEADS`. */
+  demo?: boolean;
 }
 
 interface Shared extends Record<string, unknown> {
@@ -144,6 +159,69 @@ interface Shared extends Record<string, unknown> {
 
 type Ctx = AgentExecutionContext<Shared>;
 type Sql = ReturnType<typeof postgres>;
+
+/** One fabricated company + contact in the built-in zero-setup batch. */
+interface DemoLead {
+  /** `.example` — reserved (RFC 2606), never resolves, never a real inbox. */
+  domain: string;
+  company: string;
+  firstName: string;
+  lastName: string;
+  position: string;
+  /** A plausible address at `domain` — never dialed; `send` always targets
+   * this agent's own demo inbox instead, so nothing goes to it. */
+  email: string;
+  /** A canned company blurb standing in for the page `scrape` would read. */
+  context: string;
+}
+
+/**
+ * The zero-setup stand-in: three fabricated companies and contacts, used only
+ * when a run supplies no `leads` at all. Hunter has no real person to find at
+ * a company that doesn't exist, so `enrich` and `verify` simulate its
+ * response deterministically for these instead of calling it — `scrape`'s
+ * context is likewise canned here rather than fetched. `personalize` (the
+ * live model call), `launch` (the real persist), and `send` (a real email to
+ * this agent's own demo inbox) all still run for real. See "Make it runnable
+ * with nothing" in AUTHORING.md.
+ */
+const DEMO_LEADS: DemoLead[] = [
+  {
+    domain: "brightloop.example",
+    company: "Brightloop",
+    firstName: "Jordan",
+    lastName: "Rivera",
+    position: "Head of Growth",
+    email: "jordan.rivera@brightloop.example",
+    context:
+      "Brightloop sells shift-scheduling software to retail chains. Their site " +
+      "leads with a case study: a 40-store grocery chain cut no-show shifts by " +
+      "a third in one quarter.",
+  },
+  {
+    domain: "fernwoodlabs.example",
+    company: "Fernwood Labs",
+    firstName: "Priya",
+    lastName: "Nandan",
+    position: "VP of Engineering",
+    email: "priya.nandan@fernwoodlabs.example",
+    context:
+      "Fernwood Labs builds lab-inventory tracking for biotech startups. They " +
+      "just announced a partnership with a reagent supplier to auto-reorder " +
+      "stock that falls below threshold.",
+  },
+  {
+    domain: "haventree.example",
+    company: "Haventree",
+    firstName: "Marcus",
+    lastName: "Webb",
+    position: "Director of Operations",
+    email: "marcus.webb@haventree.example",
+    context:
+      "Haventree runs a network of urgent-care clinics. Their homepage " +
+      "highlights a new online check-in flow that cut waiting-room time in half.",
+  },
+];
 
 /** The three-touch default drip — a personalized open, a bump, and a breakup. */
 const DEFAULT_SEQUENCE: Touch[] = [
@@ -335,7 +413,12 @@ const enrich = defineStep({
   inputSchema: entryInput,
   next: ["scrape"],
   async run(input: EntryInput, ctx: Ctx) {
-    const leads = normalizeLeads(input.leads);
+    // Zero-setup: no `leads` at all (not merely leads that fail to normalize —
+    // that's still a real attempt, and stays on the honest "nothing verified"
+    // path below) runs the built-in demo batch instead of stopping with
+    // nobody to write to.
+    const demoRun = !Array.isArray(input.leads) || input.leads.length === 0;
+    const leads = demoRun ? [] : normalizeLeads(input.leads);
     const sequence =
       Array.isArray(input.sequence) && input.sequence.length > 0
         ? input.sequence
@@ -351,6 +434,7 @@ const enrich = defineStep({
       resolveResourceHandle(input, { fallback: DEFAULT_DB_HANDLE }),
     );
     ctx.shared.set("dryRun", truthy(input.dryRun));
+    ctx.shared.set("demoRun", demoRun);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
     ctx.shared.set("senderName", input.senderName?.trim() || "The team");
     ctx.shared.set("dripMs", dripDays * DAY_MS);
@@ -358,6 +442,24 @@ const enrich = defineStep({
     ctx.shared.set("touchIndex", 0);
     ctx.shared.set("sent", 0);
     ctx.shared.set("replied", 0);
+
+    if (demoRun) {
+      const contacts: Contact[] = DEMO_LEADS.map((d) => ({
+        email: d.email,
+        firstName: d.firstName,
+        lastName: d.lastName,
+        fullName: `${d.firstName} ${d.lastName}`,
+        position: d.position,
+        company: d.company,
+        domain: d.domain,
+        status: "active",
+        demo: true,
+      }));
+      ctx.logger.info("zero-setup: enriching the built-in demo leads", {
+        contacts: contacts.length,
+      });
+      return goto("scrape", { contacts });
+    }
 
     const byEmail = new Map<string, Contact>();
     for (const lead of leads) {
@@ -433,21 +535,27 @@ const scrape = defineStep({
       ...new Set(contacts.map((c) => c.domain).filter((d): d is string => !!d)),
     ];
     const context = new Map<string, string>();
-    for (const domain of domains) {
-      try {
-        const page = await ctx.sapiom.search.scrape({
-          url: `https://${domain}`,
-          formats: ["markdown"],
-          onlyMainContent: true,
-        });
-        const text = (page.markdown ?? "").trim();
-        if (text) context.set(domain, text.slice(0, MAX_CONTEXT_CHARS));
-      } catch (err) {
-        // Paywalls, timeouts, DNS — degrade per-domain; the opener falls back.
-        ctx.logger.warn("scrape failed; no context for domain", {
-          domain,
-          err: String(err),
-        });
+    if (ctx.shared.get("demoRun")) {
+      // `.example` domains don't resolve — this is the canned blurb the page
+      // would have returned, standing in for a live fetch that can't succeed.
+      for (const lead of DEMO_LEADS) context.set(lead.domain, lead.context);
+    } else {
+      for (const domain of domains) {
+        try {
+          const page = await ctx.sapiom.search.scrape({
+            url: `https://${domain}`,
+            formats: ["markdown"],
+            onlyMainContent: true,
+          });
+          const text = (page.markdown ?? "").trim();
+          if (text) context.set(domain, text.slice(0, MAX_CONTEXT_CHARS));
+        } catch (err) {
+          // Paywalls, timeouts, DNS — degrade per-domain; the opener falls back.
+          ctx.logger.warn("scrape failed; no context for domain", {
+            domain,
+            err: String(err),
+          });
+        }
       }
     }
     ctx.logger.info("scraped company context", {
@@ -532,6 +640,18 @@ const verify = defineStep({
     const contacts = input.contacts ?? [];
     const checked: Contact[] = [];
     for (const c of contacts) {
+      if (c.demo) {
+        // Same stand-in as `enrich`: Hunter can't verify an address at a
+        // company that doesn't exist. Deterministically deliverable, so the
+        // demo reaches a real send rather than stopping for a reason the
+        // caller didn't cause.
+        checked.push({
+          ...c,
+          deliverable: true,
+          verifyStatus: "demo-stand-in",
+        });
+        continue;
+      }
       try {
         const res = await ctx.sapiom.search.emailSearch.verifyEmail({
           email: c.email,
@@ -601,9 +721,11 @@ const launch = defineStep({
 
     // Nobody to write to. Stop here rather than provision a database, enter the
     // drip, and then suspend on a reply signal no prospect can ever send — and
-    // rather than report an empty campaign as a completed one. There is
-    // deliberately no default lead list: emailing a prospect we invented is the
-    // one thing this template must never do.
+    // rather than report an empty campaign as a completed one. This only fires
+    // when the leads actually supplied don't resolve to a deliverable contact;
+    // a `{}` run with no `leads` at all never reaches here — `enrich` already
+    // routed it to the built-in demo batch (`DEMO_LEADS`) instead. Emailing a
+    // real prospect we invented is the one thing this template must never do.
     if (deliverable.length === 0) {
       ctx.logger.info("no deliverable contacts — nothing to launch", {
         enriched: contacts.length,
@@ -620,7 +742,7 @@ const launch = defineStep({
           unmet: ["leads"],
           note:
             contacts.length === 0
-              ? "No `leads` were given, so there was nobody to write to and nothing was sent. Pass a lead list — a name, an email, and a company each — to run a real campaign."
+              ? "None of the supplied leads could be enriched into a contact — Hunter found nobody for any of them — so there was nobody to write to and nothing was sent."
               : `None of the ${contacts.length} lead(s) verified as deliverable, so nothing was sent.`,
         },
         { reason: "no deliverable contacts" },
@@ -672,6 +794,7 @@ const send = defineStep({
     const dbHandle = ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE;
     const touchIndex = ctx.shared.get("touchIndex") ?? 0;
     const contacts = ctx.shared.get("contacts") ?? [];
+    const demoRun = ctx.shared.get("demoRun") ?? false;
     const active = contacts.filter(
       (c) => c.deliverable && c.status === "active",
     );
@@ -697,11 +820,19 @@ const send = defineStep({
           touchIndex === 0
             ? `${c.firstLine ?? fallbackFirstLine(c)}\n\n${render(touch.body, c, senderName)}`
             : render(touch.body, c, senderName);
+        // Zero-setup: the fabricated demo lead is never a real inbox, so every
+        // touch lands in this agent's own Sapiom-hosted demo inbox instead —
+        // a real, inspectable send rather than mail to nobody.
+        const recipient = demoRun ? inboxId : c.email;
+        const finalSubject = demoRun ? `[Demo lead] ${subject}` : subject;
+        const finalBody = demoRun
+          ? `${body}\n\n— Demo lead: ${c.fullName ?? c.firstName} at ${c.company}. Sent here, to this agent's own demo inbox, instead of a real prospect. Pass your own \`leads\` to reach real contacts.`
+          : body;
         try {
           const sent = await ctx.sapiom.email.messages.send(inboxId, {
-            to: c.email,
-            subject,
-            text: body,
+            to: recipient,
+            subject: finalSubject,
+            text: finalBody,
           });
           sentThisTouch += 1;
           if (sql) {
@@ -727,7 +858,17 @@ const send = defineStep({
       touchIndex,
       recipients: active.length,
       sent: sentThisTouch,
+      demo: demoRun,
     });
+
+    // Zero-setup stops right here: it has produced the artifact (a real,
+    // personalized send to the demo inbox) and there is no real prospect to
+    // wait on. The multi-touch drip and the durable reply-wait below are the
+    // live-mode upgrade — pass your own `leads` to unlock both.
+    if (demoRun) {
+      ctx.logger.info("zero-setup: stopping after the first touch");
+      return goto("done", {});
+    }
 
     // Last touch: nothing left to wait for.
     if (touchIndex >= sequence.length - 1) {
@@ -813,9 +954,11 @@ const done = defineStep({
   async run(_input: unknown, ctx: Ctx) {
     const contacts = ctx.shared.get("contacts") ?? [];
     const campaign = ctx.shared.get("campaign") || "cold-outreach";
+    const demoRun = ctx.shared.get("demoRun") ?? false;
     const summary = {
       campaign,
       dryRun: false,
+      demo: demoRun,
       touchesSent: ctx.shared.get("touchIndex") ?? 0,
       enriched: contacts.length,
       deliverable: contacts.filter((c) => c.deliverable).length,
@@ -827,10 +970,16 @@ const done = defineStep({
         deliverable: c.deliverable,
         status: c.status,
       })),
+      ...(demoRun
+        ? {
+            note: "This is a zero-setup demo: enrichment and verification simulated Hunter's response for 3 built-in sample leads, the opener came from a real model call, and the first touch was actually sent to this agent's own Sapiom-hosted demo inbox — open it to read the personalized drafts. Pass your own `leads` to enrich, verify, and drip a real campaign, including the durable pause and reply-to-stop behavior.",
+          }
+        : {}),
     };
     ctx.logger.info("outreach run complete", {
       sent: summary.sent,
       replied: summary.replied,
+      demo: demoRun,
     });
     return terminate(summary);
   },

@@ -24,6 +24,7 @@ import {
 import { expandHome } from "./paths.js";
 import { HOST_ESBUILD_PIN } from "./asar-path.js";
 import { resolveSpawnTarget } from "./spawn-target.js";
+import { stripAnsi } from "./strip-ansi.js";
 import {
   AdapterNotFoundError,
   ExternalHarnessError,
@@ -99,6 +100,21 @@ const DEFAULT_ROWS = 24;
 /** Bytes of terminal output retained per session for replay on WS (re)attach. */
 const SCROLLBACK_BYTES = 131_072;
 /**
+ * Readable output preserved from a session that exited ABNORMALLY (see
+ * {@link HarnessSession.exitTail}). Enough to hold a startup error banner —
+ * "error: unknown option '--plugin-dir'", an auth failure, "Cannot find
+ * module …" — without bloating the persisted registry. The live pty's
+ * scrollback (up to SCROLLBACK_BYTES) is discarded the instant it exits,
+ * taking the coding agent's own error line with it; this is the one place
+ * that line survives.
+ *
+ * Measured in JS string length (UTF-16 code units), matching SCROLLBACK_BYTES
+ * — an approximation of bytes that's exact for the ASCII error text this
+ * targets and close enough for the rest; the point is a small bound, not a
+ * precise byte count.
+ */
+const EXIT_TAIL_BYTES = 4_096;
+/**
  * Delay between writing prompt text and a trailing Enter, when submitting
  * non-empty text in one call (see `submitInput`). Claude Code — like many
  * bracketed-paste-aware TUIs — treats a single write containing both text
@@ -170,6 +186,32 @@ const defaultIsPidAlive = (pid: number): boolean => {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Reduce a dying session's raw terminal bytes to the human-readable text worth
+ * persisting as {@link HarnessSession.exitTail}: strips ANSI escapes, drops
+ * carriage-return redraws and other control bytes, collapses blank runs, and
+ * keeps only the final {@link EXIT_TAIL_BYTES}. Best-effort — a window sliced
+ * mid-escape can leave a fragment — but the abnormal-exit case it serves is
+ * almost always a plain error banner rather than a full-screen TUI, so the
+ * common result is clean. Returns null when nothing readable remains, so the
+ * UI collapses the section instead of showing an empty box.
+ *
+ * Exported for direct unit testing.
+ */
+export function sanitizeExitTail(raw: string): string | null {
+  // Only the end can be the tail; bound the work rather than clean a full
+  // 128 KB scrollback (a redraw frame is a few KB, so this is ample headroom).
+  const cleaned = stripAnsi(raw.slice(-4 * EXIT_TAIL_BYTES))
+    .replace(/\r/g, "")
+    // Any control bytes stripAnsi left behind (a lone ESC from a truncated
+    // sequence, NUL padding), keeping tab and newline.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  const trimmed = cleaned.replace(/\n{3,}/g, "\n\n").trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.slice(-EXIT_TAIL_BYTES);
 }
 
 export type SessionStatusListener = (session: HarnessSession) => void;
@@ -268,6 +310,14 @@ interface PtyHandle {
   exited: Promise<void>;
   /** Internal resolver — called exactly once by markExited(). */
   resolveExited: () => void;
+  /**
+   * Set by `kill()` before it signals the pty, so `markExited()` knows this
+   * death was intentional and skips the exit-tail capture. A session the user
+   * closed is not a crash to diagnose — and node-pty can report a non-zero
+   * code for a signalled process (e.g. 143 = 128 + SIGTERM on some platforms),
+   * which would otherwise be mistaken for an abnormal exit worth a tail.
+   */
+  killed: boolean;
 }
 
 export class SessionManager {
@@ -574,6 +624,9 @@ export class SessionManager {
       }
       return Promise.resolve(false);
     }
+    // Mark before signalling so markExited() (whichever path reports the death)
+    // knows this exit was intentional and skips the exit-tail capture.
+    handle.killed = true;
     handle.pty.kill();
     // Root-caused via instrumented real-process runs: node-pty's `onExit`
     // can simply never fire for a pty killed within milliseconds of being
@@ -916,7 +969,7 @@ export class SessionManager {
     const exited = new Promise<void>((resolve) => {
       resolveExited = resolve;
     });
-    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now(), exited, resolveExited };
+    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now(), exited, resolveExited, killed: false };
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -948,6 +1001,20 @@ export class SessionManager {
    */
   private markExited(id: string, handle: PtyHandle, exitCode: number | null): void {
     if (this.ptys.get(id) !== handle) return;
+    // Preserve the tail of output BEFORE the handle (and its buffer) is dropped
+    // — this is the only chance to keep the agent's own error line. Worth it
+    // only for a genuine, unprompted non-zero exit: a clean exit (0) has
+    // nothing to diagnose, and a death WE caused (`handle.killed`, or a
+    // synthesized null exit from kill()/sweep) is not a crash whose reason the
+    // output would explain — even if node-pty reports a non-zero signal code
+    // for it. Best-effort: it captures whatever onData has delivered into
+    // `handle.buffer` by now, which for a fast startup crash is normally the
+    // error banner, but a build that exits before its final chunk drains can
+    // leave it short (hence `sanitizeExitTail` returning null over an empty box).
+    const exitTail =
+      !handle.killed && exitCode != null && exitCode !== 0
+        ? sanitizeExitTail(handle.buffer)
+        : null;
     this.ptys.delete(id);
     this.lastActivityBroadcast.delete(id);
     // Resolve after the pty map is cleaned up. transitionExited runs
@@ -955,7 +1022,7 @@ export class SessionManager {
     handle.resolveExited();
     const session = this.sessions.get(id);
     if (!session) return;
-    void this.transitionExited(session, exitCode);
+    void this.transitionExited(session, exitCode, { exitTail });
   }
 
   /**
@@ -969,10 +1036,15 @@ export class SessionManager {
   private transitionExited(
     session: HarnessSession,
     exitCode: number | null,
-    { stampLastActive = true }: { stampLastActive?: boolean } = {},
+    { stampLastActive = true, exitTail = null }: { stampLastActive?: boolean; exitTail?: string | null } = {},
   ): Promise<void> {
     session.status = "exited";
     session.exitCode = exitCode;
+    // Only markExited (a live-pty death) has output to preserve; every other
+    // caller (pre-pty create/resume failure, kill()'s ghost path, the sweep)
+    // passes nothing, which clears any stale tail from a previous life — a
+    // resume that fails before spawning must not still show the last crash's.
+    session.exitTail = exitTail;
     // `stampLastActive: false` is for reconciling a resume that never got a
     // pty: "we noticed it's dead" is not activity, and stamping it there is
     // what made an untouched session's duration grow on every failed Resume.

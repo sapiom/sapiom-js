@@ -1,49 +1,53 @@
-# Content Repurposing Pipeline
+# Content Pack
 
 Turn one blog post or transcript into a whole content pack: a tweet thread, a
 LinkedIn post, a newsletter, quote graphics, and a short teaser clip — packaged
-and emailed to you. Built for marketers and creators who write once and want to
-publish everywhere.
+and fanned out by email to every recipient you name. Built for marketers and
+creators who write once and want to publish everywhere.
 
 ## What it does
 
 ```
-repurpose ──▶ graphics ──▶ clip ──▶ collectClip ──▶ package ──▶ deliver
-(models.run) (images.create) (video.launch) (drain) (fileStorage) (email.send)
+repurpose ──▶ graphics ⇄ collectGraphic ──▶ clip ⇄ collectClip ──▶ package ──▶ deliver
+(models.run)  (images.launch)  (drain)      (video.launch) (drain) (fileStorage) (email.send × N)
 ```
 
 1. **repurpose** — an LLM (`ctx.sapiom.models.run`) rewrites the source into every
    channel at once: the tweet thread, the LinkedIn post, the newsletter, the
    pull-quotes to render, and a short video script. `dryRun` stops here with the
    copy only (no paid media).
-2. **graphics** — one quote-graphic image per pull-quote (`images.create`),
-   **fanned out** concurrently, each persisted for a durable `fileId`.
-3. **clip** — animates the first quote graphic into a short teaser: launches an
-   async image-to-video job (`video.launch`) and pauses on it; the video-generation
-   webhook resumes `collectClip` when the clip is ready.
-4. **collectClip** — records the finished clip.
-5. **package** — assembles the whole pack as one markdown document and uploads it
+2. **graphics ⇄ collectGraphic** — one quote-graphic image at a time
+   (`images.launch`, async): launch the job, pause until the webhook resumes
+   `collectGraphic`, record it, then loop back for the next quote or advance.
+3. **clip ⇄ collectClip** — animates the first quote graphic into a short
+   teaser: launches an async image-to-video job (`video.launch`) and pauses on
+   it; the video-generation webhook resumes `collectClip` when the clip is ready.
+4. **package** — assembles the whole pack as one markdown document and uploads it
    to file storage (`fileStorage.upload`) for a durable `fileId` + download URL.
-6. **deliver** — emails the pack to your recipient (`email.messages.send`), and
-   returns a summary of everything produced.
+5. **deliver** — fans the pack out to every `deliverTo` recipient
+   (`email.messages.send`), one message each, and returns a summary of
+   everything produced plus how many recipients it delivered to.
 
 Input: `{ "source": "<your blog post or transcript>", "title": "..." }`. With no
 `source` at all, the run repurposes a built-in sample post and says so in its output.
-Optional: `audience`, `numQuotes` (default 2, max 4), `deliverTo`, `schedule`
-(a cron string), `model` (an advanced image-to-video model id), and `dryRun` (copy only).
+Optional: `audience`, `numQuotes` (default 2, max 4), `deliverTo` (one or more
+recipient emails), `schedule` (a cron string), `model` (an advanced image-to-video
+model id), and `dryRun` (copy only).
 
-## Delivery
+## Delivery: fan-out per recipient
 
-Set `deliverTo` and the pack is emailed. Without it, the run returns the pack and
-says nothing was sent. The full pack is always in the email body; the file-storage copy
-is a durable convenience link.
+`deliverTo` takes a list. `deliver` maps over it — one `email.messages.send` per
+recipient — then reduces the results into one `delivered` count: a bad or
+placeholder address degrades that one recipient rather than sinking the whole
+run. Leave `deliverTo` empty and the run returns the pack inline and says
+nothing was sent.
 
 ## Cost
 
 A full run bills an LLM call, one **image** per quote, one image-to-**video** clip,
-and the email — so the estimated per-run cost card (derived from `capabilities`) is
-higher than the text-only templates. Use `dryRun` while iterating on the copy, and
-keep `numQuotes` small for real runs.
+and one email per recipient — so the estimated per-run cost card (derived from
+`capabilities`) is higher than the text-only templates. Use `dryRun` while
+iterating on the copy, and keep `numQuotes` small for real runs.
 
 ## Run it with Claude + the Sapiom MCP
 
@@ -67,13 +71,13 @@ keep `numQuotes` small for real runs.
 
 `clip` defaults to a high-quality image-to-video model. Pass a cheaper model via
 the `model` input to trade quality for cost. Model ids are an advanced, evolving
-surface and are passed through verbatim — most callers omit `model` and take the
+surface and are passed through verbatim; most callers omit `model` and take the
 default.
 
 ## Files
 
 - `index.ts` — the agent (edit this).
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
-- `AGENTS.md` — the authoring loop and why the clip step pauses.
+- `AGENTS.md` — the authoring loop and why the async steps pause.
 
 Run `npm run typecheck` to confirm it compiles.

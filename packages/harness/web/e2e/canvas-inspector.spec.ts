@@ -173,7 +173,10 @@ test("a launched-agent node keeps its private identifiers and navigates to the a
   await openAgent.click();
 
   await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
+  // The binding now reads in the current session's ⌄ menu (moved off the bar).
+  await page.getByTestId("session-menu").click();
   await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
+  await page.keyboard.press("Escape");
 });
 
 test("deselect restores the overview: Esc, the panel's close, and empty board space", async ({ page }) => {

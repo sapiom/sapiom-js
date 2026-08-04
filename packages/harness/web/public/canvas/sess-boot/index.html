@@ -18,19 +18,22 @@
 -->
 <style>
   :root {
-    --bg: #fafafa; --panel: #ffffff; --ink: #141417; --ink-muted: #54545e;
+    --bg: #ffffff; --panel: #ffffff; --ink: #141417; --ink-muted: #54545e;
     --ink-faint: #6a6a74; --line: rgba(17,17,20,.08); --line-2: rgba(17,17,20,.15);
     --brand: #167e3a; --brand-wash: rgba(22,126,58,.12); --node: #f2f2f3;
     --dot: rgba(17,17,20,.12);
   }
   [data-theme="dark"] {
-    --bg: #0a0a0c; --panel: #101013; --ink: #f4f4f5; --ink-muted: #a7a7b0;
+    --bg: #12161d; --panel: #12161d; --ink: #f4f4f5; --ink-muted: #a7a7b0;
     --ink-faint: #85858f; --line: rgba(255,255,255,.07); --line-2: rgba(255,255,255,.13);
     --brand: #6be195; --brand-wash: rgba(107,225,149,.14); --node: #17171b;
     --dot: rgba(255,255,255,.10);
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  /* The graph pans/zooms by TRANSFORMING in place over a fixed dotted board;
+     the document itself never scrolls, so it clips its own overflow rather
+     than sprouting native scrollbars when the graph is scaled past the frame. */
+  html, body { height: 100%; overflow: hidden; }
   body {
     margin: 0; padding: 0; background: var(--bg); color: var(--ink);
     font: 13px/1.5 "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;

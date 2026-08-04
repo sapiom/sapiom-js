@@ -16,8 +16,6 @@ const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
 const bold = (s: string): string => `${ESC}1m${s}${ESC}0m`;
 const cyan = (s: string): string => `${ESC}36m${s}${ESC}0m`;
 const green = (s: string): string => `${ESC}32m${s}${ESC}0m`;
-// Claude Code's spark — the 256-color orange the real CLI uses for ✻.
-const spark = (s: string): string => `${ESC}38;5;208m${s}${ESC}0m`;
 
 interface ScriptLine {
   text: string;
@@ -27,40 +25,6 @@ interface ScriptLine {
 /** Box width: full terminal minus a 1-col right margin, floored for tiny panes. */
 function boxWidth(term: XTerm): number {
   return Math.max(30, term.cols - 1);
-}
-
-/** Visible width of a string once its ANSI SGR sequences are stripped. */
-function visibleLength(s: string): number {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
-/** The Claude Code welcome box, sized to the live terminal width. Content
- *  longer than the box truncates instead of wrapping — a wrapped line would
- *  push the side borders apart and break the frame. */
-function welcomeBox(term: XTerm): string {
-  const w = boxWidth(term);
-  const inner = w - 2;
-  const line = (content: string): string => {
-    let body = content;
-    if (visibleLength(content) > inner) {
-      // Rebuild from the stripped text — dropping the styling is safer than
-      // slicing mid-ANSI-sequence.
-      // eslint-disable-next-line no-control-regex
-      body = dim(content.replace(/\x1b\[[0-9;]*m/g, "").slice(0, Math.max(0, inner - 1)) + "…");
-    }
-    return dim("│") + body + " ".repeat(Math.max(0, inner - visibleLength(body))) + dim("│") + "\r\n";
-  };
-  return (
-    dim("╭" + "─".repeat(inner) + "╮") +
-    "\r\n" +
-    line(" " + spark("✻") + " Welcome to " + bold("Claude Code") + "!") +
-    line("") +
-    line(dim("   /help for help")) +
-    line(dim("   cwd: /Users/demo/acme-app")) +
-    dim("╰" + "─".repeat(inner) + "╯") +
-    "\r\n\r\n"
-  );
 }
 
 /** The bordered prompt box + shortcut hint, exactly like the real CLI.
@@ -89,17 +53,8 @@ function promptBox(term: XTerm): string {
 
 function transcript(): ScriptLine[] {
   return [
-    // Authored demo copy must never split a word at the xterm column
-    // boundary: the tip is pre-broken into two short lines that fit
-    // every pane width the demo renders at, instead of relying on wrap.
-    {
-      text:
-        dim("  ※ Tip: run `npx @sapiom/harness`") +
-        "\r\n" +
-        dim("    for the real, PTY-backed session") +
-        "\r\n\r\n",
-      delayMs: 300,
-    },
+    // The tip now lives in the Sapiom masthead (TerminalBrand), so the scripted
+    // transcript opens straight into the conversation.
     { text: bold("> ") + "Map the leasing agent and visualize it\r\n\r\n", delayMs: 700 },
     { text: green("⏺") + " I'll read the agent definition first.\r\n\r\n", delayMs: 800 },
     { text: green("⏺") + " " + bold("Read") + "(sapiom.json)\r\n", delayMs: 600 },
@@ -174,7 +129,8 @@ export function attachMockTerminal(term: XTerm): MockTerminalHandle {
   timers.push(
     setTimeout(() => {
       if (!disposed) {
-        term.write(welcomeBox(term));
+        // The Sapiom masthead (TerminalBrand) now replaces the CLI welcome box,
+        // so the demo terminal opens straight into the scripted conversation.
         schedule(0);
       }
     }, 200),
@@ -195,7 +151,9 @@ export function attachMockTerminal(term: XTerm): MockTerminalHandle {
           green("⏺") +
             dim(" This is a recorded demo. Prompts aren't sent to a coding agent here.") +
             "\r\n" +
-            dim("  Run `npx @sapiom/harness` locally to work with a real session.") +
+            dim("  Run `npx @sapiom/agent-studio@latest`") +
+            "\r\n" +
+            dim("    locally to work with a real session.") +
             "\r\n\r\n",
         );
       }

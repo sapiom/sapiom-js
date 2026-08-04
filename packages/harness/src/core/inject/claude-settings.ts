@@ -171,7 +171,20 @@ export async function generateClaudeSettings(
         hooks: [
           {
             type: "command",
-            command: `node ${emitScriptPath} ${event}`,
+            // The script path is double-quoted because Claude Code runs a
+            // `command` hook through a shell (`/bin/sh -c …`; `cmd.exe` on
+            // Windows). An unquoted path under a home directory that contains a
+            // space (`/Users/First Last/.sapiom/harness/generated/…/emit.cjs`)
+            // word-splits, so `node` receives `/Users/First` and the hook dies
+            // with "Cannot find module" — the SessionStart hook then never
+            // POSTs and the session's agentSessionId is never established
+            // (the exact "exited before establishing a session id" failure).
+            // Double quotes group the path on both sh and cmd.exe and are
+            // stripped before `node` sees the argument. This is the harness
+            // CLAUDE.md's "paths contain spaces — never hand a shell an
+            // unquoted path" rule. The event name is a fixed identifier from
+            // HOOK_EVENTS, so it needs no quoting.
+            command: `node "${emitScriptPath}" ${event}`,
           },
         ],
       },

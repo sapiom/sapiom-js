@@ -9,35 +9,43 @@ agent from a plain script.
 ## What it does
 
 ```
-decompose ──▶ keyframes ──▶ animate ⇄ collect ──▶ stitch ──▶ finalize
-(models.run)  (images.create) (video.launch) (drain) (video.create) (terminal)
+decompose ──▶ keyframe ⇄ collectKeyframe ──▶ animate ⇄ collect ──▶ stitch ──▶ finalize
+(models.run)  (images.launch)  (drain)      (video.launch) (drain) (video.create) (terminal)
 ```
 
 1. **decompose** — an LLM (`ctx.sapiom.models.run`) turns the scene into a global
    style/identity **bible** plus an ordered shot list (each shot: `image_prompt`,
-   `motion_prompt`, `duration`, `transition`).
-2. **keyframes** — one keyframe image per shot (`images.create`), **fanned out**
-   concurrently, each persisted for a durable `fileId`.
-3. **animate** — launches an async image-to-video job per shot (`video.launch`)
+   `motion_prompt`, `duration`, `transition`). Run it with no `scene` and it plans
+   (and later shoots) the built-in sample scene as a single shot.
+2. **keyframe** — launches an async keyframe-image job for one shot
+   (`images.launch`) and pauses on it; the webhook resumes `collectKeyframe`
+   when the image is ready.
+3. **collectKeyframe** — records the finished keyframe, then loops back to
+   `keyframe` for the next shot, or advances to `animate` once every keyframe
+   is in.
+4. **animate** — launches an async image-to-video job per shot (`video.launch`)
    and pauses on it; the FAL webhook resumes `collect` when the clip is ready.
-4. **collect** — records the clip, then loops back to `animate` for the next shot,
+5. **collect** — records the clip, then loops back to `animate` for the next shot,
    or advances to `stitch` once every clip is in.
-5. **stitch** — concats every clip through FAL's synchronous merge endpoint. The
-   SDK has a bounded polling fallback if the provider unexpectedly queues it.
-6. **finalize** — terminal; returns `{ videoFileId, downloadUrl, shots }`.
+6. **stitch** — concats every clip through FAL's synchronous merge endpoint (a
+   single-clip scene bypasses the merge). The SDK has a bounded polling
+   fallback if the provider unexpectedly queues it.
+7. **finalize** — terminal; returns `{ videoFileId, downloadUrl, shots }`.
    `videoFileId` is `null` when persistence did not produce a durable file.
 
 Input: `{ "scene": "a paper boat drifting down a rain-soaked city gutter at night", "numShots": 3 }`.
 Optional: `aspectRatio` (default `"16:9"`), `model` (FAL image-to-video id), and
-`dryRun` (plan only — skip all image/video generation).
+`dryRun: true` (plan only — skip all image/video generation). Omit everything
+and it shoots the built-in sample scene as a single real, cheap shot.
 
 ## Cost
 
-⚠️ **This is the priciest template in the gallery.** A real run bills an LLM call,
-N keyframe **images**, N image-to-**video** clips, and a merge job — so the
-gallery's estimated per-run cost card (derived from `capabilities`) is visibly
-higher than the other templates. Use `dryRun` while iterating, and keep `numShots`
-small for real runs.
+⚠️ **This is the priciest template in the gallery once you go past one shot.**
+A real multi-shot run bills an LLM call, N keyframe **images**, N image-to-
+**video** clips, and a merge job — so the gallery's estimated per-run cost card
+(derived from `capabilities`) is visibly higher than the other templates. A
+zero-input run clamps to a single shot and skips the merge, so it stays cheap.
+Use `dryRun` while iterating, and keep `numShots` small for a real multi-shot run.
 
 ## Run it with Claude + the Sapiom MCP
 

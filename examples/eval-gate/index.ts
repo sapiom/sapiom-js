@@ -7,222 +7,340 @@ import {
 } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { buildDraftPrompt } from "./draft.js";
 import { buildJudgePrompt, parseScore } from "./judge.js";
 
 /**
- * eval-gate
- * ---------
- * An LLM-judge quality gate. Score an output against YOUR rubric, then gate the
- * next step on the score — a deployable Sapiom agent built from primitives you
- * already have: one metered LLM call (the judge, via `ctx.sapiom.models.run`),
- * the engine's branch control flow (the gate), and two terminal outcomes
- * (publish / revise).
+ * Self-Editing Writer
+ * -------------------
+ * Give it a brief and a rubric; it drafts, critiques its own draft against the
+ * rubric with an LLM judge, and revises — bounded — until the draft clears the
+ * bar or the attempt cap is hit, then publishes whichever draft that was:
  *
- * We own the harness (a default judge prompt + a score parser, see `judge.ts`)
- * and the pattern. The RUBRIC is yours — we ship one generic default judge prompt
- * you override, never an opinion about what "quality" means.
+ *   parse ─▶ draft ─▶ judge ─▶ decide ─┬─▶ draft   (score < threshold, attempts remain — loop)
+ *                        (loop back)   └─▶ publish (score >= threshold, OR attempts exhausted)
  *
- *   judge ─▶ gate ─┬─▶ publish   (score >= threshold)
- *                  └─▶ revise    (score <  threshold)
+ * `draft` and `judge` are both ordinary `models.run` calls — the judge reads
+ * the draft `draft` just wrote, so this is chained judgment: the second
+ * model's input is the first model's output, and drift can compound across a
+ * revision. `decide` is pure branch logic, no model call: it either loops
+ * back to `draft` with the rejected attempt and the judge's critique so far,
+ * or terminates at `publish` with the best draft produced. The loop is
+ * bounded by `maxIterations` (default 2 draft attempts) so it always
+ * terminates — `decide` never loops past that cap, pass or not.
  *
- * The judge is an ordinary `models.run` call, so it rides the same step→gateway
- * path as everything else and inherits the engine's routing / capacity / load
- * balancing for free — no evals-specific agent-run path is created.
- *
- * Shape: `(input, output, rubric, threshold) → { decision, score, threshold,
- * rationale }`. Copy this as a starter, or call it as a CHILD from a parent
- * agent that produced `output` and branch on the returned decision — see the
- * "self-grading agent" composition pattern in `README.md`.
+ * `publish` is honest either way: it always returns the final draft, but
+ * `passed` says whether it actually cleared the rubric or the run simply ran
+ * out of attempts. There's no separate "reject" outcome — a self-editing
+ * writer with nowhere to send a failing draft still has to hand back
+ * something, so it hands back its best attempt and says so.
  */
 
-/** Run-scoped values stashed in `ctx.shared` so later steps can read them. */
-interface EvalShared extends Record<string, unknown> {
-  /** The pass bar, stashed by `judge` so `gate` can branch on it. */
+/** Run-scoped values threaded through the loop via `ctx.shared`. */
+interface WriterShared extends Record<string, unknown> {
+  brief: string;
+  rubric: string;
   threshold: number;
-  /** Set when the run graded the built-in sample case rather than the caller's. */
+  maxIterations: number;
+  /** The attempt number the run is currently drafting (1-based). */
+  iteration: number;
+  model?: string;
+  judgeModel?: string;
+  /** The rejected draft `decide` sends back for `draft` to revise. */
+  previousDraft?: string;
+  /** The judge's critique of `previousDraft`, addressed by the revision. */
+  critique?: string;
+  /** Set when the run used the built-in sample brief/rubric. */
   note?: string;
 }
 
 /**
- * The sample case a zero-input run grades. Every entry field defaults from it,
- * so `{}` produces a real judge call instead of a schema rejection — and the
- * terminal artifact says the sample was used, so nobody mistakes it for theirs.
+ * The sample brief + rubric a zero-input run drafts and grades for real. Concrete
+ * enough that the draft is a real artifact and the rubric has teeth — a model
+ * that pads past the word count or reaches for a cliché genuinely fails it.
  */
-const SAMPLE_CASE = {
-  input: "Write a one-line product tagline for a privacy-first email app.",
-  output: "Inbox peace, finally — email that never reads your mail.",
-  rubric:
-    "Concise (<= 12 words), mentions privacy, no jargon, reads naturally.",
-} as const;
+const SAMPLE_BRIEF =
+  "Write a 3-5 sentence noir-style opening for a detective agency called Northstar Investigations.";
+const SAMPLE_RUBRIC =
+  "Under 120 words. Noir tone: short, punchy sentences, understated menace. Establishes a hook — a case or a client. No clichés like 'dark and stormy night'. No meta-commentary, just the paragraph.";
+const DEFAULT_THRESHOLD = 0.8;
+const DEFAULT_MAX_ITERATIONS = 2;
 
-const judgeInputSchema = z
+function must<T>(v: T | undefined, name: string): T {
+  if (v === undefined) throw new Error(`missing shared state: ${name}`);
+  return v;
+}
+
+const entryInputSchema = z
   .object({
-    input: z
-      .unknown()
-      .default(SAMPLE_CASE.input)
-      .describe(
-        "The case the output was produced from (task, prompt, question…).",
-      ),
-    output: z
-      .unknown()
-      .default(SAMPLE_CASE.output)
-      .describe("The produced output to grade."),
+    brief: z
+      .string()
+      .min(1)
+      .default(SAMPLE_BRIEF)
+      .describe("What to write. Fed to the draft step's prompt."),
     rubric: z
       .string()
       .min(1)
-      .default(SAMPLE_CASE.rubric)
+      .default(SAMPLE_RUBRIC)
       .describe(
-        "YOUR criteria. The judge scores the output against this — we ship no scorer taxonomy.",
+        "YOUR pass/fail criteria. The judge scores every draft against this — we ship no scorer taxonomy.",
       ),
     threshold: z
       .number()
       .min(0)
       .max(1)
-      .default(0.7)
+      .default(DEFAULT_THRESHOLD)
       .describe(
-        "Pass bar in [0,1]. score >= threshold ⇒ publish, else revise.",
+        "Pass bar in [0,1]. score >= threshold publishes immediately.",
+      ),
+    maxIterations: z
+      .number()
+      .int()
+      .min(1)
+      .max(5)
+      .default(DEFAULT_MAX_ITERATIONS)
+      .describe(
+        "Bound on draft attempts (1 initial + revisions). The run always publishes by this attempt, pass or not.",
       ),
     model: z
       .string()
       .optional()
       .describe(
-        "Judge-model alias the models capability knows (default: the configured judge model).",
+        "Draft-model alias the models capability knows (default: the configured default model).",
+      ),
+    judgeModel: z
+      .string()
+      .optional()
+      .describe(
+        "Judge-model alias (default: the configured judge model).",
       ),
   })
   .meta({
-    examples: [{ ...SAMPLE_CASE, threshold: 0.7 }],
+    examples: [
+      {
+        brief: SAMPLE_BRIEF,
+        rubric: SAMPLE_RUBRIC,
+        threshold: DEFAULT_THRESHOLD,
+        maxIterations: DEFAULT_MAX_ITERATIONS,
+      },
+    ],
   });
 
 /** What the agent run starts with. */
-export type EvalGateInput = z.infer<typeof judgeInputSchema>;
+export type WriterInput = z.infer<typeof entryInputSchema>;
 
 // ---------------------------------------------------------------------------
-// Step 1 — judge: build the prompt from YOUR rubric, call models.run, parse score
+// Step 1 — parse: validate + default the brief/rubric, seed the loop state.
 // ---------------------------------------------------------------------------
+
+const parse = defineStep({
+  name: "parse",
+  next: ["draft"],
+  inputSchema: entryInputSchema,
+  async run(input: WriterInput, ctx: AgentExecutionContext<WriterShared>) {
+    ctx.shared.set("brief", input.brief);
+    ctx.shared.set("rubric", input.rubric);
+    ctx.shared.set("threshold", input.threshold);
+    ctx.shared.set("maxIterations", input.maxIterations);
+    ctx.shared.set("iteration", 1);
+    if (input.model) ctx.shared.set("model", input.model);
+    if (input.judgeModel) ctx.shared.set("judgeModel", input.judgeModel);
+    if (input.brief === SAMPLE_BRIEF && input.rubric === SAMPLE_RUBRIC) {
+      // Say so in the artifact: a real self-edit against OUR sample brief is
+      // not a self-edit against yours.
+      ctx.shared.set(
+        "note",
+        "Drafted and judged the built-in sample brief/rubric. Pass your own `brief` and `rubric` to write and grade yours.",
+      );
+    }
+    ctx.logger.info("parse: starting the self-editing loop", {
+      threshold: input.threshold,
+      maxIterations: input.maxIterations,
+    });
+    return goto("draft", {});
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Step 2 — draft: write (or revise) the piece. One models.run call.
+// ---------------------------------------------------------------------------
+
+const draft = defineStep({
+  name: "draft",
+  next: ["judge"],
+  timeoutMs: 60_000,
+  async run(_input: unknown, ctx: AgentExecutionContext<WriterShared>) {
+    const brief = must(ctx.shared.get("brief"), "brief");
+    const rubric = must(ctx.shared.get("rubric"), "rubric");
+    const iteration = must(ctx.shared.get("iteration"), "iteration");
+    const previousDraft = ctx.shared.get("previousDraft");
+    const critique = ctx.shared.get("critique");
+    const prompt = buildDraftPrompt({
+      brief,
+      rubric,
+      ...(previousDraft !== undefined &&
+        critique !== undefined && {
+          revision: { draft: previousDraft, critique },
+        }),
+    });
+    ctx.logger.info(`draft: writing attempt ${iteration}`, { iteration });
+    // The load-bearing seam: an ordinary metered LLM call. An empty reply
+    // means the writer produced nothing real to grade, so we throw and let
+    // the engine retry rather than judging a blank page.
+    const res = await ctx.sapiom.models.run({
+      prompt,
+      model: ctx.shared.get("model"),
+      maxTokens: 500,
+    });
+    const text = (res.output ?? "").trim();
+    if (!text) {
+      throw new Error(
+        "self-editing writer: draft model returned no text to grade",
+      );
+    }
+    return goto("judge", { draft: text });
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Step 3 — judge: score the draft against the rubric. One models.run call.
+// ---------------------------------------------------------------------------
+
+interface DraftPayload {
+  draft: string;
+}
 
 const judge = defineStep({
   name: "judge",
-  next: ["gate"],
+  next: ["decide"],
   timeoutMs: 60_000,
-  inputSchema: judgeInputSchema,
-  async run(input: EvalGateInput, ctx: AgentExecutionContext<EvalShared>) {
-    ctx.shared.set("threshold", input.threshold);
-    if (input.rubric === SAMPLE_CASE.rubric) {
-      // Say so in the artifact: a real score against OUR sample is not a score
-      // against yours, and the number alone doesn't distinguish them.
-      ctx.shared.set(
-        "note",
-        "Graded the built-in sample case. Pass your own `input`, `output`, and `rubric` to grade yours.",
-      );
-    }
+  async run(input: DraftPayload, ctx: AgentExecutionContext<WriterShared>) {
+    const brief = must(ctx.shared.get("brief"), "brief");
+    const rubric = must(ctx.shared.get("rubric"), "rubric");
     const prompt = buildJudgePrompt({
-      input: input.input,
-      output: input.output,
-      rubric: input.rubric,
+      input: brief,
+      output: input.draft,
+      rubric,
     });
-    // The load-bearing seam: the judge is an ordinary metered LLM call. A
-    // malformed reply (or none) makes `parseScore` throw, so the engine retries.
+    // Chained judgment: this call's input is the `draft` step's model output,
+    // not caller-supplied data — a malformed reply still throws in
+    // `parseScore` and the engine retries, same contract as `draft`.
     const res = await ctx.sapiom.models.run({
       prompt,
-      model: input.model,
+      model: ctx.shared.get("judgeModel"),
       maxTokens: 256,
     });
     const { score, rationale } = parseScore(res.output ?? "");
-    ctx.logger.info("judge: scored output against rubric", {
-      score,
-      threshold: input.threshold,
-    });
-    return goto("gate", { score, rationale });
+    ctx.logger.info("judge: scored the draft against the rubric", { score });
+    return goto("decide", { draft: input.draft, score, critique: rationale });
   },
 });
 
 // ---------------------------------------------------------------------------
-// Step 2 — gate: the branch the whole template turns on (pure logic, no call)
+// Step 4 — decide: the bounded loop gate. Pure logic, no model call.
 // ---------------------------------------------------------------------------
 
-interface GateInput {
+interface DecideInput {
+  draft: string;
   score: number;
-  rationale: string;
+  critique: string;
 }
 
-interface GateOutcome {
+interface PublishInput {
+  draft: string;
   score: number;
-  threshold: number;
-  rationale: string;
+  critique: string;
+  passed: boolean;
+  iterations: number;
 }
 
-const gate = defineStep({
-  name: "gate",
-  next: ["publish", "revise"],
-  async run(input: GateInput, ctx: AgentExecutionContext<EvalShared>) {
-    const threshold = ctx.shared.get("threshold") ?? 0.7;
+const decide = defineStep({
+  name: "decide",
+  next: ["draft", "publish"],
+  async run(input: DecideInput, ctx: AgentExecutionContext<WriterShared>) {
+    const threshold = must(ctx.shared.get("threshold"), "threshold");
+    const maxIterations = must(ctx.shared.get("maxIterations"), "maxIterations");
+    const iteration = must(ctx.shared.get("iteration"), "iteration");
     const passed = input.score >= threshold;
-    ctx.logger.info(
-      `gate: score ${passed ? "met" : "below"} threshold → ${passed ? "publish" : "revise"}`,
-      { score: input.score, threshold },
-    );
-    const outcome: GateOutcome = {
+    const exhausted = iteration >= maxIterations;
+
+    if (passed || exhausted) {
+      ctx.logger.info(
+        `decide: ${passed ? "cleared the rubric" : "hit the attempt cap"} — publishing`,
+        { score: input.score, threshold, iteration },
+      );
+      return goto("publish", {
+        draft: input.draft,
+        score: input.score,
+        critique: input.critique,
+        passed,
+        iterations: iteration,
+      });
+    }
+
+    // Bounded revise-loop: hand `draft` the rejected attempt and the judge's
+    // critique, advance the attempt counter, and loop back. `maxIterations`
+    // guarantees this always reaches `publish` — there is no unbounded path.
+    ctx.shared.set("previousDraft", input.draft);
+    ctx.shared.set("critique", input.critique);
+    ctx.shared.set("iteration", iteration + 1);
+    ctx.logger.info("decide: below threshold, revising", {
       score: input.score,
       threshold,
-      rationale: input.rationale,
-    };
-    return passed ? goto("publish", outcome) : goto("revise", outcome);
+      nextIteration: iteration + 1,
+      maxIterations,
+    });
+    return goto("draft", {});
   },
 });
 
 // ---------------------------------------------------------------------------
-// Step 3 — terminal outcomes. The caller decides what publish/revise MEAN.
+// Step 5 — publish: the one terminal. Always returns the final draft.
 // ---------------------------------------------------------------------------
 
 const publish = defineStep({
   name: "publish",
   next: [],
   terminal: true,
-  async run(input: GateOutcome, ctx: AgentExecutionContext<EvalShared>) {
-    ctx.logger.info("publish: output passed the eval-gate", {
-      score: input.score,
-    });
-    return terminate(
-      {
-        decision: "publish",
-        score: input.score,
-        threshold: input.threshold,
-        rationale: input.rationale,
-        ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
-      },
-      { reason: "score met threshold" },
+  async run(input: PublishInput, ctx: AgentExecutionContext<WriterShared>) {
+    const threshold = must(ctx.shared.get("threshold"), "threshold");
+    const note = ctx.shared.get("note");
+    const capNote =
+      !input.passed
+        ? `Hit the ${input.iterations}-attempt cap without clearing the rubric (score ${input.score} < ${threshold}) — this is the best draft produced, not a passing one.`
+        : undefined;
+    ctx.logger.info(
+      `publish: ${input.passed ? "cleared" : "did not clear"} the rubric after ${input.iterations} attempt(s)`,
+      { score: input.score, threshold },
     );
-  },
-});
-
-const revise = defineStep({
-  name: "revise",
-  next: [],
-  terminal: true,
-  async run(input: GateOutcome, ctx: AgentExecutionContext<EvalShared>) {
-    ctx.logger.info("revise: output failed the eval-gate", {
-      score: input.score,
-    });
     return terminate(
       {
-        decision: "revise",
+        draft: input.draft,
+        passed: input.passed,
         score: input.score,
-        threshold: input.threshold,
-        rationale: input.rationale,
-        ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
+        threshold,
+        iterations: input.iterations,
+        rationale: input.critique,
+        ...([note, capNote].filter(Boolean).length > 0 && {
+          note: [note, capNote].filter(Boolean).join(" "),
+        }),
       },
-      { reason: "score below threshold" },
+      {
+        reason: input.passed
+          ? "draft cleared the rubric"
+          : "published the best draft after exhausting the attempt cap",
+      },
     );
   },
 });
 
 /**
- * The agent. The engine imports THIS `agent` export, bundles it, and walks these
- * step bodies inside a sandbox. Exactly ONE `defineAgent` is exported from this
- * module — the loader requires precisely one.
+ * The agent. The engine imports THIS `agent` export, bundles it, and walks
+ * these step bodies inside a sandbox. Exactly ONE `defineAgent` is exported
+ * from this module — the loader requires precisely one.
  */
-export const agent = defineAgent<EvalGateInput, EvalShared>({
-  name: "eval-gate",
-  entry: "judge",
-  steps: { judge, gate, publish, revise },
+export const agent = defineAgent<WriterInput, WriterShared>({
+  name: "self-editing-writer",
+  entry: "parse",
+  steps: { parse, draft, judge, decide, publish },
 });

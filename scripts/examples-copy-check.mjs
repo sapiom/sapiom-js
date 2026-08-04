@@ -260,6 +260,28 @@ export function checkCopy(template, manifest) {
     );
   }
 
+  // The three human-facing prose fields stay plain and pricing-free (SAP golden
+  // gallery). No em/en-dashes, no run-cost language. Scoped to these fields so a
+  // proposal's own "priced line items" (domain content elsewhere) is unaffected.
+  const DASH_RE = /[—–]/;
+  const PRICING_RE =
+    /\$\s?\d|\bcredits?\b|\byou pay\b|\bpay for\b|\bfor free\b|\bis free\b|sitting idle is free|covers first runs?|signup credit|\bper (?:run|question|call)s?\b/i;
+  for (const field of ["whatItDoes", "longDescription", "notes"]) {
+    const copy = typeof manifest?.[field] === "string" ? manifest[field] : "";
+    if (DASH_RE.test(copy)) {
+      fail(
+        "copy-dash",
+        `manifest.${field} contains an em- or en-dash. Keep this prose plain: delete a trailing phrase, split into two sentences, or use a comma.`,
+      );
+    }
+    if (PRICING_RE.test(copy)) {
+      fail(
+        "copy-pricing",
+        `manifest.${field} contains run-cost/pricing language. Pricing is not a template concern; remove it.`,
+      );
+    }
+  }
+
   for (const [surface, value, terminology] of [
     ["registry", registryDisplayCopy(template), WORKFLOW_TERM_RE],
     ["registry", registryProseCopy(template), ORCHESTRATION_TERM_RE],

@@ -1,16 +1,17 @@
 # Working in this agent
 
-This project defines exactly one Sapiom agent in `index.ts` — **Scene → Images → Video** — authored against `@sapiom/agent`. It is the richest onboarding template: a real multi-step generative pipeline, not a one-shot text-to-image. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.models.run`, `ctx.sapiom.contentGeneration.images.create`, and `ctx.sapiom.contentGeneration.video.{launch,create}`).
+This project defines exactly one Sapiom agent in `index.ts` — **Scene → Images → Video** — authored against `@sapiom/agent`. It is the richest onboarding template: a real multi-step generative pipeline, not a one-shot text-to-image. Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom` (here `ctx.sapiom.models.run`, `ctx.sapiom.contentGeneration.images.launch`, and `ctx.sapiom.contentGeneration.video.{launch,create}`).
 
 ## The graph
 
 ```
-decompose ─▶ keyframes ─▶ animate ⇄ collect ─▶ stitch ─▶ finalize
-(models.run) (images.create) (video.launch) (drain)  (video.create) (terminal)
+decompose ─▶ keyframe ⇄ collectKeyframe ─▶ animate ⇄ collect ─▶ stitch ─▶ finalize
+(models.run) (images.launch)  (drain)     (video.launch) (drain) (video.create) (terminal)
 ```
 
-- **decompose** — an LLM decomposes the scene into a global style/identity **bible** + an ordered shot list. A `dryRun` input terminates here with the plan only (no paid generation).
-- **keyframes** — one keyframe image per shot, **fanned out in-process** (`Promise.all`), each persisted (`storage`) for a durable `fileId`.
+- **decompose** — an LLM decomposes the scene into a global style/identity **bible** + an ordered shot list. An explicit `dryRun: true` input terminates here with the plan only (no paid generation) — omitted, it always continues into real generation, clamped to a single shot when `scene` itself was omitted too.
+- **keyframe** — launches an async keyframe-image job for one shot and `pauseUntilSignal`s on it. The `pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep: 'collectKeyframe' }` declaration is the graph edge; the webhook fires the signal to resume `collectKeyframe`.
+- **collectKeyframe** — records the finished keyframe, then loops back to `keyframe` for the next shot or advances to `animate` once every keyframe is in.
 - **animate** — launches an async image-to-video job for one shot and `pauseUntilSignal`s on it. The `pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: 'collect' }` declaration is the graph edge; the FAL webhook fires the signal to resume `collect`.
 - **collect** — records the finished clip, then loops back to `animate` for the next shot or advances to `stitch`.
 - **stitch** — FAL's synchronous ffmpeg-merge endpoint concats every resolved
@@ -24,17 +25,17 @@ decompose ─▶ keyframes ─▶ animate ⇄ collect ─▶ stitch ─▶ final
 
 - An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run, ... })`. Keep exactly one `defineAgent(...)` export.
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. Note `ctx.sapiom.llm` does **not** exist; the LLM path is `ctx.sapiom.models.run({ prompt, system, maxTokens })`.
-- **Async pause/resume.** A launched capability (`video.launch`) returns a dispatch handle; `return pauseUntilSignal(handle, { resumeStep })` suspends the step until the job's signal arrives. The step must also **declare** the edge: `pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep }`. The resumed step receives a `VideoResultPayload` (`{ outputs: [{ fileId?, downloadUrl? }] }`).
-- **Why animate is sequential, not one paused step per clip at once.** A paused step waits on a single `(signal, correlationId)` pair. Launching every clip up front and then draining would risk a clip finishing before we've paused on it — its resume signal would have nowhere to land. Launching shot `i` only after shot `i-1` resumes keeps a paused step always waiting before its job can complete.
+- **Async pause/resume.** A launched capability (`images.launch`, `video.launch`) returns a dispatch handle; `return pauseUntilSignal(handle, { resumeStep })` suspends the step until the job's signal arrives. The step must also **declare** the edge: `pause: { signal, resumeStep }`. The resumed step receives an `ImageResultPayload` / `VideoResultPayload` (`{ outputs: [{ fileId?, downloadUrl? }] }`).
+- **Why `keyframe`/`animate` are sequential, not one paused step per job at once.** A paused step waits on a single `(signal, correlationId)` pair. Launching every job up front and then draining would risk one finishing before we've paused on it — its resume signal would have nowhere to land. Launching shot `i` only after shot `i-1` resumes keeps a paused step always waiting before its job can complete. This is also why keyframes use `images.launch` rather than a concurrent `Promise.all` of `images.create`: the synchronous routed call holds its request open for the full generate+store, which meets Core's 30s router cap under fan-out — `launch` submits and returns as soon as the job is enqueued, so it never does.
 
 ## Validating
 
 When you've made a coherent change and want to validate it — the same point you'd run tests in any project — reach for the local suite. You don't need to run it after every small edit.
 
-- **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists (plus the `VIDEO_RESULT_SIGNAL` import).
+- **`npm run typecheck`** — types, and confirms every `ctx.sapiom.*` capability/method you used exists (plus the `IMAGE_RESULT_SIGNAL` / `VIDEO_RESULT_SIGNAL` imports).
 - **check** — typecheck + bundle + manifest + step-graph validation. The full local pre-flight before deploy.
 - **run_local** with `{ "dryRun": true }` — runs your **real** step code against **stub capabilities** and traces the full graph offline for free, without any billed generation.
-- **deploy**, then **run** — ship it, then perform a real, billed run: LLM plan → keyframe images → per-shot clips → stitched video.
+- **deploy**, then **run** — ship it, then perform a real, billed run: LLM plan → keyframe images → per-shot clips → stitched video. A zero-input run shoots the built-in sample as a single real shot rather than dry-running.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities), not the other way around — never weaken or drop real logic to shape a local run.
 
@@ -42,8 +43,8 @@ Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev t
 
 ## Cost
 
-This is the priciest template in the gallery: it bills an LLM call, N keyframe **images**, N image-to-**video** clips, and a merge job per run. Use `dryRun` while iterating on the graph, and start with a small `numShots` for real runs.
+This is the priciest template in the gallery once you go past one shot: a full run bills an LLM call, N keyframe **images**, N image-to-**video** clips, and (for more than one shot) a merge job. A zero-input run clamps to a single shot, so it stays cheap. Use `dryRun` while iterating on the graph, and start with a small `numShots` for a real multi-shot run.
 
 ## Determinism
 
-A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Capture non-deterministic values once and pass them forward via the `goto(...)` input or `ctx.shared` rather than recomputing them. The `animate ⇄ collect` loop advances a single `animateIndex` counter in `ctx.shared`.
+A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Capture non-deterministic values once and pass them forward via the `goto(...)` input or `ctx.shared` rather than recomputing them. The `keyframe ⇄ collectKeyframe` loop advances a `keyframeIndex` counter and the `animate ⇄ collect` loop advances a separate `animateIndex` counter, both in `ctx.shared`.

@@ -39,6 +39,8 @@ describe("attachMockTerminal", () => {
     expect(rendered).toContain(
       "This is a recorded demo. Prompts aren't sent to a coding agent here.",
     );
+    expect(rendered).toContain("npx @sapiom/agent-studio@latest");
+    expect(rendered).not.toContain("npx @sapiom/harness");
     expect(rendered).not.toContain("Prompts aren't sent to an agent here.");
 
     handle.dispose();

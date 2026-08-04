@@ -31,8 +31,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function openPastRow(page: Page, testid: string): Promise<void> {
+  // Past-session rows moved out of the ⋯ menu into a sub-card that opens off
+  // the "Past sessions" row: ⋯ → Past sessions → the row.
   await page.getByTestId("history-trigger").click();
   await expect(page.getByTestId("history-menu")).toBeVisible();
+  // The flyout opens on hover onto its row (a click would toggle the
+  // hover-open straight back shut).
+  await page.getByTestId("past-sessions-trigger").hover();
+  await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId(testid).click();
   await expect(page.getByTestId("dead-session-pane")).toBeVisible();
 }
@@ -62,14 +68,22 @@ test("a recorded, un-resumable session offers Continue and says what carries ove
 
 test("continuing it opens a NEW session rather than resuming the old one", async ({ page }) => {
   await openPastRow(page, REHYDRATABLE_ROW);
-  const tabs = page.getByTestId("session-tabs").locator(".session-tab");
-  const before = await tabs.count();
+  // While the pane is up, the exited pricing session is the one in context.
+  const context = page.getByTestId("session-context");
+  await expect(context).toHaveAttribute("data-session-id", "sess-pricing");
 
   await page.getByTestId("dead-session-continue").click();
 
-  await expect(tabs).toHaveCount(before + 1);
-  // The old session is not what came back — it stays exited.
-  await expect(page.getByTestId("session-tab-sess-pricing")).toHaveCount(0);
+  // A FRESH session became active — the live workbench replaces the dead pane,
+  // and the active session is a new id, not the old one resumed in place.
+  await expect(page.getByTestId("agent-view")).toBeVisible();
+  await expect(context).not.toHaveAttribute("data-session-id", "sess-pricing");
+  // A real fresh id is present — `/.+/` proves the attribute EXISTS and is
+  // non-empty (a bare not-"" also passes when the attribute is absent).
+  await expect(context).toHaveAttribute("data-session-id", /.+/);
+  // The old session is not what came back — it never appears as a live session
+  // (no active context on it, no switch chip for it).
+  await expect(page.getByTestId("session-switch-sess-pricing")).toHaveCount(0);
   // And no failure toast: this path never attempts the resume that would 409.
   await expect(page.getByTestId("toast")).toHaveCount(0);
 });

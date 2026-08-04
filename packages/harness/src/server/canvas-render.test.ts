@@ -79,14 +79,15 @@ describe("canvas render router", () => {
     await expect(fs.access(path.join(projectDir, CANVAS_DIR))).rejects.toThrow();
   });
 
-  it("passes the session's real binding and the live workflow list through to the render", async () => {
-    const listWorkflows = vi.fn().mockReturnValue([]);
-    const getSession = vi.fn().mockReturnValue({ cwd: projectDir, boundWorkflowPath: "/some/workflow" });
+  it("awaits the session's enriched workflow list before rendering its real binding", async () => {
+    const session = { cwd: projectDir, boundWorkflowPath: "/some/workflow" };
+    const listWorkflows = vi.fn().mockResolvedValue([]);
+    const getSession = vi.fn().mockReturnValue(session);
     await start({ getSession, listWorkflows });
 
     await fetch(`${baseUrl}/api/canvas/sess-42/render`, { method: "POST", headers: TOKEN_HEADER });
 
     expect(getSession).toHaveBeenCalledWith("sess-42");
-    expect(listWorkflows).toHaveBeenCalled();
+    expect(listWorkflows).toHaveBeenCalledWith(session);
   });
 });

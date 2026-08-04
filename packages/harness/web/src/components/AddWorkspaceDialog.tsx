@@ -441,7 +441,7 @@ function HaveProjectDoor({
  * claiming that the server is absent.
  *
  * Still copy-a-prompt for now. What the prompt contains is a shell command
- * (`claude mcp add sapiom -- npx -y @sapiom/mcp`), so a desktop build can
+ * (`claude mcp add sapiom-dev -- npx -y @sapiom/mcp`), so a desktop build can
  * run it for you — that needs the Electron preload and is deliberately a
  * separate change; this is the same capability, minus the clutter.
  */

@@ -28,11 +28,14 @@ import { buildTerminalWsUrl } from "../lib/terminal-ws.js";
 import { getTheme, subscribeTheme, type Theme } from "../lib/theme.js";
 import { isMockMode } from "../lib/api.js";
 import { attachMockTerminal, type MockTerminalHandle } from "../lib/mock-terminal.js";
+import { TerminalBrand } from "./TerminalBrand.js";
 
 export interface TerminalProps {
   sessionId: string;
   /** Per-boot token baked into the SPA; required on the WS upgrade. */
   token: string;
+  /** The session's working directory, shown in the masthead's dir fact. */
+  cwd?: string | null;
 }
 
 type ConnectionStatus = "connecting" | "connected" | "error";
@@ -98,7 +101,9 @@ const LIGHT_ANSI: Partial<ITheme> = {
  * time so it always reflects the current [data-theme].
  */
 function xtermThemeFor(theme: Theme): ITheme {
-  const background = readToken("--bg", theme === "dark" ? "#0c0c0e" : "#fbfbfc");
+  // The shell block is the recessed surface (same as the rail), so the xterm
+  // canvas paints --bg to match the session bar + masthead around it.
+  const background = readToken("--bg", theme === "dark" ? "#0b0e13" : "#f8f9fa");
   const foreground = readToken("--ink", theme === "dark" ? "#f3f3f5" : "#16161a");
   // Fallbacks mirror the per-theme --brand values in styles.css.
   const brand = readToken("--brand", theme === "dark" ? "#6be195" : "#167e3a");
@@ -113,7 +118,7 @@ function xtermThemeFor(theme: Theme): ITheme {
   };
 }
 
-export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
+export const Terminal = ({ sessionId, token, cwd }: TerminalProps): JSX.Element => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -271,10 +276,11 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     // Full-bleed terminal block: a status subheader over the raw PTY screen.
     // All chrome styling is class + token based — see styles.css.
     <div className="harness-terminal">
-      <div className="terminal-statusbar" data-status={status}>
-        <span className="terminal-status-dot" aria-hidden="true" />
-        <span className="terminal-status-label">{statusLabel}</span>
-      </div>
+      <TerminalBrand
+        cwd={cwd}
+        status={status === "connected" ? null : statusLabel}
+        version={`v${__STUDIO_VERSION__}`}
+      />
       <div ref={containerRef} className="terminal-screen" />
     </div>
   );

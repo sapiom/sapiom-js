@@ -5,14 +5,14 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "whatItDoes": "Query a database on a schedule, write the narrative, render the charts, and email the report. Runs a set of read-only queries, turns each result into a metric, narrates the movement with an LLM, and renders charts in a sandbox before sending.",
-  "longDescription": "On a schedule, this queries a database, turns the numbers into a written report and a chart, and emails it — the standing \"metrics email\" you'd otherwise assemble by hand.\n\nThe graph is four steps: `snapshot` (database) runs a set of read-only SQL queries and turns each result into a metric — a labeled series or a single number. `narrate` (`models.run`, the live x402-served model) reads those numbers and writes a short markdown report: a summary, a few insights that cite the figures, and a line on what to watch. `chart` spins up a sandbox, renders the series into an SVG bar chart with a tiny dependency-free script, and hosts it in file storage so the report can link to it. `deliver` emails the whole thing.\n\nOut of the box it introspects the database's own catalog — rows per table, table count, database size — so it produces a real report on any database with no setup. Point it at your own data by passing `queries` (each returns `label` and `value` columns), and at your own database by supplying `REPORT_DATABASE_URL` — read at runtime, never stored in the run. A `dryRun` reports on sample metrics and skips the send, so you can trace the whole flow for free.\n\nYou pay for the database snapshot, the model that writes the narrative, and the sandbox that renders the chart, on each run — the email is cheap, and a dry run reports on sample data without touching a database.",
+  "whatItDoes": "Query a database on a schedule, flag the one anomaly worth attention, narrate it, drill into it with a follow-up query, render a chart, and email the report. An LLM spots the outlier, a second query investigates it, and a sandbox renders both.",
+  "longDescription": "On a schedule, this queries a database, spots what changed, digs one level deeper, and emails a written report with a chart. It's the standing metrics email you'd otherwise assemble by hand, with the anomaly already flagged.\n\nThe graph runs in six steps. `snapshot` runs a set of read-only SQL queries and turns each result into a metric: a labeled series or a single number. `detectAnomalies` reads those metrics and picks out the single outlier most worth a human's attention. `narrate` writes a short markdown report that leads with that finding, citing the figures and noting what to watch. `followUp` runs a second query into whatever table the anomaly named, reading Postgres's own activity counters (inserts, updates, deletes, scans) for it. `chart` renders the metrics, including the follow-up read, into an SVG bar chart in a sandbox. `deliver` emails the whole report.",
   "useCases": [
     "Metrics email with charts",
-    "Read-only SQL snapshot",
+    "Anomaly spotted, then drilled into",
     "Dry-run preview"
   ],
-  "notes": "Click **Use this template** — Sapiom builds and deploys it for you; open it on the **Agents** page and run it. Your $5 signup credit covers first runs.\n\nWith no config it reports on the database's own catalog (rows per table, size), so you get a real report immediately. To report on your own data, pass `queries` — an array of `{ name, sql }` where each query returns `label` and `value` columns (a single `value` row is read as a KPI). It runs with no setup: Sapiom provisions a small Postgres and seeds a demo dataset, so the first report has real numbers in it, and the run says the data is the demo set rather than yours. To report on your own database, supply `REPORT_DATABASE_URL` or point `dbHandle` at it. Set `deliverTo` to have the report emailed; without it the report is returned in the run's output. The managed demo Postgres expires after 7 days and there is no renew verb, so a scheduled run reports when it had to provision a fresh one. Pass `dryRun: true` to report on sample metrics and get the report back without sending. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole snapshot → narrate → chart → deliver flow for free (capabilities stubbed, the DB query and delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** and Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no config it reports on the database's own catalog (rows per table, size), so you get a real report immediately, with the one number most worth your attention already flagged and a second query already run against it. To report on your own data, pass `queries`: an array of `{ name, sql }` where each query returns `label` and `value` columns (a single `value` row is read as a KPI). It runs with no setup. Sapiom provisions a small Postgres and seeds a demo dataset, so the first report has real numbers in it, and the run says the data is the demo set rather than yours. To report on your own database, supply `REPORT_DATABASE_URL` or point `dbHandle` at it. Set `deliverTo` to have the report emailed; without it the report is returned in the run's output. The managed demo Postgres expires after 7 days and there is no renew verb, so a scheduled run reports when it had to provision a fresh one. Pass `dryRun: true` to skip the real queries and the send and get the report back on sample data instead. The anomaly detection and narration still run for real either way. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole `snapshot` → `detectAnomalies` → `narrate` → `followUp` → `chart` → `deliver` flow (capabilities stubbed, the DB queries and delivery skipped), or edit and deploy it with the Sapiom MCP.",
   "resources": [
     {
       "kind": "postgres",
@@ -20,7 +20,9 @@
       "duration": "7d",
       "seed": "seed.sql",
       "ephemeral": false,
-      "reuse": { "key": "dbHandle" }
+      "reuse": {
+        "key": "dbHandle"
+      }
     }
   ],
   "requiredSecrets": [
@@ -63,7 +65,40 @@
         "generatedAt": "2099-01-01T00:00:00.000Z",
         "chartUrl": null,
         "metricCount": 3,
-        "report": "# Database insight report\n\nThe database holds roughly 112k rows across 14 user tables and occupies 48.2 MB. Activity is concentrated in `events`, which alone accounts for the large majority of stored rows.\n\n- `events` is by far the largest table at 81,300 rows [1]\n- `users` (12,840) and `orders` (9,420) are the next largest [1]\n- Total footprint is a modest 48.2 MB across 14 tables\n\n**What to watch:** growth in `events` relative to the rest.\n\n## Metrics\n- **Rows per table (top 10):**\n  - events: 81300\n  - users: 12840\n  - orders: 9420\n  - sessions: 6110\n  - invoices: 2305\n- **User tables:** 14\n- **Database size (MB):** 48.2"
+        "anomaly": {
+          "table": "events",
+          "metric": "Rows per table (top 10)",
+          "description": "`events` leads `Rows per table (top 10)` at 81300, 6.3x the runner-up (12840).",
+          "severity": "high"
+        },
+        "followUp": {
+          "name": "Activity on `events`",
+          "kind": "series",
+          "points": [
+            {
+              "label": "inserts",
+              "value": 4210
+            },
+            {
+              "label": "updates",
+              "value": 128
+            },
+            {
+              "label": "deletes",
+              "value": 0
+            },
+            {
+              "label": "sequential scans",
+              "value": 3
+            },
+            {
+              "label": "index scans",
+              "value": 512
+            }
+          ]
+        },
+        "report": "# Database insight report\n\nThe database holds roughly 112k rows across 14 user tables and occupies 48.2 MB. Activity is concentrated in `events`, which alone accounts for the large majority of stored rows.\n\n- `events` is by far the largest table at 81,300 rows [1]\n- `users` (12,840) and `orders` (9,420) are the next largest [1]\n- Total footprint is a modest 48.2 MB across 14 tables\n\n**What to watch:** growth in `events` relative to the rest.\n\n_Snapshot taken 2099-01-01T00:00:00.000Z._\n\n## Anomaly flagged\n\n`events` leads `Rows per table (top 10)` at 81300, 6.3x the runner-up (12840). (**high**)\n\n## Follow-up: Activity on `events`\n\n- inserts: 4210\n- updates: 128\n- deletes: 0\n- sequential scans: 3\n- index scans: 512\n\n## Metrics\n- **Rows per table (top 10):**\n  - events: 81300\n  - users: 12840\n  - orders: 9420\n  - sessions: 6110\n  - invoices: 2305\n- **User tables:** 14\n- **Database size (MB):** 48.2",
+        "note": "`dryRun` was set, so no database was read and nothing was emailed. Dry run: skipped a real follow-up query and used a sample activity read for `events`."
       }
     },
     {
@@ -83,5 +118,32 @@
         "deliverTo": "founders@example.com"
       }
     }
-  ]
+  ],
+  "zeroSetup": {
+    "terminalState": "completed",
+    "expect": [
+      {
+        "path": "report",
+        "assert": "nonEmptyString"
+      },
+      {
+        "path": "anomaly.description",
+        "assert": "nonEmptyString"
+      },
+      {
+        "path": "chartUrl",
+        "assert": "nonEmptyString"
+      },
+      {
+        "path": "delivered",
+        "assert": "equals",
+        "value": false
+      },
+      {
+        "path": "unmet",
+        "assert": "nonEmptyArray"
+      }
+    ],
+    "narrative": "Snapshots the seeded demo database's own catalog, has a model flag the one table most worth attention, runs a second query into that table's write activity, writes a real narrative around both, and returns the full report with a rendered chart inline — nothing is emailed, because no `deliverTo` recipient is set."
+  }
 }

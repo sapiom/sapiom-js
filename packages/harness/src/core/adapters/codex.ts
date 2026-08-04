@@ -32,6 +32,7 @@ import type {
   PastSessionRecord,
   SpawnSpec,
 } from "../../shared/types.js";
+import { stripAnsi } from "../strip-ansi.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,30 +57,6 @@ const MAX_SCAN_DEPTH = 4; // ~/.codex/sessions/YYYY/MM/DD/*.jsonl
  * be relied on standalone, unlike Claude Code's).
  */
 const TRUST_PROMPT_PATTERN = /trust\s*the\s*contents\s*of\s*this\s*directory/i;
-
-/** Strips ANSI/CSI/OSC control sequences a pty stream is otherwise full of,
- *  so text pattern-matching (e.g. `TRUST_PROMPT_PATTERN`) sees the words a
- *  human would actually read rather than raw terminal-control bytes. Not
- *  exhaustive of every escape sequence a TUI could emit, but covers what
- *  Codex's TUI is confirmed (via real captures) to use: CSI (cursor moves,
- *  SGR color/style) and OSC (window title) sequences. */
-export function stripAnsi(text: string): string {
-  /* eslint-disable no-control-regex -- matching literal ESC (\x1b) / BEL
-   * (\x07) bytes is the entire point of an ANSI-sequence stripper; there's
-   * no non-control-character way to express "a real escape sequence". */
-  return text
-    // Lazy (`*?`), not greedy: a greedy `[^\x07]*` doesn't exclude `\x1b\\`
-    // (ST) from what it can consume, so it backtracks from the END of the
-    // whole string looking for the last reachable terminator instead of the
-    // next one — silently swallowing everything (including real prompt
-    // text) between an OSC sequence and some unrelated, much-later BEL/ST.
-    // Confirmed against a real capture: this exact bug made the trust-
-    // prompt regex below never match a full multi-KB scrollback buffer.
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "") // OSC ... BEL or ST
-    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "") // CSI sequences
-    .replace(/\x1b[()>=][A-Za-z0-9]?/g, ""); // charset/keypad-mode selection
-  /* eslint-enable no-control-regex */
-}
 
 export interface CodexAdapterOptions {
   /** Overridable for tests. */

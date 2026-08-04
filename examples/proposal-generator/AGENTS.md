@@ -3,25 +3,33 @@
 This project defines exactly one Sapiom agent in `index.ts` — **Proposal / Quote
 Generator** — authored against `@sapiom/agent`. From a free-text requirement it
 drafts a proposal with an LLM, renders it to a PDF in a sandbox, persists the file,
-pauses for a human to sign off, and only then emails the proposal to the client.
-Inside a step's `run`, Sapiom capabilities are pre-auth'd on `ctx.sapiom`
-(`ctx.sapiom.models.run`, `ctx.sapiom.sandboxes`, `ctx.sapiom.fileStorage`,
-`ctx.sapiom.email`).
+then either pauses for a human to sign off (an approver is assigned) or
+terminates honestly at the gate (none is — the zero-setup default) — only after
+a sign-off does it email the proposal to the client. Inside a step's `run`,
+Sapiom capabilities are pre-auth'd on `ctx.sapiom` (`ctx.sapiom.models.run`,
+`ctx.sapiom.sandboxes`, `ctx.sapiom.fileStorage`, `ctx.sapiom.email`).
 
 ## The spine
 
 - **`draft`** calls `ctx.sapiom.models.run` for a structured proposal, then totals
-  the line items **in code** — the money is never trusted from the model.
+  the line items **in code** — the money is never trusted from the model. Omit
+  `request` and it drafts against a built-in sample brief, so `{}` still
+  produces a real, priced quote.
 - **`render`** creates a sandbox, `writeFile`s `proposal.json` + a `pdf-lib` layout
   script (`RENDER_SCRIPT`), `exec`s the render, reads the PDF back as base64, and
   PUTs the bytes to the presigned URL from `ctx.sapiom.fileStorage.upload`. The
   sandbox is destroyed in a `finally`. Under `run_local` the sandbox exec is
   stubbed (empty output) — the step detects the empty render and skips the real
   byte PUT while still walking the upload shape, so the offline trace stays whole.
-- **`review`** emails the approver, then returns
+- **`review`** checks for an assigned approver first. With none — nothing will
+  ever fire the decision signal on an unconfigured run — it takes the `pending`
+  branch instead of pausing. With one, it emails them and returns
   `pauseUntilSignal({ signal: "proposal.decision", resumeStep: "onDecision", correlationId: ctx.executionId })`.
   It carries a static `pause: { signal, resumeStep: "onDecision" }` annotation —
   the build-time graph edge that must match the directive.
+- **`pending`** is the gate's honest off-ramp: terminal, carrying the rendered
+  PDF's `fileId`/`downloadUrl` and `outcome: "pending-approval"`. This — not a
+  hung pause — is what a `{}` run reaches.
 - **`onDecision`** reads the approval payload **directly as its `run` input**. Safe
   default: only `{ decision: "approve" }` proceeds to `send`; anything else
   (including a `run_local` resume with no payload) routes to `rejected` — nothing
@@ -58,13 +66,15 @@ after every small edit.
 - **run_local** — runs your **real** step code against **stub capabilities** and
   auto-resumes the pause. With no payload injected, the approval resume takes the
   safe reject branch, so you get a full offline trace for free.
-- **deploy**, then **run** — ship it, then perform a real run that pauses.
+- **deploy**, then **run** — ship it with an `approver` set for a real run that
+  pauses; run it with `{}` and it terminates at `pending` instead (no hang).
 
 ### Firing the resume signal in dev
 
-A real `run` pauses once, at `review`. To resume without a real approver, fire the
-signal via the MCP `signal_workflow` / `workflow_signal` tool — the manual
-stand-in:
+A real `run` pauses once, at `review` — only when an `approver` is assigned;
+otherwise `review` terminates at `pending`. To resume without a real approver,
+fire the signal via the MCP `signal_workflow` / `workflow_signal` tool — the
+manual stand-in:
 
 ```json
 { "signal": "proposal.decision", "correlationId": "<executionId>", "payload": { "decision": "approve" } }

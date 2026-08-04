@@ -4,6 +4,9 @@ import { describe, it, expect, vi } from "vitest";
 // drive the doctor-matrix below. Reset in each test rather than beforeEach so
 // each case's setup reads top-to-bottom next to its assertions.
 let presentBinaries: Set<string>;
+// The version string `claude --version` reports — mutated per test to exercise
+// the minimum-version floor. Defaults to a supported version in each test.
+let claudeVersion: string;
 
 vi.mock("node:child_process", () => ({
   execFile: (
@@ -22,7 +25,7 @@ vi.mock("node:child_process", () => ({
       return;
     }
     if (file === "claude" && args[0] === "--version") {
-      callback(null, { stdout: "1.2.3 (Claude Code)\n", stderr: "" });
+      callback(null, { stdout: `${claudeVersion}\n`, stderr: "" });
       return;
     }
     if (file === "codex" && args[0] === "--version") {
@@ -38,15 +41,17 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { runDoctor, pickDefaultHarness, CLAUDE_INSTALL_COMMAND, CODEX_INSTALL_COMMAND } from "./doctor.js";
+import { MIN_CLAUDE_CODE_VERSION } from "../core/adapters/claude-code.js";
 
 describe("runDoctor", () => {
   it("passes when node, claude, and git are present and codex is absent", async () => {
     presentBinaries = new Set(["claude", "git"]);
+    claudeVersion = "2.1.4 (Claude Code)";
     const report = await runDoctor();
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
 
     expect(byName.node.ok).toBe(true);
-    expect(byName.claude).toEqual({ name: "claude", ok: true, detail: "1.2.3 (Claude Code)" });
+    expect(byName.claude).toEqual({ name: "claude", ok: true, detail: "2.1.4 (Claude Code)" });
     expect(byName.git).toEqual({ name: "git", ok: true, detail: "git version 2.43.0" });
     expect(byName.codex.ok).toBe(false);
 
@@ -56,8 +61,34 @@ describe("runDoctor", () => {
     expect(report.availableHarnesses).toEqual(["claude-code"]);
   });
 
+  it("marks a present-but-too-old claude unavailable, with an upgrade remedy", async () => {
+    // Present on PATH and answers --version, but predates the flags every
+    // launch injects (notably --plugin-dir) — so it exit-1s each session
+    // before establishing a session id. Doctor must report it NOT ok.
+    presentBinaries = new Set(["claude", "git"]);
+    claudeVersion = "1.9.9 (Claude Code)";
+    const report = await runDoctor();
+    const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
+
+    expect(byName.claude.ok).toBe(false);
+    expect(byName.claude.detail).toContain(MIN_CLAUDE_CODE_VERSION);
+    expect(byName.claude.detail).toContain(CLAUDE_INSTALL_COMMAND);
+    expect(report.availableHarnesses).not.toContain("claude-code");
+    // No other agent present, so the whole report fails — the CLI then refuses
+    // to start with the upgrade remedy instead of crash-looping every session.
+    expect(report.ok).toBe(false);
+  });
+
+  it("accepts a claude at exactly the minimum version", async () => {
+    presentBinaries = new Set(["claude", "git"]);
+    claudeVersion = `${MIN_CLAUDE_CODE_VERSION} (Claude Code)`;
+    const report = await runDoctor();
+    expect(report.availableHarnesses).toEqual(["claude-code"]);
+  });
+
   it("passes on codex alone, with claude's check carrying the exact install remedy", async () => {
     presentBinaries = new Set(["codex", "git"]);
+    claudeVersion = "2.1.4 (Claude Code)";
     const report = await runDoctor();
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
 
@@ -70,6 +101,7 @@ describe("runDoctor", () => {
 
   it("fails only when neither claude nor codex is present, surfacing both install remedies", async () => {
     presentBinaries = new Set(["git"]);
+    claudeVersion = "2.1.4 (Claude Code)";
     const report = await runDoctor();
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
 
@@ -81,6 +113,7 @@ describe("runDoctor", () => {
 
   it("prefers claude-code when both agents are present", async () => {
     presentBinaries = new Set(["claude", "codex", "git"]);
+    claudeVersion = "2.1.4 (Claude Code)";
     const report = await runDoctor();
 
     expect(report.ok).toBe(true);

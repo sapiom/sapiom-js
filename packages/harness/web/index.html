@@ -1,15 +1,21 @@
 <!doctype html>
-<html lang="en">
+<!-- data-product scopes the design-system's named "sapiom-studio" preset
+     (compact IDE density, scarce green brand, neutral focus/selection). -->
+<html lang="en" data-product="sapiom-studio">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Studio</title>
     <script>
       // Set the theme before first paint to avoid a flash of the wrong one.
-      // Storage key must match web/src/lib/theme.ts (this can't import it).
+      // Storage key + resolution must match web/src/lib/theme.ts (this can't
+      // import it): a stored choice wins, otherwise follow the OS preference.
       (function () {
         var stored = localStorage.getItem("sapiom-harness-theme");
-        var theme = stored === "light" || stored === "dark" ? stored : "dark";
+        var prefersDark =
+          window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var theme =
+          stored === "light" || stored === "dark" ? stored : prefersDark ? "dark" : "light";
         document.documentElement.dataset.theme = theme;
       })();
     </script>

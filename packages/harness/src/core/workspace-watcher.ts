@@ -7,9 +7,10 @@
  *
  * Modeled on core/canvas-watcher.ts (same recursive-fs.watch-with-polling-
  * fallback shape, same per-session lifecycle), but tuned to STRUCTURAL change
- * rather than content change. It fires only when the SET of workflow-marker
- * directories under the workspace actually changes (a workflow appearing,
- * disappearing, or being renamed) — never for ordinary file edits:
+ * rather than content change. It fires only when the workflow-marker state
+ * under the workspace actually changes (a workflow appearing, disappearing,
+ * being renamed, or crossing a temporary unreadable boundary) — never for
+ * ordinary file edits:
  *
  *   - A raw watch event only *arms* a check; the debounced check recomputes
  *     the workflow-marker fingerprint and fires `onChange` iff it differs from
@@ -33,15 +34,25 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import {
   AGENT_PROJECT_SCAN_MAX_DEPTH,
+  inspectAgentProjectMarker,
+  inspectAgentProjectMarkerSync,
   isAgentProjectScanIgnoredDir,
-  readAgentProjectMarker,
-  readAgentProjectMarkerSync,
 } from "./agent-project-discovery.js";
 
 const DEBOUNCE_MS = 250;
 /** Longer than the watch debounce — the watcher path is the fast signal;
  *  the poll is just a backstop for platforms without recursive fs.watch. */
 const POLL_INTERVAL_MS = 2_000;
+const UNREADABLE_FINGERPRINT = "<unreadable>";
+
+function isConfirmedMissing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function addUnreadableFingerprint(fingerprints: string[], dir: string): void {
+  fingerprints.push(`${dir}\0${UNREADABLE_FINGERPRINT}`);
+}
 
 function firstSegmentIgnored(relPath: string): boolean {
   for (const segment of relPath.split(path.sep)) {
@@ -52,9 +63,10 @@ function firstSegmentIgnored(relPath: string): boolean {
 
 /**
  * Fingerprint of the set of workflow-marker directories under `root` (sorted,
- * bounded depth, ignored subtrees skipped). Changes exactly when a workflow is
- * added, removed, or renamed — not when unrelated files are edited. Exported
- * for direct testing.
+ * bounded depth, ignored subtrees skipped), plus opaque sentinels for subtrees
+ * that are temporarily unreadable. Changes when a workflow is added, removed,
+ * renamed, or crosses that unreadable boundary — not when unrelated readable
+ * files are edited. Exported for direct testing.
  *
  * The synchronous form is retained for callers that need an immediate
  * baseline at construction time (before async I/O is possible). The
@@ -66,17 +78,27 @@ export function snapshotWorkspaceWorkflows(root: string): string {
 
   const walk = (dir: string, depth: number): void => {
     if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
+    // Preserve "temporarily unreadable" as a distinct state. If it collapsed
+    // to the same fingerprint as an absent/invalid project, a quick
+    // unreadable -> invalid transition could be swallowed by the debounce and
+    // leave a stale workflow in the registry until some later filesystem event.
+    const markerResult = inspectAgentProjectMarkerSync(dir);
+    if (markerResult.status === "valid") {
+      markerDirs.push(`${dir}\0${JSON.stringify(markerResult.marker)}`);
+      return;
+    }
+    if (markerResult.status === "unreadable") {
+      addUnreadableFingerprint(markerDirs, dir);
+      return;
+    }
+
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    // A directory carrying the marker is itself a workflow — record it and
-    // don't descend (matches the registry's scan semantics).
-    const marker = readAgentProjectMarkerSync(dir);
-    if (marker) {
-      markerDirs.push(`${dir}\0${JSON.stringify(marker)}`);
+    } catch (error) {
+      if (!isConfirmedMissing(error)) {
+        addUnreadableFingerprint(markerDirs, dir);
+      }
       return;
     }
     for (const entry of entries) {
@@ -100,15 +122,23 @@ export async function snapshotWorkspaceWorkflowsAsync(root: string): Promise<str
 
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > AGENT_PROJECT_SCAN_MAX_DEPTH) return;
+    const markerResult = await inspectAgentProjectMarker(dir);
+    if (markerResult.status === "valid") {
+      markerDirs.push(`${dir}\0${JSON.stringify(markerResult.marker)}`);
+      return;
+    }
+    if (markerResult.status === "unreadable") {
+      addUnreadableFingerprint(markerDirs, dir);
+      return;
+    }
+
     let entries: fs.Dirent[];
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    const marker = await readAgentProjectMarker(dir);
-    if (marker) {
-      markerDirs.push(`${dir}\0${JSON.stringify(marker)}`);
+    } catch (error) {
+      if (!isConfirmedMissing(error)) {
+        addUnreadableFingerprint(markerDirs, dir);
+      }
       return;
     }
     for (const entry of entries) {

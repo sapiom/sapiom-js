@@ -6,29 +6,43 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import postgres from "postgres";
 import { z } from "zod/v4";
 
 /**
  * Natural-Language DB Query Endpoint — deploy a live HTTP endpoint that turns a
  * plain-English question into a read-only SQL query and returns the answer.
  *
- * One run stands up the endpoint; the endpoint answers questions.
+ * One run stands up the endpoint AND proves the pipeline for real: it runs the
+ * sample question against the seeded demo database and returns the actual rows.
  *
- *   validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ deploy ─┬─▶ deployed      (terminal)
- *              (database   (models  (read-  │          └─▶ deploy_failed (terminal)
- *               .get)       .run)   only    └─▶ rejected                (terminal)
- *                                   check)
+ *   validate ─▶ resolve ─▶ plan ─▶ guard ─┬─▶ execute ─┬─▶ deploy ─┬─▶ deployed         (terminal)
+ *              (database   (models  (read- │            │          ├─▶ deploy_failed   (terminal)
+ *               .get)       .run)   only    │            │          └─▶ endpoint_skipped(terminal)
+ *                                   check)  │            └─▶ query_failed              (terminal)
+ *                                           └─▶ rejected                                (terminal)
  *
  *   1. validate — check the input (a database handle or connection string) and
  *      resolve config (sample question, port, row cap, model).
  *   2. resolve  — read the target Postgres connection string from a Sapiom-managed
- *      database handle (`database.get`) so it can be injected into the endpoint.
- *   3. plan     — preview the pipeline: translate the sample question into SQL with
- *      an LLM (`models.run`), system-prompted to emit a single read-only SELECT.
- *   4. guard    — apply the read-only guardrail to that sample SQL. Anything that
- *      isn't a single read-only statement routes to `rejected` — the endpoint is
- *      only deployed once the safe path is proven.
- *   5. deploy   — write a small server (which re-runs translate → guard → execute
+ *      database handle (`database.get`) so it can be injected into the endpoint,
+ *      and — for the managed demo database — seed it (`customers`/`invoices`) if
+ *      deploy's own `seed.sql` has not already run. Idempotent, so a repeat run
+ *      is a no-op.
+ *   3. plan     — translate the sample question into SQL. On the seeded demo
+ *      database with the unmodified default question, this is a fixed, known-safe
+ *      SELECT written once by us, so the zero-setup path never depends on an LLM
+ *      returning valid SQL. Any other question or database still asks an LLM
+ *      (`models.run`), system-prompted to emit a single read-only SELECT.
+ *   4. guard    — apply the read-only guardrail to that sample SQL, whichever
+ *      source produced it. Anything that isn't a single read-only statement routes
+ *      to `rejected`.
+ *   5. execute  — run the guarded SQL for real against the resolved database,
+ *      inside `BEGIN ... READ ONLY` with a statement timeout and the same row cap
+ *      the deployed endpoint enforces. The returned rows ARE the zero-setup
+ *      artifact — a connection or query failure routes honestly to `query_failed`
+ *      rather than fabricating rows.
+ *   6. deploy   — write a small server (which re-runs translate → guard → execute
  *      per request) into a sandbox and expose it at a stable URL
  *      (`sandboxes.deployPreview`). DATABASE_URL and the server's own API key are
  *      passed as env — never baked into source. The endpoint's key is MINTED for it
@@ -36,19 +50,24 @@ import { z } from "zod/v4";
  *      long-lived server uses to call `models.run`, since the engine's per-run token
  *      expires with this step. Only if minting is unavailable and no key was supplied
  *      does the run stop at `endpoint_skipped`: a URL whose only route cannot answer
- *      is worse than no URL.
- *   6. deployed / endpoint_skipped / deploy_failed / rejected — terminal.
+ *      is worse than no URL — but it still reports the real rows `execute` fetched.
+ *   7. deployed / endpoint_skipped / deploy_failed / query_failed / rejected — terminal.
  *
- * The read-only guardrail is defense-in-depth: the LLM is *told* to emit a SELECT,
- * the SQL is *checked* (single statement, starts with SELECT/WITH, no DDL/DML
- * keywords), and the endpoint *executes* it inside `BEGIN TRANSACTION READ ONLY`
- * with a statement timeout and a row cap — the last of which Postgres enforces at
- * the engine level, so a write can't slip through even if the first two are wrong.
+ * The read-only guardrail is defense-in-depth: the SQL source is *told* (an LLM
+ * system prompt) or *known* (the built-in zero-setup query) to be a SELECT, the
+ * SQL is *checked* (single statement, starts with SELECT/WITH, no DDL/DML
+ * keywords) at `guard`, and both `execute` and the deployed endpoint *run* it
+ * inside `BEGIN ... READ ONLY` with a statement timeout and a row cap — the last
+ * of which Postgres enforces at the engine level, so a write can't slip through
+ * even if the earlier layers are wrong.
  *
- * `run_local` stubs `models.run`, so on defaults the `plan` output is a non-SQL
- * placeholder and `guard` routes to `rejected` — a legible demo of the guardrail
- * refusing junk. Pass a stub override that returns a real SELECT (see AGENTS.md)
- * and add `{ "dryRun": true }` to trace the deploy branch offline for free.
+ * `run_local` stubs `database.get`, so on defaults the built-in sample SQL passes
+ * `guard` (it never called the model) but `execute`'s real query against the
+ * stubbed, unreachable connection fails — a legible trace of the query-execution
+ * boundary at `query_failed`. Pass a stub override for `database.get` returning a
+ * reachable connection string to trace `execute`/`deploy` succeeding, or add
+ * `{ "dryRun": true }` to trace the whole graph offline over fixed sample rows
+ * (see AGENTS.md).
  */
 
 // ────────────────────────────────────────────────────────────────── config ──
@@ -95,11 +114,19 @@ interface Shared extends Record<string, unknown> {
   config: Config;
   connectionString: string;
   sampleSql: string;
+  /** Column names from the real (or, under `dryRun`, fixed) sample execution. */
+  sampleColumns?: string[];
+  /** Rows the sample SQL actually returned — the zero-setup artifact. */
+  sampleRows?: Record<string, unknown>[];
+  sampleRowCount?: number;
+  /** True when the row cap (`maxRows`) truncated the result. */
+  sampleTruncated?: boolean;
   /** One plain sentence about which database was used and what was skipped. */
   note?: string;
 }
 
 type Ctx = AgentExecutionContext<Shared>;
+type Sql = ReturnType<typeof postgres>;
 
 const DEFAULT_SANDBOX = "nl-db-query-endpoint";
 const DEFAULT_QUESTION = "How many rows are in each table?";
@@ -132,6 +159,34 @@ const ENDPOINT_API_KEY = "ENDPOINT_SAPIOM_API_KEY";
  * and can be revoked by its id before the TTL.
  */
 const ENDPOINT_KEY_TTL = "30d";
+
+/** Per-query statement timeout for `execute`'s real sample-query run. Mirrors the
+ * deployed endpoint's own default (see `SERVER_SOURCE`'s `STATEMENT_TIMEOUT_MS`). */
+const STATEMENT_TIMEOUT_MS = 10_000;
+
+/**
+ * Known-safe SELECT that answers `DEFAULT_QUESTION` against the seeded demo
+ * schema (`customers`, `invoices` — see `seed.sql`). Used only on the zero-setup
+ * path (the demo database, the unmodified default question), so the sample query
+ * never depends on an LLM translating it correctly.
+ */
+const DEFAULT_SAMPLE_SQL = [
+  "SELECT 'customers' AS table_name, count(*)::int AS row_count FROM customers",
+  "UNION ALL",
+  "SELECT 'invoices' AS table_name, count(*)::int AS row_count FROM invoices",
+  "ORDER BY table_name",
+].join("\n");
+
+/**
+ * Fixed rows `execute` reports under `dryRun`, instead of opening a connection.
+ * Matches what the seeded demo data actually contains (6 customers, 60 invoices),
+ * so the offline trace looks like the real thing without touching a database.
+ */
+const SAMPLE_COLUMNS = ["table_name", "row_count"];
+const SAMPLE_ROWS: Record<string, unknown>[] = [
+  { table_name: "customers", row_count: 6 },
+  { table_name: "invoices", row_count: 60 },
+];
 
 function resolveConfig(input: EntryInput | undefined): Config {
   // Read the target handle through the canonical injection seam so a deploy-time
@@ -208,6 +263,14 @@ function guardReadOnly(raw: string): GuardResult {
     };
   }
   return { ok: true, sql };
+}
+
+/**
+ * Append a LIMIT clause when the query doesn't already cap its own rows. Kept in
+ * sync with the identical helper embedded in `SERVER_SOURCE` — see AGENTS.md.
+ */
+function ensureLimit(sql: string, max: number): string {
+  return /\blimit\b/i.test(sql) ? sql : `${sql} LIMIT ${max}`;
 }
 
 // ─────────────────────────────────────────────────────── the endpoint app ──
@@ -362,6 +425,57 @@ const SERVER_PACKAGE_JSON = JSON.stringify(
   2,
 );
 
+/**
+ * Create and populate the demo tables (`customers`, `invoices`) when they are
+ * missing or empty. Deploy runs `seed.sql` for the declared resource, so this
+ * only fires when it did not (a local run, or a handle this run had to provision
+ * itself). Idempotent by construction: it inserts only into an empty table, and
+ * mirrors `seed.sql` exactly.
+ *
+ * Read-side only — these are the tables the endpoint ANSWERS QUESTIONS about;
+ * nothing here is the template's own output.
+ */
+async function ensureSeeded(ctx: Ctx, sql: Sql): Promise<boolean> {
+  await sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS customers (
+      id      bigserial PRIMARY KEY,
+      name    text NOT NULL,
+      country text NOT NULL,
+      plan    text NOT NULL
+    )`);
+  await sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id          bigserial PRIMARY KEY,
+      customer_id bigint NOT NULL REFERENCES customers (id),
+      issued_on   date   NOT NULL,
+      amount_usd  numeric(10, 2) NOT NULL,
+      paid        boolean NOT NULL
+    )`);
+  const [{ count }] = await sql<{ count: number }[]>`
+    select count(*)::int as count from customers`;
+  if (count > 0) return false;
+  ctx.logger.info("seeding the demo dataset");
+  await sql.unsafe(`
+    INSERT INTO customers (name, country, plan)
+    SELECT * FROM (VALUES
+      ('Northwind Traders', 'US', 'enterprise'),
+      ('Contoso Ltd',       'US', 'pro'),
+      ('Fabrikam GmbH',     'DE', 'pro'),
+      ('Tailspin Toys',     'GB', 'free'),
+      ('Adventure Works',   'AU', 'enterprise'),
+      ('Wingtip Cycles',    'CA', 'free')
+    ) AS demo(name, country, plan)`);
+  await sql.unsafe(`
+    INSERT INTO invoices (customer_id, issued_on, amount_usd, paid)
+    SELECT
+      1 + (n % 6),
+      (CURRENT_DATE - (n * 3))::date,
+      ROUND((120 + (n * 91) % 4200)::numeric, 2),
+      (n % 4) <> 0
+    FROM generate_series(0, 59) AS s(n)`);
+  return true;
+}
+
 // ──────────────────────────────────────────────────────────────── steps ──
 
 /** Validate the input and resolve config. Missing DB target → rejected. */
@@ -479,6 +593,34 @@ const resolve = defineStep({
       // No live handle needed to trace the graph offline.
       connectionString = "postgres://user:pass@localhost:5432/db";
     }
+
+    // The managed demo database needs its customers/invoices tables loaded.
+    // Deploy normally runs `seed.sql` for the declared resource before the first
+    // run; this covers the case where it did not (a self-provision just above, or
+    // a handle deploy never seeded). Idempotent, and skipped under `dryRun` — no
+    // live connection exists to seed.
+    if (config.usingDemoDatabase && !config.dryRun && connectionString) {
+      const sql = postgres(connectionString, {
+        ssl: "require",
+        max: 1,
+        idle_timeout: 5,
+        connect_timeout: 10,
+      });
+      try {
+        const seeded = await ensureSeeded(ctx, sql);
+        if (seeded) ctx.logger.info("seeded the demo dataset");
+      } catch (err) {
+        // A seed failure degrades the DEMO ONLY, not the run: `execute` still
+        // runs the sample query for real and, if the tables truly are missing,
+        // fails honestly at `query_failed` rather than here.
+        ctx.logger.warn("could not seed the demo database", {
+          err: String(err),
+        });
+      } finally {
+        await sql.end({ timeout: 5 }).catch(() => {});
+      }
+    }
+
     ctx.shared.set("connectionString", connectionString);
     ctx.logger.info("resolved connection string", {
       resolved: Boolean(connectionString),
@@ -487,12 +629,25 @@ const resolve = defineStep({
   },
 });
 
-/** Preview the translate step: sample question → SQL via the LLM. */
+/**
+ * Translate the sample question into SQL. On the seeded demo database with the
+ * unmodified default question — the zero-setup path — this is a fixed,
+ * known-safe SELECT written once by us, so it never depends on an LLM returning
+ * valid SQL. Any other question or database still asks an LLM.
+ */
 const plan = defineStep({
   name: "plan",
   next: ["guard"],
   async run(_input: unknown, ctx: Ctx) {
     const config = ctx.shared.get("config")!;
+
+    if (config.usingDemoDatabase && config.sampleQuestion === DEFAULT_QUESTION) {
+      ctx.logger.info("using the built-in deterministic sample query", {
+        question: config.sampleQuestion,
+      });
+      return goto("guard", { sql: DEFAULT_SAMPLE_SQL });
+    }
+
     const system = [
       "You translate a natural-language question into ONE read-only SQL query for PostgreSQL.",
       "Output ONLY the SQL: no prose, no markdown fences, no trailing semicolon.",
@@ -512,7 +667,7 @@ const plan = defineStep({
 /** Apply the read-only guardrail to the sample SQL. Unsafe → rejected. */
 const guard = defineStep({
   name: "guard",
-  next: ["deploy", "rejected"],
+  next: ["execute", "rejected"],
   async run(input: { sql: string }, ctx: Ctx) {
     const result = guardReadOnly(input?.sql ?? "");
     if (!result.ok) {
@@ -523,7 +678,71 @@ const guard = defineStep({
     }
     ctx.shared.set("sampleSql", result.sql);
     ctx.logger.info("sample sql passed guardrail", { sql: result.sql });
-    return goto("deploy", {});
+    return goto("execute", {});
+  },
+});
+
+/**
+ * Run the guarded sample SQL for real against the resolved database, inside a
+ * READ ONLY transaction with a statement timeout and the same row cap the
+ * deployed endpoint enforces — the returned rows ARE the zero-setup artifact.
+ * `dryRun` reports fixed sample rows instead of opening a connection; a real
+ * connection or query failure routes to `query_failed` rather than faking rows.
+ */
+const execute = defineStep({
+  name: "execute",
+  next: ["deploy", "query_failed"],
+  async run(_input: unknown, ctx: Ctx) {
+    const config = ctx.shared.get("config")!;
+    const sampleSql = ctx.shared.get("sampleSql") ?? "";
+
+    if (config.dryRun) {
+      ctx.shared.set("sampleColumns", SAMPLE_COLUMNS);
+      ctx.shared.set("sampleRows", SAMPLE_ROWS);
+      ctx.shared.set("sampleRowCount", SAMPLE_ROWS.length);
+      ctx.shared.set("sampleTruncated", false);
+      ctx.logger.info(
+        "dry run — reporting fixed sample rows instead of a live query",
+      );
+      return goto("deploy", {});
+    }
+
+    const connectionString = ctx.shared.get("connectionString") ?? "";
+    if (!connectionString) {
+      return goto("query_failed", {
+        reason: "no database connection to query",
+        sql: sampleSql,
+      });
+    }
+
+    const sql = postgres(connectionString, {
+      ssl: "require",
+      max: 1,
+      idle_timeout: 5,
+      connect_timeout: 10,
+      connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+    });
+    try {
+      const limited = ensureLimit(sampleSql, config.maxRows);
+      const rows = await sql.begin("read only", (tx) => tx.unsafe(limited));
+      const columns =
+        rows.columns?.map((c) => c.name) ??
+        (rows.length > 0 ? Object.keys(rows[0]) : []);
+      ctx.shared.set("sampleColumns", columns);
+      ctx.shared.set(
+        "sampleRows",
+        rows as unknown as Record<string, unknown>[],
+      );
+      ctx.shared.set("sampleRowCount", rows.length);
+      ctx.shared.set("sampleTruncated", rows.length >= config.maxRows);
+      ctx.logger.info("sample query executed", { rows: rows.length });
+      return goto("deploy", {});
+    } catch (err) {
+      ctx.logger.error("sample query failed", { err: String(err) });
+      return goto("query_failed", { reason: String(err), sql: sampleSql });
+    } finally {
+      await sql.end({ timeout: 5 }).catch(() => {});
+    }
   },
 });
 
@@ -535,6 +754,13 @@ const deploy = defineStep({
     const config = ctx.shared.get("config")!;
     const connectionString = ctx.shared.get("connectionString") ?? "";
     const sampleSql = ctx.shared.get("sampleSql") ?? "";
+    // The rows `execute` actually fetched (or, under dryRun, the fixed sample
+    // rows) — the zero-setup artifact, carried through regardless of how the
+    // endpoint deploy itself turns out.
+    const sampleColumns = ctx.shared.get("sampleColumns") ?? [];
+    const sampleRows = ctx.shared.get("sampleRows") ?? [];
+    const sampleRowCount = ctx.shared.get("sampleRowCount") ?? sampleRows.length;
+    const sampleTruncated = ctx.shared.get("sampleTruncated") ?? false;
 
     // The server's own API key (used to call models.run per request). A caller can
     // bring one — the dev-only input, or the optional ENDPOINT_SAPIOM_API_KEY
@@ -582,6 +808,10 @@ const deploy = defineStep({
       return goto("endpoint_skipped", {
         sampleQuestion: config.sampleQuestion,
         sampleSql,
+        sampleColumns,
+        sampleRows,
+        sampleRowCount,
+        sampleTruncated,
       });
     }
 
@@ -603,6 +833,10 @@ const deploy = defineStep({
         healthEndpoint: null,
         sampleQuestion: config.sampleQuestion,
         sampleSql,
+        sampleColumns,
+        sampleRows,
+        sampleRowCount,
+        sampleTruncated,
         envKeys: Object.keys(env),
         serverBytes: SERVER_SOURCE.length,
       });
@@ -628,7 +862,15 @@ const deploy = defineStep({
         url: res.url,
       });
       if (res.status === "failed" || !res.url) {
-        return goto("deploy_failed", { status: res.status, logs: res.logs });
+        return goto("deploy_failed", {
+          status: res.status,
+          logs: res.logs,
+          sampleSql,
+          sampleColumns,
+          sampleRows,
+          sampleRowCount,
+          sampleTruncated,
+        });
       }
       return goto("deployed", {
         dryRun: false,
@@ -637,6 +879,10 @@ const deploy = defineStep({
         healthEndpoint: healthEndpoint(res.url),
         sampleQuestion: config.sampleQuestion,
         sampleSql,
+        sampleColumns,
+        sampleRows,
+        sampleRowCount,
+        sampleTruncated,
         envKeys: Object.keys(env),
         serverBytes: SERVER_SOURCE.length,
       });
@@ -645,7 +891,15 @@ const deploy = defineStep({
         sandbox: config.sandboxName,
         err: String(err),
       });
-      return goto("deploy_failed", { status: "error", logs: String(err) });
+      return goto("deploy_failed", {
+        status: "error",
+        logs: String(err),
+        sampleSql,
+        sampleColumns,
+        sampleRows,
+        sampleRowCount,
+        sampleTruncated,
+      });
     }
   },
 });
@@ -663,6 +917,10 @@ const deployed = defineStep({
       healthEndpoint: string | null;
       sampleQuestion: string;
       sampleSql: string;
+      sampleColumns: string[];
+      sampleRows: Record<string, unknown>[];
+      sampleRowCount: number;
+      sampleTruncated: boolean;
       envKeys: string[];
       serverBytes: number;
     },
@@ -676,6 +934,10 @@ const deployed = defineStep({
       healthEndpoint: input?.healthEndpoint ?? null,
       sampleQuestion: input?.sampleQuestion ?? null,
       sampleSql: input?.sampleSql ?? null,
+      sampleColumns: input?.sampleColumns ?? [],
+      sampleRows: input?.sampleRows ?? [],
+      sampleRowCount: input?.sampleRowCount ?? 0,
+      sampleTruncated: input?.sampleTruncated ?? false,
       envKeys: input?.envKeys ?? null,
       serverBytes: input?.serverBytes ?? null,
       ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
@@ -684,15 +946,25 @@ const deployed = defineStep({
 });
 
 /**
- * Translated and guarded, but no endpoint was stood up because the server had no
- * credential of its own. Terminal, and honest: the SQL below is real and was
- * checked, and no URL is reported because none exists.
+ * Translated, guarded, and executed for real — but no endpoint was stood up
+ * because the server had no credential of its own. Terminal, and honest: the
+ * SQL and rows below are real, and no URL is reported because none exists.
  */
 const endpoint_skipped = defineStep({
   name: "endpoint_skipped",
   next: [],
   terminal: true,
-  async run(input: { sampleQuestion: string; sampleSql: string }, ctx: Ctx) {
+  async run(
+    input: {
+      sampleQuestion: string;
+      sampleSql: string;
+      sampleColumns: string[];
+      sampleRows: Record<string, unknown>[];
+      sampleRowCount: number;
+      sampleTruncated: boolean;
+    },
+    ctx: Ctx,
+  ) {
     const note = ctx.shared.get("note");
     return terminate(
       {
@@ -701,9 +973,13 @@ const endpoint_skipped = defineStep({
         queryEndpoint: null,
         sampleQuestion: input?.sampleQuestion ?? null,
         sampleSql: input?.sampleSql ?? null,
+        sampleColumns: input?.sampleColumns ?? [],
+        sampleRows: input?.sampleRows ?? [],
+        sampleRowCount: input?.sampleRowCount ?? 0,
+        sampleTruncated: input?.sampleTruncated ?? false,
         unmet: [ENDPOINT_API_KEY],
         note: [
-          "The question was translated to SQL and passed the read-only guardrail — that part really ran.",
+          "The question was translated to SQL, passed the read-only guardrail, and ran for real against the database — the rows above are genuine.",
           `No endpoint was deployed: the server needs its own \`${ENDPOINT_API_KEY}\` to translate each request, and none is set.`,
           "Supply one to stand the endpoint up.",
           note,
@@ -721,12 +997,46 @@ const deploy_failed = defineStep({
   name: "deploy_failed",
   next: [],
   terminal: true,
-  async run(input: { status: string; logs: string | null }) {
+  async run(input: {
+    status: string;
+    logs: string | null;
+    sampleSql?: string;
+    sampleColumns?: string[];
+    sampleRows?: Record<string, unknown>[];
+    sampleRowCount?: number;
+    sampleTruncated?: boolean;
+  }) {
     return terminate({
       deployed: false,
       failed: true,
       status: input?.status ?? null,
       logs: input?.logs ?? null,
+      // The sample query genuinely ran even though the sandbox deploy failed —
+      // report it rather than discarding a real result on a partial failure.
+      sampleSql: input?.sampleSql ?? null,
+      sampleColumns: input?.sampleColumns ?? [],
+      sampleRows: input?.sampleRows ?? [],
+      sampleRowCount: input?.sampleRowCount ?? 0,
+      sampleTruncated: input?.sampleTruncated ?? false,
+    });
+  },
+});
+
+/**
+ * The guarded sample SQL could not be executed for real against the resolved
+ * database (no connection, or the query itself errored). Terminal, and honest:
+ * no rows are reported because none were fetched.
+ */
+const query_failed = defineStep({
+  name: "query_failed",
+  next: [],
+  terminal: true,
+  async run(input: { reason: string; sql?: string }) {
+    return terminate({
+      deployed: false,
+      queryFailed: true,
+      reason: input?.reason ?? "the sample query could not be executed",
+      sql: input?.sql ?? null,
     });
   },
 });
@@ -755,9 +1065,11 @@ export const agent = defineAgent<EntryInput, Shared>({
     resolve,
     plan,
     guard,
+    execute,
     deploy,
     deployed,
     deploy_failed,
+    query_failed,
     rejected,
   },
 });

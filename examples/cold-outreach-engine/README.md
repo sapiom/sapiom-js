@@ -40,6 +40,19 @@ Input: `{ "leads": [{ "domain": "acme.com", "fullName": "Jordan Rivera" }], "sen
 - `dripIntervalDays` sets the gap between touches (default 3).
 - `dryRun: true` returns the plan and openers without sending, persisting, or waiting.
 
+### Zero-setup: `{}`
+
+With no `leads` at all, `enrich` works `DEMO_LEADS` — three built-in, fabricated
+companies and contacts — instead of stopping with nobody to write to. Hunter
+has no real person to find or verify at a company that doesn't exist, so
+`enrich` and `verify` simulate its response for these deterministically;
+`personalize` still calls the live model, `launch` still persists the
+campaign, and `send` still delivers the first touch for real — to this
+agent's own Sapiom-hosted demo inbox (`resolveSenderInbox`), never to the
+fabricated address. The run stops right after that touch: the multi-touch
+drip and the durable reply-wait have no real prospect to wait on in demo
+mode, and are what passing your own `leads` unlocks.
+
 ### The durable wait
 
 Between touches the run suspends via `pauseUntilSignal` with a timeout: it costs

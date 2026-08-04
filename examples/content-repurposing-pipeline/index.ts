@@ -6,37 +6,58 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
-import { VIDEO_RESULT_SIGNAL, type VideoResultPayload } from "@sapiom/tools";
+import {
+  IMAGE_RESULT_SIGNAL,
+  VIDEO_RESULT_SIGNAL,
+  type ImageResultPayload,
+  type VideoResultPayload,
+} from "@sapiom/tools";
 import { z } from "zod/v4";
 
 /**
- * Content Repurposing Pipeline — one long-form source into a multi-channel pack.
+ * Content Pack — one long-form source into a multi-channel pack, fanned out to
+ * every recipient on your list.
  *
  * Feed it a blog post or a transcript and it fans that single source out into a
  * tweet thread, a LinkedIn post, a newsletter, quote graphics, and a short video
- * clip — then packages the lot into one markdown brief and emails it to you. It
- * ships with a `schedule` input so it reads as a standing "repurpose the latest
- * post" agent you point at a cron cadence, not just a one-shot.
+ * clip — then packages the lot into one markdown brief and emails it to every
+ * recipient you name. It ships with a `schedule` input so it reads as a standing
+ * "repurpose the latest post" agent you point at a cron cadence, not just a
+ * one-shot.
  *
- *   repurpose ─▶ graphics ─▶ clip ─▶ collectClip ─▶ package ─▶ deliver
- *   (models.run) (images.create) (video.launch) (drain)  (fileStorage) (email.send)
+ *   repurpose ─▶ graphics ⇄ collectGraphic ─▶ clip ⇄ collectClip ─▶ package ─▶ deliver
+ *   (models.run) (images.launch)  (drain)     (video.launch) (drain) (fileStorage) (email.send × N)
  *
  *   1. repurpose — an LLM (`ctx.sapiom.models.run`) rewrites the source into every
  *      channel at once: the tweet thread, the LinkedIn post, the newsletter, the
  *      pull-quotes to render as graphics, and a short video script.
- *   2. graphics — one quote-graphic image per pull-quote (`images.create`), fanned
- *      out in-process, each persisted for a durable `fileId`.
- *   3. clip — animate the first quote graphic into a short teaser clip: launch an
+ *   2. graphics — launch an async quote-graphic image job (`images.launch`) for the
+ *      next pull-quote and `pauseUntilSignal` on it; the image-generation webhook
+ *      resumes `collectGraphic` when it's ready.
+ *   3. collectGraphic — record the finished graphic, then loop back to `graphics`
+ *      for the next quote, or advance once every quote graphic is in.
+ *   4. clip — animate the first quote graphic into a short teaser clip: launch an
  *      async image-to-video job (`video.launch`) and `pauseUntilSignal` on it; the
  *      video-generation webhook resumes `collectClip` when the clip is ready.
- *   4. collectClip — record the finished clip.
- *   5. package — assemble the whole pack as one markdown document and upload it to
+ *   5. collectClip — record the finished clip.
+ *   6. package — assemble the whole pack as one markdown document and upload it to
  *      file storage (`fileStorage.upload`) for a durable `fileId` + download URL.
- *   6. deliver — email the pack to your recipient (`email.messages.send`); terminal.
+ *   7. deliver — fan the pack out to every `deliverTo` recipient (`email.messages.send`),
+ *      one message each; terminal.
  *
- * A `dryRun` guard short-circuits after `repurpose` so authors can trace the graph
- * and read the generated copy without paying for the (pricier) image + video steps.
- * A run with no recipient configured skips the send and returns the pack instead.
+ * Why `graphics` and `clip` launch-and-pause one at a time rather than a concurrent
+ * `Promise.all`: a paused step waits on a single `(signal, correlationId)` pair, so
+ * launching job N only after job N-1 has resumed keeps a paused step always waiting
+ * before its job can complete (the `scene-to-video` / `personalized-media-at-scale`
+ * lesson — a concurrent fan-out of the routed sync image call also risks Core's 30s
+ * router cap; `launch` enqueues and returns immediately, so that wall doesn't apply).
+ *
+ * `deliver`'s recipient loop is the map-reduce fan-out this template absorbs from
+ * `personalized-media-at-scale`: map over the recipient list, send each
+ * independently, then reduce into one delivered/skipped summary — a bad address
+ * degrades that one recipient rather than sinking the batch.
+ *
+ * A run with no `deliverTo` recipients skips every send and returns the pack instead.
  */
 
 /** One pull-quote plus the prompt used to render it as a graphic. */
@@ -61,11 +82,14 @@ interface Pack {
   videoScript: string;
 }
 
-/** A generated quote graphic, carried forward to `clip` and into the pack. */
+/**
+ * A generated quote graphic, carried forward to `clip` and into the pack. Crossed
+ * the wire from a resumed `images.launch` job, so it carries only the
+ * durable/short-lived references, never a bare synchronous `url`.
+ */
 interface Graphic {
   quote: string;
   fileId?: string;
-  url: string;
   downloadUrl?: string;
 }
 
@@ -85,8 +109,8 @@ interface RepurposeInput {
   audience?: string;
   /** How many quote graphics to make (default 2, clamped 1–4). */
   numQuotes?: number;
-  /** Recipient email. Omit it and the pack is returned inline instead of emailed. */
-  deliverTo?: string;
+  /** Recipient email address(es). Omit and the pack is returned inline instead of emailed. */
+  deliverTo?: string[];
   /** Cron cadence this pipeline is meant to run on (carried + reported). */
   schedule?: string;
   /** Optional image-to-video model id (advanced), passed through verbatim to `video.launch`. */
@@ -99,13 +123,15 @@ interface Shared extends Record<string, unknown> {
   title: string;
   audience: string;
   schedule: string;
-  deliverTo: string | null;
+  deliverTo: string[];
   aspectRatio: string;
   model?: string;
   /** Whether to render the (pricey) teaser clip. Off for the built-in sample run. */
   renderClip: boolean;
   pack: Pack;
   graphics: Graphic[];
+  /** Index of the next pull-quote to render a graphic for; advanced by `collectGraphic`. */
+  graphicIndex: number;
   clip: Clip | null;
   packFileId: string | null;
   packDownloadUrl: string | null;
@@ -131,8 +157,6 @@ const DEFAULT_NUM_QUOTES = 2;
 const MAX_QUOTES = 4;
 /** Username for the inbox we send from (created once, then reused). */
 const SENDER_USERNAME = "content-repurposing";
-const TRANSIENT_IMAGE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
-const MAX_ERROR_MESSAGE_LENGTH = 4_096;
 
 /** Title paired with `SAMPLE_SOURCE`. */
 const SAMPLE_TITLE = "Why small teams ship faster";
@@ -160,106 +184,32 @@ function must<T>(v: T | undefined, name: string): T {
   return v;
 }
 
-function numericStatus(value: unknown): number | undefined {
-  const status =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-  return Number.isInteger(status) ? status : undefined;
-}
-
-function isAsciiWordChar(char: string | undefined): boolean {
-  if (!char) return false;
-  const code = char.charCodeAt(0);
+/**
+ * True for an address RFC 2606 reserves for documentation. Mail to these is
+ * guaranteed not to arrive; a caller who pastes a placeholder recipient gets an
+ * honest per-recipient skip rather than a false "delivered".
+ */
+export function isReservedAddress(email: string): boolean {
+  const domain = email.split("@")[1]?.toLowerCase() ?? "";
   return (
-    (code >= 48 && code <= 57) ||
-    (code >= 65 && code <= 90) ||
-    code === 95 ||
-    (code >= 97 && code <= 122)
+    domain === "example.com" ||
+    domain === "example.net" ||
+    domain === "example.org" ||
+    domain === "example" ||
+    domain.endsWith(".example") ||
+    domain.endsWith(".invalid") ||
+    domain.endsWith(".test")
   );
 }
 
-function skipWhitespace(value: string, start: number): number {
-  let cursor = start;
-  while (
-    cursor < value.length &&
-    (value[cursor] === " " ||
-      value[cursor] === "\t" ||
-      value[cursor] === "\n" ||
-      value[cursor] === "\r" ||
-      value[cursor] === "\f")
-  ) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-/** Parse common HTTP/status-code phrases without a backtracking regular expression. */
-function hasTransientStatus(message: string): boolean {
-  const value = message.slice(0, MAX_ERROR_MESSAGE_LENGTH).toLowerCase();
-
-  for (const marker of ["http", "status"]) {
-    let searchFrom = 0;
-    while (searchFrom < value.length) {
-      const markerIndex = value.indexOf(marker, searchFrom);
-      if (markerIndex === -1) break;
-      searchFrom = markerIndex + marker.length;
-
-      if (
-        isAsciiWordChar(value[markerIndex - 1]) ||
-        isAsciiWordChar(value[searchFrom])
-      ) {
-        continue;
-      }
-
-      let cursor = skipWhitespace(value, searchFrom);
-      if (
-        marker === "status" &&
-        value.startsWith("code", cursor) &&
-        !isAsciiWordChar(value[cursor + 4])
-      ) {
-        cursor = skipWhitespace(value, cursor + 4);
-      }
-      if (value[cursor] === ":" || value[cursor] === "=") {
-        cursor = skipWhitespace(value, cursor + 1);
-      }
-
-      const codeText = value.slice(cursor, cursor + 3);
-      const code = Number(codeText);
-      if (
-        codeText.length === 3 &&
-        Number.isInteger(code) &&
-        !isAsciiWordChar(value[cursor + 3]) &&
-        TRANSIENT_IMAGE_STATUSES.has(code)
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-/** Prefer structured HTTP status and use message parsing only as a narrow fallback. */
-export function isTransientImageError(error: unknown): boolean {
-  if (error && typeof error === "object") {
-    const direct = numericStatus((error as { status?: unknown }).status);
-    const nested = numericStatus(
-      (error as { response?: { status?: unknown } }).response?.status,
-    );
-    const status = direct ?? nested;
-    if (status !== undefined) return TRANSIENT_IMAGE_STATUSES.has(status);
-  }
-
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    hasTransientStatus(message) ||
-    /application error|network|socket|timed?\s*out|temporar/i.test(
-      message.slice(0, MAX_ERROR_MESSAGE_LENGTH),
-    )
-  );
+/** Resolve a single graphic's usable URL, re-minting from `fileId` when needed. */
+async function resolveGraphicUrl(
+  graphic: Graphic,
+  getDownloadUrl: (fileId: string) => Promise<{ downloadUrl: string }>,
+): Promise<string> {
+  if (graphic.downloadUrl) return graphic.downloadUrl;
+  if (graphic.fileId) return (await getDownloadUrl(graphic.fileId)).downloadUrl;
+  throw new Error("quote graphic has no usable download URL");
 }
 
 /**
@@ -412,10 +362,10 @@ const entryInput = z.object({
     .default(2)
     .describe("How many quote graphics to make (clamped 1–4)."),
   deliverTo: z
-    .string()
+    .array(z.string())
     .optional()
     .describe(
-      "Recipient email. Omit it and the pack is returned inline instead of emailed.",
+      "Recipient email address(es). Omit and the pack is returned inline instead of emailed — list more than one to fan the pack out to a distribution list.",
     ),
   schedule: z
     .string()
@@ -465,6 +415,15 @@ const repurpose = defineStep({
     const audience =
       input.audience?.trim() || "a general professional audience";
     const numQuotes = clampQuotes(input.numQuotes);
+    // De-duplicate and drop blanks so a caller who pastes the same address twice, or
+    // an empty string from a form, doesn't fan out a redundant or dead send.
+    const deliverTo = Array.from(
+      new Set(
+        (input.deliverTo ?? [])
+          .map((addr) => addr.trim())
+          .filter((addr) => addr.length > 0),
+      ),
+    );
 
     const system =
       "You are a content strategist repurposing one long-form SOURCE (a blog post " +
@@ -492,7 +451,7 @@ const repurpose = defineStep({
     ctx.shared.set("title", title);
     ctx.shared.set("audience", audience);
     ctx.shared.set("schedule", input.schedule?.trim() || DEFAULT_SCHEDULE);
-    ctx.shared.set("deliverTo", input.deliverTo?.trim() || null);
+    ctx.shared.set("deliverTo", deliverTo);
     ctx.shared.set("aspectRatio", ASPECT_RATIO);
     if (input.model) ctx.shared.set("model", input.model);
     // The teaser clip (image-to-video) is the priciest, slowest leg. A run nobody
@@ -503,6 +462,7 @@ const repurpose = defineStep({
     ctx.shared.set("renderClip", !usedSampleSource);
     ctx.shared.set("pack", pack);
     ctx.shared.set("graphics", []);
+    ctx.shared.set("graphicIndex", 0);
     ctx.shared.set("clip", null);
     ctx.shared.set("packFileId", null);
     ctx.shared.set("packDownloadUrl", null);
@@ -512,8 +472,9 @@ const repurpose = defineStep({
     });
 
     // dryRun is an explicit author opt-in — never inferred from a defaulted source —
-    // to trace the graph and read the copy without paying for any generated media. A
-    // zero-setup run (no dryRun) falls through to `graphics` and renders real artwork.
+    // to trace the graph and read the generated copy without paying for any generated
+    // media. A zero-setup run (no dryRun) falls through to `graphics` and renders
+    // real artwork.
     if (input.dryRun) {
       ctx.logger.info("dryRun — returning copy only");
       return terminate({
@@ -534,60 +495,67 @@ const repurpose = defineStep({
 
 const graphics = defineStep({
   name: "graphics",
-  next: ["clip", "package"],
+  next: [],
+  // Async pause/resume, one quote at a time: `images.launch` submits and returns a
+  // handle immediately, and the image-generation webhook fires IMAGE_RESULT_SIGNAL on
+  // completion, resuming `collectGraphic` with that quote's result. Launching every
+  // quote's job up front and then draining would risk one finishing before we've
+  // paused on it (its resume signal would have nowhere to land) — see the module doc.
+  pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep: "collectGraphic" },
   async run(_input: unknown, ctx: Ctx) {
     const pack = must(ctx.shared.get("pack"), "pack");
-    ctx.logger.info("generating quote graphics", {
-      count: pack.quoteGraphics.length,
+    const index = must(ctx.shared.get("graphicIndex"), "graphicIndex");
+    const quote = pack.quoteGraphics[index];
+
+    ctx.logger.info("generating quote graphic", {
+      index: index + 1,
+      of: pack.quoteGraphics.length,
+    });
+    const handle = await ctx.sapiom.contentGeneration.images.launch({
+      prompt: quote.imagePrompt,
+      numImages: 1,
+      storage: { visibility: "private" },
+    });
+    return await pauseUntilSignal(handle, { resumeStep: "collectGraphic" });
+  },
+});
+
+const collectGraphic = defineStep({
+  name: "collectGraphic",
+  next: ["graphics", "clip", "package"],
+  async run(result: ImageResultPayload, ctx: Ctx) {
+    const pack = must(ctx.shared.get("pack"), "pack");
+    const graphicsSoFar = must(ctx.shared.get("graphics"), "graphics");
+    const index = must(ctx.shared.get("graphicIndex"), "graphicIndex");
+    const quote = pack.quoteGraphics[index];
+
+    const img = result.outputs?.[0];
+    if (!img?.fileId && !img?.downloadUrl) {
+      const storageError = img?.storageError ? `: ${img.storageError}` : "";
+      throw new Error(
+        `quote graphic generation completed without a usable output for quote ${index + 1}${storageError}`,
+      );
+    }
+    const graphic: Graphic = {
+      quote: quote.quote,
+      ...(img.fileId !== undefined && { fileId: img.fileId }),
+      ...(img.downloadUrl !== undefined && { downloadUrl: img.downloadUrl }),
+    };
+    const nextGraphics = [...graphicsSoFar, graphic];
+    const nextIndex = index + 1;
+    ctx.shared.set("graphics", nextGraphics);
+    ctx.shared.set("graphicIndex", nextIndex);
+    ctx.logger.info("collected quote graphic", {
+      collected: nextGraphics.length,
+      of: pack.quoteGraphics.length,
     });
 
-    // Fan-out: one graphic per pull-quote, generated concurrently. `storage`
-    // persists each output so we get a durable `fileId` + a ready-to-use URL to
-    // hand the clip step as its start frame and to link from the pack.
-    const generated = await Promise.all(
-      pack.quoteGraphics.map(async (q, index) => {
-        const maxAttempts = 3;
-        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-          try {
-            return await ctx.sapiom.contentGeneration.images.create({
-              prompt: q.imagePrompt,
-              numImages: 1,
-              storage: { visibility: "private" },
-            });
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            const transient = isTransientImageError(error);
-            if (!transient || attempt === maxAttempts) throw error;
-
-            const delayMs = 500 * 2 ** (attempt - 1);
-            ctx.logger.warn("transient image generation failure; retrying", {
-              quote: index + 1,
-              attempt,
-              maxAttempts,
-              delayMs,
-              error: message.slice(0, 500),
-            });
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-        }
-        throw new Error("unreachable image retry state");
-      }),
-    );
-    const results: Graphic[] = generated.map((result, i) => {
-      const img = result.images?.[0];
-      if (!img) throw new Error(`no graphic returned for quote ${i + 1}`);
-      return {
-        quote: pack.quoteGraphics[i].quote,
-        ...(img.fileId !== undefined && { fileId: img.fileId }),
-        url: img.url,
-        ...(img.downloadUrl !== undefined && { downloadUrl: img.downloadUrl }),
-      };
-    });
-    ctx.shared.set("graphics", results);
-    ctx.logger.info("graphics ready", { count: results.length });
-    // The built-in sample run stops at the graphics (a real visual artifact) and skips
-    // the pricey teaser clip; a caller-supplied source renders the full pack.
+    // More quotes need a graphic? Loop back. Otherwise every graphic is in — the
+    // built-in sample run stops here (a real visual artifact) and skips the pricey
+    // teaser clip; a caller-supplied source renders the full pack.
+    if (nextIndex < pack.quoteGraphics.length) {
+      return goto("graphics", {});
+    }
     const renderClip = ctx.shared.get("renderClip") ?? true;
     return renderClip ? goto("clip", {}) : goto("package", {});
   },
@@ -603,7 +571,9 @@ const clip = defineStep({
     const pack = must(ctx.shared.get("pack"), "pack");
     const graphicsList = must(ctx.shared.get("graphics"), "graphics");
     const frame = graphicsList[0];
-    const imageUrl = frame.downloadUrl ?? frame.url;
+    const imageUrl = await resolveGraphicUrl(frame, async (fileId) => {
+      return await ctx.sapiom.fileStorage.getDownloadUrl(fileId);
+    });
     const model = ctx.shared.get("model") ?? DEFAULT_VIDEO_MODEL;
 
     ctx.logger.info("animating teaser clip", { from: frame.quote });
@@ -703,7 +673,7 @@ async function resolveSenderInbox(ctx: Ctx): Promise<string> {
   if (existing.inboxes.length > 0) return existing.inboxes[0].inboxId;
   const inbox = await ctx.sapiom.email.inboxes.create({
     username: SENDER_USERNAME,
-    displayName: "Content Repurposing",
+    displayName: "Content Pack",
   });
   return inbox.inboxId;
 }
@@ -722,6 +692,7 @@ const deliver = defineStep({
     const packDownloadUrl = ctx.shared.get("packDownloadUrl") ?? null;
     const markdown = input.markdown ?? "";
     const subject = `Content pack: ${title}`;
+    const note = ctx.shared.get("note");
 
     const summary = {
       title,
@@ -737,56 +708,84 @@ const deliver = defineStep({
       // inspectable visual artifact (real links) even when nothing is emailed.
       graphics: graphicsList.map((g) => ({
         quote: g.quote,
-        downloadUrl: g.downloadUrl ?? g.url,
+        downloadUrl: g.downloadUrl ?? null,
       })),
       packFileId,
       packDownloadUrl,
       clipFileId: value?.fileId ?? null,
     };
 
-    // A recipient is ordinary configuration, so it arrives as run input (declared
+    // Recipients are ordinary configuration, so they arrive as run input (declared
     // as a `deliverTo` setting in template.json) rather than from a write-only
     // secret store nothing in the product can populate.
-    const deliverTo = ctx.shared.get("deliverTo");
-    const note = ctx.shared.get("note");
+    const recipients = must(ctx.shared.get("deliverTo"), "deliverTo");
 
-    // The safe path: no recipient configured yet returns the pack without sending.
-    if (!deliverTo) {
-      ctx.logger.info("skipping delivery — no recipient", {});
+    // The safe path: no recipients configured yet returns the pack without sending.
+    if (recipients.length === 0) {
+      ctx.logger.info("skipping delivery — no recipients", {});
       return terminate({
         ...summary,
-        delivered: false,
-        reason: "no-recipient",
+        rendered: graphicsList.length,
+        delivered: 0,
+        recipients: [],
         unmet: ["deliverTo"],
         note: [
-          "Nothing was emailed: no `deliverTo` address is set — the rendered quote graphics and the full pack are returned inline below.",
+          "Nothing was emailed: no `deliverTo` recipient is set — the rendered quote graphics and the full pack are returned inline below.",
           note,
         ]
           .filter(Boolean)
           .join(" "),
-        to: null,
         subject,
         markdown,
       });
     }
 
+    // FAN-OUT: the map-reduce delivery loop absorbed from
+    // `personalized-media-at-scale` — map over every recipient, send each
+    // independently, then reduce into one delivered/skipped summary. A bad or
+    // reserved address degrades that one recipient rather than sinking the batch.
     const inboxId = await resolveSenderInbox(ctx);
-    const sent = await ctx.sapiom.email.messages.send(inboxId, {
-      to: deliverTo,
-      subject,
-      text: markdown,
-    });
+    const results: { to: string; messageId?: string; skipped?: string }[] = [];
+    for (const to of recipients) {
+      if (isReservedAddress(to)) {
+        results.push({ to, skipped: "reserved-address" });
+        continue;
+      }
+      try {
+        const sent = await ctx.sapiom.email.messages.send(inboxId, {
+          to,
+          subject,
+          text: markdown,
+        });
+        results.push({ to, messageId: sent.messageId });
+      } catch (err) {
+        ctx.logger.warn("email failed for recipient", {
+          to,
+          err: String(err),
+        });
+        results.push({ to });
+      }
+    }
+    const delivered = results.filter((r) => r.messageId).length;
+    const skipped = results.length - delivered;
     ctx.logger.info("content pack delivered", {
-      to: deliverTo,
-      messageId: sent.messageId,
+      recipients: recipients.length,
+      delivered,
     });
     return terminate({
       ...summary,
-      delivered: true,
-      to: deliverTo,
-      subject,
-      messageId: sent.messageId,
-      ...(note ? { note } : {}),
+      rendered: graphicsList.length,
+      delivered,
+      recipients: results,
+      note:
+        [
+          skipped > 0
+            ? `${delivered} of ${results.length} recipient(s) were delivered; the rest were skipped (a reserved placeholder address or a failed send).`
+            : null,
+          note,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined,
     });
   },
 });
@@ -797,6 +796,7 @@ export const agent = defineAgent<RepurposeInput, Shared>({
   steps: {
     repurpose,
     graphics,
+    collectGraphic,
     clip,
     collectClip,
     package: packageStep,

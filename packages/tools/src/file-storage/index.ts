@@ -210,6 +210,22 @@ export async function getDownloadUrl(
   return { downloadUrl: raw.download_url, expiresAt: raw.expires_at };
 }
 
+/**
+ * Build the durable PUBLIC permalink for a file — a stable URL that never expires and
+ * re-signs a fresh presigned URL on each request (the service 302-redirects to it).
+ *
+ * Use this for a link you email or embed for an external recipient. Unlike
+ * {@link getDownloadUrl} — a ~15-minute presigned URL that must be minted with auth and
+ * dies quickly in an inbox — this permalink stays valid. It only resolves for files stored
+ * with `visibility: "public"`; a private file's permalink returns 404. Pure and synchronous:
+ * it constructs the URL string and makes no network call.
+ *
+ *   const link = fileStorage.getPublicUrl(fileId); // https://file-storage.…/public/<id>
+ */
+export function getPublicUrl(fileId: string, baseUrl = DEFAULT_BASE_URL): string {
+  return `${baseUrl}/public/${encodeURIComponent(fileId)}`;
+}
+
 /** List files owned by the authenticated tenant. */
 export async function list(
   opts?: ListOptions,

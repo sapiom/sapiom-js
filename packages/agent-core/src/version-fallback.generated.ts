@@ -4,6 +4,6 @@
 // @sapiom/agent + @sapiom/tools versions and the offline scaffold fallback can no
 // longer drift.
 export const VERSION_FALLBACK = {
-  agent: "0.9.1",
-  tools: "0.24.0",
+  agent: "0.9.3",
+  tools: "0.26.0",
 } as const;

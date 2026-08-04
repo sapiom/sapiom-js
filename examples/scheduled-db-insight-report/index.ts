@@ -11,11 +11,13 @@ import { z } from "zod/v4";
 
 /**
  * Scheduled DB Snapshot to Insight Report — on a cron cadence, take a snapshot of
- * a database, have an LLM write the narrative, render the numbers into charts in a
+ * a database, have an LLM spot what's anomalous in it, write the narrative, run a
+ * second query informed by that anomaly, render the numbers into charts in a
  * sandbox, and email the finished report.
  *
  * In one legible graph:
- *   snapshot (database) ──▶ narrate (models.run) ──▶ chart (sandbox + fileStorage) ──▶ deliver (email)
+ *   snapshot (database) ──▶ detectAnomalies (models.run) ──▶ narrate (models.run)
+ *     ──▶ followUp (database) ──▶ chart (sandbox + fileStorage) ──▶ deliver (email)
  *
  *   - **snapshot** runs a set of read-only SQL queries against a Postgres database
  *     and normalizes each result into a metric — a labeled series (for a bar chart)
@@ -23,23 +25,37 @@ import { z } from "zod/v4";
  *     catalog (rows per table, table count, database size), so it produces a real
  *     snapshot on any database with zero configuration; pass your own `queries` to
  *     report on your actual data.
- *   - **narrate** hands those metrics to an LLM (`ctx.sapiom.models.run` — the live
- *     x402-served model, not a hardcoded formatter) to write a short markdown
- *     insight report: an executive summary, a few bullet insights that cite the
- *     numbers, and a line on what to watch.
+ *   - **detectAnomalies** hands those metrics to an LLM (`ctx.sapiom.models.run`) to
+ *     pick out the single most notable outlier or change — the number most worth a
+ *     human's attention — and cite the actual figures. A deterministic fallback
+ *     (the largest series point vs. the runner-up) covers an empty snapshot or an
+ *     unusable model response, so this step never has nothing to say.
+ *   - **narrate** reads the metrics AND the flagged anomaly and writes a short
+ *     markdown insight report that leads with it: an executive summary, a few
+ *     bullet insights that cite the numbers, and a line on what to watch.
+ *   - **followUp** recommends and runs a SECOND, data-driven query targeted at
+ *     whatever table the anomaly named — Postgres's own activity counters
+ *     (inserts/updates/deletes, scans) for that one table, from `pg_stat_user_tables`.
+ *     It's a system-catalog read, so it's safe and meaningful on any Postgres
+ *     database, not just the seeded demo. No named table (a scalar-only snapshot,
+ *     or a model response with nothing usable) skips it and says so.
  *   - **chart** spins up a sandbox, writes a tiny dependency-free Node renderer plus
- *     the metrics as JSON, runs it to produce an SVG bar chart, then uploads that
- *     SVG to file storage and takes a shareable download URL. The sandbox is torn
- *     down when the step ends. The rendered SVG is the only large payload here — it
- *     dies at the chart boundary; only the URL crosses into the report.
- *   - **deliver** assembles the report (narrative + chart link + a compact metrics
- *     table) and emails it. A `dryRun` (or a run with no recipient) returns the
- *     report as a preview without sending, so `run_local` traces the whole graph
- *     for free (capabilities stubbed, the real DB query and the send skipped).
+ *     the metrics (and the follow-up read, when there is one) as JSON, runs it to
+ *     produce an SVG bar chart, then uploads that SVG to file storage and takes a
+ *     shareable download URL. The sandbox is torn down when the step ends. The
+ *     rendered SVG is the only large payload here — it dies at the chart boundary;
+ *     only the URL crosses into the report.
+ *   - **deliver** assembles the report (narrative + anomaly + follow-up + chart link
+ *     + a compact metrics table) and emails it. A `dryRun` (or a run with no
+ *     recipient) returns the report as a preview without sending, so `run_local`
+ *     traces the whole graph for free (capabilities stubbed, the real DB query and
+ *     the send skipped).
  *
  * Side-effect discipline (copied from `error-triage-digest` / `scheduled-research-brief`):
  *   - The real SQL is gated behind `dryRun`: a dry run reports on sample metrics so
- *     the graph traces offline without connecting to a database.
+ *     the graph traces offline without connecting to a database. The two LLM steps
+ *     (`detectAnomalies`, `narrate`) run for real either way — they are the world's
+ *     response to whatever metrics are on hand, sample or not.
  *   - The recipient — and an optional external database URL — are read from the
  *     injected environment for a DSN, and ordinary run input for the recipient.
  *   - Non-deterministic values (the snapshot timestamp) are captured once at the DB
@@ -112,6 +128,26 @@ const SAMPLE_METRICS: Metric[] = [
   { name: "Database size (MB)", kind: "scalar", value: 48.2 },
 ];
 
+/**
+ * Sample follow-up read used on a dry run so `followUp` traces without a query.
+ * Named after whichever table the (real, model-driven) anomaly step actually
+ * flagged, so a dry run never shows an activity read for a table the anomaly
+ * above it didn't name.
+ */
+function sampleFollowUp(table: string): SeriesMetric {
+  return {
+    name: `Activity on \`${table}\``,
+    kind: "series",
+    points: [
+      { label: "inserts", value: 4_210 },
+      { label: "updates", value: 128 },
+      { label: "deletes", value: 0 },
+      { label: "sequential scans", value: 3 },
+      { label: "index scans", value: 512 },
+    ],
+  };
+}
+
 // ─────────────────────────────────────────────────────────────── shapes ──
 /** A named read-only query. `sql` should return `label` / `value` columns. */
 interface MetricQuery {
@@ -141,6 +177,22 @@ type Metric =
     }
   | { name: string; kind: "scalar"; value: number };
 
+/** The series-shaped half of `Metric` — what a follow-up read always produces. */
+type SeriesMetric = Extract<Metric, { kind: "series" }>;
+
+/**
+ * What `detectAnomalies` flags as the single most notable outlier or change.
+ * `table` is the seam `followUp` reads to target its drill-down query — only
+ * ever a label the snapshot itself returned (see `coerceAnomaly`), so a model's
+ * free text can't become an arbitrary lookup.
+ */
+interface Anomaly {
+  table: string | null;
+  metric: string;
+  description: string;
+  severity: "low" | "medium" | "high";
+}
+
 interface Shared extends Record<string, unknown> {
   dbHandle: string;
   schedule: string;
@@ -148,6 +200,8 @@ interface Shared extends Record<string, unknown> {
   dryRun: boolean;
   generatedAt: string;
   narrative: string;
+  /** One plain sentence on what the follow-up query found (or why it didn't run). */
+  followUpNote?: string;
   /** True when the snapshot came from the caller's own database. */
   external?: boolean;
   /** True when this run had to provision the managed Postgres itself. */
@@ -208,6 +262,129 @@ function toMetric(name: string, rows: Record<string, unknown>[]): Metric {
   return { name, kind: "series", points };
 }
 
+/** Render metrics as plain text for a model prompt. Shared by both LLM steps. */
+function renderMetrics(metrics: Metric[]): string {
+  return metrics
+    .map((m) =>
+      m.kind === "scalar"
+        ? `${m.name}: ${m.value}`
+        : `${m.name}:\n${m.points
+            .map((p) => `  - ${p.label}: ${p.value}`)
+            .join("\n")}`,
+    )
+    .join("\n");
+}
+
+/** Best-effort extraction of a single JSON object from model output. */
+function extractJson(output: string | null): Record<string, unknown> | null {
+  if (!output) return null;
+  const start = output.indexOf("{");
+  const end = output.lastIndexOf("}");
+  if (start < 0 || end < 0 || end < start) return null;
+  try {
+    return JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Deterministic anomaly fallback: the largest point across every series metric,
+ * compared to the runner-up in its own series. Covers an empty snapshot and an
+ * unusable model response, so `detectAnomalies` never has nothing to say.
+ */
+function deterministicAnomaly(metrics: Metric[]): Anomaly {
+  const series = metrics.filter(
+    (m): m is Extract<Metric, { kind: "series" }> =>
+      m.kind === "series" && m.points.length > 0,
+  );
+  if (series.length === 0) {
+    return {
+      table: null,
+      metric: metrics[0]?.name ?? "",
+      description:
+        "No labeled series in this snapshot to compare, so nothing stands out as an outlier.",
+      severity: "low",
+    };
+  }
+  let best: {
+    seriesName: string;
+    label: string;
+    value: number;
+    runnerUp: number;
+  } | null = null;
+  for (const s of series) {
+    const sorted = [...s.points].sort((a, b) => b.value - a.value);
+    const top = sorted[0];
+    const runnerUp = sorted[1]?.value ?? 0;
+    if (!best || top.value > best.value) {
+      best = {
+        seriesName: s.name,
+        label: top.label,
+        value: top.value,
+        runnerUp,
+      };
+    }
+  }
+  if (!best) {
+    return {
+      table: null,
+      metric: series[0].name,
+      description: "Nothing stands out as an outlier in this snapshot.",
+      severity: "low",
+    };
+  }
+  const ratio = best.runnerUp > 0 ? best.value / best.runnerUp : best.value;
+  return {
+    table: best.label,
+    metric: best.seriesName,
+    description: `\`${best.label}\` leads \`${best.seriesName}\` at ${best.value}${
+      best.runnerUp > 0
+        ? `, ${ratio.toFixed(1)}x the runner-up (${best.runnerUp})`
+        : ""
+    }.`,
+    severity: ratio >= 3 ? "high" : ratio >= 1.5 ? "medium" : "low",
+  };
+}
+
+/**
+ * Coerce the anomaly-step model output into an `Anomaly`, falling back field by
+ * field. `table` is only ever trusted when it names a label the snapshot ACTUALLY
+ * returned — the model's free text never becomes a query parameter otherwise.
+ */
+function coerceAnomaly(
+  output: string | null,
+  metrics: Metric[],
+  fallback: Anomaly,
+): Anomaly {
+  const obj = extractJson(output);
+  if (!obj) return fallback;
+  const description =
+    typeof obj.description === "string" && obj.description.trim()
+      ? obj.description.trim()
+      : fallback.description;
+  const severity: Anomaly["severity"] =
+    obj.severity === "low" ||
+    obj.severity === "medium" ||
+    obj.severity === "high"
+      ? obj.severity
+      : fallback.severity;
+  const metric =
+    typeof obj.metric === "string" && obj.metric.trim()
+      ? obj.metric.trim()
+      : fallback.metric;
+  const knownLabels = new Set(
+    metrics.flatMap((m) =>
+      m.kind === "series" ? m.points.map((p) => p.label) : [],
+    ),
+  );
+  const table =
+    typeof obj.table === "string" && knownLabels.has(obj.table)
+      ? obj.table
+      : fallback.table;
+  return { table, metric, description, severity };
+}
+
 /** What `resolveConnectionString` connected to, so the report can say so. */
 interface Target {
   connectionString: string;
@@ -250,6 +427,19 @@ async function resolveConnectionString(
   const connectionString = db.connection?.connectionString ?? null;
   if (!connectionString) return null;
   return { connectionString, external: false, provisioned };
+}
+
+/** Open a connection to `handle` with the same bounds every step reuses. */
+function connect(connectionString: string): Sql {
+  return postgres(connectionString, {
+    ssl: "require",
+    max: 1,
+    idle_timeout: 5,
+    connect_timeout: 10,
+    // Bound every query on this connection so one slow statement can't stall
+    // the run.
+    connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+  });
 }
 
 /**
@@ -308,6 +498,32 @@ async function resolveSenderInbox(ctx: Ctx): Promise<string> {
   return inbox.inboxId;
 }
 
+/**
+ * `followUp`'s drill-down: activity counters for ONE flagged table, straight from
+ * Postgres's own stats catalog. This is a system-catalog read — it never touches
+ * user schema, so it's safe and meaningful on ANY Postgres database, not just the
+ * seeded demo — and it's parameterized, so a stray table name can't become SQL.
+ */
+const FOLLOW_UP_SQL = `
+  select n_tup_ins as inserts, n_tup_upd as updates, n_tup_del as deletes,
+         seq_scan as sequential_scans, coalesce(idx_scan, 0) as index_scans
+    from pg_stat_user_tables
+   where relname = $1`;
+
+async function runFollowUpQuery(
+  sql: Sql,
+  table: string,
+): Promise<SeriesMetric | null> {
+  const rows = await sql.unsafe(FOLLOW_UP_SQL, [table]);
+  if (!rows || rows.length === 0) return null;
+  const row = rows[0] as Record<string, unknown>;
+  const points = Object.entries(row).map(([label, value]) => ({
+    label: label.replace(/_/g, " "),
+    value: num(value),
+  }));
+  return { name: `Activity on \`${table}\``, kind: "series", points };
+}
+
 // ─────────────────────────────────────────────────────────────── steps ──
 /**
  * The entry contract — this agent's public API, and what the dashboard "Run
@@ -320,7 +536,7 @@ const entryInput = z.object({
     .array(z.object({ name: z.string(), sql: z.string() }))
     .optional()
     .describe(
-      "Queries to snapshot; defaults to catalog introspection when omitted.",
+      "Advanced: read-only queries to snapshot, each `{ name, sql }` where `sql` returns `label`/`value` columns. Optional — defaults to catalog introspection when omitted.",
     ),
   schedule: z
     .string()
@@ -347,7 +563,7 @@ const entryInput = z.object({
 const snapshot = defineStep({
   name: "snapshot",
   inputSchema: entryInput,
-  next: ["narrate"],
+  next: ["detectAnomalies"],
   async run(input: EntryInput, ctx: Ctx) {
     const dryRun = truthy(input.dryRun);
     const handle = resolveResourceHandle(input, {
@@ -363,7 +579,7 @@ const snapshot = defineStep({
     if (dryRun) {
       ctx.shared.set("generatedAt", "2099-01-01T00:00:00.000Z");
       ctx.logger.info("dry run — using sample metrics");
-      return goto("narrate", { metrics: SAMPLE_METRICS });
+      return goto("detectAnomalies", { metrics: SAMPLE_METRICS });
     }
 
     const queries = resolveQueries(input.queries);
@@ -377,20 +593,12 @@ const snapshot = defineStep({
         "note",
         `Could not open a connection to \`${handle}\`, so the report has no metrics in it.`,
       );
-      return goto("narrate", { metrics: [] as Metric[] });
+      return goto("detectAnomalies", { metrics: [] as Metric[] });
     }
     ctx.shared.set("external", target.external);
     ctx.shared.set("provisioned", target.provisioned);
 
-    const sql = postgres(target.connectionString, {
-      ssl: "require",
-      max: 1,
-      idle_timeout: 5,
-      connect_timeout: 10,
-      // Bound every query on this connection so one slow statement can't stall
-      // the run.
-      connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
-    });
+    const sql = connect(target.connectionString);
     const metrics: Metric[] = [];
     try {
       // Only the managed demo database gets seeded — never the caller's own.
@@ -449,40 +657,73 @@ const snapshot = defineStep({
     }
 
     ctx.logger.info("snapshot complete", { metrics: metrics.length });
-    return goto("narrate", { metrics });
+    return goto("detectAnomalies", { metrics });
+  },
+});
+
+const detectAnomalies = defineStep({
+  name: "detectAnomalies",
+  next: ["narrate"],
+  async run(input: { metrics: Metric[] }, ctx: Ctx) {
+    const metrics = Array.isArray(input?.metrics) ? input.metrics : [];
+    const fallback = deterministicAnomaly(metrics);
+
+    if (metrics.length === 0) {
+      ctx.logger.info(
+        "no metrics to inspect; using the deterministic fallback",
+      );
+      return goto("narrate", { metrics, anomaly: fallback });
+    }
+
+    // The live, x402-served model spots the outlier — same call the dry-run path
+    // takes too (a model call is the world's RESPONSE to the numbers on hand,
+    // sample or real; only the DB query and the send are gated behind `dryRun`).
+    const res = await ctx.sapiom.models.run({
+      system:
+        "You are a data analyst spotting anomalies in a database snapshot. Given " +
+        "METRICS (named series of label/value points, and scalar KPIs), find the " +
+        "SINGLE most notable outlier or change — the number most worth a human's " +
+        "attention — and cite the actual figures. Respond with ONLY a JSON object: " +
+        '{"table": string|null, "metric": string, "description": string, ' +
+        '"severity": "low"|"medium"|"high"}. Set `table` to the exact label from a ' +
+        'series point when the anomaly names one (e.g. a table name from "Rows per ' +
+        'table"), else null. No preamble, no code fences.',
+      prompt: `METRICS:\n${renderMetrics(metrics)}`,
+      maxTokens: 300,
+    });
+    const anomaly = coerceAnomaly(res.output ?? null, metrics, fallback);
+    ctx.logger.info("anomaly detected", {
+      table: anomaly.table,
+      severity: anomaly.severity,
+    });
+    return goto("narrate", { metrics, anomaly });
   },
 });
 
 const narrate = defineStep({
   name: "narrate",
-  next: ["chart"],
-  async run(input: { metrics: Metric[] }, ctx: Ctx) {
+  next: ["followUp"],
+  async run(input: { metrics: Metric[]; anomaly: Anomaly }, ctx: Ctx) {
     const metrics = Array.isArray(input?.metrics) ? input.metrics : [];
+    const anomaly = input?.anomaly ?? deterministicAnomaly(metrics);
 
     let narrative: string;
     if (metrics.length === 0) {
       narrative =
         "# Database insight report\n\n_No metrics were collected for this snapshot._";
     } else {
-      const rendered = metrics
-        .map((m) =>
-          m.kind === "scalar"
-            ? `${m.name}: ${m.value}`
-            : `${m.name}:\n${m.points
-                .map((p) => `  - ${p.label}: ${p.value}`)
-                .join("\n")}`,
-        )
-        .join("\n");
-      // The live, x402-served model writes the narrative from the numbers.
+      // The live, x402-served model writes the narrative from the numbers,
+      // leading with whatever `detectAnomalies` already flagged.
       const res = await ctx.sapiom.models.run({
         system:
           "You are a data analyst writing a short insight report from a database " +
-          "snapshot. Given a set of METRICS (named series of label/value pairs, and " +
-          "scalar KPIs), write markdown with: a 2-3 sentence executive summary, then " +
-          "3-5 bullet insights that each cite the actual numbers, then a one-line " +
-          "'What to watch'. Be concrete and quantitative. Do not invent metrics that " +
-          "aren't given. Output ONLY the markdown report — no preamble, no code fences.",
-        prompt: `METRICS:\n${rendered}`,
+          "snapshot. Given METRICS and a flagged ANOMALY (the one outlier already " +
+          "identified upstream), write markdown with: a 2-3 sentence executive " +
+          "summary that leads with the anomaly, then 3-5 bullet insights that each " +
+          "cite the actual numbers, then a one-line 'What to watch'. Be concrete and " +
+          "quantitative. Do not invent metrics that aren't given. Output ONLY the " +
+          "markdown report — no preamble, no code fences.",
+        prompt: `METRICS:\n${renderMetrics(metrics)}\n\nANOMALY: ${anomaly.description} (severity: ${anomaly.severity})`,
         maxTokens: 700,
       });
       narrative =
@@ -491,9 +732,74 @@ const narrate = defineStep({
     }
 
     ctx.logger.info("narrated report", { chars: narrative.length });
-    // Metrics continue to `chart`; the narrative rides in shared for `deliver`.
+    // Metrics + anomaly continue to `followUp`; the narrative rides in shared for
+    // `deliver`.
     ctx.shared.set("narrative", narrative);
-    return goto("chart", { metrics });
+    return goto("followUp", { metrics, anomaly });
+  },
+});
+
+const followUp = defineStep({
+  name: "followUp",
+  next: ["chart"],
+  async run(input: { metrics: Metric[]; anomaly: Anomaly }, ctx: Ctx) {
+    const metrics = Array.isArray(input?.metrics) ? input.metrics : [];
+    const anomaly = input?.anomaly ?? deterministicAnomaly(metrics);
+    const dryRun = truthy(ctx.shared.get("dryRun"));
+    const handle = ctx.shared.get("dbHandle") || DEFAULT_DB_HANDLE;
+
+    // The anomaly didn't name a table (a scalar-only snapshot, or a model
+    // response with nothing usable) — nothing to drill into.
+    if (!anomaly.table) {
+      ctx.shared.set(
+        "followUpNote",
+        "The flagged anomaly didn't name a table, so no follow-up query ran.",
+      );
+      return goto("chart", { metrics, anomaly, followUp: null });
+    }
+
+    if (dryRun) {
+      ctx.logger.info("dry run — using a sample follow-up read");
+      ctx.shared.set(
+        "followUpNote",
+        `Dry run: skipped a real follow-up query and used a sample activity read for \`${anomaly.table}\`.`,
+      );
+      return goto("chart", {
+        metrics,
+        anomaly,
+        followUp: sampleFollowUp(anomaly.table),
+      });
+    }
+
+    const target = await resolveConnectionString(ctx, handle);
+    if (!target) {
+      ctx.shared.set(
+        "followUpNote",
+        `Recommends drilling into \`${anomaly.table}\`'s write activity, but the follow-up query couldn't open a connection.`,
+      );
+      return goto("chart", { metrics, anomaly, followUp: null });
+    }
+
+    const sql = connect(target.connectionString);
+    let followUpMetric: SeriesMetric | null = null;
+    try {
+      followUpMetric = await runFollowUpQuery(sql, anomaly.table);
+    } catch (err) {
+      ctx.logger.warn("follow-up query failed", {
+        table: anomaly.table,
+        err: String(err),
+      });
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    ctx.shared.set(
+      "followUpNote",
+      followUpMetric
+        ? `Recommends watching \`${anomaly.table}\` — its activity since the last snapshot: ${followUpMetric.points.map((p) => `${p.label} ${p.value}`).join(", ")}.`
+        : `Recommends drilling into \`${anomaly.table}\`, but the follow-up query returned nothing.`,
+    );
+    return goto("chart", { metrics, anomaly, followUp: followUpMetric });
   },
 });
 
@@ -547,9 +853,21 @@ function toBase64(text: string): string {
 const chart = defineStep({
   name: "chart",
   next: ["deliver"],
-  async run(input: { metrics: Metric[] }, ctx: Ctx) {
+  async run(
+    input: {
+      metrics: Metric[];
+      anomaly: Anomaly;
+      followUp: SeriesMetric | null;
+    },
+    ctx: Ctx,
+  ) {
     const metrics = Array.isArray(input?.metrics) ? input.metrics : [];
-    const charts = metrics
+    const anomaly = input?.anomaly ?? deterministicAnomaly(metrics);
+    const followUpMetric = input?.followUp ?? null;
+    // The follow-up read charts alongside the snapshot's own series metrics —
+    // it's the same shape, just one more bar chart in the sandbox render.
+    const chartable = followUpMetric ? [...metrics, followUpMetric] : metrics;
+    const charts = chartable
       .filter(
         (m): m is Extract<Metric, { kind: "series" }> =>
           m.kind === "series" && m.points.length > 0,
@@ -559,7 +877,12 @@ const chart = defineStep({
     // Nothing chartable — hand the report on without a chart.
     if (charts.length === 0) {
       ctx.logger.info("no series metrics; skipping chart render");
-      return goto("deliver", { chartUrl: null, metrics });
+      return goto("deliver", {
+        chartUrl: null,
+        metrics,
+        anomaly,
+        followUp: followUpMetric,
+      });
     }
 
     const sandboxName = `db-insight-${ctx.executionId}`;
@@ -631,7 +954,12 @@ const chart = defineStep({
       if (box) await box.destroy().catch(() => {});
     }
 
-    return goto("deliver", { chartUrl, metrics });
+    return goto("deliver", {
+      chartUrl,
+      metrics,
+      anomaly,
+      followUp: followUpMetric,
+    });
   },
 });
 
@@ -639,15 +967,32 @@ const deliver = defineStep({
   name: "deliver",
   next: [],
   terminal: true,
-  async run(input: { chartUrl: string | null; metrics: Metric[] }, ctx: Ctx) {
+  async run(
+    input: {
+      chartUrl: string | null;
+      metrics: Metric[];
+      anomaly: Anomaly;
+      followUp: SeriesMetric | null;
+    },
+    ctx: Ctx,
+  ) {
     const metrics = Array.isArray(input?.metrics) ? input.metrics : [];
     const chartUrl = input?.chartUrl ?? null;
+    const anomaly = input?.anomaly ?? deterministicAnomaly(metrics);
+    const followUpMetric = input?.followUp ?? null;
     const narrative = ctx.shared.get("narrative") || "";
     const generatedAt = ctx.shared.get("generatedAt") || "";
     const schedule = ctx.shared.get("schedule") || DEFAULT_SCHEDULE;
     const dryRun = ctx.shared.get("dryRun") ?? true;
 
-    const report = renderReport(narrative, metrics, chartUrl, generatedAt);
+    const report = renderReport(
+      narrative,
+      metrics,
+      anomaly,
+      followUpMetric,
+      chartUrl,
+      generatedAt,
+    );
     const subject = "Database insight report";
 
     // A recipient is ordinary configuration, so it arrives as run input (declared
@@ -672,6 +1017,8 @@ const deliver = defineStep({
         generatedAt,
         chartUrl,
         metricCount: metrics.length,
+        anomaly,
+        followUp: followUpMetric,
         report,
         ...(dryRun ? {} : { unmet: ["deliverTo"] }),
         note: [
@@ -679,6 +1026,7 @@ const deliver = defineStep({
             ? "`dryRun` was set, so no database was read and nothing was emailed."
             : "Nothing was emailed: no `deliverTo` address is set, so the report is returned inline below.",
           ctx.shared.get("note"),
+          ctx.shared.get("followUpNote"),
         ]
           .filter(Boolean)
           .join(" "),
@@ -704,22 +1052,42 @@ const deliver = defineStep({
       generatedAt,
       chartUrl,
       metricCount: metrics.length,
+      anomaly,
+      followUp: followUpMetric,
       messageId: sent.messageId,
-      ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
+      ...(ctx.shared.get("note") || ctx.shared.get("followUpNote")
+        ? {
+            note: [ctx.shared.get("note"), ctx.shared.get("followUpNote")]
+              .filter(Boolean)
+              .join(" "),
+          }
+        : {}),
     });
   },
 });
 
 // ─────────────────────────────────────────────────────────────── render ──
-/** Assemble the emailed report: narrative, chart link, and a metrics appendix. */
+/** Assemble the emailed report: narrative, anomaly, follow-up, chart, appendix. */
 function renderReport(
   narrative: string,
   metrics: Metric[],
+  anomaly: Anomaly,
+  followUp: SeriesMetric | null,
   chartUrl: string | null,
   generatedAt: string,
 ): string {
   const parts = [narrative.trim()];
   if (generatedAt) parts.push(`\n_Snapshot taken ${generatedAt}._`);
+  parts.push(
+    `\n## Anomaly flagged\n\n${anomaly.description} (**${anomaly.severity}**)`,
+  );
+  if (followUp) {
+    parts.push(
+      `\n## Follow-up: ${followUp.name}\n\n${followUp.points
+        .map((p) => `- ${p.label}: ${p.value}`)
+        .join("\n")}`,
+    );
+  }
   if (chartUrl) parts.push(`\n## Chart\n\n[View chart](${chartUrl})`);
 
   if (metrics.length > 0) {
@@ -740,5 +1108,5 @@ function renderReport(
 export const agent = defineAgent<EntryInput, Shared>({
   name: "scheduled-db-insight-report",
   entry: "snapshot",
-  steps: { snapshot, narrate, chart, deliver },
+  steps: { snapshot, detectAnomalies, narrate, followUp, chart, deliver },
 });

@@ -11,8 +11,9 @@ import { workflowDeploymentState } from "../lib/workflow-deployment";
  * strip to that agent's sessions. Sessions are not a rail concern, so this row
  * carries no session dot, no expander, and no session sub-rows.
  *
- * Row anatomy: [zap glyph][agent name][deployed/draft cloud glyph]. The
- * focused agent is the single filled selection (is-focused).
+ * Row anatomy: [agent name][deployed/draft cloud glyph] — no leading glyph
+ * (indent alone carries the nesting under the workspace folder). The focused
+ * agent is the single filled selection (is-focused).
  */
 export function WorkflowRow({
   workflow,
@@ -47,7 +48,6 @@ export function WorkflowRow({
         aria-pressed={isFocused}
         data-tooltip={isFocused ? "Focused agent" : "Focus this agent"}
       >
-        <Icon name="Zap" size={13} />
         <span className="tree-row-label">{workflow.name}</span>
         <span
           className="workflow-status"

@@ -116,3 +116,123 @@ test("chart step skips the sandbox entirely when there is nothing chartable", as
   assert.equal(directive.input?.chartUrl, null);
   assert.equal(calls.exec.length, 0, "no sandbox work when no series metric");
 });
+
+// ── detectAnomalies ────────────────────────────────────────────────────────
+// The model call is only made when there ARE metrics to inspect; with none, the
+// deterministic fallback covers it and the (unstubbed) model is never touched.
+
+function anomalyContext({ modelOutput } = {}) {
+  return {
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    sapiom: {
+      models: {
+        async run() {
+          if (modelOutput === undefined) {
+            throw new Error("models.run should not be called with no metrics");
+          }
+          return { output: modelOutput };
+        },
+      },
+    },
+  };
+}
+
+test("detectAnomalies falls back deterministically and skips the model when there are no metrics", async () => {
+  const directive = await agent.steps.detectAnomalies.run(
+    { metrics: [] },
+    anomalyContext(),
+  );
+  assert.equal(directive.stepName, "narrate");
+  assert.equal(directive.input?.anomaly?.table, null);
+  assert.equal(directive.input?.anomaly?.severity, "low");
+});
+
+test("detectAnomalies trusts a model-flagged table when it names a real label", async () => {
+  const directive = await agent.steps.detectAnomalies.run(
+    { metrics: SERIES_METRICS },
+    anomalyContext({
+      modelOutput: JSON.stringify({
+        table: "events",
+        metric: "Rows per table",
+        description: "`events` dwarfs every other table.",
+        severity: "high",
+      }),
+    }),
+  );
+  assert.equal(directive.stepName, "narrate");
+  assert.equal(directive.input?.anomaly?.table, "events");
+  assert.equal(directive.input?.anomaly?.severity, "high");
+});
+
+test("detectAnomalies ignores a model-invented table name that isn't an actual label", async () => {
+  const directive = await agent.steps.detectAnomalies.run(
+    { metrics: SERIES_METRICS },
+    anomalyContext({
+      modelOutput: JSON.stringify({
+        table: "not-a-real-table",
+        metric: "Rows per table",
+        description: "made up",
+        severity: "high",
+      }),
+    }),
+  );
+  // The invented table name is discarded; the deterministic fallback's table
+  // (the largest real point, `events`) wins instead — a model's free text never
+  // becomes the follow-up query's parameter unless the snapshot itself named it.
+  assert.equal(directive.input?.anomaly?.table, "events");
+});
+
+// ── followUp ────────────────────────────────────────────────────────────────
+// The real query is gated behind `dryRun`, same discipline as `snapshot`'s own
+// database read — these contexts never provide `ctx.sapiom` at all, so any
+// accidental capability call would throw and fail the test.
+
+function sharedStore(initial = {}) {
+  const state = { ...initial };
+  return {
+    get: (k) => state[k],
+    set: (k, v) => {
+      state[k] = v;
+    },
+    has: (k) => k in state,
+    snapshot: () => ({ ...state }),
+  };
+}
+
+function followUpContext(sharedInitial) {
+  return {
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    shared: sharedStore(sharedInitial),
+  };
+}
+
+test("followUp uses a sample activity read on a dry run, never touching the database", async () => {
+  const anomaly = {
+    table: "orders",
+    metric: "Rows per table",
+    description: "orders lead",
+    severity: "medium",
+  };
+  const directive = await agent.steps.followUp.run(
+    { metrics: SERIES_METRICS, anomaly },
+    followUpContext({ dryRun: true, dbHandle: "db-insight-demo" }),
+  );
+  assert.equal(directive.stepName, "chart");
+  assert.equal(directive.input?.followUp?.name, "Activity on `orders`");
+  assert.ok(directive.input?.followUp?.points?.length > 0);
+});
+
+test("followUp skips the query entirely when the anomaly didn't name a table", async () => {
+  const anomaly = {
+    table: null,
+    metric: "User tables",
+    description: "nothing stands out",
+    severity: "low",
+  };
+  const directive = await agent.steps.followUp.run(
+    { metrics: SERIES_METRICS, anomaly },
+    followUpContext({ dryRun: false, dbHandle: "db-insight-demo" }),
+  );
+  assert.equal(directive.stepName, "chart");
+  assert.equal(directive.input?.followUp, null);
+});

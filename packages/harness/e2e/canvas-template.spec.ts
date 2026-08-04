@@ -157,7 +157,7 @@ for (const theme of ["light", "dark"] as const) {
     if (theme === "dark") {
       expect(bg).toBe("rgb(15, 15, 15)"); // #0f0f0f
     } else {
-      expect(bg).toBe("rgb(243, 244, 246)"); // #f3f4f6
+      expect(bg).toBe("rgb(255, 255, 255)"); // #ffffff — the raised "lighter white" board
     }
 
     expect(errors).toEqual([]);

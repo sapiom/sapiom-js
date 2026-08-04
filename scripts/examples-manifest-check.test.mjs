@@ -56,7 +56,11 @@ test("every existing manifest in the repo validates unchanged", () => {
     );
   }
   assert.deepEqual(problems, []);
-  assert.ok(registry.templates.length >= 24);
+  assert.equal(
+    registry.templates.length,
+    11,
+    "the curated gallery is exactly 11 — update this floor and the copy gate deliberately when the set changes (culled dirs still on disk must not silently regrow it)",
+  );
 });
 
 test("the copy length caps are enforced by the schema, with a pointer", () => {

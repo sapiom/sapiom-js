@@ -21,7 +21,7 @@ test.describe("session history dropdown", () => {
     await menu.getByText("Past sessions", { exact: true }).click();
     await expect(menu).toBeVisible();
 
-    await page.locator(".brand-name").click();
+    await page.locator(".brand-lockup").click();
     await expect(menu).toBeHidden();
   });
 
@@ -56,14 +56,11 @@ test.describe("settings popover", () => {
     await page.getByTestId("telemetry-toggle").click();
     await expect(popover).toBeVisible();
 
-    // Click well outside the popover to light-dismiss it. The popover anchors at
-    // the top-left brand/settings area and its identity row now overlaps
-    // `.brand-name`, so that (top-left) target is no longer "outside" — it's
-    // occluded by the popover and the click lands on the popover itself. Click the
-    // lower-right of the viewport, which is unambiguously outside a top-anchored popover.
-    const viewport = page.viewportSize();
-    if (!viewport) throw new Error("viewport size unavailable");
-    await page.mouse.click(viewport.width - 40, viewport.height - 40);
+    // The popover is anchored to the footer account row and grows UP across the
+    // full-width rail (up-start + matchWidth), so it now covers the rail's
+    // brand lockup — click the main panel instead, which the rail-width popover
+    // never reaches.
+    await page.locator(".terminal-slot").click();
     await expect(popover).toBeHidden();
   });
 
