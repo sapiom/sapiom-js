@@ -74,12 +74,12 @@ API-key principal; link, deploy, and cloud run require it.
 
 ### 4. Link → deploy → run → inspect
 
-| Command                     | What it does                                  |
-| --------------------------- | --------------------------------------------- |
-| `sapiom_dev_agents_link`    | Registers the agent under your tenant         |
-| `sapiom_dev_agents_deploy`  | Builds and deploys to Sapiom's cloud          |
-| `sapiom_dev_agents_run`     | Starts a real (billed) execution              |
-| `sapiom_dev_agents_inspect` | Watch an execution's status, steps, and spend |
+| Command                     | What it does                                        |
+| --------------------------- | --------------------------------------------------- |
+| `sapiom_dev_agents_link`    | Registers the agent under your tenant               |
+| `sapiom_dev_agents_deploy`  | Builds and deploys to Sapiom's cloud                |
+| `sapiom_dev_agents_run`     | Starts a real (billed) execution                    |
+| `sapiom_dev_agents_inspect` | Watch status, pinned build, steps, logs, and output |
 
 ## The Step Model — Hard Rules
 

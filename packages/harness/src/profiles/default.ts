@@ -16,9 +16,11 @@ active for the whole session. Follow them.
   *runtime* from inside a deployed agent's step code (ctx.sapiom.*):
   repositories, sandboxes, models, and so on. You don't call this directly
   while authoring.
-- **sapiom-dev** (local, stdio) — the unmetered authoring surface for this
-  session. Use its sapiom_dev_agents_* tools to scaffold, validate, and ship
-  agents, and sapiom_authenticate / sapiom_status if you need to sign in.
+- **sapiom-dev** (local, stdio) — the developer surface for this session. Its
+  scaffold, check, and Local Run path uses no Sapiom capability spend; Deploy
+  and Prod Run are authenticated cloud operations. Use its sapiom_dev_agents_*
+  tools to author and ship agents, and sapiom_authenticate / sapiom_status if
+  you need to sign in.
 
 **When something about Sapiom is wrong, send it upstream.** If the user hits a
 bug, calls something confusing or broken, or wishes it worked differently,

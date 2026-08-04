@@ -45,5 +45,11 @@ describe("local agent tool contracts", () => {
       schemas.get("sapiom_dev_agents_run_local")?.stubs?.description ?? "";
     expect(stubs).toContain("not a sequence of responses");
     expect(stubs).not.toContain("<response> | [<response>]");
+
+    const deploy = descriptions.get("sapiom_dev_agents_deploy") ?? "";
+    expect(deploy).toContain("current local source");
+    expect(deploy).toContain("including uncommitted source");
+    expect(deploy).toContain("metered cloud build");
+    expect(deploy).not.toContain("current git commit");
   });
 });

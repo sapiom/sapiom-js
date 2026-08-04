@@ -23,11 +23,12 @@ export interface InspectOptions {
 }
 
 /**
- * Fetch the full {@link ExecutionProjection} for a single execution — the same
- * tree + per-node cost + trace refs the REST DTO returns (Module P / SAP-1138).
- * The SDK is a thin passthrough of the REST shape; the body is only NORMALIZED
- * (see {@link decodeExecutionProjection}) so pre-seam runs decode without error
- * (degraded tree from lineage, flat cost fallback) — never reshaped or recosted.
+ * Fetch the full execution audit for a single run: status, pinned build, step
+ * attempts, logs/events, output/error, trace refs, and dispatch lineage. The
+ * SDK is a thin passthrough of the REST shape; the body is only NORMALIZED (see
+ * {@link decodeExecutionProjection}) so pre-seam runs decode without error.
+ * This endpoint is cost-agnostic today, so missing run/step cost stays `null`
+ * rather than being fabricated or fetched from another endpoint.
  *
  * Throws `AgentOperationError` (code `HTTP_*` | `NETWORK`) on gateway errors.
  */
@@ -163,9 +164,10 @@ export async function waitForExecution(
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), Math.max(0, deadline - now()));
   timer.unref?.();
-  const events = watch({ executionId: opts.executionId, signal: abort.signal }, client)[
-    Symbol.asyncIterator
-  ]();
+  const events = watch(
+    { executionId: opts.executionId, signal: abort.signal },
+    client,
+  )[Symbol.asyncIterator]();
   try {
     for (;;) {
       const next = await events.next(); // resolves on each SSE event (heartbeats filtered)
@@ -173,7 +175,8 @@ export async function waitForExecution(
       execution = await read();
       settled = settledResult(execution, autoResume);
       if (settled) return { execution, ...settled };
-      if (now() >= deadline) return { execution, reason: "timeout", done: false };
+      if (now() >= deadline)
+        return { execution, reason: "timeout", done: false };
     }
     if (now() >= deadline) return { execution, reason: "timeout", done: false };
   } catch {

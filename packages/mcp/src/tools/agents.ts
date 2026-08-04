@@ -325,7 +325,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_deploy",
-    "Deploy the linked agent: push the current git commit, trigger a build, and wait for it to finish. The project must be linked (sapiom.json) and a git repo with at least one commit.",
+    "Deploy the linked agent: bundle the current local source (including uncommitted source), push a synthesized build tree, trigger a metered cloud build, and wait for it to finish. The project must be linked (sapiom.json) and a git repo with at least one commit.",
     {
       dir: z
         .string()

@@ -221,11 +221,10 @@ export interface StepProjection {
 }
 
 /**
- * The canonical inspection projection for a single execution — the same tree +
- * per-node cost + trace identity the REST `ExecutionProjection` returns (Module
- * P / SAP-1138). One read returns everything a view needs. Extension of the
- * engine execution detail: the base audit fields plus the tree/cost/trace
- * projection additions.
+ * The canonical inspection projection for a single execution: the engine audit
+ * fields plus dispatch lineage, trace identity, step logs/events, and nullable
+ * cost slots. The execution-detail read is cost-agnostic today; one inspection
+ * therefore returns the execution evidence, while missing cost remains `null`.
  */
 export interface ExecutionProjection {
   // ── identity / status ──────────────────────────────────────────────────────

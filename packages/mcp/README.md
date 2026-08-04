@@ -1,15 +1,16 @@
 # @sapiom/mcp
 
 The **local developer** MCP server for Sapiom. It runs on your machine over
-stdio under the server name `sapiom-dev` — the unmetered `sapiom_dev_*` surface
-for building and operating on Sapiom. Today it gives a coding agent the tools to
-scaffold, test, deploy, and inspect Sapiom orchestrations; the namespace leaves
-room for other non-capability developer tooling later.
+stdio under the server name `sapiom-dev`. Today it gives a coding agent the
+tools to scaffold, test, deploy, and inspect Sapiom agents; the namespace leaves
+room for other developer tooling later.
 
 > **Not the capability surface.** This is _not_ the remote "Sapiom" MCP (the
 > hosted connector with `sapiom_sandbox_*`, scrape, search, … capability tools).
-> `sapiom-dev` is the local developer surface; it makes no paid capability calls
-> and exposes no capability tools. See
+> `sapiom-dev` exposes no direct capability tools. Its local check and Local
+> Run path uses stubbed capabilities without Sapiom capability spend; deploys,
+> cloud builds, production runs, signals, and schedules operate Sapiom cloud
+> state and may be metered. See
 > [the two Sapiom MCP servers](../../docs/mcp-servers.md) for which to use when.
 
 ## Install
@@ -85,7 +86,7 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_agents_run_local`        | author code only | Run locally with `ctx.sapiom.*` calls stubbed (no Sapiom capability spend) |
 | `sapiom_dev_agents_link`             | ✓                | Resolve/create the hosted orchestration and cache its id                   |
 | `sapiom_dev_agents_clone`            | ✓                | Fork a gallery template (or re-clone a fork) into a local project          |
-| `sapiom_dev_agents_deploy`           | ✓                | Push the current commit, build, and wait for it                            |
+| `sapiom_dev_agents_deploy`           | ✓                | Bundle current local source, build in the cloud, and wait                  |
 | `sapiom_dev_agents_run`              | ✓                | Start a real cloud execution                                               |
 | `sapiom_dev_agents_inspect`          | ✓                | Inspect an execution or build (optionally waiting for it)                  |
 | `sapiom_dev_agents_signal`           | ✓                | Resume a paused execution by delivering a signal                           |
@@ -102,8 +103,9 @@ A typical loop: `scaffold` → write step code → `run_local` until green → `
 Workflows authored here call Sapiom capabilities — sandboxes, repositories,
 coding agents, search, storage, content generation — through
 [`@sapiom/tools`](../tools) (`ctx.sapiom.*`). `run_local` resolves those calls
-from stubs; a real `run`/`deploy` executes them in the cloud (metered). This MCP
-never grows a per-capability tool of its own — capabilities live in
+from stubs; deploy and production run cross into authenticated cloud operations
+and can be metered. This MCP never grows a per-capability tool of its own —
+capabilities live in
 `@sapiom/tools` and the remote `sapiom` MCP. See
 [the positioning doc](../../docs/mcp-servers.md) for the full policy.
 
