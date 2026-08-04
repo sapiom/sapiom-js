@@ -52,9 +52,11 @@ export const HARNESS_PATHS = {
 export const AGENT_PROJECT_MARKER = "sapiom.json";
 
 /**
- * Canvas convention: agents write static HTML here, relative to the session
- * cwd. The server watches this directory and serves it at
- * `/canvas/<harnessSessionId>/`.
+ * Canvas convention: Studio-owned deterministic renders and optional custom
+ * HTML live here, relative to the session cwd. The server watches this
+ * directory and serves the active workflow at `/canvas/<harnessSessionId>/`.
+ * Deterministic workflow files use `CANVAS_RENDERS_DIR`; `index.html` remains
+ * the optional custom-canvas fallback and is never rewritten by that pipeline.
  */
 export const CANVAS_DIR = ".sapiom/canvas";
 export const CANVAS_INDEX = `${CANVAS_DIR}/index.html`;
@@ -1357,6 +1359,14 @@ export interface WorkflowInfo {
    *  caches as `name`, used as the executions-API handle
    *  (`/agents/v1/definitions/{slug}/executions`). Null before first link. */
   definitionSlug: string | null;
+  /**
+   * Cloud build evidence from the definition-detail projection. An id alone
+   * only proves that this local project is linked to a cloud definition;
+   * `activeBuildRunStatus === "ready"` is the signal that the definition has a
+   * runnable build. Optional for compatibility with older harness servers.
+   */
+  activeBuildRunId?: string | null;
+  activeBuildRunStatus?: string | null;
   /** How it entered the registry. */
   source: "scan" | "connect";
 }

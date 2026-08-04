@@ -119,7 +119,12 @@ function buildOverviewPayload(graph: CanvasGraph, enrichment?: CanvasEnrichment 
   const exits = graph.nodes.filter(
     (n) => n.kind === "terminal-success" || n.kind === "terminal-warn",
   ).length;
-  const steps = graph.nodes.length - exits;
+  const steps = graph.nodes.filter(
+    (n) =>
+      n.kind !== "terminal-success" &&
+      n.kind !== "terminal-warn" &&
+      n.kind !== "launched-workflow",
+  ).length;
   const entryLabel = graph.nodes.find((n) => n.id === graph.entry)?.label ?? graph.entry;
   const parts = [`${steps} ${steps === 1 ? "step" : "steps"}`];
   if (exits > 0) parts.push(`${exits} ${exits === 1 ? "exit" : "exits"}`);
@@ -176,6 +181,7 @@ ${renderGraphSvg(graph, enrichment)}
  *  a crash, never a silent fallback to the LLM path, just an honest reason
  *  styled through the same shell. */
 export function buildErrorPanelHtml(title: string, reason: string): string {
+  const errorData = JSON.stringify({ title, reason }).replace(/</g, "\\u003c");
   return `<section class="canvas-panel">
   <header class="canvas-header">
     <div class="canvas-title-row">
@@ -184,8 +190,9 @@ export function buildErrorPanelHtml(title: string, reason: string): string {
     </div>
   </header>
   <div class="canvas-diagram-panel">
-    <p class="canvas-empty-note">Could not extract this agent's step graph: ${esc(reason)}. Ask your coding agent to fix the issue (see the terminal for details) — this pane updates automatically once it builds cleanly.</p>
+    <p class="canvas-empty-note">Could not extract this agent's step graph: ${esc(reason)}. Use the workbench actions to ask your coding agent to fix it or retry the deterministic render.</p>
   </div>
+  <script type="application/json" id="sapiom-render-error">${errorData}</script>
 </section>`;
 }
 

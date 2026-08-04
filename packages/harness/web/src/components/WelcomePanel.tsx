@@ -212,9 +212,9 @@ export function WelcomePanel({
                 about to be given. */}
             <p className="welcome-intro">
               Agent Studio turns the agents in your codebase into diagrams you
-              can inspect and run. Local agent runs are free and offline, with every
-              step&rsquo;s input, output and capability call on screen. Nothing
-              ships until you say so.
+              can inspect and run. Local runs need no sign-in and stub Sapiom
+              capability calls, with every step&rsquo;s input, output and call on
+              screen. Nothing ships until you say so.
             </p>
             {error && <div className="welcome-error">{error}</div>}
 

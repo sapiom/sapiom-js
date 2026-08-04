@@ -6,7 +6,11 @@ import { stepIsStubbed, stubNotice } from "@shared/stub-feedback";
 import type { CanvasGraph, CanvasGraphEdge, CanvasGraphNode } from "../lib/canvas-graph";
 import { formatTimeout, stepFacts, stepInputFields } from "../lib/canvas-graph";
 import { formatPayload } from "../lib/format-payload";
-import { extractStepContext, extractStepLinks } from "../lib/extract-step-context";
+import { runStepFor } from "../lib/run-step";
+import {
+  extractStepContext,
+  extractStepLinks,
+} from "../lib/extract-step-context";
 import type { RunTarget } from "../lib/use-harness-state";
 import { Icon } from "./Icon";
 
@@ -22,7 +26,7 @@ function StubbedChip(): JSX.Element {
     <span
       className="canvas-run-stub-chip"
       data-testid="canvas-run-stub-chip"
-      data-tooltip="Capability calls in this step were served by stubs (offline run) — not real calls"
+      data-tooltip="Sapiom capability calls in this local run were served by stubs — not real Sapiom calls"
     >
       stubbed
     </span>
@@ -168,11 +172,6 @@ export function StubNoticeSection({ run }: { run: RunView | null }): JSX.Element
       )}
     </section>
   );
-}
-
-/** RunView steps are keyed by the manifest step name == our node id. */
-export function runStepFor(run: RunView | null, nodeId: string): StepView | null {
-  return run?.steps.find((s) => s.name === nodeId) ?? null;
 }
 
 /** The run's origin as a plain phrase ("prod run" / "local run"), or a bare

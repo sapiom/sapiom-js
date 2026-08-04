@@ -202,6 +202,17 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
       timeout: 3_000,
     });
     await expect(deployBtn).toHaveClass(/session-action-primary/);
+    // The mock persists a definition id before the failed first build, just
+    // like production. That link must not enable Prod Run or Code snippets.
+    const dashboardLink = page.getByTestId("workflow-dashboard-link");
+    await expect(dashboardLink).toContainText("deploy failed");
+    await expect(dashboardLink).toHaveAttribute("data-deployment-state", "failed");
+    await expect(runBtn).toBeDisabled();
+    await page.getByTestId("right-tab-code").click();
+    await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
+    await expect(page.getByTestId("right-panel-code")).toContainText(
+      "Deploy did not produce a ready build",
+    );
   });
 
   test("a successful retry clears the deploy-failed state — Prod-run returns to normal", async ({

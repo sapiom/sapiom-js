@@ -1,5 +1,5 @@
 /**
- * renderLocalRun — the pure mapper from an offline stub run's per-step traces
+ * renderLocalRun — the pure mapper from a local stub run's per-step traces
  * ({@link LocalStepTrace}[], streamed as NDJSON by `POST /api/runs/local`) to
  * the same {@link RunView} the canvas renders for prod runs. Its twin is
  * {@link renderRunState} (prod / local-backend); both emit the identical
@@ -154,7 +154,7 @@ function toStepView(trace: LocalStepTrace): StepView {
 }
 
 /**
- * Map an offline stub run's traces (plus the caller-owned execution id and, once
+ * Map a local stub run's traces (plus the caller-owned execution id and, once
  * known, terminal outcome) to the {@link RunView} the canvas renders. Order-
  * preserving over `traces` (execution order); total — never throws, mirroring
  * renderRunState — because the traces are already the decoded wire shape.

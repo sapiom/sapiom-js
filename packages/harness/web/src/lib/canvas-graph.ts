@@ -110,7 +110,13 @@ export function graphCounts(graph: CanvasGraph): { steps: number; exits: number 
   const exits = graph.nodes.filter(
     (n) => n.kind === "terminal-success" || n.kind === "terminal-warn",
   ).length;
-  return { steps: graph.nodes.length - exits, exits };
+  const steps = graph.nodes.filter(
+    (n) =>
+      n.kind !== "terminal-success" &&
+      n.kind !== "terminal-warn" &&
+      n.kind !== "launched-workflow",
+  ).length;
+  return { steps, exits };
 }
 
 /** "4 steps · 2 exits" (exits omitted when the graph has none). */

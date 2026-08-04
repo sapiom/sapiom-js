@@ -77,7 +77,8 @@ if (result.status === "completed") {
 
 function curlSnippet(definition: string, inputSample: unknown, baseUrl: string): string {
   const body = shellSingleQuote(`{ "input": ${curlInput(inputSample)} }`);
-  return `curl -X POST ${baseUrl}/agents/v1/definitions/${definition}/executions \\
+  const encodedDefinition = encodeURIComponent(definition);
+  return `curl -X POST ${baseUrl}/agents/v1/definitions/${encodedDefinition}/executions \\
   -H "${AUTH_HEADER}: ${API_KEY_PLACEHOLDER}" \\
   -H "Content-Type: application/json" \\
   -d '${body}'

@@ -44,6 +44,24 @@ describe("createDefinitionSlugResolver", () => {
     expect(slug).toBe("lease-abstractor");
   });
 
+  it("returns mutable build evidence with the stable slug", async () => {
+    const fetchImpl = makeFetch(200, {
+      slug: "lease-abstractor",
+      activeBuildRunId: "build-17",
+      activeBuildRunStatus: "ready",
+    });
+    const resolver = createDefinitionSlugResolver({
+      apiKey: "test-key",
+      fetchImpl,
+    });
+
+    await expect(resolver.resolveMetadata("188")).resolves.toEqual({
+      slug: "lease-abstractor",
+      activeBuildRunId: "build-17",
+      activeBuildRunStatus: "ready",
+    });
+  });
+
   it("calls the correct URL with the api key header", async () => {
     const fetchImpl = makeFetch(200, { slug: "my-agent" });
     const resolver = createDefinitionSlugResolver({
@@ -97,6 +115,66 @@ describe("createDefinitionSlugResolver", () => {
 
     expect(slug).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("uses the current api key after a signed-out boot", async () => {
+    let currentKey: string | null = null;
+    const fetchImpl = makeFetch(200, {
+      slug: "signed-in-agent",
+      activeBuildRunId: "build-1",
+      activeBuildRunStatus: "ready",
+    });
+    const resolver = createDefinitionSlugResolver({
+      apiKey: () => currentKey,
+      fetchImpl,
+    });
+
+    await expect(resolver.resolveMetadata("188")).resolves.toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    currentKey = "sk-after-login";
+    await expect(resolver.resolveMetadata("188")).resolves.toMatchObject({
+      slug: "signed-in-agent",
+      activeBuildRunStatus: "ready",
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), {
+      headers: { "x-sapiom-api-key": "sk-after-login" },
+    });
+  });
+
+  it("does not cache mutable build status", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          slug: "agent",
+          activeBuildRunId: "build-1",
+          activeBuildRunStatus: "building",
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          slug: "agent",
+          activeBuildRunId: "build-1",
+          activeBuildRunStatus: "ready",
+        }),
+      } as Response);
+    const resolver = createDefinitionSlugResolver({
+      apiKey: "test-key",
+      fetchImpl,
+    });
+
+    expect((await resolver.resolveMetadata("188"))?.activeBuildRunStatus).toBe(
+      "building",
+    );
+    expect((await resolver.resolveMetadata("188"))?.activeBuildRunStatus).toBe(
+      "ready",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("returns null when the response body has no slug field", async () => {

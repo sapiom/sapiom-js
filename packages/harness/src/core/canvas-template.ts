@@ -20,6 +20,7 @@ import { CANVAS_DIR, CANVAS_INDEX } from "../shared/types.js";
 import { isLegacyDeterministicCanvas } from "./canvas-index-classify.js";
 import {
   applyRunStateToCanvas,
+  bootCanvasError,
   bootCanvasGraph,
   bootCanvasOverview,
   bootCanvasNodeClicks,
@@ -366,7 +367,7 @@ const NAME_SHIM = "function __name(fn){return fn;}";
  *  embedded step graph so the Steps tab can project it — all via the same
  *  stringify pattern. `NAME_SHIM` MUST come first (see its doc — without it,
  *  esbuild/tsx output throws in the iframe). */
-const RUN_STATE_SCRIPT = `${NAME_SHIM}\n${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();\n${bootCanvasView.toString()}\nbootCanvasView();\n${bootCanvasGraph.toString()}\nbootCanvasGraph();\n${bootCanvasOverview.toString()}\nbootCanvasOverview();`;
+const RUN_STATE_SCRIPT = `${NAME_SHIM}\n${runStateNodeClass.toString()}\n${applyRunStateToCanvas.toString()}\n${bootCanvasRunState.toString()}\nbootCanvasRunState();\n${bootCanvasNodeClicks.toString()}\nbootCanvasNodeClicks();\n${bootCanvasView.toString()}\nbootCanvasView();\n${bootCanvasGraph.toString()}\nbootCanvasGraph();\n${bootCanvasOverview.toString()}\nbootCanvasOverview();\n${bootCanvasError.toString()}\nbootCanvasError();`;
 
 /**
  * Wraps `bodyHtml` in the shared canvas document shell: doctype, the theme

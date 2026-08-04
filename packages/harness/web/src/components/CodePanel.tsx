@@ -12,6 +12,7 @@ import type { WorkflowInfo } from "@shared/types";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { SnippetPanel } from "./SnippetPanel";
+import { workflowDeploymentState } from "../lib/workflow-deployment";
 
 interface CodePanelProps {
   /** The workflow bound to the active session, if any. */
@@ -21,9 +22,16 @@ interface CodePanelProps {
   noSessionAgent?: string | null;
   /** The Agents API base URL (from AppState) — see SnippetPanel. */
   agentsBaseUrl?: string;
+  /** Local terminal deploy error, used when cloud status could not refresh. */
+  lastDeployError?: string | null;
 }
 
-export function CodePanel({ boundWorkflow, noSessionAgent = null, agentsBaseUrl }: CodePanelProps): JSX.Element {
+export function CodePanel({
+  boundWorkflow,
+  noSessionAgent = null,
+  agentsBaseUrl,
+  lastDeployError = null,
+}: CodePanelProps): JSX.Element {
   // No bound agent — the empty state centres like the sibling tabs (it is a
   // direct child of the flex-column right-pane panel, so its own flex:1 fills
   // the height). Naming the opened agent when there is one keeps it honest.
@@ -35,13 +43,41 @@ export function CodePanel({ boundWorkflow, noSessionAgent = null, agentsBaseUrl 
         title={noSessionAgent ? `No running session for ${noSessionAgent}` : "No agent bound"}
         body={
           noSessionAgent
-            ? "Start a session to trigger this agent from your code."
+            ? "Start a session to inspect this agent's integration snippets here."
             : "Open an agent to see how to trigger it from your code."
         }
       />
     );
   }
-  const deployed = boundWorkflow.definitionId != null;
+  const deploymentState = workflowDeploymentState(
+    boundWorkflow,
+    lastDeployError,
+  );
+  const deployed = deploymentState === "ready";
+  const statusLabel =
+    deploymentState === "building"
+      ? "Building"
+      : deploymentState === "failed"
+        ? "Deploy failed"
+        : deploymentState === "linked"
+          ? "Linked"
+          : "Draft";
+  const emptyTitle =
+    deploymentState === "building"
+      ? "Cloud build in progress"
+      : deploymentState === "failed"
+        ? "Deploy did not produce a ready build"
+        : deploymentState === "linked"
+          ? "No ready deployment yet"
+          : "Deploy to trigger from code";
+  const emptyBody =
+    deploymentState === "building"
+      ? `${boundWorkflow.name} is linked and building. Integration snippets appear after the cloud build is ready.`
+      : deploymentState === "failed"
+        ? `Fix ${boundWorkflow.name} and retry Deploy. Studio only shows integration snippets for a ready cloud build.`
+        : deploymentState === "linked"
+          ? `${boundWorkflow.name} is linked to Sapiom, but Studio cannot confirm a ready cloud build. Deploy it before integrating.`
+          : `${boundWorkflow.name} is a draft. Once it deploys, TypeScript SDK and cURL starter calls appear here.`;
   return (
     <div className="code-panel">
       {/* The SAME subheader recipe Canvas and Steps use: agent name left,
@@ -52,7 +88,7 @@ export function CodePanel({ boundWorkflow, noSessionAgent = null, agentsBaseUrl 
           <span
             className="status-tag workflow-deployed-tag"
             data-testid="code-panel-status"
-            data-tooltip="Deployed to production"
+            data-tooltip="Ready cloud build"
           >
             <span className="workflow-dot workflow-dot-pinned" aria-hidden="true" />
             Deployed
@@ -61,10 +97,10 @@ export function CodePanel({ boundWorkflow, noSessionAgent = null, agentsBaseUrl 
           <span
             className="status-tag code-panel-draft-tag"
             data-testid="code-panel-status"
-            data-tooltip="Exists locally only. Deploy it to call it from your code."
+            data-tooltip={emptyTitle}
           >
             <Icon name="CloudOff" size={13} />
-            Draft
+            {statusLabel}
           </span>
         )}
       </div>
@@ -83,8 +119,8 @@ export function CodePanel({ boundWorkflow, noSessionAgent = null, agentsBaseUrl 
         <EmptyState
           className="code-panel-empty"
           icon="Code"
-          title="Deploy to trigger from code"
-          body={`${boundWorkflow.name} is a draft. Once it deploys, copy-paste TypeScript SDK and cURL calls for it appear here.`}
+          title={emptyTitle}
+          body={emptyBody}
         />
       )}
     </div>

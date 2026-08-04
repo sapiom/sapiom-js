@@ -36,8 +36,15 @@ function plural(n: number, one: string, many = `${one}s`): string {
  * the same graph the diagram is drawn from, so it can never disagree with it.
  */
 export function deriveSummary(graph: CanvasGraph): string {
-  // Real steps only — exclude the dashed launched-workflow placeholders.
-  const stepCount = graph.nodes.filter((n) => n.kind !== "launched-workflow").length;
+  // Pipeline steps only. Terminal outcomes and dashed launched-workflow
+  // placeholders have their own labels/counts; counting either as a step made
+  // the board summary disagree with the Steps header for the same graph.
+  const stepCount = graph.nodes.filter(
+    (n) =>
+      n.kind !== "launched-workflow" &&
+      n.kind !== "terminal-success" &&
+      n.kind !== "terminal-warn",
+  ).length;
 
   // A branch point is a step that fans out to multiple successors; the graph
   // marks exactly those edges "branching" (core/canvas-graph.ts's edgesForStep).

@@ -377,7 +377,7 @@ export function useHarnessState(): HarnessStateHook {
   const localRunSeq = useRef(0);
 
   /**
-   * Run an offline stub run and stream it into the shared run store. The NDJSON
+   * Run locally with Sapiom capability calls stubbed and stream it into the shared run store. The NDJSON
    * arrives per-step: each {@link LocalStepTrace} line appends to a local buffer
    * that is re-mapped through `renderLocalRun` and written to `runsByExecution`,
    * so the inspector lights up step-by-step (same store, same shape, same
@@ -649,6 +649,10 @@ export function useHarnessState(): HarnessStateHook {
               }
             : prev,
         );
+        // Definition build evidence is authenticated enrichment. Re-list on
+        // both sign-in and sign-out so a post-boot login can enable a ready
+        // agent and a logout cannot leave tenant metadata pinned in memory.
+        void refreshWorkflows();
       }
     });
   }, [refreshWorkflows, startRunPolling]);
@@ -987,6 +991,9 @@ export function useHarnessState(): HarnessStateHook {
             } else if (event.phase === "building") {
               lastNonTerminalPhase = "building";
               setToast("Deploying — building on Sapiom…");
+              // The link is already durable at this point. Pull its mutable
+              // build projection so the chip can say Building, not Deployed.
+              void refreshWorkflows();
             }
           });
           if (terminal.phase === "ready") {
@@ -1012,7 +1019,13 @@ export function useHarnessState(): HarnessStateHook {
             setToast(msg);
             // Persist the failure so the action bar can distinguish "last deploy
             // failed" from "never deployed" after the toast is dismissed.
-            setLastDeployErrorByPath((prev) => new Map(prev).set(workflowPath, msg));
+            setLastDeployErrorByPath((prev) =>
+              new Map(prev).set(workflowPath, msg),
+            );
+            // First-link build failures still persist definitionId. Refresh so
+            // the UI sees the linked definition's failed build projection
+            // instead of continuing to show a local draft.
+            await refreshWorkflows();
           }
         } catch (err) {
           const msg = err instanceof ApiError && err.reason ? err.reason : (err as Error).message;

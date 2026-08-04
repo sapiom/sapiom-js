@@ -3,6 +3,7 @@ import type { JSX } from "react";
 import type { WorkflowInfo } from "@shared/types";
 
 import { generateSnippet } from "../lib/generate-snippet";
+import { isWorkflowRunnable } from "../lib/workflow-deployment";
 
 /** Sapiom dashboard page where a user mints/manages the tenant API key that the
  *  snippet's `YOUR_SAPIOM_API_KEY` placeholder stands in for. Needed to run a
@@ -32,8 +33,8 @@ type SnippetTab = "typescript" | "curl";
 
 /**
  * "Trigger from your code" panel — shown under the canvas subheader whenever
- * the bound workflow is deployed (definitionId != null). Provides copy-paste
- * TypeScript SDK and cURL snippets for the deployed agent.
+ * the bound workflow has a ready cloud build. Provides starter TypeScript SDK
+ * and cURL snippets for the deployed agent.
  *
  * The slug is READ-ONLY: it is the deployed agent's stable handle
  * (`defineAgent({ name })`, cached in sapiom.json) and the executions-API
@@ -41,9 +42,12 @@ type SnippetTab = "typescript" | "curl";
  * snippet call a non-existent agent (404). To rename an agent, change its
  * `defineAgent` name in code and redeploy.
  */
-export function SnippetPanel({ boundWorkflow, agentsBaseUrl }: SnippetPanelProps): JSX.Element | null {
-  // Guard: only render when the workflow is deployed.
-  if (boundWorkflow.definitionId == null) return null;
+export function SnippetPanel({
+  boundWorkflow,
+  agentsBaseUrl,
+}: SnippetPanelProps): JSX.Element | null {
+  // Guard: linkage alone is not enough; only a ready build is callable.
+  if (!isWorkflowRunnable(boundWorkflow)) return null;
 
   return <SnippetPanelInner boundWorkflow={boundWorkflow} agentsBaseUrl={agentsBaseUrl} />;
 }
@@ -134,8 +138,20 @@ function SnippetPanelInner({ boundWorkflow, agentsBaseUrl }: SnippetPanelProps):
         </button>
       </div>
 
-      <p className="snippet-hint">
-        Replace <code>YOUR_SAPIOM_API_KEY</code> with a key from your{" "}
+      <p className="snippet-hint" data-testid="snippet-hint">
+        {activeTab === "typescript" ? (
+          <>
+            Install <code>@sapiom/tools</code>, set <code>SAPIOM_API_KEY</code>,
+            and replace the sample input. The SDK call waits for a terminal run
+            and returns its result.
+          </>
+        ) : (
+          <>
+            Replace <code>YOUR_SAPIOM_API_KEY</code> and the sample input. This
+            request starts a run and returns its execution ID.
+          </>
+        )}{" "}
+        Create or manage the key in your{" "}
         <a
           className="snippet-link"
           data-testid="snippet-api-key-link"
@@ -145,7 +161,7 @@ function SnippetPanelInner({ boundWorkflow, agentsBaseUrl }: SnippetPanelProps):
         >
           Sapiom dashboard
         </a>
-        . Add <code>idempotencyKey</code> to the body to deduplicate retries.
+        .
       </p>
     </div>
   );

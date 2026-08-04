@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { directActionKind } from "./macro-actions";
+import type { MacroDef } from "@shared/types";
+import { directActionKind, macroNeedsReadySession } from "./macro-actions";
 
 describe("directActionKind", () => {
   it("maps the three direct-action macros to their kind", () => {
@@ -31,5 +32,38 @@ describe("directActionKind", () => {
     expect(directActionKind("toString")).toBeNull();
     expect(directActionKind("deploy_v2")).toBeNull();
     expect(directActionKind("run_local_dry")).toBeNull();
+  });
+});
+
+describe("macroNeedsReadySession", () => {
+  function macro(id: string, action: MacroDef["action"]): Pick<MacroDef, "id" | "action"> {
+    return { id, action };
+  }
+
+  it.each(["deploy", "prod_run", "run_local"])(
+    "does not readiness-gate the direct %s action despite its legacy inject shape",
+    (id) => {
+      expect(macroNeedsReadySession(macro(id, { kind: "inject", text: "legacy command" }))).toBe(
+        false,
+      );
+    },
+  );
+
+  it("readiness-gates coding-agent prompt injection", () => {
+    expect(
+      macroNeedsReadySession(macro("debug", { kind: "inject", text: "Debug this agent" })),
+    ).toBe(true);
+    expect(
+      macroNeedsReadySession(macro("explain", { kind: "inject", text: "Explain this step" })),
+    ).toBe(true);
+  });
+
+  it("does not readiness-gate deterministic canvas rendering or links", () => {
+    expect(macroNeedsReadySession(macro("visualize", { kind: "render-canvas" }))).toBe(false);
+    expect(
+      macroNeedsReadySession(
+        macro("open_prod", { kind: "open-url", url: "https://app.sapiom.ai" }),
+      ),
+    ).toBe(false);
   });
 });

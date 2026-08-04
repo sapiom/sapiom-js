@@ -3,9 +3,14 @@ import type { JSX } from "react";
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
+import { macroNeedsReadySession } from "../lib/macro-actions";
 import { macroDisabledReason } from "../lib/macro-gating";
 import { track } from "../lib/track";
 import { SAPIOM_DASHBOARD_ROOT, agentUrl } from "../lib/urls";
+import {
+  prodRunDisabledReason,
+  workflowDeploymentState,
+} from "../lib/workflow-deployment";
 
 interface SessionStepsBarProps {
   workflow: WorkflowInfo;
@@ -21,7 +26,7 @@ interface SessionStepsBarProps {
   /** Whether the user is authenticated (gates auth-requiring actions). */
   authenticated: boolean;
   /** Bumped by the parent on every direct-action settle, so the pending ring
-   *  always clears even when neither `deployed` nor `lastDeployError` flips. */
+   *  always clears even when neither deployment state nor `lastDeployError` flips. */
   directActionSettleSeq: number;
 }
 
@@ -31,14 +36,14 @@ interface SessionStepsBarProps {
  * one-way stages. Order is fixed at every width: Prod globe → Test → Run →
  * Deploy.
  *   Prod (globe) = open the agent in the Sapiom dashboard (deep-link when
- *                  deployed, dashboard root otherwise)
- *   Test         = run_local  (offline stub run; no auth)
- *   Run          = prod_run   (real cloud execution; needs deploy + auth)
+ *                  linked, dashboard root otherwise)
+ *   Test         = run_local  (Sapiom capabilities stubbed; no auth)
+ *   Run          = prod_run   (real cloud execution; needs a ready build + auth)
  *   Deploy       = deploy     (push + cloud build; needs auth)
  *
- * The filled CTA follows state: a Draft fills Deploy, a Deployed agent fills
- * Run; idle verbs stay outlined. The Draft/Deployed lifecycle pill is NOT here
- * — it lives once in the right-pane header, so the bar carries no duplicate.
+ * The filled CTA follows runnable state: a ready build fills Run; otherwise
+ * Deploy is primary. The lifecycle pill lives once in the right-pane header,
+ * so the bar carries no duplicate.
  */
 export function SessionStepsBar({
   workflow,
@@ -52,17 +57,29 @@ export function SessionStepsBar({
   directActionSettleSeq,
 }: SessionStepsBarProps): JSX.Element {
   const macroFor = (id: string): MacroDef | undefined => macros.find((m) => m.id === id);
-  const deployed = workflow.definitionId != null;
-  // A deployed agent deep-links to its definition; a draft (or signed-out)
+  const deploymentState = workflowDeploymentState(workflow, lastDeployError);
+  const runnable = deploymentState === "ready";
+  // A linked agent deep-links to its definition; a draft (or signed-out)
   // agent has no definition yet, so the globe falls back to the dashboard root
   // — always a real destination, never a dead click.
   const dashboardUrl =
     workflow.definitionId != null ? agentUrl(workflow.definitionId) : SAPIOM_DASHBOARD_ROOT;
 
+  // Launched-but-not-durable feedback: a clicked action shows a dotted
+  // "in flight" ring until a durable signal lands. The ring clears on ANY
+  // terminal outcome — success OR failure — by including all relevant settled
+  // state in the useEffect deps:
+  //   - workflow.path: re-binding a session clears the pending id.
+  //   - deploymentState: the cloud build advances or fails.
+  //   - lastDeployError: a failed deploy sets this; ring must not persist.
+  //   - directActionSettleSeq: bumped by the parent on EVERY direct-action
+  //     settle (success or failure), covering the cases where deployed and
+  //     lastDeployError don't change (e.g. re-deploy of an already-deployed
+  //     workflow, or a prod/local run completing without a re-bind).
   const [pendingId, setPendingId] = useState<string | null>(null);
   useEffect(() => {
     setPendingId(null);
-  }, [workflow.path, deployed, lastDeployError, directActionSettleSeq]);
+  }, [workflow.path, deploymentState, lastDeployError, directActionSettleSeq]);
 
   const actions: {
     id: string;
@@ -81,7 +98,7 @@ export function SessionStepsBar({
       icon: "FlaskConical",
       macro: macroFor("run_local"),
       testId: "session-step-local",
-      hint: "Test: run locally with every capability stubbed — no real calls.",
+      hint: "Test locally with Sapiom capability calls stubbed — no real Sapiom capability calls.",
     },
     {
       id: "run",
@@ -92,8 +109,8 @@ export function SessionStepsBar({
       hint: "Run: start a real cloud execution on Sapiom.",
       needsDeploy: true,
       needsAuth: true,
-      // Deployed → Run is the primary CTA (the agent is live; running it is the act).
-      primary: deployed,
+      // Ready build → Run is primary (the agent is live; running it is the act).
+      primary: runnable,
     },
     {
       id: "deploy",
@@ -103,8 +120,8 @@ export function SessionStepsBar({
       testId: "session-step-deploy",
       hint: "Deploy: push and build on Sapiom.",
       needsAuth: true,
-      // Draft → Deploy is the primary CTA (shipping it is the next act).
-      primary: !deployed,
+      // Until a ready build exists, Deploy is the next act.
+      primary: !runnable,
     },
   ].filter((action) => action.macro);
 
@@ -136,8 +153,8 @@ export function SessionStepsBar({
         rel="noreferrer"
         aria-label="Open this agent in the Sapiom dashboard"
         data-tooltip={
-          deployed
-            ? "Open this deployed agent in the Sapiom dashboard"
+          workflow.definitionId != null
+            ? "Open this linked agent in the Sapiom dashboard"
             : "Open the Sapiom dashboard"
         }
       >
@@ -145,15 +162,18 @@ export function SessionStepsBar({
       </a>
 
       {actions.map((action) => {
-        const authReason = action.needsAuth && !authenticated ? "Connect your account first" : null;
-        const funnelReason =
-          action.needsDeploy && !deployed
-            ? lastDeployError != null
-              ? "Last deploy failed — retry Deploy"
-              : "Not deployed yet"
-            : null;
+        // Auth gate: actions requiring authentication are disabled when not
+        // signed in. Test remains available because its Sapiom calls are stubbed.
+        const authReason =
+          action.needsAuth && !authenticated ? "Connect your account first" : null;
+        // A definition id is only a link. Prod Run requires a ready cloud build.
+        const funnelReason = action.needsDeploy
+          ? prodRunDisabledReason(workflow, lastDeployError)
+          : null;
+        // Direct actions bypass the pty; only actual prompt injection waits for
+        // the coding-agent session to become ready.
         const readyReason =
-          !sessionReady && action.macro && action.macro.action.kind !== "open-url"
+          !sessionReady && action.macro && macroNeedsReadySession(action.macro)
             ? "Session is starting"
             : null;
         const disabledReason =

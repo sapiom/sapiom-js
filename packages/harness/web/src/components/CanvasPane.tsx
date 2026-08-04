@@ -680,6 +680,7 @@ export function CanvasPane({
       ? latestFinished
       : null;
   const retryMacro = failedTask ? (macros.find((macro) => macro.id === failedTask.macroId) ?? null) : null;
+  const visualizeMacro = macros.find((macro) => macro.id === "visualize") ?? null;
 
   // Content is on screen and loadable — the only state where panel-level
   // view actions (expand) make sense.
@@ -956,9 +957,13 @@ export function CanvasPane({
                   className="btn-ghost"
                   data-testid="canvas-error-retry"
                   onClick={() => {
-                    skeletonHoldUntilRef.current = Date.now() + 900;
-                    setFrameLoading(true);
-                    setReloadKey((key) => key + 1);
+                    if (visualizeMacro) {
+                      onRunMacro(visualizeMacro);
+                    } else {
+                      skeletonHoldUntilRef.current = Date.now() + 900;
+                      setFrameLoading(true);
+                      setReloadKey((key) => key + 1);
+                    }
                   }}
                 >
                   Retry

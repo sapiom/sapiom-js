@@ -78,6 +78,12 @@ describe("generateSnippet - cURL", () => {
     );
   });
 
+  it("URL-encodes a definition handle before placing it in the path", () => {
+    expect(
+      generateSnippet({ definition: "agent name/variant" }).curl,
+    ).toContain("/agents/v1/definitions/agent%20name%2Fvariant/executions");
+  });
+
   it("POSIX-escapes an apostrophe in a string value so the -d '...' body stays valid shell", () => {
     const { curl } = generateSnippet({ definition: "x", inputSample: { name: "O'Brien" } });
     // Each ' becomes '\'' (close, escaped-quote, reopen) - the exact

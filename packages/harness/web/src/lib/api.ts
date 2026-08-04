@@ -33,11 +33,12 @@ import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 import { MOCK_FS_TREE, MOCK_HARNESSES, MOCK_HISTORY, MOCK_LAUNCH_DIR, MOCK_MACROS, MOCK_SESSION_RECORDS, MOCK_SESSIONS, MOCK_SETTINGS, MOCK_TEMPLATE_GRAPHS, MOCK_TEMPLATES, MOCK_WORKFLOWS } from "./mock-data";
 
 /**
- * Body for `POST /api/runs/local` — run the agent project at `sourceDir`
- * entirely offline against stub capabilities. `sourceDir` is the only required
- * field; the rest are forwarded to the run-local bootstrap as-is. Needs no API
- * key and makes no network call (zero cost) — mirrors the server's
- * `RunLocalRequest` without importing a server module into the browser bundle.
+ * Body for `POST /api/runs/local` — run the agent project at `sourceDir` with
+ * Sapiom capability calls served by stubs. `sourceDir` is the only required
+ * field; the rest are forwarded to the run-local bootstrap as-is. The runner
+ * needs no API key and makes no Sapiom capability request; arbitrary user step
+ * code still executes locally and may use the machine's network. Mirrors the
+ * server's `RunLocalRequest` without importing it into the browser bundle.
  */
 export interface RunLocalArgs {
   /** Absolute path to the agent project directory (contains `index.ts`). */
@@ -1183,7 +1184,24 @@ class MockApi implements HarnessApi {
       onEvent?.(linking);
       await delay(200);
     }
-    const building: DeployStreamEvent = { phase: "building", definitionId: "mock-def" };
+    // A first link persists before its first build finishes. Model that exact
+    // boundary so failure tests cannot accidentally treat definitionId as a
+    // ready deployment.
+    this.workflows = this.workflows.map((w) =>
+      w.path === workflowPath
+        ? {
+            ...w,
+            definitionId: w.definitionId ?? 4242,
+            definitionSlug: w.definitionSlug ?? "mock-agent",
+            activeBuildRunId: "mock-build-1",
+            activeBuildRunStatus: "building",
+          }
+        : w,
+    );
+    const building: DeployStreamEvent = {
+      phase: "building",
+      definitionId: "mock-def",
+    };
     onEvent?.(building);
     await delay(400);
     // Test-only failure mode: `?mockError=deploy` makes the stream end with a
@@ -1191,6 +1209,9 @@ class MockApi implements HarnessApi {
     // affordance (lastDeployError persists, chip reads "Deploy failed",
     // prod-run disabled-reason reads "Last deploy failed — retry Deploy").
     if (mockErrorTargets().has("deploy")) {
+      this.workflows = this.workflows.map((w) =>
+        w.path === workflowPath ? { ...w, activeBuildRunStatus: "failed" } : w,
+      );
       const failed: DeployStreamEvent = {
         phase: "error",
         code: "BUILD_FAILED",
@@ -1207,12 +1228,14 @@ class MockApi implements HarnessApi {
       status: "succeeded",
     };
     onEvent?.(ready);
-    // Mirror the real server: a successful deploy links the workflow, so its
-    // definitionId flips. Reflect that in the fixture so the Draft→Deployed
-    // chip and the deploy-gated actions light up after a mock deploy.
+    // Mirror the definition-detail projection after a successful cloud build.
     this.workflows = this.workflows.map((w) =>
-      w.path === workflowPath && w.definitionId == null
-        ? { ...w, definitionId: 4242, definitionSlug: w.definitionSlug ?? "mock-agent" }
+      w.path === workflowPath
+        ? {
+            ...w,
+            activeBuildRunId: "mock-build-1",
+            activeBuildRunStatus: "ready",
+          }
         : w,
     );
     return ready;

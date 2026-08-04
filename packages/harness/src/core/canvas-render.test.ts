@@ -79,6 +79,29 @@ describe("renderCanvasForSession", () => {
     expect(graph.edges.length).toBeGreaterThan(0);
   });
 
+  it("labels a definition link separately from a ready deployment", async () => {
+    const linkedCwd = await tmpCwd();
+    await renderCanvasForSession(
+      { cwd: linkedCwd, boundWorkflowPath: ORDER_TRIAGE },
+      [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: 42 }],
+    );
+    expect(await readRender(linkedCwd, ORDER_TRIAGE)).toContain(">linked<");
+
+    const readyCwd = await tmpCwd();
+    await renderCanvasForSession(
+      { cwd: readyCwd, boundWorkflowPath: ORDER_TRIAGE },
+      [
+        {
+          path: ORDER_TRIAGE,
+          name: "order-triage",
+          definitionId: 42,
+          activeBuildRunStatus: "ready",
+        },
+      ],
+    );
+    expect(await readRender(readyCwd, ORDER_TRIAGE)).toContain(">deployed<");
+  });
+
   it("serves the second render of an unchanged workflow from the extraction cache", async () => {
     const cwd = await tmpCwd();
     const workflows: RenderableWorkflow[] = [{ path: ORDER_TRIAGE, name: "order-triage", definitionId: null }];
@@ -122,7 +145,9 @@ describe("renderCanvasForSession", () => {
     expect(html).toContain("broken-flow");
     expect(html).toContain("render failed");
     expect(html).toContain("Could not extract this agent's step graph");
-    expect(html).toContain("Ask your coding agent to fix the issue");
+    expect(html).toContain('id="sapiom-render-error"');
+    expect(html).toContain('"title":"broken-flow"');
+    expect(html).toContain("sapiom-canvas:error");
     expect(html).not.toContain('class="canvas-node '); // no diagram — just the note
   });
 
@@ -209,8 +234,8 @@ describe("deterministic enrichment merged into renders", () => {
     expect(outcome.enrichmentApplied).toBe(true);
 
     const html = await readRender(cwd, ORDER_TRIAGE);
-    // order-triage: 5 steps, one branch point (route), two success terminals.
-    expect(html).toContain("5 steps · 1 branch point · 2 success outcomes");
+    // order-triage: 3 pipeline steps, one branch point, two success terminals.
+    expect(html).toContain("3 steps · 1 branch point · 2 success outcomes");
     expect(html).not.toContain("stale — Refresh");
     // Never writes an enrichment cache dir — the annotation is recomputed each render.
     await expect(fs.access(path.join(cwd, CANVAS_DIR, "cache"))).rejects.toThrow();

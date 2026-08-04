@@ -78,6 +78,18 @@ export function applyRunStateToCanvas(
 ): void {
   const stateClasses = ["is-running", "is-passed", "is-failed", "is-pending"];
 
+  // A message describes one complete run snapshot, not a delta. Clear every
+  // node first so switching runs (or rebinding to a run with fewer steps)
+  // cannot leave pass/fail/latency evidence from the previous run behind.
+  const allNodes = doc.querySelectorAll(".canvas-node");
+  for (let i = 0; i < allNodes.length; i++) {
+    const node = allNodes[i];
+    for (let j = 0; j < stateClasses.length; j++) {
+      node.classList.remove(stateClasses[j]);
+    }
+    node.removeAttribute("data-latency");
+  }
+
   for (let i = 0; i < msg.steps.length; i++) {
     const step = msg.steps[i];
     // Match by step name (the node's data-step-name), falling back to the
@@ -94,9 +106,6 @@ export function applyRunStateToCanvas(
       node = null;
     }
     if (!node) continue;
-    for (let j = 0; j < stateClasses.length; j++) {
-      node.classList.remove(stateClasses[j]);
-    }
     node.classList.add(runStateNodeClass(step.status));
     if (step.latencyMs != null) {
       node.setAttribute("data-latency", String(step.latencyMs));
@@ -328,6 +337,37 @@ export function bootCanvasOverview(): void {
       );
     } catch {
       /* malformed payload — leave the overview empty rather than throw */
+    }
+  }
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", post);
+  } else {
+    post();
+  }
+}
+
+/**
+ * Posts deterministic extraction failures to the parent workbench. The error
+ * panel embeds `{ title, reason }` in `#sapiom-render-error`; without this
+ * bridge the app's actionable error overlay can never appear and the iframe
+ * is left showing only static prose.
+ */
+export function bootCanvasError(): void {
+  function post(): void {
+    const el = document.getElementById("sapiom-render-error");
+    if (!el) return;
+    try {
+      const data = JSON.parse(el.textContent || "{}");
+      window.parent.postMessage(
+        {
+          type: "sapiom-canvas:error",
+          title: typeof data.title === "string" ? data.title : "",
+          reason: typeof data.reason === "string" ? data.reason : "",
+        },
+        "*",
+      );
+    } catch {
+      /* malformed payload — keep the in-document error panel visible */
     }
   }
   if (document.readyState === "loading") {

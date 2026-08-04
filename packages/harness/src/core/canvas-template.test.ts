@@ -160,6 +160,13 @@ describe("renderCanvasDocument", () => {
     expect(html).toContain("sapiom-canvas:graph");
     expect(html).toContain('getElementById("sapiom-graph")');
   });
+
+  it("bridges a deterministic render failure to the workbench error overlay", () => {
+    const html = renderCanvasDocument("");
+    expect(html).toContain("sapiom-canvas:error");
+    expect(html).toContain('getElementById("sapiom-render-error")');
+    expect(html).toContain("bootCanvasError()");
+  });
 });
 
 describe("TEMPLATE_HTML", () => {

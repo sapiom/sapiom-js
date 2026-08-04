@@ -45,6 +45,7 @@ export interface RenderableWorkflow {
   path: string;
   name: string;
   definitionId: number | null;
+  activeBuildRunStatus?: string | null;
 }
 
 /**
@@ -103,7 +104,22 @@ export interface RenderCanvasOptions {
 }
 
 function badgesFor(workflow: RenderableWorkflow): string[] {
-  return [workflow.definitionId != null ? "deployed" : "local only"];
+  if (workflow.activeBuildRunStatus === "ready") return ["deployed"];
+  if (
+    ["pending", "queued", "building"].includes(
+      workflow.activeBuildRunStatus ?? "",
+    )
+  ) {
+    return ["building"];
+  }
+  if (
+    ["failed", "cancelled", "superseded", "stale"].includes(
+      workflow.activeBuildRunStatus ?? "",
+    )
+  ) {
+    return ["deploy failed"];
+  }
+  return [workflow.definitionId != null ? "linked" : "local only"];
 }
 
 function buildSingleBody(

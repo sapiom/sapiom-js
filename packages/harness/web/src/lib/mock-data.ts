@@ -841,11 +841,35 @@ export const MOCK_SESSION_RECORDS: Record<string, SessionRecord> = {
 };
 
 export const MOCK_WORKFLOWS: WorkflowInfo[] = [
-  { name: "leasing", path: "/Users/demo/acme-app/leasing", definitionId: 4821, definitionSlug: "leasing", source: "scan" },
-  { name: "rfq", path: "/Users/demo/rfq-agent", definitionId: null, definitionSlug: null, source: "scan" },
+  {
+    name: "leasing",
+    path: "/Users/demo/acme-app/leasing",
+    definitionId: 4821,
+    definitionSlug: "leasing",
+    activeBuildRunId: "build-leasing-ready",
+    activeBuildRunStatus: "ready",
+    source: "scan",
+  },
+  {
+    name: "rfq",
+    path: "/Users/demo/rfq-agent",
+    definitionId: null,
+    definitionSlug: null,
+    activeBuildRunId: null,
+    activeBuildRunStatus: null,
+    source: "scan",
+  },
   // Deployed like "leasing" but with a much longer name — exercises the
   // canvas header's deployed-dot staying pinned regardless of name length.
-  { name: "onboarding-flow", path: "/Users/demo/onboarding-flow", definitionId: 9001, definitionSlug: "onboarding-flow", source: "connect" },
+  {
+    name: "onboarding-flow",
+    path: "/Users/demo/onboarding-flow",
+    definitionId: 9001,
+    definitionSlug: "onboarding-flow",
+    activeBuildRunId: "build-onboarding-ready",
+    activeBuildRunStatus: "ready",
+    source: "connect",
+  },
 ];
 
 export const MOCK_MACROS: MacroDef[] = [
@@ -871,9 +895,9 @@ export const MOCK_MACROS: MacroDef[] = [
     requiresWorkflow: true,
   },
   {
-    // One-click force refresh: deterministic re-render + AI enrichment task
-    // re-spawn, all server-side — no LLM in the render itself, no pty
-    // involved. Matches the real DEFAULT_MACROS contract (src/core/macros.ts).
+    // One-click force refresh: deterministic extraction + derived annotations,
+    // all server-side — no LLM and no pty involved. Matches the real
+    // DEFAULT_MACROS contract (src/core/macros.ts).
     id: "visualize",
     label: "Visualize",
     icon: "Sparkles",

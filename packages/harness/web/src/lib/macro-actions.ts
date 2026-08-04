@@ -8,7 +8,7 @@
  *
  *   - `deploy`    → POST /api/workflows/:id/deploy  (build-status NDJSON stream)
  *   - `prod_run`  → POST /api/runs                  ({ executionId } → inspector)
- *   - `run_local` → POST /api/runs/local            (offline stub-run NDJSON)
+ *   - `run_local` → POST /api/runs/local            (local stub-run NDJSON)
  *
  * Every other macro is untouched: `visualize` (render-canvas), and any inject
  * macro — including the Debug / Explain / free-form prompt-inserts surfaced
@@ -21,6 +21,7 @@
  * call site stays a thin `switch`, and the mapping is unit-testable without a
  * DOM. It is pure: no React, no I/O.
  */
+import type { MacroDef } from "@shared/types";
 
 /** The direct server-backed action a macro maps to, or `null` for a macro that
  *  keeps its existing (inject / open-url / render-canvas) behaviour. */
@@ -49,4 +50,18 @@ export function directActionKind(macroId: string): DirectActionKind | null {
   return Object.prototype.hasOwnProperty.call(DIRECT_ACTION_BY_MACRO_ID, macroId)
     ? DIRECT_ACTION_BY_MACRO_ID[macroId]
     : null;
+}
+
+/**
+ * Whether invoking a macro must type into a ready coding-agent session.
+ *
+ * The registry still describes Deploy, Prod Run, and Local Run as legacy
+ * `inject` macros for backwards-compatible configuration, but App.tsx routes
+ * those exact ids to direct server methods before `runMacro` can touch the
+ * terminal. Classify the effective route, not just the serialized action
+ * shape, so a Claude trust/auth prompt cannot disable work that bypasses
+ * Claude. Render-canvas and open-url actions also avoid terminal input.
+ */
+export function macroNeedsReadySession(macro: Pick<MacroDef, "id" | "action">): boolean {
+  return directActionKind(macro.id) === null && macro.action.kind === "inject";
 }

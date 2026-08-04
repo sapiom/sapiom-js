@@ -33,7 +33,7 @@ describe("deriveSummary", () => {
         { from: "decide", to: "warn", kind: "branching" },
       ],
     });
-    expect(deriveSummary(g)).toBe("4 steps · 1 branch point · 1 success / 1 escalation outcomes");
+    expect(deriveSummary(g)).toBe("2 steps · 1 branch point · 1 success / 1 escalation outcomes");
   });
 
   it("omits the outcomes clause when there are no terminals", () => {
@@ -49,7 +49,7 @@ describe("deriveSummary", () => {
 
   it("reads counts in the singular", () => {
     const g = graph({ nodes: [{ id: "only", kind: "terminal-success", label: "only" }] });
-    expect(deriveSummary(g)).toBe("1 step · 1 success outcome");
+    expect(deriveSummary(g)).toBe("0 steps · 1 success outcome");
   });
 
   it("excludes dashed launched-workflow placeholders from the step count", () => {
@@ -106,7 +106,7 @@ describe("deriveEnrichment", () => {
       ],
       edges: [{ from: "a", to: "b", kind: "sequential" }],
     });
-    expect(deriveEnrichment(g)).toEqual({ summary: "2 steps · 1 success outcome" });
+    expect(deriveEnrichment(g)).toEqual({ summary: "1 step · 1 success outcome" });
   });
 
   it("includes notes and crossWorkflow when the graph warrants them", () => {
@@ -123,7 +123,7 @@ describe("deriveEnrichment", () => {
       warnings: ["one warning"],
     });
     expect(deriveEnrichment(g)).toEqual({
-      summary: "2 steps · 1 success outcome",
+      summary: "1 step · 1 success outcome",
       notes: ["one warning"],
       crossWorkflow: "Launches spoke.",
     });
@@ -147,7 +147,7 @@ describe("deriveEnrichment over a real extracted graph (order-triage)", () => {
     if (!result.ok) throw new Error("expected extraction to succeed");
     const enrichment = deriveEnrichment(result.graph);
     // Summary is fully deterministic from the graph shape.
-    expect(enrichment.summary).toBe("5 steps · 1 branch point · 2 success outcomes");
+    expect(enrichment.summary).toBe("3 steps · 1 branch point · 2 success outcomes");
     // This fixture ships no entry `inputSchema` on purpose (a monorepo zod-duplication
     // hazard — see its index.ts header), so `check()` emits the SAP-2227 entry-contract
     // warning, which the canvas surfaces as a note. Assert by substring: the note is

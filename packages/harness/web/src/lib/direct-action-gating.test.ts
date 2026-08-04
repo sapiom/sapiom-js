@@ -13,6 +13,11 @@ import { describe, expect, it } from "vitest";
 
 import type { MacroDef, WorkflowInfo } from "@shared/types";
 import { macroDisabledReason } from "./macro-gating";
+import {
+  isWorkflowRunnable,
+  prodRunDisabledReason,
+  workflowDeploymentState,
+} from "./workflow-deployment";
 
 // ---------------------------------------------------------------------------
 // Helpers — mirror the pure gating rules from SessionStepsBar without
@@ -24,8 +29,7 @@ type GatingInput = {
   needsDeploy: boolean;
   /** Simulated per-action needsAuth flag. */
   needsAuth: boolean;
-  /** Whether the current workflow has been deployed. */
-  deployed: boolean;
+  workflow: WorkflowInfo;
   /** Whether a previous deploy failed. */
   lastDeployError: string | null;
   /** Whether the user is authenticated. */
@@ -46,10 +50,8 @@ function computeDisabledReason(input: GatingInput): string | null {
     return "Connect your account first";
   }
   // Fix 3: deploy gate — distinguish failed-deploy from virgin.
-  if (input.needsDeploy && !input.deployed) {
-    return input.lastDeployError != null
-      ? "Last deploy failed — retry Deploy"
-      : "Not deployed yet";
+  if (input.needsDeploy) {
+    return prodRunDisabledReason(input.workflow, input.lastDeployError);
   }
   return null;
 }
@@ -59,11 +61,18 @@ function computeDisabledReason(input: GatingInput): string | null {
 // ---------------------------------------------------------------------------
 
 describe("Fix 5 — auth precondition disables auth-requiring actions", () => {
+  const draft = makeWorkflow();
+  const ready = makeWorkflow({
+    definitionId: 42,
+    activeBuildRunId: "build-1",
+    activeBuildRunStatus: "ready",
+  });
+
   it("Deploy is disabled with 'Connect your account first' when not authenticated", () => {
     const reason = computeDisabledReason({
       needsDeploy: false,
       needsAuth: true,
-      deployed: false,
+      workflow: draft,
       lastDeployError: null,
       authenticated: false,
     });
@@ -74,7 +83,7 @@ describe("Fix 5 — auth precondition disables auth-requiring actions", () => {
     const reason = computeDisabledReason({
       needsDeploy: true,
       needsAuth: true,
-      deployed: true,
+      workflow: ready,
       lastDeployError: null,
       authenticated: false,
     });
@@ -86,7 +95,7 @@ describe("Fix 5 — auth precondition disables auth-requiring actions", () => {
     const reason = computeDisabledReason({
       needsDeploy: true,
       needsAuth: true,
-      deployed: false,
+      workflow: draft,
       lastDeployError: null,
       authenticated: false,
     });
@@ -97,7 +106,7 @@ describe("Fix 5 — auth precondition disables auth-requiring actions", () => {
     const reason = computeDisabledReason({
       needsDeploy: false,
       needsAuth: false,
-      deployed: false,
+      workflow: draft,
       lastDeployError: null,
       authenticated: false,
     });
@@ -110,7 +119,7 @@ describe("Fix 5 — auth precondition disables auth-requiring actions", () => {
       computeDisabledReason({
         needsDeploy: false,
         needsAuth: true,
-        deployed: false,
+        workflow: draft,
         lastDeployError: null,
         authenticated: true,
       }),
@@ -121,7 +130,7 @@ describe("Fix 5 — auth precondition disables auth-requiring actions", () => {
       computeDisabledReason({
         needsDeploy: true,
         needsAuth: true,
-        deployed: true,
+        workflow: ready,
         lastDeployError: null,
         authenticated: true,
       }),
@@ -137,7 +146,7 @@ describe("Fix 3 — Prod Run disabled-reason distinguishes deploy-failed from ne
   const base: GatingInput = {
     needsDeploy: true,
     needsAuth: true,
-    deployed: false,
+    workflow: makeWorkflow(),
     lastDeployError: null,
     authenticated: true,
   };
@@ -155,13 +164,14 @@ describe("Fix 3 — Prod Run disabled-reason distinguishes deploy-failed from ne
     expect(reason).toBe("Last deploy failed — retry Deploy");
   });
 
-  it("is not disabled when deployed (definitionId set) — regardless of lastDeployError", () => {
-    // A later successful deploy clears lastDeployError + sets deployed=true,
-    // so this state is theoretically unreachable, but the gating rule must
-    // not double-disable a correctly deployed workflow.
+  it("is not disabled when a ready build exists — regardless of a stale local error", () => {
     const reason = computeDisabledReason({
       ...base,
-      deployed: true,
+      workflow: makeWorkflow({
+        definitionId: 42,
+        activeBuildRunId: "build-1",
+        activeBuildRunStatus: "ready",
+      }),
       lastDeployError: "stale error (should have been cleared)",
     });
     expect(reason).toBeNull();
@@ -171,7 +181,7 @@ describe("Fix 3 — Prod Run disabled-reason distinguishes deploy-failed from ne
     const reason = computeDisabledReason({
       needsDeploy: false,
       needsAuth: false,
-      deployed: false,
+      workflow: makeWorkflow(),
       lastDeployError: "some error",
       authenticated: true,
     });
@@ -197,10 +207,17 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
       return workflow ? null : "Select an agent first.";
     }
     if (kind === "prod-run") {
-      if (workflow?.definitionId != null) return null; // proceed
-      return lastDeployError
+      if (isWorkflowRunnable(workflow)) return null;
+      const state = workflow
+        ? workflowDeploymentState(workflow, lastDeployError)
+        : "draft";
+      return state === "failed"
         ? "Last deploy failed — retry Deploy."
-        : "This agent isn't deployed yet — deploy it first.";
+        : state === "building"
+          ? "The cloud build is still in progress."
+          : state === "linked"
+            ? "No ready deployment yet — deploy it first."
+            : "This agent isn't deployed yet — deploy it first.";
     }
     if (kind === "run-local") {
       return workflow ? null : "Select an agent first.";
@@ -240,9 +257,20 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
     );
   });
 
-  it("prod-run with a definitionId proceeds (no toast)", () => {
-    const wf = { path: "/p", name: "p", definitionId: 42, definitionSlug: null, source: "connect" } as WorkflowInfo;
+  it("prod-run with a ready build proceeds (no toast)", () => {
+    const wf = makeWorkflow({
+      definitionId: 42,
+      activeBuildRunId: "build-1",
+      activeBuildRunStatus: "ready",
+    });
     expect(directActionToastReason("prod-run", wf, null)).toBeNull();
+  });
+
+  it("prod-run with only a definitionId is blocked as linked, not deployed", () => {
+    const wf = makeWorkflow({ definitionId: 42 });
+    expect(directActionToastReason("prod-run", wf, null)).toBe(
+      "No ready deployment yet — deploy it first.",
+    );
   });
 
   it("prod-run with no workflow at all toasts 'not deployed' (null workflow has no definitionId)", () => {
@@ -256,6 +284,17 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
 // macroDisabledReason — regression guard for existing gating (unchanged)
 // ---------------------------------------------------------------------------
 
+function makeWorkflow(overrides: Partial<WorkflowInfo> = {}): WorkflowInfo {
+  return {
+    path: "/Users/demo/test",
+    name: "test",
+    definitionId: null,
+    definitionSlug: null,
+    source: "connect",
+    ...overrides,
+  };
+}
+
 describe("macroDisabledReason — existing gating not regressed", () => {
   /** Minimal MacroDef factory. */
   function makeMacro(overrides: Partial<MacroDef>): MacroDef {
@@ -267,18 +306,6 @@ describe("macroDisabledReason — existing gating not regressed", () => {
       action: { kind: "inject", text: "test" },
       ...overrides,
     } as MacroDef;
-  }
-
-  /** Minimal WorkflowInfo factory. */
-  function makeWorkflow(overrides: Partial<WorkflowInfo> = {}): WorkflowInfo {
-    return {
-      path: "/Users/demo/test",
-      name: "test",
-      definitionId: null,
-      definitionSlug: null,
-      source: "connect",
-      ...overrides,
-    } as WorkflowInfo;
   }
 
   it("returns null when all conditions met", () => {

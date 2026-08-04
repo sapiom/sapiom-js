@@ -103,6 +103,30 @@ test("a generic render failure names the agent graph", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Ask coding agent to fix" })).toBeVisible();
 });
 
+test("Retry runs a fresh deterministic render instead of reloading the failed document", async ({
+  page,
+}) => {
+  await postFromCanvas(page, {
+    type: "sapiom-canvas:error",
+    title: "leasing",
+    reason: "TypeScript extraction failed",
+  });
+
+  await page.getByTestId("canvas-error-retry").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __HARNESS_TEST__?: { lastMacroRun?: { id: string } };
+            }
+          ).__HARNESS_TEST__?.lastMacroRun?.id ?? null,
+      ),
+    )
+    .toBe("visualize");
+});
+
 test("a launched-agent node keeps its private identifiers and navigates to the agent", async ({ page }) => {
   await postFromCanvas(page, {
     type: "sapiom-canvas:graph",

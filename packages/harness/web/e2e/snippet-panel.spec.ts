@@ -93,6 +93,11 @@ test.describe("snippet content", () => {
     expect(text).not.toContain("/triggers");
     expect(text).not.toContain("Bearer");
     expect(text).not.toMatch(/sk_[A-Za-z0-9]/);
+    const hint = page.getByTestId("snippet-hint");
+    await expect(hint).toContainText("Install @sapiom/tools");
+    await expect(hint).toContainText("SAPIOM_API_KEY");
+    await expect(hint).toContainText("waits for a terminal run");
+    await expect(hint).not.toContainText("YOUR_SAPIOM_API_KEY");
   });
 
   test("the cURL tab shows the same endpoint with the placeholder key, never a real one", async ({ page }) => {
@@ -109,6 +114,10 @@ test.describe("snippet content", () => {
     expect(text).not.toContain("/triggers");
     expect(text).not.toContain("Bearer");
     expect(text).not.toMatch(/sk_[A-Za-z0-9]/);
+    const hint = page.getByTestId("snippet-hint");
+    await expect(hint).toContainText("YOUR_SAPIOM_API_KEY");
+    await expect(hint).toContainText("starts a run");
+    await expect(hint).toContainText("execution ID");
   });
 
   test("links to the dashboard's API keys page for the real credential", async ({ page }) => {

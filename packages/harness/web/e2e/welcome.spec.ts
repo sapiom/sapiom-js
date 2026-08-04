@@ -50,7 +50,9 @@ test.describe("first run", () => {
 
     // "Welcome to" is the one thing that marks a first run.
     await expect(panel).toContainText("Welcome to Agent Studio");
-    await expect(panel).toContainText("Local agent runs are free and offline");
+    await expect(panel).toContainText(
+      "Local runs need no sign-in and stub Sapiom capability calls",
+    );
 
     // Each way in is a row that says what picking it does, not a bare button.
     const folder = page.getByTestId("welcome-open-card");

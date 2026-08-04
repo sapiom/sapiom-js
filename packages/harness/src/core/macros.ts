@@ -1,9 +1,11 @@
 /**
  * Default action-rail macros. Pure data — no execution wiring. The server
- * resolves `{{...}}` placeholders (see MacroDef in shared/types.ts) and
- * either injects the text into the session pty or opens the URL. Matches the
- * SPA's MOCK_MACROS fixture (web/src/lib/mock-data.ts) so mock and real mode
- * present the same action rail.
+ * resolves `{{...}}` placeholders (see MacroDef in shared/types.ts) for the
+ * generic macro path. The SPA classifies run_local / deploy / prod_run by id
+ * and sends them to direct server routes before these legacy inject payloads
+ * can touch the pty (web/src/lib/macro-actions.ts). Other actions render the
+ * canvas, inject text, or open a URL. Matches the SPA's MOCK_MACROS fixture
+ * (web/src/lib/mock-data.ts) so mock and real mode present the same action rail.
  */
 import type { MacroDef } from "../shared/types.js";
 

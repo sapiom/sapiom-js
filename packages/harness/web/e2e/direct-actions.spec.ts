@@ -50,6 +50,7 @@ type HarnessTestWindow = {
     directActions?: Array<{ action: string; req: Record<string, unknown> }>;
     lastMacroRun?: { id: string; req: { harnessSessionId?: string; workflowPath?: string; subject?: string } };
     lastInjectInput?: { id: string; req: { text: string; submit: boolean } };
+    publish?: (message: unknown) => void;
   };
 };
 
@@ -101,6 +102,45 @@ test.beforeEach(async ({ page }) => {
   // The boot session is bound to leasing and running — the action bar is live.
   await expect(page.getByTestId("session-steps")).toBeVisible();
   await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+});
+
+test("direct actions remain available while Claude is starting and still bypass the pty", async ({
+  page,
+}) => {
+  // Reproduce the real trust/auth-prompt window: the terminal process is live,
+  // but Studio has not marked it ready for programmatic input. Direct actions
+  // do not type into that terminal, so this state must not gate them.
+  await page.evaluate(() => {
+    const hook = (window as unknown as HarnessTestWindow).__HARNESS_TEST__;
+    hook?.publish?.({
+      type: "session.status",
+      session: {
+        id: "sess-boot",
+        agentSessionId: null,
+        boundWorkflowPath: "/Users/demo/acme-app/leasing",
+        harness: "claude-code",
+        cwd: "/Users/demo/acme-app",
+        title: "acme-app",
+        status: "running",
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        ready: false,
+      },
+    });
+  });
+
+  const localBtn = page.getByTestId("session-step-local");
+  const runBtn = page.getByTestId("session-step-run");
+  const deployBtn = page.getByTestId("session-step-deploy");
+  await expect(localBtn).toBeEnabled();
+  await expect(runBtn).toBeEnabled();
+  await expect(deployBtn).toBeEnabled();
+
+  const injectBefore = await captureInjectInputBefore(page);
+  await localBtn.click();
+  const direct = await waitForDirectAction(page);
+  expect(direct.action).toBe("runLocal");
+  await assertNoPtyWrite(page, injectBefore);
 });
 
 // ---------------------------------------------------------------------------
@@ -310,7 +350,7 @@ test.describe("Run-local button — offline stub run, per-step inspector render,
     await assertNoPtyWrite(page, injectBefore);
   });
 
-  test("Run-local works offline (no network dependency): the Steps tab shows per-step latency-free stub results", async ({
+  test("Run-local needs no Sapiom connection: the Steps tab shows per-step stub results", async ({
     page,
   }) => {
     // Load the graph first so the full steps list renders (not the fallback).

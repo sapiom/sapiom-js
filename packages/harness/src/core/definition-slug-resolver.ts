@@ -50,8 +50,17 @@ export function resolveCoreBaseUrl(): string {
   return "https://api.sapiom.ai";
 }
 
+export interface DefinitionMetadata {
+  slug: string | null;
+  activeBuildRunId: string | null;
+  activeBuildRunStatus: string | null;
+}
+
 export interface DefinitionSlugResolver {
   resolve(definitionId: string): Promise<string | null>;
+  /** Fetch mutable definition metadata. Unlike the stable slug lookup, build
+   *  state is deliberately not cached so a completed build becomes visible. */
+  resolveMetadata(definitionId: string): Promise<DefinitionMetadata | null>;
 }
 
 /**
@@ -62,12 +71,14 @@ export interface DefinitionSlugResolver {
  * failure (network, 4xx, missing field, unparseable body).
  */
 export function createDefinitionSlugResolver(opts: {
-  apiKey: string | null;
+  /** A getter keeps enrichment working when the user signs in after boot. */
+  apiKey: string | null | (() => string | null);
   baseUrl?: string;
   /** Injectable for unit tests; defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
 }): DefinitionSlugResolver {
   const { apiKey, baseUrl = resolveAgentsBaseUrl(), fetchImpl = fetch } = opts;
+  const getApiKey = typeof apiKey === "function" ? apiKey : () => apiKey;
   const cache = new Map<string, string>();
   // Each id's resolution failure is logged at most once. resolve() runs on
   // every /api/state and /api/workflows poll and null results are deliberately
@@ -86,41 +97,55 @@ export function createDefinitionSlugResolver(opts: {
     );
   };
 
-  return {
-    async resolve(definitionId: string): Promise<string | null> {
-      // Not signed in: expected (a harness launched without auth), not a
-      // failure worth logging — the panel's project-name fallback covers it.
-      if (!apiKey) return null;
+  const resolveMetadata = async (
+    definitionId: string,
+  ): Promise<DefinitionMetadata | null> => {
+    const currentApiKey = getApiKey();
+    // Not signed in is expected, not a failure worth logging. Because this is
+    // a getter, a later sign-in is picked up without restarting Studio.
+    if (!currentApiKey) return null;
 
-      const cached = cache.get(definitionId);
-      if (cached !== undefined) return cached;
+    try {
+      const url = `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definitionId)}`;
+      const response = await fetchImpl(url, {
+        headers: { "x-sapiom-api-key": currentApiKey },
+      });
 
-      try {
-        const url = `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definitionId)}`;
-        const response = await fetchImpl(url, {
-          headers: { "x-sapiom-api-key": apiKey },
-        });
-
-        if (!response.ok) {
-          warnOnce(definitionId, `HTTP ${response.status}`);
-          return null;
-        }
-
-        const body = (await response.json()) as Record<string, unknown>;
-        const slug = typeof body.slug === "string" ? body.slug : null;
-        if (slug !== null) {
-          cache.set(definitionId, slug);
-        } else {
-          warnOnce(definitionId, "response had no string `slug` field");
-        }
-        return slug;
-      } catch (err) {
-        warnOnce(
-          definitionId,
-          err instanceof Error ? err.message : String(err),
-        );
+      if (!response.ok) {
+        warnOnce(definitionId, `HTTP ${response.status}`);
         return null;
       }
+
+      const body = (await response.json()) as Record<string, unknown>;
+      const slug = typeof body.slug === "string" ? body.slug : null;
+      const activeBuildRunId =
+        typeof body.activeBuildRunId === "string"
+          ? body.activeBuildRunId
+          : null;
+      const activeBuildRunStatus =
+        typeof body.activeBuildRunStatus === "string"
+          ? body.activeBuildRunStatus
+          : null;
+      if (slug !== null) {
+        cache.set(definitionId, slug);
+      } else {
+        warnOnce(definitionId, "response had no string `slug` field");
+      }
+      return { slug, activeBuildRunId, activeBuildRunStatus };
+    } catch (err) {
+      warnOnce(definitionId, err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  };
+
+  return {
+    resolveMetadata,
+    async resolve(definitionId: string): Promise<string | null> {
+      // Keep the old stable-slug cache contract for existing callers.
+      if (!getApiKey()) return null;
+      const cached = cache.get(definitionId);
+      if (cached !== undefined) return cached;
+      return (await resolveMetadata(definitionId))?.slug ?? null;
     },
   };
 }

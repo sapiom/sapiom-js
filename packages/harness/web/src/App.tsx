@@ -42,6 +42,7 @@ import { ApiError, boundWorkflowPathOf } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
 import { resolveProjectRoot } from "./lib/project-dir";
+import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { agentUrl } from "./lib/urls";
 import { starterScaffoldInstruction, useTemplatePrompt, type StudioTemplate } from "./lib/templates";
 import { track } from "./lib/track";
@@ -55,6 +56,10 @@ import { sessionDisplayName } from "./lib/session-name";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
 import { useHarnessState, type ObservedRun } from "./lib/use-harness-state";
+import {
+  isWorkflowRunnable,
+  workflowDeploymentState,
+} from "./lib/workflow-deployment";
 
 type RightTab = "canvas" | "steps" | "code";
 
@@ -372,16 +377,33 @@ export const App = (): JSX.Element => {
   // (null) while a focused agent has no session, so it never shows a
   // different agent's board behind the "no session" state.
   const rightPaneWorkflow = showAgentEmpty ? null : boundWorkflow;
-  const noSessionAgentName = showAgentEmpty ? (focusedWorkflow?.name ?? null) : null;
+  const noSessionAgentName = showAgentEmpty
+    ? (focusedWorkflow?.name ?? null)
+    : null;
+  const rightPaneDeploymentState = rightPaneWorkflow
+    ? workflowDeploymentState(
+        rightPaneWorkflow,
+        harness.lastDeployErrorFor(rightPaneWorkflow.path),
+      )
+    : null;
 
   // Run inspection for the active session.
-  const activeObservedRun = harness.activeSessionId
+  const selectedObservedRun = harness.activeSessionId
     ? (harness.runsBySession.get(harness.activeSessionId) ?? null)
+    : null;
+  const activeObservedRun = observedRunMatchesWorkflow(
+    selectedObservedRun,
+    boundWorkflowPath,
+  )
+    ? selectedObservedRun
     : null;
   const activeSessionRuns: ObservedRun[] = harness.activeSessionId
     ? (harness.runIdsBySession.get(harness.activeSessionId) ?? [])
         .map((executionId) => harness.runsByExecution.get(executionId))
         .filter((observed): observed is ObservedRun => observed !== undefined)
+        .filter((observed) =>
+          observedRunMatchesWorkflow(observed, boundWorkflowPath),
+        )
     : [];
 
   const closeMobileDrawer = (): void => {
@@ -628,20 +650,27 @@ export const App = (): JSX.Element => {
             void harness.deploy(workflow.path);
           }
         } else if (direct === "prod-run") {
-          if (workflow?.definitionId != null) {
-            // definitionId is present (the button is deploy-gated); the runs route
-            // wants it as a string.
+          if (workflow?.definitionId != null && isWorkflowRunnable(workflow)) {
+            // The definition has a ready cloud build; the runs route wants its
+            // id as a string.
             void harness.startProdRun(sessionId, String(workflow.definitionId));
           } else {
-            // The button is already disabled in SessionStepsBar when there's no
-            // definitionId — this branch only fires if something bypasses the UI
-            // gate (e.g. a direct keyboard call). Toast the reason explicitly so
-            // it is never silent.
-            const lastErr = workflow ? harness.lastDeployErrorFor(workflow.path) : null;
+            // The button is already disabled in SessionStepsBar when there is
+            // no ready build. This branch protects keyboard/programmatic calls.
+            const lastErr = workflow
+              ? harness.lastDeployErrorFor(workflow.path)
+              : null;
+            const deploymentState = workflow
+              ? workflowDeploymentState(workflow, lastErr)
+              : "draft";
             harness.showToast(
-              lastErr
+              deploymentState === "failed"
                 ? "Last deploy failed — retry Deploy."
-                : "This agent isn't deployed yet — deploy it first.",
+                : deploymentState === "building"
+                  ? "The cloud build is still in progress."
+                  : deploymentState === "linked"
+                    ? "No ready deployment yet — deploy it first."
+                    : "This agent isn't deployed yet — deploy it first.",
             );
           }
         } else if (direct === "run-local") {
@@ -1023,23 +1052,30 @@ export const App = (): JSX.Element => {
                 Code
               </button>
               <div className="right-pane-corner">
-                {/* Deployed pill → dashboard. The board has no subheader now, so
-                    its deploy status lives here in the tab bar (Tidjane's design:
-                    nothing sits between the tabs and the canvas). */}
-                {rightTab === "canvas" && rightPaneWorkflow?.definitionId != null && (
-                  <a
-                    className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
-                    data-testid="workflow-dashboard-link"
-                    href={agentUrl(rightPaneWorkflow.definitionId)}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label="Deployed — open in the Sapiom dashboard"
-                    data-tooltip="Open this agent in the Sapiom dashboard"
-                  >
-                    <Icon name="Cloud" size={12} />
-                    deployed
-                  </a>
-                )}
+                {/* Cloud-status pill → dashboard. The board has no subheader,
+                    so the link/build state lives here in the tab bar. */}
+                {rightTab === "canvas" &&
+                  rightPaneWorkflow?.definitionId != null && (
+                    <a
+                      className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
+                      data-testid="workflow-dashboard-link"
+                      data-deployment-state={rightPaneDeploymentState ?? undefined}
+                      href={agentUrl(rightPaneWorkflow.definitionId)}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`${rightPaneDeploymentState} — open in the Sapiom dashboard`}
+                      data-tooltip="Open this agent in the Sapiom dashboard"
+                    >
+                      <Icon name="Cloud" size={12} />
+                      {rightPaneDeploymentState === "ready"
+                        ? "deployed"
+                        : rightPaneDeploymentState === "building"
+                          ? "building"
+                          : rightPaneDeploymentState === "failed"
+                            ? "deploy failed"
+                            : "linked"}
+                    </a>
+                  )}
                 {/* Canvas expand sits right beside the collapse-panel toggle. */}
                 {rightTab === "canvas" && (
                   <button
@@ -1106,6 +1142,11 @@ export const App = (): JSX.Element => {
                   boundWorkflow={rightPaneWorkflow}
                   noSessionAgent={noSessionAgentName}
                   agentsBaseUrl={state.agentsBaseUrl}
+                  lastDeployError={
+                    rightPaneWorkflow
+                      ? harness.lastDeployErrorFor(rightPaneWorkflow.path)
+                      : null
+                  }
                 />
               </div>
             )}

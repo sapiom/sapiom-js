@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import type { WorkflowInfo } from "@shared/types";
 
 import { Icon } from "./Icon";
+import { workflowDeploymentState } from "../lib/workflow-deployment";
 
 /**
  * One agent (workflow) row — the hero of the rail, LEVEL 2 under a workspace
@@ -24,7 +25,18 @@ export function WorkflowRow({
   isFocused: boolean;
   onFocus: (path: string) => void;
 }): JSX.Element {
-  const deployed = workflow.definitionId != null;
+  const deploymentState = workflowDeploymentState(workflow);
+  const deployed = deploymentState === "ready";
+  const statusTitle =
+    deploymentState === "ready"
+      ? "Deployed to Sapiom with a ready build."
+      : deploymentState === "building"
+        ? "Cloud build in progress."
+        : deploymentState === "failed"
+          ? "Cloud build failed."
+          : deploymentState === "linked"
+            ? "Linked to Sapiom; no ready build confirmed."
+            : "Draft. Not deployed to Sapiom yet.";
   return (
     <div
       className={"workflow-item" + (isFocused ? " is-focused" : "")}
@@ -40,8 +52,9 @@ export function WorkflowRow({
         <span
           className="workflow-status"
           data-deployed={deployed}
+          data-deployment-state={deploymentState}
           data-testid={`workflow-status-${workflow.name}`}
-          title={deployed ? "Deployed to Sapiom" : "Draft. Not deployed to Sapiom yet."}
+          title={statusTitle}
         >
           <Icon name={deployed ? "Cloud" : "CloudOff"} size={13} />
         </span>
