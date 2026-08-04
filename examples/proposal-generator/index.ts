@@ -41,7 +41,7 @@ import { z } from "zod/v4";
  * resume with no payload takes the safe reject branch, so the whole graph traces
  * end to end for free. The sandbox exec returns empty output under stubs, so
  * `render` skips the real byte upload but still walks its full shape. Fire a real
- * `proposal.decision` signal (in dev, via the MCP `workflow_signal` tool — see
+ * `proposal.decision` signal (in dev, via the MCP `sapiom_dev_agents_signal` tool — see
  * README) to drive the approve → send path.
  *
  * `pauseUntilSignal` is a runtime primitive, not a metered capability. The billed

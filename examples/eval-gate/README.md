@@ -237,13 +237,15 @@ export const agent = defineAgent<{ brief: string }, Shared>({
 
 The child's terminal output (`{ decision, score, threshold, rationale }`) is
 delivered as `decision`'s input via the `CHILD_DONE` signal, correlated by the
-parent's `executionId`. In dev you fire that signal yourself via the MCP
-`signal_workflow` / `workflow_signal` tool once the child run finishes — the same
-manual stand-in the Wait-for-Webhook template uses:
+parent's `executionId`. In dev you fire that signal yourself with **Resume run**
+in Run Inspector, local MCP `sapiom_dev_agents_signal`, or hosted MCP
+`sapiom_workflow_signal` once the child run finishes — the same manual stand-in
+the Wait-for-Webhook template uses:
 
 ```json
 {
-  "signal": "eval.child.done",
+  "executionId": "<executionId>",
+  "name": "eval.child.done",
   "correlationId": "<parent executionId>",
   "payload": {
     "decision": "publish",

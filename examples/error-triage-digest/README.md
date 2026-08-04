@@ -65,7 +65,7 @@ Input: `{ "errors": [{ "message": "...", "level": "error", "service": "checkout"
 
 4. To run it on a cadence, attach the `schedule` as a cron trigger on the
    deployed agent. To push errors in instead, run with `webhook: true` and fire
-   the `errors.pushed` signal with the `workflow_signal` MCP tool, passing
+   the `errors.pushed` signal with the `sapiom_dev_agents_signal` MCP tool, passing
    `{ "errors": [ ... ] }`.
 
 ## Files

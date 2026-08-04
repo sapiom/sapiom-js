@@ -63,13 +63,15 @@ degrades to a skip (it still completes) so you can trace the graph first.
 ## Resuming a paused run in dev
 
 A real `run` pauses at `watch` and waits for the `pr.opened` signal. Instead of
-a real webhook, fire it yourself via the MCP `signal_workflow` / `workflow_signal`
-tool. The `correlationId` is the paused run's `executionId`, and the `payload`
+a real webhook, fire it yourself with **Resume run** in Run Inspector, local MCP
+`sapiom_dev_agents_signal`, or hosted MCP `sapiom_workflow_signal`. The
+`correlationId` is the paused run's `executionId`, and the `payload`
 becomes `review`'s input:
 
 ```json
 {
-  "signal": "pr.opened",
+  "executionId": "<executionId>",
+  "name": "pr.opened",
   "correlationId": "<executionId of the paused run>",
   "payload": {
     "repo": { "owner": "acme", "name": "api" },

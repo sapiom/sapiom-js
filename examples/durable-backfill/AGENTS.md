@@ -31,11 +31,12 @@ When you've made a coherent change and want to validate it — the same point yo
 
 ### Advancing a paused run in dev
 
-A real `run` pauses after each chunk. To advance it without a schedule, fire the heartbeat via the MCP `signal_workflow` / `workflow_signal` tool:
+A real `run` pauses after each chunk. To advance it without a schedule, fire the heartbeat with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`):
 
 ```json
 {
-  "signal": "backfill.heartbeat",
+  "executionId": "<executionId>",
+  "name": "backfill.heartbeat",
   "correlationId": "<executionId of the paused run>"
 }
 ```

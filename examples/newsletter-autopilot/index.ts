@@ -238,7 +238,7 @@ const entryInput = z.object({
     .string()
     .optional()
     .describe(
-      "Cron cadence this newsletter runs on (default weekly Monday 08:00).",
+      "Cadence label carried in this run's output; it does not create a schedule.",
     ),
   subscribers: z
     .array(z.string())

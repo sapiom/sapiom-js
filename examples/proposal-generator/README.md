@@ -77,7 +77,7 @@ the client email.
 ## Resuming a paused run in dev
 
 A real `run` pauses once, at `review`. Instead of a real approver, fire the signal
-yourself via the MCP `signal_workflow` / `workflow_signal` tool. The
+yourself with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`). The
 `correlationId` is the paused run's `executionId`, and the `payload` becomes the
 resumed step's input.
 
@@ -85,7 +85,8 @@ resumed step's input.
 
 ```json
 {
-  "signal": "proposal.decision",
+  "executionId": "<executionId>",
+  "name": "proposal.decision",
   "correlationId": "<executionId of the paused run>",
   "payload": { "decision": "approve" }
 }

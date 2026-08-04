@@ -80,7 +80,7 @@ The `approver` and `escalateTo` addresses fall back to `config.APPROVER_EMAIL` /
 ## Resuming a paused run in dev
 
 A real `run` pauses twice. Instead of a real approver / candidate, fire the
-signals yourself via the MCP `signal_workflow` / `workflow_signal` tool. The
+signals yourself with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`). The
 `correlationId` is the paused run's `executionId`, and each `payload` becomes the
 resumed step's input.
 
@@ -88,7 +88,8 @@ resumed step's input.
 
 ```json
 {
-  "signal": "approval.decision",
+  "executionId": "<executionId>",
+  "name": "approval.decision",
   "correlationId": "<executionId of the paused run>",
   "payload": { "decision": "approve" }
 }
@@ -98,7 +99,8 @@ resumed step's input.
 
 ```json
 {
-  "signal": "candidate.confirm",
+  "executionId": "<executionId>",
+  "name": "candidate.confirm",
   "correlationId": "<executionId of the paused run>",
   "payload": { "decision": "accept" }
 }

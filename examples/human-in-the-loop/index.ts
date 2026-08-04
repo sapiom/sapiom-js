@@ -40,7 +40,7 @@ import { z } from "zod/v4";
  * resume with no explicit decision takes the SAFE branch (nothing commits), and
  * the `dryRun` guard makes `commit`'s irreversible action a no-op — so the whole
  * graph traces end to end for free. Fire real `approval.decision` / `candidate.confirm`
- * signals (in dev, via the MCP `workflow_signal` tool — see README) to drive the
+ * signals (in dev, via the MCP `sapiom_dev_agents_signal` tool — see README) to drive the
  * approve → accept → commit path and the fallback loop.
  */
 

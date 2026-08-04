@@ -19,7 +19,7 @@ capabilities are pre-auth'd on `ctx.sapiom` (here, `ctx.sapiom.models.run` and
   Safe default: only `{ decision: "approve" }` proceeds; anything else (including
   a `run_local` resume with no payload) routes to `revert` — nothing commits
   without a deliberate human yes.
-- **`offer`** makes a *provisional, non-committing* offer to `ranked[index]` and
+- **`offer`** makes a _provisional, non-committing_ offer to `ranked[index]` and
   pauses on `candidate.confirm`, resuming at `resolve`.
 - **`resolve`** reads the confirm payload as its input. `accept` → `commit`;
   `decline`/`timeout`/absent → `index + 1` and loop back to `offer` while
@@ -60,12 +60,12 @@ after every small edit.
 ### Firing the resume signals in dev
 
 A real `run` pauses twice. To resume without a real approver/candidate, fire the
-signals via the MCP `signal_workflow` / `workflow_signal` tool — the manual
+signals with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — the manual
 stand-in. Approve, then accept:
 
 ```json
-{ "signal": "approval.decision", "correlationId": "<executionId>", "payload": { "decision": "approve" } }
-{ "signal": "candidate.confirm", "correlationId": "<executionId>", "payload": { "decision": "accept" } }
+{ "executionId": "<executionId>", "name": "approval.decision", "correlationId": "<executionId>", "payload": { "decision": "approve" } }
+{ "executionId": "<executionId>", "name": "candidate.confirm", "correlationId": "<executionId>", "payload": { "decision": "accept" } }
 ```
 
 Send `{ "decision": "decline" }` on `candidate.confirm` to walk the fallback to

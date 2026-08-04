@@ -280,7 +280,9 @@ const entryInput = z.object({
   schedule: z
     .string()
     .optional()
-    .describe('Cron cadence this batch runs on (e.g. "0 9 * * *").'),
+    .describe(
+      "Cadence label carried in this run's output; it does not create a schedule.",
+    ),
   limit: z
     .number()
     .default(3)

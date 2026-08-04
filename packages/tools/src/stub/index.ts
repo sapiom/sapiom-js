@@ -39,6 +39,7 @@ import type {
   AgentRunResult,
   RunHandle as AgentRunHandle,
 } from "../agents/index.js";
+import type { ScheduleDetail } from "../schedules/index.js";
 import type {
   LlmGrantLink,
   LlmRouteHandle,
@@ -859,6 +860,77 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           finishedAt: "2099-01-01T00:00:00.000Z",
         }));
       },
+    },
+    schedules: {
+      create: (spec) =>
+        Promise.resolve(
+          r("schedules.create", [spec], () => {
+            const id = `stub-schedule-${++launchSeq}`;
+            const at =
+              spec.kind === "schedule_once" && spec.at instanceof Date
+                ? spec.at.toISOString()
+                : spec.kind === "schedule_once"
+                  ? (spec.at ?? null)
+                  : null;
+            return {
+              id,
+              kind: spec.kind,
+              status: "active" as const,
+              definitionSlug: spec.definition,
+              cron: spec.cron ?? null,
+              timezone:
+                spec.kind === "schedule_cron" ? (spec.timezone ?? "UTC") : null,
+              nextFireAt: at ?? spec.startAt ?? null,
+              createdAt: "2099-01-01T00:00:00.000Z",
+              input: spec.input ?? {},
+              startAt: spec.startAt ?? null,
+              endAt: spec.endAt ?? null,
+              policy: spec.policy ?? {},
+              recentFires: [],
+            };
+          }) as ScheduleDetail,
+        ),
+      list: (definition, listOpts) =>
+        Promise.resolve(
+          r(
+            "schedules.list",
+            [definition, listOpts],
+            () => [],
+          ) as ScheduleDetail[],
+        ),
+      get: (scheduleId) =>
+        Promise.resolve(
+          r("schedules.get", [scheduleId], () => ({
+            id: scheduleId,
+            kind: "schedule_once" as const,
+            status: "active" as const,
+            definitionSlug: "stub-agent",
+            cron: null,
+            timezone: null,
+            nextFireAt: null,
+            createdAt: "2099-01-01T00:00:00.000Z",
+            input: {},
+            startAt: null,
+            endAt: null,
+            policy: {},
+            recentFires: [],
+          })) as ScheduleDetail,
+        ),
+      cancel: (scheduleId) =>
+        Promise.resolve(
+          r("schedules.cancel", [scheduleId], () => ({
+            id: scheduleId,
+            status: "disabled" as const,
+          })) as { id: string; status: "disabled" },
+        ),
+      preview: (spec) =>
+        Promise.resolve(
+          r("schedules.preview", [spec], () => ({
+            cron: spec.cron,
+            timezone: spec.timezone ?? "UTC",
+            occurrences: [],
+          })) as { cron: string; timezone: string; occurrences: string[] },
+        ),
     },
     llm: {
       run: <T = Record<string, unknown>>(spec: {

@@ -14,7 +14,7 @@ went silent). Inside a step's `run`, Sapiom capabilities are pre-auth'd on
   returns `pauseUntilSignal({ signal: "approval.decision", resumeStep: "decide", correlationId: ctx.executionId })`.
   It carries a static `pause: { signal, resumeStep: "decide" }` annotation — the
   build-time graph edge that must match the directive. **No `timeoutMs`:** the
-  engine's paused-run reaper *terminates* a lapsed pause (`PauseTimeoutError`)
+  engine's paused-run reaper _terminates_ a lapsed pause (`PauseTimeoutError`)
   instead of resuming it, so a gate deadline would hard-fail a slow approval and
   skip `escalate`. The gates wait indefinitely; the reminder/escalation cadence
   comes from the signal (see below), never the engine deadline.
@@ -77,13 +77,14 @@ after every small edit.
 ### Firing the resume signals in dev
 
 A real `run` pauses at every gate. To resume without a real approver, fire the
-signals via the MCP `signal_workflow` / `workflow_signal` tool — the manual
+signals with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — the manual
 stand-in. The `correlationId` is the paused run's `executionId`, and each
 `payload` arrives as `decide`'s input.
 
 ```json
 {
-  "signal": "approval.decision",
+  "executionId": "<executionId>",
+  "name": "approval.decision",
   "correlationId": "<executionId>",
   "payload": { "decision": "approve" }
 }

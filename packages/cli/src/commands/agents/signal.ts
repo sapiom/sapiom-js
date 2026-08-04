@@ -1,27 +1,53 @@
-import { AgentOperationError, parseSignalPayload, signal } from '@sapiom/agent-core';
+import {
+  AgentOperationError,
+  parseSignalPayload,
+  signal,
+} from "@sapiom/agent-core";
 
-import { type CliTarget, makeClient } from '../../lib/client.js';
-import { readConfig } from '../../lib/config.js';
-import { CliError, ok } from '../../lib/output.js';
+import { type CliTarget, makeClient } from "../../lib/client.js";
+import { readConfig } from "../../lib/config.js";
+import { CliError, ok } from "../../lib/output.js";
 
 /**
- * `sapiom agents signal <executionId>` — resume a paused execution by
- * delivering a named signal (matched by name + correlation id).
+ * `sapiom agents signal <executionId>` — deliver a named signal inside the
+ * framed execution's tenant. Routing is by name + correlation id; the result
+ * reports how many paused runs resumed.
  */
 export async function runSignal(
   executionId: string,
-  opts: { name: string; correlationId: string; payload?: string; host?: string; target?: CliTarget },
+  opts: {
+    name: string;
+    correlationId: string;
+    payload?: string;
+    host?: string;
+    target?: CliTarget;
+  },
 ): Promise<void> {
   try {
     const cfg = readConfig(process.cwd());
-    const client = makeClient({ projectHost: cfg?.host, flagHost: opts.host, flagTarget: opts.target });
+    const client = makeClient({
+      projectHost: cfg?.host,
+      flagHost: opts.host,
+      flagTarget: opts.target,
+    });
     const payload = opts.payload ? parseSignalPayload(opts.payload) : undefined;
 
-    const result = await signal({ executionId, name: opts.name, correlationId: opts.correlationId, payload }, client);
+    const result = await signal(
+      {
+        executionId,
+        name: opts.name,
+        correlationId: opts.correlationId,
+        payload,
+      },
+      client,
+    );
 
-    ok({ matched: result.matched }, [`✓ Signal '${opts.name}' delivered (matched ${result.matched}).`]);
+    ok({ matched: result.matched }, [
+      `✓ Signal '${opts.name}' delivered (matched ${result.matched}).`,
+    ]);
   } catch (err) {
-    if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
+    if (err instanceof AgentOperationError)
+      throw new CliError(err.toStructured());
     throw err;
   }
 }

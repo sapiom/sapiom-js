@@ -64,7 +64,7 @@ Input: `{ "transcript": "Call with Dana Ruiz, VP Eng at Northwind. ...", "delive
    summary).
 
 4. To push transcripts in, run with `webhook: true` and fire the
-   `transcript.ready` signal with the `workflow_signal` MCP tool, passing
+   `transcript.ready` signal with the `sapiom_dev_agents_signal` MCP tool, passing
    `{ "transcript": "..." }`.
 
 ## Files

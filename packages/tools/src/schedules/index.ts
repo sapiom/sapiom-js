@@ -22,7 +22,8 @@ export type ScheduleStatus = "active" | "paused" | "completed" | "disabled";
 
 export interface SchedulePolicy {
   catchupPolicy?: "skip" | "all";
-  overlapPolicy?: "allow" | "skip";
+  /** Overlapping runs are currently allowed. `skip` is not implemented. */
+  overlapPolicy?: "allow";
   jitterMs?: number;
 }
 
@@ -30,7 +31,8 @@ export interface CreateScheduleSpec {
   /** The orchestration's tenant-unique slug. */
   definition: string;
   kind: ScheduleKind;
-  input?: unknown;
+  /** JSON object passed to the entry step on each fire. */
+  input?: Record<string, unknown>;
   /** Recurring (`schedule_cron`): cron expression + optional timezone/bounds/policy. */
   cron?: string;
   timezone?: string;
@@ -72,6 +74,18 @@ export interface ListSchedulesOptions {
   status?: ScheduleStatus;
   limit?: number;
   offset?: number;
+}
+
+export interface CronPreviewSpec {
+  cron: string;
+  timezone?: string;
+  count?: number;
+}
+
+export interface CronPreview {
+  cron: string;
+  timezone: string;
+  occurrences: string[];
 }
 
 /** Create a schedule (cron or one-off) for the orchestration. */
@@ -119,6 +133,18 @@ export async function cancel(
   return transport.request<{ id: string; status: ScheduleStatus }>(
     `${baseUrl}/agents/v1/triggers/${encodeURIComponent(scheduleId)}`,
     { method: "DELETE" },
+  );
+}
+
+/** Validate a cron expression and return its next occurrences without creating a schedule. */
+export async function preview(
+  spec: CronPreviewSpec,
+  transport: Transport = defaultTransport(),
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<CronPreview> {
+  return transport.request<CronPreview>(
+    `${baseUrl}/agents/v1/triggers/preview-cron`,
+    { method: "POST", body: JSON.stringify(spec) },
   );
 }
 

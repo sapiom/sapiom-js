@@ -2,8 +2,8 @@
  * Agent authoring tools. Thin wrappers over @sapiom/agent-core.
  * Local tools (scaffold / check / run_local) need no Sapiom account or real
  * capability calls; scaffold may query npm for current dependency versions.
- * Networked tools (link / deploy / run / inspect / signal) build a client from
- * the cached credential and the environment's API host.
+ * Networked tools (link / deploy / run / inspect / signal / schedules) build a
+ * client from the cached credential and the environment's API host.
  *
  * Results are returned as JSON text so the calling agent can parse them. In
  * particular, `run_local` returns a per-step trace plus `unusedStubs` /
@@ -38,7 +38,6 @@ import {
   waitForExecution,
   writeConfig,
   type ScheduleDetail,
-  type SchedulePolicy,
   type StubFile,
 } from "@sapiom/agent-core";
 import { type ResolvedEnvironment } from "../credentials.js";
@@ -474,15 +473,15 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_signal",
-    "Resume a paused cloud execution by delivering a named signal (matched by name + correlationId).",
+    "Deliver a signal inside a cloud execution's tenant. Paused runs are matched by name + correlationId (the executionId frames ownership, not routing), and matched reports how many resumed.",
     {
       executionId: z.string().describe("The paused execution."),
       name: z.string().describe("Signal name to deliver."),
       correlationId: z.string().describe("Signal correlation id."),
       payload: z
-        .unknown()
+        .record(z.unknown())
         .optional()
-        .describe("Signal payload (any JSON value)."),
+        .describe("Signal payload object passed to the resumed step."),
     },
     async ({ executionId, name, correlationId, payload }) => {
       const client = await gatewayClient(env);
@@ -533,9 +532,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           "ISO 8601 fire time — required for 'schedule_once'. E.g. '2026-07-01T17:00:00Z'.",
         ),
       input: z
-        .unknown()
+        .record(z.unknown())
         .optional()
-        .describe("Execution input passed to each run (any JSON value)."),
+        .describe("Execution input object passed to each run."),
       startAt: z
         .string()
         .optional()
@@ -545,7 +544,11 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .optional()
         .describe("Cron only: ISO time after which the schedule completes."),
       policy: z
-        .unknown()
+        .object({
+          catchupPolicy: z.enum(["skip", "all"]).optional(),
+          overlapPolicy: z.literal("allow").optional(),
+          jitterMs: z.number().int().nonnegative().optional(),
+        })
         .optional()
         .describe(
           "Cron only: { catchupPolicy?: 'skip'|'all', overlapPolicy?: 'allow', jitterMs?: number }.",
@@ -572,10 +575,10 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
             cron,
             timezone,
             at,
-            input: coerceJson(input),
+            input,
             startAt,
             endAt,
-            policy: coerceJson(policy) as SchedulePolicy | undefined,
+            policy,
           },
           client,
         );
@@ -637,7 +640,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_schedule_cancel",
-    "Cancel a schedule by id. Stops all future fires (a recurring schedule won't re-arm; a pending one-off won't run). Irreversible — recreate to reschedule.",
+    "Cancel a schedule by id. Drops future unfired occurrences (a recurring schedule won't re-arm; a pending one-off won't run) but does not cancel a run that already started. Irreversible — recreate to reschedule.",
     {
       scheduleId: z.string().describe("The schedule to cancel."),
     },

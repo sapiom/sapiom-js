@@ -60,7 +60,7 @@ expected shape if it encounters an unknown environment name).
 
 ## Authentication
 
-The first networked call (`link`, `deploy`, `run`, `inspect`, `signal`) needs a
+The first networked call (`link`, `deploy`, `run`, `inspect`, `signal`, or a schedule tool) needs a
 Sapiom API key. Run **`sapiom_authenticate`** and the server opens a browser
 login flow, then caches the resulting key per environment in
 `~/.sapiom/credentials.json`. After that, tools work without re-authenticating.
@@ -89,10 +89,10 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_agents_deploy`           | ✓                | Bundle current local source, build in the cloud, and wait                  |
 | `sapiom_dev_agents_run`              | ✓                | Start a real cloud execution                                               |
 | `sapiom_dev_agents_inspect`          | ✓                | Inspect an execution or build (optionally waiting for it)                  |
-| `sapiom_dev_agents_signal`           | ✓                | Resume a paused execution by delivering a signal                           |
+| `sapiom_dev_agents_signal`           | ✓                | Deliver a tenant-framed signal and report how many paused runs resumed     |
 | `sapiom_dev_agents_schedule`         | ✓                | Create a recurring (cron) or one-off schedule for a deployed agent         |
 | `sapiom_dev_agents_schedule_inspect` | ✓                | Inspect one schedule (with fire history) or list an agent's schedules      |
-| `sapiom_dev_agents_schedule_cancel`  | ✓                | Cancel a schedule (stops all future fires)                                 |
+| `sapiom_dev_agents_schedule_cancel`  | ✓                | Cancel a schedule (drops future unfired occurrences)                       |
 | `sapiom_dev_agents_cron_preview`     | ✓                | Validate a cron expression and preview its next occurrences                |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`

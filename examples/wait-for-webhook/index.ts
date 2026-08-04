@@ -25,7 +25,7 @@ import { z } from "zod/v4";
  *
  * Resume contract: `kickoff` registers `{ executionId, signal, correlationId }`
  * with the external job and pauses; the external caller fires that signal (in
- * dev, via the MCP `signal_workflow` / `workflow_signal` tool — see README). The
+ * dev, via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — see README). The
  * resumed `decide` step's input IS the callback payload; everything else survives
  * the pause in `ctx.shared`.
  *

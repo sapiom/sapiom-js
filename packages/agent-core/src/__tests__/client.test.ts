@@ -10,11 +10,12 @@
  * "MCP-style" here means "programmatic / dependency-injected" — the same
  * pattern @sapiom/mcp (SAP-930) will use when it becomes a second consumer.
  */
-import { createClient, GatewayClient } from '../client';
-import { inspect, inspectBuild, listExecutions } from '../inspect';
-import { link } from '../link';
-import { run, parseJsonInput } from '../run';
-import { signal, parseSignalPayload } from '../signal';
+import { createClient, GatewayClient } from "../client";
+import { inspect, inspectBuild, listExecutions } from "../inspect";
+import { link } from "../link";
+import { run, parseJsonInput } from "../run";
+import { signal, parseSignalPayload } from "../signal";
+import { parseScheduleInput } from "../schedule";
 
 // ── Fetch mock helpers ────────────────────────────────────────────────────────
 
@@ -22,13 +23,13 @@ type MockResponse = { status: number; body: unknown };
 
 function mockFetch(responses: MockResponse[]): jest.SpyInstance {
   let i = 0;
-  return jest.spyOn(global, 'fetch' as any).mockImplementation(async () => {
+  return jest.spyOn(global, "fetch" as any).mockImplementation(async () => {
     const r = responses[i++] ?? responses[responses.length - 1];
     const text = JSON.stringify(r.body);
     return {
       ok: r.status >= 200 && r.status < 300,
       status: r.status,
-      statusText: r.status === 200 ? 'OK' : 'Error',
+      statusText: r.status === 200 ? "OK" : "Error",
       text: async () => text,
     } as Response;
   });
@@ -40,250 +41,327 @@ afterEach(() => {
 
 // ── GatewayClient ─────────────────────────────────────────────────────────────
 
-describe('createClient / GatewayClient', () => {
-  it('sends x-api-key header and targets /v1/workflows', async () => {
+describe("createClient / GatewayClient", () => {
+  it("sends x-api-key header and targets /v1/workflows", async () => {
     const spy = mockFetch([{ status: 200, body: { ok: true } }]);
-    const client = createClient({ host: 'https://example.com', apiKey: 'sk_test' });
-    await client.get('/foo');
+    const client = createClient({
+      host: "https://example.com",
+      apiKey: "sk_test",
+    });
+    await client.get("/foo");
 
     expect(spy).toHaveBeenCalledTimes(1);
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://example.com/v1/workflows/foo');
-    expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk_test');
+    expect(url).toBe("https://example.com/v1/workflows/foo");
+    expect((init.headers as Record<string, string>)["x-api-key"]).toBe(
+      "sk_test",
+    );
   });
 
-  it('throws AgentOperationError with HTTP_4xx code on error status', async () => {
-    mockFetch([{ status: 401, body: { message: 'Unauthorized' } }]);
-    const client = createClient({ host: 'https://example.com', apiKey: 'bad' });
-    await expect(client.get('/foo')).rejects.toMatchObject({
-      code: 'HTTP_401',
-      message: 'Unauthorized',
+  it("throws AgentOperationError with HTTP_4xx code on error status", async () => {
+    mockFetch([{ status: 401, body: { message: "Unauthorized" } }]);
+    const client = createClient({ host: "https://example.com", apiKey: "bad" });
+    await expect(client.get("/foo")).rejects.toMatchObject({
+      code: "HTTP_401",
+      message: "Unauthorized",
     });
   });
 
-  it('defaults to the production backend host', () => {
-    const client = new GatewayClient({ apiKey: 'sk_test' });
+  it("defaults to the production backend host", () => {
+    const client = new GatewayClient({ apiKey: "sk_test" });
     // Access the private base via a GET call
     const spy = mockFetch([{ status: 200, body: {} }]);
-    void client.get('/ping');
+    void client.get("/ping");
     const [url] = spy.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('api.sapiom.ai/v1/workflows/ping');
+    expect(url).toContain("api.sapiom.ai/v1/workflows/ping");
   });
 
-  it('throws NETWORK error when fetch rejects', async () => {
-    jest.spyOn(global, 'fetch' as any).mockRejectedValue(new Error('ECONNREFUSED'));
-    const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
-    await expect(client.get('/foo')).rejects.toMatchObject({ code: 'NETWORK' });
+  it("throws NETWORK error when fetch rejects", async () => {
+    jest
+      .spyOn(global, "fetch" as any)
+      .mockRejectedValue(new Error("ECONNREFUSED"));
+    const client = createClient({ host: "https://example.com", apiKey: "sk" });
+    await expect(client.get("/foo")).rejects.toMatchObject({ code: "NETWORK" });
   });
 
-  it('postAtHostRoot targets the host root, bypassing the /v1/workflows base', async () => {
-    const spy = mockFetch([{ status: 200, body: { id: 'fb_1' } }]);
-    const client = createClient({ host: 'https://example.com', apiKey: 'sk_test' });
-    await client.postAtHostRoot('/v1/studio-feedback', { message: 'hi' });
+  it("postAtHostRoot targets the host root, bypassing the /v1/workflows base", async () => {
+    const spy = mockFetch([{ status: 200, body: { id: "fb_1" } }]);
+    const client = createClient({
+      host: "https://example.com",
+      apiKey: "sk_test",
+    });
+    await client.postAtHostRoot("/v1/studio-feedback", { message: "hi" });
 
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://example.com/v1/studio-feedback');
-    expect(url).not.toContain('/v1/workflows');
-    expect(init.method).toBe('POST');
-    expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk_test');
-    expect(init.body).toBe(JSON.stringify({ message: 'hi' }));
+    expect(url).toBe("https://example.com/v1/studio-feedback");
+    expect(url).not.toContain("/v1/workflows");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["x-api-key"]).toBe(
+      "sk_test",
+    );
+    expect(init.body).toBe(JSON.stringify({ message: "hi" }));
   });
 
-  it('strips trailing slashes from the host for both bases', async () => {
+  it("strips trailing slashes from the host for both bases", async () => {
     const spy = mockFetch([{ status: 200, body: {} }]);
-    const client = createClient({ host: 'https://example.com//', apiKey: 'sk' });
-    await client.postAtHostRoot('/v1/studio-feedback');
-    await client.get('/foo');
+    const client = createClient({
+      host: "https://example.com//",
+      apiKey: "sk",
+    });
+    await client.postAtHostRoot("/v1/studio-feedback");
+    await client.get("/foo");
 
-    expect(spy.mock.calls[0][0]).toBe('https://example.com/v1/studio-feedback');
-    expect(spy.mock.calls[1][0]).toBe('https://example.com/v1/workflows/foo');
+    expect(spy.mock.calls[0][0]).toBe("https://example.com/v1/studio-feedback");
+    expect(spy.mock.calls[1][0]).toBe("https://example.com/v1/workflows/foo");
   });
 
-  it('normalizes the host in linear time, not by backtracking', () => {
+  it("normalizes the host in linear time, not by backtracking", () => {
     // The natural `/\/+$/` is quadratic on a host with many interior slashes,
     // and the host is caller-supplied (a project config or credentials file).
     // 100k slashes finishes instantly if the scan is linear; the regex form
     // takes seconds. Guards the fix for the js/polynomial-redos alert.
-    const nasty = `https://example.com/${'/'.repeat(100_000)}x`;
+    const nasty = `https://example.com/${"/".repeat(100_000)}x`;
     const started = Date.now();
-    const client = createClient({ host: nasty, apiKey: 'sk' });
+    const client = createClient({ host: nasty, apiKey: "sk" });
     expect(Date.now() - started).toBeLessThan(250);
     // Nothing to strip — the string does not end in a slash.
     const spy = mockFetch([{ status: 200, body: {} }]);
-    void client.get('/foo');
+    void client.get("/foo");
     expect(spy.mock.calls[0][0]).toBe(`${nasty}/v1/workflows/foo`);
   });
 
-  it('maps postAtHostRoot failures through the same error shaping', async () => {
-    mockFetch([{ status: 401, body: { message: 'Unauthorized' } }]);
-    const client = createClient({ host: 'https://example.com', apiKey: 'bad' });
-    await expect(client.postAtHostRoot('/v1/studio-feedback', {})).rejects.toMatchObject({
-      code: 'HTTP_401',
-      message: 'Unauthorized',
+  it("maps postAtHostRoot failures through the same error shaping", async () => {
+    mockFetch([{ status: 401, body: { message: "Unauthorized" } }]);
+    const client = createClient({ host: "https://example.com", apiKey: "bad" });
+    await expect(
+      client.postAtHostRoot("/v1/studio-feedback", {}),
+    ).rejects.toMatchObject({
+      code: "HTTP_401",
+      message: "Unauthorized",
     });
   });
 });
 
 // ── run ───────────────────────────────────────────────────────────────────────
 
-describe('run', () => {
-  const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+describe("run", () => {
+  const client = createClient({ host: "https://example.com", apiKey: "sk" });
 
-  it('posts to /executions with definitionId in the body and returns executionId (CLI-style)', async () => {
-    const spy = mockFetch([{ status: 200, body: { executionId: 'exec-1', status: 'running' } }]);
-    const result = await run({ definitionId: 'def-1', input: { foo: 'bar' } }, client);
-    expect(result.executionId).toBe('exec-1');
-    expect(result.raw).toMatchObject({ executionId: 'exec-1' });
+  it("posts to /executions with definitionId in the body and returns executionId (CLI-style)", async () => {
+    const spy = mockFetch([
+      { status: 200, body: { executionId: "exec-1", status: "running" } },
+    ]);
+    const result = await run(
+      { definitionId: "def-1", input: { foo: "bar" } },
+      client,
+    );
+    expect(result.executionId).toBe("exec-1");
+    expect(result.raw).toMatchObject({ executionId: "exec-1" });
 
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://example.com/v1/workflows/executions');
+    expect(url).toBe("https://example.com/v1/workflows/executions");
     const body = JSON.parse(init.body as string);
-    expect(body.definitionId).toBe('def-1');
-    expect(body.input).toEqual({ foo: 'bar' });
+    expect(body.definitionId).toBe("def-1");
+    expect(body.input).toEqual({ foo: "bar" });
   });
 
-  it('accepts id field as fallback for executionId (MCP-style)', async () => {
-    mockFetch([{ status: 200, body: { id: 'exec-2' } }]);
-    const result = await run({ definitionId: 'def-1' }, client);
-    expect(result.executionId).toBe('exec-2');
+  it("accepts id field as fallback for executionId (MCP-style)", async () => {
+    mockFetch([{ status: 200, body: { id: "exec-2" } }]);
+    const result = await run({ definitionId: "def-1" }, client);
+    expect(result.executionId).toBe("exec-2");
   });
 
-  it('throws RUN_NO_ID when neither executionId nor id is present', async () => {
+  it("throws RUN_NO_ID when neither executionId nor id is present", async () => {
     mockFetch([{ status: 200, body: {} }]);
-    await expect(run({ definitionId: 'def-1' }, client)).rejects.toMatchObject({ code: 'RUN_NO_ID' });
+    await expect(run({ definitionId: "def-1" }, client)).rejects.toMatchObject({
+      code: "RUN_NO_ID",
+    });
   });
 
-  it('defaults input to {} when not provided', async () => {
-    const spy = mockFetch([{ status: 200, body: { executionId: 'e1' } }]);
-    await run({ definitionId: 'def-1' }, client);
-    const body = JSON.parse((spy.mock.calls[0] as [string, RequestInit])[1].body as string);
+  it("defaults input to {} when not provided", async () => {
+    const spy = mockFetch([{ status: 200, body: { executionId: "e1" } }]);
+    await run({ definitionId: "def-1" }, client);
+    const body = JSON.parse(
+      (spy.mock.calls[0] as [string, RequestInit])[1].body as string,
+    );
     expect(body.input).toEqual({});
   });
 });
 
-describe('parseJsonInput', () => {
-  it('parses valid JSON', () => {
-    expect(parseJsonInput('{"key":"val"}')).toEqual({ key: 'val' });
+describe("parseJsonInput", () => {
+  it("parses valid JSON", () => {
+    expect(parseJsonInput('{"key":"val"}')).toEqual({ key: "val" });
   });
-  it('throws BAD_INPUT on invalid JSON', () => {
-    expect(() => parseJsonInput('not-json')).toThrow(
-      expect.objectContaining({ code: 'BAD_INPUT' }),
+  it("throws BAD_INPUT on invalid JSON", () => {
+    expect(() => parseJsonInput("not-json")).toThrow(
+      expect.objectContaining({ code: "BAD_INPUT" }),
     );
   });
 });
 
 // ── signal ────────────────────────────────────────────────────────────────────
 
-describe('signal', () => {
-  const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+describe("signal", () => {
+  const client = createClient({ host: "https://example.com", apiKey: "sk" });
 
-  it('posts to /executions/:id/signals and returns matched count (CLI-style)', async () => {
+  it("posts to /executions/:id/signals and returns matched count (CLI-style)", async () => {
     mockFetch([{ status: 200, body: { matched: 1 } }]);
     const result = await signal(
-      { executionId: 'exec-1', name: 'approve', correlationId: 'c1' },
+      { executionId: "exec-1", name: "approve", correlationId: "c1" },
       client,
     );
     expect(result.matched).toBe(1);
   });
 
-  it('defaults matched to 0 when absent from response (MCP-style)', async () => {
+  it("defaults matched to 0 when absent from response (MCP-style)", async () => {
     mockFetch([{ status: 200, body: {} }]);
     const result = await signal(
-      { executionId: 'exec-1', name: 'approve', correlationId: 'c1' },
+      { executionId: "exec-1", name: "approve", correlationId: "c1" },
       client,
     );
     expect(result.matched).toBe(0);
   });
 
-  it('forwards optional payload', async () => {
+  it("forwards optional payload", async () => {
     const spy = mockFetch([{ status: 200, body: { matched: 1 } }]);
     await signal(
-      { executionId: 'exec-1', name: 'approve', correlationId: 'c1', payload: { decision: true } },
+      {
+        executionId: "exec-1",
+        name: "approve",
+        correlationId: "c1",
+        payload: { decision: true },
+      },
       client,
     );
-    const body = JSON.parse((spy.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const body = JSON.parse(
+      (spy.mock.calls[0] as [string, RequestInit])[1].body as string,
+    );
     expect(body.payload).toEqual({ decision: true });
   });
 });
 
-describe('parseSignalPayload', () => {
-  it('parses valid JSON', () => {
+describe("parseSignalPayload", () => {
+  it("parses valid JSON", () => {
     expect(parseSignalPayload('{"x":1}')).toEqual({ x: 1 });
   });
-  it('throws BAD_PAYLOAD on invalid JSON', () => {
-    expect(() => parseSignalPayload('bad')).toThrow(
-      expect.objectContaining({ code: 'BAD_PAYLOAD' }),
+  it("throws BAD_PAYLOAD on invalid JSON", () => {
+    expect(() => parseSignalPayload("bad")).toThrow(
+      expect.objectContaining({ code: "BAD_PAYLOAD" }),
     );
   });
+  it.each(["null", "true", "1", '"text"', "[]"])(
+    "rejects non-object JSON payload %s",
+    (raw) => {
+      expect(() => parseSignalPayload(raw)).toThrow(
+        expect.objectContaining({
+          code: "BAD_PAYLOAD",
+          message: expect.stringMatching(/object/),
+        }),
+      );
+    },
+  );
+});
+
+describe("parseScheduleInput", () => {
+  it("parses a JSON object", () => {
+    expect(parseScheduleInput('{"topic":"reliability"}')).toEqual({
+      topic: "reliability",
+    });
+  });
+
+  it.each(["null", "true", "1", '"text"', "[]"])(
+    "rejects non-object JSON input %s",
+    (raw) => {
+      expect(() => parseScheduleInput(raw)).toThrow(
+        expect.objectContaining({
+          code: "BAD_INPUT",
+          message: expect.stringMatching(/object/),
+        }),
+      );
+    },
+  );
 });
 
 // ── inspect / logs ────────────────────────────────────────────────────────────
 
-describe('inspect', () => {
-  const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+describe("inspect", () => {
+  const client = createClient({ host: "https://example.com", apiKey: "sk" });
 
-  it('returns the decoded ExecutionProjection directly', async () => {
-    const ex = { id: 'exec-1', status: 'completed', steps: [] };
+  it("returns the decoded ExecutionProjection directly", async () => {
+    const ex = { id: "exec-1", status: "completed", steps: [] };
     mockFetch([{ status: 200, body: ex }]);
-    const result = await inspect({ executionId: 'exec-1' }, client);
-    expect(result.id).toBe('exec-1');
-    expect(result.status).toBe('completed');
+    const result = await inspect({ executionId: "exec-1" }, client);
+    expect(result.id).toBe("exec-1");
+    expect(result.status).toBe("completed");
   });
 
-  it('carries the current step through', async () => {
-    const ex = { id: 'exec-2', status: 'running', currentStep: 'process' };
+  it("carries the current step through", async () => {
+    const ex = { id: "exec-2", status: "running", currentStep: "process" };
     mockFetch([{ status: 200, body: ex }]);
-    const execution = await inspect({ executionId: 'exec-2' }, client);
-    expect(execution.currentStep).toBe('process');
+    const execution = await inspect({ executionId: "exec-2" }, client);
+    expect(execution.currentStep).toBe("process");
   });
 });
 
-describe('listExecutions', () => {
-  const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+describe("listExecutions", () => {
+  const client = createClient({ host: "https://example.com", apiKey: "sk" });
 
-  it('returns tree-aware ExecutionRef[] directly', async () => {
-    const list = [{ id: 'e1', status: 'completed' }, { id: 'e2', status: 'running' }];
+  it("returns tree-aware ExecutionRef[] directly", async () => {
+    const list = [
+      { id: "e1", status: "completed" },
+      { id: "e2", status: "running" },
+    ];
     mockFetch([{ status: 200, body: list }]);
     const executions = await listExecutions(client);
     expect(executions).toHaveLength(2);
-    expect(executions[0].executionId).toBe('e1');
-    expect(executions[0].traceRoot).toBe('e1');
+    expect(executions[0].executionId).toBe("e1");
+    expect(executions[0].traceRoot).toBe("e1");
   });
 });
 
-describe('inspectBuild', () => {
-  const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+describe("inspectBuild", () => {
+  const client = createClient({ host: "https://example.com", apiKey: "sk" });
 
-  it('fetches build status by definitionId + buildRunId', async () => {
-    mockFetch([{ status: 200, body: { id: 'build-1', status: 'ready' } }]);
-    const { build } = await inspectBuild({ definitionId: 'def-1', buildRunId: 'build-1' }, client);
-    expect(build.status).toBe('ready');
+  it("fetches build status by definitionId + buildRunId", async () => {
+    mockFetch([{ status: 200, body: { id: "build-1", status: "ready" } }]);
+    const { build } = await inspectBuild(
+      { definitionId: "def-1", buildRunId: "build-1" },
+      client,
+    );
+    expect(build.status).toBe("ready");
   });
 });
 
 // ── link ──────────────────────────────────────────────────────────────────────
 
-describe('link', () => {
-  const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+describe("link", () => {
+  const client = createClient({ host: "https://example.com", apiKey: "sk" });
 
-  it('resolves existing definition by name (CLI-style)', async () => {
-    mockFetch([{ status: 200, body: [{ id: 'def-1', name: 'my-orch', slug: 'my-orch' }] }]);
-    const result = await link({ name: 'my-orch' }, client);
-    expect(result.definitionId).toBe('def-1');
-    expect(result.name).toBe('my-orch');
+  it("resolves existing definition by name (CLI-style)", async () => {
+    mockFetch([
+      {
+        status: 200,
+        body: [{ id: "def-1", name: "my-orch", slug: "my-orch" }],
+      },
+    ]);
+    const result = await link({ name: "my-orch" }, client);
+    expect(result.definitionId).toBe("def-1");
+    expect(result.name).toBe("my-orch");
   });
 
-  it('creates definition when not found and create=true (MCP-style)', async () => {
+  it("creates definition when not found and create=true (MCP-style)", async () => {
     mockFetch([
       { status: 200, body: [] }, // list returns empty
-      { status: 200, body: { id: 'def-new', name: 'new-orch' } }, // create
+      { status: 200, body: { id: "def-new", name: "new-orch" } }, // create
     ]);
-    const result = await link({ name: 'new-orch', create: true }, client);
-    expect(result.definitionId).toBe('def-new');
+    const result = await link({ name: "new-orch", create: true }, client);
+    expect(result.definitionId).toBe("def-new");
   });
 
-  it('throws NOT_FOUND when not found and create=false', async () => {
+  it("throws NOT_FOUND when not found and create=false", async () => {
     mockFetch([{ status: 200, body: [] }]);
-    await expect(link({ name: 'missing' }, client)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(link({ name: "missing" }, client)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
 });

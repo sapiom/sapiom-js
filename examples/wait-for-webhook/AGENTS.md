@@ -26,11 +26,12 @@ When you've made a coherent change and want to validate it — the same point yo
 
 ### Firing the resume signal in dev
 
-A real `run` pauses at `kickoff`. To resume it without a real webhook, fire the signal via the MCP `signal_workflow` / `workflow_signal` tool — the manual stand-in for the callback:
+A real `run` pauses at `kickoff`. To resume it without a real webhook, fire the signal with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — the manual stand-in for the callback:
 
 ```json
 {
-  "signal": "webhook.callback",
+  "executionId": "<executionId>",
+  "name": "webhook.callback",
   "correlationId": "<executionId of the paused run>",
   "payload": { "status": "succeeded", "result": { "note": "job done" } }
 }

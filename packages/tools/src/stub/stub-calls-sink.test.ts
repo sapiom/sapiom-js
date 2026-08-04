@@ -58,7 +58,9 @@ describe("stub calls sink — basic recording", () => {
   it("does not push to any sink when calls option is omitted (no side effect)", async () => {
     // Guard: creating a client without a sink must not throw or set a global.
     const client = createStubClient();
-    await expect(client.search.webSearch({ query: "test" })).resolves.toBeDefined();
+    await expect(
+      client.search.webSearch({ query: "test" }),
+    ).resolves.toBeDefined();
   });
 });
 
@@ -69,7 +71,9 @@ describe("stub calls sink — args fidelity", () => {
 
     await client.search.webSearch({ query: "specific query", intent: "links" });
 
-    expect(calls[0].args).toEqual([{ query: "specific query", intent: "links" }]);
+    expect(calls[0].args).toEqual([
+      { query: "specific query", intent: "links" },
+    ]);
   });
 
   it("records multi-arg calls (e.g. email.messages.send) with both args", async () => {
@@ -135,6 +139,23 @@ describe("stub calls sink — capability ids are dotted and provider-agnostic", 
     await client.database.create({ duration: "1h", region: "us-east-1" });
 
     expect(calls[0].capability).toBe("database.create");
+  });
+
+  it("keeps the schedules namespace shape-faithful", async () => {
+    const calls: StubCallRecord[] = [];
+    const client = createStubClient({ calls });
+
+    await expect(
+      client.schedules.preview({ cron: "0 9 * * *", count: 2 }),
+    ).resolves.toEqual({
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      occurrences: [],
+    });
+    expect(calls[0]).toMatchObject({
+      capability: "schedules.preview",
+      stubUsed: true,
+    });
   });
 });
 

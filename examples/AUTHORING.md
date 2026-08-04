@@ -513,8 +513,9 @@ one-click webapp path; put the code/MCP path second, clearly optional.**
    `run_local` to trace the whole flow with no Sapiom capability spend, or edit and deploy it with the Sapiom MCP."
 
 For templates that **pause on a live signal** (human-in-the-loop, wait-for-webhook), say so
-plainly and show how to send the signal (today that's the MCP `workflow_signal` tool / the
-API — there is no one-click signal button yet). Keep payloads short and correct.
+plainly and show how to send the signal with **Resume run** in Run Inspector, local MCP
+`sapiom_dev_agents_signal`, hosted MCP `sapiom_workflow_signal`, or the API. Keep payloads short
+and correct.
 
 ---
 

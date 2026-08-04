@@ -8,15 +8,15 @@ import {
   getSchedule,
   listSchedules,
   AgentOperationError,
-  parseJsonInput,
+  parseScheduleInput,
   previewCron,
   type ScheduleKind,
   type ScheduleStatus,
-} from '@sapiom/agent-core';
+} from "@sapiom/agent-core";
 
-import { type CliTarget, makeClient } from '../../lib/client.js';
-import { readConfig } from '../../lib/config.js';
-import { CliError, ok } from '../../lib/output.js';
+import { type CliTarget, makeClient } from "../../lib/client.js";
+import { readConfig } from "../../lib/config.js";
+import { CliError, ok } from "../../lib/output.js";
 
 interface HostOpts {
   host?: string;
@@ -25,11 +25,16 @@ interface HostOpts {
 
 /** A client scoped to the project's host (if linked) with per-invocation flag overrides. */
 function clientFor(opts: HostOpts) {
-  return makeClient({ projectHost: readConfig(process.cwd())?.host, flagHost: opts.host, flagTarget: opts.target });
+  return makeClient({
+    projectHost: readConfig(process.cwd())?.host,
+    flagHost: opts.host,
+    flagTarget: opts.target,
+  });
 }
 
 function rethrow(err: unknown): never {
-  if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
+  if (err instanceof AgentOperationError)
+    throw new CliError(err.toStructured());
   throw err;
 }
 
@@ -46,7 +51,7 @@ export async function runScheduleCreate(
 ): Promise<void> {
   try {
     // `--at` ⇒ one-off; otherwise recurring (the engine validates the kind's required field).
-    const kind: ScheduleKind = opts.at ? 'schedule_once' : 'schedule_cron';
+    const kind: ScheduleKind = opts.at ? "schedule_once" : "schedule_cron";
     const schedule = await createSchedule(
       {
         definition,
@@ -56,12 +61,12 @@ export async function runScheduleCreate(
         at: opts.at,
         startAt: opts.startAt,
         endAt: opts.endAt,
-        input: opts.input ? parseJsonInput(opts.input) : undefined,
+        input: opts.input ? parseScheduleInput(opts.input) : undefined,
       },
       clientFor(opts),
     );
     ok({ schedule }, [
-      `✓ Created schedule ${schedule.id}${schedule.nextFireAt ? ` — next fire ${schedule.nextFireAt}` : ''}`,
+      `✓ Created schedule ${schedule.id}${schedule.nextFireAt ? ` — next fire ${schedule.nextFireAt}` : ""}`,
       `  inspect: sapiom agents schedule inspect ${schedule.id}`,
     ]);
   } catch (err) {
@@ -69,7 +74,10 @@ export async function runScheduleCreate(
   }
 }
 
-export async function runScheduleList(definition: string, opts: HostOpts & { status?: string }): Promise<void> {
+export async function runScheduleList(
+  definition: string,
+  opts: HostOpts & { status?: string },
+): Promise<void> {
   try {
     const rows = await listSchedules(
       { definition, status: opts.status as ScheduleStatus | undefined },
@@ -77,19 +85,25 @@ export async function runScheduleList(definition: string, opts: HostOpts & { sta
     );
     ok({ schedules: rows }, [
       `${rows.length} schedule(s) for ${definition}`,
-      ...rows.map((r) => `  ${r.id}  ${r.kind}  ${r.status}  ${r.cron ?? ''}  next:${r.nextFireAt ?? '—'}`),
+      ...rows.map(
+        (r) =>
+          `  ${r.id}  ${r.kind}  ${r.status}  ${r.cron ?? ""}  next:${r.nextFireAt ?? "—"}`,
+      ),
     ]);
   } catch (err) {
     rethrow(err);
   }
 }
 
-export async function runScheduleInspect(scheduleId: string, opts: HostOpts): Promise<void> {
+export async function runScheduleInspect(
+  scheduleId: string,
+  opts: HostOpts,
+): Promise<void> {
   try {
     const s = await getSchedule(scheduleId, clientFor(opts));
     ok({ schedule: s }, [
       `Schedule ${s.id}  (${s.kind}, ${s.status})`,
-      `  next fire: ${s.nextFireAt ?? '—'}`,
+      `  next fire: ${s.nextFireAt ?? "—"}`,
       `  recent fires: ${s.recentFires.length}`,
     ]);
   } catch (err) {
@@ -97,10 +111,15 @@ export async function runScheduleInspect(scheduleId: string, opts: HostOpts): Pr
   }
 }
 
-export async function runScheduleCancel(scheduleId: string, opts: HostOpts): Promise<void> {
+export async function runScheduleCancel(
+  scheduleId: string,
+  opts: HostOpts,
+): Promise<void> {
   try {
     const result = await cancelSchedule(scheduleId, clientFor(opts));
-    ok({ id: result.id, status: result.status }, [`✓ Cancelled schedule ${scheduleId}`]);
+    ok({ id: result.id, status: result.status }, [
+      `✓ Cancelled schedule ${scheduleId}`,
+    ]);
   } catch (err) {
     rethrow(err);
   }
@@ -112,13 +131,24 @@ export async function runSchedulePreview(
 ): Promise<void> {
   try {
     const result = await previewCron(
-      { cron, timezone: opts.timezone, count: opts.count ? Number(opts.count) : undefined },
+      {
+        cron,
+        timezone: opts.timezone,
+        count: opts.count ? Number(opts.count) : undefined,
+      },
       clientFor(opts),
     );
-    ok({ cron: result.cron, timezone: result.timezone, occurrences: result.occurrences }, [
-      `Next ${result.occurrences.length} occurrence(s) of '${cron}' (${result.timezone}):`,
-      ...result.occurrences.map((o) => `  ${o}`),
-    ]);
+    ok(
+      {
+        cron: result.cron,
+        timezone: result.timezone,
+        occurrences: result.occurrences,
+      },
+      [
+        `Next ${result.occurrences.length} occurrence(s) of '${cron}' (${result.timezone}):`,
+        ...result.occurrences.map((o) => `  ${o}`),
+      ],
+    );
   } catch (err) {
     rethrow(err);
   }

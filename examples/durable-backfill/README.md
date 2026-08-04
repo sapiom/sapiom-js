@@ -61,12 +61,13 @@ skips the sandbox / database / file-storage calls.
 
 A deployed run processes one chunk, then pauses for the `backfill.heartbeat`
 signal. In production a schedule fires that signal on a cadence; in dev, fire it
-yourself via the MCP `signal_workflow` / `workflow_signal` tool. The
+yourself with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`). The
 `correlationId` is the paused run's `executionId`:
 
 ```json
 {
-  "signal": "backfill.heartbeat",
+  "executionId": "<executionId>",
+  "name": "backfill.heartbeat",
   "correlationId": "<executionId of the paused run>"
 }
 ```

@@ -66,7 +66,7 @@ answers never gets the next follow-up.
    (a real, billed run that enriches, personalizes, verifies, and sends).
 
 4. To end the drip early when a prospect replies, fire the `reply.received`
-   signal with the `workflow_signal` MCP tool, passing `{ "email": "..." }` and
+   signal with the `sapiom_dev_agents_signal` MCP tool, passing `{ "email": "..." }` and
    the run's `executionId` as the `correlationId`. To run it on a cadence, attach
    the `schedule` as a cron trigger on the deployed agent.
 

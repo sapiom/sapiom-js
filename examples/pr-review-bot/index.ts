@@ -33,7 +33,7 @@ import { z } from "zod/v4";
  *
  * Resume contract: `watch` registers `{ executionId, signal, correlationId }`
  * with the webhook source and pauses; the source fires that signal when a PR is
- * opened (in dev, via the MCP `signal_workflow` / `workflow_signal` tool — see
+ * opened (in dev, via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — see
  * README). The resumed `review` step's input IS the PR payload.
  *
  * Offline: with no `WEBHOOK_REGISTER_URL` configured (or `DRY_RUN` set), nothing

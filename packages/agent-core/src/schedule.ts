@@ -7,14 +7,16 @@
  * top-level (`/triggers/:id`); cron preview is stateless (`/triggers/preview-cron`). "Schedule" is
  * the SDK word for the engine's "trigger".
  */
-import { GatewayClient } from './client.js';
+import { GatewayClient } from "./client.js";
+import { AgentOperationError } from "./errors.js";
 
-export type ScheduleKind = 'schedule_cron' | 'schedule_once';
-export type ScheduleStatus = 'active' | 'paused' | 'completed' | 'disabled';
+export type ScheduleKind = "schedule_cron" | "schedule_once";
+export type ScheduleStatus = "active" | "paused" | "completed" | "disabled";
 
 export interface SchedulePolicy {
-  catchupPolicy?: 'skip' | 'all';
-  overlapPolicy?: 'allow' | 'skip';
+  catchupPolicy?: "skip" | "all";
+  /** Overlapping runs are currently allowed. `skip` is not implemented. */
+  overlapPolicy?: "allow";
   jitterMs?: number;
 }
 
@@ -23,7 +25,7 @@ export interface CreateScheduleOptions {
   definition: string;
   kind: ScheduleKind;
   /** Execution input passed to each fire. */
-  input?: unknown;
+  input?: Record<string, unknown>;
   /** Recurring (`schedule_cron`): the cron expression (required for that kind). */
   cron?: string;
   /** IANA timezone the cron is evaluated in (defaults to UTC server-side). */
@@ -83,19 +85,33 @@ export interface CronPreview {
 }
 
 /** Create a schedule (cron or one-off) for the agent. Returns the schedule detail. */
-export async function createSchedule(opts: CreateScheduleOptions, client: GatewayClient): Promise<ScheduleDetail> {
+export async function createSchedule(
+  opts: CreateScheduleOptions,
+  client: GatewayClient,
+): Promise<ScheduleDetail> {
   const { definition, ...body } = opts;
-  return client.post<ScheduleDetail>(`/definitions/${encodeURIComponent(definition)}/triggers`, body);
+  return client.post<ScheduleDetail>(
+    `/definitions/${encodeURIComponent(definition)}/triggers`,
+    body,
+  );
 }
 
 /** List an agent's schedules (newest first), optionally filtered by status. */
-export async function listSchedules(opts: ListSchedulesOptions, client: GatewayClient): Promise<ScheduleSummary[]> {
+export async function listSchedules(
+  opts: ListSchedulesOptions,
+  client: GatewayClient,
+): Promise<ScheduleSummary[]> {
   const { definition, ...filters } = opts;
-  return client.get<ScheduleSummary[]>(`/definitions/${encodeURIComponent(definition)}/triggers${toQuery(filters)}`);
+  return client.get<ScheduleSummary[]>(
+    `/definitions/${encodeURIComponent(definition)}/triggers${toQuery(filters)}`,
+  );
 }
 
 /** Get one schedule: config + next fire + recent fire ledger. */
-export async function getSchedule(id: string, client: GatewayClient): Promise<ScheduleDetail> {
+export async function getSchedule(
+  id: string,
+  client: GatewayClient,
+): Promise<ScheduleDetail> {
   return client.get<ScheduleDetail>(`/triggers/${encodeURIComponent(id)}`);
 }
 
@@ -104,12 +120,38 @@ export async function cancelSchedule(
   id: string,
   client: GatewayClient,
 ): Promise<{ id: string; status: ScheduleStatus }> {
-  return client.request<{ id: string; status: ScheduleStatus }>('DELETE', `/triggers/${encodeURIComponent(id)}`);
+  return client.request<{ id: string; status: ScheduleStatus }>(
+    "DELETE",
+    `/triggers/${encodeURIComponent(id)}`,
+  );
 }
 
 /** Validate a cron expression + timezone and preview the next occurrences (no persistence). */
-export async function previewCron(opts: CronPreviewOptions, client: GatewayClient): Promise<CronPreview> {
-  return client.post<CronPreview>('/triggers/preview-cron', opts);
+export async function previewCron(
+  opts: CronPreviewOptions,
+  client: GatewayClient,
+): Promise<CronPreview> {
+  return client.post<CronPreview>("/triggers/preview-cron", opts);
+}
+
+/** Parse and validate the JSON object stored as a schedule's execution input. */
+export function parseScheduleInput(raw: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new AgentOperationError({
+      code: "BAD_INPUT",
+      message: "Schedule input is not valid JSON.",
+    });
+  }
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new AgentOperationError({
+      code: "BAD_INPUT",
+      message: "Schedule input must be a JSON object.",
+    });
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function toQuery(filters: Record<string, unknown>): string {
@@ -118,5 +160,5 @@ function toQuery(filters: Record<string, unknown>): string {
     if (value !== undefined && value !== null) params.set(key, String(value));
   }
   const qs = params.toString();
-  return qs ? `?${qs}` : '';
+  return qs ? `?${qs}` : "";
 }

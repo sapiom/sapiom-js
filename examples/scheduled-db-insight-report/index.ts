@@ -325,7 +325,9 @@ const entryInput = z.object({
   schedule: z
     .string()
     .optional()
-    .describe("Cron cadence this report runs on (documentation only)."),
+    .describe(
+      "Cadence label carried in this run's output; it does not create a schedule.",
+    ),
   dbHandle: z
     .string()
     .optional()

@@ -53,13 +53,21 @@ When you've made a coherent change and want to validate it — the same point yo
 
 ### Firing the resume signal in dev
 
-A real `run` pauses at `watch`. To resume it without a real webhook, fire the signal via the MCP `signal_workflow` / `workflow_signal` tool — the manual stand-in for the PR webhook:
+A real `run` pauses at `watch`. To resume it without a real webhook, fire the signal with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`) — the manual stand-in for the PR webhook:
 
 ```json
 {
-  "signal": "pr.opened",
+  "executionId": "<executionId>",
+  "name": "pr.opened",
   "correlationId": "<executionId of the paused run>",
-  "payload": { "repo": { "owner": "acme", "name": "api" }, "number": 42, "title": "…", "branch": "feat/x", "baseBranch": "main", "diff": "…" }
+  "payload": {
+    "repo": { "owner": "acme", "name": "api" },
+    "number": 42,
+    "title": "…",
+    "branch": "feat/x",
+    "baseBranch": "main",
+    "diff": "…"
+  }
 }
 ```
 

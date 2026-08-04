@@ -43,6 +43,16 @@ import type {
   AgentRunResult,
   RunHandle as AgentRunHandle,
 } from "./agents/index.js";
+import * as schedules from "./schedules/index.js";
+import type {
+  CreateScheduleSpec,
+  ScheduleDetail,
+  ScheduleStatus,
+  ScheduleSummary,
+  ListSchedulesOptions,
+  CronPreviewSpec,
+  CronPreview,
+} from "./schedules/index.js";
 import {
   run as llmRun,
   submit as llmSubmit,
@@ -197,6 +207,17 @@ export interface Sapiom {
     run(spec: AgentRunSpec): Promise<AgentRunResult>;
     /** Launch a deployed agent; pass the handle to `pauseUntilSignal` to suspend on it. */
     launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
+  };
+  /** Persisted cron and one-off triggers for deployed agents. */
+  readonly schedules: {
+    create(spec: CreateScheduleSpec): Promise<ScheduleDetail>;
+    list(
+      definition: string,
+      opts?: ListSchedulesOptions,
+    ): Promise<ScheduleSummary[]>;
+    get(scheduleId: string): Promise<ScheduleDetail>;
+    cancel(scheduleId: string): Promise<{ id: string; status: ScheduleStatus }>;
+    preview(spec: CronPreviewSpec): Promise<CronPreview>;
   };
   /**
    * Routed LLM calls through the gateway's `/v2` routing front-end. `run` is the
@@ -535,6 +556,13 @@ function bind(transport: Transport): Sapiom {
     agents: {
       run: (spec) => agentsRun(spec, transport),
       launch: (spec) => agentsLaunch(spec, transport),
+    },
+    schedules: {
+      create: (spec) => schedules.create(spec, transport),
+      list: (definition, opts) => schedules.list(definition, opts, transport),
+      get: (scheduleId) => schedules.get(scheduleId, transport),
+      cancel: (scheduleId) => schedules.cancel(scheduleId, transport),
+      preview: (spec) => schedules.preview(spec, transport),
     },
     llm: {
       run: (spec) => llmRun(spec, transport),

@@ -92,7 +92,9 @@ export function registerAgentsCommands(program: Command): void {
     json(
       group
         .command("signal <executionId>")
-        .description("Resume a paused execution."),
+        .description(
+          "Deliver a signal and report how many paused runs resumed.",
+        ),
     ),
   )
     .requiredOption("--name <name>", "the signal name to deliver")

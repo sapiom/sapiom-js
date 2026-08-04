@@ -246,7 +246,9 @@ const entryInput = z.object({
   schedule: z
     .string()
     .optional()
-    .describe('Cron cadence this audit runs on (e.g. "0 6 * * 1").'),
+    .describe(
+      "Cadence label carried in this run's attestation; it does not create a schedule.",
+    ),
   framework: z
     .string()
     .optional()

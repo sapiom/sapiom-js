@@ -132,7 +132,9 @@ const entryInput = z.object({
   schedule: z
     .string()
     .optional()
-    .describe('Cron cadence this brief runs on (e.g. "0 8 * * *").'),
+    .describe(
+      "Cadence label carried in this run's output; it does not create a schedule.",
+    ),
   deliverTo: z
     .string()
     .optional()

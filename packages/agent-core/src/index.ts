@@ -136,6 +136,7 @@ export {
   getSchedule,
   cancelSchedule,
   previewCron,
+  parseScheduleInput,
 } from "./schedule.js";
 export type {
   ScheduleKind,

@@ -55,7 +55,7 @@ external audit copy that never blocks the chain.
 ## Reminders, escalation, and why the gates wait forever
 
 Each gate pauses **indefinitely** at $0 — it carries no pause `timeoutMs`. That is
-deliberate: the engine has a paused-run reaper that *terminates* a lapsed pause
+deliberate: the engine has a paused-run reaper that _terminates_ a lapsed pause
 with a `PauseTimeoutError` (it does not resume the step), so a deadline here would
 silently fail any approval slower than the deadline and never run the graceful
 `escalate` step. A legitimately slow approver must not lose the run.
@@ -70,7 +70,7 @@ signal, not by an engine deadline:
   walks `remind` → … → `escalate` for free.
 
 `maxReminders` (default 2) bounds how many reminder ticks a gate takes before it
-escalates. (The mirror template `wait-for-webhook` *wants* the terminal timeout and
+escalates. (The mirror template `wait-for-webhook` _wants_ the terminal timeout and
 so opts into `timeoutMs`; this chain wants a reminder, so it must not — don't add a
 gate `timeoutMs` back without switching to that terminal model.)
 
@@ -118,7 +118,7 @@ with no `ledgerHandle` no live Postgres is touched, so it's free. Keep
 ## Resuming a paused run in dev
 
 A real `run` pauses at each gate. Instead of a real approver, fire the signals
-yourself via the MCP `signal_workflow` / `workflow_signal` tool. The
+yourself with **Resume run** in Run Inspector, or via local MCP `sapiom_dev_agents_signal` (hosted MCP: `sapiom_workflow_signal`). The
 `correlationId` is the paused run's `executionId`, and each `payload` becomes the
 resumed `decide` step's input.
 
@@ -126,7 +126,8 @@ resumed `decide` step's input.
 
 ```json
 {
-  "signal": "approval.decision",
+  "executionId": "<executionId>",
+  "name": "approval.decision",
   "correlationId": "<executionId of the paused run>",
   "payload": { "decision": "approve" }
 }

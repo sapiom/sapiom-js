@@ -9,6 +9,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
 import { AGENT_PROJECT_MARKER } from "../shared/types.js";
+import { childPath, hasTraversalSegment } from "./path-safety.js";
 
 export const AGENT_PROJECT_SCAN_MAX_DEPTH = 3;
 
@@ -45,13 +46,20 @@ export function parseAgentProjectMarker(
   }
 }
 
+/** Resolve the fixed marker as one direct child of the selected directory. */
+function markerPathFor(dir: string): string | null {
+  const resolvedDir = path.resolve(dir);
+  if (hasTraversalSegment(resolvedDir)) return null;
+  return childPath(resolvedDir, AGENT_PROJECT_MARKER);
+}
+
 export function readAgentProjectMarkerSync(
   dir: string,
 ): AgentProjectMarker | null {
+  const markerPath = markerPathFor(dir);
+  if (!markerPath) return null;
   try {
-    return parseAgentProjectMarker(
-      fs.readFileSync(path.join(dir, AGENT_PROJECT_MARKER), "utf8"),
-    );
+    return parseAgentProjectMarker(fs.readFileSync(markerPath, "utf8"));
   } catch {
     return null;
   }
@@ -60,10 +68,10 @@ export function readAgentProjectMarkerSync(
 export async function readAgentProjectMarker(
   dir: string,
 ): Promise<AgentProjectMarker | null> {
+  const markerPath = markerPathFor(dir);
+  if (!markerPath) return null;
   try {
-    return parseAgentProjectMarker(
-      await fsp.readFile(path.join(dir, AGENT_PROJECT_MARKER), "utf8"),
-    );
+    return parseAgentProjectMarker(await fsp.readFile(markerPath, "utf8"));
   } catch {
     return null;
   }

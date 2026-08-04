@@ -420,7 +420,9 @@ const entryInput = z.object({
   schedule: z
     .string()
     .optional()
-    .describe("Cron cadence this pipeline runs on (carried + reported)."),
+    .describe(
+      "Cadence label carried in this run's output; it does not create a schedule.",
+    ),
   model: z
     .string()
     .optional()
