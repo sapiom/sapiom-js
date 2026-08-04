@@ -2063,8 +2063,8 @@ input {
   height: var(--pane-header-h);
   flex: 0 0 auto;
   padding: 0 var(--pane-pad-x);
-  /* Continuous surface with the terminal below — no decorative underline. */
-  background: var(--surface-base);
+  /* Surface (transparent — the bar IS the shell block) is owned by refine.css's
+     three-block model and declared there ONLY, so import order can't flip it. */
   position: relative;
   /* The bar measures its own width so the verbs can compact before the session
      queue starts clipping. */
@@ -6400,7 +6400,9 @@ input {
 .right-pane {
   display: flex;
   flex-direction: column;
-  background: var(--surface-base);
+  /* Block surface (the raised white graph pane) is owned by refine.css's
+     three-block model and declared there ONLY — so import order can't silently
+     flip the pane back to grey. Do not re-add a background here. */
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -6431,8 +6433,8 @@ input {
   flex-shrink: 0;
   height: var(--pane-header-h);
   padding: 0 var(--pane-pad-x);
-  /* Continuous with the board below — no decorative underline. */
-  background: var(--surface-base);
+  /* Surface (transparent — it shows the graph block) is owned by refine.css's
+     three-block model and declared there ONLY, so import order can't flip it. */
 }
 
 /* Individual segment buttons — small, rounded pills (fill bg-1 / subtle

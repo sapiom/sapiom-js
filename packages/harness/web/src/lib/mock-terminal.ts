@@ -27,12 +27,6 @@ function boxWidth(term: XTerm): number {
   return Math.max(30, term.cols - 1);
 }
 
-/** Visible width of a string once its ANSI SGR sequences are stripped. */
-function visibleLength(s: string): number {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
 /** The bordered prompt box + shortcut hint, exactly like the real CLI.
  *  The hint is truncated to one guaranteed visual line so the trailing
  *  relative cursor move (up 2, col 5 — inside the box after "> ") always

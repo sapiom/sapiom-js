@@ -23,7 +23,13 @@ export interface AgentNode {
  */
 export type RailGrouping = "workspace" | "deployment";
 
-/** Group and row order. "recent" is newest activity first; "name" is A–Z. */
+/**
+ * Sort order for the rail. "name" is A–Z; "recent" is newest-activity-first,
+ * but ONLY for folder groups (they carry session recency) — `WorkflowInfo` has
+ * no timestamp, so agent ROWS within a group are always path-stable regardless
+ * of this setting (see `agentOrder`). "recent" therefore changes group order,
+ * not row order.
+ */
 export type RailSort = "recent" | "name";
 
 /**
@@ -60,6 +66,9 @@ const basename = (path: string): string => path.split("/").filter(Boolean).pop()
 const isUnder = (childPath: string, cwd: string): boolean =>
   childPath === cwd || childPath.startsWith(`${cwd}/`);
 
+// Agent rows have no recency signal (WorkflowInfo carries no timestamp), so
+// "recent" cannot order them — it falls back to a stable path sort. Only the
+// folder groups above them honor recency. See the RailSort doc.
 const agentOrder =
   (sort: RailSort) =>
   (a: WorkflowInfo, b: WorkflowInfo): number =>

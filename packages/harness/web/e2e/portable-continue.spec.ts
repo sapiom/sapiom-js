@@ -78,7 +78,9 @@ test("continuing it opens a NEW session rather than resuming the old one", async
   // and the active session is a new id, not the old one resumed in place.
   await expect(page.getByTestId("agent-view")).toBeVisible();
   await expect(context).not.toHaveAttribute("data-session-id", "sess-pricing");
-  await expect(context).not.toHaveAttribute("data-session-id", "");
+  // A real fresh id is present — `/.+/` proves the attribute EXISTS and is
+  // non-empty (a bare not-"" also passes when the attribute is absent).
+  await expect(context).toHaveAttribute("data-session-id", /.+/);
   // The old session is not what came back — it never appears as a live session
   // (no active context on it, no switch chip for it).
   await expect(page.getByTestId("session-switch-sess-pricing")).toHaveCount(0);
