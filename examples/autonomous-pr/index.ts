@@ -116,6 +116,13 @@ const DEFAULT_REPO_HANDLE = "autonomous-pr-demo";
 const PREVIEW_SERVER_FILE = "sapiom-preview-server.mjs";
 const PREVIEW_PORT = 3000;
 const PREVIEW_SANDBOX_TTL = "1h";
+// Client-side bound on the preview deploy, kept under this step's own
+// `timeoutMs`. A git-source deploy waits for the branch's server to answer, so
+// bounding it ourselves guarantees a slow or unresponsive deploy becomes a
+// caught error the `catch` below degrades honestly — keeping "the preview is a
+// bonus; a failed one never fails an already-pushed run" true for a deploy
+// that never comes up, not just one that throws.
+const PREVIEW_DEPLOY_TIMEOUT_MS = 240_000;
 const PREVIEW_SERVER_SOURCE = `import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -523,8 +530,37 @@ const push = defineStep({
 
     // Deterministic, not agent-authored: written here so `preview` always has
     // something real to serve from this branch, regardless of what the task
-    // touched.
-    await box.writeFile(`${cwd}/${PREVIEW_SERVER_FILE}`, PREVIEW_SERVER_SOURCE);
+    // touched. Written through `exec` with the confirmed ABSOLUTE checkout
+    // path — NOT `box.writeFile`, whose paths resolve against the sandbox's
+    // `workspaceRoot` (which `sandboxes.attach` roots away from this checkout),
+    // so `writeFile("${cwd}/…")` silently lands the file OUTSIDE the tree
+    // `pushFromSandbox` commits — the exact inverse of the `exec`-cwd trap
+    // `verify` documents. base64-pipe so the source survives shell quoting
+    // intact, then stage it explicitly.
+    const previewServerB64 = Buffer.from(PREVIEW_SERVER_SOURCE, "utf8").toString(
+      "base64",
+    );
+    await box.exec(
+      `printf %s '${previewServerB64}' | base64 -d > "${cwd}/${PREVIEW_SERVER_FILE}"`,
+      { timeout: 30_000 },
+    );
+    await box.exec(`git -C "${cwd}" add "${PREVIEW_SERVER_FILE}"`, {
+      timeout: 30_000,
+    });
+
+    // Keep installed dependencies out of the reviewed branch. `verify` ran the
+    // repo's install, so `node_modules/` now exists in the checkout, and
+    // `pushFromSandbox` stages pending files wholesale — without this the
+    // pushed branch is thousands of dependency files, not the change under
+    // review. Ensure `.gitignore` excludes it (idempotent), and drop it from
+    // the index if a prior reused run already tracked it. `cd "<abs>"` in the
+    // command targets the real checkout, same discipline as `verify`'s install.
+    await box.exec(
+      `cd "${cwd}" && (grep -qxF 'node_modules/' .gitignore 2>/dev/null || ` +
+        `printf 'node_modules/\\npackage-lock.json\\n' >> .gitignore) && ` +
+        `git add .gitignore && (git rm -r --cached --quiet node_modules 2>/dev/null || true)`,
+      { timeout: 60_000 },
+    );
 
     const repo = await ctx.sapiom.repositories.get(repoSlug);
     const message = truncate(`feat: ${task}`, 72);
@@ -566,18 +602,35 @@ const preview = defineStep({
       ctx.shared.get("pushBranch") ?? ctx.shared.get("branchName") ?? "main";
     const hostName = `autonomous-pr-preview-${slugify(ctx.executionId)}`;
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const host = await ctx.sapiom.sandboxes.create({
         name: hostName,
         port: PREVIEW_PORT,
         ttl: PREVIEW_SANDBOX_TTL,
       });
-      const deploy = await host.deployPreview({
-        source: { kind: "git", repo: repoSlug, ref: branchName },
-        start: `node ${PREVIEW_SERVER_FILE}`,
-        port: PREVIEW_PORT,
-        env: { PORT: String(PREVIEW_PORT) },
-      });
+      // Race the deploy against our own timer (see `PREVIEW_DEPLOY_TIMEOUT_MS`)
+      // so a deploy that never binds the port becomes a caught error the
+      // `catch` degrades, not a hang that stalls the whole run.
+      const deploy = await Promise.race([
+        host.deployPreview({
+          source: { kind: "git", repo: repoSlug, ref: branchName },
+          start: `node ${PREVIEW_SERVER_FILE}`,
+          port: PREVIEW_PORT,
+          env: { PORT: String(PREVIEW_PORT) },
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "preview deploy did not return within the preview budget",
+                ),
+              ),
+            PREVIEW_DEPLOY_TIMEOUT_MS,
+          );
+        }),
+      ]);
       ctx.shared.set("previewUrl", deploy.url);
       ctx.shared.set("previewStatus", deploy.status);
       ctx.shared.set("previewLogs", tail(deploy.logs, ""));
@@ -593,7 +646,11 @@ const preview = defineStep({
       ctx.shared.set("previewUrl", null);
       ctx.shared.set("previewStatus", "failed");
       ctx.shared.set("previewLogs", String(err));
-      ctx.logger.warn("preview deploy threw", { err: String(err) });
+      ctx.logger.warn("preview deploy did not complete", { err: String(err) });
+    } finally {
+      // Clear the timer whether the deploy resolved, threw, or timed out — a
+      // pending timer would otherwise reject later, unobserved.
+      if (timer) clearTimeout(timer);
     }
     return goto("review", {});
   },

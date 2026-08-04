@@ -99,6 +99,14 @@ const SEED_TSCONFIG = `{
 }
 `;
 
+// A real examples repo ignores its installed dependencies. Seeding this keeps
+// the very first push clean the moment `verify`'s install populates
+// `node_modules/`, so the reviewed branch is the change, not the dependency
+// tree. `push` re-asserts the same ignore for BYO/reused repos.
+const SEED_GITIGNORE = `node_modules/
+package-lock.json
+`;
+
 /**
  * Exact-content scaffold instructions, prepended to the real task on a
  * scratch repo only — see `implement` in `index.ts`.
@@ -113,5 +121,6 @@ export const SEED_PREAMBLE =
   `--- examples/echo/index.ts ---\n${SEED_ECHO_INDEX}\n` +
   `--- examples/echo/template.json ---\n${SEED_ECHO_TEMPLATE}\n` +
   `--- package.json ---\n${SEED_ROOT_PACKAGE_JSON}\n` +
-  `--- tsconfig.json ---\n${SEED_TSCONFIG}\n\n` +
+  `--- tsconfig.json ---\n${SEED_TSCONFIG}\n` +
+  `--- .gitignore ---\n${SEED_GITIGNORE}\n\n` +
   "Once those files exist exactly as given, do the task below.\n\n";
