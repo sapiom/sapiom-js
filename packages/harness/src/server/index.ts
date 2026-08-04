@@ -270,8 +270,10 @@ function workflowListsEqual(
   // NUL separates the fields because it can't occur in any of them. Keep it
   // written as the escape `\u0000` — a literal NUL byte in the source makes
   // grep and ripgrep classify this whole file as binary and silently skip it.
+  // Mutable cloud-build fields are deliberately enriched at serve/render
+  // time; the registry snapshots compared here never own those fields.
   const key = (w: WorkflowInfo): string =>
-    `${w.path}\u0000${w.name}\u0000${w.definitionId ?? ""}\u0000${w.definitionSlug ?? ""}\u0000${w.activeBuildRunId ?? ""}\u0000${w.activeBuildRunStatus ?? ""}\u0000${w.source}`;
+    `${w.path}\u0000${w.name}\u0000${w.definitionId ?? ""}\u0000${w.definitionSlug ?? ""}\u0000${w.source}`;
   const setA = new Set(a.map(key));
   return b.every((w) => setA.has(key(w)));
 }
@@ -977,19 +979,39 @@ export const startServer = async (
     return found;
   };
 
+  /** Enrich only the bound workflow before a Canvas render. Canvas extraction
+   *  needs the registry snapshot to resolve the binding, but its cloud badge
+   *  needs the same mutable build projection exposed by /api/state. Limiting
+   *  the lookup to the bound workflow avoids one remote request per linked
+   *  agent on every source-triggered auto-render. */
+  const canvasWorkflowsForSession = async (
+    session: Pick<HarnessSession, "boundWorkflowPath">,
+  ): Promise<WorkflowInfo[]> => {
+    if (session.boundWorkflowPath == null) return workflowsCache;
+    const boundIndex = workflowsCache.findIndex(
+      (workflow) => workflow.path === session.boundWorkflowPath,
+    );
+    if (boundIndex === -1) return workflowsCache;
+    const [enrichedBound] = await enrichWorkflows([workflowsCache[boundIndex]]);
+    const workflows = [...workflowsCache];
+    workflows[boundIndex] = enrichedBound;
+    return workflows;
+  };
+
   // Renders a session's bound workflow via the fully deterministic pipeline —
-  // always against the live workflowsCache; structure + derived annotations,
-  // no LLM, no user token. A cheap no-op for an unbound session (the canvas
-  // router serves the empty state on its own). Never throws (see
-  // core/canvas-render.ts); best-effort, like every other canvas write here.
+  // against the live workflowsCache plus the bound definition's current cloud
+  // build projection; structure + derived annotations, no LLM, no user token.
+  // A cheap no-op for an unbound session (the canvas router serves the empty
+  // state on its own). Never throws (see core/canvas-render.ts); best-effort,
+  // like every other canvas write here.
   // autoRenderCanvas is the UNPROMPTED variant (session-create/boot) that
   // won't replace a workflow's existing render with an error panel when its
   // extraction fails.
   const renderCanvas = async (session: HarnessSession): Promise<void> => {
-    await renderCanvasForSession(session, workflowsCache);
+    await renderCanvasForSession(session, await canvasWorkflowsForSession(session));
   };
   const autoRenderCanvas = async (session: HarnessSession): Promise<void> => {
-    await renderCanvasForSession(session, workflowsCache, {
+    await renderCanvasForSession(session, await canvasWorkflowsForSession(session), {
       preserveExistingOnFailure: true,
     });
   };
@@ -1166,7 +1188,7 @@ export const startServer = async (
     "/api",
     createCanvasRenderRouter({
       getSession: (harnessSessionId) => sessionManager.get(harnessSessionId),
-      listWorkflows: () => workflowsCache,
+      listWorkflows: canvasWorkflowsForSession,
     }),
   );
   // Wrap the registry so GET /api/workflows also returns enriched slugs —
