@@ -20,8 +20,9 @@ import type { CaptureResult } from "posthog-js";
  *    a field value can be the secret itself.
  *
  * Never throws: posthog-js does not guard this callback, so an exception here
- * would take down capture for the whole page. On failure we pass the event
- * through unmodified rather than losing it.
+ * would take down capture for the whole page. On failure we drop the one event;
+ * an analytics gap is safer than sending a live boot token or secret-surface
+ * text that we could not prove was redacted.
  */
 
 /** Upper bound on retained click text — longer runs are likely user content. */
@@ -33,7 +34,10 @@ const MAX_EL_TEXT_LENGTH = 120;
  * place for a credential; everything else (aria-label, title, value, placeholder)
  * is dropped because any of them can carry the secret.
  */
-const KEPT_ELEMENT_ATTRIBUTES: ReadonlySet<string> = new Set(["attr__class", "attr__id"]);
+const KEPT_ELEMENT_ATTRIBUTES: ReadonlySet<string> = new Set([
+  "attr__class",
+  "attr__id",
+]);
 
 /** `attr__href` values inside the serialized `$elements_chain` string. */
 const CHAIN_HREF_PATTERN = /attr__href="([^"]*)"/gi;
@@ -48,9 +52,18 @@ const URL_VALUED_PERSON_PROPERTIES = /(?:current_url|referrer|pathname)$/;
  * itself and we can redact without knowing a pathname (the harness has none).
  */
 function isSecretSurface(properties: Record<string, unknown>): boolean {
-  const surface = typeof properties.surface === "string" ? properties.surface.toLowerCase() : "";
-  const object = typeof properties.object === "string" ? properties.object.toLowerCase() : "";
-  return /secret|vault|credential/.test(surface) || /secret|vault|credential/.test(object);
+  const surface =
+    typeof properties.surface === "string"
+      ? properties.surface.toLowerCase()
+      : "";
+  const object =
+    typeof properties.object === "string"
+      ? properties.object.toLowerCase()
+      : "";
+  return (
+    /secret|vault|credential/.test(surface) ||
+    /secret|vault|credential/.test(object)
+  );
 }
 
 /**
@@ -74,15 +87,21 @@ export function sanitizeUrl(rawUrl: unknown): unknown {
 
 /** Truncate retained click text with an ellipsis marker. */
 function truncateElementText(text: string): string {
-  return text.length > MAX_EL_TEXT_LENGTH ? `${text.slice(0, MAX_EL_TEXT_LENGTH)}…` : text;
+  return text.length > MAX_EL_TEXT_LENGTH
+    ? `${text.slice(0, MAX_EL_TEXT_LENGTH)}…`
+    : text;
 }
 
 /** Scrub one entry of `properties.$elements`. */
-function scrubElement(element: Record<string, unknown>, isSecret: boolean): void {
+function scrubElement(
+  element: Record<string, unknown>,
+  isSecret: boolean,
+): void {
   if (isSecret) {
     delete element.$el_text;
     for (const key of Object.keys(element)) {
-      if (key.startsWith("attr__") && !KEPT_ELEMENT_ATTRIBUTES.has(key)) delete element[key];
+      if (key.startsWith("attr__") && !KEPT_ELEMENT_ATTRIBUTES.has(key))
+        delete element[key];
     }
     return;
   }
@@ -100,11 +119,15 @@ function scrubElement(element: Record<string, unknown>, isSecret: boolean): void
  * remote config, so both are handled — a server-side flip cannot silently start
  * leaking.
  */
-function scrubElementCarriers(properties: Record<string, unknown>, isSecret: boolean): void {
+function scrubElementCarriers(
+  properties: Record<string, unknown>,
+  isSecret: boolean,
+): void {
   const elements = properties.$elements;
   if (Array.isArray(elements)) {
     for (const element of elements) {
-      if (element && typeof element === "object") scrubElement(element as Record<string, unknown>, isSecret);
+      if (element && typeof element === "object")
+        scrubElement(element as Record<string, unknown>, isSecret);
     }
   }
 
@@ -113,10 +136,15 @@ function scrubElementCarriers(properties: Record<string, unknown>, isSecret: boo
     delete properties.$elements_chain;
     return;
   }
-  properties.$elements_chain = properties.$elements_chain.replace(CHAIN_HREF_PATTERN, (match, href: string) => {
-    const sanitized = sanitizeUrl(href);
-    return typeof sanitized === "string" ? `attr__href="${sanitized}"` : match;
-  });
+  properties.$elements_chain = properties.$elements_chain.replace(
+    CHAIN_HREF_PATTERN,
+    (match, href: string) => {
+      const sanitized = sanitizeUrl(href);
+      return typeof sanitized === "string"
+        ? `attr__href="${sanitized}"`
+        : match;
+    },
+  );
 }
 
 /**
@@ -125,7 +153,10 @@ function scrubElementCarriers(properties: Record<string, unknown>, isSecret: boo
  * writes `$initial_current_url` there, which would otherwise pin the boot-token
  * URL onto the person profile permanently.
  */
-function redactUrls(result: CaptureResult, properties: Record<string, unknown>): void {
+function redactUrls(
+  result: CaptureResult,
+  properties: Record<string, unknown>,
+): void {
   properties.$current_url = sanitizeUrl(properties.$current_url);
   properties.$referrer = sanitizeUrl(properties.$referrer);
 
@@ -133,13 +164,17 @@ function redactUrls(result: CaptureResult, properties: Record<string, unknown>):
     if (!bag) continue;
     const personProperties = bag as Record<string, unknown>;
     for (const key of Object.keys(personProperties)) {
-      if (URL_VALUED_PERSON_PROPERTIES.test(key)) personProperties[key] = sanitizeUrl(personProperties[key]);
+      if (URL_VALUED_PERSON_PROPERTIES.test(key))
+        personProperties[key] = sanitizeUrl(personProperties[key]);
     }
   }
 }
 
 /** Redact autocaptured click text — the top-level `$el_text` and the nested carriers. */
-function redactClickText(properties: Record<string, unknown>, isSecret: boolean): void {
+function redactClickText(
+  properties: Record<string, unknown>,
+  isSecret: boolean,
+): void {
   if (typeof properties.$el_text === "string") {
     if (isSecret) {
       delete properties.$el_text;
@@ -150,7 +185,7 @@ function redactClickText(properties: Record<string, unknown>, isSecret: boolean)
   scrubElementCarriers(properties, isSecret);
 }
 
-/** `before_send` implementation. Returns `null` to drop an event (never used today). */
+/** `before_send` implementation. Returns `null` when an event cannot be redacted safely. */
 export function beforeSend(result: CaptureResult | null): CaptureResult | null {
   if (!result) return result;
   try {
@@ -163,9 +198,8 @@ export function beforeSend(result: CaptureResult | null): CaptureResult | null {
     result.properties = properties;
     return result;
   } catch {
-    // Pass through unmodified — dropping telemetry is worse than un-redacted
-    // telemetry only in the sense that an unhandled throw here breaks capture
-    // page-wide; the URL/token risk is mitigated by posthog's own config too.
-    return result;
+    // Fail closed. The event may still contain the per-boot URL credential or
+    // secret-surface text, so it cannot leave the machine unredacted.
+    return null;
   }
 }

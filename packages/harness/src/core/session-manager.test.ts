@@ -3,8 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { HarnessAdapter, HarnessKind, HarnessSession, SpawnSpec } from "../shared/types.js";
-import { SessionManager, type PtySpawnFn, type SessionManagerOptions } from "./session-manager.js";
+import type {
+  HarnessAdapter,
+  HarnessKind,
+  HarnessSession,
+  SpawnSpec,
+} from "../shared/types.js";
+import {
+  SessionManager,
+  type PtySpawnFn,
+  type SessionManagerOptions,
+} from "./session-manager.js";
 import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
@@ -14,7 +23,9 @@ import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
  *  leaves it undefined, which the sweep must treat as "can't tell, hands off". */
 function createFakePty(pid?: number) {
   const dataListeners: Array<(chunk: string) => void> = [];
-  const exitListeners: Array<(e: { exitCode: number; signal?: number }) => void> = [];
+  const exitListeners: Array<
+    (e: { exitCode: number; signal?: number }) => void
+  > = [];
   const pty = {
     pid,
     onData: (cb: (chunk: string) => void) => {
@@ -36,7 +47,9 @@ function createFakePty(pid?: number) {
   };
 }
 
-function createFakeAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
+function createFakeAdapter(
+  overrides: Partial<HarnessAdapter> = {},
+): HarnessAdapter {
   return {
     id: "claude-code",
     eventSource: "hooks",
@@ -126,10 +139,16 @@ describe("SessionManager", () => {
 
   it("creates a session, spawns via the adapter's SpawnSpec, and marks it running", async () => {
     const { manager, adapter } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
     expect(adapter.launch).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/tmp/proj", harnessSessionId: session.id }),
+      expect.objectContaining({
+        cwd: "/tmp/proj",
+        harnessSessionId: session.id,
+      }),
     );
     expect(session.status).toBe("running");
     expect(session.cwd).toBe("/tmp/proj");
@@ -140,10 +159,15 @@ describe("SessionManager", () => {
 
   it("persists sessions to disk and reconciles non-exited sessions to exited on reload", async () => {
     const { manager } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
     expect(session.status).toBe("running");
 
-    const raw = JSON.parse(await readFile(sessionsPath, "utf8")) as HarnessSession[];
+    const raw = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
     expect(raw).toHaveLength(1);
     expect(raw[0]?.id).toBe(session.id);
     expect(raw[0]?.status).toBe("running");
@@ -157,7 +181,10 @@ describe("SessionManager", () => {
 
   it("routes write() and resize() to the underlying pty", async () => {
     const { manager, spawns } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
     expect(manager.write(session.id, "echo hi\r")).toBe(true);
     expect(spawns[0]?.pty.write).toHaveBeenCalledWith("echo hi\r");
@@ -180,10 +207,17 @@ describe("SessionManager", () => {
 
     it("splits non-empty submitted text into a text write, then a separate \\r after a delay", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       manager.setReady(session.id);
 
-      const submitPromise = manager.submitInput(session.id, "hello world", true);
+      const submitPromise = manager.submitInput(
+        session.id,
+        "hello world",
+        true,
+      );
 
       // Text lands immediately; the trailing Enter must NOT be part of the
       // same write (that's exactly the bracketed-paste bug this fixes).
@@ -202,7 +236,10 @@ describe("SessionManager", () => {
 
     it("writes a bare \\r in a single call for submit:true with empty text (no splitting needed)", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       manager.setReady(session.id);
 
       const ok = await manager.submitInput(session.id, "", true);
@@ -214,7 +251,10 @@ describe("SessionManager", () => {
 
     it("writes only the text, with no \\r at all, when submit is false", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       manager.setReady(session.id);
 
       const ok = await manager.submitInput(session.id, "draft text", false);
@@ -226,12 +266,17 @@ describe("SessionManager", () => {
 
     it("returns false for an unknown session without ever touching a pty", async () => {
       const { manager } = makeManager();
-      expect(await manager.submitInput("unknown-id", "hello", true)).toBe(false);
+      expect(await manager.submitInput("unknown-id", "hello", true)).toBe(
+        false,
+      );
     });
 
     it("does not write the trailing \\r if the session's pty is gone by the time the delay elapses", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       manager.setReady(session.id);
 
       const submitPromise = manager.submitInput(session.id, "hello", true);
@@ -256,16 +301,22 @@ describe("SessionManager", () => {
       vi.useRealTimers();
     });
 
-    it("a fresh session starts not-ready even though its pty is already \"running\"", async () => {
+    it('a fresh session starts not-ready even though its pty is already "running"', async () => {
       const { manager } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       expect(session.status).toBe("running");
       expect(session.ready).toBe(false);
     });
 
     it("write() (raw keystrokes) is never gated on readiness — a human must be able to answer a blocking prompt themselves", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       expect(session.ready).toBe(false);
 
       expect(manager.write(session.id, "1\r")).toBe(true);
@@ -277,7 +328,10 @@ describe("SessionManager", () => {
         "setReady() fires before the grace period elapses (macro fired a beat before onboarding finished)",
       async () => {
         const { manager, spawns } = makeManager();
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
         // Not ready yet — must NOT have written anything, this is exactly the
@@ -304,7 +358,10 @@ describe("SessionManager", () => {
 
     it("throws SessionNotReadyError (never silently proceeds) when a session never becomes ready within the grace period", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
 
       const submitPromise = manager.submitInput(session.id, "hello", true);
       const assertion = expect(submitPromise).rejects.toThrow(/not ready yet/i);
@@ -317,7 +374,10 @@ describe("SessionManager", () => {
 
     it("resuming resets ready back to false, even for a session that was ready before its pty exited", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       manager.setAgentSessionId(session.id, "agent-1");
       manager.setReady(session.id);
       expect(manager.get(session.id)?.ready).toBe(true);
@@ -340,8 +400,13 @@ describe("SessionManager", () => {
     describe("harnesses with detectBlockingPrompt (Codex's lazy-rollout-file bridge)", () => {
       it("is not ready before the settle window elapses, even with a clean scrollback", async () => {
         const detectBlockingPrompt = vi.fn(() => false);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const { manager, spawns } = makeManager({
+          adapter: createFakeAdapter({ detectBlockingPrompt }),
+        });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
         expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
@@ -357,8 +422,13 @@ describe("SessionManager", () => {
 
       it("becomes ready enough after the settle window when the scrollback shows no blocking prompt (the common already-trusted case)", async () => {
         const detectBlockingPrompt = vi.fn(() => false);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const { manager, spawns } = makeManager({
+          adapter: createFakeAdapter({ detectBlockingPrompt }),
+        });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
 
         await vi.advanceTimersByTimeAsync(700);
         const submitPromise = manager.submitInput(session.id, "hello", true);
@@ -374,8 +444,13 @@ describe("SessionManager", () => {
       it("stays not-ready while the scrollback shows a blocking prompt, then proceeds once it clears", async () => {
         let showingPrompt = true;
         const detectBlockingPrompt = vi.fn(() => showingPrompt);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const { manager, spawns } = makeManager({
+          adapter: createFakeAdapter({ detectBlockingPrompt }),
+        });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
         await vi.advanceTimersByTimeAsync(700);
@@ -390,11 +465,17 @@ describe("SessionManager", () => {
 
       it("throws SessionNotReadyError if the blocking prompt never clears within the grace period", async () => {
         const detectBlockingPrompt = vi.fn(() => true);
-        const { manager, spawns } = makeManager({ adapter: createFakeAdapter({ detectBlockingPrompt }) });
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const { manager, spawns } = makeManager({
+          adapter: createFakeAdapter({ detectBlockingPrompt }),
+        });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
-        const assertion = expect(submitPromise).rejects.toThrow(/not ready yet/i);
+        const assertion =
+          expect(submitPromise).rejects.toThrow(/not ready yet/i);
         await vi.advanceTimersByTimeAsync(8_000);
         await assertion;
 
@@ -405,7 +486,10 @@ describe("SessionManager", () => {
 
   it("replays the scrollback buffer to new attach()ers and streams live data", async () => {
     const { manager, spawns } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
     spawns[0]?.emitData("hello ");
     spawns[0]?.emitData("world");
@@ -426,7 +510,10 @@ describe("SessionManager", () => {
     it("broadcasts once immediately, then throttles further data within the window", async () => {
       vi.useFakeTimers();
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
 
       const activity: string[] = [];
       manager.onActivity((id) => activity.push(id));
@@ -477,7 +564,10 @@ describe("SessionManager", () => {
 
   it("marks a session exited when its pty exits, and notifies status listeners", async () => {
     const { manager, spawns } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
     const statuses: HarnessSession["status"][] = [];
     manager.onStatusChange((s) => {
@@ -493,7 +583,10 @@ describe("SessionManager", () => {
 
   it("kill() signals the pty for a running session and returns a Promise resolving true; returns Promise<false> otherwise", async () => {
     const { manager, spawns } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
     // kill() now returns Promise<boolean> — fire-and-forget still works via void,
     // but here we confirm the resolved value and that the signal was sent.
@@ -533,9 +626,14 @@ describe("SessionManager", () => {
 
   it("resume() requires a known agentSessionId and respawns via adapter.resume", async () => {
     const { manager, adapter, spawns } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
-    await expect(manager.resume(session.id)).rejects.toThrow(/no agentSessionId/);
+    await expect(manager.resume(session.id)).rejects.toThrow(
+      /no agentSessionId/,
+    );
 
     manager.setAgentSessionId(session.id, "agent-uuid-1");
     spawns[0]?.emitExit(0);
@@ -544,12 +642,17 @@ describe("SessionManager", () => {
     const resumed = await manager.resume(session.id);
     expect(adapter.resume).toHaveBeenCalledWith(
       "agent-uuid-1",
-      expect.objectContaining({ harnessSessionId: session.id, cwd: "/tmp/proj" }),
+      expect.objectContaining({
+        harnessSessionId: session.id,
+        cwd: "/tmp/proj",
+      }),
     );
     expect(resumed.status).toBe("running");
     expect(resumed.id).toBe(session.id);
 
-    await expect(manager.resume("does-not-exist")).rejects.toThrow(/Unknown session/);
+    await expect(manager.resume("does-not-exist")).rejects.toThrow(
+      /Unknown session/,
+    );
   });
 
   it("awaits an async buildLaunchOpts and merges its result into launch opts", async () => {
@@ -558,14 +661,19 @@ describe("SessionManager", () => {
       return { settingsFile: `/generated/${harnessSessionId}/settings.json` };
     });
     const { manager, adapter } = makeManager({ buildLaunchOpts });
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
     expect(buildLaunchOpts).toHaveBeenCalledWith(
       session.id,
       expect.objectContaining({ cwd: "/tmp/proj", harness: "claude-code" }),
     );
     expect(adapter.launch).toHaveBeenCalledWith(
-      expect.objectContaining({ settingsFile: `/generated/${session.id}/settings.json` }),
+      expect.objectContaining({
+        settingsFile: `/generated/${session.id}/settings.json`,
+      }),
     );
   });
 
@@ -574,7 +682,10 @@ describe("SessionManager", () => {
       mcpConfigFile: `/generated/${harnessSessionId}/mcp-config.json`,
     }));
     const { manager, adapter, spawns } = makeManager({ buildLaunchOpts });
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
     manager.setAgentSessionId(session.id, "agent-uuid-1");
     spawns[0]?.emitExit(0);
 
@@ -582,7 +693,9 @@ describe("SessionManager", () => {
 
     expect(adapter.resume).toHaveBeenLastCalledWith(
       "agent-uuid-1",
-      expect.objectContaining({ mcpConfigFile: `/generated/${session.id}/mcp-config.json` }),
+      expect.objectContaining({
+        mcpConfigFile: `/generated/${session.id}/mcp-config.json`,
+      }),
     );
   });
 
@@ -620,11 +733,15 @@ describe("SessionManager", () => {
     }
 
     it("throws SessionNotResumeableError instead of spawning when the agent no longer holds the conversation", async () => {
-      const adapter = createFakeAdapter({ canResume: vi.fn(async () => false) });
+      const adapter = createFakeAdapter({
+        canResume: vi.fn(async () => false),
+      });
       const { manager, spawns } = makeManager({ adapter });
       const session = registerPhantom(manager);
 
-      await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        SessionNotResumeableError,
+      );
       // The point of the pre-flight: no doomed pty. Previously this spawned
       // `claude --resume <id>`, which exited 1 with "No conversation found".
       expect(spawns).toHaveLength(0);
@@ -632,7 +749,9 @@ describe("SessionManager", () => {
     });
 
     it("names the agent and the reason so the 409 tells the user WHY", async () => {
-      const adapter = createFakeAdapter({ canResume: vi.fn(async () => false) });
+      const adapter = createFakeAdapter({
+        canResume: vi.fn(async () => false),
+      });
       const { manager } = makeManager({ adapter });
       const session = registerPhantom(manager);
 
@@ -647,7 +766,9 @@ describe("SessionManager", () => {
 
     it("probes the agent's store with the session's own agentSessionId and cwd", async () => {
       const canResume = vi.fn(async () => true);
-      const { manager } = makeManager({ adapter: createFakeAdapter({ canResume }) });
+      const { manager } = makeManager({
+        adapter: createFakeAdapter({ canResume }),
+      });
       const session = registerPhantom(manager);
 
       await manager.resume(session.id);
@@ -656,10 +777,14 @@ describe("SessionManager", () => {
     });
 
     it("leaves a rejected session's record untouched — still exited, same lastActiveAt", async () => {
-      const { manager } = makeManager({ adapter: createFakeAdapter({ canResume: vi.fn(async () => false) }) });
+      const { manager } = makeManager({
+        adapter: createFakeAdapter({ canResume: vi.fn(async () => false) }),
+      });
       const session = registerPhantom(manager);
 
-      await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        SessionNotResumeableError,
+      );
 
       const after = manager.get(session.id);
       expect(after?.status).toBe("exited");
@@ -677,7 +802,9 @@ describe("SessionManager", () => {
       });
       const session = registerPhantom(manager);
 
-      await expect(manager.resume(session.id)).rejects.toThrow("node-pty exploded");
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        "node-pty exploded",
+      );
 
       const after = manager.get(session.id);
       expect(after?.status).toBe("exited");
@@ -688,20 +815,69 @@ describe("SessionManager", () => {
 
     it("still short-circuits on a missing agentSessionId without probing the adapter", async () => {
       const canResume = vi.fn(async () => true);
-      const { manager } = makeManager({ adapter: createFakeAdapter({ canResume }) });
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const { manager } = makeManager({
+        adapter: createFakeAdapter({ canResume }),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       await manager.kill(session.id);
 
-      await expect(manager.resume(session.id)).rejects.toThrow(SessionNotResumeableError);
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        SessionNotResumeableError,
+      );
       expect(canResume).not.toHaveBeenCalled();
     });
   });
 
   it("new sessions start with boundWorkflowPath: null", async () => {
     const { manager } = makeManager();
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
     expect(session.boundWorkflowPath).toBeNull();
     expect(manager.get(session.id)?.boundWorkflowPath).toBeNull();
+  });
+
+  it("preserves a tracked project binding when portable continuation assembled a brief", async () => {
+    const { manager } = makeManager({
+      buildLaunchOpts: async (_id, req) =>
+        req.rehydrateFrom ? { rehydratedFrom: req.rehydrateFrom } : {},
+    });
+    const prior = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    manager.setBoundWorkflowPath(prior.id, "/tmp/proj/agent");
+
+    const continued = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+      rehydrateFrom: prior.id,
+    });
+
+    expect(continued.rehydratedFrom).toBe(prior.id);
+    expect(continued.boundWorkflowPath).toBe("/tmp/proj/agent");
+  });
+
+  it("does not copy a binding when portable continuation found no record", async () => {
+    const { manager } = makeManager({ buildLaunchOpts: async () => ({}) });
+    const prior = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    manager.setBoundWorkflowPath(prior.id, "/tmp/proj/agent");
+
+    const fresh = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+      rehydrateFrom: prior.id,
+    });
+
+    expect(fresh.rehydratedFrom).toBeNull();
+    expect(fresh.boundWorkflowPath).toBeNull();
   });
 
   describe("harness-context.json wiring", () => {
@@ -713,7 +889,10 @@ describe("SessionManager", () => {
       // autoCreateSession call shape (server/index.ts calling
       // sessionManager.create() directly), the entry point that used to skip
       // the write entirely because it lived in the REST handler instead.
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
 
       expect(writeWorkspaceContext).toHaveBeenCalledTimes(1);
       expect(writeWorkspaceContext).toHaveBeenCalledWith(session);
@@ -746,7 +925,9 @@ describe("SessionManager", () => {
       });
       const { manager } = makeManager({ writeWorkspaceContext });
 
-      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).rejects.toThrow("disk full");
+      await expect(
+        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+      ).rejects.toThrow("disk full");
       // The record was persisted as "starting" before the failing write — it
       // must not stay that way (a non-exited record with no pty behind it
       // renders as a ghost tab forever).
@@ -769,7 +950,11 @@ describe("SessionManager", () => {
         void args;
         return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
       };
-      const { manager } = makeManager({ buildLaunchOpts, prepareWorkspaceContext, spawnPty });
+      const { manager } = makeManager({
+        buildLaunchOpts,
+        prepareWorkspaceContext,
+        spawnPty,
+      });
 
       const session = manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
@@ -781,7 +966,9 @@ describe("SessionManager", () => {
       await manager.resume(session.id);
 
       expect(prepareWorkspaceContext).toHaveBeenCalledTimes(1);
-      expect(prepareWorkspaceContext).toHaveBeenCalledWith(manager.get(session.id));
+      expect(prepareWorkspaceContext).toHaveBeenCalledWith(
+        manager.get(session.id),
+      );
       expect(order).toEqual(["prompt", "prepare", "spawn"]);
     });
 
@@ -799,7 +986,9 @@ describe("SessionManager", () => {
         lastActiveAt: "2026-01-01T00:00:00.000Z",
       });
 
-      await expect(manager.resume(session.id)).rejects.toThrow("context path unreadable");
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        "context path unreadable",
+      );
 
       expect(spawns).toHaveLength(0);
       expect(manager.get(session.id)).toMatchObject({
@@ -816,7 +1005,9 @@ describe("SessionManager", () => {
       // that doesn't exist) or leave a real .sapiom dir behind on the test
       // runner's machine — neither happens, proving both defaults are inert.
       const { manager } = makeManager();
-      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).resolves.toBeDefined();
+      await expect(
+        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+      ).resolves.toBeDefined();
 
       const historical = manager.registerHistorical({
         agentSessionId: "agent-uuid-9",
@@ -881,7 +1072,9 @@ describe("SessionManager", () => {
 
     it("defaults to a no-op so tests with fake cwds never touch the real filesystem", async () => {
       const { manager } = makeManager();
-      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).resolves.toBeDefined();
+      await expect(
+        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+      ).resolves.toBeDefined();
     });
   });
 
@@ -892,7 +1085,9 @@ describe("SessionManager", () => {
       });
       const { manager } = makeManager({ ensureCanvasTemplate });
 
-      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).rejects.toThrow("read-only fs");
+      await expect(
+        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+      ).rejects.toThrow("read-only fs");
       expect(manager.list()[0]?.status).toBe("exited");
     });
 
@@ -904,16 +1099,18 @@ describe("SessionManager", () => {
       const statuses: string[] = [];
       manager.onStatusChange((s) => statuses.push(s.status));
 
-      await expect(manager.create({ cwd: "/tmp/proj", harness: "claude-code" })).rejects.toThrow(
-        "posix_spawnp failed",
-      );
+      await expect(
+        manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+      ).rejects.toThrow("posix_spawnp failed");
       expect(manager.list()[0]?.status).toBe("exited");
       expect(statuses).toContain("exited");
 
       // The reconciliation must be durable, not just in-memory — a persisted
       // "starting" record would still ghost after the SPA refetches state.
       await manager.flush();
-      const raw = JSON.parse(await readFile(sessionsPath, "utf8")) as HarnessSession[];
+      const raw = JSON.parse(
+        await readFile(sessionsPath, "utf8"),
+      ) as HarnessSession[];
       expect(raw[0]?.status).toBe("exited");
     });
 
@@ -938,7 +1135,10 @@ describe("SessionManager", () => {
 
     it("kill() transitions a stale non-exited record with no pty to exited instead of failing", async () => {
       const { manager, spawns } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       spawns[0]?.emitExit(0);
       // Simulate the ghost state directly (the transitions that used to
       // produce it are all reconciled now): a record stuck non-exited whose
@@ -963,8 +1163,14 @@ describe("SessionManager", () => {
         // The node-pty missed-exit bug (see kill()'s fallback), but for a
         // process that died on its own — no kill() call means no fallback
         // was ever armed, which is exactly what the sweep exists to catch.
-        const { manager } = makeManager({ fakePid: 4242, isPidAlive: () => false });
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const { manager } = makeManager({
+          fakePid: 4242,
+          isPidAlive: () => false,
+        });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
         expect(session.status).toBe("running");
 
         const statuses: string[] = [];
@@ -978,13 +1184,21 @@ describe("SessionManager", () => {
         expect(manager.attach(session.id, () => {})).toBeUndefined();
 
         await manager.flush();
-        const raw = JSON.parse(await readFile(sessionsPath, "utf8")) as HarnessSession[];
+        const raw = JSON.parse(
+          await readFile(sessionsPath, "utf8"),
+        ) as HarnessSession[];
         expect(raw[0]?.status).toBe("exited");
       });
 
       it("leaves sessions whose process is alive untouched", async () => {
-        const { manager } = makeManager({ fakePid: 4242, isPidAlive: () => true });
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const { manager } = makeManager({
+          fakePid: 4242,
+          isPidAlive: () => true,
+        });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
 
         manager.sweepDeadSessions();
 
@@ -994,7 +1208,10 @@ describe("SessionManager", () => {
       it("never probes a pty without a numeric pid, and never declares it dead", async () => {
         const isPidAlive = vi.fn(() => false);
         const { manager } = makeManager({ isPidAlive }); // fake pty with pid: undefined
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
 
         manager.sweepDeadSessions();
 
@@ -1004,7 +1221,10 @@ describe("SessionManager", () => {
 
       it("reconciles a non-exited record with no pty only after it outlives the grace window", async () => {
         const { manager, spawns } = makeManager();
-        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+        const session = await manager.create({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+        });
         spawns[0]?.emitExit(0);
         const record = manager.get(session.id)!;
         record.status = "starting"; // simulate the stale mid-transition ghost
@@ -1026,7 +1246,10 @@ describe("SessionManager", () => {
   describe("setBoundWorkflowPath", () => {
     it("updates the in-memory session, persists it, and notifies status listeners", async () => {
       const { manager } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
 
       const statuses: (string | null)[] = [];
       manager.onStatusChange((s) => {
@@ -1039,13 +1262,20 @@ describe("SessionManager", () => {
       expect(manager.get(session.id)?.boundWorkflowPath).toBe("/tmp/leasing");
       expect(statuses).toEqual(["/tmp/leasing"]);
 
-      const raw = JSON.parse(await readFile(sessionsPath, "utf8")) as HarnessSession[];
-      expect(raw.find((s) => s.id === session.id)?.boundWorkflowPath).toBe("/tmp/leasing");
+      const raw = JSON.parse(
+        await readFile(sessionsPath, "utf8"),
+      ) as HarnessSession[];
+      expect(raw.find((s) => s.id === session.id)?.boundWorkflowPath).toBe(
+        "/tmp/leasing",
+      );
     });
 
     it("unbinds with null, persisting and notifying again", async () => {
       const { manager } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       manager.setBoundWorkflowPath(session.id, "/tmp/leasing");
 
       const statuses: (string | null)[] = [];
@@ -1065,14 +1295,19 @@ describe("SessionManager", () => {
       const statuses: string[] = [];
       manager.onStatusChange(() => statuses.push("fired"));
 
-      expect(() => manager.setBoundWorkflowPath("does-not-exist", "/tmp/leasing")).not.toThrow();
+      expect(() =>
+        manager.setBoundWorkflowPath("does-not-exist", "/tmp/leasing"),
+      ).not.toThrow();
       await manager.flush();
       expect(statuses).toEqual([]);
     });
 
     it("is a no-op when rebinding to the already-current value (no redundant persist/notify)", async () => {
       const { manager } = makeManager();
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       manager.setBoundWorkflowPath(session.id, "/tmp/leasing");
       await manager.flush();
 
@@ -1095,10 +1330,15 @@ describe("SessionManager", () => {
       return fake.pty as unknown as ReturnType<PtySpawnFn>;
     };
     const { manager } = makeManager({ spawnPty });
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
 
     const env = capturedEnvs[0];
-    expect(env?.["SAPIOM_HARNESS_INGEST_URL"]).toBe("http://127.0.0.1:4100/ingest");
+    expect(env?.["SAPIOM_HARNESS_INGEST_URL"]).toBe(
+      "http://127.0.0.1:4100/ingest",
+    );
     expect(env?.["SAPIOM_HARNESS_INGEST_TOKEN"]).toBe("boot-token");
     expect(env?.["SAPIOM_HARNESS_SESSION_ID"]).toBe(session.id);
   });
@@ -1139,7 +1379,8 @@ describe("SessionManager", () => {
    * "0.28.1"` on a project that builds fine outside the app.
    */
   it("never leaks the host's ESBUILD_BINARY_PATH pin into the agent's environment", async () => {
-    process.env["ESBUILD_BINARY_PATH"] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
+    process.env["ESBUILD_BINARY_PATH"] =
+      "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
     const capturedEnvs: Record<string, string | undefined>[] = [];
     const spawnPty: PtySpawnFn = (_file, _args, options) => {
       capturedEnvs.push(options.env ?? {});
@@ -1175,7 +1416,10 @@ describe("SessionManager", () => {
         fakePid: 9999,
         isPidAlive: () => pidAlive,
       });
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
       expect(session.status).toBe("running");
 
       // Confirm the pty exists and won't emit onExit on its own — the exit
@@ -1204,8 +1448,14 @@ describe("SessionManager", () => {
     });
 
     it("kill() resolves immediately via real onExit when node-pty fires before the escalation window", async () => {
-      const { manager, spawns } = makeManager({ fakePid: 8888, isPidAlive: () => false });
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const { manager, spawns } = makeManager({
+        fakePid: 8888,
+        isPidAlive: () => false,
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
 
       const killPromise = manager.kill(session.id);
       // Drive the real onExit — this fires before the escalation timer.
@@ -1224,7 +1474,10 @@ describe("SessionManager", () => {
         fakePid: 7777,
         isPidAlive: () => pidAlive,
       });
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
 
       const killPromise = manager.kill(session.id);
       expect(spawns[0]?.pty.kill).toHaveBeenCalledTimes(1); // initial SIGTERM (no arg)
@@ -1243,7 +1496,10 @@ describe("SessionManager", () => {
     });
 
     it("killAll() resolves once all sessions are confirmed dead, even when exits come at different times", async () => {
-      const { manager, spawns } = makeManager({ fakePid: 6666, isPidAlive: () => false });
+      const { manager, spawns } = makeManager({
+        fakePid: 6666,
+        isPidAlive: () => false,
+      });
       const a = await manager.create({ cwd: "/tmp/a", harness: "claude-code" });
       const b = await manager.create({ cwd: "/tmp/b", harness: "claude-code" });
 
@@ -1275,7 +1531,10 @@ describe("SessionManager", () => {
       // Both ptys swallow their onExit events — killAll() must still resolve
       // via the missed-exit synthesis path within the escalation window.
       let pidAlive = true;
-      const { manager } = makeManager({ fakePid: 5555, isPidAlive: () => pidAlive });
+      const { manager } = makeManager({
+        fakePid: 5555,
+        isPidAlive: () => pidAlive,
+      });
       await manager.create({ cwd: "/tmp/a", harness: "claude-code" });
       await manager.create({ cwd: "/tmp/b", harness: "claude-code" });
 
@@ -1306,7 +1565,10 @@ describe("SessionManager", () => {
         // Always "alive" — simulates an EPERM zombie that survives all probes.
         isPidAlive: () => true,
       });
-      const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
 
       const killPromise = manager.kill(session.id);
       // Initial signal sent.
@@ -1350,7 +1612,9 @@ describe("SessionManager", () => {
         lastActiveAt: new Date().toISOString(),
       });
 
-      await expect(manager.resume(session.id)).rejects.toThrow(ExternalHarnessError);
+      await expect(manager.resume(session.id)).rejects.toThrow(
+        ExternalHarnessError,
+      );
     });
 
     it("resume() ExternalHarnessError has code HARNESS_EXTERNAL and names the harness label", async () => {
@@ -1389,7 +1653,9 @@ describe("SessionManager", () => {
         lastActiveAt: new Date().toISOString(),
       });
 
-      await expect(manager.submitInput(session.id, "hello")).rejects.toThrow(ExternalHarnessError);
+      await expect(manager.submitInput(session.id, "hello")).rejects.toThrow(
+        ExternalHarnessError,
+      );
     });
 
     it("submitInput() ExternalHarnessError has code HARNESS_EXTERNAL", async () => {

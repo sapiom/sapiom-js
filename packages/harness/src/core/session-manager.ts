@@ -48,7 +48,11 @@ export {
 // the whole server at import time.
 type IPty = import("node-pty").IPty;
 type PtyForkOptions = import("node-pty").IPtyForkOptions;
-export type PtySpawnFn = (file: string, args: string[], options: PtyForkOptions) => IPty;
+export type PtySpawnFn = (
+  file: string,
+  args: string[],
+  options: PtyForkOptions,
+) => IPty;
 
 let defaultSpawn: PtySpawnFn | undefined;
 let defaultSpawnError: Error | undefined;
@@ -67,7 +71,9 @@ let defaultSpawnError: Error | undefined;
 export async function ensureSpawnHelperExecutable(): Promise<void> {
   if (process.platform === "win32") return;
   try {
-    const nodePtyPkgJson = createRequire(import.meta.url).resolve("node-pty/package.json");
+    const nodePtyPkgJson = createRequire(import.meta.url).resolve(
+      "node-pty/package.json",
+    );
     const helperPath = join(
       dirname(nodePtyPkgJson),
       "prebuilds",
@@ -189,8 +195,13 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
  */
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
-  req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom">,
-) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
+  req: Pick<
+    CreateSessionRequest,
+    "cwd" | "harness" | "profile" | "rehydrateFrom"
+  >,
+) =>
+  | Omit<LaunchOpts, "harnessSessionId" | "cwd">
+  | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
 
@@ -280,8 +291,12 @@ export class SessionManager {
   private readonly buildLaunchOpts: LaunchOptsBuilder;
   private readonly now: () => string;
   private readonly generateId: () => string;
-  private readonly writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
-  private readonly prepareWorkspaceContext: (session: HarnessSession) => Promise<void>;
+  private readonly writeWorkspaceContext: (
+    session: HarnessSession,
+  ) => Promise<void>;
+  private readonly prepareWorkspaceContext: (
+    session: HarnessSession,
+  ) => Promise<void>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
 
@@ -300,14 +315,19 @@ export class SessionManager {
     this.ingestUrl = options.ingestUrl;
     this.ingestToken = options.ingestToken;
     this.collectorUrl = options.collectorUrl;
-    this.sessionsPath = expandHome(options.sessionsPath ?? HARNESS_PATHS.sessions);
+    this.sessionsPath = expandHome(
+      options.sessionsPath ?? HARNESS_PATHS.sessions,
+    );
     this.spawnPty = options.spawnPty;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
-    this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
-    this.prepareWorkspaceContext = options.prepareWorkspaceContext ?? (async () => {});
-    this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
+    this.writeWorkspaceContext =
+      options.writeWorkspaceContext ?? (async () => {});
+    this.prepareWorkspaceContext =
+      options.prepareWorkspaceContext ?? (async () => {});
+    this.ensureCanvasTemplate =
+      options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
     this.statusEmitter.setMaxListeners(0);
@@ -372,7 +392,8 @@ export class SessionManager {
       // with harness="conductor" (written by an earlier build, hand-edited, or
       // a future registration) hits this path on resume/submitInput.
       const info = listHarnessAdapters().find((a) => a.id === harness);
-      if (info?.mode === "external") throw new ExternalHarnessError(harness, info.label);
+      if (info?.mode === "external")
+        throw new ExternalHarnessError(harness, info.label);
       throw new AdapterNotFoundError(harness);
     }
     return adapter;
@@ -387,6 +408,23 @@ export class SessionManager {
       ...(await this.buildLaunchOpts(id, req)),
     };
     const spec = adapter.launch(opts);
+    // Portable continuation starts a new coding-agent conversation, but when
+    // the source is one of OUR tracked sessions its project binding is durable
+    // Studio state and can be carried forward independently of vendor context.
+    // Require both an assembled brief and the same cwd: an arbitrary
+    // rehydrateFrom id must never bind an unrelated directory.
+    const rehydratedSession = opts.rehydratedFrom
+      ? (this.sessions.get(req.rehydrateFrom ?? "") ??
+        Array.from(this.sessions.values()).find(
+          (candidate) =>
+            candidate.agentSessionId === req.rehydrateFrom &&
+            candidate.cwd === req.cwd,
+        ))
+      : undefined;
+    const preservedBinding =
+      rehydratedSession?.cwd === req.cwd
+        ? rehydratedSession.boundWorkflowPath
+        : null;
     const session: HarnessSession = {
       id,
       agentSessionId: null,
@@ -397,7 +435,7 @@ export class SessionManager {
       createdAt: this.now(),
       lastActiveAt: this.now(),
       exitCode: null,
-      boundWorkflowPath: null,
+      boundWorkflowPath: preservedBinding,
       // What the builder actually managed to assemble, not what the caller
       // asked for: `req.rehydrateFrom` naming a session our event log holds
       // nothing for yields no brief, and this stays null so nothing downstream
@@ -484,7 +522,9 @@ export class SessionManager {
     // Failing here instead keeps the record exactly as it was — unspawned,
     // and (see below) with its real lastActiveAt intact.
     if (!(await adapter.canResume(session.agentSessionId, session.cwd))) {
-      const label = listHarnessAdapters().find((a) => a.id === session.harness)?.label ?? session.harness;
+      const label =
+        listHarnessAdapters().find((a) => a.id === session.harness)?.label ??
+        session.harness;
       throw new SessionNotResumeableError(
         id,
         `${label} no longer has the conversation for this session (${session.agentSessionId}) in ${session.cwd}. ` +
@@ -641,7 +681,10 @@ export class SessionManager {
       if (handle) {
         // Guard against non-numeric pids (test fakes) — never probe the OS
         // with a garbage value, and never declare a session dead on one.
-        if (typeof handle.pty.pid === "number" && !this.isPidAlive(handle.pty.pid)) {
+        if (
+          typeof handle.pty.pid === "number" &&
+          !this.isPidAlive(handle.pty.pid)
+        ) {
           this.markExited(session.id, handle, null);
         }
         continue;
@@ -651,7 +694,8 @@ export class SessionManager {
       // so only sweep records older than the grace period (an unparseable
       // lastActiveAt is garbage and sweeps immediately).
       const ageMs = Date.now() - Date.parse(session.lastActiveAt);
-      if (!(ageMs < NO_PTY_SWEEP_GRACE_MS)) void this.transitionExited(session, null);
+      if (!(ageMs < NO_PTY_SWEEP_GRACE_MS))
+        void this.transitionExited(session, null);
     }
   }
 
@@ -692,7 +736,8 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) {
       const info = listHarnessAdapters().find((a) => a.id === session.harness);
-      if (info?.mode === "external") throw new ExternalHarnessError(session.harness, info.label);
+      if (info?.mode === "external")
+        throw new ExternalHarnessError(session.harness, info.label);
       return false;
     }
     if (!this.isReadyEnough(session, handle)) {
@@ -825,7 +870,9 @@ export class SessionManager {
     // what's actually on screen right now; checking the whole history would
     // make a session that dismissed its trust prompt minutes ago look
     // permanently stuck.
-    return !adapter.detectBlockingPrompt(handle.buffer.slice(-BLOCKING_PROMPT_SCAN_BYTES));
+    return !adapter.detectBlockingPrompt(
+      handle.buffer.slice(-BLOCKING_PROMPT_SCAN_BYTES),
+    );
   }
 
   /**
@@ -835,7 +882,10 @@ export class SessionManager {
    * keystrokes) must never wait on this, since a human answering the very
    * prompt this is waiting out is exactly how a session becomes ready.
    */
-  private async waitUntilReady(id: string, timeoutMs: number): Promise<boolean> {
+  private async waitUntilReady(
+    id: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const handle = this.ptys.get(id);
@@ -916,7 +966,14 @@ export class SessionManager {
     const exited = new Promise<void>((resolve) => {
       resolveExited = resolve;
     });
-    const handle: PtyHandle = { pty, buffer: "", emitter, spawnedAt: Date.now(), exited, resolveExited };
+    const handle: PtyHandle = {
+      pty,
+      buffer: "",
+      emitter,
+      spawnedAt: Date.now(),
+      exited,
+      resolveExited,
+    };
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -946,7 +1003,11 @@ export class SessionManager {
    * silent no-op rather than double-transitioning or clobbering a newer
    * session/handle that's since taken its place (e.g. a resume).
    */
-  private markExited(id: string, handle: PtyHandle, exitCode: number | null): void {
+  private markExited(
+    id: string,
+    handle: PtyHandle,
+    exitCode: number | null,
+  ): void {
     if (this.ptys.get(id) !== handle) return;
     this.ptys.delete(id);
     this.lastActivityBroadcast.delete(id);

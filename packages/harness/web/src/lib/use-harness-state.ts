@@ -364,6 +364,8 @@ export function useHarnessState(): HarnessStateHook {
 
   // Poll one run until terminal. A new run for the same session replaces the
   // old POLLER only — the previous run's snapshot stays in runsByExecution.
+  // A transient inspection error is retried; three consecutive failures stop
+  // this poller with a visible recovery message instead of disappearing.
   const startRunPolling = useCallback(
     (sessionId: string, executionId: string, target: RunTarget) => {
       const existing = runPollers.current.get(sessionId);
@@ -390,9 +392,20 @@ export function useHarnessState(): HarnessStateHook {
         next.delete(sessionId);
         return next;
       });
+      let consecutiveFailures = 0;
+      let pollInFlight = false;
+      let timer: ReturnType<typeof setInterval>;
+      const stopCurrentPoller = (): void => {
+        if (runPollers.current.get(sessionId) !== timer) return;
+        clearInterval(timer);
+        runPollers.current.delete(sessionId);
+      };
       const poll = async (): Promise<void> => {
+        if (pollInFlight) return;
+        pollInFlight = true;
         try {
           const run = await api.getRunState(executionId);
+          consecutiveFailures = 0;
           setRunsByExecution((prev) =>
             new Map(prev).set(executionId, {
               run,
@@ -402,23 +415,26 @@ export function useHarnessState(): HarnessStateHook {
             }),
           );
           if (run.status !== "running") {
-            const timer = runPollers.current.get(sessionId);
-            if (timer) clearInterval(timer);
-            runPollers.current.delete(sessionId);
+            stopCurrentPoller();
           }
         } catch {
-          // Endpoint absent (server predates runtime analytics) or transient
-          // failure: stop polling quietly - the UI simply shows no run state.
-          const timer = runPollers.current.get(sessionId);
-          if (timer) clearInterval(timer);
-          runPollers.current.delete(sessionId);
+          consecutiveFailures += 1;
+          if (
+            consecutiveFailures >= 3 &&
+            runPollers.current.get(sessionId) === timer
+          ) {
+            stopCurrentPoller();
+            setToast(
+              "Run inspection is temporarily unavailable. Open the run in the Sapiom dashboard or start a new Prod Run to retry.",
+            );
+          }
+        } finally {
+          pollInFlight = false;
         }
       };
+      timer = setInterval(() => void poll(), 2000);
+      runPollers.current.set(sessionId, timer);
       void poll();
-      runPollers.current.set(
-        sessionId,
-        setInterval(() => void poll(), 2000),
-      );
     },
     [],
   );

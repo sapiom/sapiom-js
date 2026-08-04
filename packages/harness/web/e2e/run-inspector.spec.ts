@@ -61,19 +61,52 @@ const clickLocalButton = async (page: Page): Promise<void> => {
  *  canvas-inspector.spec.ts). */
 const publish = (page: Page, message: unknown): Promise<void> =>
   page.evaluate((msg) => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } })
-      .__HARNESS_TEST__.publish(msg);
+    (
+      window as unknown as {
+        __HARNESS_TEST__: { publish: (m: unknown) => void };
+      }
+    ).__HARNESS_TEST__.publish(msg);
   }, message);
 
 /** Seed window.__MOCK_RUN_STATE__[executionId] so MockApi.getRunState returns
  *  a custom RunView on the next poll for that id — consumed and cleared once. */
-const seedRunState = (page: Page, executionId: string, view: RunView): Promise<void> =>
+const seedRunState = (
+  page: Page,
+  executionId: string,
+  view: RunView,
+): Promise<void> =>
   page.evaluate(
     ([id, v]) => {
-      const win = window as unknown as { __MOCK_RUN_STATE__?: Record<string, unknown> };
+      const win = window as unknown as {
+        __MOCK_RUN_STATE__?: Record<string, unknown>;
+      };
       win.__MOCK_RUN_STATE__ = { ...(win.__MOCK_RUN_STATE__ ?? {}), [id]: v };
     },
     [executionId, view] as [string, RunView],
+  );
+
+/** Make the next N mocked inspection calls fail and expose their call count. */
+const seedRunStateFailures = (
+  page: Page,
+  executionId: string,
+  failures: number,
+): Promise<void> =>
+  page.evaluate(
+    ([id, count]) => {
+      const win = window as unknown as {
+        __MOCK_RUN_STATE_FAILURES__?: Record<string, number>;
+        __MOCK_RUN_STATE_CALLS__?: Record<string, number>;
+      };
+      win.__MOCK_RUN_STATE_FAILURES__ = {
+        ...(win.__MOCK_RUN_STATE_FAILURES__ ?? {}),
+        [id]: count,
+      };
+      win.__MOCK_RUN_STATE_CALLS__ = {
+        ...(win.__MOCK_RUN_STATE_CALLS__ ?? {}),
+        [id]: 0,
+      };
+    },
+    [executionId, failures] as [string, number],
   );
 
 // ---------------------------------------------------------------------------
@@ -154,7 +187,12 @@ test.describe("offline stub run — run-local inspector", () => {
       // field regardless of target; the notice fields are independent.
       stubbed: true,
       steps: [
-        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 100 },
+        {
+          id: "intake",
+          name: "intake",
+          status: "passed" as const,
+          latencyMs: 100,
+        },
       ],
       unusedStubs: [{ step: "intake", key: "contentGeneration.images.create" }],
       stubWarnings: ["intake: stub for records.read had wrong shape"],
@@ -258,6 +296,59 @@ test.describe("prod run — run-state poll via mocked endpoint", () => {
     await expect(draftRow.locator('[aria-label="passed"]')).toBeVisible();
   });
 
+  test("one transient inspection failure is retried instead of losing the run", async ({
+    page,
+  }) => {
+    const executionId = "exec-transient-inspection";
+    await seedRunStateFailures(page, executionId, 1);
+
+    await publish(page, {
+      type: "execution.started",
+      harnessSessionId: "sess-boot",
+      executionId,
+      target: "prod",
+    });
+
+    await expect(page.getByTestId("canvas-run-chip")).toContainText(
+      "prod run completed",
+      { timeout: 6_000 },
+    );
+    const calls = await page.evaluate((id) => {
+      const win = window as unknown as {
+        __MOCK_RUN_STATE_CALLS__?: Record<string, number>;
+      };
+      return win.__MOCK_RUN_STATE_CALLS__?.[id] ?? 0;
+    }, executionId);
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  test("three consecutive inspection failures stop with an actionable message", async ({
+    page,
+  }) => {
+    const executionId = "exec-unavailable-inspection";
+    await seedRunStateFailures(page, executionId, 3);
+
+    await publish(page, {
+      type: "execution.started",
+      harnessSessionId: "sess-boot",
+      executionId,
+      target: "prod",
+    });
+
+    await expect(page.getByTestId("toast")).toContainText(
+      "Run inspection is temporarily unavailable",
+      { timeout: 7_000 },
+    );
+    await expect(page.getByTestId("toast")).toContainText("Sapiom dashboard");
+    const calls = await page.evaluate((id) => {
+      const win = window as unknown as {
+        __MOCK_RUN_STATE_CALLS__?: Record<string, number>;
+      };
+      return win.__MOCK_RUN_STATE_CALLS__?.[id] ?? 0;
+    }, executionId);
+    expect(calls).toBe(3);
+  });
+
   test("a running prod run shows each step's running/passed status as polls advance", async ({
     page,
   }) => {
@@ -266,7 +357,12 @@ test.describe("prod run — run-state poll via mocked endpoint", () => {
       executionId: "exec-run-in-progress",
       status: "running",
       steps: [
-        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 110 },
+        {
+          id: "intake",
+          name: "intake",
+          status: "passed" as const,
+          latencyMs: 110,
+        },
         { id: "screen", name: "screen", status: "running" as const },
       ],
     });
@@ -291,7 +387,9 @@ test.describe("prod run — run-state poll via mocked endpoint", () => {
 
     // intake passed in both polls.
     await expect(
-      page.getByTestId("canvas-step-row-intake").locator('[aria-label="passed"]'),
+      page
+        .getByTestId("canvas-step-row-intake")
+        .locator('[aria-label="passed"]'),
     ).toBeVisible();
   });
 
@@ -302,8 +400,18 @@ test.describe("prod run — run-state poll via mocked endpoint", () => {
       executionId: "exec-fail-test",
       status: "failed",
       steps: [
-        { id: "intake", name: "intake", status: "passed" as const, latencyMs: 200 },
-        { id: "screen", name: "screen", status: "failed" as const, error: "Validation failed" },
+        {
+          id: "intake",
+          name: "intake",
+          status: "passed" as const,
+          latencyMs: 200,
+        },
+        {
+          id: "screen",
+          name: "screen",
+          status: "failed" as const,
+          error: "Validation failed",
+        },
       ],
     });
 
@@ -324,10 +432,14 @@ test.describe("prod run — run-state poll via mocked endpoint", () => {
 
     // intake passed, screen failed.
     await expect(
-      page.getByTestId("canvas-step-row-intake").locator('[aria-label="passed"]'),
+      page
+        .getByTestId("canvas-step-row-intake")
+        .locator('[aria-label="passed"]'),
     ).toBeVisible();
     await expect(
-      page.getByTestId("canvas-step-row-screen").locator('[aria-label="failed"]'),
+      page
+        .getByTestId("canvas-step-row-screen")
+        .locator('[aria-label="failed"]'),
     ).toBeVisible();
 
     // Cost-free contract: the Steps inspector must never show $ amounts.

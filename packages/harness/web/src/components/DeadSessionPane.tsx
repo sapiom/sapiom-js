@@ -1,8 +1,22 @@
 import type { JSX } from "react";
-import type { HarnessSession, SessionRecord, SessionResumeMode, SessionSummary } from "@shared/types";
+import type {
+  HarnessSession,
+  SessionRecord,
+  SessionResumeMode,
+  SessionSummary,
+} from "@shared/types";
 
-import { HARNESS_LABELS, formatDuration, formatRelativeTime, historyRowMeta } from "../lib/history-meta";
-import { useSessionRecord, type SessionRecordState } from "../lib/use-session-record";
+import {
+  HARNESS_LABELS,
+  formatDuration,
+  formatRelativeTime,
+  historyRowMeta,
+} from "../lib/history-meta";
+import { deadSessionAction } from "../lib/dead-session-action";
+import {
+  useSessionRecord,
+  type SessionRecordState,
+} from "../lib/use-session-record";
 import { Icon } from "./Icon";
 import { SessionTranscript } from "./SessionTranscript";
 
@@ -10,10 +24,8 @@ interface DeadSessionPaneProps {
   session: HarnessSession;
   /**
    * Server-verified resumability for this session, from its history row.
-   * Undefined while that lookup is still in flight — Resume stays available in
-   * that window (the server's own pre-flight is the backstop and answers 409
-   * with the reason), but a resolved `rehydrate` disables the button outright
-   * rather than letting the user click a guaranteed failure.
+   * Undefined while that lookup is still in flight — neither continuation path
+   * is offered until the server answers.
    */
   resumeMode: SessionResumeMode | undefined;
   /** Fetches the reconstructed transcript; resolves null when nothing was recorded. */
@@ -75,7 +87,6 @@ export function DeadSessionPane({
   onContinue,
   onClose,
 }: DeadSessionPaneProps): JSX.Element {
-  const canResume = session.agentSessionId != null && resumeMode !== "rehydrate";
   const duration = formatDuration(session.createdAt, session.lastActiveAt);
   const record = useSessionRecord(session.id, loadRecord);
   // "empty" collapses the section entirely rather than showing an empty box:
@@ -85,10 +96,18 @@ export function DeadSessionPane({
   // unable to hand this conversation back while OUR recording of it is right
   // there. When both are true, the way forward is portable continue rather
   // than the dead end this pane used to be.
-  const canContinue = !canResume && record.status === "ready";
+  const action = deadSessionAction({
+    hasAgentSessionId: session.agentSessionId != null,
+    resumeMode,
+    recordReady: record.status === "ready",
+  });
 
   return (
-    <div className="dead-session-pane" data-testid="dead-session-pane" data-has-record={showRecord}>
+    <div
+      className="dead-session-pane"
+      data-testid="dead-session-pane"
+      data-has-record={showRecord}
+    >
       <div className="dead-session-summary">
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />
@@ -121,8 +140,12 @@ export function DeadSessionPane({
           </div>
         </dl>
         <div className="dead-session-actions">
-          {canContinue ? (
-            <button className="btn-primary" data-testid="dead-session-continue" onClick={onContinue}>
+          {action === "continue" ? (
+            <button
+              className="btn-primary"
+              data-testid="dead-session-continue"
+              onClick={onContinue}
+            >
               Continue here
             </button>
           ) : (
@@ -130,20 +153,33 @@ export function DeadSessionPane({
               className="btn-primary"
               data-testid="dead-session-resume"
               onClick={onResume}
-              disabled={!canResume}
-              title={canResume ? undefined : resumeBlockedReason(session)}
+              disabled={action !== "resume"}
+              title={
+                action === "checking"
+                  ? "Checking Claude Code history…"
+                  : action === "resume"
+                    ? undefined
+                    : resumeBlockedReason(session)
+              }
             >
-              Resume
+              {action === "checking" ? "Checking…" : "Resume"}
             </button>
           )}
-          <button className="btn-ghost" data-testid="dead-session-close" onClick={onClose}>
+          <button
+            className="btn-ghost"
+            data-testid="dead-session-close"
+            onClick={onClose}
+          >
             Close
           </button>
         </div>
-        {!canResume && (
-          <div className="dead-session-resume-reason" data-testid="dead-session-resume-reason">
+        {(action === "continue" || action === "blocked") && (
+          <div
+            className="dead-session-resume-reason"
+            data-testid="dead-session-resume-reason"
+          >
             {resumeBlockedReason(session)}{" "}
-            {canContinue
+            {action === "continue"
               ? "Continuing opens a fresh session in this directory, seeded with the reconstruction below — a briefing about this session, not its context. The new coding agent will need to check the repository before relying on any of it."
               : "Start a new session in this directory instead; there is no recording of this one to carry over either."}
           </div>
@@ -217,20 +253,35 @@ export function PastSessionPane({
           </div>
         </div>
         <div className="dead-session-actions">
-          <button className="btn-primary" data-testid="past-session-start" onClick={onStart}>
-            {resumable ? "Resume" : canRehydrate ? "Continue here" : "New session here"}
+          <button
+            className="btn-primary"
+            data-testid="past-session-start"
+            onClick={onStart}
+          >
+            {resumable
+              ? "Resume"
+              : canRehydrate
+                ? "Continue here"
+                : "New session here"}
           </button>
-          <button className="btn-ghost" data-testid="past-session-close" onClick={onClose}>
+          <button
+            className="btn-ghost"
+            data-testid="past-session-close"
+            onClick={onClose}
+          >
             Close
           </button>
         </div>
       </header>
 
       {!resumable && (
-        <div className="dead-session-resume-reason" data-testid="past-session-reason">
-          {HARNESS_LABELS[summary.harness]} has no saved conversation for this session, so it can't
-          be reattached — sessions that end before their first prompt are never written to the
-          coding agent's history.{" "}
+        <div
+          className="dead-session-resume-reason"
+          data-testid="past-session-reason"
+        >
+          {HARNESS_LABELS[summary.harness]} has no saved conversation for this
+          session, so it can't be reattached — sessions that end before their
+          first prompt are never written to the coding agent's history.{" "}
           {canRehydrate
             ? "Continuing opens a fresh session here, seeded with the reconstruction below. The new coding agent gets a briefing about this session, not its context — it will need to check the repository before relying on any of it."
             : "Starting opens a fresh session in the same directory, with no context from this one."}
@@ -249,7 +300,11 @@ export function PastSessionPane({
  * transcript appears. An absent record is stated plainly — it is the one thing
  * this view must never quietly turn into "an empty session".
  */
-function SessionRecordBody({ state }: { state: SessionRecordState }): JSX.Element {
+function SessionRecordBody({
+  state,
+}: {
+  state: SessionRecordState;
+}): JSX.Element {
   if (state.status === "loading") {
     return (
       <div className="past-session-status" data-testid="past-session-loading">
@@ -270,9 +325,9 @@ function SessionRecordBody({ state }: { state: SessionRecordState }): JSX.Elemen
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />
         </span>
-        No transcript for this session: Agent Studio has no recorded events for it. Sessions Agent
-        Studio didn't run — or ones whose events have aged out of the local log — show up here as
-        history rows only.
+        No transcript for this session: Agent Studio has no recorded events for
+        it. Sessions Agent Studio didn't run — or ones whose events have aged
+        out of the local log — show up here as history rows only.
       </div>
     );
   }

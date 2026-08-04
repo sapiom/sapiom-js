@@ -14,7 +14,6 @@
  * --no-open, --no-session, --dev, --state-root <dir>.
  */
 import * as crypto from "node:crypto";
-import open from "open";
 import {
   runDoctor,
   printDoctorReport,
@@ -29,6 +28,7 @@ import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
 import { resolveStatePaths } from "../core/paths.js";
 import { parseArgs } from "./args.js";
+import { openStudioInBrowser } from "./open-browser.js";
 import { startServer, type HarnessServer } from "../server/index.js";
 
 const main = async (): Promise<void> => {
@@ -72,9 +72,15 @@ const main = async (): Promise<void> => {
   // out explicitly so "auth silently worked" doesn't read as "nothing
   // happened" (a fresh login is its own visible browser flow already).
   if (identity?.source === "cached") {
-    console.log(`\nSigned in as ${identity.organizationName} (cached credential).`);
+    console.log(
+      `\nSigned in as ${identity.organizationName} (cached credential).`,
+    );
   }
-  const consentResult = await ensureConsent({ noTelemetry: options.noTelemetry });
+  const consentResult = await ensureConsent({
+    noTelemetry: options.noTelemetry,
+    settingsPath: statePaths.settings,
+    eventsPath: statePaths.events,
+  });
   const { telemetryOptIn } = consentResult;
   // First run = no recent directories recorded before this boot. Must be read
   // BEFORE recordRecentDir below stamps the launch dir in — after that the
@@ -82,7 +88,8 @@ const main = async (): Promise<void> => {
   // and suppresses the auto-created boot session, so a brand-new user lands on
   // the welcome panel rather than a bare terminal in whatever directory they
   // happened to launch from.
-  const firstRun = (await loadSettings(statePaths.settings)).recentDirs.length === 0;
+  const firstRun =
+    (await loadSettings(statePaths.settings)).recentDirs.length === 0;
   await recordRecentDir(options.dir, statePaths.settings);
 
   const bootToken = crypto.randomBytes(32).toString("hex");
@@ -123,7 +130,9 @@ const main = async (): Promise<void> => {
   });
 
   if (server && !options.noOpen) {
-    await open(`http://localhost:${server.port}/?token=${bootToken}`);
+    await openStudioInBrowser(
+      `http://localhost:${server.port}/?token=${bootToken}`,
+    );
   }
 
   if (server) {

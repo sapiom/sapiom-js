@@ -69,7 +69,7 @@ export async function migrateHarnessIdentity(
 
     // Seed analytics.json. seedAnalyticsIdentity handles atomic write +
     // 0600 permissions + degrade-on-error.
-    seedAnalyticsIdentity(machineId);
+    seedAnalyticsIdentity(machineId, targetPath);
   } catch {
     // Migration failures must never crash the server.
   }

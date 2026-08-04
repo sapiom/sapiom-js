@@ -60,7 +60,10 @@ describe("ensureConsent", () => {
   it("describes detailed telemetry as coding-agent activity", async () => {
     const wasTTY = process.stdin.isTTY;
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
 
     try {
       await ensureConsent({ noTelemetry: false });
@@ -69,7 +72,44 @@ describe("ensureConsent", () => {
       expect(printed).not.toContain("the tool calls your agent makes");
     } finally {
       log.mockRestore();
-      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: wasTTY,
+        configurable: true,
+      });
+    }
+  });
+
+  it("uses an isolated settings file and names its actual event log", async () => {
+    const wasTTY = process.stdin.isTTY;
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    const stateRoot = path.join(tmpDir, "throwaway-state");
+    const settingsPath = path.join(stateRoot, "settings.json");
+    const eventsPath = path.join(stateRoot, "events.ndjson");
+
+    try {
+      const result = await ensureConsent({
+        noTelemetry: false,
+        settingsPath,
+        eventsPath,
+      });
+
+      expect(result.source).toBe("default-silent");
+      expect(await hasStoredSettings(settingsPath)).toBe(true);
+      expect(await hasStoredSettings()).toBe(false);
+      expect((await loadSettings(settingsPath)).telemetryOptIn).toBe(false);
+      const printed = log.mock.calls.flat().join("\n");
+      expect(printed).toContain(eventsPath);
+      expect(printed).not.toContain("~/.sapiom/harness/events.ndjson");
+    } finally {
+      log.mockRestore();
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: wasTTY,
+        configurable: true,
+      });
     }
   });
 
@@ -77,7 +117,10 @@ describe("ensureConsent", () => {
     // SAP-1988: the invasive Sapiom→BQ tier is opt-out by default — a non-TTY
     // first run (CI/Docker/headless) must never silently opt the user in.
     const wasTTY = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
 
     try {
       const result = await ensureConsent({ noTelemetry: false });
@@ -87,13 +130,19 @@ describe("ensureConsent", () => {
       const settings = await loadSettings();
       expect(settings.telemetryOptIn).toBe(false);
     } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: wasTTY,
+        configurable: true,
+      });
     }
   });
 
   it("reuses the persisted answer on subsequent runs without re-prompting", async () => {
     const wasTTY = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
 
     try {
       await ensureConsent({ noTelemetry: false }); // first run persists the default (false)
@@ -109,13 +158,19 @@ describe("ensureConsent", () => {
       expect(result.telemetryOptIn).toBe(true);
       expect(result.source).toBe("stored-explicit");
     } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: wasTTY,
+        configurable: true,
+      });
     }
   });
 
   it("interactive prompt: a blank answer accepts the default (off)", async () => {
     const wasTTY = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: true,
+      configurable: true,
+    });
     nextAnswer = "";
 
     try {
@@ -123,13 +178,19 @@ describe("ensureConsent", () => {
       expect(result.telemetryOptIn).toBe(false);
       expect(result.source).toBe("prompted");
     } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: wasTTY,
+        configurable: true,
+      });
     }
   });
 
   it("interactive prompt: an explicit 'n' opts out", async () => {
     const wasTTY = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: true,
+      configurable: true,
+    });
     nextAnswer = "n";
 
     try {
@@ -137,13 +198,19 @@ describe("ensureConsent", () => {
       expect(result.telemetryOptIn).toBe(false);
       expect(result.source).toBe("prompted");
     } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: wasTTY,
+        configurable: true,
+      });
     }
   });
 
   it("interactive prompt: an explicit 'y' opts in", async () => {
     const wasTTY = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: true,
+      configurable: true,
+    });
     nextAnswer = "y";
 
     try {
@@ -151,7 +218,10 @@ describe("ensureConsent", () => {
       expect(result.telemetryOptIn).toBe(true);
       expect(result.source).toBe("prompted");
     } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: wasTTY,
+        configurable: true,
+      });
     }
   });
 
@@ -179,32 +249,41 @@ describe("ensureConsent", () => {
       ["SAPIOM_TELEMETRY_DISABLED", "TRUE"],
       ["DO_NOT_TRACK", "1"],
       ["DO_NOT_TRACK", "true"],
-    ])("%s=%s forces telemetry off without prompting, on a first run", async (envVar, value) => {
-      process.env[envVar] = value;
+    ])(
+      "%s=%s forces telemetry off without prompting, on a first run",
+      async (envVar, value) => {
+        process.env[envVar] = value;
 
-      const result = await ensureConsent({ noTelemetry: false });
+        const result = await ensureConsent({ noTelemetry: false });
 
-      expect(result.telemetryOptIn).toBe(false);
-      expect(result.source).toBe("env-forced-off");
-      expect(result.envReason).toBe(envVar);
-      expect(questionCallCount).toBe(0);
-      // Nothing persisted: hasStoredSettings() must still say "no" so a
-      // later run without the env var gets a genuine first-run prompt,
-      // rather than silently inheriting a fabricated opt-out answer.
-      expect(await hasStoredSettings()).toBe(false);
-    });
+        expect(result.telemetryOptIn).toBe(false);
+        expect(result.source).toBe("env-forced-off");
+        expect(result.envReason).toBe(envVar);
+        expect(questionCallCount).toBe(0);
+        // Nothing persisted: hasStoredSettings() must still say "no" so a
+        // later run without the env var gets a genuine first-run prompt,
+        // rather than silently inheriting a fabricated opt-out answer.
+        expect(await hasStoredSettings()).toBe(false);
+      },
+    );
 
     it("overrides a previously persisted opt-in for this run, without rewriting it", async () => {
       // Establish a stored opt-in from an earlier, env-free run — an explicit
       // 'y' at the prompt (the default is now off, so blank would not opt in).
       const wasTTY = process.stdin.isTTY;
-      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: true,
+        configurable: true,
+      });
       nextAnswer = "y";
       try {
         const firstResult = await ensureConsent({ noTelemetry: false });
         expect(firstResult.telemetryOptIn).toBe(true);
       } finally {
-        Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+        Object.defineProperty(process.stdin, "isTTY", {
+          value: wasTTY,
+          configurable: true,
+        });
       }
       expect((await loadSettings()).telemetryOptIn).toBe(true);
 
@@ -230,7 +309,10 @@ describe("ensureConsent", () => {
     ])("%s=%s is not treated as an opt-out", async (envVar, value) => {
       process.env[envVar] = value;
       const wasTTY = process.stdin.isTTY;
-      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: false,
+        configurable: true,
+      });
 
       try {
         const result = await ensureConsent({ noTelemetry: false });
@@ -242,7 +324,10 @@ describe("ensureConsent", () => {
         expect(result.source).toBe("default-silent");
         expect(result.envReason).toBeNull();
       } finally {
-        Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+        Object.defineProperty(process.stdin, "isTTY", {
+          value: wasTTY,
+          configurable: true,
+        });
       }
     });
 

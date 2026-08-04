@@ -1,4 +1,5 @@
 import * as readline from "node:readline/promises";
+import { HARNESS_PATHS } from "../shared/types.js";
 import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 
 // Opt-OUT by default (SAP-1988): this gates the *invasive* Sapiom→BigQuery
@@ -11,21 +12,23 @@ import { hasStoredSettings, loadSettings, saveSettings } from "./settings.js";
 // The first-run UI opt-in lives in web/src/components/WelcomePanel.tsx.
 const DEFAULT_TELEMETRY_OPT_IN = false;
 
-const CONSENT_COPY = `
+function consentCopy(eventsPath: string): string {
+  return `
 Help us optimize your Agent Studio experience.
 
 With your permission, Agent Studio shares your session details — the prompts
 you send, the tool calls your coding agent makes, and session lifecycle events — so we
 can see where the product gets in your way and improve it for you.
 
-This is always written locally to ~/.sapiom/harness/events.ndjson for your own
+This is always written locally to ${eventsPath} for your own
 inspection, whether or not you opt in. Sharing with Sapiom is OFF by default;
 turn it on anytime in the app's settings gear (or keep it off with
 --no-telemetry / SAPIOM_TELEMETRY_DISABLED=1).
 `.trim();
+}
 
-async function promptConsent(): Promise<boolean> {
-  console.log(`\n${CONSENT_COPY}\n`);
+async function promptConsent(eventsPath: string): Promise<boolean> {
+  console.log(`\n${consentCopy(eventsPath)}\n`);
 
   if (!process.stdin.isTTY) {
     // The full consent copy (what's collected, local store, and opt-out path)
@@ -33,14 +36,21 @@ async function promptConsent(): Promise<boolean> {
     // reviewing logs see it clearly.
     console.log(
       `Non-interactive session — telemetry is defaulting to ${DEFAULT_TELEMETRY_OPT_IN ? "on" : "off"}` +
-      ` per the notice above. Run with --no-telemetry or set SAPIOM_TELEMETRY_DISABLED=1 to opt out.\n`,
+        ` per the notice above. Run with --no-telemetry or set SAPIOM_TELEMETRY_DISABLED=1 to opt out.\n`,
     );
     return DEFAULT_TELEMETRY_OPT_IN;
   }
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
   try {
-    const answer = (await rl.question("Share session details with Sapiom? [y/N] ")).trim().toLowerCase();
+    const answer = (
+      await rl.question("Share session details with Sapiom? [y/N] ")
+    )
+      .trim()
+      .toLowerCase();
     if (answer === "") return DEFAULT_TELEMETRY_OPT_IN;
     return answer === "y" || answer === "yes";
   } finally {
@@ -51,6 +61,10 @@ async function promptConsent(): Promise<boolean> {
 export interface EnsureConsentOptions {
   /** The `--no-telemetry` flag — forces telemetry off without prompting. */
   noTelemetry: boolean;
+  /** Settings file for this boot. Defaults to the normal Harness path. */
+  settingsPath?: string;
+  /** Local event-log path named in the first-run notice. */
+  eventsPath?: string;
 }
 
 /**
@@ -95,7 +109,8 @@ function isEnvFlagSet(value: string | undefined): boolean {
 
 /** Which env var (if any) forces telemetry off this run, for the printed reason. */
 function envDisableReason(): string | null {
-  if (isEnvFlagSet(process.env.SAPIOM_TELEMETRY_DISABLED)) return "SAPIOM_TELEMETRY_DISABLED";
+  if (isEnvFlagSet(process.env.SAPIOM_TELEMETRY_DISABLED))
+    return "SAPIOM_TELEMETRY_DISABLED";
   if (isEnvFlagSet(process.env.DO_NOT_TRACK)) return "DO_NOT_TRACK";
   return null;
 }
@@ -113,28 +128,38 @@ function envDisableReason(): string | null {
  * uses this to show a first-run notice when the user never explicitly answered
  * (source === "default-silent"), skipping it when they did.
  */
-export async function ensureConsent(options: EnsureConsentOptions): Promise<ConsentResult> {
+export async function ensureConsent(
+  options: EnsureConsentOptions,
+): Promise<ConsentResult> {
   if (options.noTelemetry) {
     return { telemetryOptIn: false, envReason: null, source: "env-forced-off" };
   }
 
   const envReason = envDisableReason();
   if (envReason) {
-    console.log(`Telemetry disabled via ${envReason} — skipping the consent prompt.\n`);
+    console.log(
+      `Telemetry disabled via ${envReason} — skipping the consent prompt.\n`,
+    );
     return { telemetryOptIn: false, envReason, source: "env-forced-off" };
   }
 
-  const isFirstRun = !(await hasStoredSettings());
-  const settings = await loadSettings();
+  const isFirstRun = !(await hasStoredSettings(options.settingsPath));
+  const settings = await loadSettings(options.settingsPath);
 
   if (!isFirstRun) {
-    return { telemetryOptIn: settings.telemetryOptIn, envReason: null, source: "stored-explicit" };
+    return {
+      telemetryOptIn: settings.telemetryOptIn,
+      envReason: null,
+      source: "stored-explicit",
+    };
   }
 
   // First run: prompt the user (TTY) or apply the silent default (non-TTY).
   const isTTY = process.stdin.isTTY;
-  const telemetryOptIn = await promptConsent();
-  await saveSettings({ ...settings, telemetryOptIn });
+  const telemetryOptIn = await promptConsent(
+    options.eventsPath ?? HARNESS_PATHS.events,
+  );
+  await saveSettings({ ...settings, telemetryOptIn }, options.settingsPath);
   const source: ConsentSource = isTTY ? "prompted" : "default-silent";
   return { telemetryOptIn, envReason: null, source };
 }

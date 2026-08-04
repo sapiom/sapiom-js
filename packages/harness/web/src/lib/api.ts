@@ -1312,7 +1312,19 @@ class MockApi implements HarnessApi {
     if (typeof window !== "undefined") {
       const win = window as unknown as {
         __MOCK_RUN_STATE__?: Record<string, RunView>;
+        __MOCK_RUN_STATE_FAILURES__?: Record<string, number>;
+        __MOCK_RUN_STATE_CALLS__?: Record<string, number>;
       };
+      win.__MOCK_RUN_STATE_CALLS__ = {
+        ...(win.__MOCK_RUN_STATE_CALLS__ ?? {}),
+        [executionId]: (win.__MOCK_RUN_STATE_CALLS__?.[executionId] ?? 0) + 1,
+      };
+      const failuresRemaining =
+        win.__MOCK_RUN_STATE_FAILURES__?.[executionId] ?? 0;
+      if (failuresRemaining > 0) {
+        win.__MOCK_RUN_STATE_FAILURES__![executionId] = failuresRemaining - 1;
+        throw new Error("mock run-state inspection failure");
+      }
       const override = win.__MOCK_RUN_STATE__?.[executionId];
       if (override) {
         delete win.__MOCK_RUN_STATE__![executionId];

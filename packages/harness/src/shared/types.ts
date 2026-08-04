@@ -12,7 +12,8 @@
 
 export const DEFAULT_PORT = 4100;
 
-/** All harness-owned state lives under this directory. Uninstall = delete it. */
+/** Default root for Harness-owned state. Shared credentials, analytics identity,
+ * coding-agent history, desktop userData, and agent projects live elsewhere. */
 export const HARNESS_HOME = "~/.sapiom/harness";
 
 export const HARNESS_PATHS = {

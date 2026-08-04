@@ -118,23 +118,35 @@ function resolveHomeDir(): string {
 }
 
 /**
- * Seed `~/.sapiom/analytics.json` with a known `anonymous_id` if it does not
- * yet exist. Idempotent: when the file already exists the call is a no-op and
- * returns `false`. When the seed succeeds it returns `true`. On any error
- * (unwritable HOME, permission denied, …) it silently returns `false` so
- * callers can treat the result as best-effort.
+ * Seed `~/.sapiom/analytics.json` (or an explicit identity path) with a known
+ * `anonymous_id` if it does not yet exist. Idempotent: when the file already
+ * exists the call is a no-op and returns `false`. When the seed succeeds it
+ * returns `true`. On any error (unwritable HOME, permission denied, …) it
+ * silently returns `false` so callers can treat the result as best-effort.
  *
  * Intended for one-way migration of a legacy per-install id (e.g.
  * `~/.sapiom/harness/machine-id`) into the canonical analytics identity so
  * the longitudinal join key survives across versions.
+ *
+ * @param identityPath Override the canonical file location. Used by isolated
+ * callers and tests; no fallback write occurs if this path is unavailable.
  */
-export function seedAnalyticsIdentity(anonymousId: string): boolean {
+export function seedAnalyticsIdentity(
+  anonymousId: string,
+  identityPath?: string,
+): boolean {
   try {
-    const filePath = path.join(resolveHomeDir(), ".sapiom", "analytics.json");
+    const filePath =
+      identityPath ?? path.join(resolveHomeDir(), ".sapiom", "analytics.json");
     if (fs.existsSync(filePath)) return false;
-    const record: IdentityRecord = { anonymous_id: anonymousId, first_run_notice_at: null };
+    const record: IdentityRecord = {
+      anonymous_id: anonymousId,
+      first_run_notice_at: null,
+    };
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(filePath, JSON.stringify(record, null, 2) + "\n", { mode: 0o600 });
+    fs.writeFileSync(filePath, JSON.stringify(record, null, 2) + "\n", {
+      mode: 0o600,
+    });
     try {
       fs.chmodSync(filePath, 0o600);
     } catch {

@@ -32,10 +32,14 @@ describe("state-root isolation", () => {
   let dir: string;
   let launchDir: string;
   let server: HarnessServer | undefined;
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-state-isolation-"));
     fakeHome = path.join(dir, "home");
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
     launchDir = path.join(dir, "project");
     await fs.mkdir(fakeHome, { recursive: true });
     await fs.mkdir(launchDir, { recursive: true });
@@ -44,6 +48,10 @@ describe("state-root isolation", () => {
   afterEach(async () => {
     await server?.close();
     server = undefined;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await fs.rm(dir, { recursive: true, force: true });
   });
 
@@ -60,10 +68,15 @@ describe("state-root isolation", () => {
     });
 
     const baseUrl = `http://127.0.0.1:${server.port}`;
-    const headers = { "Content-Type": "application/json", "X-Harness-Token": "test-token" };
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Harness-Token": "test-token",
+    };
 
     // machine-id was created at boot (no machineId option passed), under stateRoot.
-    const machineId = (await fs.readFile(path.join(stateRoot, "machine-id"), "utf-8")).trim();
+    const machineId = (
+      await fs.readFile(path.join(stateRoot, "machine-id"), "utf-8")
+    ).trim();
     expect(machineId).toMatch(/^[0-9a-f-]{36}$/);
 
     // The boot-time launch-dir scan persisted the registry under stateRoot.
@@ -79,7 +92,9 @@ describe("state-root isolation", () => {
       body: JSON.stringify({ telemetryOptIn: true }),
     });
     expect(patchRes.status).toBe(200);
-    const stored = JSON.parse(await fs.readFile(path.join(stateRoot, "settings.json"), "utf-8")) as {
+    const stored = JSON.parse(
+      await fs.readFile(path.join(stateRoot, "settings.json"), "utf-8"),
+    ) as {
       telemetryOptIn: boolean;
     };
     expect(stored.telemetryOptIn).toBe(true);
@@ -114,8 +129,18 @@ describe("state-root isolation", () => {
     await fs.writeFile(
       path.join(stateRoot, "workflows.json"),
       JSON.stringify([
-        { name: "deleted-project", path: deadPath, definitionId: 1, source: "scan" },
-        { name: "project", path: launchDir, definitionId: null, source: "connect" },
+        {
+          name: "deleted-project",
+          path: deadPath,
+          definitionId: 1,
+          source: "scan",
+        },
+        {
+          name: "project",
+          path: launchDir,
+          definitionId: null,
+          source: "connect",
+        },
       ]),
     );
 
@@ -131,7 +156,9 @@ describe("state-root isolation", () => {
 
     const baseUrl = `http://127.0.0.1:${server.port}`;
     const headers = { "X-Harness-Token": "test-token" };
-    const workflows = (await (await fetch(`${baseUrl}/api/workflows`, { headers })).json()) as Array<{
+    const workflows = (await (
+      await fetch(`${baseUrl}/api/workflows`, { headers })
+    ).json()) as Array<{
       path: string;
     }>;
     expect(workflows.some((w) => w.path === deadPath)).toBe(false);
@@ -141,7 +168,9 @@ describe("state-root isolation", () => {
     // with this read (fs.writeFile isn't atomic) — poll until a complete,
     // parseable write is on disk.
     await vi.waitFor(async () => {
-      const persisted = JSON.parse(await fs.readFile(path.join(stateRoot, "workflows.json"), "utf-8")) as Array<{
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(stateRoot, "workflows.json"), "utf-8"),
+      ) as Array<{
         path: string;
       }>;
       expect(persisted.some((w) => w.path === deadPath)).toBe(false);

@@ -215,8 +215,26 @@ describe("seedAnalyticsIdentity", () => {
     const result = seedAnalyticsIdentity(secondId);
 
     expect(result).toBe(false);
-    const record = JSON.parse(fs.readFileSync(home.identityPath, "utf8")) as { anonymous_id: string };
+    const record = JSON.parse(fs.readFileSync(home.identityPath, "utf8")) as {
+      anonymous_id: string;
+    };
     expect(record.anonymous_id).toBe(firstId); // unchanged
+  });
+
+  it("seeds an explicitly supplied identity path instead of HOME", () => {
+    const id = "99999999-aaaa-4bbb-8ccc-dddddddddddd";
+    const explicitPath = path.join(home.dir, "isolated", "analytics.json");
+
+    expect(seedAnalyticsIdentity(id, explicitPath)).toBe(true);
+    expect(fs.existsSync(home.identityPath)).toBe(false);
+    expect(fs.statSync(explicitPath).mode & 0o777).toBe(0o600);
+    expect(
+      (
+        JSON.parse(fs.readFileSync(explicitPath, "utf8")) as {
+          anonymous_id: string;
+        }
+      ).anonymous_id,
+    ).toBe(id);
   });
 
   it("returns false without throwing when HOME is unwritable", () => {

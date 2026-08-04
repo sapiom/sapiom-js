@@ -13,11 +13,28 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => tmpHome };
 });
 
-import type { HarnessAdapter, HarnessKind, HarnessSession, MacroDef, SessionRecord, SessionSummary, SpawnSpec, WorkflowInfo } from "../shared/types.js";
+import type {
+  HarnessAdapter,
+  HarnessKind,
+  HarnessSession,
+  MacroDef,
+  SessionRecord,
+  SessionSummary,
+  SpawnSpec,
+  WorkflowInfo,
+} from "../shared/types.js";
 import { MAX_IMAGE_UPLOAD_BYTES } from "../shared/types.js";
-import { SessionManager, SessionNotReadyError, UnknownSessionError } from "../core/session-manager.js";
+import {
+  SessionManager,
+  SessionNotReadyError,
+  UnknownSessionError,
+} from "../core/session-manager.js";
 import type { SessionRecordReader } from "../core/session-record.js";
-import { AdapterNotFoundError, SessionAlreadyLiveError, SessionNotResumeableError } from "../core/errors.js";
+import {
+  AdapterNotFoundError,
+  SessionAlreadyLiveError,
+  SessionNotResumeableError,
+} from "../core/errors.js";
 import { createRestRouter, type RestRouterOptions } from "./rest.js";
 
 const TOKEN_HEADER = { "X-Harness-Token": "unused-in-router-tests" };
@@ -36,28 +53,38 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
       const session = sessions.get(id);
       if (session) session.boundWorkflowPath = workflowPath;
     }),
-    registerHistorical: vi.fn((input: { agentSessionId: string; harness: HarnessKind; cwd: string; title: string; lastActiveAt: string }) => {
-      const session: HarnessSession = {
-        id: `adopted-${input.agentSessionId}`,
-        agentSessionId: input.agentSessionId,
-        harness: input.harness,
-        cwd: input.cwd,
-        title: input.title,
-        status: "exited",
-        createdAt: input.lastActiveAt,
-        lastActiveAt: input.lastActiveAt,
-        exitCode: null,
-        boundWorkflowPath: null,
-        ready: false,
-      };
-      sessions.set(session.id, session);
-      return session;
-    }),
+    registerHistorical: vi.fn(
+      (input: {
+        agentSessionId: string;
+        harness: HarnessKind;
+        cwd: string;
+        title: string;
+        lastActiveAt: string;
+      }) => {
+        const session: HarnessSession = {
+          id: `adopted-${input.agentSessionId}`,
+          agentSessionId: input.agentSessionId,
+          harness: input.harness,
+          cwd: input.cwd,
+          title: input.title,
+          status: "exited",
+          createdAt: input.lastActiveAt,
+          lastActiveAt: input.lastActiveAt,
+          exitCode: null,
+          boundWorkflowPath: null,
+          ready: false,
+        };
+        sessions.set(session.id, session);
+        return session;
+      },
+    ),
   } as unknown as RestRouterOptions["sessionManager"];
 }
 
 /** An exited registry session — the shape a past-sessions row is built from. */
-function exitedSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
+function exitedSession(
+  overrides: Partial<HarnessSession> = {},
+): HarnessSession {
   return {
     id: "sess-1",
     agentSessionId: "agent-1",
@@ -76,15 +103,22 @@ function exitedSession(overrides: Partial<HarnessSession> = {}): HarnessSession 
 
 /** A history adapter whose resumability answer and transcript listing are both
  *  controllable — the two independent inputs the history endpoint merges. */
-function historyAdapter(opts: {
-  canResume?: HarnessAdapter["canResume"];
-  listPastSessions?: HarnessAdapter["listPastSessions"];
-} = {}): HarnessAdapter {
+function historyAdapter(
+  opts: {
+    canResume?: HarnessAdapter["canResume"];
+    listPastSessions?: HarnessAdapter["listPastSessions"];
+  } = {},
+): HarnessAdapter {
   return {
     id: "claude-code",
     eventSource: "hooks" as const,
     doctor: async () => [],
-    launch: (o): SpawnSpec => ({ command: "fake-claude", args: [], env: {}, cwd: o.cwd }),
+    launch: (o): SpawnSpec => ({
+      command: "fake-claude",
+      args: [],
+      env: {},
+      cwd: o.cwd,
+    }),
     resume: (agentSessionId, o): SpawnSpec => ({
       command: "fake-claude",
       args: ["--resume", agentSessionId],
@@ -233,7 +267,11 @@ describe("createRestRouter", () => {
 
       start({
         sessionManager: fakeSessionManager([session]),
-        identity: { userId: "user-1", tenantId: "user-1", organizationName: "Acme" },
+        identity: {
+          userId: "user-1",
+          tenantId: "user-1",
+          organizationName: "Acme",
+        },
         listWorkflows: async () => [workflow],
         listMacros: () => [macro],
       });
@@ -487,7 +525,10 @@ describe("createRestRouter", () => {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
     const PNG_DATA_URL = `data:image/png;base64,${PNG_BASE64}`;
 
-    function seededSession(cwd: string, harness: HarnessKind = "claude-code"): HarnessSession {
+    function seededSession(
+      cwd: string,
+      harness: HarnessKind = "claude-code",
+    ): HarnessSession {
       return {
         id: "sess-img",
         agentSessionId: null,
@@ -514,15 +555,25 @@ describe("createRestRouter", () => {
       });
 
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { path: string; mediaType: string; bytes: number };
+      const body = (await res.json()) as {
+        path: string;
+        mediaType: string;
+        bytes: number;
+      };
       expect(body.mediaType).toBe("image/png");
       expect(body.bytes).toBeGreaterThan(0);
-      expect(body.path.startsWith(path.join(cwd, ".sapiom", "uploads"))).toBe(true);
+      expect(body.path.startsWith(path.join(cwd, ".sapiom", "uploads"))).toBe(
+        true,
+      );
       expect(body.path.endsWith(".png")).toBe(true);
       // The file really exists and the path (with a trailing space) was injected
       // into the pty without submitting, so the user can add a message.
       await expect(fs.stat(body.path)).resolves.toBeDefined();
-      expect(sessionManager.submitInput).toHaveBeenCalledWith("sess-img", `${body.path} `, false);
+      expect(sessionManager.submitInput).toHaveBeenCalledWith(
+        "sess-img",
+        `${body.path} `,
+        false,
+      );
 
       await fs.rm(cwd, { recursive: true, force: true });
     });
@@ -627,9 +678,9 @@ describe("createRestRouter", () => {
     it("409s when the session isn't ready yet (SessionNotReadyError)", async () => {
       const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "harness-img-"));
       const sessionManager = fakeSessionManager([seededSession(cwd)]);
-      (sessionManager.submitInput as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new SessionNotReadyError("sess-img"),
-      );
+      (
+        sessionManager.submitInput as ReturnType<typeof vi.fn>
+      ).mockRejectedValue(new SessionNotReadyError("sess-img"));
       start({ sessionManager });
 
       const res = await fetch(`${baseUrl}/sessions/sess-img/image`, {
@@ -744,7 +795,8 @@ describe("createRestRouter", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "Unknown agent path '/not/registered' — scan or connect it before binding a session to it",
+        error:
+          "Unknown agent path '/not/registered' — scan or connect it before binding a session to it",
       });
       expect(sessionManager.setBoundWorkflowPath).not.toHaveBeenCalled();
       expect(writeWorkspaceContext).not.toHaveBeenCalled();
@@ -866,9 +918,12 @@ describe("createRestRouter", () => {
 
   describe("GET /sessions/history — server-verified resumeMode", () => {
     async function history(cwd: string): Promise<SessionSummary[]> {
-      const res = await fetch(`${baseUrl}/sessions/history?cwd=${encodeURIComponent(cwd)}`, {
-        headers: TOKEN_HEADER,
-      });
+      const res = await fetch(
+        `${baseUrl}/sessions/history?cwd=${encodeURIComponent(cwd)}`,
+        {
+          headers: TOKEN_HEADER,
+        },
+      );
       expect(res.status).toBe(200);
       return (await res.json()) as SessionSummary[];
     }
@@ -876,12 +931,18 @@ describe("createRestRouter", () => {
     it("marks a registry row the agent still holds as agent-resume", async () => {
       start({
         sessionManager: fakeSessionManager([exitedSession()]),
-        adapters: { "claude-code": historyAdapter({ canResume: async () => true }) },
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => true }),
+        },
       });
 
       const rows = await history("/tmp/proj");
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ agentSessionId: "agent-1", source: "registry", resumeMode: "agent-resume" });
+      expect(rows[0]).toMatchObject({
+        agentSessionId: "agent-1",
+        source: "registry",
+        resumeMode: "agent-resume",
+      });
     });
 
     it("marks a PHANTOM registry row as rehydrate — an agentSessionId is not evidence of a conversation", async () => {
@@ -890,11 +951,16 @@ describe("createRestRouter", () => {
       // button whose only possible outcome was exit 1.
       start({
         sessionManager: fakeSessionManager([exitedSession()]),
-        adapters: { "claude-code": historyAdapter({ canResume: async () => false }) },
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => false }),
+        },
       });
 
       const rows = await history("/tmp/proj");
-      expect(rows[0]).toMatchObject({ source: "registry", resumeMode: "rehydrate" });
+      expect(rows[0]).toMatchObject({
+        source: "registry",
+        resumeMode: "rehydrate",
+      });
     });
 
     it("probes with the row's own agentSessionId and cwd", async () => {
@@ -929,12 +995,68 @@ describe("createRestRouter", () => {
       });
 
       const rows = await history("/tmp/proj");
-      expect(rows[0]).toMatchObject({ source: "transcript", resumeMode: "agent-resume" });
+      expect(rows[0]).toMatchObject({
+        source: "transcript",
+        resumeMode: "agent-resume",
+      });
+    });
+
+    it("keeps healthy history sources and registry rows when one adapter scan fails", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      start({
+        sessionManager: fakeSessionManager([exitedSession()]),
+        adapters: {
+          "claude-code": historyAdapter({
+            listPastSessions: async () => {
+              throw new Error("Claude history is unreadable");
+            },
+            canResume: async () => false,
+          }),
+          codex: {
+            ...historyAdapter(),
+            id: "codex",
+            listPastSessions: async () => [
+              {
+                agentSessionId: "healthy-agent-session",
+                harness: "codex",
+                cwd: "/tmp/proj",
+                title: "Healthy source",
+                lastActiveAt: "2026-01-03T00:00:00.000Z",
+                source: "transcript",
+              },
+            ],
+          },
+        },
+      });
+
+      const rows = await history("/tmp/proj");
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            agentSessionId: "agent-1",
+            resumeMode: "rehydrate",
+          }),
+          expect.objectContaining({
+            agentSessionId: "healthy-agent-session",
+            resumeMode: "agent-resume",
+          }),
+        ]),
+      );
+      expect(error).toHaveBeenCalledWith(
+        "[harness] claude-code history scan failed:",
+        expect.any(Error),
+      );
+      error.mockRestore();
     });
 
     it("resolves each row independently — a phantom and a live transcript in one directory", async () => {
       start({
-        sessionManager: fakeSessionManager([exitedSession({ id: "sess-phantom", agentSessionId: "agent-phantom" })]),
+        sessionManager: fakeSessionManager([
+          exitedSession({
+            id: "sess-phantom",
+            agentSessionId: "agent-phantom",
+          }),
+        ]),
         adapters: {
           "claude-code": historyAdapter({
             canResume: async (id) => id !== "agent-phantom",
@@ -952,7 +1074,12 @@ describe("createRestRouter", () => {
         },
       });
 
-      const byId = new Map((await history("/tmp/proj")).map((row) => [row.agentSessionId, row.resumeMode]));
+      const byId = new Map(
+        (await history("/tmp/proj")).map((row) => [
+          row.agentSessionId,
+          row.resumeMode,
+        ]),
+      );
       expect(byId.get("agent-phantom")).toBe("rehydrate");
       expect(byId.get("agent-real")).toBe("agent-resume");
     });
@@ -975,13 +1102,18 @@ describe("createRestRouter", () => {
       ]);
       start({
         sessionManager: fakeSessionManager([exitedSession()]),
-        adapters: { "claude-code": historyAdapter({ canResume, listPastSessions }) },
+        adapters: {
+          "claude-code": historyAdapter({ canResume, listPastSessions }),
+        },
       });
 
       const rows = await history("/tmp/proj");
       expect(rows).toHaveLength(1);
       // Registry row wins the merge (it carries live status) and is resumable.
-      expect(rows[0]).toMatchObject({ source: "registry", resumeMode: "agent-resume" });
+      expect(rows[0]).toMatchObject({
+        source: "registry",
+        resumeMode: "agent-resume",
+      });
       expect(listPastSessions).toHaveBeenCalledTimes(1);
       expect(canResume).not.toHaveBeenCalled();
     });
@@ -1010,7 +1142,12 @@ describe("createRestRouter", () => {
         },
       });
 
-      const byId = new Map((await history("/tmp/proj")).map((r) => [r.agentSessionId, r.resumeMode]));
+      const byId = new Map(
+        (await history("/tmp/proj")).map((r) => [
+          r.agentSessionId,
+          r.resumeMode,
+        ]),
+      );
       expect(byId.get("agent-found")).toBe("agent-resume");
       expect(byId.get("agent-missed")).toBe("rehydrate");
       expect(canResume.mock.calls).toEqual([["agent-missed", "/tmp/proj"]]);
@@ -1020,7 +1157,9 @@ describe("createRestRouter", () => {
       // e.g. an external-mode harness, or a kind persisted by another build:
       // unverifiable is not the same as resumable.
       start({
-        sessionManager: fakeSessionManager([exitedSession({ harness: "conductor" as HarnessKind })]),
+        sessionManager: fakeSessionManager([
+          exitedSession({ harness: "conductor" as HarnessKind }),
+        ]),
         adapters: {},
       });
 
@@ -1064,27 +1203,45 @@ describe("createRestRouter", () => {
 
     it("registers a transcript-only row and resumes it for real", async () => {
       const sessionManager = fakeSessionManager();
-      (sessionManager.resume as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => ({
-        ...exitedSession({ id, agentSessionId: body.agentSessionId }),
-        status: "running",
-      }));
-      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => true }) } });
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockImplementation(
+        async (id: string) => ({
+          ...exitedSession({ id, agentSessionId: body.agentSessionId }),
+          status: "running",
+        }),
+      );
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => true }),
+        },
+      });
 
       const res = await adopt(body);
       expect(res.status).toBe(200);
-      expect((await res.json()) as HarnessSession).toMatchObject({ status: "running" });
+      expect((await res.json()) as HarnessSession).toMatchObject({
+        status: "running",
+      });
       expect(sessionManager.registerHistorical).toHaveBeenCalledWith(body);
       // The whole point: a real resume, not a fresh session.
-      expect(sessionManager.resume).toHaveBeenCalledWith("adopted-agent-transcript");
+      expect(sessionManager.resume).toHaveBeenCalledWith(
+        "adopted-agent-transcript",
+      );
     });
 
     it("409s SESSION_NOT_RESUMEABLE without registering anything when the agent no longer holds it", async () => {
       const sessionManager = fakeSessionManager();
-      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => false }) } });
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => false }),
+        },
+      });
 
       const res = await adopt(body);
       expect(res.status).toBe(409);
-      expect((await res.json()) as { code: string }).toMatchObject({ code: "SESSION_NOT_RESUMEABLE" });
+      expect((await res.json()) as { code: string }).toMatchObject({
+        code: "SESSION_NOT_RESUMEABLE",
+      });
       // No phantom record left behind by a stale history row.
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
       expect(sessionManager.resume).not.toHaveBeenCalled();
@@ -1093,17 +1250,33 @@ describe("createRestRouter", () => {
     it("re-verifies server-side — a client claiming resumability cannot force a registration", async () => {
       const sessionManager = fakeSessionManager();
       const canResume = vi.fn(async () => false);
-      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume }) } });
+      start({
+        sessionManager,
+        adapters: { "claude-code": historyAdapter({ canResume }) },
+      });
 
-      expect((await adopt({ ...body, resumeMode: "agent-resume" })).status).toBe(409);
+      expect(
+        (await adopt({ ...body, resumeMode: "agent-resume" })).status,
+      ).toBe(409);
       expect(canResume).toHaveBeenCalledWith(body.agentSessionId, body.cwd);
     });
 
     it("is idempotent: an already-tracked row resumes its existing record instead of duplicating it", async () => {
-      const existing = exitedSession({ id: "sess-existing", agentSessionId: body.agentSessionId });
+      const existing = exitedSession({
+        id: "sess-existing",
+        agentSessionId: body.agentSessionId,
+      });
       const sessionManager = fakeSessionManager([existing]);
-      (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({ ...existing, status: "running" });
-      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => true }) } });
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...existing,
+        status: "running",
+      });
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => true }),
+        },
+      });
 
       expect((await adopt(body)).status).toBe(200);
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
@@ -1123,7 +1296,12 @@ describe("createRestRouter", () => {
       // `POST /sessions/:id` exists to catch it. This pins that, so adding
       // such a route later can't silently reroute adopt through resume().
       const sessionManager = fakeSessionManager();
-      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => false }) } });
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => false }),
+        },
+      });
 
       const res = await adopt(body);
       expect(res.status).toBe(409);
@@ -1135,11 +1313,18 @@ describe("createRestRouter", () => {
       (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
         new SessionAlreadyLiveError("adopted-agent-transcript"),
       );
-      start({ sessionManager, adapters: { "claude-code": historyAdapter({ canResume: async () => true }) } });
+      start({
+        sessionManager,
+        adapters: {
+          "claude-code": historyAdapter({ canResume: async () => true }),
+        },
+      });
 
       const res = await adopt(body);
       expect(res.status).toBe(409);
-      expect((await res.json()) as { code: string }).toMatchObject({ code: "SESSION_ALREADY_LIVE" });
+      expect((await res.json()) as { code: string }).toMatchObject({
+        code: "SESSION_ALREADY_LIVE",
+      });
     });
   });
 
@@ -1176,7 +1361,10 @@ describe("createRestRouter", () => {
     it("surfaces each adapter's imageInput capability", async () => {
       start();
       const res = await fetch(`${baseUrl}/harnesses`);
-      const body = (await res.json()) as Array<{ id: string; imageInput: boolean }>;
+      const body = (await res.json()) as Array<{
+        id: string;
+        imageInput: boolean;
+      }>;
       for (const entry of body) {
         expect(typeof entry.imageInput).toBe("boolean");
       }
@@ -1377,7 +1565,9 @@ describe("createRestRouter", () => {
       limitations: [],
     };
 
-    function stubRecords(overrides: Partial<SessionRecordReader> = {}): SessionRecordReader {
+    function stubRecords(
+      overrides: Partial<SessionRecordReader> = {},
+    ): SessionRecordReader {
       const find = async (id: string): Promise<SessionRecord | null> =>
         id === "sess-1" || id === "agent-1" ? record : null;
       return {
@@ -1391,26 +1581,34 @@ describe("createRestRouter", () => {
 
     it("GET /sessions/:id/record returns the reconstructed record", async () => {
       start({ sessionRecords: stubRecords() });
-      const res = await fetch(`${baseUrl}/sessions/sess-1/record`, { headers: TOKEN_HEADER });
+      const res = await fetch(`${baseUrl}/sessions/sess-1/record`, {
+        headers: TOKEN_HEADER,
+      });
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual(record);
     });
 
     it("GET /sessions/:id/record resolves an agent session id too", async () => {
       start({ sessionRecords: stubRecords() });
-      const res = await fetch(`${baseUrl}/sessions/agent-1/record`, { headers: TOKEN_HEADER });
+      const res = await fetch(`${baseUrl}/sessions/agent-1/record`, {
+        headers: TOKEN_HEADER,
+      });
       expect(res.status).toBe(200);
     });
 
     it("GET /sessions/:id/record is 404 when nothing was recorded for the session", async () => {
       start({ sessionRecords: stubRecords() });
-      const res = await fetch(`${baseUrl}/sessions/unknown/record`, { headers: TOKEN_HEADER });
+      const res = await fetch(`${baseUrl}/sessions/unknown/record`, {
+        headers: TOKEN_HEADER,
+      });
       expect(res.status).toBe(404);
     });
 
     it("GET /sessions/:id/record is 501 when the server has no record reader", async () => {
       start();
-      const res = await fetch(`${baseUrl}/sessions/sess-1/record`, { headers: TOKEN_HEADER });
+      const res = await fetch(`${baseUrl}/sessions/sess-1/record`, {
+        headers: TOKEN_HEADER,
+      });
       expect(res.status).toBe(501);
     });
 
@@ -1427,11 +1625,17 @@ describe("createRestRouter", () => {
         lastActiveAt: "2026-07-01T10:00:05.000Z",
         ready: false,
       };
-      start({ sessionManager: fakeSessionManager([session]), sessionRecords: stubRecords() });
-
-      const res = await fetch(`${baseUrl}/sessions/history?cwd=${encodeURIComponent("/repo")}`, {
-        headers: TOKEN_HEADER,
+      start({
+        sessionManager: fakeSessionManager([session]),
+        sessionRecords: stubRecords(),
       });
+
+      const res = await fetch(
+        `${baseUrl}/sessions/history?cwd=${encodeURIComponent("/repo")}`,
+        {
+          headers: TOKEN_HEADER,
+        },
+      );
       expect(res.status).toBe(200);
       const body = (await res.json()) as SessionSummary[];
       expect(body).toHaveLength(1);
@@ -1460,9 +1664,12 @@ describe("createRestRouter", () => {
         }),
       });
 
-      const res = await fetch(`${baseUrl}/sessions/history?cwd=${encodeURIComponent("/repo")}`, {
-        headers: TOKEN_HEADER,
-      });
+      const res = await fetch(
+        `${baseUrl}/sessions/history?cwd=${encodeURIComponent("/repo")}`,
+        {
+          headers: TOKEN_HEADER,
+        },
+      );
       expect(res.status).toBe(200);
       const body = (await res.json()) as SessionSummary[];
       expect(body).toHaveLength(1);
