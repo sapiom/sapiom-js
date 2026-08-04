@@ -401,7 +401,9 @@ input {
   grid-template-rows: var(--header-h) auto;
   align-items: center;
   height: auto;
-  padding: 0 var(--pane-pad-x) var(--sp2);
+  /* No bottom padding: the --sp2 gap below agent.studio is owned by the nav's
+     padding-top, so agent.studio → Search matches every other top-stack gap. */
+  padding: 0 var(--pane-pad-x);
   column-gap: var(--sp2);
 }
 
@@ -508,10 +510,15 @@ input {
 /* Search + Templates: the persistent labelled destinations above the tree.
    A quiet vertical stack of rows on the continuous rail surface — no boxed
    field, no divider. */
+/* One uniform gap (--sp2) sets the whole top stack's rhythm: the nav's
+   padding-top spaces it off the brand header, each row/CTA carries an --sp2
+   bottom margin, and the Workspaces header takes no top margin — so
+   agent.studio → Search → Create new → Templates → Workspaces are all evenly
+   spaced by the same 8px. */
 .rail-nav {
   display: flex;
   flex-direction: column;
-  padding: var(--sp2) 0 var(--sp1);
+  padding: var(--sp2) 0 0;
 }
 
 /* The unboxed shortcut hint on the Search row — right-aligned, quiet mono, no
@@ -717,7 +724,7 @@ input {
   align-items: center;
   gap: var(--sp2);
   width: calc(100% - var(--sp3));
-  margin: 0 var(--sp2) var(--sp1);
+  margin: 0 var(--sp2) var(--sp2);
   padding: var(--sp2);
   border: none;
   border-radius: var(--radius-sm);
@@ -747,6 +754,78 @@ input {
   font-weight: 550;
 }
 
+/* "Create new": the primary creative action, promoted out of the header + into
+   a standing CTA under Search. A real button (bordered fill, centered label,
+   brand-green plus) — distinct from the ghost Search/Templates rows, but the
+   same inset and --sp2 rhythm so the top stack stays evenly spaced. */
+.rail-nav-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp1);
+  width: calc(100% - var(--sp3));
+  margin: 0 var(--sp2) var(--sp2);
+  min-height: var(--control-h);
+  padding: 0 var(--sp2);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  text-align: center;
+  font-size: var(--type-ui);
+  font-weight: 550;
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+/* The plus is the create signal — the one reserved accent at rest, inheriting
+   the button ink once the CTA fills in for the empty state. */
+.rail-nav-cta svg {
+  color: var(--brand);
+}
+
+.rail-nav-cta:hover {
+  background: var(--surface-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+.rail-nav-cta:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.rail-nav-cta:active {
+  transform: translateY(0);
+}
+
+/* Empty rail: fill with the brand green (the reserved accent) over its own
+   contrasting ink, ringed in a soft brand halo — so the one action a first-run
+   user needs is the loudest thing on an otherwise empty rail. --brand-ink flips
+   with the theme (white on the dark-green light brand, near-black on the
+   light-green dark brand), so it stays legible in both. */
+.rail-nav-cta.is-empty {
+  background: var(--brand);
+  border-color: transparent;
+  color: var(--brand-ink);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 22%, transparent);
+}
+
+.rail-nav-cta.is-empty svg {
+  color: var(--brand-ink);
+}
+
+.rail-nav-cta.is-empty:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--brand) 32%, transparent),
+    var(--shadow-soft);
+}
+
 .rail-header {
   position: relative;
   flex: 0 0 auto;
@@ -755,9 +834,10 @@ input {
   gap: var(--sp2);
   /* A compact section-label row (a peer of the Search/Templates nav rows and
      the folder rows below), not a 56px band — it reads as the header of the
-     tree it sits above, with a modest gap from the nav group. */
+     tree it sits above. Its gap from the nav group is the same --sp2 as every
+     other top-stack boundary, owned by the last nav row's bottom margin. */
   min-height: var(--control-h);
-  margin-top: var(--sp2);
+  margin-top: 0;
   /* One deliberate divider under the Workspaces header, setting the explorer
      tree off from the destinations above it (Search / Templates). It is the
      rail's only rule — the main shell panes carry none. */
@@ -2233,12 +2313,68 @@ input {
 }
 
 .session-menu {
-  min-width: 180px;
+  min-width: 220px;
 }
 
 .session-menu-danger:hover:not(:disabled) {
   color: var(--red-text);
   background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+/* Session switcher inside the current-session menu ------------------------
+   The ⌄ on the current session opens a titled list of the agent's live
+   sessions (active one checked) plus this session's actions — one place to
+   pick a session or act on it, so the bar itself stays a single clean pill. */
+.session-menu-section {
+  padding: var(--sp2) var(--sp2) var(--sp1);
+  font-size: var(--type-micro);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* Rows reuse .profile-menu-item; the active one carries the app's standard
+   "you are here" selected wash. The label grows; time trails, right-aligned. */
+.session-switch-item .session-switch-label {
+  flex: 1 1 auto;
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.session-switch-item.is-selected {
+  background: var(--active-shade);
+  color: var(--text);
+}
+
+.session-switch-meta {
+  margin-left: auto;
+  padding-left: var(--sp2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.session-menu-divider {
+  height: 1px;
+  margin: var(--sp1) 0;
+  background: var(--ui-line);
+}
+
+/* Bound-agent line: which agent's Canvas this session drives. Quiet metadata,
+   not a boxed chip — it never reads as another session (the old bar chip did). */
+.session-menu-bound {
+  padding: var(--sp1) var(--sp2) var(--sp2);
+  font-size: var(--type-meta);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+.session-menu-bound strong {
+  color: var(--text-dim);
+  font-weight: 600;
 }
 
 
@@ -2283,24 +2419,6 @@ input {
   font-weight: 700;
   line-height: 14px;
   text-align: center;
-}
-
-/* Badge recipe (variant="active"): tinted fill + matching border + accent
-   text, rounded-md rather than a pill — the product's status chips are
-   small rounded rectangles, not fully-rounded tags. */
-.session-workflow-chip {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 2px 8px;
-  border-radius: var(--radius-md);
-  background: var(--accent-dim);
-  border: 1px solid var(--accent-border);
-  color: var(--text-dim);
-  font-size: var(--type-meta);
-  font-weight: 500;
 }
 
 /* Right-anchored status slot, pushed past the flexible title/cwd/chip run —

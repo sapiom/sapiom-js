@@ -52,30 +52,57 @@ test("viewport-locked shell: the page never scrolls even when terminal content o
   expect(root.scrollHeight).toBe(root.clientHeight);
 });
 
-test("theme: defaults to dark, toggles to light, and the choice persists across reload", async ({ page }) => {
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.screenshot({ path: "web/e2e/screenshots/theme-dark.png", fullPage: true });
+test.describe("theme — a manual choice overrides system and persists", () => {
+  // Pin the OS to dark so the default resolves to dark; the toggle then flips
+  // to light and the STORED choice must survive a reload even though the OS
+  // still prefers dark (persistence beats system).
+  test.use({ colorScheme: "dark" });
 
-  await page.getByTestId("theme-toggle").click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.screenshot({ path: "web/e2e/screenshots/theme-light.png", fullPage: true });
+  test("toggles to light and the choice persists across reload", async ({ page }) => {
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.screenshot({ path: "web/e2e/screenshots/theme-dark.png", fullPage: true });
 
-  await page.reload();
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await page.getByTestId("theme-toggle").click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await page.screenshot({ path: "web/e2e/screenshots/theme-light.png", fullPage: true });
 
-  await page.getByTestId("theme-toggle").click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-});
+    await page.reload();
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-test.describe("theme — system preference", () => {
-  // The Studio defaults to dark until the user sets a preference,
-  // regardless of the OS color scheme.
-  test.use({ colorScheme: "light" });
-
-  test("defaults to dark even when the system prefers light, absent a stored choice", async ({ page }) => {
+    await page.getByTestId("theme-toggle").click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });
+});
+
+test.describe("theme — follows the system preference until the user chooses", () => {
+  // No stored choice → the app mirrors the OS color scheme in both directions
+  // (boot never persists, so it keeps tracking the system across launches).
+  test.describe("system prefers dark", () => {
+    test.use({ colorScheme: "dark" });
+    test("defaults to dark", async ({ page }) => {
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    });
+  });
+
+  test.describe("system prefers light", () => {
+    test.use({ colorScheme: "light" });
+    test("defaults to light", async ({ page }) => {
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    });
+  });
+});
+
+test("rail: the Create-new CTA sits below Search and opens the Add menu", async ({ page }) => {
+  const cta = page.getByTestId("rail-create-new");
+  await expect(cta).toBeVisible();
+  await expect(cta).toContainText("Create new");
+
+  // It opens the SAME Add menu as the header + — anchored to itself — so the
+  // primary creative action is reachable straight from the nav.
+  await cta.click();
+  await expect(page.getByTestId("add-menu")).toBeVisible();
+  await expect(page.getByTestId("new-session-btn")).toBeVisible();
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({ page }) => {
@@ -253,14 +280,18 @@ test("creation IA: the rail + adds projects; the tab strip + adds a session to t
 
   // Session creation lives in the session bar: the trailing + starts a NEW
   // session on the focused agent (leasing), no dialog. Leasing has two live
-  // sessions on load (active + one switch chip); the + makes it three, so a
-  // second switch chip joins and the new session becomes active.
+  // sessions on load (listed in the switcher menu); the + makes it three and
+  // the new session becomes active.
   const newBtn = page.getByTestId("session-new");
   await expect(newBtn).toHaveAttribute("aria-label", "New session");
-  await expect(page.locator(".session-switch")).toHaveCount(1);
+  await page.getByTestId("session-menu").click();
+  await expect(page.locator(".session-switch-item")).toHaveCount(2);
+  await page.keyboard.press("Escape");
   await newBtn.click();
-  await expect(page.locator(".session-switch")).toHaveCount(2);
   await expect(page.getByTestId("session-context-title")).toContainText("leasing");
+  await page.getByTestId("session-menu").click();
+  await expect(page.locator(".session-switch-item")).toHaveCount(3);
+  await page.keyboard.press("Escape");
   // No dialog — the + is a direct action.
   await expect(page.locator(".modal-new-session")).toHaveCount(0);
 });
@@ -336,14 +367,18 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await page.screenshot({ path: "web/e2e/screenshots/rail-explorer.png", fullPage: true });
   });
 
-  test("focusing an agent with sessions shows the active session plus inline switch chips", async ({ page }) => {
-    // Leasing is focused on load and carries two live sessions — the active one
-    // is the options dropdown (sess-boot); the other is an inline switch chip.
+  test("focusing an agent with sessions shows the active session and a switcher menu", async ({ page }) => {
+    // Leasing is focused on load and carries two live sessions. The bar shows a
+    // single selector (sess-boot); switching lives in its ⌄ menu, which lists
+    // both sessions with the active one checked.
     const header = page.getByTestId("session-context");
     await expect(header).toHaveAttribute("data-session-id", "sess-boot");
     await expect(page.getByTestId("session-menu")).toBeVisible();
-    await expect(page.locator(".session-switch")).toHaveCount(1);
+    await page.getByTestId("session-menu").click();
+    await expect(page.locator(".session-switch-item")).toHaveCount(2);
     await expect(page.getByTestId("session-switch-sess-leasing-2")).toBeVisible();
+    await expect(page.getByTestId("session-switch-sess-boot")).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
     // A + to add another session is always available.
     await expect(page.getByTestId("session-new")).toBeVisible();
     await page.screenshot({ path: "web/e2e/screenshots/session-tab-strip.png", fullPage: true });
@@ -356,7 +391,8 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
     await expect(page.locator(".canvas-iframe")).toBeVisible();
 
-    // Click the other session's switch chip to make it active.
+    // Switch to the other session from the current session's menu.
+    await page.getByTestId("session-menu").click();
     await page.getByTestId("session-switch-sess-leasing-2").click();
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-leasing-2");
     await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
@@ -365,20 +401,25 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await page.getByTestId("right-tab-steps").click();
     await expect(page.locator(".canvas-empty")).toContainText("No steps yet");
 
-    // sess-boot is now the switch chip — clicking it returns to the board.
+    // Switching back from the menu returns to the board.
+    await page.getByTestId("session-menu").click();
     await page.getByTestId("session-switch-sess-boot").click();
     await page.getByTestId("right-tab-canvas").click();
     await expect(page.locator(".canvas-iframe")).toBeVisible();
   });
 
   test("the + starts a new session on the focused agent", async ({ page }) => {
-    await expect(page.locator(".session-switch")).toHaveCount(1);
+    await page.getByTestId("session-menu").click();
+    await expect(page.locator(".session-switch-item")).toHaveCount(2);
+    await page.keyboard.press("Escape");
     await page.getByTestId("session-new").click();
 
-    // A third session joins, bound to the same agent, and becomes active — so a
-    // second switch chip appears.
-    await expect(page.locator(".session-switch")).toHaveCount(2);
+    // A third session joins, bound to the same agent, and becomes active — the
+    // switcher menu now lists three.
     await expect(page.getByTestId("session-context-title")).toContainText("leasing");
+    await page.getByTestId("session-menu").click();
+    await expect(page.locator(".session-switch-item")).toHaveCount(3);
+    await page.keyboard.press("Escape");
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
   });
 
@@ -392,18 +433,22 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(confirm).toBeVisible();
     await expect(confirm).toContainText("kills the live terminal");
 
-    // Keep cancels — nothing dies, the other session's chip stays.
+    // Keep cancels — nothing dies, both sessions remain in the switcher.
     await page.getByRole("button", { name: "Keep session" }).click();
     await expect(confirm).toHaveCount(0);
-    await expect(page.locator(".session-switch")).toHaveCount(1);
+    await page.getByTestId("session-menu").click();
+    await expect(page.locator(".session-switch-item")).toHaveCount(2);
+    await page.keyboard.press("Escape");
 
     // Confirming ends the active session; the workbench falls back to the other
-    // leasing session, which is now active (no more switch chips).
+    // leasing session, now active and the only one left in the switcher.
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-end-btn").click();
     await page.getByTestId("end-session-confirm-btn").click();
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-leasing-2");
-    await expect(page.locator(".session-switch")).toHaveCount(0);
+    await page.getByTestId("session-menu").click();
+    await expect(page.locator(".session-switch-item")).toHaveCount(1);
+    await page.keyboard.press("Escape");
     // Leasing stays focused throughout — ending a session never moves the rail.
     await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
   });
@@ -1645,19 +1690,25 @@ test.describe("resizable panes", () => {
   });
 });
 
-test("the canvas iframe carries the app's theme and flips on toggle", async ({ page }) => {
-  await page.evaluate(() => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
+test.describe("canvas iframe theme", () => {
+  // Pin the OS to dark so the default theme is deterministic (it now follows
+  // the system); the test then proves the iframe carries it and flips on toggle.
+  test.use({ colorScheme: "dark" });
+
+  test("the canvas iframe carries the app's theme and flips on toggle", async ({ page }) => {
+    await page.evaluate(() => {
+      (window as unknown as { __HARNESS_TEST__: { publish: (message: unknown) => void } }).__HARNESS_TEST__.publish({
+        type: "canvas.reload",
+        harnessSessionId: "sess-boot",
+      });
     });
+
+    const iframe = page.locator(".canvas-iframe");
+    await expect(iframe).toHaveAttribute("src", /theme=dark/);
+
+    await page.getByTestId("theme-toggle").click();
+    await expect(iframe).toHaveAttribute("src", /theme=light/);
   });
-
-  const iframe = page.locator(".canvas-iframe");
-  await expect(iframe).toHaveAttribute("src", /theme=dark/);
-
-  await page.getByTestId("theme-toggle").click();
-  await expect(iframe).toHaveAttribute("src", /theme=light/);
 });
 
 

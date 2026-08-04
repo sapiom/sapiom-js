@@ -14,12 +14,14 @@ function systemPrefersDark(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
 }
 
-/** No stored preference → dark, matching the Studio's default.
- *  The toggle and any stored choice still win. */
+/** No stored preference → follow the OS (prefers-color-scheme). Boot never
+ *  persists, so with no stored choice the app tracks the system theme across
+ *  launches; the toggle and any stored choice still win. Must match the inline
+ *  script in index.html, which resolves the same way before first paint. */
 export function getInitialTheme(): Theme {
   const stored = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
   if (stored === "light" || stored === "dark") return stored;
-  return "dark";
+  return systemPrefersDark() ? "dark" : "light";
 }
 
 let current: Theme = getInitialTheme();

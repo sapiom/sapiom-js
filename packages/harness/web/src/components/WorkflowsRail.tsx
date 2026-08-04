@@ -331,6 +331,9 @@ export function WorkflowsRail({
 }: WorkflowsRailProps): JSX.Element {
   const [addDialogMode, setAddDialogMode] = useState<"session" | "workspace" | null>(null);
   const connectTriggerRef = useRef<HTMLButtonElement>(null);
+  // The prominent "Create new" CTA in the nav opens the SAME Add menu as the
+  // header +; the popover anchors to whichever trigger the user pressed.
+  const createTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋯ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
@@ -349,6 +352,9 @@ export function WorkflowsRail({
    */
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [addDoor, setAddDoor] = useState<Door>("have");
+  // Which trigger the Add menu hangs off — the compact header + or the nav CTA
+  // — so the popover anchors to the button the user actually pressed.
+  const [addMenuFrom, setAddMenuFrom] = useState<"header" | "cta">("header");
   const closeAddMenu = useCallback(() => setAddMenuOpen(false), []);
 
   // The ⋯ overflow menu: how the tree is grouped, how it is sorted, and the
@@ -442,6 +448,10 @@ export function WorkflowsRail({
     recentDirs,
   );
 
+  // A first-run rail (no agents, no orphans) promotes the Create-new CTA to the
+  // primary style — the one action that gets the user their first agent.
+  const isEmpty = workspaces.length === 0 && orphanAgents.length === 0;
+
   const copyPath = (path: string): void => {
     void navigator.clipboard
       ?.writeText(path)
@@ -470,6 +480,29 @@ export function WorkflowsRail({
           <Icon name="Search" size={14} />
           <span>Search</span>
           <span className="rail-nav-kbd">{SHORTCUT_HINT}</span>
+        </button>
+
+        {/* The primary creative action, promoted out of the header + into a
+            standing CTA directly under Search: the fastest path to a first
+            agent. It opens the same Add menu as the + (anchored to itself), and
+            when the rail has nothing yet it becomes the filled primary button so
+            an empty workspace has an obvious next step. */}
+        <button
+          type="button"
+          ref={createTriggerRef}
+          className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
+          data-testid="rail-create-new"
+          aria-label="Create new agent or workspace"
+          aria-haspopup="menu"
+          aria-expanded={addMenuOpen && addMenuFrom === "cta"}
+          onClick={() => {
+            setHistoryOpen(false);
+            setAddMenuFrom("cta");
+            setAddMenuOpen((open) => !open);
+          }}
+        >
+          <Icon name="Plus" size={14} />
+          <span>Create new</span>
         </button>
 
         <button
@@ -506,10 +539,11 @@ export function WorkflowsRail({
             className="theme-toggle rail-header-btn"
             data-testid="add-workspace"
             aria-label="Add workspace"
-            aria-expanded={addMenuOpen}
+            aria-expanded={addMenuOpen && addMenuFrom === "header"}
             title="Add a workspace: a folder containing an agent project (sapiom.json). Its agent appears in the rail."
             onClick={() => {
               setHistoryOpen(false);
+              setAddMenuFrom("header");
               setAddMenuOpen((open) => !open);
             }}
           >
@@ -526,11 +560,11 @@ export function WorkflowsRail({
             the catalog. */}
         <AnchoredPopover
           open={addMenuOpen}
-          anchorRef={connectTriggerRef}
+          anchorRef={addMenuFrom === "cta" ? createTriggerRef : connectTriggerRef}
           onDismiss={closeAddMenu}
-          // Beside the rail, not over it. The + is pinned to the rail's right
-          // edge, so a downward panel grows back across the workspace tree it
-          // is about to add to — covering the list you are checking against.
+          // Beside the rail, not over it. Both triggers are pinned to the rail's
+          // right edge, so a downward panel grows back across the workspace tree
+          // it is about to add to — covering the list you are checking against.
           placement="right-start"
           className="connect-card add-card"
           testid="add-menu"

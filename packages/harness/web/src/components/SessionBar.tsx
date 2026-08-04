@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import type { JSX, ReactNode } from "react";
 import type { HarnessSession } from "@shared/types";
 
-import { HARNESS_LABELS } from "../lib/history-meta";
+import { HARNESS_LABELS, formatRelativeTime } from "../lib/history-meta";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { EndSessionConfirm } from "./EndSessionConfirm";
 import { Icon } from "./Icon";
@@ -92,6 +92,8 @@ export function SessionBar({
   };
 
   const others = activeSession ? sessions.filter((s) => s.id !== activeSession.id) : [];
+  // The switcher lists every live session of this agent, active one first.
+  const orderedSessions = activeSession ? [activeSession, ...others] : [];
 
   return (
     <div className="session-bar">
@@ -190,17 +192,6 @@ export function SessionBar({
                   <Icon name="ChevronDown" size={13} />
                 </button>
               )}
-              {/* Bound-agent suffix on the active session: a quiet metadata tail
-                  next to the title (styled in refine.css), never a boxed tag. */}
-              {boundWorkflowName && (
-                <span
-                  className="session-workflow-chip"
-                  data-testid="session-workflow-chip"
-                  data-tooltip={`Bound to ${boundWorkflowName}; shown in Canvas`}
-                >
-                  · {boundWorkflowName}
-                </span>
-              )}
               <AnchoredPopover
                 open={menuOpen}
                 anchorRef={menuTriggerRef}
@@ -210,6 +201,57 @@ export function SessionBar({
                 role="menu"
                 testid="session-menu-popover"
               >
+                {/* Switcher: every live session of this agent, the active one
+                    checked. Picking a row switches; the actions below act on the
+                    current session. One place to select or act — no inline chips
+                    crowding the bar. */}
+                <div className="session-menu-section">Sessions</div>
+                {orderedSessions.map((s) => {
+                  const isActive = s.id === activeSession.id;
+                  return (
+                    <button
+                      key={s.id}
+                      role="menuitemradio"
+                      aria-checked={isActive}
+                      className={"profile-menu-item session-switch-item" + (isActive ? " is-selected" : "")}
+                      data-testid={`session-switch-${s.id}`}
+                      onClick={() => {
+                        if (!isActive) onSelectSession?.(s.id);
+                        closeMenu();
+                      }}
+                    >
+                      <span className="session-dot" data-status={s.status} />
+                      <span className="session-switch-label">{labelOf ? labelOf(s) : s.title}</span>
+                      <span className="session-switch-meta">{formatRelativeTime(s.lastActiveAt)}</span>
+                      {isActive && <Icon name="Check" size={13} />}
+                    </button>
+                  );
+                })}
+                {onNewSession && (
+                  <button
+                    role="menuitem"
+                    className="profile-menu-item session-menu-new"
+                    data-testid="session-new-menu"
+                    onClick={() => {
+                      onNewSession();
+                      closeMenu();
+                    }}
+                  >
+                    <Icon name="Plus" size={13} />
+                    New session
+                  </button>
+                )}
+
+                <div className="session-menu-divider" role="separator" />
+
+                {/* Which agent's Canvas this session drives — moved off the bar
+                    into the menu, where it reads as metadata, not a session. */}
+                {boundWorkflowName && (
+                  <div className="session-menu-bound" data-testid="session-workflow-chip">
+                    Bound to <strong>{boundWorkflowName}</strong> · shown in Canvas
+                  </div>
+                )}
+
                 <button
                   role="menuitem"
                   className="profile-menu-item"
@@ -265,21 +307,6 @@ export function SessionBar({
                 )}
               </AnchoredPopover>
             </div>
-
-            {/* Other live sessions of this agent: click a chip to switch. */}
-            {others.map((s) => (
-              <button
-                key={s.id}
-                className="session-switch"
-                data-testid={`session-switch-${s.id}`}
-                title={labelOf ? labelOf(s) : s.title}
-                onClick={() => onSelectSession?.(s.id)}
-              >
-                <span className="session-dot" data-status={s.status} />
-                <span className="session-switch-label">{labelOf ? labelOf(s) : s.title}</span>
-              </button>
-            ))}
-
           </>
         ) : (
           <span className="session-context-none">No active session</span>

@@ -234,8 +234,8 @@
     "id": "session-bar-private-css-and-test-id",
     "path": "packages/harness/web/src/components/SessionBar.tsx",
     "pattern": "^session-workflow-chip$",
-    "occurrences": 2,
-    "reason": "Private CSS classes and test IDs remain stable."
+    "occurrences": 1,
+    "reason": "The private bound-agent test ID remains stable (the e2e suite addresses the line by it)."
   },
   {
     "id": "tooltip-private-selector",
@@ -399,13 +399,6 @@
     "reason": "The private CSS selector remains stable with its React class name."
   },
   {
-    "id": "styles-session-workflow-chip-selector",
-    "path": "packages/harness/web/src/styles.css",
-    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
-    "occurrences": 1,
-    "reason": "The private CSS selector remains stable with its React class name."
-  },
-  {
     "id": "styles-workflow-actions-header-selector",
     "path": "packages/harness/web/src/styles.css",
     "pattern": "(?<![a-z0-9_-])workflow-actions-header(?![a-z0-9_-])",
@@ -438,13 +431,6 @@
     "path": "packages/harness/web/src/styles/refine.css",
     "pattern": "(?<![a-z0-9_-])workflow-item(?![a-z0-9_-])",
     "occurrences": 2,
-    "reason": "The private refinement-layer CSS selector remains stable with its React class name."
-  },
-  {
-    "id": "refine-session-workflow-chip-selector",
-    "path": "packages/harness/web/src/styles/refine.css",
-    "pattern": "(?<![a-z0-9_-])session-workflow-chip(?![a-z0-9_-])",
-    "occurrences": 1,
     "reason": "The private refinement-layer CSS selector remains stable with its React class name."
   },
   {

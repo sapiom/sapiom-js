@@ -124,20 +124,6 @@ body {
   background: transparent;
 }
 
-/* Bound-workflow suffix inside the active tab: quiet metadata text, not a
-   boxed tag. */
-.session-workflow-chip {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ---- Shared buttons: pill + lift; primary is the inverted --btn -------- */
 .btn-ghost,
 .btn-primary {
