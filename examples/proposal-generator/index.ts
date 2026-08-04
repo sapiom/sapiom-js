@@ -911,9 +911,20 @@ function newPage() {
 function ensure(space) {
   if (y - space < MARGIN) newPage();
 }
+// pdf-lib's StandardFonts speak WinAnsi (CP1252) only; any glyph outside it —
+// arrows, checkmarks, most math/emoji the model tends to emit — throws at encode
+// time, and since the drafted text is identical each attempt it killed every
+// retry. Map the common offenders to ASCII, then drop anything still unencodable
+// so a stray glyph degrades the text instead of failing the whole PDF.
+const WINANSI_MAP = { "→": "->", "←": "<-", "↔": "<->", "⇒": "=>", "⇐": "<=", "↑": "^", "↓": "v", "★": "*", "☆": "*", "✓": "[x]", "✔": "[x]", "✗": "x", "✘": "x", "≥": ">=", "≤": "<=", "≠": "!=", "≈": "~" };
+function winansi(str) {
+  return String(str)
+    .replace(/[→←↔⇒⇐↑↓★☆✓✔✗✘≥≤≠≈]/g, (c) => WINANSI_MAP[c] ?? c)
+    .replace(/[^\\t\\n\\r\\x20-\\x7E\\xA0-\\xFF\\u20AC\\u201A\\u0192\\u201E\\u2026\\u2020\\u2021\\u02C6\\u2030\\u0160\\u2039\\u0152\\u017D\\u2018\\u2019\\u201C\\u201D\\u2022\\u2013\\u2014\\u02DC\\u2122\\u0161\\u203A\\u0153\\u017E\\u0178]/g, "");
+}
 // Greedy word-wrap to the content width at the given size.
 function wrap(text, f, size) {
-  const words = String(text).split(/\\s+/).filter(Boolean);
+  const words = winansi(text).split(/\\s+/).filter(Boolean);
   const lines = [];
   let line = "";
   for (const w of words) {
@@ -938,6 +949,8 @@ function text(str, { f = font, size = 11, gap = 4, color = rgb(0.1, 0.1, 0.1) } 
 // A right-aligned amount on the same row as a left label.
 function row(label, amount, { f = font, size = 11 } = {}) {
   ensure(size + 6);
+  label = winansi(label);
+  amount = winansi(amount);
   page.drawText(label, { x: MARGIN, y, size, font: f, color: rgb(0.1, 0.1, 0.1) });
   const w = f.widthOfTextAtSize(amount, size);
   page.drawText(amount, { x: MARGIN + WIDTH - w, y, size, font: f, color: rgb(0.1, 0.1, 0.1) });
