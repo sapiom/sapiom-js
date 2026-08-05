@@ -1,5 +1,17 @@
 # @sapiom/harness-desktop
 
+## 0.2.3
+
+### Patch Changes
+
+- Brand-coherent terminal colors: Claude Code's accent colors now match the
+  Studio palette instead of Claude's defaults. Each session is pinned to Claude
+  Code's `dark-ansi` / `light-ansi` theme (matched to the app theme), routing
+  its colors through the terminal's 16-color ramp, which is retuned to a calmer
+  blue, the Studio green for success/live state, and harmonized red / yellow /
+  cyan / magenta. The recessed terminal background is unchanged. (Ships the
+  `@sapiom/harness` change ahead of the batched changeset release.)
+
 ## 0.2.2
 
 ### Patch Changes
