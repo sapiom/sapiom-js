@@ -121,6 +121,8 @@ import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
 import { createTemplatesRouter } from "./templates.js";
 import { createActionsRouter } from "./actions.js";
+import { createConnectGitHubRouter } from "./connect-github.js";
+import { createGitHubDeviceRouter, getGitHubToken } from "./github-device.js";
 import {
   createAuthRouter,
   createMutableAuthState,
@@ -1246,6 +1248,11 @@ export const startServer = async (
   );
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
+    // Device OAuth keeps the GitHub token server-side. The clone route receives
+    // only its HttpOnly session cookie, returns a local path, and the client
+    // registers that path through createWorkflowsRouter above.
+    createGitHubDeviceRouter(),
+    createConnectGitHubRouter({ getToken: getGitHubToken }),
     createFsRouter(),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,

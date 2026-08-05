@@ -27,6 +27,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { ConnectivityBanner, ConnectivityScreen } from "./components/ConnectivityState";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
+import type { GitHubDeviceApi } from "./components/GitHubDeviceConnect";
 import { Icon } from "./components/Icon";
 import { ImageComposer } from "./components/ImageComposer";
 import { SessionBar } from "./components/SessionBar";
@@ -38,7 +39,7 @@ import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { ApiError, boundWorkflowPathOf, isMockMode } from "./lib/api";
+import { ApiError, boundWorkflowPathOf, isMockMode, type ConnectGitHubRequest } from "./lib/api";
 import { hasMockCanvasDoc } from "./lib/mock-data";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
@@ -981,6 +982,23 @@ export const App = (): JSX.Element => {
     })();
   };
 
+  const githubDeviceApi: GitHubDeviceApi = {
+    deviceStart: () => harness.api.githubDeviceStart(),
+    devicePoll: (deviceCode) => harness.api.githubDevicePoll(deviceCode),
+    listRepos: () => harness.api.githubListRepos(),
+    status: () => harness.api.githubStatus(),
+    disconnect: () => harness.api.githubDisconnect(),
+    clone: async (request: ConnectGitHubRequest) => {
+      // Clone first, then hand the resulting directory to the existing
+      // workflows/connect path. That registry owns Agent-project discovery;
+      // the GitHub feature deliberately does not parse sapiom.json itself.
+      const { path } = await harness.api.connectGitHub(request);
+      await harness.connectWorkflow(path);
+      handleFocusAgent(path);
+      return path;
+    },
+  };
+
   return (
     <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
       {isMobile && !railCollapsed && (
@@ -1287,6 +1305,7 @@ export const App = (): JSX.Element => {
                   onConnect={async (cwd) => {
                     await harness.connectWorkflow(cwd);
                   }}
+                  githubApi={githubDeviceApi}
                   onScan={handleScanWorkflows}
                   onScaffold={handleScaffoldSession}
                   onSaveProjectRoot={saveProjectRoot}

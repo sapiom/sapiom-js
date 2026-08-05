@@ -12,6 +12,8 @@ import {
 import { formatComplexity, type GalleryTemplate } from "../lib/templates";
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { AnchoredPopover } from "./AnchoredPopover";
+import { GitHubConnectDialog } from "./GitHubConnectDialog";
+import type { GitHubDeviceApi } from "./GitHubDeviceConnect";
 import { StartDialog } from "./StartDialog";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { HarnessMenuItems } from "./HarnessMenuItems";
@@ -93,6 +95,8 @@ interface NewSessionComposerProps {
   projectRoot: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
   onConnect: (cwd: string) => Promise<void>;
+  /** GitHub Device OAuth, repository listing, clone, then normal registration. */
+  githubApi: GitHubDeviceApi;
   onScan: (root: string) => Promise<number>;
   onScaffold: (cwd: string, harness: HarnessKind, idea?: string) => Promise<void>;
   onSaveProjectRoot: (root: string) => Promise<void>;
@@ -112,6 +116,7 @@ export function NewSessionComposer({
   projectRoot,
   listDir,
   onConnect,
+  githubApi,
   onScan,
   onScaffold,
   onSaveProjectRoot,
@@ -124,6 +129,7 @@ export function NewSessionComposer({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [templates, setTemplates] = useState<GalleryTemplate[]>([]);
   const [addOpen, setAddOpen] = useState(false);
+  const [githubOpen, setGitHubOpen] = useState(false);
   // While the composer is dropping away to make room for the terminal. The
   // action (which starts the session) fires once the exit has played.
   const [leaving, setLeaving] = useState(false);
@@ -131,6 +137,7 @@ export function NewSessionComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const harnessTriggerRef = useRef<HTMLButtonElement>(null);
   const addTriggerRef = useRef<HTMLButtonElement>(null);
+  const githubTriggerRef = useRef<HTMLButtonElement>(null);
   const closePicker = useCallback(() => setPickerOpen(false), []);
 
   // Registry-driven agent picker, same correction NewSessionModal applies: an
@@ -311,6 +318,23 @@ export function NewSessionComposer({
             </div>
           </div>
         </div>
+
+        <button
+          ref={githubTriggerRef}
+          type="button"
+          className="composer-github-option"
+          data-testid="composer-connect-github"
+          onClick={() => setGitHubOpen(true)}
+        >
+          <span className="composer-github-icon" aria-hidden="true">
+            <Icon name="GitBranch" size={15} />
+          </span>
+          <span className="composer-github-copy">
+            <strong>Connect GitHub</strong>
+            <span>Choose a repository to clone into Agent Studio</span>
+          </span>
+          <Icon name="ChevronRight" size={14} />
+        </button>
       </div>
 
       {templates.length > 0 && (
@@ -395,6 +419,15 @@ export function NewSessionComposer({
           onConnect={onConnect}
           onScan={onScan}
           triggerRef={addTriggerRef as RefObject<HTMLElement | null>}
+        />
+      )}
+
+      {githubOpen && (
+        <GitHubConnectDialog
+          api={githubApi}
+          defaultCloneParent={projectRoot}
+          onClose={() => setGitHubOpen(false)}
+          triggerRef={githubTriggerRef as RefObject<HTMLElement | null>}
         />
       )}
     </div>

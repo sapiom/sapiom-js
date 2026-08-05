@@ -1,0 +1,380 @@
+/* GitHub is a peer source immediately below the idea composer. It uses the
+   current Studio shell's neutral surfaces and focus tokens rather than
+   reviving the retired multi-door Add menu. */
+.composer-github-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp3);
+  width: 100%;
+  min-height: 52px;
+  margin-top: var(--sp3);
+  padding: var(--sp2) var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.composer-github-option:hover {
+  background: var(--surface-hover);
+  border-color: var(--ui-line-strong);
+  box-shadow: var(--shadow-xs);
+}
+
+.composer-github-option:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.composer-github-option > svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.composer-github-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+}
+
+.composer-github-copy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-github-copy strong {
+  font-size: var(--type-ui);
+  font-weight: 590;
+}
+
+.composer-github-copy span {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--type-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* GitHub Device OAuth + repository chooser. */
+.modal-github-connect {
+  width: min(520px, calc(100vw - var(--sp5)));
+}
+
+.modal-github-connect .github-connect-dialog-body {
+  gap: var(--sp3);
+  padding-block: var(--sp3);
+}
+
+.github-connect-state,
+.github-connect-waiting,
+.github-connect-account > span,
+.github-connect-repo-trail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1);
+}
+
+.github-connect-state {
+  min-height: 120px;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: var(--type-label);
+}
+
+.github-connect-state svg,
+.github-connect-waiting svg,
+.github-connect-repo-trail svg {
+  animation: github-connect-spin 0.9s linear infinite;
+}
+
+.github-connect-state-error svg {
+  color: var(--text-warning);
+  animation: none;
+}
+
+.github-connect-empty,
+.github-connect-awaiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp3);
+  min-height: 190px;
+  padding: var(--sp5) var(--sp4);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  text-align: center;
+}
+
+.github-connect-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--ui-line);
+  border-radius: 50%;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.github-connect-empty-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+  max-width: 310px;
+}
+
+.github-connect-empty-copy strong {
+  font-size: var(--type-ui);
+  font-weight: 600;
+}
+
+.github-connect-empty-copy span,
+.github-connect-no-results {
+  color: var(--text-faint);
+  font-size: var(--type-label);
+  line-height: 1.5;
+}
+
+.github-connect-empty .modal-error {
+  margin: 0;
+}
+
+.github-connect-eyebrow {
+  color: var(--text-faint);
+  font-size: var(--type-micro);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.github-connect-code {
+  display: flex;
+  align-items: center;
+  gap: var(--sp4);
+  height: 48px;
+  padding: 0 var(--sp4);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  box-shadow: var(--shadow-xs);
+}
+
+.github-connect-code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-faint);
+  font-family: var(--font-sans);
+  font-size: var(--type-micro);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.github-connect-code:hover .github-connect-code-copy {
+  color: var(--text);
+}
+
+.github-connect-awaiting .modal-field-hint {
+  max-width: 320px;
+  padding: 0;
+}
+
+.github-connect-open {
+  text-decoration: none;
+}
+
+.github-connect-waiting {
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+.github-connect-repositories {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp2);
+  min-width: 0;
+}
+
+.github-connect-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+}
+
+.github-connect-account > span svg {
+  color: var(--brand);
+}
+
+.github-connect-disconnect {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+.github-connect-disconnect:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.github-connect-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-faint);
+}
+
+.github-connect-search:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.github-connect-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.github-connect-search input::placeholder {
+  color: var(--text-faint);
+}
+
+.github-connect-error {
+  margin: 0;
+  padding: var(--sp2);
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+}
+
+.github-connect-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(42vh, 330px);
+  overflow-y: auto;
+  border-block: 1px solid var(--ui-line);
+}
+
+.github-connect-repo {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  width: 100%;
+  min-height: 48px;
+  padding: var(--sp2);
+  border: 0;
+  border-bottom: 1px solid var(--ui-line);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.github-connect-repo:last-child {
+  border-bottom: 0;
+}
+
+.github-connect-repo:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.github-connect-repo:focus-visible {
+  position: relative;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.github-connect-repo-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+}
+
+.github-connect-repo-copy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.github-connect-repo-copy strong,
+.github-connect-repo-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-connect-repo-copy strong {
+  font-size: var(--type-label);
+  font-weight: 550;
+}
+
+.github-connect-repo-copy span,
+.github-connect-repo-trail {
+  color: var(--text-faint);
+  font-size: var(--type-meta);
+}
+
+.github-connect-repo-trail {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.github-connect-no-results {
+  padding: var(--sp5);
+  text-align: center;
+}
+
+@keyframes github-connect-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-github-option,
+  .github-connect-state svg,
+  .github-connect-waiting svg,
+  .github-connect-repo-trail svg {
+    transition: none;
+    animation: none;
+  }
+}

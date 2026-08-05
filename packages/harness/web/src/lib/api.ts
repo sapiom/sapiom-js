@@ -215,6 +215,42 @@ export interface AuthStartResponse {
   started: boolean;
 }
 
+export interface ConnectGitHubRequest {
+  repoUrl: string;
+  targetDir?: string;
+}
+
+export interface ConnectGitHubResponse {
+  path: string;
+}
+
+export interface GitHubDeviceStartResponse {
+  user_code: string;
+  verification_uri: string;
+  device_code: string;
+  interval: number;
+  expires_in: number;
+}
+
+export interface GitHubDevicePollResponse {
+  status: "authorized" | "pending" | "slow_down" | "expired" | "denied";
+  interval?: number;
+}
+
+export interface GitHubApiRepoEntry {
+  fullName: string;
+  cloneUrl: string;
+  private: boolean;
+  description: string | null;
+  updatedAt: string | null;
+}
+
+export interface GitHubStatusResponse {
+  connected: boolean;
+  configured?: boolean;
+  login?: string;
+}
+
 export interface HarnessApi {
   /**
    * Kick off the browser OAuth flow (`POST /api/auth/start`). Returns
@@ -322,6 +358,13 @@ export interface HarnessApi {
    * `{ executionId }`, which the caller hands to the run-inspector poller.
    */
   run(req: { definitionId: string; input?: unknown }): Promise<RunResponse>;
+  /** Clone a repository selected through the server-side GitHub OAuth flow. */
+  connectGitHub(req: ConnectGitHubRequest): Promise<ConnectGitHubResponse>;
+  githubDeviceStart(): Promise<GitHubDeviceStartResponse>;
+  githubDevicePoll(deviceCode: string): Promise<GitHubDevicePollResponse>;
+  githubListRepos(): Promise<GitHubApiRepoEntry[]>;
+  githubStatus(): Promise<GitHubStatusResponse>;
+  githubDisconnect(): Promise<void>;
 }
 
 class RealApi implements HarnessApi {
@@ -606,6 +649,40 @@ class RealApi implements HarnessApi {
     });
   }
 
+  connectGitHub(req: ConnectGitHubRequest): Promise<ConnectGitHubResponse> {
+    return this.request<ConnectGitHubResponse>("/api/connect/github", {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
+  }
+
+  githubDeviceStart(): Promise<GitHubDeviceStartResponse> {
+    return this.request<GitHubDeviceStartResponse>("/api/github/device/start", {
+      method: "POST",
+    });
+  }
+
+  githubDevicePoll(deviceCode: string): Promise<GitHubDevicePollResponse> {
+    return this.request<GitHubDevicePollResponse>("/api/github/device/poll", {
+      method: "POST",
+      body: JSON.stringify({ device_code: deviceCode }),
+    });
+  }
+
+  githubListRepos(): Promise<GitHubApiRepoEntry[]> {
+    return this.request<GitHubApiRepoEntry[]>("/api/github/repos");
+  }
+
+  githubStatus(): Promise<GitHubStatusResponse> {
+    return this.request<GitHubStatusResponse>("/api/github/status");
+  }
+
+  async githubDisconnect(): Promise<void> {
+    await this.request<{ ok: true }>("/api/github/disconnect", {
+      method: "POST",
+    });
+  }
+
   /**
    * POST to an NDJSON route and parse the response body line by line, invoking
    * `onLine` for each well-formed JSON line as it arrives and returning every
@@ -800,6 +877,8 @@ class MockApi implements HarnessApi {
   // can drive the full sign-in flow deterministically without a real browser.
   private _authenticated = false;
   private _organizationName: string | null = null;
+  private _githubConnected = false;
+  private readonly _githubLogin = "mock-user";
   // First-poll wall-clock per progressive prod run, so the timeline is measured
   // from when the run was first observed (not module load) — see getRunState.
   private progressiveRunStart = new Map<string, number>();
@@ -1516,6 +1595,90 @@ class MockApi implements HarnessApi {
     // A fresh, non-"local" id so the run-state fixture returns the prod
     // steps and the inspector poller has something to follow.
     return { executionId: `exec-mock-prod-${Date.now()}` };
+  }
+
+  async connectGitHub(req: ConnectGitHubRequest): Promise<ConnectGitHubResponse> {
+    await delay(300);
+    if (mockErrorTargets().has("connectGitHub")) {
+      throw new ApiError(
+        500,
+        "git clone failed: repository not found",
+        "git clone failed: repository not found",
+      );
+    }
+    const repoName = req.repoUrl.split("/").pop()?.replace(/\.git$/, "") ?? "repo";
+    const clonedPath = req.targetDir ?? `/Users/demo/sapiom/${repoName}`;
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        lastConnectGitHub: req,
+      };
+    }
+    return { path: clonedPath };
+  }
+
+  async githubDeviceStart(): Promise<GitHubDeviceStartResponse> {
+    await delay(120);
+    if (mockErrorTargets().has("githubNotConfigured")) {
+      throw new ApiError(503, "notConfigured", "notConfigured");
+    }
+    return {
+      user_code: "ABCD-EFGH",
+      verification_uri: "https://github.com/login/device",
+      device_code: "mock-device-code",
+      interval: 1,
+      expires_in: 900,
+    };
+  }
+
+  async githubDevicePoll(_deviceCode: string): Promise<GitHubDevicePollResponse> {
+    await delay(120);
+    if (mockErrorTargets().has("githubPollDenied")) {
+      return { status: "denied" };
+    }
+    if (mockErrorTargets().has("githubPollExpired")) {
+      return { status: "expired" };
+    }
+    this._githubConnected = true;
+    return { status: "authorized" };
+  }
+
+  async githubListRepos(): Promise<GitHubApiRepoEntry[]> {
+    await delay(120);
+    return [
+      {
+        fullName: "mock-user/my-agent",
+        cloneUrl: "https://github.com/mock-user/my-agent.git",
+        private: false,
+        description: "An example agent repository",
+        updatedAt: "2026-08-01T00:00:00Z",
+      },
+      {
+        fullName: "mock-user/private-agent",
+        cloneUrl: "https://github.com/mock-user/private-agent.git",
+        private: true,
+        description: null,
+        updatedAt: "2026-07-28T00:00:00Z",
+      },
+    ];
+  }
+
+  async githubStatus(): Promise<GitHubStatusResponse> {
+    await delay(80);
+    if (mockErrorTargets().has("githubNotConfigured")) {
+      return { connected: false, configured: false };
+    }
+    return this._githubConnected
+      ? { connected: true, configured: true, login: this._githubLogin }
+      : { connected: false, configured: true };
+  }
+
+  async githubDisconnect(): Promise<void> {
+    await delay(80);
+    this._githubConnected = false;
   }
 
   /** Test-only escape hatch (mock mode only): record a direct-action call so
