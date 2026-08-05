@@ -282,6 +282,27 @@ export function checkCopy(template, manifest) {
     }
   }
 
+  // The "About" prose (longDescription) is a single tight paragraph, not an
+  // essay. One paragraph, and short enough that a buyer reads all of it. Detail
+  // that overflows belongs in `notes`, which carries no such cap.
+  const longDescription =
+    typeof manifest?.longDescription === "string" ? manifest.longDescription : "";
+  const longDescriptionWordCount = longDescription
+    .split(/\s+/)
+    .filter(Boolean).length;
+  if (longDescriptionWordCount > 85) {
+    fail(
+      "copy-about-length",
+      `manifest.longDescription runs ${longDescriptionWordCount} words — cap the About at 85. Keep the core what and how; move secondary detail to \`notes\`.`,
+    );
+  }
+  if (/\n\s*\n/.test(longDescription)) {
+    fail(
+      "copy-about-paragraphs",
+      `manifest.longDescription spans more than one paragraph. Keep the About to a single paragraph; move the rest to \`notes\`.`,
+    );
+  }
+
   for (const [surface, value, terminology] of [
     ["registry", registryDisplayCopy(template), WORKFLOW_TERM_RE],
     ["registry", registryProseCopy(template), ORCHESTRATION_TERM_RE],

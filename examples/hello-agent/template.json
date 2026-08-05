@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Confirm the plumbing works before you build anything real. One step, `greet`, reads an optional name and returns a greeting — enough to prove build, deploy, and run end to end without spending anything or calling a capability.",
-  "longDescription": "The smallest valid Sapiom agent. It's a smoke test: use it to check that your setup builds, deploys, and runs before you reach for a template that actually does work.\\n\\nThere is one step. `greet` takes an optional `name`, and returns `{ greeting: \\\"Hello, <name>!\\\" }` — or `Hello, world!` if you leave the name out. That's the whole agent. It calls no capabilities and touches no external services.\\n\\nOnce this deploys and runs cleanly, you know the path works. From there, fork a capability-backed template like Web Research Digest and build the real thing on top of a foundation you've already seen work.\\n\\nIt makes no metered capability calls.",
+  "longDescription": "The smallest valid Sapiom agent, a smoke test for checking that your setup builds, deploys, and runs before you reach for a template that does real work. There is one step: `greet` takes an optional `name` and returns `{ greeting: \"Hello, <name>!\" }`, or `Hello, world!` when you leave the name out. That is the whole agent. It calls no capabilities and touches no external services. Once it deploys and runs cleanly, fork a capability-backed template like Web Research Digest and build on top.",
   "useCases": [
     "Build, deploy, run check",
     "Smallest valid agent",

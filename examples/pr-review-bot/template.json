@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Review each pull request as it opens and flag behavior changes that ship without tests. Registers a PR webhook and then waits, costing nothing while idle — it can sit for days between reviews — and posts the result to email or Slack.",
-  "longDescription": "A review bot that wakes up when someone opens a pull request. It waits on a webhook and costs nothing while idle — it can sit for days between reviews and only spends once a PR arrives.\n\nWhen one does, a coding agent checks the code out in a sandbox and reads the diff, with a standing instruction to look hardest at test coverage: for every behavior the change touches, does a matching test exist? It reviews, it doesn't edit — nothing is pushed. A model then turns the agent's raw notes into a short, structured review — a verdict, a summary, and a plain list of the tests that are missing.\n\nThe review goes to wherever you want it: your email, or a Slack channel using your own bot token, which Sapiom hands to the run as an environment variable — read at runtime, never in code. You pay for the coding review, the model summary, and the delivery — the waiting is free.",
+  "longDescription": "A review bot that wakes when someone opens a pull request. It waits on a webhook, idle for days between reviews and spending nothing until one arrives. When it does, a coding agent checks the code out in a sandbox and reads the diff, looking hardest at test coverage and reviewing without editing so nothing is pushed. A model turns the raw notes into a short structured review and delivers it to your email or a Slack channel using your own bot token.",
   "useCases": [
     "Missing-test detection",
     "Posts to email or Slack",

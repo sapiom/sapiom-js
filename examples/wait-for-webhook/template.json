@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Start a slow external job, pause at $0 until it calls back, then summarize the result and decide whether to accept it. For a render, a batch export, or any third-party job whose answer arrives hours later by callback.",
-  "longDescription": "Some work hinges on a slow external job — a render farm, a batch export, a third-party screening service — that finishes on its own schedule and calls you back when it's done. This workflow starts that job and then waits for the callback, instead of holding a worker open or polling in a loop.\n\nThe `kickoff` step tells the external job how to reach this exact run, then pauses (`pauseUntilSignal`). The run suspends until the webhook fires — that can be minutes, hours, or days. When it does, the callback payload becomes `decide`'s input, a model summarizes it, and the run branches to accept or reject. Anything set before the pause is waiting in `ctx.shared` when it resumes.\n\nPausing is free — a suspended run isn't billed while it waits. The only paid call is the model summary in `decide`.",
+  "longDescription": "Some work hinges on a slow external job, a render, a batch export, a screening service, that finishes on its own schedule and calls back when done. It starts that job and waits for the callback instead of holding a worker open or polling. `kickoff` tells the job how to reach this run, then pauses (`pauseUntilSignal`) for minutes, hours, or days. When the webhook fires, its payload becomes `decide`'s input, a model summarizes it, and the run branches to accept or reject.",
   "useCases": [
     "Pause for a slow callback",
     "$0 while waiting",

@@ -6,7 +6,7 @@
     "url": "https://sapiom.ai/"
   },
   "whatItDoes": "Search the web for a topic and return a short, sourced digest you can read or share. One search, formatted in process — no LLM, no delivery. The simplest thing that turns a question into something citable.",
-  "longDescription": "Give it a topic and it searches the web and hands you a short digest with sources. It's the onboarding starting point — one capability, one clear output — and a good template to fork when you want to see a real capability run before building something bigger.\\n\\nThe `search` step calls Sapiom's `web.search` capability, which returns a synthesized answer plus ranked results. The `summarize` step formats that answer and its links into a markdown digest in the run — no model call — and returns `{ topic, digest, sources }`. If you pass an empty topic, it skips the search and hands back an empty digest instead of failing.\\n\\nYou pay for the one web search. The formatting step is free.",
+  "longDescription": "Give it a topic and it searches the web and hands you a short, sourced digest. It is the onboarding starting point, one capability and one clear output, a good template to fork before building something bigger. The `search` step calls Sapiom's `web.search` capability, which returns a synthesized answer plus ranked results. The `summarize` step formats that answer and its links into a markdown digest with no model call, returning `{ topic, digest, sources }`. An empty topic hands back an empty digest.",
   "useCases": [
     "Sourced digest with citations",
     "Quick pre-meeting briefing",
