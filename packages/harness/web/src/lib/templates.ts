@@ -257,6 +257,24 @@ export function useTemplatePrompt(
   );
 }
 
+/**
+ * Prompt handed to a session's agent to clone a DEPLOYED agent by its Sapiom
+ * definition id — the deep-link ("Open in Studio") fallback when the agent isn't
+ * on this machine yet. Mirrors the gallery branch of `useTemplatePrompt` but names
+ * `definitionId`: the clone tool writes that id into the checkout's `sapiom.json`,
+ * so the folder lands pre-linked and the server's workspace rescan surfaces it as
+ * a workflow the SPA can focus.
+ */
+export function cloneDefinitionPrompt(definitionId: string, dir: string): string {
+  return (
+    `Clone the deployed Sapiom agent (definition ${definitionId}) into this directory: ` +
+    `call the sapiom_dev_agents_clone tool with dir "${dir}" and definitionId "${definitionId}". ` +
+    "If it reports you are not authenticated, run sapiom_authenticate first and retry. " +
+    "After the clone, read the project's AGENTS.md and run npm install. " +
+    "When the project is ready, offer a local test run with no Sapiom capability spend (sapiom_dev_agents_run_local) as the next step."
+  );
+}
+
 /** Exact local MCP handoff shared by every bundled-starter entry point. */
 export function starterScaffoldInstruction(
   dir: string,

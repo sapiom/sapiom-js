@@ -12,6 +12,7 @@
 // `spawn ENOTDIR`. See esbuild-binary.ts.
 import "./esbuild-binary.js";
 import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { app, dialog, Menu } from "electron";
 import { resolveInstanceLockAction } from "./single-instance.js";
 import { createSetupWindow } from "./windows.js";
@@ -20,6 +21,8 @@ import { runSmokeChecks, reportSmoke } from "./smoke.js";
 import { initUpdater } from "./updater.js";
 import { initDialogs } from "./dialogs.js";
 import { setTrustedWindow } from "./trusted-sender.js";
+import { parseDeepLink, deepLinkFromArgv, DEEP_LINK_SCHEME } from "./deep-link.js";
+import { DEEP_LINK_NAVIGATE } from "./ipc.js";
 
 const devMode = process.argv.includes("--dev");
 /** `--smoke`: boot, verify the packaged bundle, print results, exit. See smoke.ts. */
@@ -55,6 +58,45 @@ function shutdownServer(): Promise<void> {
   return shuttingDown;
 }
 
+/**
+ * A `sapiom://` deep link buffered until the main window can receive it (no
+ * window yet, or its first page still loading). Consumed by the cold-start query
+ * param (boot) or the did-finish-load flush below.
+ */
+let pendingDeepLink: string | null = null;
+
+/** Deliver a received deep link: focus the window and push the target, or buffer it. */
+function handleDeepLink(rawUrl: string): void {
+  const target = parseDeepLink(rawUrl);
+  if (!target) return; // not one of ours — ignore
+  const win = bootResult?.mainWindow;
+  if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    win.webContents.send(DEEP_LINK_NAVIGATE, target);
+  } else {
+    pendingDeepLink = rawUrl;
+  }
+}
+
+/**
+ * Register Studio as the OS handler for `sapiom://`. Skipped under --smoke (CI
+ * must not mutate LaunchServices/HKCU). electron-builder writes the macOS
+ * Info.plist + Linux .desktop entries at package time; this call covers Windows
+ * (HKCU) and the unpackaged `pnpm dev` case.
+ */
+function registerDeepLinkScheme(): void {
+  if (smokeMode) return;
+  if (process.defaultApp) {
+    // Unpackaged: Electron itself is the launcher, so register execPath + entry.
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, [resolve(process.argv[1])]);
+    }
+  } else {
+    app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
+  }
+}
+
 // Single-instance: focus the existing window instead of booting twice — except
 // under --smoke, where losing the lock means the run verified NOTHING and must
 // say so instead of exiting 0. See single-instance.ts.
@@ -78,12 +120,23 @@ if (lock.action === "fail") {
 } else if (lock.action === "quit") {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  registerDeepLinkScheme();
+  // macOS delivers deep links to the primary instance via open-url, and it can
+  // fire BEFORE whenReady on a cold start — register at top level so the handler
+  // buffers into pendingDeepLink until the window exists.
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    handleDeepLink(url);
+  });
+  app.on("second-instance", (_event, argv) => {
     const win = bootResult?.mainWindow;
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
+    // Windows/Linux deliver a deep link as an argv token to this second launch.
+    const link = deepLinkFromArgv(argv);
+    if (link) handleDeepLink(link);
   });
 
   app.whenReady().then(async () => {
@@ -94,7 +147,12 @@ if (lock.action === "fail") {
     Menu.setApplicationMenu(null);
     const setupWin = createSetupWindow();
     try {
-      bootResult = await boot(setupWin, { devMode, smoke: smokeMode });
+      // A deep link present at cold start — a macOS open-url already buffered, or
+      // the URL in Windows/Linux argv — rides onto the SPA load URL as ?agent=.
+      const coldLink = pendingDeepLink ?? deepLinkFromArgv(process.argv);
+      pendingDeepLink = null;
+      const coldTarget = coldLink ? parseDeepLink(coldLink) : null;
+      bootResult = await boot(setupWin, { devMode, smoke: smokeMode, deepLink: coldTarget ?? undefined });
       if (devMode || smokeMode) {
         // Dev/smoke hook: print the tokened URL so a harness can verify the
         // server booted without driving the GUI.
@@ -134,6 +192,14 @@ if (lock.action === "fail") {
         app.exit(code);
         return;
       }
+      // A deep link that landed during the load gap (window created, first page
+      // not yet finished) was buffered — deliver it once the SPA is ready. Only
+      // on the non-smoke path; the smoke branch returned above.
+      bootResult.mainWindow.webContents.once("did-finish-load", () => {
+        const buffered = pendingDeepLink;
+        pendingDeepLink = null;
+        if (buffered) handleDeepLink(buffered);
+      });
     } catch (err) {
       if (smokeMode) {
         // A boot failure IS the smoke result — report it as one and fail fast

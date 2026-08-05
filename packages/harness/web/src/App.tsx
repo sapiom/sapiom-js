@@ -51,7 +51,11 @@ import {
 } from "./lib/project-dir";
 import { observedRunMatchesWorkflow } from "./lib/run-workflow-filter";
 import { agentUrl } from "./lib/urls";
+import { getDesktopBridge } from "./lib/desktop";
+import { agentFromSearch, type DeepLinkAgentTarget } from "./lib/deep-link";
+import { CloneAgentConfirm } from "./components/CloneAgentConfirm";
 import {
+  cloneDefinitionPrompt,
   starterScaffoldInstruction,
   useTemplatePrompt,
   type GalleryTemplate,
@@ -119,6 +123,19 @@ export const App = (): JSX.Element => {
   // selection and the main panel's tab-strip subject. The active tab's
   // session is harness.activeSessionId.
   const [focusedAgentPath, setFocusedAgentPath] = useState<string | null>(null);
+  // "Open in Studio" deep links (sapiom://agent/<id>). The applier is a ref
+  // because it needs `state`/`handleFocusAgent`, which exist only past the loading
+  // guard; the effects below reach it through the ref. The cold-start target rides
+  // in on the ?agent= load-URL param; warm links come via the desktop bridge.
+  const applyDeepLinkRef = useRef<((target: DeepLinkAgentTarget) => void) | null>(null);
+  const focusExistingRef = useRef<((definitionId: string) => boolean) | null>(null);
+  const coldDeepLinkRef = useRef<DeepLinkAgentTarget | null>(agentFromSearch());
+  const coldDeepLinkHandledRef = useRef(false);
+  // A clone kicked off from a remote-only deep link: focus the agent once the
+  // workspace rescan surfaces it locally.
+  const pendingCloneFocusRef = useRef<string | null>(null);
+  // The remote-only agent a deep link is offering to clone (drives the confirm).
+  const [cloneRequest, setCloneRequest] = useState<DeepLinkAgentTarget | null>(null);
   // Lifted so the telemetry chip in the session bar can open the settings
   // popover from outside SessionBar's own gear button.
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -394,6 +411,32 @@ export const App = (): JSX.Element => {
       describeTaskStatus.current.set(task.id, task.status);
     }
   }, [harness.tasks, harness.showToast]);
+
+  // Warm deep link: the desktop bridge pushes a target while the app is running.
+  useEffect(() => {
+    const bridge = getDesktopBridge();
+    if (!bridge?.onDeepLink) return;
+    return bridge.onDeepLink((target) => applyDeepLinkRef.current?.(target));
+  }, []);
+
+  // Cold-start deep link (?agent=): apply once, after the state has loaded, so a
+  // locally-connected agent is matched instead of prompting to clone.
+  useEffect(() => {
+    if (harness.loading) return;
+    const target = coldDeepLinkRef.current;
+    if (!target || coldDeepLinkHandledRef.current) return;
+    coldDeepLinkHandledRef.current = true;
+    applyDeepLinkRef.current?.(target);
+  }, [harness.loading]);
+
+  // After a deep-link clone lands, the workspace rescan surfaces the agent with a
+  // matching definitionId — focus it then, closing the "clone → display" loop.
+  useEffect(() => {
+    const wantId = pendingCloneFocusRef.current;
+    if (wantId && focusExistingRef.current?.(wantId)) {
+      pendingCloneFocusRef.current = null;
+    }
+  }, [harness.state?.workflows]);
 
   if (harness.loading) {
     return <div className="app-status">Loading Agent Studio…</div>;
@@ -739,6 +782,52 @@ export const App = (): JSX.Element => {
     // The canvas follows the focus target: shown for a populated session, hidden
     // for one with nothing yet or an agent with no session at all.
     applyCanvasVisibility(nextActiveId);
+  };
+
+  // Focus a deep-linked / just-cloned agent if the user has it locally; returns
+  // whether it was found. Assigned here (not in an effect) because it closes over
+  // `state` + `handleFocusAgent`, which exist only past the loading guard — the
+  // deep-link effects above reach it through the ref.
+  focusExistingRef.current = (definitionId: string): boolean => {
+    const match = state.workflows.find(
+      (w) => w.definitionId != null && String(w.definitionId) === definitionId,
+    );
+    if (!match) return false;
+    handleFocusAgent(match.path);
+    return true;
+  };
+
+  // Resolve a deep-link target (`sapiom://agent/<id>`): focus it if present, else
+  // offer to clone it locally — the remote-only fallback.
+  applyDeepLinkRef.current = (target: DeepLinkAgentTarget): void => {
+    if (focusExistingRef.current?.(target.definitionId)) return;
+    setCloneRequest(target);
+  };
+
+  // Clone a remote-only deep-linked agent locally (confirmed): open a session in a
+  // fresh folder and hand the coding agent the clone-by-definitionId prompt — the
+  // same agent-driven path "Use template" uses. The workspace rescan then surfaces
+  // the cloned agent, and the pending-focus effect above displays it.
+  const handleCloneDefinition = async (target: DeepLinkAgentTarget): Promise<void> => {
+    setCloneRequest(null);
+    const cwd = uniqueProjectDir(target.slug?.trim() || `agent-${target.definitionId}`);
+    if (!cwd) {
+      harness.showToast("Set a project folder first — use the + to open one.");
+      return;
+    }
+    pendingCloneFocusRef.current = target.definitionId;
+    setRightCollapsed(true); // terminal-first, like the template flow
+    try {
+      const session = await createSessionAt(cwd, "claude-code");
+      injectPromptWithRetry(
+        session.id,
+        cloneDefinitionPrompt(target.definitionId, cwd),
+        "Couldn't send the clone prompt. Ask the coding agent to run sapiom_dev_agents_clone.",
+      );
+    } catch (err) {
+      pendingCloneFocusRef.current = null;
+      harness.showToast((err as Error).message || "Couldn't start a session to clone the agent.");
+    }
   };
 
   // Binds a workflow to a live session in its own workspace and focuses it —
@@ -1414,6 +1503,14 @@ export const App = (): JSX.Element => {
           onOpenPath={(cwd) => void handleCreateSession(cwd, "claude-code")}
           onBrowseTemplates={() => setTemplatesOpen(true)}
           onClose={() => setPaletteOpen(false)}
+        />
+      )}
+
+      {cloneRequest && (
+        <CloneAgentConfirm
+          agentLabel={cloneRequest.slug ? `“${cloneRequest.slug}”` : `Agent ${cloneRequest.definitionId}`}
+          onCancel={() => setCloneRequest(null)}
+          onConfirm={() => void handleCloneDefinition(cloneRequest)}
         />
       )}
 

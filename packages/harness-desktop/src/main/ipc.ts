@@ -70,6 +70,31 @@ export const UPDATE_CHECK = "update:check";
  * `/` may open it.
  */
 export const CHOOSE_DIRECTORY = "dialog:choose-directory";
+
+/**
+ * main → renderer (push): a `sapiom://` deep link was received; navigate the SPA
+ * to the target agent. A main→renderer SEND, not an invoke, so it is NOT subject
+ * to `isTrustedSender` (which guards renderer→main invokes) — it opens no attack
+ * surface, it only pushes a target the SPA is free to act on or ignore.
+ *
+ * Cold-start links (the one that launched the app) are delivered instead as an
+ * `agent=` query param on the load URL, so the first render already has them with
+ * no IPC race; this channel carries links that arrive while the app is running.
+ */
+export const DEEP_LINK_NAVIGATE = "deep-link:navigate";
+
+/**
+ * A parsed `sapiom://agent/<definitionId>` deep link. `definitionId` is the raw
+ * URL segment (a string); the SPA stringifies its numeric `WorkflowInfo.definitionId`
+ * to match. `slug` is a display-only hint; `org` lets the SPA notice a link minted
+ * for a different signed-in organization. Mirrored on the SPA side in
+ * `harness/web/src/lib/desktop.ts`.
+ */
+export interface DeepLinkTarget {
+  definitionId: string;
+  slug?: string;
+  org?: string;
+}
 /*
  * There is deliberately NO "apply the update" channel. The restart is destructive —
  * it ends every running agent session — and the page that would call it is the same

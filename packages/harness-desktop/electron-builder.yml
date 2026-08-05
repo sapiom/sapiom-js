@@ -6,6 +6,14 @@ copyright: Copyright © Sapiom
 # with the `electron` devDependency.
 electronVersion: 33.4.11
 
+# Custom URL scheme for web→desktop deep links (the dashboard's "Open in Studio").
+# Populates macOS CFBundleURLTypes (Info.plist) and the Linux .desktop MimeType.
+# Windows registration is runtime-only, via app.setAsDefaultProtocolClient (index.ts).
+protocols:
+  - name: Sapiom
+    schemes:
+      - sapiom
+
 directories:
   output: release
   buildResources: assets

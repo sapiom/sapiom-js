@@ -35,7 +35,15 @@ import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
 import { ensureSapiomCli, installClaudeCode } from "./agent-install.js";
 import { installRuntimeShims } from "./runtime-shims.js";
-import { BOOT_PROGRESS, BOOT_ERROR, CONSENT_SUBMIT, RETRY, type BootProgress, type BootErrorPayload } from "./ipc.js";
+import {
+  BOOT_PROGRESS,
+  BOOT_ERROR,
+  CONSENT_SUBMIT,
+  RETRY,
+  type BootProgress,
+  type BootErrorPayload,
+  type DeepLinkTarget,
+} from "./ipc.js";
 
 export interface BootResult {
   server: HarnessServer;
@@ -241,6 +249,14 @@ export interface BootMode {
    * smoke pass still exercises PATH, asar paths, the server, and the windows.
    */
   smoke: boolean;
+  /**
+   * A `sapiom://` deep link present at COLD start (a macOS `open-url` that
+   * arrived before `whenReady`, or the URL in Windows/Linux argv). Its target is
+   * threaded onto the SPA load URL as `?agent=<id>` so the first render already
+   * has it — no IPC race. Links that arrive while the app is running are pushed
+   * over the DEEP_LINK_NAVIGATE channel instead (see index.ts).
+   */
+  deepLink?: DeepLinkTarget;
 }
 
 export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<BootResult> {
@@ -390,7 +406,7 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   });
 
   // 9. Load the SPA in the main window; close setup once it renders.
-  const url = `http://127.0.0.1:${server.port}/?token=${bootToken}`;
+  const url = withAgentParam(`http://127.0.0.1:${server.port}/?token=${bootToken}`, mode.deepLink);
   const mainWindow = createMainWindow(url);
   mainWindow.webContents.once("did-finish-load", () => {
     if (!setupWin.isDestroyed()) setupWin.close();
@@ -398,4 +414,22 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   progress(setupWin, { phase: "ready", message: "Ready.", status: "done" });
 
   return { server, mainWindow, url };
+}
+
+/**
+ * Thread a cold-start deep link's target onto the SPA load URL as query params.
+ * Query only — never a path segment: `isTrustedSender` (trusted-sender.ts) fails
+ * closed unless the top frame's pathname is exactly "/", so a path-based route
+ * here would break the update + folder-picker IPC.
+ */
+function withAgentParam(loadUrl: string, target: DeepLinkTarget | undefined): string {
+  if (!target) return loadUrl;
+  try {
+    const u = new URL(loadUrl);
+    u.searchParams.set("agent", target.definitionId);
+    if (target.slug) u.searchParams.set("agentSlug", target.slug);
+    return u.toString();
+  } catch {
+    return loadUrl;
+  }
 }

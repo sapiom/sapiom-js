@@ -17,6 +17,13 @@
  * "no bridge".
  */
 
+/** A `sapiom://` deep-link target. Mirrors the desktop app's `DeepLinkTarget` (ipc.ts). */
+export interface DeepLinkTarget {
+  definitionId: string;
+  slug?: string;
+  org?: string;
+}
+
 /** Result of an on-demand update check. Mirrors the desktop app's `UpdateCheckOutcome`. */
 export type UpdateCheckOutcome =
   | { kind: "available"; version: string }
@@ -39,6 +46,14 @@ export interface DesktopBridge {
    * back to the in-app directory listing, never assume it.
    */
   chooseDirectory?: (defaultPath?: string) => Promise<string | null>;
+  /**
+   * Subscribe to `sapiom://` deep links that arrive while the app is running
+   * (main → renderer push); returns an unsubscribe fn. Optional on purpose: a
+   * plain browser has no bridge, and a desktop build older than this SPA won't
+   * expose it — callers must feature-detect it. Cold-start links arrive via the
+   * `agent=` load-URL param (see `deep-link.ts`), not this channel.
+   */
+  onDeepLink?: (callback: (target: DeepLinkTarget) => void) => () => void;
   // No restart method: applying an update is confirmed by a native dialog in the
   // desktop app, so page code — which shares an origin with agent-authored files
   // the harness serves — has no way to end a user's sessions.
@@ -80,6 +95,9 @@ export function getDesktopBridge(host: DesktopHost | undefined = defaultHost()):
     // Optional: only surfaced when the desktop build actually provides it, so an
     // older app degrades to the in-app listing rather than a rejecting call.
     chooseDirectory: typeof bridge.chooseDirectory === "function" ? bridge.chooseDirectory : undefined,
+    // Optional for the same reason: an older desktop build (or a browser) simply
+    // never delivers a warm deep link, and cold links still ride the load-URL param.
+    onDeepLink: typeof bridge.onDeepLink === "function" ? bridge.onDeepLink : undefined,
   };
 }
 

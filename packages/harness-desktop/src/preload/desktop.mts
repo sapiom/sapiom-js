@@ -13,7 +13,14 @@
  * on and `ipcRenderer` is never handed to the page.
  */
 import { contextBridge, ipcRenderer } from "electron";
-import { APP_VERSION_ARG, CHOOSE_DIRECTORY, UPDATE_CHECK, type UpdateCheckOutcome } from "../main/ipc.js";
+import {
+  APP_VERSION_ARG,
+  CHOOSE_DIRECTORY,
+  DEEP_LINK_NAVIGATE,
+  UPDATE_CHECK,
+  type DeepLinkTarget,
+  type UpdateCheckOutcome,
+} from "../main/ipc.js";
 
 const api = {
   /** The desktop app's version — NOT the harness's (the SPA already knows that one). */
@@ -30,6 +37,20 @@ const api = {
    */
   chooseDirectory(defaultPath?: string): Promise<string | null> {
     return ipcRenderer.invoke(CHOOSE_DIRECTORY, defaultPath) as Promise<string | null>;
+  },
+  /**
+   * Subscribe to `sapiom://` deep links that arrive while the app is running.
+   * Returns an unsubscribe fn. RECEIVE-only (main → renderer push): the page
+   * still never gets `ipcRenderer`, and there is nothing to invoke — a link is a
+   * target the SPA may act on or ignore. Cold-start links arrive via the `agent=`
+   * load-URL param instead, so the one that opened the app isn't re-delivered here.
+   */
+  onDeepLink(callback: (target: DeepLinkTarget) => void): () => void {
+    const listener = (_event: unknown, target: DeepLinkTarget): void => callback(target);
+    ipcRenderer.on(DEEP_LINK_NAVIGATE, listener);
+    return () => {
+      ipcRenderer.removeListener(DEEP_LINK_NAVIGATE, listener);
+    };
   },
   // No restart method, on purpose — see ipc.ts. An update that is ready to install
   // is confirmed through a native dialog, so nothing the page can call ends a

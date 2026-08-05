@@ -607,8 +607,9 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
     "({ bridge: typeof window.sapiomDesktop," +
       " check: typeof window.sapiomDesktop?.checkForUpdates," +
       " choose: typeof window.sapiomDesktop?.chooseDirectory," +
+      " deep: typeof window.sapiomDesktop?.onDeepLink," +
       " version: window.sapiomDesktop?.appVersion })",
-  )) as { bridge: string; check: string; choose: string; version: unknown };
+  )) as { bridge: string; check: string; choose: string; deep: string; version: unknown };
 
   if (shape.bridge !== "object") {
     throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
@@ -623,6 +624,12 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   if (shape.choose !== "function") {
     throw new Error(`bridge incomplete — chooseDirectory missing: ${JSON.stringify(shape)}`);
   }
+  // Shape-only, like chooseDirectory: onDeepLink is a receive-only subscription
+  // (main → renderer push), so there is nothing to invoke here — asserting the
+  // wrapped method is present is the honest check.
+  if (shape.deep !== "function") {
+    throw new Error(`bridge incomplete — onDeepLink missing: ${JSON.stringify(shape)}`);
+  }
   // The bridge must stay MINIMAL as well as present. Only two members are allowed
   // beyond appVersion: checkForUpdates (no destructive counterpart — applying an
   // update is a native dialog, see ipc.ts) and chooseDirectory (returns only a
@@ -630,7 +637,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   // restart method, by contrast, would let same-origin agent-authored content end
   // every running session — so anything new here has to be a deliberate addition.
   const extra = (await win.webContents.executeJavaScript(
-    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory')",
+    "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink')",
   )) as string[];
   if (extra.length > 0) {
     throw new Error(`bridge exposes unexpected members to page code: ${extra.join(", ")}`);
@@ -680,7 +687,7 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   }
 
   return (
-    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory (v${shape.version}); ` +
+    `window.sapiomDesktop exposes checkForUpdates + chooseDirectory + onDeepLink (v${shape.version}); ` +
     `trusted-sender round-trip returned "${outcome.kind}: ${outcome.reason}"`
   );
 }
