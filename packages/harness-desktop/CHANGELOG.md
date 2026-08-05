@@ -1,5 +1,16 @@
 # @sapiom/harness-desktop
 
+## 0.2.2
+
+### Patch Changes
+
+- Open in Studio (SAP-2424): register a `sapiom://` URL scheme so the dashboard's
+  "Open in Studio" action opens the desktop app and routes to the agent —
+  focusing it when it's already cloned locally, or offering to clone it (by
+  definition id) and then focusing it. Handles macOS `open-url` and
+  Windows/Linux argv for both warm and cold launches, with a download-page
+  fallback when the app isn't installed.
+
 ## 0.2.1
 
 ### Patch Changes
