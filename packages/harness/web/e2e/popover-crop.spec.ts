@@ -101,12 +101,4 @@ test("canvas run picker and step detail menu open uncropped at the right pane's 
   await page.getByTestId("canvas-run-chip").click();
   await expectUncropped(page, page.getByTestId("canvas-run-menu"));
   await page.keyboard.press("Escape");
-
-  // The step-detail ⋯ menu sits at the pane's far right — the down-end
-  // placement must still land fully on screen. "Full details" lives inside
-  // the expanded step row, so expand it first.
-  await page.getByTestId("canvas-step-row-approve").click();
-  await page.getByTestId("canvas-step-open-approve").click();
-  await page.getByTestId("canvas-detail-menu").click();
-  await expectUncropped(page, page.getByTestId("canvas-detail-menu-popover"));
 });

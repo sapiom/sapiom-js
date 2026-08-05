@@ -10,7 +10,6 @@ import type { DeployProgress, ObservedRun, RunTarget } from "../lib/use-harness-
 import { CanvasOverviewPanel } from "./CanvasOverviewPanel";
 import {
   CanvasChatPanel,
-  CanvasStepDetail,
   CanvasStepsList,
   DeployStatusBanner,
   RunStepsList,
@@ -452,12 +451,11 @@ export function CanvasPane({
   // title, reason}) — the app shows an actionable card instead of the
   // document's wall of text.
   const [postedError, setPostedError] = useState<{ title: string; reason: string } | null>(null);
-  // The real workflow graph the document posts — the source for the step
-  // drill-down. `detailStepId` is the step currently drilled into (null = the
-  // overview list).
+  // The real workflow graph the document posts — the source for the step list.
   const [graph, setGraph] = useState<CanvasGraph | null>(null);
-  const [detailStepId, setDetailStepId] = useState<string | null>(null);
-  // The steps list's accordion: which step row is expanded in place.
+  // The steps list's accordion: which step row is expanded in place. A row's
+  // full detail (Agent run, IO/logs, contract, lineage) renders INSIDE its
+  // expansion — clicking a step is a dropdown, not a separate slide-in view.
   const [expandedStepId, setExpandedStepId] = useState<string | null>(null);
   useEffect(() => {
     const onMessage = (event: MessageEvent): void => {
@@ -546,7 +544,6 @@ export function CanvasPane({
     setPostedOverview(null);
     setPostedError(null);
     setGraph(null);
-    setDetailStepId(null);
     setSelectedNodeId(null);
     setExpandedStepId(null);
     setOverviewOpen(true);
@@ -562,28 +559,18 @@ export function CanvasPane({
     setRestView({ zoom: 1, x: 0, y: 0 });
     userAdjustedRef.current = false;
   }, [sessionId, reloadKey]);
-  const detailNode = graph && detailStepId ? (graph.nodes.find((n) => n.id === detailStepId) ?? null) : null;
-  // The slide-out must not empty mid-flight: keep the LAST drilled step
-  // rendered in the off-going pane so back reads as the detail sliding away,
-  // not vanishing. Cleared with the graph (document swap).
-  const lastDetailRef = useRef<typeof detailNode>(null);
-  if (detailNode) lastDetailRef.current = detailNode;
-  if (!graph) lastDetailRef.current = null;
-  const renderedDetail = detailNode ?? lastDetailRef.current;
   // The board-picked node the bottom inspector shows — validated against the
   // live graph so a stale id (document re-render dropped the step) renders
   // the overview, never a ghost step.
   const selectedNode =
     graph && selectedNodeId ? (graph.nodes.find((n) => n.id === selectedNodeId) ?? null) : null;
-  // Keep the board's is-selected ring in sync with whichever selection is
-  // showing: the Steps tab's full-pane drill wins while open; otherwise the
-  // inspector's board pick. Both null clears the ring.
+  // Keep the board's is-selected ring in sync with the board pick; null clears it.
   useEffect(() => {
     frameRef.current?.contentWindow?.postMessage(
-      { type: "sapiom-canvas:select", id: detailStepId ?? selectedNodeId },
+      { type: "sapiom-canvas:select", id: selectedNodeId },
       "*",
     );
-  }, [detailStepId, selectedNodeId]);
+  }, [selectedNodeId]);
 
   // Run-state bridge: post live run status into the served canvas board so its
   // SVG nodes animate (is-running / is-passed / is-failed / is-pending). The
@@ -760,8 +747,8 @@ export function CanvasPane({
       {boundWorkflow && !overviewActive && (
         <WorkflowActionsHeader
           workflow={boundWorkflow}
-          detailStep={detailNode}
-          onBack={() => setDetailStepId(null)}
+          detailStep={null}
+          onBack={() => {}}
           onAskAgent={onInjectPrompt}
           surface={surface}
           stepsSummary={graph && graph.nodes.length > 0 ? formatGraphCounts(graph) : null}
@@ -902,13 +889,13 @@ export function CanvasPane({
       ) : (
         <div
           className={"canvas-frame-wrap" + (expanded ? " is-expanded" : "")}
-          data-view={surface === "board" ? "board" : detailNode ? "detail" : "steps"}
+          data-view={surface === "board" ? "board" : "steps"}
         >
-          {/* Full-pane slide: pane A is the active surface (board on the
-              Canvas tab, the steps list on the Steps tab), pane B the
-              drilled step. The subheader above swaps chrome per view
-              (WorkflowActionsHeader). The board stays MOUNTED under the
-              steps surface: the iframe is the graph's source of truth. */}
+          {/* The active surface: the board on the Canvas tab, the steps list on
+              the Steps tab. A step's detail opens inline in its list row (see
+              CanvasStepsList), so there is no separate detail pane. The board
+              stays MOUNTED under the steps surface: the iframe is the graph's
+              source of truth. */}
           <div className="canvas-slide-track">
           <div className="canvas-slide-pane">
           <div className={"canvas-visual" + (surface === "steps" ? " is-offstage" : "")}>
@@ -1156,9 +1143,9 @@ export function CanvasPane({
                   runTarget={runTarget}
                   workflows={workflows}
                   onOpenWorkflow={onOpenWorkflow}
+                  onAskAgent={onInjectPrompt}
                   expandedId={expandedStepId}
                   onToggle={(id) => setExpandedStepId((cur) => (cur === id ? null : id))}
-                  onOpenDetail={setDetailStepId}
                 />
               ) : run ? (
                 /* No structural graph, but a real run was observed:
@@ -1189,7 +1176,9 @@ export function CanvasPane({
               workflows={workflows}
               onOpenWorkflow={onOpenWorkflow}
               onOpenSteps={() => {
-                if (selectedNodeId) setDetailStepId(selectedNodeId);
+                // Board pick → Steps tab with that step's row already expanded
+                // (the detail is inline in the list now, not a separate view).
+                if (selectedNodeId) setExpandedStepId(selectedNodeId);
                 onOpenSteps();
               }}
               onDeselect={() => setSelectedNodeId(null)}
@@ -1213,17 +1202,6 @@ export function CanvasPane({
               onClose={() => setChatOpen(false)}
             />
           )}
-          </div>
-          <div className="canvas-slide-pane" aria-hidden={detailNode ? undefined : true}>
-            {renderedDetail && graph && (
-              <CanvasStepDetail
-                graph={graph}
-                node={renderedDetail}
-                run={run}
-                workflows={workflows}
-                onOpenWorkflow={onOpenWorkflow}
-              />
-            )}
           </div>
           </div>
         </div>

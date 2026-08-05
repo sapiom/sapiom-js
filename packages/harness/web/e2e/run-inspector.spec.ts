@@ -173,13 +173,9 @@ test.describe("offline stub run — run-local inspector", () => {
     await expect(chip).toBeVisible({ timeout: 8000 });
     await expect(chip).toContainText("completed", { timeout: 8000 });
 
-    // Expand the intake step (only ran step) to reveal the CanvasStepDetail,
-    // which renders StubNoticeSection. The accordion row is a button; click it.
+    // Expand the intake step (only ran step): the CanvasStepDetail — with the
+    // run's StubNoticeSection — renders INLINE in the row's dropdown.
     await page.getByTestId("canvas-step-row-intake").click();
-    // CanvasStepDetail renders in the slide-pane (the "Full details" drill —
-    // open it to see the run's StubNoticeSection).
-    await page.getByTestId("canvas-step-open-intake").click();
-    // The detail pane is now visible — wait for the canvas-step-detail.
     const detail = page.getByTestId("canvas-step-detail");
     await expect(detail).toBeVisible({ timeout: 5000 });
 

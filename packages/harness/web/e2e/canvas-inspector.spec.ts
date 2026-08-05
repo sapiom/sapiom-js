@@ -82,12 +82,12 @@ test("a board pick populates the inspector in place, with no tab switch", async 
   await expect(inspector).toContainText("records.read");
 
   // The drawer no longer carries step-navigation links — the chart is right
-  // there for that. "Open step" is the explicit full-pane drill, and it opens
-  // the picked step (still intake, since nothing retargeted the selection).
+  // there for that. "Open step" switches to the Steps tab and expands that
+  // step's row inline (its detail is a dropdown now, not a separate view).
   await page.getByTestId("canvas-inspector-open-steps").click();
   await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
-  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "detail");
-  await expect(page.getByTestId("canvas-detail-title")).toHaveText("intake");
+  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "steps");
+  await expect(page.getByTestId("canvas-step-expand-intake")).toContainText("Logs the incoming order");
 });
 
 test("a generic render failure names the agent graph", async ({ page }) => {

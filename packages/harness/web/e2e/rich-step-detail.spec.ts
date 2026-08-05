@@ -314,9 +314,8 @@ test.describe("Capability calls block", () => {
     await expect(chip).toBeVisible({ timeout: 8000 });
     await expect(chip).toContainText("completed", { timeout: 8000 });
 
-    // Expand the 'approve' row then open full-pane detail.
+    // Expand the 'approve' row: the detail renders inline in its dropdown.
     await page.getByTestId("canvas-step-row-approve").click();
-    await page.getByTestId("canvas-step-open-approve").click();
 
     const detail = page.getByTestId("canvas-step-detail");
     await expect(detail).toBeVisible({ timeout: 5000 });
@@ -333,7 +332,6 @@ test("the entry-step detail says the agent starts here", async ({ page }) => {
   await loadBoard(page);
   await page.getByTestId("right-tab-steps").click();
   await page.getByTestId("canvas-step-row-intake").click();
-  await page.getByTestId("canvas-step-open-intake").click();
 
   const detail = page.getByTestId("canvas-step-detail");
   await expect(detail).toContainText("Entry point: the agent starts here.");

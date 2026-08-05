@@ -1786,36 +1786,35 @@ test("steps tab drills into a step's real transitions and slides back", async ({
   // Grouped steps sit under their board band's label.
   await expect(page.getByTestId("canvas-steps-list")).toContainText("intake & screening");
 
-  // Rows are an ACCORDION: the first click expands in place with the step's
-  // description, input contract, and transitions; navigation is the explicit
-  // link inside.
+  // Rows are an ACCORDION: clicking one expands its FULL detail INLINE — a
+  // dropdown, NOT a separate slide-in view (data-view stays "steps").
   await approveRow.click();
   const expand = page.getByTestId("canvas-step-expand-approve");
   await expect(expand).toBeVisible();
-  await expect(expand).toContainText("score ≥ 620");
-  const inputCard = page.getByTestId("canvas-step-input-approve");
-  await expect(inputCard).toContainText("score");
-  await expect(inputCard).toContainText("number");
-  // Capabilities ride the posted graph (A4-04): the Sapiom services a step
-  // calls render as chips wherever the step's contract shows.
-  await expect(page.getByTestId("canvas-step-capabilities-approve")).toContainText("rules.evaluate");
   await expect(frame).toHaveAttribute("data-view", "steps");
 
-  // Full details slides the WHOLE pane; the subheader swaps to back
-  // (1×1, left-anchored) + step name + kind, with the main action and the
-  // ⋯ menu right-anchored.
-  await page.getByTestId("canvas-step-open-approve").click();
-  await expect(frame).toHaveAttribute("data-view", "detail");
-  const header = page.getByTestId("workflow-actions-header");
-  await expect(header.getByTestId("canvas-detail-back")).toBeVisible();
-  await expect(header.getByTestId("canvas-detail-title")).toHaveText("approve?");
-  const askCodingAgent = header.getByTestId("canvas-detail-ask");
-  await expect(askCodingAgent).toBeVisible();
-  await expect(askCodingAgent).toHaveAccessibleName("Ask coding agent");
-  await expect(askCodingAgent).toHaveAttribute("data-tooltip", "Ask the coding agent in the terminal");
-  await expect(askCodingAgent).toContainText("Ask coding agent");
-  await expect(header.getByTestId("canvas-detail-menu")).toBeVisible();
+  const detail = page.getByTestId("canvas-step-detail");
+  await expect(detail).toBeVisible();
 
+  // Real outgoing transitions with their branch conditions, both terminals.
+  await expect(detail).toContainText("draft-lease");
+  await expect(detail).toContainText("score ≥ 620");
+  await expect(detail).toContainText("manual-review");
+  await expect(detail).toContainText("declined");
+
+  // The Contract section renders the step's REAL declared input schema and the
+  // capabilities it calls.
+  const contract = detail.getByTestId("canvas-detail-input");
+  await expect(contract).toContainText("score");
+  await expect(contract).toContainText("number");
+  await expect(detail.getByTestId("canvas-detail-capabilities")).toContainText("rules.evaluate");
+
+  // Per-step coding-agent actions live in the dropdown (ported from the retired
+  // detail-pane header): "Ask coding agent" sends a step-scoped prompt (never a
+  // workflow-scoped one), and "Ask to modify" sends the modify prompt.
+  const askCodingAgent = detail.getByTestId("canvas-detail-ask");
+  await expect(askCodingAgent).toBeVisible();
+  await expect(askCodingAgent).toContainText("Ask coding agent");
   await askCodingAgent.click();
   await expect
     .poll(async () =>
@@ -1824,7 +1823,7 @@ test("steps tab drills into a step's real transitions and slides back", async ({
           .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
       ),
     )
-    .toContain('step of this agent');
+    .toContain("step of this agent");
   const askPrompt = await page.evaluate(() =>
     (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
       .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
@@ -1835,8 +1834,7 @@ test("steps tab drills into a step's real transitions and slides back", async ({
     const hook = (window as unknown as { __HARNESS_TEST__?: Record<string, unknown> }).__HARNESS_TEST__;
     if (hook) delete hook.lastInjectInput;
   });
-  await header.getByTestId("canvas-detail-menu").click();
-  await page.getByRole("menuitem", { name: "Ask coding agent to modify" }).click();
+  await detail.getByTestId("canvas-detail-modify").click();
   await expect
     .poll(async () =>
       page.evaluate(() =>
@@ -1844,26 +1842,13 @@ test("steps tab drills into a step's real transitions and slides back", async ({
           .__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
       ),
     )
-    .toContain('step of this agent');
-
-  // Real outgoing transitions with their branch conditions, both terminals.
-  const detail = page.getByTestId("canvas-step-detail");
-  await expect(detail).toContainText("draft-lease");
-  await expect(detail).toContainText("score ≥ 620");
-  await expect(detail).toContainText("manual-review");
-  await expect(detail).toContainText("declined");
-
-  // The Contract section renders the step's REAL declared input schema and
-  // the capabilities it calls (the thing Sapiom bills for).
-  const contract = detail.getByTestId("canvas-detail-input");
-  await expect(contract).toContainText("score");
-  await expect(contract).toContainText("number");
-  await expect(detail.getByTestId("canvas-detail-capabilities")).toContainText("rules.evaluate");
+    .toContain("step of this agent");
 
   await page.screenshot({ path: "web/e2e/screenshots/canvas-step-detail.png" });
 
-  // Back returns to the steps list; the Canvas tab still shows the board.
-  await page.getByTestId("canvas-detail-back").click();
+  // Collapsing the row hides the detail again; the list stays put.
+  await approveRow.click();
+  await expect(page.getByTestId("canvas-step-detail")).toHaveCount(0);
   await expect(frame).toHaveAttribute("data-view", "steps");
   await page.getByTestId("right-tab-canvas").click();
   await expect(frame).toHaveAttribute("data-view", "board");
@@ -1947,9 +1932,8 @@ test("an observed run renders per-step status and latency in the steps tab", asy
   await expect(page.getByTestId("canvas-run-chip")).toContainText("prod run completed");
   await expect(page.getByTestId("canvas-steps-run-note")).toHaveText("prod run");
 
-  // Detail carries the same run truth for the drilled step.
+  // Detail carries the same run truth for the drilled step (inline dropdown).
   await introRow.click();
-  await page.getByTestId("canvas-step-open-intake").click();
   const runSection = page.getByTestId("canvas-detail-run");
   await expect(runSection).toContainText("passed");
   await expect(runSection).toContainText("240ms");

@@ -81,6 +81,9 @@ function PayloadBlock({
       open={defaultOpen}
     >
       <summary>
+        <span className="payload-block-caret" aria-hidden="true">
+          <Icon name="ChevronRight" size={12} />
+        </span>
         <span className="payload-block-label">{label}</span>
         <button
           type="button"
@@ -226,6 +229,13 @@ export function RunSummaryBlock({
   const finalOutputStep = [...run.steps].reverse().find((s) => s.output !== undefined);
   const dashboardUrl = workflow?.definitionId != null ? agentUrl(workflow.definitionId) : null;
 
+  // The first produced URL is the run's payoff → the primary "Open result" CTA;
+  // any others drop to the secondary row. The dashboard link shows as secondary
+  // whenever it isn't already the primary (i.e. the run produced something).
+  const resultLink = links[0] ?? null;
+  const restLinks = resultLink ? links.slice(1) : [];
+  const secondaryDashboard = dashboardUrl != null && resultLink != null;
+
   const statusLabel = running
     ? `Running — ${passed} of ${total} step${total === 1 ? "" : "s"}`
     : run.status === "completed"
@@ -254,36 +264,75 @@ export function RunSummaryBlock({
         )}
       </div>
 
-      {/* Final-data CTA, highest-signal first. Only one link CTA shows. */}
-      {dashboardUrl ? (
+      {/* The payoff CTA. What the run PRODUCED (its first result URL) is the
+          primary, prominent action; a deployed dashboard link and preview drop
+          to secondary. When the run produced nothing, the dashboard (or
+          preview) takes the primary slot so there's always a real destination. */}
+      {resultLink ? (
         <a
-          className="status-tag status-tag-action run-summary-cta"
+          className="run-summary-open"
+          data-testid="run-summary-open"
+          href={resultLink.url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <Icon name="ArrowUpRight" size={14} />
+          Open result
+        </a>
+      ) : preview ? (
+        <a
+          className="run-summary-open"
+          data-testid="run-summary-preview-link"
+          href={preview.url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <Icon name="ArrowUpRight" size={14} />
+          Open preview
+        </a>
+      ) : dashboardUrl ? (
+        <a
+          className="run-summary-open"
           data-testid="run-summary-dashboard-link"
           href={dashboardUrl}
           target="_blank"
           rel="noreferrer"
           data-tooltip="Open this agent in the Sapiom dashboard"
         >
-          <Icon name="Cloud" size={12} />
+          <Icon name="Cloud" size={14} />
           Open in Sapiom
-        </a>
-      ) : preview ? (
-        <a
-          className="status-tag status-tag-action run-summary-cta"
-          data-testid="run-summary-preview-link"
-          href={preview.url}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <Icon name="ExternalLink" size={12} />
-          Open preview
         </a>
       ) : null}
 
-      {links.length > 0 && (
-        <div className="run-summary-links">
-          <span className="canvas-input-label">Results</span>
-          <LinksList links={links} testid="run-summary-links" />
+      {/* Secondary destinations — flat links beneath the primary CTA. */}
+      {(secondaryDashboard || preview || restLinks.length > 0) && (
+        <div className="run-summary-secondary">
+          {secondaryDashboard && (
+            <a
+              className="status-tag status-tag-action run-summary-secondary-link"
+              data-testid="run-summary-dashboard-link"
+              href={dashboardUrl!}
+              target="_blank"
+              rel="noreferrer"
+              data-tooltip="Open this agent in the Sapiom dashboard"
+            >
+              <Icon name="Cloud" size={12} />
+              Open in Sapiom
+            </a>
+          )}
+          {resultLink && preview && (
+            <a
+              className="status-tag status-tag-action run-summary-secondary-link"
+              data-testid="run-summary-preview-link"
+              href={preview.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Icon name="ExternalLink" size={12} />
+              Open preview
+            </a>
+          )}
+          {restLinks.length > 0 && <LinksList links={restLinks} testid="run-summary-links" />}
         </div>
       )}
 
@@ -294,7 +343,6 @@ export function RunSummaryBlock({
           className="canvas-run-result"
           testid="run-summary-output"
           copyTestid="payload-copy-result"
-          defaultOpen
         />
       )}
     </section>
@@ -705,9 +753,9 @@ export function CanvasStepsList({
   runTarget,
   workflows,
   onOpenWorkflow,
+  onAskAgent,
   expandedId,
   onToggle,
-  onOpenDetail,
 }: {
   graph: CanvasGraph;
   /** The session's shown run; per-step status/latency render only
@@ -719,9 +767,11 @@ export function CanvasStepsList({
   /** Registry workflows — launched-workflow nodes link through to theirs. */
   workflows: WorkflowInfo[];
   onOpenWorkflow: (path: string) => void;
+  /** Sends a prompt to the terminal's coding agent (per-step actions in the
+   *  inline detail). */
+  onAskAgent: (text: string) => void;
   expandedId: string | null;
   onToggle: (id: string) => void;
-  onOpenDetail: (id: string) => void;
 }): JSX.Element {
   // Same validity rule as the board's group bands: a group referencing a
   // step that no longer exists is stale enrichment and renders nowhere, so
@@ -797,18 +847,16 @@ export function CanvasStepsList({
             </button>
             {open && (
               <div className="canvas-step-expand" data-testid={`canvas-step-expand-${node.id}`}>
-                {node.description && <p className="canvas-step-desc">{node.description}</p>}
-                <StepInputContract node={node} />
-                <StepCapabilities node={node} />
-                <StepTransitions graph={graph} node={node} />
-                <OpenLaunchedWorkflow node={node} workflows={workflows} onOpenWorkflow={onOpenWorkflow} />
-                <button
-                  className="canvas-step-open"
-                  data-testid={`canvas-step-open-${node.id}`}
-                  onClick={() => onOpenDetail(node.id)}
-                >
-                  Full details <Icon name="ArrowRight" size={12} />
-                </button>
+                {/* The full step detail lives HERE, inline — clicking a step
+                    opens it as a dropdown, not a separate slide-in view. */}
+                <CanvasStepDetail
+                  graph={graph}
+                  node={node}
+                  run={run}
+                  workflows={workflows}
+                  onOpenWorkflow={onOpenWorkflow}
+                  onAskAgent={onAskAgent}
+                />
               </div>
             )}
           </div>
@@ -828,14 +876,16 @@ interface CanvasStepDetailProps {
   /** Registry workflows — launched-workflow nodes link through to theirs. */
   workflows: WorkflowInfo[];
   onOpenWorkflow: (path: string) => void;
+  /** Sends a prompt to the terminal's coding agent — powers the per-step
+   *  "Ask coding agent" / "Ask to modify" actions. Absent = no actions row. */
+  onAskAgent?: (text: string) => void;
 }
 
 /**
- * Per-step drill-down BODY (its chrome — back, name, kind, actions — lives
- * in the canvas subheader; see WorkflowActionsHeader). Driven entirely by
- * the posted graph: the step's role and description, then its real
- * transitions — what it leads to (with branch condition / pause signal) and
- * what reaches it, shown as read-only lineage.
+ * Per-step detail, rendered INLINE inside the step's list-row dropdown (see
+ * CanvasStepsList) — the step's role and description, its per-step run IO/logs,
+ * capability calls, contract, and read-only lineage (what it leads to / what
+ * reaches it), plus a compact row of coding-agent actions.
  */
 export function CanvasStepDetail({
   graph,
@@ -843,6 +893,7 @@ export function CanvasStepDetail({
   run,
   workflows,
   onOpenWorkflow,
+  onAskAgent,
 }: CanvasStepDetailProps): JSX.Element {
   const runStep = runStepFor(run, node.id);
   const outgoing = graph.edges.filter((e) => e.from === node.id);
@@ -859,6 +910,48 @@ export function CanvasStepDetail({
           <p className="canvas-detail-groups">
             Part of {groups.map((g) => g.label).join(", ")}
           </p>
+        )}
+        {onAskAgent && (
+          <div className="canvas-detail-actions">
+            <button
+              type="button"
+              className="btn-ghost canvas-detail-ask"
+              data-testid="canvas-detail-ask"
+              data-tooltip="Ask the coding agent in the terminal"
+              onClick={() =>
+                onAskAgent(
+                  `Walk me through the "${node.label}" step of this agent: what it does, its inputs and outputs, and its transitions.`,
+                )
+              }
+            >
+              <Icon name="MessageSquare" size={13} />
+              Ask coding agent
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              data-testid="canvas-detail-modify"
+              data-tooltip="Ask the coding agent to change this step"
+              onClick={() =>
+                onAskAgent(
+                  `Modify the "${node.label}" step of this agent. Show me the step's code first, then propose the change.`,
+                )
+              }
+            >
+              <Icon name="Wand2" size={13} />
+              Ask to modify
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              data-testid="canvas-detail-copy-name"
+              data-tooltip="Copy the step name"
+              onClick={() => void navigator.clipboard?.writeText(node.label).catch(() => {})}
+            >
+              <Icon name="Copy" size={13} />
+              Copy name
+            </button>
+          </div>
         )}
         <OpenLaunchedWorkflow node={node} workflows={workflows} onOpenWorkflow={onOpenWorkflow} />
 

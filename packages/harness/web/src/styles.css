@@ -4063,31 +4063,21 @@ input {
   color: var(--text-faint);
 }
 
+/* The step detail now opens inline in its list row, so there is no board↔detail
+   slide — the track holds a single, full-width pane (the active surface). */
 .canvas-slide-track {
   display: flex;
-  width: 200%;
+  width: 100%;
   flex: 1;
   min-height: 0;
-  transform: translateX(0);
-  transition: transform 260ms var(--ease);
-}
-
-.canvas-frame-wrap[data-view="detail"] .canvas-slide-track {
-  transform: translateX(-50%);
 }
 
 .canvas-slide-pane {
-  width: 50%;
-  flex: 0 0 50%;
+  width: 100%;
+  flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .canvas-slide-track {
-    transition: none;
-  }
 }
 
 /* Detail subheader chrome: the main action sits right-anchored before the
@@ -4138,6 +4128,30 @@ input {
   flex-direction: column;
   gap: var(--sp2);
   padding: var(--sp1) var(--sp2) var(--sp3) calc(var(--sp2) + 7px + var(--sp2));
+}
+
+/* The step detail rendered INLINE inside a row's dropdown drops its full-pane
+   chrome: no independent scroll and no pane padding (the row already pads), and
+   it sizes to its content instead of filling a pane. */
+.canvas-step-expand .canvas-detail {
+  flex: initial;
+}
+.canvas-step-expand .canvas-detail-body {
+  overflow-y: visible;
+  padding: 0;
+  gap: var(--sp2);
+}
+
+/* Per-step coding-agent actions, a compact ghost-button row in the inline
+   detail (ported from the retired detail-pane header). */
+.canvas-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp1);
+}
+.canvas-detail-actions .btn-ghost {
+  gap: 4px;
+  font-size: var(--type-meta);
 }
 
 .canvas-step-desc {
@@ -4517,17 +4531,40 @@ input {
 /* PayloadBlock: label on the left, Copy on the right. The disclosure marker is
    dropped in favour of the whole row being the toggle (scoped to .payload-block
    so the capability-call disclosures keep their default triangle). */
-.payload-block summary {
+.payload-block > summary {
   display: flex;
   align-items: center;
-  gap: var(--sp2);
+  gap: var(--sp1);
   list-style: none;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  transition: background-color var(--transition-fast);
 }
-.payload-block summary::-webkit-details-marker {
+.payload-block > summary::-webkit-details-marker {
   display: none;
+}
+.payload-block > summary:hover {
+  background: var(--surface-hover, var(--bg-hover));
+}
+.payload-block-caret {
+  display: inline-flex;
+  color: var(--text-faint);
+  transition: transform var(--transition-fast);
+}
+.payload-block[open] > summary .payload-block-caret {
+  transform: rotate(90deg);
 }
 .payload-block .payload-block-label {
   margin-right: auto;
+  color: var(--text-dim);
+  font-weight: 560;
+}
+@media (prefers-reduced-motion: reduce) {
+  .payload-block-caret,
+  .payload-block > summary {
+    transition: none;
+  }
 }
 .payload-copy {
   display: inline-flex;
@@ -4604,21 +4641,51 @@ input {
   font-size: var(--type-micro);
   color: var(--text-faint);
 }
-/* Result CTA: a flat action tag in brand green so it reads as the primary
-   payoff (--brand is the hue; --brand-ink is the light-on-green text, wrong
-   here on a light card). */
-.run-summary-cta.status-tag-action {
+/* Primary "Open result" CTA: a FILLED brand button — the produced artifact is
+   the payoff, so this is the one prominent control in the otherwise-flat card.
+   (--brand-ink IS correct here: light text on the brand green.) */
+.run-summary-open {
   align-self: flex-start;
-  color: var(--brand);
-  font-weight: 560;
-}
-.run-summary-links {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  align-items: center;
   gap: var(--sp1);
+  min-height: var(--control-h-xs, 28px);
+  padding: 4px 12px;
+  border-radius: var(--radius-md, var(--radius));
+  background: var(--brand);
+  color: var(--brand-ink, #fff);
+  font-size: var(--type-meta);
+  font-weight: 590;
+  text-decoration: none;
+  transition: filter var(--transition-fast);
 }
-.run-summary-links .canvas-input-label {
-  color: var(--text-faint);
+.run-summary-open svg {
+  flex: 0 0 auto;
+}
+.run-summary-open:hover {
+  filter: brightness(1.06);
+}
+.run-summary-open:active {
+  filter: brightness(0.96);
+}
+.run-summary-open:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-summary-open {
+    transition: none;
+  }
+}
+/* Secondary destinations — flat brand-green links under the primary. */
+.run-summary-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp3);
+}
+.run-summary-secondary-link.status-tag-action {
+  color: var(--brand);
 }
 /* Final output gets a brand-tinted frame so it reads as the result, not a log. */
 .canvas-run-logs.canvas-run-result {
