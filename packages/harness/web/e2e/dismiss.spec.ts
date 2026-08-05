@@ -78,21 +78,21 @@ test.describe("settings popover", () => {
 });
 
 test.describe("Start dialog", () => {
-  test("closes on Escape and returns focus to the + that spawned it", async ({
+  test("closes on Escape and returns focus to the button that spawned it", async ({
     page,
   }) => {
-    await page.getByTestId("add-workspace").click();
+    await page.getByTestId("add-existing-agents").click();
     await expect(page.locator(".modal-start")).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(page.locator(".modal-start")).toBeHidden();
-    await expect(page.getByTestId("add-workspace")).toBeFocused();
+    await expect(page.getByTestId("add-existing-agents")).toBeFocused();
   });
 
   test("still closes on a backdrop click, but not on clicks inside the panel", async ({
     page,
   }) => {
-    await page.getByTestId("add-workspace").click();
+    await page.getByTestId("add-existing-agents").click();
     await expect(page.locator(".modal-start")).toBeVisible();
 
     await page.getByTestId("dir-picker-input").click();

@@ -196,18 +196,11 @@ test.describe("UI event tracking (track() calls)", () => {
   });
 
   test("new session creation emits track('session.created')", async ({ page }) => {
-    // Open the Start dialog.
-    await page.getByTestId("add-workspace").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
-
-    // Point at a new folder so the primary action starts a session (scaffold).
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/scratch/new-agent");
-    const startBtn = page.getByTestId("aw-scaffold-here");
-    await expect(startBtn).toBeEnabled();
-    await startBtn.click();
-
-    // The dialog closes once the session is created (mock).
-    await expect(page.locator(".modal-start")).toHaveCount(0, { timeout: 3_000 });
+    // Creating a new agent starts a session from the composer.
+    await page.getByTestId("rail-create-new").click();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await page.getByTestId("composer-input").fill("Summarize new issues each morning.");
+    await page.getByTestId("composer-send").click();
 
     await waitForTrackEvent(page, "session.created");
     const events = await getTrackEvents(page);

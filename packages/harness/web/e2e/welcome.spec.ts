@@ -64,22 +64,20 @@ test.describe("first run", () => {
     await page.screenshot({ path: "web/e2e/screenshots/composer-home.png", fullPage: true });
   });
 
-  test("the + opens the folder door, and the workspace joins the rail", async ({ page }) => {
-    // The composer's leading + reaches the same add flow the rail's + does, and
-    // lands directly on the folder question rather than the door list.
+  test("the + opens the Add existing agents dialog, and the workspace joins the rail", async ({ page }) => {
+    // The composer's leading + reaches the same "add existing agents" dialog the
+    // rail's button does — one detection-driven picker, no doors.
     await page.getByTestId("composer-open-folder").click();
-    await expect(page.locator(".modal-add-workspace")).toBeVisible();
-    await expect(page.locator(".modal-new-session")).toHaveCount(0);
+    await expect(page.locator(".modal-start")).toBeVisible();
     await expect(page.getByTestId("aw-doors")).toHaveCount(0);
 
-    // Already at door 1: pick a fixture folder that holds an agent project.
+    // Pick a fixture folder that holds an agent project — detection is reactive.
     await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-agent");
-    await page.getByTestId("aw-have-continue").click();
     await expect(page.getByTestId("aw-result")).toContainText("This is an agent project");
     await page.getByTestId("aw-add").click();
 
     // The workspace joins the rail.
-    await expect(page.locator(".modal-add-workspace")).toHaveCount(0);
+    await expect(page.locator(".modal-start")).toHaveCount(0);
     await expect(page.getByTestId("workflow-rfq-agent")).toBeVisible();
   });
 });

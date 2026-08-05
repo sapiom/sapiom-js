@@ -75,14 +75,6 @@ test("session bar menu opens uncropped at the header's right cluster", async ({ 
   await expectUncropped(page, page.getByTestId("session-menu-popover"));
 });
 
-test("harness picker opens uncropped over the Start dialog", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  // The agent picker shows only in session-starting states.
-  await page.getByTestId("dir-picker-input").fill("/Users/demo/scratch/new-agent");
-  await page.getByTestId("harness-select").click();
-  await expectUncropped(page, page.getByTestId("harness-select-menu"));
-});
-
 test("canvas run picker and step detail menu open uncropped at the right pane's edge", async ({ page }) => {
   // Load the workflow graph, then observe two runs so the chip becomes the
   // run picker (same events the agent's MCP calls emit).

@@ -153,9 +153,8 @@ test("session header: compact identity (name only; path in the tooltip); New ses
 
   await page.screenshot({ path: "web/e2e/screenshots/session-header.png" });
 
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
-  await expect(page.locator(".modal-new-session")).toBeVisible();
+  await page.getByTestId("add-existing-agents").click();
+  await expect(page.locator(".modal-start")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 });
 
@@ -228,35 +227,28 @@ test("Overview opens the composer, and Back returns to the session behind it", a
   await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
 });
 
-test("creation IA: the rail + adds projects; the tab strip + adds a session to the focused agent", async ({
+test("creation IA: Add existing agents opens the detection dialog; the tab strip + opens the composer", async ({
   page,
 }) => {
-  // The rail's + is the PROJECT entry: it opens the three-door add menu. No
-  // mode tabs (the entry point fixed the intent, docs/IA.md) and no agent
-  // picker — each door asks exactly one question.
-  await page.getByTestId("add-workspace").click();
-  const menu = page.getByTestId("add-menu");
-  await expect(menu).toBeVisible();
-  await expect(menu.locator(".connect-card-header")).toContainText("Add");
-  await expect(menu.getByTestId("aw-doors")).toBeVisible();
-  await expect(menu.getByTestId("add-mode-session")).toHaveCount(0);
-  await expect(menu.getByTestId("add-mode-project")).toHaveCount(0);
-  await expect(menu.getByTestId("harness-select")).toHaveCount(0);
-  // "Add workspace" is now the OUTCOME of picking a folder that holds a
-  // project, not a button offered before anything is known.
-  await expect(menu.getByRole("button", { name: "Add workspace" })).toHaveCount(0);
+  // Adding what already exists is ONE detection-driven dialog — no doors, no
+  // modes, no agent picker.
+  await page.getByTestId("add-existing-agents").click();
+  const modal = page.locator(".modal-start");
+  await expect(modal).toBeVisible();
+  await expect(page.getByTestId("add-menu")).toHaveCount(0);
+  await expect(page.getByTestId("aw-doors")).toHaveCount(0);
+  await expect(modal.locator(".dir-picker")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(menu).toHaveCount(0);
+  await expect(modal).toHaveCount(0);
 
-  // Session creation lives in the session bar: the trailing + opens the
-  // composer-first "new session" home (describe an outcome → a session starts),
+  // Creating something NEW lives in the composer: the session bar's + opens it,
   // not a dialog and not a silent direct add.
   const newBtn = page.getByTestId("session-new");
   await expect(newBtn).toHaveAttribute("aria-label", "New session");
   await newBtn.click();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
   await expect(page.getByTestId("composer-input")).toBeVisible();
-  await expect(page.locator(".modal-new-session")).toHaveCount(0);
+  await expect(page.locator(".modal-start")).toHaveCount(0);
 });
 
 test("workflows rail lists the fixtures and the FOCUSED one drives macro gating", async ({ page }) => {
@@ -508,42 +500,12 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 });
 
-test("add project: the rail's + registers a bare folder through the 'Open a folder' door", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("aw-door-have").click();
-
-  const modal = page.locator(".modal-add-workspace");
+test("Add existing agents: directory picker navigates and validates", async ({ page }) => {
+  await page.getByTestId("add-existing-agents").click();
+  const modal = page.locator(".modal-start");
   await expect(modal).toBeVisible();
-  await expect(modal.getByTestId("harness-select")).toHaveCount(0);
 
-  const input = modal.getByTestId("dir-picker-input");
-  await input.fill("/Users/demo/scratch");
-  await modal.getByTestId("aw-have-continue").click();
-
-  // scratch holds no sapiom.json, so detection says so — and registering it as
-  // a bare workspace stays available (the rail supports agent-less folders).
-  await expect(modal.getByTestId("aw-result")).toContainText("No agent project");
-  await modal.getByTestId("aw-add-anyway").click();
-
-  await expect(modal).toBeHidden();
-  // The connected path joins the rail as a workspace-owned workflow row.
-  await expect(page.getByTestId("workflow-scratch")).toBeVisible();
-});
-
-test("new-session modal: directory picker navigates and validates", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
-  const modal = page.locator(".modal-new-session");
-  await expect(modal).toBeVisible();
-  await expect(modal.locator(".modal-field-hint")).toHaveText(
-    "Pick the workspace folder the coding agent runs in; the session is named after the folder.",
-  );
-  await expect(modal.getByTestId("harness-select")).toHaveAttribute(
-    "aria-label",
-    "Coding agent for this session",
-  );
-
-  const startButton = page.getByRole("button", { name: "Start session" });
+  const primary = modal.locator(".modal-primary-cta");
   const input = page.getByTestId("dir-picker-input");
 
   // Seeded from launchDir; browsing shows its subdirectories.
@@ -565,25 +527,26 @@ test("new-session modal: directory picker navigates and validates", async ({ pag
   await expect(input).toHaveValue("/Users/demo");
   await expect(page.getByTestId("dir-picker-item-acme-app")).toBeVisible();
 
-  await page.screenshot({ path: "web/e2e/screenshots/new-session-modal.png" });
+  await page.screenshot({ path: "web/e2e/screenshots/add-existing-agents.png" });
 
-  await input.fill("");
-  await expect(startButton).toBeDisabled();
-  await input.fill("/tmp/example-project");
-  await expect(startButton).toBeEnabled();
+  // Only a folder that already holds an agent enables the action; a plain one
+  // (and an empty field) leave it disabled.
+  await input.fill("/Users/demo/rfq-agent");
+  await expect(primary).toBeEnabled();
+  await input.fill("/Users/demo/scratch");
+  await expect(primary).toBeDisabled();
 
   await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.locator(".modal-new-session")).toBeHidden();
+  await expect(page.locator(".modal-start")).toBeHidden();
 });
 
-test("new-session modal: a failed directory read shows an error, not an empty listing", async ({ page }) => {
+test("Add existing agents: a failed directory read shows an error, not an empty listing", async ({ page }) => {
   // ?mockError=listDir makes the filesystem probe reject.
   await page.goto("/?mockError=listDir&seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
-  await expect(page.locator(".modal-new-session")).toBeVisible();
+  await page.getByTestId("add-existing-agents").click();
+  await expect(page.locator(".modal-start")).toBeVisible();
 
   const err = page.getByTestId("dir-picker-error");
   await expect(err).toBeVisible({ timeout: 3_000 });
@@ -1711,8 +1674,7 @@ test.describe("session menu copy path", () => {
 });
 
 test("directory picker: arrow keys move the highlight and Enter drills into it", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
+  await page.getByTestId("add-existing-agents").click();
   const input = page.getByTestId("dir-picker-input");
   await expect(page.getByTestId("dir-picker-item-leasing")).toBeVisible();
 

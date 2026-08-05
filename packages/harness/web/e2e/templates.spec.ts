@@ -381,20 +381,6 @@ test.describe("templates journey (from the composer)", () => {
   });
 });
 
-test("the Start-from tray hands straight off to the templates browser", async ({
-  page,
-}) => {
-  await page.goto("/");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-  await page.getByTestId("add-workspace").click();
-  // Templates is reached from the "Start from" tray for a new/empty folder; it
-  // hands straight off to the catalog and closes the dialog behind it.
-  await page.getByTestId("dir-picker-input").fill("/Users/demo/scratch/new-agent");
-  await page.getByTestId("start-from-templates").click();
-  await expect(page.getByTestId("templates-panel")).toBeVisible();
-  await expect(page.locator(".modal-start")).toHaveCount(0);
-});
-
 test("the rail navigates to templates, and says so while you are there", async ({
   page,
 }) => {

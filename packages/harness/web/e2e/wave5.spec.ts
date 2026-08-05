@@ -64,134 +64,25 @@ test.describe("command palette sections and highlighting", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Add dialog: scaffold, scan, registry picker, MCP prompts
+// Add existing agents dialog: detection + bulk scan
 // ---------------------------------------------------------------------------
 
-test.describe("add to Studio (detection-driven)", () => {
-  test("a non-existent folder offers the scaffold action, which starts a session and prompts the agent", async ({
-    page,
-  }) => {
-    await page.getByTestId("add-workspace").click();
-    const modal = page.locator(".modal-start");
-    await expect(modal).toBeVisible();
-
-    // Detection is reactive — no "Continue": the action appears once the picker
-    // resolves the typed path.
-    await modal.getByTestId("dir-picker-input").fill("/Users/demo/brand-new-agent");
-
-    // A folder that doesn't exist can't be registered — only created.
-    await expect(modal.getByTestId("aw-result")).toContainText("doesn't exist yet");
-    await expect(modal.getByTestId("aw-add")).toHaveCount(0);
-    await expect(modal.getByTestId("aw-add-anyway")).toHaveCount(0);
-
-    await modal.getByTestId("aw-scaffold-here").click();
-    await expect(modal).toBeHidden();
-
-    // The new session is live and the scaffold prompt reached its pty.
-    await expect(page.getByTestId("session-context-title")).toContainText("brand-new-agent");
-    await page.waitForFunction(() => {
-      const test = (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
-        .__HARNESS_TEST__;
-      return test?.lastInjectInput?.req.text.includes("sapiom_dev_agents_scaffold") ?? false;
-    });
-    const scaffoldPrompt = await page.evaluate(() =>
-      (window as unknown as { __HARNESS_TEST__?: { lastInjectInput?: { req: { text: string } } } })
-        .__HARNESS_TEST__?.lastInjectInput?.req.text,
-    );
-    expect(scaffoldPrompt).toContain(
-      '{"dir":"/Users/demo/brand-new-agent","template":"default"}',
-    );
-    expect(scaffoldPrompt).toContain("define the first agent");
-    expect(scaffoldPrompt?.toLowerCase()).not.toContain("workflow");
-  });
-
+test.describe("add existing agents (detection-driven)", () => {
   test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {
-    await page.getByTestId("add-workspace").click();
+    await page.getByTestId("add-existing-agents").click();
     const modal = page.locator(".modal-start");
     await modal.getByTestId("dir-picker-input").fill("/Users/demo");
 
-    // Bulk discovery is no longer a permanent button: it is what the dialog
-    // OFFERS once the picked folder turns out to contain projects. Two of the
-    // three fixture workflows sit directly under /Users/demo (the third is
-    // nested in acme-app), so that is what detection reports here.
+    // Bulk discovery is what the dialog OFFERS once the picked folder turns out
+    // to contain projects. Two of the three fixture workflows sit directly under
+    // /Users/demo (the third is nested in acme-app), so that is what detection
+    // reports here.
     await expect(modal.getByTestId("aw-add-all")).toContainText("Add all 2");
     await modal.getByTestId("aw-add-all").click();
     await expect(modal).toBeHidden();
     // The scan itself is recursive, so it finds all three.
     await expect(page.locator(".toast")).toContainText("Found 3 agent projects.");
   });
-
-  test("the MCP setup prompt is copyable and fires mcp.install", async ({ page, context }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    await page.getByTestId("add-workspace").click();
-    // Contextual now, not permanent: the offer exists only where it applies —
-    // a folder that exists and has no Sapiom wiring.
-    const modal = page.locator(".modal-start");
-    await modal.getByTestId("dir-picker-input").fill("/Users/demo/scratch");
-
-    const block = page.getByTestId("mcp-install");
-    await expect(block).toBeVisible();
-
-    const copyClaude = page.getByTestId("mcp-install-copy-claude-code");
-    await copyClaude.click();
-    await expect(copyClaude).toHaveText("Copied");
-
-    const clip = await page.evaluate(() => navigator.clipboard.readText());
-    expect(clip).toContain("claude mcp add sapiom");
-
-    // The analytics event rode POST /api/track (intercepted in mock mode).
-    const events = await page.evaluate(
-      () =>
-        (window as unknown as { __HARNESS_TEST__?: { trackEvents?: { event: string }[] } }).__HARNESS_TEST__
-          ?.trackEvents ?? [],
-    );
-    expect(events.some((e) => e.event === "mcp.install")).toBe(true);
-  });
-
-  test("the harness picker renders from the adapter registry", async ({ page }) => {
-    await page.getByTestId("add-workspace").click();
-    // The agent picker shows only in session-starting states — point at a folder
-    // that scaffolds so it appears.
-    await page.getByTestId("dir-picker-input").fill("/Users/demo/scratch/new-agent");
-    const trigger = page.getByTestId("harness-select");
-    await expect(trigger).toBeVisible();
-    await expect(trigger).toContainText("Claude Code");
-
-    // The mock registry mirrors the upstream adapter list: five entries in
-    // registry order, claude-code first.
-    await trigger.click();
-    const menu = page.getByTestId("harness-select-menu");
-    const rows = menu.getByRole("menuitemradio");
-    await expect(rows).toHaveCount(5);
-    await expect(rows.first()).toContainText("Claude Code");
-
-    // The active row carries its leading check and no suffix text; adapters
-    // the Studio can't launch render disabled with the reason on hover.
-    await expect(menu.getByTestId("harness-option-claude-code")).toHaveAttribute("aria-checked", "true");
-    await expect(menu.getByTestId("harness-option-pi")).toHaveAttribute("aria-disabled", "true");
-    await expect(menu.getByTestId("harness-option-conductor")).toHaveAttribute("aria-disabled", "true");
-    // A disabled row never takes the pick (force: Playwright itself refuses
-    // aria-disabled targets — the click still lands on the DOM).
-    await menu.getByTestId("harness-option-conductor").click({ force: true });
-    await expect(menu.getByTestId("harness-option-conductor")).toHaveAttribute("aria-checked", "false");
-
-    // Picking the other spawnable adapter closes the menu and updates the trigger.
-    await menu.getByTestId("harness-option-codex").click();
-    await expect(menu).toHaveCount(0);
-    await expect(trigger).toContainText("Codex");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Recent-path chips
-// ---------------------------------------------------------------------------
-
-test("recent-path chips middle-truncate long paths and keep the full path in the tooltip", async ({ page }) => {
-  await page.getByTestId("add-workspace").click();
-
-  const chip = page.locator(".recent-dir-chip").first();
-  await expect(chip).toHaveText("/Users/…/acme-app");
-  await expect(chip).toHaveAttribute("title", "/Users/demo/acme-app");
 });
 
 // ---------------------------------------------------------------------------
@@ -249,7 +140,7 @@ test("the directory picker's read failure carries its own Retry", async ({ page 
   await page.goto("/?mockError=listDir");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("add-workspace").click();
+  await page.getByTestId("add-existing-agents").click();
 
   const err = page.getByTestId("dir-picker-error");
   await expect(err).toBeVisible();
