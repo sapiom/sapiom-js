@@ -21,6 +21,7 @@ import {
 import * as esbuild from "esbuild";
 
 import { AgentOperationError } from "./errors.js";
+import { importFreshModule } from "./native-import.js";
 
 /**
  * Run the project's TypeScript compiler in no-emit mode. Returns a warning
@@ -166,9 +167,7 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
     // `defineAgent` one and the pre-rename `defineOrchestration` one — the
     // definition shape is identical, so everything downstream (buildManifest,
     // graph validation) works unchanged on either.
-    const mod: Record<string, unknown> = await import(
-      `file://${bundlePath}?t=${Date.now()}`
-    );
+    const mod = await importFreshModule(bundlePath);
     const defs: unknown[] = [];
     for (const value of Object.values(mod)) {
       if (

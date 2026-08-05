@@ -19,6 +19,7 @@ import {
 import * as esbuild from 'esbuild';
 
 import { AgentOperationError } from '../errors.js';
+import { importFreshModule } from '../native-import.js';
 
 const LOCAL_SDK_VERSION = '0.0.0-local';
 
@@ -59,7 +60,7 @@ export async function loadDefinition(sourceDir: string): Promise<LoadedDefinitio
       });
     }
 
-    const mod: Record<string, unknown> = await import(`file://${bundlePath}?t=${Date.now()}`);
+    const mod = await importFreshModule(bundlePath);
     const defs = Object.values(mod).filter(isAgentDefinition);
     if (defs.length === 0) {
       throw new AgentOperationError({

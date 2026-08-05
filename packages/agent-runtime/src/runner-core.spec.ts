@@ -8,7 +8,7 @@
  */
 
 import type { AgentManifest } from '@sapiom/agent';
-import { DIRECTIVE_KIND } from '@sapiom/agent';
+import { DIRECTIVE_KIND, StepInputValidationError } from '@sapiom/agent';
 
 import { ADVANCE_RESULT_KIND } from './advance-result.js';
 import type { StepDispatcher } from './dispatch.js';
@@ -157,6 +157,38 @@ describe('AgentRunnerCore', () => {
   // ── (2) Step throws, retries exhaust at cap → FAILED ──────────────────────
 
   describe('retry cap exhaustion: FAILED', () => {
+    it('fails a remotely thrown StepInputValidationError without retrying', async () => {
+      const manifest = makeManifest({
+        entry: 'validate',
+        steps: {
+          validate: {
+            timeoutMs: null,
+            inputSchema: null,
+            transitions: [{ kind: 'terminate' }],
+          },
+        } as unknown as AgentManifest['steps'],
+      });
+
+      const { store, dispatcher, core } = setupCore();
+      let callCount = 0;
+      dispatcher.setSyncBody('validate', async () => {
+        callCount++;
+        const err = new Error('Invalid input for step validate');
+        err.name = StepInputValidationError.name;
+        throw err;
+      });
+
+      const executionId = await core.createExecution('test-workflow', 'validate', {}, { manifest });
+      const result = await core.advance(executionId, DEFAULT_MAX_ATTEMPTS_PER_STEP);
+
+      expect(result.kind).toBe(ADVANCE_RESULT_KIND.DISPATCHED);
+      const state = store.getExecution(executionId);
+      expect(state?.status).toBe(EXECUTION_STATUS.FAILED);
+      expect(state?.currentStepAttempt).toBe(0);
+      expect((state?.error as Error | undefined)?.name).toBe(StepInputValidationError.name);
+      expect(callCount).toBe(1);
+    });
+
     it('retries on throw and fails with RetryLimitExceededError when cap is reached', async () => {
       const manifest = makeManifest({
         entry: 'flaky',

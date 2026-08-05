@@ -263,7 +263,20 @@ export class AgentRunnerCore {
         outcome: 'error',
         errorName: err.name,
       });
-      result = await this.handleRetryOrCap(row, stepRow.stepName, sharedSnapshot, maxAttemptsPerStep);
+      if (err.name === StepInputValidationError.name) {
+        const won = await this.deps.store.failExecution({
+          executionId: row.id,
+          expectedVersion: row.version,
+          error: err,
+          sharedState: sharedSnapshot,
+        });
+        if (!won) {
+          this.recordCasLoss('dispatched_input_validation_fail', row.id, row.version);
+        }
+        result = { kind: ADVANCE_RESULT_KIND.FAILED, error: err };
+      } else {
+        result = await this.handleRetryOrCap(row, stepRow.stepName, sharedSnapshot, maxAttemptsPerStep);
+      }
     } else {
       const stepResult = {
         output: payload.result?.output,
@@ -881,4 +894,3 @@ function rehydrateRemoteError(error: { name: string; message: string; stack?: st
   }
   return err;
 }
-

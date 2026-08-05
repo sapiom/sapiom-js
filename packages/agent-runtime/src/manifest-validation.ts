@@ -2,6 +2,7 @@ import { StepInputValidationError } from '@sapiom/agent';
 // Explicit `.js` so the emitted ESM resolves under Node's strict ESM loader
 // (the extensionless form only works for the CJS build).
 import Ajv2020 from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 
 /**
  * AJV-based manifest input validation — a cheap pre-gate before paying to run a
@@ -14,6 +15,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
  */
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
+addFormats(ajv);
 
 /**
  * Validate `input` against `schema`. Throws `StepInputValidationError` when
