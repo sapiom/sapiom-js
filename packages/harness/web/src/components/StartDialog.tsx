@@ -19,8 +19,8 @@ import { Icon } from "./Icon";
  */
 interface StartDialogProps {
   recentDirs: string[];
-  /** The folder the picker opens on. Falls back to the first recent dir, then the
-   *  project root. */
+  /** Fallback for the folder the picker opens on, after the project root — the
+   *  harness home now that launchDir is pinned there. */
   launchDir?: string | null;
   projectRoot?: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
@@ -43,7 +43,10 @@ export function StartDialog({
   onScan,
   triggerRef,
 }: StartDialogProps): JSX.Element {
-  const [cwd, setCwd] = useState(launchDir ?? recentDirs[0] ?? projectRoot ?? "");
+  // Open on the project root (`…/projects`) where agents live, so "Add existing
+  // agents" lands on the folder that holds them. Falls back to launchDir (the
+  // harness home) then the most recent dir.
+  const [cwd, setCwd] = useState(projectRoot ?? launchDir ?? recentDirs[0] ?? "");
   const [outcome, setOutcome] = useState<FolderOutcome | null>(null);
   const [checking, setChecking] = useState(true);
   const [busy, setBusy] = useState(false);
