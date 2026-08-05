@@ -1201,7 +1201,8 @@ input {
 .composer-library,
 .profile-menu,
 .session-menu,
-.settings-popover {
+.settings-popover,
+.template-facts {
   display: flex;
   flex-direction: column;
   gap: var(--tree-row-gap);
@@ -1221,7 +1222,8 @@ input {
   .connect-card,
   .profile-menu,
   .session-menu,
-  .settings-popover {
+  .settings-popover,
+  .template-facts {
     animation: none;
   }
 }

@@ -736,6 +736,7 @@ export const App = (): JSX.Element => {
   const openSession = (id: string): void => {
     setComposing(false);
     setReviewSummary(null);
+    setTemplatesOpen(false);
     closeMobileDrawer();
     const session = state.sessions.find((s) => s.id === id);
     if (session) setFocusedAgentPath(boundWorkflowPathOf(session) ?? session.cwd);
@@ -748,6 +749,7 @@ export const App = (): JSX.Element => {
   const selectTab = (id: string): void => {
     setComposing(false);
     setReviewSummary(null);
+    setTemplatesOpen(false);
     harness.setActiveSessionId(id);
     applyCanvasVisibility(id);
   };
@@ -757,6 +759,7 @@ export const App = (): JSX.Element => {
   const reviewPastSession = (summary: SessionSummary): void => {
     setComposing(false);
     setReviewSummary(summary);
+    setTemplatesOpen(false);
     closeMobileDrawer();
   };
 
@@ -778,6 +781,7 @@ export const App = (): JSX.Element => {
   const handleFocusAgent = (path: string): void => {
     setComposing(false);
     setReviewSummary(null);
+    setTemplatesOpen(false);
     setFocusedAgentPath(path);
     closeMobileDrawer();
     const tabs = liveSessionsForFocus(state.sessions, path);
@@ -1008,9 +1012,13 @@ export const App = (): JSX.Element => {
           onSelectOverview={() => {
             setComposing(true);
             setReviewSummary(null);
+            setTemplatesOpen(false);
             closeMobileDrawer();
           }}
-          onNewSession={() => setComposing(true)}
+          onNewSession={() => {
+            setComposing(true);
+            setTemplatesOpen(false);
+          }}
           onReviewSummary={reviewPastSession}
           history={harness.history}
           historyLoading={harness.historyLoading}

@@ -397,6 +397,28 @@ test("the rail navigates to templates, and says so while you are there", async (
   await expect(page.locator(".center-pane")).toBeHidden();
 });
 
+test("the rail navigates away from templates: another nav row dismisses the browser", async ({
+  page,
+}) => {
+  // The browsing destination hid the workbench and used to swallow the rail's
+  // other nav rows — the only way out was the back arrow. Any real navigation
+  // (here, Create new) must leave templates the same way the back arrow does.
+  await page.goto("/");
+  await expect(page.locator(".rail-workflows")).toBeVisible();
+
+  await page.getByTestId("rail-templates").click();
+  await expect(page.getByTestId("templates-panel")).toBeVisible();
+  await expect(page.locator(".center-pane")).toBeHidden();
+
+  await page.getByTestId("rail-create-new").click();
+
+  // The template destination is gone and the workbench is back — you actually
+  // navigated, rather than staying stranded on the browser.
+  await expect(page.getByTestId("templates-panel")).toHaveCount(0);
+  await expect(page.getByTestId("rail-templates")).not.toHaveClass(/is-selected/);
+  await expect(page.locator(".center-pane")).toBeVisible();
+});
+
 test("the command palette's Browse templates action opens the browser from anywhere", async ({
   page,
 }) => {
