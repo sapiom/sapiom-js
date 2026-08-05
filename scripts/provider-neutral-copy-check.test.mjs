@@ -30,13 +30,25 @@ describe("provider-neutral copy guard", () => {
         "Fallback may use Anthropic.",
         "Anthropic normally serves spillover requests.",
         "OpenAI may serve overflow capacity.",
+        'Fallback provider is "anthropic".',
+        'Overflow is served by "openai".',
+        "anthropic: normally serves spillover requests.",
+        "openai: serves overflow capacity.",
       ].join("\n"),
       "packages/tools/src/llm/index.ts",
     );
 
     assert.deepEqual(
       violations.map(({ token }) => token),
-      ["Anthropic", "Anthropic", "OpenAI"],
+      [
+        "Anthropic",
+        "Anthropic",
+        "OpenAI",
+        "anthropic",
+        "openai",
+        "anthropic",
+        "openai",
+      ],
     );
   });
 
@@ -57,9 +69,12 @@ describe("provider-neutral copy guard", () => {
         POST /v2/anthropic/v1/messages
         The verbatim LLM request uses the Anthropic messages shape.
         This client speaks Anthropic Messages.
-        The default Anthropic shape is selected with shape: "anthropic".
+        The default Anthropic shape uses the anthropic/v1/messages route.
         The alternate wire shape is OpenAI Chat Completions.
+        Pass \`shape: "openai"\` to select Chat Completions.
         const urls: { anthropic: string; openai: string };
+        const shape: { shape?: "anthropic" | "openai" } = {};
+        if (opts.shape === "openai") return;
         const suffix = "openai/v1/chat/completions";
       `,
       "packages/tools/src/llm/index.ts",
