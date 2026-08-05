@@ -28,7 +28,6 @@ import { buildTerminalWsUrl } from "../lib/terminal-ws.js";
 import { getTheme, subscribeTheme, type Theme } from "../lib/theme.js";
 import { isMockMode } from "../lib/api.js";
 import { attachMockTerminal, type MockTerminalHandle } from "../lib/mock-terminal.js";
-import { TerminalBrand } from "./TerminalBrand.js";
 
 export interface TerminalProps {
   sessionId: string;
@@ -118,7 +117,7 @@ function xtermThemeFor(theme: Theme): ITheme {
   };
 }
 
-export const Terminal = ({ sessionId, token, cwd }: TerminalProps): JSX.Element => {
+export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -263,24 +262,10 @@ export const Terminal = ({ sessionId, token, cwd }: TerminalProps): JSX.Element 
     };
   }, [sessionId, token]);
 
-  const statusLabel =
-    status === "connected"
-      ? isMockMode()
-        ? "Demo session, scripted. No live agent."
-        : "Connected"
-      : status === "error"
-        ? (errorMessage ?? "Error")
-        : "Connecting…";
-
   return (
-    // Full-bleed terminal block: a status subheader over the raw PTY screen.
+    // Full-bleed terminal block: the raw PTY screen, full-bleed.
     // All chrome styling is class + token based — see styles.css.
     <div className="harness-terminal">
-      <TerminalBrand
-        cwd={cwd}
-        status={status === "connected" ? null : statusLabel}
-        version={`v${__STUDIO_VERSION__}`}
-      />
       <div ref={containerRef} className="terminal-screen" />
     </div>
   );
