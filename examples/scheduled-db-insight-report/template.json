@@ -12,7 +12,7 @@
     "Anomaly spotted, then drilled into",
     "Dry-run preview"
   ],
-  "notes": "Click **Use this template** and Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no config it reports on the database's own catalog (rows per table, size), so you get a real report immediately, with the one number most worth your attention already flagged and a second query already run against it. To report on your own data, pass `queries`: an array of `{ name, sql }` where each query returns `label` and `value` columns (a single `value` row is read as a KPI). It runs with no setup. Sapiom provisions a small Postgres and seeds a demo dataset, so the first report has real numbers in it, and the run says the data is the demo set rather than yours. To report on your own database, supply `REPORT_DATABASE_URL` or point `dbHandle` at it. Set `deliverTo` to have the report emailed; without it the report is returned in the run's output. The managed demo Postgres expires after 7 days and there is no renew verb, so a scheduled run reports when it had to provision a fresh one. Pass `dryRun: true` to skip the real queries and the send and get the report back on sample data instead. The anomaly detection and narration still run for real either way. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole `snapshot` → `detectAnomalies` → `narrate` → `followUp` → `chart` → `deliver` flow (capabilities stubbed, the DB queries and delivery skipped), or edit and deploy it with the Sapiom MCP.",
+  "notes": "Click **Use this template** and Sapiom builds and deploys it for you; open it on the **Agents** page and run it.\n\nWith no config it reports on the database's own catalog (rows per table, size), so you get a real report immediately, with the one number most worth your attention already flagged and a second query already run against it. To report on your own data, pass `queries`: an array of `{ name, sql }` where each query returns `label` and `value` columns (a single `value` row is read as a KPI). It runs with no setup. Sapiom provisions a small Postgres and seeds a demo dataset, so the first report has real numbers in it, and the run says the data is the demo set rather than yours. To report on your own database, point `dbHandle` at a Postgres you own from the agent's Setup tab (or set `REPORT_DATABASE_URL` as a credential there). Set `deliverTo` to have the report emailed; without it the report is returned in the run's output. The managed demo Postgres expires after 7 days and there is no renew verb, so a scheduled run reports when it had to provision a fresh one. Pass `dryRun: true` to skip the real queries and the send and get the report back on sample data instead. The anomaly detection and narration still run for real either way. To run it on a cadence, attach the `schedule` as a cron trigger on the deployed agent.\n\nPrefer to work from the code? Run it locally with `run_local` to trace the whole `snapshot` → `detectAnomalies` → `narrate` → `followUp` → `chart` → `deliver` flow (capabilities stubbed, the DB queries and delivery skipped), or edit and deploy it with the Sapiom MCP.",
   "resources": [
     {
       "kind": "postgres",
@@ -25,16 +25,7 @@
       }
     }
   ],
-  "requiredSecrets": [
-    {
-      "key": "REPORT_DATABASE_URL",
-      "label": "Your database connection string",
-      "provider": "postgres",
-      "credentialKind": "dsn",
-      "description": "A Postgres connection string for the database to report on. Without it the report covers the seeded demo dataset instead.",
-      "optional": true
-    }
-  ],
+  "requiredSecrets": [],
   "settings": [
     {
       "path": "deliverTo",

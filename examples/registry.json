@@ -839,7 +839,7 @@
       ],
       "setup": {
         "runsWithNoSetup": true,
-        "connectionCount": 1,
+        "connectionCount": 0,
         "settingCount": 1,
         "provisions": ["postgres"],
         "degradedWithoutSetup": "Snapshots the seeded demo database's own catalog, has a model flag the one table most worth attention, runs a second query into that table's write activity, writes a real narrative around both, and returns the full report with a rendered chart inline — nothing is emailed, because no `deliverTo` recipient is set."
