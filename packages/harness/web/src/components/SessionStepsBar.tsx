@@ -5,6 +5,7 @@ import type { MacroDef, WorkflowInfo } from "@shared/types";
 import { Icon } from "./Icon";
 import { macroNeedsReadySession } from "../lib/macro-actions";
 import { macroDisabledReason } from "../lib/macro-gating";
+import type { RunTarget } from "../lib/use-harness-state";
 import { track } from "../lib/track";
 import { SAPIOM_DASHBOARD_ROOT, agentUrl } from "../lib/urls";
 import {
@@ -28,6 +29,10 @@ interface SessionStepsBarProps {
   /** Bumped by the parent on every direct-action settle, so the pending ring
    *  always clears even when neither deployment state nor `lastDeployError` flips. */
   directActionSettleSeq: number;
+  /** Target of the run currently in flight for this session ("local" ↔ Test,
+   *  "prod" ↔ Run), or null. Tied to the real run status (not the brief pending
+   *  ring), so the acting button pulses for the run's whole duration. */
+  runningTarget: RunTarget | null;
 }
 
 /**
@@ -55,6 +60,7 @@ export function SessionStepsBar({
   lastDeployError,
   authenticated,
   directActionSettleSeq,
+  runningTarget,
 }: SessionStepsBarProps): JSX.Element {
   const macroFor = (id: string): MacroDef | undefined => macros.find((m) => m.id === id);
   const deploymentState = workflowDeploymentState(workflow, lastDeployError);
@@ -181,12 +187,18 @@ export function SessionStepsBar({
           funnelReason ??
           readyReason ??
           (action.macro ? macroDisabledReason(action.macro, workflow, activeSessionId) : null);
+        // The run's REAL status drives this (not the hand-off pending ring), so
+        // Test/Run stay lit for the whole execution the user is watching.
+        const isRunningAction =
+          (runningTarget === "local" && action.id === "local") ||
+          (runningTarget === "prod" && action.id === "run");
         return (
           <button
             key={action.id}
             className={"session-step" + (action.primary ? " session-action-primary" : "")}
             data-testid={action.testId}
             data-pending={pendingId === action.id || undefined}
+            data-running={isRunningAction || undefined}
             disabled={Boolean(disabledReason)}
             data-tooltip={disabledReason ? `${action.label}: ${disabledReason}` : action.hint}
             aria-label={disabledReason ? `${action.label}: ${disabledReason}` : action.label}

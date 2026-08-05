@@ -67,7 +67,7 @@ import { describeWorkflowPrompt } from "./lib/describe-prompt";
 import { sessionDisplayName } from "./lib/session-name";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import { CANVAS_MIN, RAIL_MIN, isMobileShell, useMobileShell, usePaneWidths } from "./lib/use-pane-widths";
-import { useHarnessState, type ObservedRun } from "./lib/use-harness-state";
+import { useHarnessState, type ObservedRun, type RunTarget } from "./lib/use-harness-state";
 import {
   isWorkflowRunnable,
   workflowDeploymentState,
@@ -484,6 +484,11 @@ export const App = (): JSX.Element => {
           observedRunMatchesWorkflow(observed, boundWorkflowPath),
         )
     : [];
+  // The action button's honest "running" signal: tied to the SHOWN run's real
+  // status, not the brief `directActionSettleSeq` pending ring (which clears at
+  // hand-off). null unless the visible run is still running.
+  const runningTarget: RunTarget | null =
+    activeObservedRun?.run.status === "running" ? activeObservedRun.target : null;
 
   const closeMobileDrawer = (): void => {
     if (isMobile) setRailCollapsed(true);
@@ -782,6 +787,26 @@ export const App = (): JSX.Element => {
   // draw into the wrong root.
   const handleRunMacroForWorkflow = (workflow: WorkflowInfo | null, macro: MacroDef): void => {
     void (async () => {
+      // Deploy / Prod-run / Run-local run via the DIRECT harness routes (no
+      // Claude Code, no user LLM credits). Once a macro is a direct action we
+      // NEVER fall through to the pty-inject runMacro — the buttons are already
+      // gated (require a workflow / a deploy), so a missing prerequisite here is
+      // a no-op, never a silent revert to the Claude Code path.
+      const direct = directActionKind(macro.id);
+      // Reveal + focus the Steps pane the instant an action will actually run,
+      // BEFORE the (possibly slow) bind round-trip, so the run/deploy lands in a
+      // view the user is already looking at. Gated so a click that will only
+      // toast (prod-run with no ready build; run/deploy with no workflow) never
+      // yanks the view. Matches the dispatch guards below exactly.
+      const willActNow =
+        ((direct === "deploy" || direct === "run-local") && workflow != null) ||
+        (direct === "prod-run" &&
+          workflow?.definitionId != null &&
+          isWorkflowRunnable(workflow));
+      if (willActNow) {
+        setRightTab("steps");
+        setRightCollapsed(false);
+      }
       let sessionId = harness.activeSessionId;
       if (workflow) sessionId = (await handleBindWorkflow(workflow.path)) ?? sessionId;
       if (macro.action.kind === "open-url") {
@@ -789,12 +814,6 @@ export const App = (): JSX.Element => {
         return;
       }
       if (!sessionId) return;
-      // Deploy / Prod-run / Run-local run via the DIRECT harness routes (no
-      // Claude Code, no user LLM credits). Once a macro is a direct action we
-      // NEVER fall through to the pty-inject runMacro — the buttons are already
-      // gated (require a workflow / a deploy), so a missing prerequisite here is
-      // a no-op, never a silent revert to the Claude Code path.
-      const direct = directActionKind(macro.id);
       if (direct !== null) {
         if (direct === "deploy") {
           if (!workflow) {
@@ -1071,6 +1090,7 @@ export const App = (): JSX.Element => {
                     lastDeployError={harness.lastDeployErrorFor(boundWorkflow.path)}
                     authenticated={state.authenticated}
                     directActionSettleSeq={harness.directActionSettleSeq}
+                    runningTarget={runningTarget}
                   />
                 ) : null
               }
@@ -1332,6 +1352,23 @@ export const App = (): JSX.Element => {
                 runs={activeSessionRuns}
                 onSelectRun={(executionId) => {
                   if (harness.activeSessionId) harness.selectRun(harness.activeSessionId, executionId);
+                }}
+                preview={
+                  harness.activeSessionId
+                    ? (harness.previewBySession.get(harness.activeSessionId) ?? null)
+                    : null
+                }
+                deployState={
+                  rightPaneWorkflow
+                    ? (harness.deployStateByPath.get(rightPaneWorkflow.path) ?? null)
+                    : null
+                }
+                onDismissDeploy={() => {
+                  if (rightPaneWorkflow) harness.dismissDeployState(rightPaneWorkflow.path);
+                }}
+                onOpenCode={() => {
+                  setRightTab("code");
+                  setCodePanelEverShown(true);
                 }}
                 workflows={state.workflows}
                 onOpenWorkflow={(path) => void handleBindWorkflow(path)}

@@ -4508,6 +4508,204 @@ input {
   word-break: break-word;
 }
 
+/* --------------------------------------------------------------------------
+   Run observability: the payload copy affordance, the run-summary card, and
+   the deploy banner. Motion-light and reduced-motion-aware; CTAs stay within
+   the flat .status-tag idiom (the cards are the only bordered chrome).
+   -------------------------------------------------------------------------- */
+
+/* PayloadBlock: label on the left, Copy on the right. The disclosure marker is
+   dropped in favour of the whole row being the toggle (scoped to .payload-block
+   so the capability-call disclosures keep their default triangle). */
+.payload-block summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  list-style: none;
+}
+.payload-block summary::-webkit-details-marker {
+  display: none;
+}
+.payload-block .payload-block-label {
+  margin-right: auto;
+}
+.payload-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--type-micro);
+  font-weight: 510;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.payload-copy:hover {
+  color: var(--text-dim);
+  border-color: var(--border-strong, var(--ui-line));
+}
+.payload-copy.is-copied {
+  color: var(--green-text, var(--green));
+  border-color: color-mix(in srgb, var(--green) 40%, var(--ui-line));
+}
+.payload-copy:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Run-summary card: the headline of the Steps surface — outcome, duration,
+   the one relevant result CTA, and (terminal) the final output. */
+.canvas-run-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding: var(--sp3);
+  margin-bottom: var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+}
+.canvas-run-summary-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+.canvas-run-summary-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  font-size: var(--type-meta);
+  font-weight: 600;
+}
+.canvas-run-summary-status.is-completed {
+  color: var(--green-text, var(--green));
+}
+.canvas-run-summary-status.is-failed {
+  color: var(--red-text, var(--red));
+}
+.canvas-run-summary-status.is-running {
+  color: var(--text);
+}
+.canvas-run-summary-status.is-cancelled {
+  color: var(--text-faint);
+}
+.canvas-run-summary-meta {
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+  color: var(--text-dim);
+}
+.canvas-run-summary-target {
+  margin-left: auto;
+  font-size: var(--type-micro);
+  color: var(--text-faint);
+}
+/* Result CTA: a flat action tag in brand green so it reads as the primary
+   payoff (--brand is the hue; --brand-ink is the light-on-green text, wrong
+   here on a light card). */
+.run-summary-cta.status-tag-action {
+  align-self: flex-start;
+  color: var(--brand);
+  font-weight: 560;
+}
+.run-summary-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp1);
+}
+.run-summary-links .canvas-input-label {
+  color: var(--text-faint);
+}
+/* Final output gets a brand-tinted frame so it reads as the result, not a log. */
+.canvas-run-logs.canvas-run-result {
+  border: 1px solid color-mix(in srgb, var(--brand) 28%, var(--ui-line));
+  border-radius: var(--radius);
+  padding: var(--sp2) var(--sp2) var(--sp2) var(--sp2);
+  background: color-mix(in srgb, var(--brand) 4%, transparent);
+}
+.canvas-run-logs.canvas-run-result > summary .payload-block-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Deploy banner: a deploy landing in the Steps surface — phase, then on ready
+   the dashboard + code CTAs. Reuses the .canvas-task-spinner while in flight. */
+.deploy-status-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  padding: var(--sp3);
+  margin-bottom: var(--sp3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+}
+.deploy-status-banner.is-ready {
+  border-color: color-mix(in srgb, var(--green) 35%, var(--ui-line));
+  background: color-mix(in srgb, var(--green) 6%, transparent);
+}
+.deploy-status-banner.is-error {
+  border-color: color-mix(in srgb, var(--red, #e05a57) 35%, var(--ui-line));
+  background: color-mix(in srgb, var(--red, #e05a57) 6%, transparent);
+}
+.deploy-status-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+}
+.deploy-status-label {
+  font-size: var(--type-meta);
+  font-weight: 590;
+  color: var(--text);
+}
+.deploy-status-dismiss {
+  margin-left: auto;
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.deploy-status-dismiss:hover {
+  color: var(--text-dim);
+}
+.deploy-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp3);
+}
+.deploy-status-actions .status-tag-action {
+  color: var(--brand);
+  font-weight: 560;
+}
+
+/* Action button, RUN in progress: a brand pulse tied to the real run status,
+   distinct from the dashed [data-pending] hand-off ring. */
+.session-step[data-running] {
+  animation: session-step-running 1.4s ease-in-out infinite;
+}
+@keyframes session-step-running {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 42%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-step[data-running] {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 30%, transparent);
+  }
+}
+
 /* Steps subheader run chip: the flat .status-tag recipe — run truth is a
    labeled fact ("prod run completed"), mono because it is data. */
 .canvas-run-chip {

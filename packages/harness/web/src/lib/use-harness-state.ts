@@ -71,6 +71,16 @@ export interface ObservedRun {
   observedAt: number;
 }
 
+/** Live progress of a deploy, surfaced in the Steps pane. The wire stream has
+ *  a transient `warning` phase folded into `building` here — the banner only
+ *  needs "in flight" vs "landed" vs "failed". */
+export interface DeployProgress {
+  phase: "linking" | "building" | "ready" | "error";
+  /** A complete, user-facing sentence when the server supplied one (a warning
+   *  passthrough, or an error message); absent otherwise. */
+  message?: string;
+}
+
 export interface HarnessStateHook {
   state: AppState | null;
   loading: boolean;
@@ -150,6 +160,14 @@ export interface HarnessStateHook {
    * when a build has already been attempted and failed.
    */
   lastDeployErrorFor: (workflowPath: string) => string | null;
+  /**
+   * Live deploy progress per workflow path (linking → building → ready/error),
+   * so the Steps surface can show a deploy landing. In-memory only. Absent = no
+   * deploy observed this session (or the completion banner was dismissed).
+   */
+  deployStateByPath: Map<string, DeployProgress>;
+  /** Dismiss a workflow's deploy banner (clears its `deployStateByPath` entry). */
+  dismissDeployState: (workflowPath: string) => void;
   /**
    * Monotonic counter bumped on every direct-action settle (deploy or run,
    * success or failure). SessionStepsBar adds this to its `useEffect` deps so
@@ -319,6 +337,28 @@ export function useHarnessState(): HarnessStateHook {
   const [lastDeployErrorByPath, setLastDeployErrorByPath] = useState<
     Map<string, string>
   >(new Map());
+  // Live deploy progress per workflow path, so the Steps surface can show a
+  // deploy landing the same way a run does: linking → building → ready (or
+  // error). In-memory only (clears on reload); the durable "is deployed" truth
+  // stays the workflow registry's definitionId + the dashboard pill. Cleared to
+  // null when the user dismisses the completion banner.
+  const [deployStateByPath, setDeployStateByPath] = useState<
+    Map<string, DeployProgress>
+  >(new Map());
+  const setDeployProgress = useCallback(
+    (workflowPath: string, next: DeployProgress | null): void => {
+      setDeployStateByPath((prev) => {
+        if (next === null) {
+          if (!prev.has(workflowPath)) return prev;
+          const map = new Map(prev);
+          map.delete(workflowPath);
+          return map;
+        }
+        return new Map(prev).set(workflowPath, next);
+      });
+    },
+    [],
+  );
   // Monotonic settle counter for direct actions: bumped each time a deploy or
   // run (prod/local) reaches its terminal state — success OR failure. The
   // SessionStepsBar adds this to its useEffect deps so the pending ring clears
@@ -1175,6 +1215,7 @@ export function useHarnessState(): HarnessStateHook {
             // created first — say so, rather than claiming we're building.
             if (event.phase === "linking") {
               lastNonTerminalPhase = "linking";
+              setDeployProgress(workflowPath, { phase: "linking" });
               setToast(
                 `Deploying — creating the agent "${event.name}" on Sapiom…`,
               );
@@ -1189,6 +1230,7 @@ export function useHarnessState(): HarnessStateHook {
               setToast(event.message);
             } else if (event.phase === "building") {
               lastNonTerminalPhase = "building";
+              setDeployProgress(workflowPath, { phase: "building" });
               setToast("Deploying — building on Sapiom…");
               // The link is already durable at this point. Pull its mutable
               // build projection so the chip can say Building, not Deployed.
@@ -1196,6 +1238,7 @@ export function useHarnessState(): HarnessStateHook {
             }
           });
           if (terminal.phase === "ready") {
+            setDeployProgress(workflowPath, { phase: "ready" });
             setToast(
               pendingWarning
                 ? `Deployed to Sapiom. ${pendingWarning}`
@@ -1222,6 +1265,7 @@ export function useHarnessState(): HarnessStateHook {
             const msg = terminal.hint
               ? `${prefix}: ${terminal.message} (${terminal.hint})`
               : `${prefix}: ${terminal.message}`;
+            setDeployProgress(workflowPath, { phase: "error", message: msg });
             setToast(msg);
             // Persist the failure so the action bar can distinguish "last deploy
             // failed" from "never deployed" after the toast is dismissed.
@@ -1238,6 +1282,7 @@ export function useHarnessState(): HarnessStateHook {
             err instanceof ApiError && err.reason
               ? err.reason
               : (err as Error).message;
+          setDeployProgress(workflowPath, { phase: "error", message: msg });
           setToast(msg);
           // An exception from the deploy stream (e.g. network error) also counts
           // as a deploy failure — persist so the action bar reflects it.
@@ -1255,7 +1300,7 @@ export function useHarnessState(): HarnessStateHook {
       inFlightDeploys.current.set(workflowPath, run);
       return run;
     },
-    [refreshWorkflows, bumpDirectActionSettleSeq],
+    [refreshWorkflows, bumpDirectActionSettleSeq, setDeployProgress],
   );
 
   // Prod-run via the direct route: start the execution server-side, then feed
@@ -1366,6 +1411,8 @@ export function useHarnessState(): HarnessStateHook {
     injectInput,
     showToast,
     lastDeployErrorFor,
+    deployStateByPath,
+    dismissDeployState: (workflowPath: string) => setDeployProgress(workflowPath, null),
     directActionSettleSeq,
     listDir,
     lastMessage,

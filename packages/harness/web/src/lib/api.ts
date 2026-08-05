@@ -25,6 +25,7 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
   RunView,
+  StepView,
   WorkflowInfo,
 } from "@shared/types";
 
@@ -761,12 +762,47 @@ export function terminalDeployEvent(
 const delay = (ms = 180): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+// The demo leasing run's five steps (id, name, authored latency). Shared by the
+// terminal completed fixture and the progressive prod-run timeline so both tell
+// the same story. Latency is per-step duration only — there is no cost anywhere.
+const LEASING_RUN_STEPS: { id: string; name: string; latencyMs: number }[] = [
+  { id: "intake", name: "intake", latencyMs: 240 },
+  { id: "screen", name: "screen", latencyMs: 610 },
+  { id: "credit-check", name: "credit-check", latencyMs: 1900 },
+  { id: "approve", name: "approve", latencyMs: 130 },
+  { id: "draft-lease", name: "draft-lease", latencyMs: 800 },
+];
+
+// Wall-clock so the demo prod run visibly ADVANCES across the 2s poll cadence:
+// step i is `running` from i·STEP_MS and `passed` from (i+1)·STEP_MS, so the run
+// completes in ~6s no matter how the polls fall. Honest-absence: a `running`
+// step carries NO `latencyMs` (it isn't finished); latency appears only once it
+// passes; nothing carries cost. Used exclusively for `run()`-minted
+// `exec-mock-prod-*` ids, never the terminal default other ids rely on.
+export const PROGRESSIVE_STEP_MS = 900;
+export function progressiveLeasingRun(executionId: string, elapsedMs: number): RunView {
+  const steps: StepView[] = LEASING_RUN_STEPS.map((step, i) => {
+    if (elapsedMs >= (i + 1) * PROGRESSIVE_STEP_MS) {
+      return { id: step.id, name: step.name, status: "passed", latencyMs: step.latencyMs };
+    }
+    if (elapsedMs >= i * PROGRESSIVE_STEP_MS) {
+      return { id: step.id, name: step.name, status: "running" };
+    }
+    return { id: step.id, name: step.name, status: "pending" };
+  });
+  const done = steps.every((s) => s.status === "passed");
+  return { executionId, status: done ? "completed" : "running", steps };
+}
+
 /** In-memory, mutable copies of the fixtures — mutations persist for the tab's lifetime, reset on reload. */
 class MockApi implements HarnessApi {
   // Mock auth state: flipped by startAuth() / disconnect() so D7 e2e tests
   // can drive the full sign-in flow deterministically without a real browser.
   private _authenticated = false;
   private _organizationName: string | null = null;
+  // First-poll wall-clock per progressive prod run, so the timeline is measured
+  // from when the run was first observed (not module load) — see getRunState.
+  private progressiveRunStart = new Map<string, number>();
 
   async startAuth(): Promise<AuthStartResponse> {
     // Record the call for Playwright assertions (same pattern as runMacro/deploy).
@@ -1319,41 +1355,28 @@ class MockApi implements HarnessApi {
         return override;
       }
     }
+    // A run the user just STARTED (Run button → run() mints exec-mock-prod-*)
+    // advances step-by-step on a wall clock so the Steps view visibly moves.
+    // Every other id (the on-load demo receipt, Playwright's authored ids) keeps
+    // the terminal fixture below — several specs depend on that first poll being
+    // terminal so the poller stops.
+    if (executionId.startsWith("exec-mock-prod-")) {
+      let startedAt = this.progressiveRunStart.get(executionId);
+      if (startedAt === undefined) {
+        startedAt = Date.now();
+        this.progressiveRunStart.set(executionId, startedAt);
+      }
+      return progressiveLeasingRun(executionId, Date.now() - startedAt);
+    }
     return {
       executionId,
       status: "completed",
-      steps: [
-        {
-          id: "intake",
-          name: "intake",
-          status: "passed" as const,
-          latencyMs: 240,
-        },
-        {
-          id: "screen",
-          name: "screen",
-          status: "passed" as const,
-          latencyMs: 610,
-        },
-        {
-          id: "credit-check",
-          name: "credit-check",
-          status: "passed" as const,
-          latencyMs: 1900,
-        },
-        {
-          id: "approve",
-          name: "approve",
-          status: "passed" as const,
-          latencyMs: 130,
-        },
-        {
-          id: "draft-lease",
-          name: "draft-lease",
-          status: "passed" as const,
-          latencyMs: 800,
-        },
-      ],
+      steps: LEASING_RUN_STEPS.map((step) => ({
+        id: step.id,
+        name: step.name,
+        status: "passed" as const,
+        latencyMs: step.latencyMs,
+      })),
     };
   }
 

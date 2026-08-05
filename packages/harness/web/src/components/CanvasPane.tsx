@@ -6,9 +6,16 @@ import { isMockMode } from "../lib/api";
 import { MOCK_CANVAS_OVERVIEWS, hasMockCanvasDoc } from "../lib/mock-data";
 import { getTheme, subscribeTheme } from "../lib/theme";
 import { type CanvasGraph, formatGraphCounts, parseCanvasGraph } from "../lib/canvas-graph";
-import type { ObservedRun, RunTarget } from "../lib/use-harness-state";
+import type { DeployProgress, ObservedRun, RunTarget } from "../lib/use-harness-state";
 import { CanvasOverviewPanel } from "./CanvasOverviewPanel";
-import { CanvasChatPanel, CanvasStepDetail, CanvasStepsList, RunStepsList } from "./CanvasStepDetail";
+import {
+  CanvasChatPanel,
+  CanvasStepDetail,
+  CanvasStepsList,
+  DeployStatusBanner,
+  RunStepsList,
+  RunSummaryBlock,
+} from "./CanvasStepDetail";
 import { EmptyState } from "./EmptyState";
 import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
@@ -66,6 +73,18 @@ interface CanvasPaneProps {
   /** Every run observed for this session, oldest first (the run picker). */
   runs: ObservedRun[];
   onSelectRun: (executionId: string) => void;
+  /** Dev server the agent started in this session (port.detected), if any —
+   *  the run summary offers it as an "Open preview" result when the agent
+   *  isn't deployed. */
+  preview: { port: number; url: string } | null;
+  /** Live deploy progress for the bound workflow, or null — drives the deploy
+   *  banner in the Steps surface (linking → building → ready/error). */
+  deployState: DeployProgress | null;
+  /** Dismiss the deploy banner (clears the workflow's deploy progress). */
+  onDismissDeploy: () => void;
+  /** Switch the right pane to the Code tab — the deploy banner's "Trigger from
+   *  your code" jumps there, where the integration snippet lives. */
+  onOpenCode: () => void;
   /** Registry workflows — launched-workflow nodes navigate to theirs. */
   workflows: WorkflowInfo[];
   /** Binds and switches to another workflow (App's handleBindWorkflow) —
@@ -97,6 +116,10 @@ export function CanvasPane({
   runTarget,
   runs,
   onSelectRun,
+  preview,
+  deployState,
+  onDismissDeploy,
+  onOpenCode,
   workflows,
   onOpenWorkflow,
   onCanvasContent,
@@ -707,6 +730,31 @@ export function CanvasPane({
     }
   }, [showsContent, sessionId, onCanvasContent]);
 
+  // The observability header for the Steps surface: a deploy landing (if one is
+  // in flight/just landed) and the run summary card (if a run has been
+  // observed). Rendered at the top of every steps-surface path so Run/Test/Deploy
+  // each show progress + the relevant final data the moment the pane opens here.
+  const stepsHeader = (
+    <>
+      {deployState && (
+        <DeployStatusBanner
+          deployState={deployState}
+          workflow={boundWorkflow}
+          onDismiss={onDismissDeploy}
+          onOpenCode={onOpenCode}
+        />
+      )}
+      {run && (
+        <RunSummaryBlock
+          run={run}
+          runTarget={runTarget}
+          workflow={boundWorkflow}
+          preview={preview}
+        />
+      )}
+    </>
+  );
+
   return (
     <aside className="canvas-pane">
       {boundWorkflow && !overviewActive && (
@@ -817,11 +865,13 @@ export function CanvasPane({
           <span className="canvas-task-spinner" aria-hidden="true" />
           <p className="canvas-empty-hint">{surface === "steps" ? "Loading steps…" : "Loading canvas…"}</p>
         </div>
-      ) : !showsContent && surface === "steps" && run ? (
-        /* No diagram yet, but a run was observed: the live per-step data
-           renders instead of "No steps yet". */
+      ) : !showsContent && surface === "steps" && (run || deployState) ? (
+        /* No diagram yet, but a run was observed or a deploy is landing: the
+           live per-step data (or the deploy banner) renders instead of the
+           "No steps yet" empty state. */
         <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
-          <RunStepsList run={run} target={runTarget} />
+          {stepsHeader}
+          {run && <RunStepsList run={run} target={runTarget} />}
         </div>
       ) : !showsContent && sessionExited ? (
         /* nothing was generated and the session is dead — a render here would
@@ -1098,6 +1148,7 @@ export function CanvasPane({
           </div>
           {surface === "steps" && (
             <div className="canvas-steps-surface" data-testid="canvas-steps-surface">
+              {stepsHeader}
               {graph && graph.nodes.length > 0 ? (
                 <CanvasStepsList
                   graph={graph}

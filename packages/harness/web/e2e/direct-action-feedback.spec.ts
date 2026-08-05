@@ -204,9 +204,9 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
     await expect(deployBtn).toHaveClass(/session-action-primary/);
     // The mock persists a definition id before the failed first build, just
     // like production. That link must not enable Prod Run or Code snippets.
-    // Starting the rfq session collapsed the right pane (empty canvas — the
-    // failed build produced no doc); reopen it before inspecting canvas-tab-bar.
-    await page.getByTestId("right-expand").click();
+    // Clicking Deploy revealed the right pane and switched it to the Steps tab
+    // (the unified activity surface); switch to the Canvas tab for the pill.
+    await page.getByTestId("right-tab-canvas").click();
     const dashboardLink = page.getByTestId("workflow-dashboard-link");
     await expect(dashboardLink).toContainText("deploy failed");
     await expect(dashboardLink).toHaveAttribute("data-deployment-state", "failed");
@@ -265,6 +265,8 @@ test.describe("Fix 3 — deploy failure persists in Prod-run disabled reason", (
 
     // After success the agent is DEPLOYED: the "deployed" pill appears on the
     // Canvas tab, Run becomes enabled and takes over as the primary CTA.
+    // Deploy switched the pane to the Steps tab; go back to Canvas for the pill.
+    await page.getByTestId("right-tab-canvas").click();
     await expect(page.getByTestId("workflow-dashboard-link")).toContainText("deployed", {
       timeout: 3_000,
     });

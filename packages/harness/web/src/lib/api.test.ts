@@ -1,6 +1,57 @@
 import { describe, expect, it } from "vitest";
 
-import { parseNdjsonLine, terminalDeployEvent, type DeployStreamEvent } from "./api";
+import {
+  parseNdjsonLine,
+  progressiveLeasingRun,
+  PROGRESSIVE_STEP_MS,
+  terminalDeployEvent,
+  type DeployStreamEvent,
+} from "./api";
+
+describe("progressiveLeasingRun", () => {
+  const at = (elapsed: number) => progressiveLeasingRun("exec-mock-prod-1", elapsed);
+
+  it("starts with the first step running, the rest pending, and no latencies", () => {
+    const run = at(0);
+    expect(run.status).toBe("running");
+    expect(run.steps.map((s) => s.status)).toEqual([
+      "running",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+    ]);
+    // Honest-absence: nothing has finished, so no step reports a duration.
+    expect(run.steps.every((s) => s.latencyMs === undefined)).toBe(true);
+  });
+
+  it("advances monotonically: earlier steps pass before later ones", () => {
+    // Two steps in: step 0 passed (with its latency), step 1 running (no latency).
+    const run = at(PROGRESSIVE_STEP_MS + 10);
+    expect(run.status).toBe("running");
+    expect(run.steps[0].status).toBe("passed");
+    expect(run.steps[0].latencyMs).toBeGreaterThan(0);
+    expect(run.steps[1].status).toBe("running");
+    expect(run.steps[1].latencyMs).toBeUndefined();
+  });
+
+  it("reports a running step with NO latencyMs, a passed step WITH it", () => {
+    const run = at(PROGRESSIVE_STEP_MS * 2 + 10);
+    for (const step of run.steps) {
+      if (step.status === "running" || step.status === "pending") {
+        expect(step.latencyMs).toBeUndefined();
+      }
+      if (step.status === "passed") expect(step.latencyMs).toBeGreaterThan(0);
+    }
+  });
+
+  it("terminates as completed with every step passed and no cost fields", () => {
+    const run = at(PROGRESSIVE_STEP_MS * 6);
+    expect(run.status).toBe("completed");
+    expect(run.steps.every((s) => s.status === "passed")).toBe(true);
+    expect(JSON.stringify(run)).not.toMatch(/\$|cost/i);
+  });
+});
 
 describe("terminalDeployEvent", () => {
   it("returns the terminal ready event", () => {

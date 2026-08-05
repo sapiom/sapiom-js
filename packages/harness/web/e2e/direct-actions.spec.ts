@@ -216,9 +216,8 @@ test.describe("Deploy button — direct route, NDJSON build stream, no pty write
     // bar: a deployed workflow now surfaces the "deployed" dashboard link in the
     // right-pane header (Canvas tab only) and makes Run enabled. MockApi.deploy
     // updates its local workflow copy, and refreshWorkflows re-reads it.
-    // Starting a session on rfq (empty canvas board) auto-collapsed the right
-    // pane; reopen it before inspecting the right-pane dashboard link.
-    await page.getByTestId("right-expand").click();
+    // Clicking Deploy reveals the right pane and lands on the Steps tab (the
+    // unified activity surface); switch to the Canvas tab for the dashboard link.
     await page.getByTestId("right-tab-canvas").click();
     await expect(page.getByTestId("workflow-dashboard-link")).toContainText("deployed", { timeout: 3_000 });
     await expect(page.getByTestId("session-step-run")).toBeEnabled();
@@ -271,13 +270,15 @@ test.describe("Prod-run button — direct route, executionId → inspector, no p
     // records what api.run() received — see MockApi.run).
     expect(direct.req.definitionId).toBe("4821");
 
-    // The returned executionId is fed into the run-inspector poller. Load the
-    // Steps tab to confirm the run appeared (the mock getRunState returns the
-    // completed leasing steps immediately).
-    await page.getByTestId("right-tab-steps").click();
-    // The run chip appears once the poller's first tick resolves.
+    // The returned executionId is fed into the run-inspector poller. Clicking
+    // Run already revealed the pane and switched it to the Steps tab (the
+    // unified activity surface) — no manual tab click needed.
+    await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
+    // The run shows up RUNNING, then advances to completed as the mock's
+    // wall-clock timeline ticks across polls (the observability the feature adds).
     const runChip = page.getByTestId("canvas-run-chip");
-    await expect(runChip).toContainText("prod run completed", { timeout: 5_000 });
+    await expect(runChip).toContainText("prod run");
+    await expect(runChip).toContainText("prod run completed", { timeout: 10_000 });
 
     // lastMacroRun must be absent — the direct route bypasses runMacro.
     const hook = await readTestHook(page);
