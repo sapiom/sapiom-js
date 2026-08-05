@@ -29,6 +29,7 @@ import {
   type HarnessIdentity,
   type DoctorReport,
 } from "@sapiom/harness";
+import { resolveLaunchDir } from "./launch-dir.js";
 import { augmentProcessPath } from "./env.js";
 import { esbuildBinaryPath } from "./esbuild-binary.js";
 import { resolveWebDir } from "./paths.js";
@@ -162,20 +163,20 @@ function defaultProjectRoot(): string {
 /**
  * The directory the coding agent opens in. NEVER the app's own cwd (that would
  * open the agent inside the install dir), and NEVER an OS folder picker — a
- * one-click user shouldn't have to choose a path. Precedence:
- *   1. SAPIOM_LAUNCH_DIR env (explicit dev/testing override)
- *   2. most recent *valid* project dir (returning users)
- *   3. the default project root under ~/.sapiom (first launch / new project)
+ * one-click user shouldn't have to choose a path.
+ *
+ * Always the harness home (unless `SAPIOM_LAUNCH_DIR` overrides it): the launch
+ * dir is the stable scan root that `projectRoot = <launchDir>/projects` is
+ * derived from, so it must not drift into a project subfolder. See
+ * `resolveLaunchDir` for why deriving it from `recentDirs` nested every new
+ * agent one level deeper.
  */
 async function chooseLaunchDir(): Promise<string> {
-  const override = process.env.SAPIOM_LAUNCH_DIR;
-  if (isDir(override)) return override;
-
-  const settings = await loadSettings();
-  const lastValid = settings.recentDirs?.find(isDir);
-  if (lastValid) return lastValid;
-
-  const dir = defaultProjectRoot();
+  const dir = resolveLaunchDir({
+    override: process.env.SAPIOM_LAUNCH_DIR,
+    harnessHome: defaultProjectRoot(),
+    isDir,
+  });
   await fs.promises.mkdir(dir, { recursive: true });
   return dir;
 }
