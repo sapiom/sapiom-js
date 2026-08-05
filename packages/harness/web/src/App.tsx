@@ -193,10 +193,6 @@ export const App = (): JSX.Element => {
     launchDir: harness.state?.launchDir,
   });
 
-  const saveProjectRoot = async (root: string): Promise<void> => {
-    await harness.updateSettings({ projectRoot: root });
-  };
-
   // Opening the palette loads history for the same directories the rail's
   // popover asks for — one shared builder, so whichever opens second
   // coalesces against the first instead of re-fetching every directory.
@@ -721,7 +717,6 @@ export const App = (): JSX.Element => {
       {!railCollapsed && (
         <WorkflowsRail
           projectRoot={projectRoot || null}
-          onSaveProjectRoot={saveProjectRoot}
           width={widths.rail}
           minWidth={RAIL_MIN}
           workflows={state.workflows}
@@ -1181,7 +1176,6 @@ export const App = (): JSX.Element => {
           }}
           onScan={handleScanWorkflows}
           onScaffold={handleScaffoldSession}
-          onSaveProjectRoot={saveProjectRoot}
           listDir={harness.listDir}
           onCreateSession={handleCreateSession}
           listHarnesses={harness.listHarnesses}

@@ -1055,27 +1055,6 @@ input {
   background: var(--active-shade);
 }
 
-/* Add-menu variant: the same door rows the dialog shows, on the menu inset.
-   Matched to .history-card so the two popovers hanging off adjacent buttons
-   are visibly one control, not two designs. */
-.add-card {
-  width: min(320px, calc(100vw - var(--sp4)));
-}
-
-.add-card .connect-card-body {
-  padding: 6px;
-}
-
-/* In the modal a door is a full-bleed row on modal padding, separated from its
-   neighbours by a rule. In the menu it is an inset, rounded item like every
-   other popover row — and the rule above the first door would otherwise sit
-   directly under the header's own border, reading as a double line. */
-.add-card .aw-door {
-  padding: 6px 8px;
-  border-top: none;
-  border-radius: var(--radius-sm);
-}
-
 .rail-list {
   flex: 1;
   min-height: 0;
@@ -6168,8 +6147,7 @@ input {
 /* Full-bleed dialog anatomy: the dialog owns no padding; header / body /
    footer blocks own theirs and are separated by hairlines — mirrors the
    design system's .sapiom-dialog. */
-.modal-new-session,
-.modal-add-workspace,
+.modal-start,
 .modal-confirm {
   /* Every block (header, body, full-bleed rows, actions) shares the app's
      standard pane inset, so dialog content aligns with panel content. */
@@ -6246,8 +6224,7 @@ input {
   outline-offset: 2px;
 }
 
-.modal-new-session .modal-header,
-.modal-add-workspace .modal-header {
+.modal-start .modal-header {
   display: flex;
   align-items: center;
   min-height: var(--pane-header-h);
@@ -6290,23 +6267,138 @@ input {
   min-width: 0;
 }
 
-.modal-new-session .modal-actions,
-.modal-add-workspace .modal-actions {
+.modal-start .modal-actions {
   margin-top: 0;
   padding: var(--sp3) var(--modal-pad-x);
 }
 
 /* Keep each action button's label on one line and let the row wrap to stack
    whole buttons when the dialog is narrow — otherwise flexbox shrinks them
-   below their content width and labels like "Start from a template" and
-   "Scaffold an agent here" break mid-word (the "no agent project" state). */
-.modal-add-workspace .modal-actions {
+   below their content width and labels like "Start bare session" and
+   "Scaffold here" break mid-word (the plain/new states carry several actions). */
+.modal-start .modal-actions {
   flex-wrap: wrap;
 }
 
-.modal-add-workspace .modal-actions > button {
+.modal-start .modal-actions > button {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+/* --- StartDialog: the unified, detection-driven Add dialog --------------- */
+
+/* A flex column so the BODY scrolls (picker listing + detection status + the
+   "Start from" tray can be tall) while the header and the morphing footer stay
+   put — the primary action never scrolls out of reach. */
+.modal-start {
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 760px);
+}
+
+.modal-start .modal-header,
+.modal-start .modal-actions {
+  flex: none;
+}
+
+.modal-start .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* The first body row is prose (the subtitle), not the full-bleed picker, so
+     restore the top inset the picker variant deliberately drops. */
+  padding-top: var(--sp3);
+}
+
+.modal-start-title {
+  font-weight: var(--fw-strong, 600);
+  font-size: var(--type-h2, 1rem);
+}
+
+/* The "named after the folder" preview sits directly above the footer hairline. */
+.modal-start-name {
+  padding-bottom: 0;
+}
+
+/* "Start from": one calm choice for an empty/new folder — Empty, an idea, or the
+   template catalog (a handoff). */
+.start-from {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+}
+
+.start-from-label {
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.start-tiles {
+  display: flex;
+  gap: var(--sp2);
+}
+
+/* Selectable tile: the neutral raised-pill treatment when active — identical to
+   the pane tabs (.snippet-tab.is-active), deliberately NOT green. Green stays
+   reserved for state (the Agent badge, the good result tone, the new-folder mark). */
+.start-tile {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--sp2) var(--sp3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.start-tile:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.start-tile.is-active {
+  background: var(--bg-1);
+  border-color: var(--border-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-xs);
+}
+
+.start-tile:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.start-tile-title {
+  font-size: var(--type-label);
+  font-weight: 510;
+}
+
+.start-tile-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--type-meta);
+  color: var(--text-faint);
+}
+
+.start-idea {
+  margin-top: var(--sp1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start-tile {
+    transition: none;
+  }
 }
 
 /* Harness dropdown: compact trigger in the footer — [brand icon][label]
@@ -6869,79 +6961,6 @@ input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.aw-back {
-  margin-right: var(--sp2);
-  flex: 0 0 auto;
-}
-
-/* Doors are full-bleed rows: the GROUP owns its separators, so no row draws a
-   perimeter line and the dividers reach the dialog edge. */
-.aw-doors {
-  display: flex;
-  flex-direction: column;
-}
-
-.aw-door {
-  display: flex;
-  align-items: center;
-  gap: var(--sp3);
-  width: 100%;
-  padding: var(--sp3) var(--modal-pad-x);
-  border: none;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  border-radius: 0;
-  text-align: left;
-  color: var(--text);
-  transition: background-color var(--transition-fast);
-}
-
-.aw-door:hover,
-.aw-door:focus-visible {
-  background: var(--surface-hover);
-}
-
-.aw-door-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-2);
-  color: var(--text-dim);
-}
-
-.aw-door-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.aw-door-title {
-  font-size: var(--type-ui);
-  font-weight: 500;
-}
-
-.aw-door-sub {
-  font-size: var(--type-meta);
-  color: var(--text-faint);
-}
-
-.aw-door-arrow {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  transition: transform var(--transition-fast);
-}
-
-.aw-door:hover .aw-door-arrow {
-  transform: translateX(2px);
 }
 
 /* Detection outcome. Scaffold / template / bulk-scan / MCP-setup all live

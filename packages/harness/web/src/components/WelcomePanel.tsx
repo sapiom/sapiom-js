@@ -15,7 +15,7 @@ import { loadUiPrefs } from "../lib/ui-prefs";
 import { useDismissable } from "../lib/use-dismissable";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { Icon } from "./Icon";
-import { AddWorkspaceDialog } from "./AddWorkspaceDialog";
+import { StartDialog } from "./StartDialog";
 
 interface WelcomePanelProps {
   /** Launch dirs (settings.recentDirs). One input to the Overview list, and
@@ -38,9 +38,9 @@ interface WelcomePanelProps {
   /** Session creation — still used by the recents rows (opening a recent
    *  workspace starts a session in it). NOT what "New workspace" does. */
   onCreateSession: (cwd: string, harness: HarnessKind) => Promise<void>;
-  /** "New workspace" opens the SAME three-door dialog the rail's + does.
-   *  It used to open NewSessionModal, which meant the panel's most prominent
-   *  CTA said "workspace" and delivered the one-question session dialog. */
+  /** "Open a folder" opens the SAME unified Start dialog the rail's + does —
+   *  one detection-driven surface, so the panel's most prominent CTA and the
+   *  rail agree on what "add" means. */
   onConnect: (cwd: string) => Promise<void>;
   onScan: (root: string) => Promise<number>;
   onScaffold: (
@@ -48,7 +48,6 @@ interface WelcomePanelProps {
     harness: HarnessKind,
     idea?: string,
   ) => Promise<void>;
-  onSaveProjectRoot: (root: string) => Promise<void>;
   /** Adapter registry fetch — keeps this modal's picker registry-driven too. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /** Navigate to the templates destination. Browsing is a place you go now,
@@ -107,7 +106,6 @@ export function WelcomePanel({
   onConnect,
   onScan,
   onScaffold,
-  onSaveProjectRoot,
   listHarnesses,
   onBrowseTemplates,
   onDismiss,
@@ -374,24 +372,14 @@ export function WelcomePanel({
       </div>
 
       {modalOpen && (
-        <AddWorkspaceDialog
+        <StartDialog
           recentDirs={recentDirs}
           projectRoot={projectRoot}
           listDir={listDir}
           onClose={() => setModalOpen(false)}
           onConnect={onConnect}
           onScan={onScan}
-          onScaffold={onScaffold}
-          onSaveProjectRoot={onSaveProjectRoot}
-          listHarnesses={listHarnesses}
-          onBrowseTemplates={() => {
-            setModalOpen(false);
-            onBrowseTemplates();
-          }}
           triggerRef={startProjectRef}
-          // The row above already said "Open a folder"; deep-link to that door
-          // instead of asking the same question a second time.
-          initialDoor="have"
         />
       )}
     </>

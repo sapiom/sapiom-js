@@ -196,19 +196,18 @@ test.describe("UI event tracking (track() calls)", () => {
   });
 
   test("new session creation emits track('session.created')", async ({ page }) => {
-    // Open new session modal.
+    // Open the Start dialog.
     await page.getByTestId("add-workspace").click();
-    await page.getByTestId("new-session-btn").click();
-    await expect(page.locator(".modal-new-session")).toBeVisible();
+    await expect(page.locator(".modal-start")).toBeVisible();
 
-    // Use the existing MOCK_LAUNCH_DIR path from the picker.
-    // The directory field is prefilled — just click Start.
-    const startBtn = page.locator(".modal-new-session .btn-primary");
+    // Point at a new folder so the primary action starts a session (scaffold).
+    await page.getByTestId("dir-picker-input").fill("/Users/demo/scratch/new-agent");
+    const startBtn = page.getByTestId("aw-scaffold-here");
     await expect(startBtn).toBeEnabled();
     await startBtn.click();
 
-    // Wait for the modal to close (session created successfully in mock).
-    await expect(page.locator(".modal-new-session")).toHaveCount(0, { timeout: 3_000 });
+    // The dialog closes once the session is created (mock).
+    await expect(page.locator(".modal-start")).toHaveCount(0, { timeout: 3_000 });
 
     await waitForTrackEvent(page, "session.created");
     const events = await getTrackEvents(page);

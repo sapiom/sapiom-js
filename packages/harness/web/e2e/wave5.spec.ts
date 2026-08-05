@@ -67,17 +67,17 @@ test.describe("command palette sections and highlighting", () => {
 // Add dialog: scaffold, scan, registry picker, MCP prompts
 // ---------------------------------------------------------------------------
 
-test.describe("add workspace (three doors)", () => {
+test.describe("add to Studio (detection-driven)", () => {
   test("a non-existent folder offers the scaffold action, which starts a session and prompts the agent", async ({
     page,
   }) => {
     await page.getByTestId("add-workspace").click();
-    await page.getByTestId("aw-door-have").click();
-    const modal = page.locator(".modal-add-workspace");
+    const modal = page.locator(".modal-start");
     await expect(modal).toBeVisible();
 
+    // Detection is reactive — no "Continue": the action appears once the picker
+    // resolves the typed path.
     await modal.getByTestId("dir-picker-input").fill("/Users/demo/brand-new-agent");
-    await modal.getByTestId("aw-have-continue").click();
 
     // A folder that doesn't exist can't be registered — only created.
     await expect(modal.getByTestId("aw-result")).toContainText("doesn't exist yet");
@@ -107,10 +107,8 @@ test.describe("add workspace (three doors)", () => {
 
   test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {
     await page.getByTestId("add-workspace").click();
-    await page.getByTestId("aw-door-have").click();
-    const modal = page.locator(".modal-add-workspace");
+    const modal = page.locator(".modal-start");
     await modal.getByTestId("dir-picker-input").fill("/Users/demo");
-    await modal.getByTestId("aw-have-continue").click();
 
     // Bulk discovery is no longer a permanent button: it is what the dialog
     // OFFERS once the picked folder turns out to contain projects. Two of the
@@ -128,10 +126,8 @@ test.describe("add workspace (three doors)", () => {
     await page.getByTestId("add-workspace").click();
     // Contextual now, not permanent: the offer exists only where it applies —
     // a folder that exists and has no Sapiom wiring.
-    await page.getByTestId("aw-door-have").click();
-    const modal = page.locator(".modal-add-workspace");
+    const modal = page.locator(".modal-start");
     await modal.getByTestId("dir-picker-input").fill("/Users/demo/scratch");
-    await modal.getByTestId("aw-have-continue").click();
 
     const block = page.getByTestId("mcp-install");
     await expect(block).toBeVisible();
@@ -154,7 +150,9 @@ test.describe("add workspace (three doors)", () => {
 
   test("the harness picker renders from the adapter registry", async ({ page }) => {
     await page.getByTestId("add-workspace").click();
-    await page.getByTestId("new-session-btn").click();
+    // The agent picker shows only in session-starting states — point at a folder
+    // that scaffolds so it appears.
+    await page.getByTestId("dir-picker-input").fill("/Users/demo/scratch/new-agent");
     const trigger = page.getByTestId("harness-select");
     await expect(trigger).toBeVisible();
     await expect(trigger).toContainText("Claude Code");
@@ -190,7 +188,6 @@ test.describe("add workspace (three doors)", () => {
 
 test("recent-path chips middle-truncate long paths and keep the full path in the tooltip", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
 
   const chip = page.locator(".recent-dir-chip").first();
   await expect(chip).toHaveText("/Users/…/acme-app");
@@ -251,7 +248,6 @@ test("the directory picker's read failure carries its own Retry", async ({ page 
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
   await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
 
   const err = page.getByTestId("dir-picker-error");
   await expect(err).toBeVisible();

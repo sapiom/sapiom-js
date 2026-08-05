@@ -59,14 +59,6 @@ test("history menu opens uncropped off the rail header", async ({ page }) => {
   await expectUncropped(page, page.getByTestId("history-menu"));
 });
 
-test("add menu opens uncropped beside the rail header", async ({ page }) => {
-  // The only `right-start` placement in the app: it grows across the rail's
-  // right edge rather than down its inside, so it is the one most likely to be
-  // clipped by the rail's own scroller.
-  await page.getByTestId("add-workspace").click();
-  await expectUncropped(page, page.getByTestId("add-menu"));
-});
-
 test("profile menu opens uncropped off the rail footer", async ({ page }) => {
   await page.getByTestId("brand-identity").click();
   await expectUncropped(page, page.getByTestId("profile-menu"));
@@ -83,9 +75,10 @@ test("session bar menu opens uncropped at the header's right cluster", async ({ 
   await expectUncropped(page, page.getByTestId("session-menu-popover"));
 });
 
-test("harness picker opens uncropped over the new-session dialog", async ({ page }) => {
+test("harness picker opens uncropped over the Start dialog", async ({ page }) => {
   await page.getByTestId("add-workspace").click();
-  await page.getByTestId("new-session-btn").click();
+  // The agent picker shows only in session-starting states.
+  await page.getByTestId("dir-picker-input").fill("/Users/demo/scratch/new-agent");
   await page.getByTestId("harness-select").click();
   await expectUncropped(page, page.getByTestId("harness-select-menu"));
 });

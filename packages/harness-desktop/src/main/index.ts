@@ -18,6 +18,8 @@ import { createSetupWindow } from "./windows.js";
 import { boot, type BootResult } from "./boot.js";
 import { runSmokeChecks, reportSmoke } from "./smoke.js";
 import { initUpdater } from "./updater.js";
+import { initDialogs } from "./dialogs.js";
+import { setTrustedWindow } from "./trusted-sender.js";
 
 const devMode = process.argv.includes("--dev");
 /** `--smoke`: boot, verify the packaged bundle, print results, exit. See smoke.ts. */
@@ -106,12 +108,21 @@ if (lock.action === "fail") {
       // real wiring: it failed with "No handler registered for 'update:check'"
       // against an app that works fine in production. Handler registration must
       // not depend on where in this sequence we happen to return.
+      // The main window's renderer is the ONLY trusted origin for privileged IPC
+      // (update checks, the native folder picker). Set it before registering any
+      // handler that validates the sender, and on every boot path — including
+      // --smoke, which round-trips the bridge to prove the wiring.
+      setTrustedWindow(bootResult.mainWindow);
       initUpdater({
         mainWindow: bootResult.mainWindow,
         devMode,
         smoke: smokeMode,
         shutdown: shutdownServer,
       });
+      // Native OS dialogs (the folder picker behind Browse). Registered here for
+      // the same reason as initUpdater: invoke on an unhandled channel rejects, so
+      // the handler must exist regardless of which branch of boot we exit through.
+      initDialogs({ mainWindow: bootResult.mainWindow });
       if (smokeMode) {
         // Verify the packaged bundle, then leave — never wait for a user. The
         // exit code is the CI signal. `app.exit` skips the before-quit handler,

@@ -30,6 +30,15 @@ export interface DesktopBridge {
   /** The desktop app's own version (may be empty on older builds). */
   appVersion: string;
   checkForUpdates: () => Promise<UpdateCheckOutcome>;
+  /**
+   * Open the OS-native folder chooser, optionally starting at `defaultPath`.
+   * Resolves with the chosen absolute path, or null when cancelled.
+   *
+   * Optional on purpose: a desktop build older than this SPA won't expose it, and
+   * a plain browser has no bridge at all — callers must feature-detect it and fall
+   * back to the in-app directory listing, never assume it.
+   */
+  chooseDirectory?: (defaultPath?: string) => Promise<string | null>;
   // No restart method: applying an update is confirmed by a native dialog in the
   // desktop app, so page code — which shares an origin with agent-authored files
   // the harness serves — has no way to end a user's sessions.
@@ -68,6 +77,9 @@ export function getDesktopBridge(host: DesktopHost | undefined = defaultHost()):
   return {
     appVersion: typeof bridge.appVersion === "string" ? bridge.appVersion : "",
     checkForUpdates: bridge.checkForUpdates,
+    // Optional: only surfaced when the desktop build actually provides it, so an
+    // older app degrades to the in-app listing rather than a rejecting call.
+    chooseDirectory: typeof bridge.chooseDirectory === "function" ? bridge.chooseDirectory : undefined,
   };
 }
 

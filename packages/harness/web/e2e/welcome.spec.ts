@@ -79,18 +79,18 @@ test.describe("first run", () => {
     // reaches the same add flow the rail's + does, and lands directly on the
     // folder question rather than re-asking which of three intents this was.
     await page.getByTestId("welcome-start-project").click();
-    await expect(page.locator(".modal-add-workspace")).toBeVisible();
-    await expect(page.locator(".modal-new-session")).toHaveCount(0);
+    await expect(page.locator(".modal-start")).toBeVisible();
     await expect(page.getByTestId("aw-doors")).toHaveCount(0);
 
-    // Already at door 1: pick a fixture folder that holds an agent project.
+    // One picker, always present: pick a fixture folder that holds an agent
+    // project. Detection is reactive — no "Continue" — so the action appears on
+    // its own.
     await page.getByTestId("dir-picker-input").fill("/Users/demo/rfq-agent");
-    await page.getByTestId("aw-have-continue").click();
     await expect(page.getByTestId("aw-result")).toContainText("This is an agent project");
     await page.getByTestId("aw-add").click();
 
     // The workspace joins the rail; the first-run pitch is done.
-    await expect(page.locator(".modal-add-workspace")).toHaveCount(0);
+    await expect(page.locator(".modal-start")).toHaveCount(0);
     await expect(page.getByTestId("workflow-rfq-agent")).toBeVisible();
   });
 
@@ -240,7 +240,6 @@ test.describe("returning user", () => {
     // The directory picker's chips are the surface that still reads recentDirs
     // directly, so they show what actually survived.
     await page.getByTestId("add-workspace").click();
-    await page.getByTestId("aw-door-have").click();
     const chips = page.locator(".recent-dir-chip");
     await expect(chips).toHaveCount(3); // all three fixtures kept, none dropped
     // The folder just opened moves to the front rather than replacing the list.

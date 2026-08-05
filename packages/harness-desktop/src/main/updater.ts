@@ -29,11 +29,14 @@
  *    installer is trying to replace. So the update path calls the caller's
  *    `shutdown()` and awaits it, rather than relying on the quit hook.
  */
-import { BrowserWindow, app, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, app, dialog, ipcMain } from "electron";
 // CJS: default-import then read the property. See trap 1 above.
 import electronUpdater from "electron-updater";
 import type { UpdateInfo } from "electron-updater";
 import { UPDATE_CHECK, type UpdateCheckOutcome } from "./ipc.js";
+// Shared with the folder-picker channel — the "only the SPA at `/` may ask" rule
+// lives in one place rather than being copied per privileged channel.
+import { isTrustedSender } from "./trusted-sender.js";
 import {
   CHANNEL_ENV_VAR,
   classifyUpdateError,
@@ -329,46 +332,6 @@ export function initUpdater(deps: UpdaterDeps): void {
     disabledReason = `initialisation failed: ${err instanceof Error ? err.message : String(err)}`;
     log(`could not initialise: ${err instanceof Error ? err.message : String(err)}`);
   }
-}
-
-/**
- * Only the harness SPA, in the main window's top frame, may drive these.
- *
- * A check reaches the network and reveals that this machine runs Sapiom, so "which
- * renderer asked?" is a security question, not bookkeeping. (The destructive half —
- * applying an update — has no channel at all; see ipc.ts.) Two things could
- * otherwise ask:
- *  - another window — a pop-out inherits webPreferences unless we prevent it
- *    (windows.ts does now, and this is the check that still holds if that ever
- *    regresses);
- *  - the main window itself after navigating to agent-authored content, which the
- *    harness serves at `/canvas/:sessionId/*` on this same origin.
- *
- * Hence both an identity check and a path check. The SPA lives at `/` and never
- * navigates the top frame over http (its one `location.href` is an editor scheme,
- * which `will-navigate` sends to the OS), so requiring `/` is exact today. If the
- * SPA ever adopts routing this fails CLOSED and says why, rather than quietly
- * widening.
- */
-function isTrustedSender(event: IpcMainInvokeEvent): boolean {
-  const win = host?.mainWindow ?? null;
-  if (!win || win.isDestroyed()) return false;
-  if (event.sender !== win.webContents) {
-    log("rejected an update IPC from a non-main-window renderer");
-    return false;
-  }
-  // The top frame, not the calling frame: a subframe must never qualify even if
-  // `nodeIntegrationInSubFrames` is switched on later.
-  const frameUrl = event.sender.mainFrame.url;
-  try {
-    if (new URL(frameUrl).pathname !== "/") {
-      log(`rejected an update IPC from ${frameUrl} — only the SPA root may ask`);
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  return true;
 }
 
 /** Idempotent: `ipcMain.handle` throws if a channel is registered twice. */
