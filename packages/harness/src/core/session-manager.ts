@@ -231,7 +231,7 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
  */
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
-  req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom">,
+  req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme">,
 ) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
@@ -453,6 +453,10 @@ export class SessionManager {
       // nothing for yields no brief, and this stays null so nothing downstream
       // presents an empty-handed fresh session as a continuation.
       rehydratedFrom: opts.rehydratedFrom ?? null,
+      // Persisted so resume() regenerates the same ANSI base — otherwise a
+      // resumed session would fall back to the server default and its dim text
+      // could lose contrast against a differently-themed terminal.
+      ...(req.theme ? { theme: req.theme } : {}),
       ready: false,
     };
     this.sessions.set(id, session);

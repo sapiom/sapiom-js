@@ -72,6 +72,29 @@ describe("generateClaudeSettings", () => {
     expect(source).toContain("AbortController");
   });
 
+  it("omits the theme key by default (Claude keeps its default rendering)", async () => {
+    const { settingsPath } = await generateClaudeSettings({
+      harnessSessionId: "session-abc",
+      generatedRoot: tmpDir,
+    });
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    expect(settings).not.toHaveProperty("theme");
+    expect(settings.hooks).toBeDefined();
+  });
+
+  it("pins the ANSI theme when claudeTheme is given, alongside the hooks", async () => {
+    // The ANSI theme is what makes the terminal's own palette control Claude's
+    // colors; the hooks must still be written next to it.
+    const { settingsPath } = await generateClaudeSettings({
+      harnessSessionId: "session-abc",
+      generatedRoot: tmpDir,
+      claudeTheme: "light-ansi",
+    });
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    expect(settings.theme).toBe("light-ansi");
+    expect(Object.keys(settings.hooks)).toHaveLength(6);
+  });
+
   it("is safe to regenerate for the same session (overwrites in place)", async () => {
     const first = await generateClaudeSettings({
       harnessSessionId: "session-abc",

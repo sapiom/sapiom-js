@@ -77,6 +77,7 @@ const createSessionSchema = z.object({
   harness: z.enum(SPAWNABLE_HARNESS_KINDS),
   profile: z.string().optional(),
   rehydrateFrom: z.string().min(1).optional(),
+  theme: z.enum(["light", "dark"]).optional(),
 }) satisfies z.ZodType<CreateSessionRequest>;
 
 const injectInputSchema = z.object({

@@ -27,6 +27,18 @@ const HOOK_EVENTS = [
 
 export type ClaudeHookEvent = (typeof HOOK_EVENTS)[number];
 
+/**
+ * The two Claude Code themes that paint with the terminal's own 16-color ANSI
+ * palette (`ansi:<name>`) instead of hardcoded 256-color hex. Selecting one of
+ * these is what makes the embedded xterm's palette (Terminal.tsx's
+ * DARK_ANSI/LIGHT_ANSI) authoritative over Claude's accent colors — without it
+ * Claude emits fixed 256-color indices the palette can't touch. `theme` is not
+ * a documented settings.json key but is honoured by Claude Code (verified on
+ * 2.1.220); an older/newer build that ignores it simply falls back to its
+ * default 256-color rendering, so this degrades gracefully rather than failing.
+ */
+export type ClaudeAnsiTheme = "dark-ansi" | "light-ansi";
+
 export interface GenerateClaudeSettingsOptions {
   /** The harness session this config is generated for. */
   harnessSessionId: string;
@@ -36,6 +48,13 @@ export interface GenerateClaudeSettingsOptions {
    * tests to avoid touching the real home directory.
    */
   generatedRoot?: string;
+  /**
+   * ANSI theme to pin for this session so the app's terminal palette controls
+   * Claude's colors. Match it to the app theme (dark app → `dark-ansi`) or
+   * secondary/dim text loses contrast. Omitted → no `theme` key is written and
+   * Claude keeps its default (256-color) rendering.
+   */
+  claudeTheme?: ClaudeAnsiTheme;
 }
 
 export interface GeneratedClaudeSettings {
@@ -156,6 +175,7 @@ function settingsDirFor(root: string, harnessSessionId: string): string {
 export async function generateClaudeSettings(
   options: GenerateClaudeSettingsOptions,
 ): Promise<GeneratedClaudeSettings> {
+  const { claudeTheme } = options;
   const root = expandHome(options.generatedRoot ?? HARNESS_PATHS.generated);
   const dir = settingsDirFor(root, options.harnessSessionId);
   await fs.mkdir(dir, { recursive: true });
@@ -192,7 +212,8 @@ export async function generateClaudeSettings(
   }
 
   const settingsPath = path.join(dir, "settings.json");
-  await fs.writeFile(settingsPath, JSON.stringify({ hooks }, null, 2) + "\n", "utf8");
+  const settings = claudeTheme ? { theme: claudeTheme, hooks } : { hooks };
+  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
 
   return { settingsPath, emitScriptPath };
 }

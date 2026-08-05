@@ -55,42 +55,50 @@ function readToken(name: string, fallback: string): string {
 }
 
 // ANSI 16-color ramps: terminal DATA colors (what CLIs paint with), not app
-// chrome — kept as constants per theme, same as a data-viz scale.
+// chrome — kept as constants per theme, same as a data-viz scale. Brand-coherent
+// and authoritative over Claude Code's colors: the harness pins Claude to its
+// `dark-ansi`/`light-ansi` theme (see core/inject/claude-settings.ts), so what
+// Claude calls "blue"/"green"/etc. is literally whatever these slots hold. Green
+// is the Studio brand green; blue is a calmer, less-saturated tone; the rest are
+// harmonized to read cleanly on --bg without any one hue shouting.
 const DARK_ANSI: Partial<ITheme> = {
   black: "#1a1a1e",
-  red: "#f87171",
-  green: "#4ade80",
-  yellow: "#f59e0b",
-  blue: "#3b82f6",
-  magenta: "#9b8fc4",
-  cyan: "#22d3ee",
-  white: "#f3f3f5",
-  brightBlack: "#404046",
-  brightRed: "#ff9b96",
-  brightGreen: "#86efac",
-  brightYellow: "#ffd966",
-  brightBlue: "#60a5fa",
-  brightMagenta: "#c4b5fd",
-  brightCyan: "#67e8f9",
+  red: "#e88a84",
+  green: "#6be195", // Studio brand green (dark)
+  yellow: "#e6b96f",
+  blue: "#6f9ae0", // calmer blue
+  magenta: "#b7a6dd",
+  cyan: "#74c8d4",
+  white: "#e8e8ec",
+  brightBlack: "#565661", // dim text — bumped from #404046 for legibility
+  brightRed: "#f4a7a1",
+  brightGreen: "#8ceab0", // brand green hover (dark)
+  brightYellow: "#f2cf93",
+  brightBlue: "#8fb5ea",
+  brightMagenta: "#ccbdf0",
+  brightCyan: "#97dce7",
   brightWhite: "#ffffff",
 };
 
 const LIGHT_ANSI: Partial<ITheme> = {
   black: "#3a3a3e",
-  red: "#dc2626",
-  green: "#16a34a",
-  yellow: "#b45309",
-  blue: "#2563eb",
-  magenta: "#7c3aed",
-  cyan: "#0891b2",
-  white: "#d4d4d8",
-  brightBlack: "#6b6b75",
-  brightRed: "#ef4444",
-  brightGreen: "#22c55e",
-  brightYellow: "#f59e0b",
-  brightBlue: "#3b82f6",
-  brightMagenta: "#9b8fc4",
-  brightCyan: "#22d3ee",
+  red: "#c0392b",
+  green: "#167e3a", // Studio brand green (light)
+  yellow: "#a86414",
+  blue: "#4f7cc4", // calmer blue
+  magenta: "#7a4fb0",
+  cyan: "#0e7d94",
+  // Mid grey, not near-white: near-white foreground is invisible on the light
+  // --bg anyway, and this keeps dim text legible if a dark-base session's
+  // `white` slot ends up mapped here after a mid-session theme toggle.
+  white: "#a6a6ae",
+  brightBlack: "#6b6b75", // dim text
+  brightRed: "#d64a3d",
+  brightGreen: "#1f9a4a", // brand green (brighter, light)
+  brightYellow: "#c67d1a",
+  brightBlue: "#6f9ae0",
+  brightMagenta: "#9268c4",
+  brightCyan: "#1596ad",
   brightWhite: "#ffffff",
 };
 

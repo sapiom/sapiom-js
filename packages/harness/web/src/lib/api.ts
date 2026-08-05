@@ -31,6 +31,8 @@ import type {
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
+import { getTheme } from "./theme";
+
 import {
   MOCK_FS_TREE,
   MOCK_HARNESSES,
@@ -380,9 +382,11 @@ class RealApi implements HarnessApi {
   }
 
   createSession(req: CreateSessionRequest): Promise<HarnessSession> {
+    // Default the launch theme to the app's live theme so the terminal palette
+    // controls Claude's colors (Terminal.tsx). An explicit req.theme still wins.
     return this.request<HarnessSession>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify(req),
+      body: JSON.stringify({ theme: getTheme(), ...req }),
     });
   }
 

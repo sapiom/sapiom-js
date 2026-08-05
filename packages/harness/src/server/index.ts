@@ -337,9 +337,21 @@ function createDefaultBuildLaunchOpts(
     const viaSystemPrompt =
       brief !== null && rehydration?.deliveryFor(req.harness) === "launch-flag";
 
+    // Pin Claude's ANSI theme to the app theme so the terminal's own palette
+    // (Terminal.tsx DARK_ANSI/LIGHT_ANSI) controls its colors — matched base or
+    // dim text loses contrast. Only when the theme is known: an unthemed path
+    // (server-side auto-create, a legacy session resumed before this existed)
+    // omits it and Claude keeps its default 256-color rendering, exactly as before.
+    const claudeTheme =
+      req.theme === "light" ? "light-ansi" : req.theme === "dark" ? "dark-ansi" : undefined;
+
     const [settings, mcpConfigFile, systemPromptFile, pluginDir] =
       await Promise.all([
-        generateClaudeSettings({ harnessSessionId, generatedRoot }),
+        generateClaudeSettings({
+          harnessSessionId,
+          generatedRoot,
+          ...(claudeTheme ? { claudeTheme } : {}),
+        }),
         generateMcpConfig(harnessSessionId, {
           environment: process.env.SAPIOM_ENVIRONMENT,
           apiKey,

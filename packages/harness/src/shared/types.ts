@@ -164,6 +164,12 @@ export interface HarnessSession {
   status: SessionStatus;
   createdAt: string;
   lastActiveAt: string;
+  /**
+   * The app's UI theme at launch, mapped to Claude Code's matching ANSI theme
+   * so the terminal palette controls its colors. Persisted so resume reuses the
+   * same base. Absent on sessions created before this existed → server default.
+   */
+  theme?: UiTheme;
   /** Exit code when status === "exited". */
   exitCode?: number | null;
   /**
@@ -932,6 +938,9 @@ export interface SessionRecord {
 // POST   /api/track                     UiTrackRequest → { ok: true }  (UI-interaction analytics)
 // POST   /ingest                        (hook payloads; bearer = ingest token)
 
+/** The app's active UI theme, as tracked client-side (web/src/lib/theme.ts). */
+export type UiTheme = "light" | "dark";
+
 export interface CreateSessionRequest {
   cwd: string;
   harness: HarnessKind;
@@ -950,6 +959,14 @@ export interface CreateSessionRequest {
    * directory) on a summary that was never going to exist.
    */
   rehydrateFrom?: string;
+  /**
+   * The app's active UI theme when this session was launched. The server maps
+   * it to Claude Code's matching ANSI theme (`dark`→`dark-ansi`) so the
+   * terminal's own palette controls Claude's colors and its dim text keeps
+   * contrast. Persisted on the session so resume reuses the same base. Omitted
+   * → server default (see createDefaultBuildLaunchOpts).
+   */
+  theme?: UiTheme;
 }
 
 /**
