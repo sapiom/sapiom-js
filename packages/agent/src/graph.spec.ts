@@ -153,6 +153,6 @@ describe('validateGraph', () => {
       artifact: ARTIFACT,
       steps: { a: { timeoutMs: null, inputSchema: null, transitions: [{ kind: 'terminate' as const }] } },
     };
-    expect(() => assertValidGraph(bad)).toThrow(/Invalid workflow graph/);
+    expect(() => assertValidGraph(bad)).toThrow(/Invalid agent graph/);
   });
 });
