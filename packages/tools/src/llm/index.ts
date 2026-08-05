@@ -12,7 +12,7 @@
  *
  *   const reply = await ctx.sapiom.llm.run({
  *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 512 },
- *     model: "m2.7", // a label (m2.7 | minimax-m3 | sonnet | …); omit → default label
+ *     model: "large", // a label (smart | small | medium | large); omit → default label
  *   });
  *
  * `submit` — DEFERRED (`POST /v2/route/async`): unlike `agents.run` (a full
@@ -26,7 +26,7 @@
  *
  *   const handle = await ctx.sapiom.llm.submit({
  *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 512 },
- *     model: "m2.7", // a label; omit → default label
+ *     model: "large", // a label; omit → default label
  *     deadlineMinutes: 30,
  *   });
  *   return pauseUntilSignal(handle, { resumeStep: "use-answer" });
@@ -47,7 +47,7 @@
  * keep working until the migration completes.
  *
  *   const s = await ctx.sapiom.llm.createSession({
- *     label: "sonnet", deadlineMinutes: 60,
+ *     label: "large", deadlineMinutes: 60,
  *     budget: { maxTokens: 2_000_000, ttlMinutes: 120 },
  *   });
  *   const ready = await s.wait();                       // or pauseUntilSignal(s, …)
@@ -92,7 +92,7 @@ export interface LlmRunSpec {
    * is superseded by the routing decision (set the route label via `model` below).
    */
   request: Record<string, unknown>;
-  /** Route label (e.g. `"m2.7"`, `"minimax-m3"`, `"sonnet"`). Omit → the gateway's default label. */
+  /** Route label (e.g. `"smart"`, `"small"`, `"medium"`, `"large"`). Omit → the gateway's default label. */
   model?: string;
   /**
    * Guarantee an answer by spilling to the label's declared fallback when the
@@ -114,7 +114,7 @@ export interface LlmSubmitSpec {
    * `ctx.shared`) and re-send it to `redeem` when the grant arrives.
    */
   request: Record<string, unknown>;
-  /** Route label (e.g. `"m2.7"`, `"minimax-m3"`, `"sonnet"`). Omit → the gateway's default label. */
+  /** Route label (e.g. `"smart"`, `"small"`, `"medium"`, `"large"`). Omit → the gateway's default label. */
   model?: string;
   /**
    * How long the caller will wait, in minutes. Omitted or <= 0 → run-now (top
@@ -149,7 +149,7 @@ export interface LlmSubmitSpec {
 export interface LlmGrantLink {
   anthropicBaseUrl: string;
   apiKey: string;
-  /** USER-FACING model label (e.g. `"m2.7"`, `"minimax-m3"`) — the provider is never disclosed. */
+  /** USER-FACING model label (e.g. `"smart"`, `"large"`) — the provider is never disclosed. */
   model: string;
   expiresAtMs: number;
   usage: string;
@@ -436,7 +436,7 @@ const SESSION_SETTLED = new Set<LlmSessionState>([
 ]);
 
 export interface LlmSessionCreateSpec {
-  /** Route label (e.g. `"sonnet"`, `"haiku"`). Mutually exclusive with `model`; omit both → the gateway's default label. */
+  /** Route label (e.g. `"smart"`, `"large"`). Mutually exclusive with `model`; omit both → the gateway's default label. */
   label?: string;
   /** Pin an exact Sapiom-supported alias. Mutually exclusive with `label`. */
   model?: string;
@@ -469,7 +469,7 @@ export interface LlmSessionCreateSpec {
 export interface LlmSession {
   sessionId: string;
   state: LlmSessionState;
-  /** USER-FACING label (e.g. `"sonnet"`) — the serving provider is never disclosed. */
+  /** USER-FACING label (e.g. `"smart"`) — the serving provider is never disclosed. */
   model?: string;
   /** Present from READY on: the drop-in base URLs scoped under the session. */
   baseUrls?: { anthropic: string; openai: string };
