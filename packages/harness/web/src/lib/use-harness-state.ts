@@ -33,6 +33,8 @@ import {
 import { type ConnectivityErrorInput } from "./connectivity";
 import { mergeHistory } from "./history-meta";
 import { subscribeEvents } from "./events";
+import { track as trackProduct } from "./analytics/events";
+import { deployErrorKind, slugFromPath } from "./analytics/lifecycle";
 import { renderLocalRun } from "@shared/render-local-run";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
@@ -1198,6 +1200,11 @@ export function useHarnessState(): HarnessStateHook {
 
       const run = (async (): Promise<void> => {
         setToast("Deploying…");
+        // Product metric — "agents deployed". Slug is the folder basename (never
+        // the absolute path); duration is measured across the stream.
+        const slug = slugFromPath(workflowPath);
+        const startedAt = performance.now();
+        trackProduct("agent.deploy_started", { workflow_slug: slug });
         // Which non-terminal phase was last seen, so a terminal `error` can
         // say whether linking or building failed — both are the same wire
         // shape, told apart only by what preceded them.
@@ -1239,6 +1246,10 @@ export function useHarnessState(): HarnessStateHook {
           });
           if (terminal.phase === "ready") {
             setDeployProgress(workflowPath, { phase: "ready" });
+            trackProduct("agent.deploy_succeeded", {
+              workflow_slug: slug,
+              duration_ms: Math.round(performance.now() - startedAt),
+            });
             setToast(
               pendingWarning
                 ? `Deployed to Sapiom. ${pendingWarning}`
@@ -1266,6 +1277,10 @@ export function useHarnessState(): HarnessStateHook {
               ? `${prefix}: ${terminal.message} (${terminal.hint})`
               : `${prefix}: ${terminal.message}`;
             setDeployProgress(workflowPath, { phase: "error", message: msg });
+            trackProduct("agent.deploy_failed", {
+              workflow_slug: slug,
+              error_kind: deployErrorKind(lastNonTerminalPhase, false),
+            });
             setToast(msg);
             // Persist the failure so the action bar can distinguish "last deploy
             // failed" from "never deployed" after the toast is dismissed.
@@ -1283,6 +1298,10 @@ export function useHarnessState(): HarnessStateHook {
               ? err.reason
               : (err as Error).message;
           setDeployProgress(workflowPath, { phase: "error", message: msg });
+          trackProduct("agent.deploy_failed", {
+            workflow_slug: slug,
+            error_kind: deployErrorKind(lastNonTerminalPhase, true),
+          });
           setToast(msg);
           // An exception from the deploy stream (e.g. network error) also counts
           // as a deploy failure — persist so the action bar reflects it.

@@ -38,6 +38,16 @@ export interface AnalyticsEventMap {
     origin?: "boot" | "user";
   };
 
+  /**
+   * A new agent came into existence — a fresh `sapiom.json` appeared in the
+   * workspace registry. This is the confirmed-existence signal for "agents
+   * built": deduped by path, and seeded on first load so pre-existing agents
+   * are never counted. Deliberately distinct from the click that kicks off
+   * scaffolding (already autocaptured) — the scaffold itself runs async in the
+   * coding agent, so we count the agent that actually appeared, not the intent.
+   */
+  "agent.created": { workflow_slug?: string };
+
   /** A workflow/agent run was triggered from the Studio. */
   "agent.run_started": {
     workflow_slug?: string;
@@ -98,6 +108,24 @@ export interface AnalyticsEventMap {
  * never breaks the measured flow.
  */
 export function track<K extends keyof AnalyticsEventMap>(event: K, properties: AnalyticsEventMap[K]): void {
+  // Playwright runs with VITE_MOCK and never initializes PostHog (see
+  // posthog.ts `injectedConfig`), so there is nothing to assert against in
+  // e2e. Record the event on the test global instead — the same seam
+  // `interceptMockTrack` uses for the collector `track` — and skip any real
+  // capture. Read it in specs via `window.__HARNESS_TEST__.productEvents`.
+  if (import.meta.env.VITE_MOCK) {
+    try {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      const prev = (win.__HARNESS_TEST__?.productEvents as unknown[]) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        productEvents: [...prev, { event, properties }],
+      };
+    } catch {
+      // no-op
+    }
+    return;
+  }
   try {
     posthog.capture(event, properties);
   } catch {
