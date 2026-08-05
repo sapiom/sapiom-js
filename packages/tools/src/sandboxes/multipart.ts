@@ -6,7 +6,7 @@
  * the `Sandbox` methods that use these call through the `_client` transport.
  */
 
-/** Max parts allowed per multipart upload (Blaxel constraint). */
+/** Maximum parts allowed per multipart upload. */
 export const MAX_PARTS = 10_000;
 
 /** Default number of retries for a single failed part upload. */
@@ -139,8 +139,8 @@ function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Default part size: 5 MiB. Bottom of Blaxel's recommended 5–10 MB range
- * and well clear of the Sapiom ingress 8 MiB body-size ceiling (with
+ * Default part size: 5 MiB. Within the recommended 5–10 MiB range and well
+ * clear of the Sapiom ingress 8 MiB body-size ceiling (with
  * room left for multipart form-data overhead).
  */
 export const DEFAULT_PART_SIZE = 5 * 1024 * 1024;
@@ -148,7 +148,7 @@ export const DEFAULT_PART_SIZE = 5 * 1024 * 1024;
 /** Default number of parallel part uploads. */
 export const DEFAULT_CONCURRENCY = 4;
 
-/** Default file permissions (Blaxel default). */
+/** Default file permissions. */
 export const DEFAULT_PERMISSIONS = "0644";
 
 /**

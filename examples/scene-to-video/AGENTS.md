@@ -12,9 +12,9 @@ decompose ─▶ keyframe ⇄ collectKeyframe ─▶ animate ⇄ collect ─▶ 
 - **decompose** — an LLM decomposes the scene into a global style/identity **bible** + an ordered shot list. An explicit `dryRun: true` input terminates here with the plan only (no paid generation) — omitted, it always continues into real generation, clamped to a single shot when `scene` itself was omitted too.
 - **keyframe** — launches an async keyframe-image job for one shot and `pauseUntilSignal`s on it. The `pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep: 'collectKeyframe' }` declaration is the graph edge; the webhook fires the signal to resume `collectKeyframe`.
 - **collectKeyframe** — records the finished keyframe, then loops back to `keyframe` for the next shot or advances to `animate` once every keyframe is in.
-- **animate** — launches an async image-to-video job for one shot and `pauseUntilSignal`s on it. The `pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: 'collect' }` declaration is the graph edge; the FAL webhook fires the signal to resume `collect`.
+- **animate** — launches an async image-to-video job for one shot and `pauseUntilSignal`s on it. The `pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: 'collect' }` declaration is the graph edge; the completion webhook fires the signal to resume `collect`.
 - **collect** — records the finished clip, then loops back to `animate` for the next shot or advances to `stitch`.
-- **stitch** — FAL's synchronous ffmpeg-merge endpoint concats every resolved
+- **stitch** — the synchronous video merge capability concats every resolved
   clip. `video.create` returns immediately for that contract and has an explicit
   12-minute polling fallback for an unexpected queued response, below the
   runner's 15-minute step deadline.

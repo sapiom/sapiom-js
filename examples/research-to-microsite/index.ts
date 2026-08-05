@@ -66,8 +66,8 @@ import { buildCritiquePrompt, parseJudgment } from "./critique.js";
  * if it's ever gone), so the URL stays up — the exact recipe that holds Sapiom's own
  * dashboards up 24/7. On the LOCAL stack a coding run is host-mode (`local_host`),
  * which can't be pushed/deployed, so `publish` degrades honestly via the
- * `builtNotPublished` terminal instead of failing. (Run with the Blaxel coding
- * substrate — or on the deployed stack — for a real live URL.)
+ * `builtNotPublished` terminal instead of failing. (Run with a compatible cloud
+ * coding environment — or on the deployed stack — for a real live URL.)
  *
  * Async pause/resume, twice: `illustrate` launches an image job per section and
  * suspends on its result signal, fanning out one image at a time (the same
@@ -1028,12 +1028,13 @@ const publish = defineStep({
     const env = result.executionEnvironment;
     const repoSlug = ctx.shared.get("repoSlug");
 
-    // Local host-mode coding runs aren't a pushable/deployable Blaxel sandbox, so
+    // Local host-mode coding runs aren't a pushable/deployable cloud sandbox, so
     // there's nothing to publish from here. Degrade honestly (the site WAS built in
-    // the checkout) rather than fail. On the Blaxel substrate this branch is skipped.
+    // the checkout) rather than fail. In a compatible cloud environment this
+    // branch is skipped.
     if (env.type !== EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX || !repoSlug) {
       ctx.logger.warn(
-        "coding run not on the Blaxel substrate; skipping publish",
+        "coding run is not in a deployable cloud environment; skipping publish",
         {
           environmentType: env.type,
           repo: repoSlug,
@@ -1253,7 +1254,8 @@ const builtNotPublished = defineStep({
     // Honest degrade: the coding agent built the site, but its run executed in an
     // environment `deployPreview` can't serve from (local host mode). This is the
     // expected local-stack outcome — the same flow publishes a live preview URL in
-    // production, where the coding run lands in a Blaxel sandbox. We report the
+    // production, where the coding run lands in a compatible cloud sandbox. We
+    // report the
     // built report metadata so the run isn't a dead end, and name the limitation
     // instead of surfacing a raw "Sandbox not found" 404.
     const environmentType = input?.environmentType ?? "unknown";
@@ -1268,7 +1270,7 @@ const builtNotPublished = defineStep({
       sources: ctx.shared.get("sources") ?? [],
       sandboxName: ctx.shared.get("sandboxName") ?? null,
       note: [
-        `The coding agent built the site, but its run executed in a "${environmentType}" environment, which can't be preview-deployed — only Blaxel cloud sandboxes can. On the deployed Sapiom stack this step publishes a live *preview* URL (short-lived — the platform recycles the sandbox process; durable hosting is tracked in SAP-2211).`,
+        `The coding agent built the site, but its run executed in a "${environmentType}" environment, which can't be preview-deployed. On the deployed Sapiom stack, coding runs use a compatible cloud environment and this step publishes a live *preview* URL (short-lived — the platform recycles the sandbox process; durable hosting is tracked in SAP-2211).`,
         ctx.shared.get("note"),
       ]
         .filter(Boolean)

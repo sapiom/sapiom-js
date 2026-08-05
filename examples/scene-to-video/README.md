@@ -24,17 +24,18 @@ decompose ──▶ keyframe ⇄ collectKeyframe ──▶ animate ⇄ collect �
    `keyframe` for the next shot, or advances to `animate` once every keyframe
    is in.
 4. **animate** — launches an async image-to-video job per shot (`video.launch`)
-   and pauses on it; the FAL webhook resumes `collect` when the clip is ready.
+   and pauses on it; the completion webhook resumes `collect` when the clip is
+   ready.
 5. **collect** — records the clip, then loops back to `animate` for the next shot,
    or advances to `stitch` once every clip is in.
-6. **stitch** — concats every clip through FAL's synchronous merge endpoint (a
-   single-clip scene bypasses the merge). The SDK has a bounded polling
-   fallback if the provider unexpectedly queues it.
+6. **stitch** — concats every clip through the synchronous video merge capability
+   (a single-clip scene bypasses the merge). The SDK has a bounded polling
+   fallback if the operation is unexpectedly queued.
 7. **finalize** — terminal; returns `{ videoFileId, downloadUrl, shots }`.
    `videoFileId` is `null` when persistence did not produce a durable file.
 
 Input: `{ "scene": "a paper boat drifting down a rain-soaked city gutter at night", "numShots": 3 }`.
-Optional: `aspectRatio` (default `"16:9"`), `model` (FAL image-to-video id), and
+Optional: `aspectRatio` (default `"16:9"`), `model` (image-to-video model id), and
 `dryRun: true` (plan only — skip all image/video generation). Omit everything
 and it shoots the built-in sample scene as a single real, cheap shot.
 

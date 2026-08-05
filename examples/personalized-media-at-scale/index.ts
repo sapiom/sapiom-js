@@ -36,8 +36,8 @@ import { z } from "zod/v4";
  *      template works out of the box. `dryRun` stops here and returns the rows
  *      plus the prompt each would get, with nothing generated or sent.
  *   2a. renderImage ⇄ collectImage (image medium) — one row at a time, launch an
- *       async image job and `pauseUntilSignal` on it; the FAL webhook resumes
- *       `collectImage`, which records the image and loops back for the next row
+ *       async image job and `pauseUntilSignal` on it; the completion webhook
+ *       resumes `collectImage`, which records the image and loops back for the next row
  *       or advances once every row is done.
  *   2b. renderClip ⇄ collectClip (video medium) — same shape with `video.launch`.
  *   3. deliver — email each recipient a link to their own asset.
@@ -424,8 +424,8 @@ const renderImage = defineStep({
   next: [],
   // Async pause/resume, same as the video path: `images.launch` submits and returns a
   // handle immediately (the submit is a quick enqueue, so it never meets Core's 30s
-  // router cap — the 503 the old sync `Promise.all` fan-out hit). The FAL webhook fires
-  // IMAGE_RESULT_SIGNAL on completion, resuming `collectImage` with the image's result.
+  // router cap — the 503 the old sync `Promise.all` fan-out hit). The completion
+  // webhook fires IMAGE_RESULT_SIGNAL, resuming `collectImage` with the image's result.
   pause: { signal: IMAGE_RESULT_SIGNAL, resumeStep: "collectImage" },
   async run(_input: unknown, ctx: Ctx) {
     const rows = must(ctx.shared.get("rows"), "rows");
@@ -481,7 +481,7 @@ const renderClip = defineStep({
   name: "renderClip",
   next: [],
   // Async pause/resume: the launched video job fires VIDEO_RESULT_SIGNAL on
-  // completion (the FAL webhook), resuming `collectClip` with the clip's result.
+  // completion (the routed webhook), resuming `collectClip` with the clip's result.
   pause: { signal: VIDEO_RESULT_SIGNAL, resumeStep: "collectClip" },
   async run(_input: unknown, ctx: Ctx) {
     const rows = must(ctx.shared.get("rows"), "rows");

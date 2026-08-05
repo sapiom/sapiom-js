@@ -46,8 +46,8 @@ plan  ─▶  gather  ─▶  synthesize  ⇄  critique  ─▶  illustrate  ⇄
    nothing while it works.
 7. **publish** — re-attaches the coding agent's sandbox and deploys the site
    (`box.deployPreview`), exposing it at a live **preview** URL. `deployPreview` only
-   serves from a Blaxel cloud sandbox, so this needs the coding run to have landed
-   in one — which it does on the deployed Sapiom stack. On the **local** stack the
+   serves from a compatible cloud sandbox, so this needs the coding run to have
+   landed in one — which it does on the deployed Sapiom stack. On the **local** stack the
    coding run executes in host mode, whose files aren't in a deployable sandbox, so
    `publish` degrades honestly to the `builtNotPublished` terminal (the site is
    built, it just can't be served locally) instead of failing on a

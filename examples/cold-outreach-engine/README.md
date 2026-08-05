@@ -1,6 +1,6 @@
 # Cold Outreach Personalization Engine
 
-Enrich a lead list with Hunter, scrape each company site, write a personalized
+Enrich a lead list, scrape each company site, write a personalized
 first line for every prospect, verify deliverability, then drip touches with
 durable, $0 waits between them — stopping the moment someone replies.
 
@@ -8,13 +8,13 @@ durable, $0 waits between them — stopping the moment someone replies.
 
 ```
 enrich ──▶ scrape ──▶ personalize ──▶ verify ──▶ launch ──▶ send ⇄ advance ──▶ done
-(Hunter)   (web)      (models.run)     (Hunter)   (database)  (email)          (terminal)
+(email search) (web)   (models.run)   (email verify) (database) (email)        (terminal)
 ```
 
 1. **enrich** — for each lead (`{ domain, company?, fullName? }`), resolve a real
-   contact with Hunter: `findEmail` when you name the person, `domainSearch` to
-   surface a decision-maker when you only have the company. Per-lead failures are
-   skipped, never fatal.
+   contact through email search: use `findEmail` when you name the person or
+   `domainSearch` to surface a decision-maker when you only have the company.
+   Per-lead failures are skipped, never fatal.
 2. **scrape** — read each unique company site (`ctx.sapiom.search.scrape`) for a
    few lines of context. Bodies are bounded and die at the next step — they never
    enter shared state.
@@ -43,9 +43,9 @@ Input: `{ "leads": [{ "domain": "acme.com", "fullName": "Jordan Rivera" }], "sen
 ### Zero-setup: `{}`
 
 With no `leads` at all, `enrich` works `DEMO_LEADS` — three built-in, fabricated
-companies and contacts — instead of stopping with nobody to write to. Hunter
-has no real person to find or verify at a company that doesn't exist, so
-`enrich` and `verify` simulate its response for these deterministically;
+companies and contacts — instead of stopping with nobody to write to. The email
+search capability cannot find or verify a real person at a fabricated company,
+so `enrich` and `verify` simulate its response for these deterministically;
 `personalize` still calls the live model, `launch` still persists the
 campaign, and `send` still delivers the first touch for real — to this
 agent's own Sapiom-hosted demo inbox (`resolveSenderInbox`), never to the

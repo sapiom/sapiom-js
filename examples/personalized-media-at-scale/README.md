@@ -22,8 +22,8 @@ fetch ──▶ renderImages ─────────────────
    durable `fileId`.
 3. **renderClip ⇄ collectClip** (video medium) — one row at a time: launches an
    async text-to-video job (`ctx.sapiom.contentGeneration.video.launch`) and
-   pauses on it; the FAL webhook resumes `collectClip`, which records the clip
-   and loops back for the next row or advances once every row is done.
+   pauses on it; the completion webhook resumes `collectClip`, which records the
+   clip and loops back for the next row or advances once every row is done.
 4. **deliver** — emails each recipient (`ctx.sapiom.email`) a link to their own
    asset, degrading per-recipient so one bad address doesn't sink the batch.
 

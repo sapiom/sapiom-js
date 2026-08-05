@@ -4,7 +4,7 @@ import test from "node:test";
 import { agent } from "./index.ts";
 
 // `publish` re-attaches the coding run's environment and deploys it.
-// `deployPreview` only serves from a Blaxel cloud sandbox; a coding run in local
+// `deployPreview` only serves from a compatible cloud sandbox; a coding run in local
 // host mode leaves its files on the runner host, and attaching that id + deploying
 // 404s with "Sandbox not found" (SAP-2203). `publish` must detect the
 // non-deployable environment up front and degrade honestly instead of attempting
@@ -100,7 +100,7 @@ test("publish degrades honestly when the coding run used a local-host environmen
   );
 });
 
-test("publish deploys and goes live when the coding run used a Blaxel sandbox", async () => {
+test("publish deploys and goes live when the coding run used a compatible cloud sandbox", async () => {
   const attachCalls = [];
   const directive = await agent.steps.publish.run(
     codingResult("blaxel_sandbox", "research-to-microsite-abc123"),
