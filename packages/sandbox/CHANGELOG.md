@@ -1,5 +1,11 @@
 # @sapiom/sandbox
 
+## 0.8.4
+
+### Patch Changes
+
+- 1ac32ef: Keep public sandbox and routed-capability documentation provider-neutral while preserving required compatibility identifiers.
+
 ## 0.8.3
 
 ### Patch Changes

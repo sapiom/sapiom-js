@@ -1,5 +1,19 @@
 # @sapiom/mcp
 
+## 0.12.2
+
+### Patch Changes
+
+- 1000510: Describe deploy as a synthesized bundle of current local source, distinguish
+  account-free local validation from metered cloud builds and production runs,
+  and make execution inspection's cost-agnostic evidence boundary explicit.
+- 25fc26f: Make local agent runs parse step inputs through their Zod schemas like production, normalize relative check directories, stage and retry gallery clones across branch-propagation delays, and clarify that local validation stubs Sapiom capability traffic without sandboxing arbitrary author-code side effects.
+- 9addb66: Keep Agent Studio workspace discovery consistent across scanning, live updates, and the folder picker; preserve Studio state when cloning gallery templates; and clarify bundled starter network requirements.
+- Updated dependencies [1000510]
+- Updated dependencies [25fc26f]
+- Updated dependencies [9addb66]
+  - @sapiom/agent-core@0.10.3
+
 ## 0.12.1
 
 ### Patch Changes

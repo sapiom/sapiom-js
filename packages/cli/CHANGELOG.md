@@ -1,5 +1,24 @@
 # @sapiom/cli
 
+## 2.0.0
+
+### Patch Changes
+
+- 1000510: Describe deploy as a synthesized bundle of current local source, distinguish
+  account-free local validation from metered cloud builds and production runs,
+  and make execution inspection's cost-agnostic evidence boundary explicit.
+- Updated dependencies [3ef1454]
+- Updated dependencies [1000510]
+- Updated dependencies [2485561]
+- Updated dependencies [25fc26f]
+- Updated dependencies [9addb66]
+- Updated dependencies [533cc88]
+- Updated dependencies [7ae67f6]
+- Updated dependencies [cc2e4aa]
+- Updated dependencies [baa6102]
+  - @sapiom/harness@0.3.0
+  - @sapiom/agent-core@0.10.3
+
 ## 1.0.3
 
 ### Patch Changes
