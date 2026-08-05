@@ -110,8 +110,9 @@ export interface AnalyticsEventMap {
 export function track<K extends keyof AnalyticsEventMap>(event: K, properties: AnalyticsEventMap[K]): void {
   // Playwright runs with VITE_MOCK and never initializes PostHog (see
   // posthog.ts `injectedConfig`), so there is nothing to assert against in
-  // e2e. Record the event on the test global instead — the same seam
-  // `interceptMockTrack` uses for the collector `track` — and skip any real
+  // e2e. Record the event on the same test global `interceptMockTrack` uses —
+  // `window.__HARNESS_TEST__` — under its own `productEvents` key (the
+  // collector's `interceptMockTrack` writes `trackEvents`), and skip any real
   // capture. Read it in specs via `window.__HARNESS_TEST__.productEvents`.
   if (import.meta.env.VITE_MOCK) {
     try {

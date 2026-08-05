@@ -20,16 +20,6 @@ export function slugFromPath(path: string): string {
 }
 
 /**
- * The analytics slug for an agent: its deployed slug once linked, else the
- * workspace folder name, else the path basename. Never the absolute path.
- */
-export function workflowSlug(
-  w: Pick<WorkflowInfo, "definitionSlug" | "name" | "path">,
-): string {
-  return w.definitionSlug || w.name || slugFromPath(w.path);
-}
-
-/**
  * The paths present in `workflows` that are not yet in `seen` — the agents that
  * have newly appeared since the last snapshot. The caller seeds `seen` on first
  * load (so pre-existing agents never count) and adds the returned paths after

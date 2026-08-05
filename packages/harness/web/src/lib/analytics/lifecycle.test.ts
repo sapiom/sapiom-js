@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  deployErrorKind,
-  newAgentPaths,
-  slugFromPath,
-  workflowSlug,
-} from "./lifecycle";
+import { deployErrorKind, newAgentPaths, slugFromPath } from "./lifecycle";
 
 describe("slugFromPath", () => {
   it("returns the last segment of an absolute path", () => {
@@ -24,32 +19,6 @@ describe("slugFromPath", () => {
   it("never returns the full path", () => {
     const path = "/Users/demo/acme-app/leasing";
     expect(slugFromPath(path)).not.toContain("/");
-  });
-});
-
-describe("workflowSlug", () => {
-  it("prefers the deployed slug when linked", () => {
-    expect(
-      workflowSlug({ definitionSlug: "acme-leasing", name: "leasing", path: "/Users/demo/leasing" }),
-    ).toBe("acme-leasing");
-  });
-
-  it("falls back to the folder name before it is linked", () => {
-    expect(
-      workflowSlug({ definitionSlug: null, name: "leasing", path: "/Users/demo/leasing" }),
-    ).toBe("leasing");
-  });
-
-  it("falls back to the path basename when name is empty", () => {
-    expect(
-      workflowSlug({ definitionSlug: null, name: "", path: "/Users/demo/rfq" }),
-    ).toBe("rfq");
-  });
-
-  it("never leaks the absolute path", () => {
-    const slug = workflowSlug({ definitionSlug: null, name: "", path: "/Users/demo/secret-dir/rfq" });
-    expect(slug).toBe("rfq");
-    expect(slug).not.toContain("secret-dir");
   });
 });
 

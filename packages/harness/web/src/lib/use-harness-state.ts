@@ -34,7 +34,7 @@ import { type ConnectivityErrorInput } from "./connectivity";
 import { mergeHistory } from "./history-meta";
 import { subscribeEvents } from "./events";
 import { track as trackProduct } from "./analytics/events";
-import { deployErrorKind, slugFromPath } from "./analytics/lifecycle";
+import { deployErrorKind, newAgentPaths, slugFromPath } from "./analytics/lifecycle";
 import { renderLocalRun } from "@shared/render-local-run";
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
@@ -637,6 +637,13 @@ export function useHarnessState(): HarnessStateHook {
     };
   }, []);
 
+  // "Agents built" product metric. The seen-set is the built baseline: paths
+  // present at load and paths brought in by explicit imports (scan / connect)
+  // are folded in WITHOUT emitting, so only an agent that materializes
+  // afterwards — a fresh sapiom.json the workspace watcher reports via the
+  // `workflows.changed` bus — counts as newly built. See analytics/lifecycle.ts.
+  const seenAgentPathsRef = useRef<Set<string> | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     // A retry re-enters the loading state and clears the prior failure so the
@@ -650,6 +657,10 @@ export function useHarnessState(): HarnessStateHook {
       .then(([appState, harnessSettings]) => {
         if (cancelled) return;
         setState(appState);
+        // Baseline the built-agents metric: everything present at load already
+        // existed, so seed it into the seen-set and never count it as built.
+        const seenAtLoad = (seenAgentPathsRef.current ??= new Set<string>());
+        for (const workflow of appState.workflows) seenAtLoad.add(workflow.path);
         setSettings(harnessSettings);
         setErrorKind(null);
         if (appState.tasks) setTasks(appState.tasks);
@@ -696,6 +707,7 @@ export function useHarnessState(): HarnessStateHook {
   const refreshWorkflows = useCallback(async () => {
     const workflows = await api.listWorkflows();
     setState((prev) => (prev ? { ...prev, workflows } : prev));
+    return workflows;
   }, []);
 
   useEffect(() => {
@@ -732,7 +744,21 @@ export function useHarnessState(): HarnessStateHook {
           });
         }
       } else if (message.type === "workflows.changed") {
-        void refreshWorkflows();
+        // The workspace watcher saw a sapiom.json appear/change — the one
+        // client signal for an agent built in-app. Emit agent.created for any
+        // path we haven't already baselined (load) or imported (scan/connect).
+        void refreshWorkflows().then((workflows) => {
+          const seen = seenAgentPathsRef.current;
+          if (seen === null) {
+            // Lost the race with the initial load — baseline, don't emit.
+            seenAgentPathsRef.current = new Set(workflows.map((w) => w.path));
+            return;
+          }
+          for (const path of newAgentPaths(seen, workflows)) {
+            seen.add(path);
+            trackProduct("agent.created", { workflow_slug: slugFromPath(path) });
+          }
+        });
       } else if (message.type === "execution.started") {
         startRunPolling(
           message.harnessSessionId,
@@ -1104,6 +1130,9 @@ export function useHarnessState(): HarnessStateHook {
             }
           : prev,
       );
+      // Connecting an existing agent is an import, not a build — baseline it so
+      // it is never counted as newly built.
+      (seenAgentPathsRef.current ??= new Set<string>()).add(workflow.path);
       return workflow;
     },
     [],
@@ -1114,7 +1143,11 @@ export function useHarnessState(): HarnessStateHook {
       const found = await api.scanWorkflows(root);
       // The scan registers server-side; re-list so every discovered agent
       // joins the rail in one shot instead of trickling in per connect.
-      await refreshWorkflows();
+      const workflows = await refreshWorkflows();
+      // Discovered agents already existed — baseline them all so a bulk import
+      // never inflates the built-agents count.
+      const seen = (seenAgentPathsRef.current ??= new Set<string>());
+      for (const workflow of workflows) seen.add(workflow.path);
       return found;
     },
     [refreshWorkflows],
@@ -1216,6 +1249,12 @@ export function useHarnessState(): HarnessStateHook {
         // overwritten before it's ever seen) and gets folded into the success
         // toast instead.
         let pendingWarning: string | null = null;
+        // Emit the deploy outcome (succeeded/failed) exactly once. The terminal
+        // branches set this after emitting so a post-terminal step that throws
+        // — e.g. the `await refreshWorkflows()` below rejecting after a ready
+        // deploy — cannot fall into `catch` and log a contradictory
+        // deploy_failed on top of the deploy_succeeded already recorded.
+        let outcomeSettled = false;
         try {
           const terminal = await api.deploy(workflowPath, (event) => {
             // A never-linked project (a fresh template clone) gets its agent
@@ -1250,6 +1289,7 @@ export function useHarnessState(): HarnessStateHook {
               workflow_slug: slug,
               duration_ms: Math.round(performance.now() - startedAt),
             });
+            outcomeSettled = true;
             setToast(
               pendingWarning
                 ? `Deployed to Sapiom. ${pendingWarning}`
@@ -1281,6 +1321,7 @@ export function useHarnessState(): HarnessStateHook {
               workflow_slug: slug,
               error_kind: deployErrorKind(lastNonTerminalPhase, false),
             });
+            outcomeSettled = true;
             setToast(msg);
             // Persist the failure so the action bar can distinguish "last deploy
             // failed" from "never deployed" after the toast is dismissed.
@@ -1298,10 +1339,15 @@ export function useHarnessState(): HarnessStateHook {
               ? err.reason
               : (err as Error).message;
           setDeployProgress(workflowPath, { phase: "error", message: msg });
-          trackProduct("agent.deploy_failed", {
-            workflow_slug: slug,
-            error_kind: deployErrorKind(lastNonTerminalPhase, true),
-          });
+          // Only if a terminal ready/error wasn't already recorded — otherwise
+          // this is a post-terminal throw (e.g. refreshWorkflows) and the
+          // outcome is already logged.
+          if (!outcomeSettled) {
+            trackProduct("agent.deploy_failed", {
+              workflow_slug: slug,
+              error_kind: deployErrorKind(lastNonTerminalPhase, true),
+            });
+          }
           setToast(msg);
           // An exception from the deploy stream (e.g. network error) also counts
           // as a deploy failure — persist so the action bar reflects it.

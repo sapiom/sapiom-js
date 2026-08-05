@@ -60,7 +60,6 @@ import {
 import { track } from "./lib/track";
 import { initAnalytics } from "./lib/analytics/posthog";
 import { registerViewContext, track as trackProduct } from "./lib/analytics/events";
-import { newAgentPaths, workflowSlug } from "./lib/analytics/lifecycle";
 import type { HarnessView } from "./lib/analytics/journeys";
 import { resolveMacroUrl } from "./lib/macro-gating";
 import { directActionKind } from "./lib/macro-actions";
@@ -332,33 +331,6 @@ export const App = (): JSX.Element => {
     };
     registerViewContext(view);
   }, [st, harness.activeSessionId, settingsOpen, templatesOpen, rightTab]);
-
-  // Product metric — "agents built": count each agent that actually comes into
-  // existence (a fresh sapiom.json appearing in the registry), not the click
-  // that kicked off scaffolding. The initial GET /api/state carries the full
-  // registry, so we seed the seen-set on the first load — pre-existing agents
-  // never count — and emit only for paths that appear afterwards (a
-  // workflows.changed refresh). In-memory (per app run) on purpose: an agent
-  // created out-of-app is seeded as pre-existing next boot, so it is never
-  // double-counted; localStorage would be unreliable when the server port
-  // varies per boot. See analytics/lifecycle.ts.
-  const seenAgentPathsRef = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    const workflows = st?.workflows;
-    if (!workflows) return;
-    if (seenAgentPathsRef.current === null) {
-      seenAgentPathsRef.current = new Set(workflows.map((w) => w.path));
-      return;
-    }
-    const seen = seenAgentPathsRef.current;
-    for (const path of newAgentPaths(seen, workflows)) {
-      seen.add(path);
-      const wf = workflows.find((w) => w.path === path);
-      trackProduct("agent.created", {
-        workflow_slug: wf ? workflowSlug(wf) : undefined,
-      });
-    }
-  }, [st?.workflows]);
 
   // Crossing the breakpoint resets both panes to that mode's default.
   const prevMobile = useRef(isMobile);
