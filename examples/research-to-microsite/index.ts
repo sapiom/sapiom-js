@@ -10,6 +10,7 @@ import {
   CODING_RESULT_SIGNAL,
   EXECUTION_ENVIRONMENT_BLAXEL_SANDBOX,
   IMAGE_RESULT_SIGNAL,
+  fileStorage,
   schedules,
   type CodingResultPayload,
   type ImageResultPayload,
@@ -896,26 +897,15 @@ const build = defineStep({
     const report = must(ctx.shared.get("report"), "report");
     const illustrations = ctx.shared.get("illustrations") ?? [];
 
-    // Refresh short-lived download URLs right before handing them to the
-    // coding agent — the same use-time refresh `scene-to-video`'s
-    // `resolveFrameUrl` applies to its keyframes, since the URL returned when
-    // an image finished may already be stale by the time `build` runs.
-    const resolved = await Promise.all(
-      illustrations.map(async (ill) => {
-        if (!ill.fileId) return ill;
-        try {
-          const { downloadUrl } = await ctx.sapiom.fileStorage.getDownloadUrl(
-            ill.fileId,
-          );
-          return { ...ill, downloadUrl };
-        } catch (err) {
-          ctx.logger.warn(
-            "could not refresh illustration download url; using the original",
-            { heading: ill.heading, err: String(err) },
-          );
-          return ill;
-        }
-      }),
+    // Mint a durable permalink from each illustration's `fileId` right before
+    // handing them to the coding agent. These become `<img>` srcs baked into a
+    // PUBLISHED static site, so a presigned download URL (~15min TTL) would
+    // 404 on the live site shortly after publish — `getPublicUrl` is pure and
+    // synchronous (no network call, so nothing to refresh or catch here).
+    const resolved = illustrations.map((ill) =>
+      ill.fileId
+        ? { ...ill, downloadUrl: fileStorage.getPublicUrl(ill.fileId) }
+        : ill,
     );
 
     // The coding agent's durable output is a git REPO, not its throwaway sandbox.

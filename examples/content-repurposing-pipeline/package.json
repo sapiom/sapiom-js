@@ -11,8 +11,8 @@
     "format:check": "prettier --check \"**/*.ts\""
   },
   "dependencies": {
-    "@sapiom/agent": "^0.9.0",
-    "@sapiom/tools": "^0.25.0",
+    "@sapiom/agent": "^0.9.3",
+    "@sapiom/tools": "^0.26.0",
     "zod": "^3.25.76 || ^4.0.0"
   },
   "devDependencies": {

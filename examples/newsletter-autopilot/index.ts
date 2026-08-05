@@ -5,6 +5,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { fileStorage } from "@sapiom/tools";
 import { z } from "zod/v4";
 
 /**
@@ -658,7 +659,12 @@ const illustrate = defineStep({
       });
       const img = result.images?.[0];
       if (img) {
-        headerImageUrl = img.downloadUrl ?? img.url;
+        // The header image is embedded as an `<img>` src in the emailed issue —
+        // a durable permalink survives in the inbox where a presigned URL
+        // (`downloadUrl`/`url`, ~15min TTL) would 404.
+        headerImageUrl = img.fileId
+          ? fileStorage.getPublicUrl(img.fileId)
+          : (img.downloadUrl ?? img.url);
         headerImageFileId = img.fileId ?? null;
       } else {
         ctx.logger.warn("header image returned no output; sending without it");

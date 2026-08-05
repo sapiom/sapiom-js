@@ -6,6 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { fileStorage } from "@sapiom/tools";
 import { z } from "zod/v4";
 
 /**
@@ -513,7 +514,9 @@ const render = defineStep({
       contentType: "application/pdf",
       fileName,
       fileSize: bytes.length,
-      visibility: "private",
+      // Public: the PDF's link is emailed to the client below, so it needs a
+      // durable permalink rather than a presigned URL that expires in ~15min.
+      visibility: "public",
     });
     if (bytes.length > 0) {
       const res = await fetch(upload.uploadUrl, {
@@ -531,9 +534,9 @@ const render = defineStep({
         "no PDF bytes rendered — skipping upload PUT (local/stub)",
       );
     }
-    const link = await ctx.sapiom.fileStorage.getDownloadUrl(upload.fileId);
+    const downloadUrl = fileStorage.getPublicUrl(upload.fileId);
     ctx.shared.set("fileId", upload.fileId);
-    ctx.shared.set("downloadUrl", link.downloadUrl);
+    ctx.shared.set("downloadUrl", downloadUrl);
     ctx.logger.info("proposal rendered", {
       fileId: upload.fileId,
       bytes: bytes.length,

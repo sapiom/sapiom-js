@@ -10,6 +10,7 @@ import {
 import {
   VIDEO_RESULT_SIGNAL,
   IMAGE_RESULT_SIGNAL,
+  fileStorage,
   type VideoResultPayload,
   type ImageResultPayload,
 } from "@sapiom/tools";
@@ -437,7 +438,9 @@ const renderImage = defineStep({
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: buildPrompt(row, "image", style),
       numImages: 1,
-      storage: { visibility: "private" },
+      // Public: the render is emailed as a durable permalink below, not
+      // fetched in-process, so it needs to outlive a presigned URL's ~15min TTL.
+      storage: { visibility: "public" },
     });
     return await pauseUntilSignal(handle, { resumeStep: "collectImage" });
   },
@@ -459,7 +462,9 @@ const collectImage = defineStep({
       email: row.email,
       medium: "image",
       fileId: out?.fileId ?? null,
-      downloadUrl: out?.downloadUrl ?? null,
+      downloadUrl: out?.fileId
+        ? fileStorage.getPublicUrl(out.fileId)
+        : (out?.downloadUrl ?? null),
     };
     const nextAssets = [...assets, asset];
     const nextIndex = index + 1;
@@ -496,7 +501,9 @@ const renderClip = defineStep({
       params: {
         aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
       },
-      storage: { visibility: "private" },
+      // Public: the clip is emailed as a durable permalink below, not
+      // fetched in-process, so it needs to outlive a presigned URL's ~15min TTL.
+      storage: { visibility: "public" },
     });
     return await pauseUntilSignal(handle, { resumeStep: "collectClip" });
   },
@@ -518,7 +525,9 @@ const collectClip = defineStep({
       email: row.email,
       medium: "video",
       fileId: out?.fileId ?? null,
-      downloadUrl: out?.downloadUrl ?? null,
+      downloadUrl: out?.fileId
+        ? fileStorage.getPublicUrl(out.fileId)
+        : (out?.downloadUrl ?? null),
     };
     const nextAssets = [...assets, asset];
     const nextIndex = index + 1;

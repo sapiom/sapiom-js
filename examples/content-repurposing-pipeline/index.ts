@@ -9,6 +9,7 @@ import {
 import {
   IMAGE_RESULT_SIGNAL,
   VIDEO_RESULT_SIGNAL,
+  fileStorage,
   type ImageResultPayload,
   type VideoResultPayload,
 } from "@sapiom/tools";
@@ -203,12 +204,12 @@ export function isReservedAddress(email: string): boolean {
 }
 
 /** Resolve a single graphic's usable URL, re-minting from `fileId` when needed. */
-async function resolveGraphicUrl(
+function resolveGraphicUrl(
   graphic: Graphic,
-  getDownloadUrl: (fileId: string) => Promise<{ downloadUrl: string }>,
-): Promise<string> {
+  getPublicUrl: (fileId: string) => string,
+): string {
   if (graphic.downloadUrl) return graphic.downloadUrl;
-  if (graphic.fileId) return (await getDownloadUrl(graphic.fileId)).downloadUrl;
+  if (graphic.fileId) return getPublicUrl(graphic.fileId);
   throw new Error("quote graphic has no usable download URL");
 }
 
@@ -514,7 +515,9 @@ const graphics = defineStep({
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: quote.imagePrompt,
       numImages: 1,
-      storage: { visibility: "private" },
+      // Public: quote graphics are linked from the emailed pack below, so they
+      // need a durable permalink rather than a presigned URL that expires in ~15min.
+      storage: { visibility: "public" },
     });
     return await pauseUntilSignal(handle, { resumeStep: "collectGraphic" });
   },
@@ -539,7 +542,11 @@ const collectGraphic = defineStep({
     const graphic: Graphic = {
       quote: quote.quote,
       ...(img.fileId !== undefined && { fileId: img.fileId }),
-      ...(img.downloadUrl !== undefined && { downloadUrl: img.downloadUrl }),
+      ...(img.fileId !== undefined
+        ? { downloadUrl: fileStorage.getPublicUrl(img.fileId) }
+        : img.downloadUrl !== undefined
+          ? { downloadUrl: img.downloadUrl }
+          : {}),
     };
     const nextGraphics = [...graphicsSoFar, graphic];
     const nextIndex = index + 1;
@@ -571,9 +578,9 @@ const clip = defineStep({
     const pack = must(ctx.shared.get("pack"), "pack");
     const graphicsList = must(ctx.shared.get("graphics"), "graphics");
     const frame = graphicsList[0];
-    const imageUrl = await resolveGraphicUrl(frame, async (fileId) => {
-      return await ctx.sapiom.fileStorage.getDownloadUrl(fileId);
-    });
+    const imageUrl = resolveGraphicUrl(frame, (fileId) =>
+      fileStorage.getPublicUrl(fileId),
+    );
     const model = ctx.shared.get("model") ?? DEFAULT_VIDEO_MODEL;
 
     ctx.logger.info("animating teaser clip", { from: frame.quote });
@@ -588,7 +595,9 @@ const clip = defineStep({
         aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
         seed: 42,
       },
-      storage: { visibility: "private" },
+      // Public: the teaser clip is linked from the emailed pack below, so it
+      // needs a durable permalink rather than a presigned URL that expires in ~15min.
+      storage: { visibility: "public" },
     });
     return await pauseUntilSignal(handle, { resumeStep: "collectClip" });
   },
@@ -601,7 +610,11 @@ const collectClip = defineStep({
     const out = result.outputs?.[0];
     const value: Clip = {
       ...(out?.fileId !== undefined && { fileId: out.fileId }),
-      ...(out?.downloadUrl !== undefined && { downloadUrl: out.downloadUrl }),
+      ...(out?.fileId !== undefined
+        ? { downloadUrl: fileStorage.getPublicUrl(out.fileId) }
+        : out?.downloadUrl !== undefined
+          ? { downloadUrl: out.downloadUrl }
+          : {}),
     };
     ctx.shared.set("clip", value);
     ctx.logger.info("collected teaser clip", {
@@ -624,20 +637,12 @@ const packageStep = defineStep({
     // `downloadUrlUnavailable` signal), so a graphic's usable URL must be minted
     // from its fileId here — the same resolution the `clip` step already does.
     // Without this, a run that skips the clip (renderClip=false) packages and
-    // delivers null graphic links yet still reports success. Best-effort: a mint
-    // hiccup drops that one link rather than failing the run (the pack ships inline).
+    // delivers null graphic links yet still reports success. `getPublicUrl` is
+    // pure/synchronous (no network call, so nothing to catch here), and durable —
+    // the graphics are stored public and this link is emailed below.
     for (const g of graphicsList) {
       if (!g.downloadUrl && g.fileId) {
-        try {
-          g.downloadUrl = (
-            await ctx.sapiom.fileStorage.getDownloadUrl(g.fileId)
-          ).downloadUrl;
-        } catch (err) {
-          ctx.logger.warn("quote graphic download URL mint failed", {
-            fileId: g.fileId,
-            err: String(err),
-          });
-        }
+        g.downloadUrl = fileStorage.getPublicUrl(g.fileId);
       }
     }
     ctx.shared.set("graphics", graphicsList);
@@ -662,7 +667,9 @@ const packageStep = defineStep({
           contentType: "text/markdown",
           fileName: `content-pack-${slug}.md`,
           fileSize: bytes.byteLength,
-          visibility: "private",
+          // Public: the pack's link is emailed below, so it needs a durable
+          // permalink rather than a presigned URL that expires in ~15min.
+          visibility: "public",
         });
       const putRes = await fetch(uploadUrl, {
         method: "PUT",
@@ -672,8 +679,7 @@ const packageStep = defineStep({
       if (!putRes.ok) {
         throw new Error(`PUT ${putRes.status} ${putRes.statusText}`);
       }
-      const { downloadUrl } =
-        await ctx.sapiom.fileStorage.getDownloadUrl(fileId);
+      const downloadUrl = fileStorage.getPublicUrl(fileId);
       ctx.shared.set("packFileId", fileId);
       ctx.shared.set("packDownloadUrl", downloadUrl);
       ctx.logger.info("packaged content pack", {

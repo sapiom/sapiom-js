@@ -9,6 +9,7 @@ import {
 import {
   IMAGE_RESULT_SIGNAL,
   VIDEO_RESULT_SIGNAL,
+  fileStorage,
   type ImageResultPayload,
   type VideoResultPayload,
 } from "@sapiom/tools";
@@ -389,6 +390,9 @@ const keyframe = defineStep({
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: shot.image_prompt,
       numImages: 1,
+      // Intentionally private: a keyframe is never returned or linked to a
+      // caller — it's only ever fed straight into `animate`'s `image_url`,
+      // consumed immediately in-process, so a presigned URL is correct here.
       storage: { visibility: "private" },
     });
     return await pauseUntilSignal(handle, { resumeStep: "collectKeyframe" });
@@ -460,7 +464,11 @@ const animate = defineStep({
         duration: String(normalizeClipDuration(shot.duration)),
         aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
       },
-      storage: { visibility: "private" },
+      // Public: this clip may become the run's headline shareable output (the
+      // single-clip bypass in `stitch`, or as merge input otherwise), so it
+      // needs a durable permalink rather than a presigned URL that expires in
+      // ~15min.
+      storage: { visibility: "public" },
     });
     return await pauseUntilSignal(handle, { resumeStep: "collect" });
   },
@@ -483,7 +491,13 @@ const collect = defineStep({
     }
     const clip: Clip = {
       ...(out?.fileId !== undefined && { fileId: out.fileId }),
-      ...(out?.downloadUrl !== undefined && { downloadUrl: out.downloadUrl }),
+      // Durable permalink over a presigned URL — this clip may end up as the
+      // run's headline shareable output.
+      ...(out?.fileId !== undefined
+        ? { downloadUrl: fileStorage.getPublicUrl(out.fileId) }
+        : out?.downloadUrl !== undefined
+          ? { downloadUrl: out.downloadUrl }
+          : {}),
     };
     const nextClips = [...clips, clip];
     const nextIndex = index + 1;
@@ -508,12 +522,15 @@ const stitch = defineStep({
   async run(_input: unknown, ctx: AgentExecutionContext<Shared>) {
     const scene = must(ctx.shared.get("scene"), "scene");
     const clips = must(ctx.shared.get("clips"), "clips");
-    // Ready-to-use URLs for the merge input. For a longer-lived reference re-mint
-    // from each clip's `fileId` via `ctx.sapiom.fileStorage.getDownloadUrl(fileId)`.
-    const resolved = await resolveClipInputs(
-      clips,
-      async (fileId) => await ctx.sapiom.fileStorage.getDownloadUrl(fileId),
-    );
+    // Ready-to-use URLs for the merge input. Each clip already carries a
+    // durable public permalink from `collect`; this callback only covers the
+    // defensive fallback (a clip with a `fileId` but no `downloadUrl` yet),
+    // re-minting via `getPublicUrl` rather than a presigned URL — the
+    // single-clip bypass below can hand this straight back as the run's
+    // headline output.
+    const resolved = await resolveClipInputs(clips, async (fileId) => ({
+      downloadUrl: fileStorage.getPublicUrl(fileId),
+    }));
     const videoUrls = resolved.map(({ url }) => url);
     ctx.logger.info("stitching clips", { clips: resolved.length });
 
@@ -539,7 +556,10 @@ const stitch = defineStep({
       model: MERGE_MODEL,
       prompt: scene,
       params: { video_urls: videoUrls },
-      storage: { visibility: "private" },
+      // Public: the merged video is the run's headline shareable output below,
+      // so it needs a durable permalink rather than a presigned URL that
+      // expires in ~15min.
+      storage: { visibility: "public" },
       timeoutMs: 12 * 60_000,
     });
     if (
@@ -551,7 +571,9 @@ const stitch = defineStep({
         `video merge completed without a usable output${merged.video?.storageError ? `: ${merged.video.storageError}` : ""}`,
       );
     }
-    const downloadUrl = merged.video.downloadUrl ?? merged.video.url;
+    const downloadUrl = merged.video.fileId
+      ? fileStorage.getPublicUrl(merged.video.fileId)
+      : (merged.video.downloadUrl ?? merged.video.url);
     return goto("finalize", {
       outputs: [
         {

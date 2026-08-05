@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { fileStorage } from "@sapiom/tools";
+
 import { agent, normalizeClipDuration, resolveClipInputs } from "./index.ts";
 
-function stitchContext(clips, { create, getDownloadUrl } = {}) {
+function stitchContext(clips, { create } = {}) {
   const shared = new Map([
     ["scene", "paper boat"],
     ["clips", clips],
@@ -22,11 +24,6 @@ function stitchContext(clips, { create, getDownloadUrl } = {}) {
               throw new Error("merge should not run");
             }),
         },
-      },
-      fileStorage: {
-        getDownloadUrl:
-          getDownloadUrl ??
-          (async (fileId) => ({ downloadUrl: `https://clip/${fileId}` })),
       },
     },
     logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -75,6 +72,35 @@ test("rejects an empty clip collection before calling merge", async () => {
   );
 });
 
+test("collect records a durable public permalink for a clip carrying a fileId", async () => {
+  const shared = new Map([
+    ["shots", [{}]],
+    ["clips", []],
+    ["animateIndex", 0],
+  ]);
+  const ctx = {
+    shared: {
+      get: (key) => shared.get(key),
+      set: (key, value) => shared.set(key, value),
+    },
+    sapiom: {},
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+  };
+
+  await agent.steps.collect.run(
+    {
+      outputs: [
+        { fileId: "clip-file", downloadUrl: "https://presigned.example/clip" },
+      ],
+    },
+    ctx,
+  );
+
+  assert.deepEqual(shared.get("clips"), [
+    { fileId: "clip-file", downloadUrl: fileStorage.getPublicUrl("clip-file") },
+  ]);
+});
+
 test("stitch bypasses merge only for an actual one-clip scene", async () => {
   const directive = await agent.steps.stitch.run(
     {},
@@ -104,11 +130,32 @@ test("stitch sends every clip in order with a bounded polling fallback", async (
   );
 
   assert.deepEqual(calls[0].params.video_urls, [
-    "https://clip/first-file",
+    fileStorage.getPublicUrl("first-file"),
     "https://clip/second",
   ]);
   assert.equal(calls[0].timeoutMs, 12 * 60_000);
   assert.deepEqual(directive.input.outputs, [
     { downloadUrl: "https://provider/merged" },
+  ]);
+});
+
+test("stitch prefers a durable public permalink over the merge provider's own URL", async () => {
+  const directive = await agent.steps.stitch.run(
+    {},
+    stitchContext(
+      [{ fileId: "first-file" }, { downloadUrl: "https://clip/second" }],
+      {
+        create: async () => ({
+          video: { fileId: "merged-file", url: "https://provider/merged" },
+        }),
+      },
+    ),
+  );
+
+  assert.deepEqual(directive.input.outputs, [
+    {
+      fileId: "merged-file",
+      downloadUrl: fileStorage.getPublicUrl("merged-file"),
+    },
   ]);
 });

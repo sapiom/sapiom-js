@@ -6,6 +6,7 @@ import {
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import { fileStorage } from "@sapiom/tools";
 import postgres from "postgres";
 import { z } from "zod/v4";
 
@@ -937,8 +938,9 @@ const chart = defineStep({
           headers: up.requiredHeaders,
           body: bytes,
         });
-        const dl = await ctx.sapiom.fileStorage.getDownloadUrl(up.fileId);
-        chartUrl = dl.downloadUrl;
+        // Durable permalink, not a presigned URL — the chart is embedded in the
+        // emailed report below, which can sit in an inbox well past a ~15min TTL.
+        chartUrl = fileStorage.getPublicUrl(up.fileId);
         ctx.logger.info("chart rendered + hosted", {
           fileId: up.fileId,
           bytes: bytes.byteLength,
