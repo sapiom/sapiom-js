@@ -44,6 +44,7 @@ import {
 import { type ResolvedEnvironment } from "../credentials.js";
 import { registerTool } from "../register-tool.js";
 import { fail, gatewayClient, NOT_AUTHED, ok } from "./shared.js";
+import { webappRunUrl } from "./webapp-url.js";
 
 /**
  * Coerce a tool argument that may arrive as a JSON string (some MCP clients
@@ -381,12 +382,20 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         // stringify object-valued args), mirroring run_local — the execution API
         // requires an object, so a raw `"{}"` string would be rejected. Default an
         // absent input to {} (the entry step's empty input).
-        return ok(
-          await run(
-            { definitionId: cfg.definitionId, input: coerceJson(input) ?? {} },
-            client,
-          ),
+        const started = await run(
+          { definitionId: cfg.definitionId, input: coerceJson(input) ?? {} },
+          client,
         );
+        // Hand back the webapp link so the caller can open the run it just
+        // started without reconstructing the route.
+        return ok({
+          ...started,
+          webappUrl: webappRunUrl(
+            env.appURL,
+            cfg.definitionId,
+            started.executionId,
+          ),
+        });
       } catch (err) {
         return fail(err);
       }
@@ -396,7 +405,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_inspect",
-    "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local.\n\nReads are a fresh point-in-time snapshot. To wait for a still-running execution to finish, set wait:true (the tool polls until it settles or the wait window elapses) — do NOT sleep-and-poll this tool yourself. If a wait returns waiting:true, just call inspect again with wait:true.",
+    "Inspect a cloud execution (its steps and errors) by executionId, a build by buildRunId, or list recent executions when neither is given. On a failed step, pull its input here to reproduce the failure locally with run_local. When inspecting an execution, the result includes a `webappUrl` to open that run in the webapp.\n\nReads are a fresh point-in-time snapshot. To wait for a still-running execution to finish, set wait:true (the tool polls until it settles or the wait window elapses) — do NOT sleep-and-poll this tool yourself. If a wait returns waiting:true, just call inspect again with wait:true.",
     {
       dir: z
         .string()
@@ -453,6 +462,11 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
               execution,
               done,
               waiting: !done,
+              webappUrl: webappRunUrl(
+                env.appURL,
+                execution.definitionId,
+                execution.id,
+              ),
               ...(hint ? { hint } : {}),
             });
           }
@@ -462,7 +476,15 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           const hint = isExecutionTerminal(execution.status)
             ? undefined
             : `Execution is '${execution.status}', not terminal — call inspect with wait:true to block until it finishes instead of polling manually.`;
-          return ok({ execution, ...(hint ? { hint } : {}) });
+          return ok({
+            execution,
+            webappUrl: webappRunUrl(
+              env.appURL,
+              execution.definitionId,
+              execution.id,
+            ),
+            ...(hint ? { hint } : {}),
+          });
         }
         return ok(await listExecutions(client));
       } catch (err) {
