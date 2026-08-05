@@ -895,7 +895,7 @@ const chart = defineStep({
         ttl: "15m",
       });
       // Materialize the renderer + data and run it in ONE exec. `writeFile` and
-      // `exec` root paths differently on the Blaxel sandbox (SAP-2209: the
+      // `exec` root paths differently in the sandbox runtime (SAP-2209: the
       // filesystem API and the SDK both prepend the workspace root, so a
       // `writeFile`d file double-nests to `/blaxel/blaxel/...` while `exec` runs
       // at `/blaxel`) — a written file is never where `node` reads it. Decoding

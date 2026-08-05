@@ -14,21 +14,29 @@ describe("provider-neutral copy guard", () => {
         "The FAL webhook resumes the job.",
         "Only Blaxel cloud sandboxes work.",
         "Execute inside a Firecracker microVM.",
-        "Fallback is usually Anthropic.",
         "Every build uses your Claude Code account.",
       ].join("\n"),
     );
 
     assert.deepEqual(
       violations.map(({ token }) => token),
+      ["Hunter", "FAL", "Blaxel", "Firecracker", "Claude Code account"],
+    );
+  });
+
+  it("rejects provider-disclosing LLM fallback paraphrases", () => {
+    const violations = findProviderCopyMentions(
       [
-        "Hunter",
-        "FAL",
-        "Blaxel",
-        "Firecracker",
-        "usually Anthropic",
-        "Claude Code account",
-      ],
+        "Fallback may use Anthropic.",
+        "Anthropic normally serves spillover requests.",
+        "OpenAI may serve overflow capacity.",
+      ].join("\n"),
+      "packages/tools/src/llm/index.ts",
+    );
+
+    assert.deepEqual(
+      violations.map(({ token }) => token),
+      ["Anthropic", "Anthropic", "OpenAI"],
     );
   });
 
@@ -43,10 +51,40 @@ describe("provider-neutral copy guard", () => {
     assert.deepEqual(violations, []);
   });
 
+  it("allows intentional LLM wire-shape identifiers", () => {
+    const violations = findProviderCopyMentions(
+      `
+        POST /v2/anthropic/v1/messages
+        The verbatim LLM request uses the Anthropic messages shape.
+        This client speaks Anthropic Messages.
+        The default Anthropic shape is selected with shape: "anthropic".
+        The alternate wire shape is OpenAI Chat Completions.
+        const urls: { anthropic: string; openai: string };
+        const suffix = "openai/v1/chat/completions";
+      `,
+      "packages/tools/src/llm/index.ts",
+    );
+
+    assert.deepEqual(violations, []);
+  });
+
+  it("allows explicit user-selected provider credentials", () => {
+    const violations = findProviderCopyMentions(`
+      { "requiredSecrets": [{ "provider": "anthropic", "key": "ANTHROPIC_API_KEY" }] }
+      Connect your Anthropic API key to use that integration.
+    `);
+
+    assert.deepEqual(violations, []);
+  });
+
   it("keeps audited repository copy provider-neutral", async () => {
     const result = await auditProviderNeutralCopy();
 
-    assert.ok(result.files.length > 20);
+    assert.ok(result.files.length > 50);
+    assert.ok(
+      result.files.includes("examples/scheduled-db-insight-report/index.ts"),
+    );
+    assert.ok(result.files.includes("examples/proposal-generator/AGENTS.md"));
     assert.deepEqual(result.violations, []);
   });
 });

@@ -1,28 +1,25 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  isRegisteredProjectCopyAsset,
+  isRegisteredProjectCopyPathIgnored,
+} from "./examples-copy-check.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const REPOSITORY_ROOT = path.resolve(SCRIPT_DIR, "..");
 
-export const PROVIDER_NEUTRAL_COPY_TARGETS = [
-  "examples/cold-outreach-engine/AGENTS.md",
-  "examples/cold-outreach-engine/README.md",
-  "examples/cold-outreach-engine/index.ts",
-  "examples/cold-outreach-engine/package.json",
-  "examples/cold-outreach-engine/template.json",
+const STATIC_PROVIDER_NEUTRAL_COPY_TARGETS = [
+  "examples/registry.json",
+  // These examples are not currently registered, but were part of the original
+  // provider-copy audit and remain protected until they join or leave the repo.
+  "examples/durable-backfill/index.ts",
   "examples/personalized-media-at-scale/AGENTS.md",
   "examples/personalized-media-at-scale/README.md",
   "examples/personalized-media-at-scale/index.ts",
-  "examples/registry.json",
-  "examples/research-to-microsite/AGENTS.md",
-  "examples/research-to-microsite/README.md",
-  "examples/research-to-microsite/index.ts",
-  "examples/scene-to-video/AGENTS.md",
-  "examples/scene-to-video/README.md",
-  "examples/scene-to-video/index.ts",
   "packages/harness/web/src/components/SessionStepsBar.tsx",
   "packages/sandbox/README.md",
   "packages/sandbox/src/multipart.ts",
@@ -37,7 +34,10 @@ const REQUIRED_CONTRACT_PATTERNS = [
   /\bfal-ai\/[a-z0-9._/-]+/giu,
   /\bEXECUTION_ENVIRONMENT_BLAXEL_SANDBOX\b/gu,
   /\bblaxel_sandbox\b/giu,
+  /\/blaxel(?:\/[a-z0-9._/-]*)?/giu,
   /ghcr\.io\/blaxel-ai\/sandbox:latest/giu,
+  /"provider"\s*:\s*"(?:anthropic|openai)"/giu,
+  /\b(?:Anthropic|OpenAI) API key\b/g,
 ];
 
 const REQUIRED_CONTRACT_PATTERNS_BY_PATH = {
@@ -46,11 +46,82 @@ const REQUIRED_CONTRACT_PATTERNS_BY_PATH = {
     /the fal adapter maps fal's/giu,
     /Some Fal video operations/gu,
   ],
+  "packages/tools/src/llm/index.ts": [
+    /\banthropic\/v1\/messages/gu,
+    /openai\/v1\/chat\/completions/gu,
+    /\bAnthropic messages shape\b/g,
+    /\bAnthropic Messages\b/g,
+    /\bAnthropic shape\b/g,
+    /\bOpenAI Chat Completions\b/g,
+    /\banthropicBaseUrl\b/g,
+    /"anthropic"/g,
+    /"openai"/g,
+    /\banthropic(?=\s*:)/g,
+    /\bopenai(?=\s*:)/g,
+  ],
   "packages/tools/src/sandboxes/index.ts": [/"blaxel"/giu],
 };
 
 const FORBIDDEN_PROVIDER_COPY_RE =
-  /\b(?:hunter|fal(?:\.ai)?|blaxel|firecracker)\b|usually\s+anthropic|claude code account/giu;
+  /\b(?:anthropic|openai|hunter|fal(?:\.ai)?|blaxel|firecracker)\b|claude code account/giu;
+
+function toPosix(value) {
+  return value.split(path.sep).join("/");
+}
+
+async function collectRegisteredExampleAssets(
+  rootDir,
+  sourcePath,
+  currentPath = sourcePath,
+) {
+  const assets = [];
+  const entries = await readdir(path.join(rootDir, currentPath), {
+    withFileTypes: true,
+  });
+  for (const entry of entries) {
+    const childPath = toPosix(path.join(currentPath, entry.name));
+    const relativePath = toPosix(path.relative(sourcePath, childPath));
+    if (entry.isDirectory()) {
+      if (!isRegisteredProjectCopyPathIgnored(relativePath)) {
+        assets.push(
+          ...(await collectRegisteredExampleAssets(
+            rootDir,
+            sourcePath,
+            childPath,
+          )),
+        );
+      }
+      continue;
+    }
+    if (
+      entry.isFile() &&
+      (entry.name === "template.json" ||
+        isRegisteredProjectCopyAsset(relativePath))
+    ) {
+      assets.push(childPath);
+    }
+  }
+  return assets;
+}
+
+export async function collectProviderNeutralCopyTargets(
+  rootDir = REPOSITORY_ROOT,
+) {
+  const registry = JSON.parse(
+    await readFile(path.join(rootDir, "examples/registry.json"), "utf8"),
+  );
+  const targets = new Set(STATIC_PROVIDER_NEUTRAL_COPY_TARGETS);
+  for (const template of registry.templates ?? []) {
+    if (typeof template?.sourcePath !== "string") continue;
+    for (const asset of await collectRegisteredExampleAssets(
+      rootDir,
+      template.sourcePath,
+    )) {
+      targets.add(asset);
+    }
+  }
+  return [...targets].sort();
+}
 
 function maskRequiredContracts(content, sourcePath) {
   const patterns = [
@@ -80,12 +151,13 @@ export function findProviderCopyMentions(content, sourcePath = "fixture") {
 }
 
 export async function auditProviderNeutralCopy(rootDir = REPOSITORY_ROOT) {
+  const files = await collectProviderNeutralCopyTargets(rootDir);
   const violations = [];
-  for (const target of PROVIDER_NEUTRAL_COPY_TARGETS) {
+  for (const target of files) {
     const content = await readFile(path.join(rootDir, target), "utf8");
     violations.push(...findProviderCopyMentions(content, target));
   }
-  return { files: PROVIDER_NEUTRAL_COPY_TARGETS, violations };
+  return { files, violations };
 }
 
 async function main() {
